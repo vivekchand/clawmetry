@@ -1818,6 +1818,7 @@ async function loadContextEconomics() {
     return;
   }
   try { loadContextCoverage(); } catch (e) { /* panel is additive, never fatal */ }
+  try { _loadCeInputsMeasured(_ceSessionId); } catch (e) { /* additive */ }
   var util = data.utilization || [];
   var comps = data.compactions || [];
   var overflow = data.overflow_sessions || [];
@@ -2097,6 +2098,7 @@ function switchTab(name) {
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
   if (name === 'guard') { if (typeof loadGuardTab === 'function') loadGuardTab(); }
+  if (name === 'signals') { if (typeof loadSignalsTab === 'function') loadSignalsTab(); }
   if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
   if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
@@ -4047,6 +4049,271 @@ function renderCompareResult(data) {
   body.innerHTML = html;
 }
 
+// ── Cohort compare: "did the change help?" (WO-60) ─────────────────────────
+// Suggestions first (cards a newcomer clicks), then one verdict word with the
+// sample size next to it, then the metric table coloured by favourable
+// direction, then the sessions behind either side. The raw two-session
+// compare above stays one click deeper under "Advanced". On the hosted
+// dashboard the suggestions come from the snapshot's cohortSuggested slice
+// (served on the same URL by the cloud); custom filters stay local and the
+// surface says so instead of rendering blank.
+
+var _cohortSuggested = null;
+
+var _COHORT_ROWS = [
+  ['cost_per_done', 'Cost per finished job'],
+  ['cost_per_session', 'Cost per session'],
+  ['cost_usd', 'Total cost'],
+  ['tokens_per_session', 'Tokens per session'],
+  ['steps_per_session', 'Tool calls per session'],
+  ['tool_error_rate', 'Tool error rate'],
+  ['failure_rate', 'Failure rate'],
+  ['done_rate', 'Finished'],
+  ['cache_hit', 'Cache hit'],
+  ['frustration_rate', 'Frustration rate']
+];
+
+function _cohortFmt(key, v) {
+  if (v == null) return 'n/a';
+  if (/rate|cache_hit/.test(key)) return (v * 100).toFixed(v * 100 < 10 ? 1 : 0) + '%';
+  if (/cost/.test(key)) return '$' + (v < 0.01 ? Number(v).toFixed(4) : Number(v).toFixed(2));
+  if (typeof v === 'number' && Math.abs(v) >= 1000) return Math.round(v).toLocaleString();
+  if (typeof v === 'number') return (Math.round(v * 10) / 10).toString();
+  return String(v);
+}
+
+function _cohortDelta(key, d) {
+  if (!d || d.abs == null) return '';
+  var color = d.favorable ? 'var(--ok, #22c55e)' : 'var(--err, #ef4444)';
+  if (d.abs === 0) color = 'var(--text-muted)';
+  var sign = d.abs > 0 ? '+' : '';
+  var pct = d.pct == null ? '' : ' (' + (d.pct > 0 ? '+' : '') + d.pct.toFixed(0) + '%)';
+  return ' <span style="color:' + color + ';font-size:11px;font-weight:600;">' + sign + escapeHtmlSafe(_cohortFmt(key, d.abs)) + pct + '</span>';
+}
+
+function _cohortVerdictColor(word) {
+  if (word === 'Better') return 'var(--ok, #22c55e)';
+  if (word === 'Worse') return 'var(--err, #ef4444)';
+  if (word === 'Same') return 'var(--text-secondary)';
+  return 'var(--text-muted)';
+}
+
+function _cohortRuntimeParam() {
+  var rt = 'all';
+  try { if (typeof _cmRuntimeFilter === 'function') rt = _cmRuntimeFilter() || 'all'; } catch (e) {}
+  return rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '';
+}
+
+async function loadCohortSuggested() {
+  var host = document.getElementById('cohort-suggestions');
+  if (!host) return;
+  var adv = document.getElementById('cohort-advanced-body');
+  if (adv && window.CLOUD_MODE) {
+    adv.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">'
+      + escapeHtmlSafe(t('overview.compare_cloud_custom', null, 'Custom filters run on the local dashboard. The hosted view shows the suggested comparisons your node computed.')) + '</div>';
+  }
+  var data = null;
+  try {
+    var resp = await fetch('/api/cohort-compare/suggested' + _cohortRuntimeParam());
+    if (resp.status === 402) {
+      var up = null; try { up = await resp.json(); } catch (e) {}
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+        + escapeHtmlSafe(t('overview.compare_upgrade', null, 'Cohort compare is a paid feature.'))
+        + (up && up.required_tier ? ' <a href="/upgrade?feature=per_run_compare" style="color:var(--accent, #3b82f6);">' + escapeHtmlSafe(t('app.upgrade', null, 'Upgrade')) + '</a>' : '')
+        + '</div>';
+      return;
+    }
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    data = await resp.json();
+  } catch (e) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+      + escapeHtmlSafe(window.CLOUD_MODE
+          ? t('overview.compare_cloud_wait', null, 'Suggested comparisons arrive with the next snapshot from your node.')
+          : t('overview.compare_unreachable', null, 'Could not reach the local store.')) + '</div>';
+    return;
+  }
+  _cohortSuggested = data;
+  var list = (data && data.suggestions) || [];
+  if (!list.length) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+      + escapeHtmlSafe(data && data.store_available === false
+          ? t('overview.compare_unreachable', null, 'Could not reach the local store.')
+          : t('overview.compare_none', null, 'Nothing changed recently. Suggestions appear when a new model or runtime version shows up, or after a week of sessions.'))
+      + '</div>';
+    return;
+  }
+  host.innerHTML = list.map(function (s, i) {
+    var res = s.result || {};
+    var v = (res.verdict || {});
+    var word = v.verdict || '';
+    var na = v.sample ? v.sample.a : (res.a && res.a.stats ? res.a.stats.session_count : 0);
+    var nb = v.sample ? v.sample.b : (res.b && res.b.stats ? res.b.stats.session_count : 0);
+    return '<button type="button" class="cohort-card" data-idx="' + i + '" onclick="showCohortSuggestion(' + i + ')" '
+      + 'style="text-align:left;cursor:pointer;padding:10px 12px;border:1px solid var(--border-primary);border-radius:10px;background:var(--bg-primary);color:var(--text-primary);">'
+      + '<div style="font-size:12px;font-weight:600;line-height:1.35;">' + escapeHtmlSafe(s.title || '') + '</div>'
+      + '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);display:flex;gap:8px;align-items:baseline;">'
+      + '<span style="font-weight:700;color:' + _cohortVerdictColor(word) + ';">' + escapeHtmlSafe(word) + '</span>'
+      + '<span>' + escapeHtmlSafe(na + ' vs ' + nb + ' ' + t('overview.compare_sessions', null, 'sessions')) + '</span>'
+      + '</div></button>';
+  }).join('');
+}
+
+function showCohortSuggestion(idx) {
+  var s = _cohortSuggested && _cohortSuggested.suggestions && _cohortSuggested.suggestions[idx];
+  if (!s) return;
+  try {
+    var cards = document.querySelectorAll('#cohort-suggestions .cohort-card');
+    cards.forEach(function (c) { c.style.borderColor = (String(c.getAttribute('data-idx')) === String(idx)) ? 'var(--accent, #3b82f6)' : 'var(--border-primary)'; });
+  } catch (e) {}
+  renderCohortResult(s.result, s.title, s.why);
+}
+
+function _cohortSessionList(side, sessions) {
+  if (!sessions || !sessions.length) {
+    return '<div style="font-size:11px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, 'No data.')) + '</div>';
+  }
+  return sessions.map(function (r) {
+    var label = r.title || r.session_id;
+    return '<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-top:1px solid var(--border-primary);font-size:11px;">'
+      + '<a href="#" data-sid="' + escapeHtmlSafe(r.session_id) + '" onclick="openCohortSession(this.getAttribute(\'data-sid\'));return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(label) + '</a>'
+      + '<span style="color:var(--text-muted);white-space:nowrap;">' + _cmOutcomeChip(r.outcome) + ' ' + escapeHtmlSafe(_cohortFmt('cost_usd', r.cost_usd)) + '</span>'
+      + '</div>';
+  }).join('');
+}
+
+function openCohortSession(sessionId) {
+  if (!sessionId) return;
+  try { switchTab('transcripts'); } catch (e) {}
+  try { viewTranscript(sessionId); } catch (e) {}
+}
+
+function renderCohortResult(res, title, why) {
+  var host = document.getElementById('cohort-result');
+  if (!host) return;
+  if (!res || !res.a || !res.b) {
+    host.style.display = '';
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, 'No data.')) + '</div>';
+    return;
+  }
+  var v = res.verdict || {};
+  var word = v.verdict || t('overview.compare_not_enough', null, 'Not enough data');
+  var sa = res.a.stats || {}, sb = res.b.stats || {};
+  var html = '<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">'
+    + '<div style="font-size:26px;font-weight:800;color:' + _cohortVerdictColor(word) + ';letter-spacing:-0.5px;">' + escapeHtmlSafe(word) + '</div>'
+    + '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe((sa.session_count || 0) + ' vs ' + (sb.session_count || 0) + ' ' + t('overview.compare_sessions', null, 'sessions')) + '</div>'
+    + (title ? '<div style="font-size:12px;color:var(--text-secondary);">' + escapeHtmlSafe(title) + '</div>' : '')
+    + '</div>';
+  if (v.reason) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtmlSafe(v.reason) + '</div>';
+  if (v.mixed) {
+    html += '<div style="font-size:11px;color:var(--warn, #eab308);margin-top:4px;">' + escapeHtmlSafe(t('overview.compare_mixed', null, 'Mixed: some numbers moved the other way.'))
+      + ' ' + escapeHtmlSafe((v.against || []).map(function (k) { return k.replace(/_/g, ' '); }).join(', ')) + '</div>';
+  }
+  var comp = res.comparability || {};
+  (comp.warnings || []).forEach(function (w) {
+    html += '<div style="font-size:11px;color:var(--warn, #eab308);margin-top:4px;">⚠ ' + escapeHtmlSafe(w.note || '') + '</div>';
+  });
+  if (why) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtmlSafe(why) + '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:170px 1fr 1fr;gap:10px;font-size:12px;margin-top:12px;">'
+    + '<div></div>'
+    + '<div style="font-size:11px;color:var(--text-muted);">A: ' + escapeHtmlSafe(res.a.label || '') + '</div>'
+    + '<div style="font-size:11px;color:var(--text-muted);">B: ' + escapeHtmlSafe(res.b.label || '') + '</div>';
+  _COHORT_ROWS.forEach(function (kv) {
+    var key = kv[0], label = kv[1];
+    var va = sa[key], vb = sb[key];
+    if (va == null && vb == null) return;
+    html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(label) + '</div>'
+      + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cohortFmt(key, va)) + '</div>'
+      + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cohortFmt(key, vb)) + _cohortDelta(key, (res.deltas || {})[key]) + '</div>';
+  });
+  var mixA = sa.outcome_mix || {}, mixB = sb.outcome_mix || {};
+  var mixFmt = function (m) { return Object.keys(m).map(function (k) { return _cmOutcomeChip(k) + ' ' + m[k]; }).join(' ') || 'n/a'; };
+  html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(t('app.compare_outcome', null, 'Outcome')) + '</div>'
+    + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + mixFmt(mixA) + '</div>'
+    + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + mixFmt(mixB) + '</div>';
+  if (res.signals === 'not available') {
+    html += '<div style="grid-column:1 / -1;font-size:11px;color:var(--text-muted);padding-top:6px;">' + escapeHtmlSafe(t('overview.compare_no_signals', null, 'Behaviour signals are not recorded in this store yet.')) + '</div>';
+  }
+  html += '</div>';
+
+  html += '<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);font-weight:600;list-style:none;">▸ ' + escapeHtmlSafe(t('overview.compare_show_sessions', null, 'Show sessions')) + '</summary>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px;">'
+    + '<div><div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">A</div>' + _cohortSessionList('a', res.a.sessions) + '</div>'
+    + '<div><div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">B</div>' + _cohortSessionList('b', res.b.sessions) + '</div>'
+    + '</div></details>';
+  host.style.display = '';
+  host.innerHTML = html;
+}
+
+// Custom filters (local dashboard): a and b are filter objects.
+async function runCohortCompare(a, b, title) {
+  var host = document.getElementById('cohort-result');
+  if (!host) return;
+  if (window.CLOUD_MODE) {
+    host.style.display = '';
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('overview.compare_cloud_custom', null, 'Custom filters run on the local dashboard. The hosted view shows the suggested comparisons your node computed.')) + '</div>';
+    return;
+  }
+  host.style.display = '';
+  host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.loading_2', null, 'Loading…')) + '</div>';
+  var qs = 'a=' + encodeURIComponent(JSON.stringify(a || {})) + '&b=' + encodeURIComponent(JSON.stringify(b || {}));
+  var rtp = _cohortRuntimeParam();
+  if (rtp) qs += '&' + rtp.slice(1);
+  try {
+    var resp = await fetch('/api/cohort-compare?' + qs);
+    if (!resp.ok) {
+      var err = null; try { err = await resp.json(); } catch (e) {}
+      host.innerHTML = '<div style="font-size:12px;color:var(--err);">' + escapeHtmlSafe((err && (err.hint || err.error)) || ('Request failed (' + resp.status + ')')) + '</div>';
+      return;
+    }
+    renderCohortResult(await resp.json(), title);
+  } catch (e) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--err);">' + escapeHtmlSafe(t('app.network_error', null, 'Network error')) + '</div>';
+  }
+}
+
+// ── Runs shaped like this one (WO-60) ──────────────────────────────────────
+// Rendered below the fold of the session view. Tool-call n-gram similarity,
+// computed in the daemon; no model call.
+async function loadSimilarRuns(sessionId) {
+  var card = document.getElementById('similar-runs-card');
+  var body = document.getElementById('similar-runs-body');
+  if (!card || !body || !sessionId) return;
+  card.style.display = '';
+  if (window.CLOUD_MODE) {
+    body.innerHTML = escapeHtmlSafe(t('transcripts.similar_runs_cloud', null, 'Available on the local dashboard.'));
+    return;
+  }
+  body.innerHTML = escapeHtmlSafe(t('app.loading_2', null, 'Loading…'));
+  var data = null;
+  try {
+    var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/similar?window=30d&limit=10');
+    if (resp.status === 402) { card.style.display = 'none'; return; }
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    data = await resp.json();
+  } catch (e) {
+    body.innerHTML = escapeHtmlSafe(t('overview.compare_unreachable', null, 'Could not reach the local store.'));
+    return;
+  }
+  var rows = (data && data.neighbours) || [];
+  if (!rows.length) {
+    var cov = data && data.coverage ? String(data.coverage) : '';
+    body.innerHTML = escapeHtmlSafe(/no tool stream/.test(cov) ? cov
+      : t('transcripts.similar_runs_none', null, 'No other session in the window follows this order of tool calls.'));
+    return;
+  }
+  body.innerHTML = '<div style="display:grid;grid-template-columns:auto 1fr auto auto auto;gap:6px 12px;align-items:center;">'
+    + rows.map(function (r) {
+      var pct = Math.round((r.score || 0) * 100);
+      return '<div style="font-weight:700;color:var(--text-primary);">' + pct + '%</div>'
+        + '<a href="#" data-sid="' + escapeHtmlSafe(r.session_id) + '" onclick="openCohortSession(this.getAttribute(\'data-sid\'));return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(r.title || r.session_id) + '</a>'
+        + '<span style="color:var(--text-muted);">' + escapeHtmlSafe((r.runtime || '') + (r.model ? ' · ' + r.model : '')) + '</span>'
+        + '<span>' + _cmOutcomeChip(r.outcome) + '</span>'
+        + '<span style="color:var(--text-muted);">' + escapeHtmlSafe(_cohortFmt('cost_usd', r.cost_usd)) + '</span>';
+    }).join('')
+    + '</div>';
+}
+
 // ── Error triage (#2196 item #5) ────────────────────────────────────────────
 
 async function loadTriageList() {
@@ -4637,6 +4904,8 @@ async function loadAll() {
     try { loadHealthTimeline(); } catch (e) {}
     // Error-triage list (#2196 item #5) — also fire-and-forget.
     try { loadTriageList(); } catch (e) {}
+    // Cohort compare suggestions (WO-60), fire-and-forget; honest empty states.
+    try { loadCohortSuggested(); } catch (e) {}
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
@@ -12167,11 +12436,16 @@ var _CM_CAP_TABS = {
 // inside Memory/Skills would be unreachable because the whole tab was
 // hidden by _cmApplyRuntimeTabVisibility whenever a non-OpenClaw runtime
 // was selected in the top-of-page runtime dropdown.
-var _CM_NODE_TABS = ['alerts','notifications','security','approvals','memory','skills'];
+// guard: one Guard view ranks running sessions from EVERY runtime by spend
+// at risk, and policies apply node-wide. It was in _CM_RT_ALL_TABS but in
+// no capability map, so selecting any runtime hid it (0.12.806 field hit).
+// signals: the behaviour-signal surface covers every runtime that lands
+// text in the store and states its coverage per runtime, so it is node-level.
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','memory','skills','signals'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
-  'context-economics','approvals','guard','alerts','usage','dives','crons','memory',
+  'context-economics','approvals','guard','signals','alerts','usage','dives','crons','memory',
   'notifications','security','policy','skills','selfevolve','subagents',
   'nemoclaw','logs','version-impact','agents'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
@@ -15510,13 +15784,46 @@ window._traceSpanCopyBuf = '';
 window._traceCollapsed = {};
 
 var _TRACE_KIND_COLORS = {
-  agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
-  retrieval: '#06b6d4', attachment: '#6b7280', event: '#94a3b8'
+  agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', reasoning: '#e879f9',
+  tool: '#10b981', retrieval: '#06b6d4', attachment: '#6b7280', event: '#94a3b8'
 };
 var _TRACE_KIND_ICONS = {
-  agent: '🤖', llm: '🧠', tool: '🔧', prompt: '💬', retrieval: '📚',
+  agent: '🤖', llm: '🧠', reasoning: '💭', tool: '🔧', prompt: '💬', retrieval: '📚',
   attachment: '📎', event: '•'
 };
+// Legend order for the trace header. `reasoning` is the model's thinking
+// (its own span kind); the execute_tool spans it drove nest under it.
+var _TRACE_LEGEND_KINDS = [
+  ['agent', 'tracing.legend_agent', 'Agent'],
+  ['prompt', 'tracing.legend_prompt', 'Prompt'],
+  ['llm', 'tracing.legend_llm', 'Model call'],
+  ['reasoning', 'tracing.legend_reasoning', 'Reasoning'],
+  ['tool', 'tracing.legend_tool', 'Tool']
+];
+function _traceLegendHtml() {
+  return '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:var(--text-muted);">'
+    + _TRACE_LEGEND_KINDS.map(function(k) {
+        return '<span style="display:inline-flex;align-items:center;gap:5px;">'
+          + '<span style="width:9px;height:9px;border-radius:2px;background:' + _TRACE_KIND_COLORS[k[0]] + ';"></span>'
+          + t(k[1], null, k[2]) + '</span>';
+      }).join('')
+    + '</div>';
+}
+// Honest empty state for the reasoning lane. `r` is the API's `reasoning`
+// block {runtime, span_count, coverage, note}. Returns '' when there are
+// reasoning spans to show or the coverage is unknown.
+function _traceReasoningNoteHtml(r) {
+  if (!r || (r.span_count || 0) > 0) return '';
+  var rt = escHtml(r.runtime || 'this runtime');
+  var msg = '';
+  if (r.coverage === 'none') msg = t('tracing.reasoning_not_exposed', {runtime: rt}, 'Reasoning is not exposed by {runtime}');
+  else if (r.coverage === 'partial' || r.coverage === 'full') msg = t('tracing.reasoning_none_recorded', {runtime: rt}, 'No reasoning was recorded for this session. {runtime} exposes it only under some settings.');
+  else return '';
+  var note = r.note ? '<span style="color:var(--text-muted);"> ' + escHtml(r.note) + '</span>' : '';
+  return '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;">'
+    + '<span style="width:9px;height:9px;border-radius:2px;background:' + _TRACE_KIND_COLORS.reasoning + ';opacity:0.5;"></span>'
+    + '<span>' + msg + '.' + note + '</span></div>';
+}
 function _traceColor(s) {
   // Sub-agent ROOT span is orange; everything else (incl. spans inside a
   // sub-agent) is colored by its kind so chat/tool stay readable.
@@ -15545,11 +15852,11 @@ window._traceListSearch = '';
 // Reuses the trace list (one row per session) for picking a session, then
 // /api/turn-anatomy decomposes that session into turns of ordered spans.
 var _TA_KIND_COLORS = {
-  prompt: '#a78bfa', model: '#22d3ee', tool: '#f59e0b',
+  prompt: '#a78bfa', thinking: '#e879f9', model: '#22d3ee', tool: '#f59e0b',
   compaction: '#f472b6', reply: '#34d399'
 };
 var _TA_KIND_ICONS = {
-  prompt: '💬', model: '🧠', tool: '🔧', compaction: '🗜️', reply: '✅'
+  prompt: '💬', thinking: '💭', model: '🧠', tool: '🔧', compaction: '🗜️', reply: '✅'
 };
 function _taColor(kind) { return _TA_KIND_COLORS[kind] || '#94a3b8'; }
 function _taIcon(kind) { return _TA_KIND_ICONS[kind] || '•'; }
@@ -15685,7 +15992,8 @@ async function viewTurnAnatomy(sessionId) {
   var turns = data.turns || [];
   if (meta) {
     meta.innerHTML = '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:var(--text-primary);">' + escHtml(sessionId) + '</div>'
-      + '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">' + turns.length + ' turn' + (turns.length === 1 ? '' : 's') + '</div>';
+      + '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">' + turns.length + ' turn' + (turns.length === 1 ? '' : 's') + '</div>'
+      + _traceReasoningNoteHtml(data.reasoning);
   }
   if (!turns.length) {
     if (turnsEl) turnsEl.innerHTML = '<div class="card" style="padding:18px;color:var(--text-muted);">' + t("app.no_turns_in_this_session", null, "No turns in this session.") + '</div>';
@@ -15719,6 +16027,7 @@ function _taRenderTurn(t) {
     var color = _taColor(s.kind);
     var spanErr = s.status === 'error';
     var label = (s.label || s.kind || '');
+    if (s.kind === 'thinking' && s.text) label = 'thinking: ' + s.text.replace(/\s+/g, ' ').slice(0, 80);
     var spanCostTip = ((s.cost || 0) > 0 ? ' · ' + _taFmtCost(s.cost) : '') + ((s.tokens || 0) > 0 ? ' · ' + (s.tokens >= 1000 ? (s.tokens / 1000).toFixed(1) + 'K' : s.tokens) + ' tok' : '');
     bars += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;" title="' + escHtml(label) + ' · ' + _traceFmtDur(s.duration_ms) + spanCostTip + (spanErr ? ' · error' : '') + '">'
       + '<span style="width:18px;flex-shrink:0;text-align:center;font-size:11px;">' + _taIcon(s.kind) + '</span>'
@@ -15911,6 +16220,8 @@ async function viewTrace(traceId) {
           + '</div>'
           + (title ? '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-muted);margin-top:2px;">' + escHtml((data.trace_id || '').slice(0, 40)) + '</div>' : '')
           + '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;">' + stats.join('') + '</div>'
+          + _traceLegendHtml()
+          + _traceReasoningNoteHtml(data.reasoning)
         + '</div>'
       + '</div>';
   }
@@ -16255,9 +16566,10 @@ function _traceSpanRenderChat(s) {
   msgs.forEach(function(m) {
     var isUser = m.role === 'user';
     var isAssistant = m.role === 'assistant';
-    var bg = isUser ? 'rgba(99,102,241,0.10)' : isAssistant ? 'var(--bg-primary)' : 'rgba(245,158,11,0.08)';
-    var border = isUser ? '#6366f1' : isAssistant ? 'var(--border-secondary)' : '#f59e0b';
-    var label = isUser ? 'User' : isAssistant ? 'Assistant' : (m.role || 'system');
+    var isThinking = m.role === 'thinking';
+    var bg = isUser ? 'rgba(99,102,241,0.10)' : isAssistant ? 'var(--bg-primary)' : isThinking ? 'rgba(232,121,249,0.10)' : 'rgba(245,158,11,0.08)';
+    var border = isUser ? '#6366f1' : isAssistant ? 'var(--border-secondary)' : isThinking ? '#e879f9' : '#f59e0b';
+    var label = isUser ? 'User' : isAssistant ? 'Assistant' : isThinking ? t('tracing.thinking', null, 'Thinking') : (m.role || 'system');
     html += '<div style="background:' + bg + ';border:1px solid ' + border + ';border-left:3px solid ' + border + ';border-radius:6px;padding:8px 10px;">'
       + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:4px;">' + escHtml(label) + '</div>'
       + '<div style="font-size:13px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;line-height:1.4;">' + escHtml(m.text || '') + '</div>'
@@ -16317,6 +16629,7 @@ function _traceExtractMessages(s, full) {
         .forEach(function(c) {
           if (c.kind === 'prompt') add('user', c.detail);
           else if (c.kind === 'llm') add('assistant', c.detail);
+          else if (c.kind === 'reasoning') add('thinking', c.detail);
           else if (c.kind === 'tool') {
             if (c.detail) add('tool', (c.tool ? c.tool + ': ' : '') + c.detail);
             if (c.output) add('tool_result', c.output);
@@ -16332,6 +16645,7 @@ function _traceExtractMessages(s, full) {
   if (!out.length && s) {
     var role = s.kind === 'llm' ? 'assistant'
              : s.kind === 'prompt' ? 'user'
+             : s.kind === 'reasoning' ? 'thinking'
              : s.kind === 'tool' ? 'tool' : 'system';
     if (s.detail) add(role, s.detail);
     if (s.output) add('tool_result', s.output);
@@ -20575,6 +20889,8 @@ async function viewTranscript(sessionId) {
         '</div>';
       return;
     }
+    // Runs shaped like this one (WO-60): below the fold, never blocks the replay.
+    try { loadSimilarRuns(sessionId); } catch (e) {}
     var compactions = compactionsData.compactions || [];
     var evalChips = (evalMetricsData && evalMetricsData.metrics) || [];
     // Family runtimes store metrics under the canonical prefixed id
@@ -20648,8 +20964,11 @@ async function viewTranscript(sessionId) {
       + '<button class="refresh-btn" onclick="openSessionDeepDive(\'compare\', ' + _ddSid + ')" title="Compare this session side by side with others">' + t('transcript.compare', null, 'Compare') + '</button>'
       + '</div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
+    _loadInputsPanel(sessionId);
+    _loadLifecycleCoverageLine(sessionId);
     _loadAuthorityPanel(sessionId);
     _loadOrchestrationPanel(sessionId);
+    _loadSelfReportsPanel(sessionId);
     _loadReplayTree(sessionId);   // wire-up per #4814 — no-op until adapters land (#4815, #4816)
     // Build replay events array - include compaction markers as special events
     var events = [];
@@ -20807,6 +21126,245 @@ async function _loadOrchestrationPanel(sessionId) {
 
 // Authority footprint panel (#880) — fetches /api/authority for the current
 // session and renders tools/filesystem/network sections in a collapsible card.
+// ── Inputs & context: what the agent was given ──────────────────────────
+// Reads /api/sessions/<id>/context (DuckDB session_context, filled from
+// context.compiled events). Every number here is MEASURED from the runtime's
+// own event: real system-prompt bytes, real tool names. When the runtime does
+// not expose its inputs the adapter says so (coverage.inputs === 'none') and
+// the panel says "Not exposed by <runtime>" instead of guessing.
+//
+// Cloud: the hosted dashboard has no DuckDB. The cloud bundle installs
+// window._cmCloudSessionContext(sid) (cm-cloud-session-context interceptor),
+// which slices the E2E-encrypted snapshot's `sessionContext` bucket. That
+// slice carries metadata + a short preview only, so the card explains that
+// the full text stays on the machine rather than rendering an empty box.
+async function _fetchSessionContext(sessionId) {
+  if (window.CLOUD_MODE && typeof window._cmCloudSessionContext === 'function') {
+    var c = await window._cmCloudSessionContext(sessionId);
+    if (c && !c.error) { c._cloud = true; return c; }
+    return c;
+  }
+  var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/sessions/' + encodeURIComponent(sessionId) + '/context'
+    + ((_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '');
+  return fetch(url).then(function(r) { return r.json(); });
+}
+
+function _ctxFmtBytes(n) {
+  n = Number(n || 0);
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(n >= 102400 ? 0 : 1) + ' KB';
+  return n + ' B';
+}
+
+function _ctxRuntimeLabel(rt) {
+  try {
+    if (typeof _cmRuntimeDisplayName === 'function') { var d = _cmRuntimeDisplayName(rt); if (d) return d; }
+  } catch (e) { /* fall through */ }
+  return String(rt || 'this runtime');
+}
+
+// One collapsed block: label + measured facts on the header row, redacted
+// text (or the honest "stays on your machine" note) behind a Show toggle.
+function _ctxTextBlock(id, label, item, cloud) {
+  var facts = [];
+  if (item.size_bytes) facts.push(_ctxFmtBytes(item.size_bytes));
+  if (item.sha256) facts.push('<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" title="sha256 of the full text">' + escHtml(String(item.sha256).slice(0, 12)) + '</span>');
+  if (item.turns && item.turns > 1) facts.push(escHtml(t('inputs.seen_turns', {n: item.turns}, 'seen on ' + item.turns + ' turns')));
+  if (item.content_truncated) facts.push('<span style="color:#d97706;">' + escHtml(t('inputs.truncated', null, 'stored copy cut at 64 KB')) + '</span>');
+  var body;
+  if (item.content) {
+    body = '<pre style="margin:6px 0 0;padding:8px 10px;background:var(--bg-primary);border-radius:6px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;color:var(--text-secondary);">' + escHtml(item.content) + '</pre>';
+  } else if (cloud) {
+    body = (item.preview ? '<div style="margin-top:6px;font-size:11px;color:var(--text-secondary);font-style:italic;">' + escHtml(item.preview) + (item.preview.length >= 160 ? '…' : '') + '</div>' : '')
+      + '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.cloud_content_local', null, 'Full text stays on your machine. Open the local dashboard to read it.')) + '</div>';
+  } else {
+    body = '';
+  }
+  var bid = 'ctx-body-' + id;
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
+    + '<span style="font-size:10px;color:var(--text-muted);">' + facts.join(' · ') + '</span>'
+    + (body ? '<button class="refresh-btn" style="margin-left:auto;font-size:10px;padding:2px 8px;" onclick="var b=document.getElementById(\'' + bid + '\');var o=b.style.display===\'none\';b.style.display=o?\'\':\'none\';this.textContent=o?' + JSON.stringify(t('inputs.hide', null, 'Hide')) + ':' + JSON.stringify(t('inputs.show', null, 'Show')) + ';">' + escHtml(t('inputs.show', null, 'Show')) + '</button>' : '')
+    + '</div>'
+    + (body ? '<div id="' + bid + '" style="display:none;">' + body + '</div>' : '')
+    + '</div>';
+}
+
+function _ctxNamesBlock(label, items) {
+  var names = [];
+  var turns = 0;
+  items.forEach(function(it) {
+    (it.names || []).forEach(function(n) { if (names.indexOf(n) === -1) names.push(n); });
+    turns = Math.max(turns, Number(it.turns || 0));
+  });
+  if (!names.length) return '';
+  var head = names.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: names.length}, names.length + ' tools');
+  var pills = names.map(function(n) {
+    return '<span style="display:inline-block;margin:2px 4px 2px 0;padding:1px 7px;border-radius:9px;background:var(--bg-primary);border:1px solid var(--border-secondary);font-size:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary);">' + escHtml(n) + '</span>';
+  }).join('');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
+    + '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(head) + (turns > 1 ? ' · ' + escHtml(t('inputs.seen_turns', {n: turns}, 'seen on ' + turns + ' turns')) : '') + '</span>'
+    + '</div><div style="margin-top:4px;">' + pills + '</div></div>';
+}
+
+function _ctxMetaBlock(label, items) {
+  var meta = {};
+  items.forEach(function(it) { var m = it.meta || {}; Object.keys(m).forEach(function(k) { meta[k] = m[k]; }); });
+  var keys = Object.keys(meta).filter(function(k) { return meta[k] !== null && meta[k] !== '' && typeof meta[k] !== 'object'; });
+  if (!keys.length) return '';
+  var order = ['model', 'provider', 'cwd', 'version', 'permissionMode', 'transport', 'streamStrategy', 'tools_count', 'messages_count', 'imagesCount'];
+  keys.sort(function(a, b) { var ia = order.indexOf(a), ib = order.indexOf(b); ia = ia < 0 ? 99 : ia; ib = ib < 0 ? 99 : ib; return ia - ib || a.localeCompare(b); });
+  var rows = keys.map(function(k) {
+    return '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(k) + '</span> <span style="font-size:10px;color:var(--text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + escHtml(String(meta[k])) + '</span>';
+  }).join('<span style="color:var(--border);margin:0 6px;">|</span>');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);margin-right:8px;">' + escHtml(label) + '</span>' + rows + '</div>';
+}
+
+function _ctxFilesBlock(label, items) {
+  if (!items.length) return '';
+  var lis = items.map(function(it) {
+    return '<div style="font-size:10px;color:var(--text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + escHtml(it.summary || '') + (it.size_bytes ? ' <span style="color:var(--text-muted);">' + _ctxFmtBytes(it.size_bytes) + '</span>' : '') + '</div>';
+  }).join('');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span><div style="margin-top:3px;">' + lis + '</div></div>';
+}
+
+function _renderInputsBody(d) {
+  var items = (d && d.items) || [];
+  var cov = (d && d.coverage) || {};
+  var rt = _ctxRuntimeLabel(d && d.runtime);
+  var cloud = !!(d && d._cloud);
+  var byKind = {};
+  items.forEach(function(it) { (byKind[it.kind] = byKind[it.kind] || []).push(it); });
+  var html = '';
+  var summaryBits = [];
+  if (!items.length) {
+    if (cov.inputs === 'none') {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">'
+        + '<strong style="color:var(--text-secondary);">' + escHtml(t('inputs.not_exposed', {runtime: rt}, 'Not exposed by ' + rt)) + '</strong><br>'
+        + escHtml(cov.note || t('inputs.not_exposed_hint', null, 'This runtime does not write its instructions or tool list anywhere ClawMetry can read.')) + '</div>';
+      summaryBits.push(t('inputs.not_exposed', {runtime: rt}, 'Not exposed by ' + rt));
+    } else if (cov.inputs === 'unknown') {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.adapter_missing', null, 'The adapter for this runtime is not loaded here, so ClawMetry cannot say what it exposes.')) + '</div>';
+    } else {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.none_yet', null, 'Nothing captured for this session yet. It fills in as the agent runs.')) + '</div>';
+    }
+    return {html: html, summary: summaryBits.join(' · ')};
+  }
+  (byKind.system_prompt || []).forEach(function(it, i) { html += _ctxTextBlock('sp' + i, t('inputs.system_prompt', null, 'Instructions (system prompt)'), it, cloud); });
+  (byKind.user_prompt || []).slice(0, 1).forEach(function(it, i) { html += _ctxTextBlock('up' + i, t('inputs.user_prompt', null, 'First request'), it, cloud); });
+  html += _ctxNamesBlock(t('inputs.tools', null, 'Tools it could use'), byKind.tools_available || []);
+  html += _ctxNamesBlock(t('inputs.mcp', null, 'Connected servers (MCP)'), byKind.mcp_servers || []);
+  html += _ctxFilesBlock(t('inputs.context_files', null, 'Context files'), byKind.context_file || []);
+  html += _ctxMetaBlock(t('inputs.setup', null, 'Setup'), byKind.runtime_meta || []);
+  if (cov.inputs === 'partial') {
+    html += '<div style="padding-top:6px;font-size:10px;color:var(--text-muted);">' + escHtml(cov.note || t('inputs.partial_hint', null, 'This runtime shares part of its setup; the rest is not written to disk.')) + '</div>';
+  }
+  var sp = (byKind.system_prompt || [])[0];
+  if (sp && sp.size_bytes) summaryBits.push(_ctxFmtBytes(sp.size_bytes) + ' ' + t('inputs.system_prompt', null, 'Instructions (system prompt)').toLowerCase().split(' (')[0]);
+  var toolNames = [];
+  (byKind.tools_available || []).forEach(function(it) { (it.names || []).forEach(function(n) { if (toolNames.indexOf(n) === -1) toolNames.push(n); }); });
+  if (toolNames.length) summaryBits.push(toolNames.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: toolNames.length}, toolNames.length + ' tools'));
+  var rm = (byKind.runtime_meta || [])[0];
+  if (rm && rm.meta && rm.meta.model) summaryBits.push(String(rm.meta.model));
+  summaryBits.push('<span title="Measured from the runtime\'s own context.compiled event, not estimated." style="color:#10b981;">' + escHtml(t('inputs.measured', null, 'measured')) + '</span>');
+  return {html: html, summary: summaryBits.join(' · ')};
+}
+
+async function _loadInputsPanel(sessionId) {
+  var panel = document.getElementById('inputs-panel');
+  var body  = document.getElementById('inputs-panel-body');
+  var sumEl = document.getElementById('inputs-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  body.innerHTML = '';
+  try {
+    var d = await _fetchSessionContext(sessionId);
+    if (!d || d.error) return;
+    var r = _renderInputsBody(d);
+    body.innerHTML = r.html;
+    if (sumEl) sumEl.innerHTML = r.summary;
+    panel.style.display = '';
+    // Open by default when there is something to read; stay collapsed for
+    // the honest empty states so they do not push the transcript down.
+    body.style.display = (d.items && d.items.length) ? '' : 'none';
+  } catch (e) { /* the panel is additive; the transcript renders without it */ }
+}
+
+// LLM Context tab: measured inputs for the selected session chip. The gauge
+// above it estimates utilisation against a window; this line is the part
+// that is NOT an estimate, so the two never wear the same clothes.
+async function _loadCeInputsMeasured(sessionId) {
+  var el = document.getElementById('ce-inputs-measured');
+  if (!el) return;
+  if (!sessionId) { el.innerHTML = ''; return; }
+  try {
+    var d = await _fetchSessionContext(sessionId);
+    if (!d || d.error) { el.innerHTML = ''; return; }
+    var r = _renderInputsBody(d);
+    el.innerHTML = '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:8px 12px;">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">'
+      + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">📥 ' + escHtml(t('inputs.title', null, 'What the agent was given')) + '</span>'
+      + '<span style="font-size:11px;color:var(--text-muted);">' + r.summary + '</span></div>'
+      + r.html + '</div>';
+  } catch (e) { el.innerHTML = ''; }
+}
+
+// Per-runtime lifecycle honesty (WO-61). An empty "permission denials" row
+// on a Cursor session means Cursor never exposes one, not that nothing was
+// refused; this line says which. Reads /api/lifecycle/coverage, the one
+// declaration both dashboards render. A missing route (older server, hosted
+// dashboard before its interceptor lands) renders nothing rather than a
+// blank or invented state.
+async function _loadLifecycleCoverageLine(sessionId) {
+  var meta = document.getElementById('transcript-meta');
+  if (!meta) return;
+  var prev = document.getElementById('lifecycle-coverage-line');
+  if (prev) prev.remove();
+  var rt = '';
+  var sid = String(sessionId || '');
+  if (sid.indexOf(':') > 0) rt = sid.slice(0, sid.indexOf(':'));
+  if (!rt) {
+    try {
+      var pf = _cmClientFilterRt(_cmRuntimeFilter());
+      if (pf && pf !== 'all') rt = pf;
+    } catch (e) {}
+  }
+  if (!rt) rt = 'openclaw';
+  var data = null;
+  try {
+    var r = await fetch('/api/lifecycle/coverage?runtime=' + encodeURIComponent(rt));
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (e) { return; }
+  if (!data || !data.facts) return;
+  var lines = (data.lines || []).filter(function(l){ return !!l; });
+  var full = (data.full || []).length;
+  var labels = { tool_failed: 'Tool failures', subagent_started: 'Subagent starts',
+                 subagent_stopped: 'Subagent stops', permission_denied: 'Permission denials',
+                 context_compacted: 'Context compactions', session_started: 'Session start',
+                 instructions_loaded: 'Instructions loaded' };
+  var label = rt;
+  try { label = _cmRuntimeLabel(rt) || rt; } catch (e) {}
+  var html = '<div id="lifecycle-coverage-line" class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-secondary);align-items:flex-start;">'
+    + '<span class="stat-label" title="Which lifecycle facts ' + escHtml(label) + ' can put on this trail. Full: reported as it happens. Partial: recovered after the event. Not exposed: the runtime never tells anyone.">Trail facts</span>'
+    + '<span class="stat-val" style="font-size:11px;line-height:1.5;">';
+  if (!lines.length) {
+    html += '<span style="color:#16a34a;">All ' + full + ' lifecycle facts reported as they happen</span>';
+  } else {
+    var fullNames = (data.full || []).map(function(f){ return labels[f] || f; });
+    if (fullNames.length) html += '<span style="color:#16a34a;">' + escHtml(fullNames.join(', ')) + ': live</span><br>';
+    html += lines.map(function(l){ return '<span style="color:#d97706;">' + escHtml(l) + '</span>'; }).join('<br>');
+  }
+  html += '</span></div>';
+  meta.insertAdjacentHTML('beforeend', html);
+}
+
 async function _loadAuthorityPanel(sessionId) {
   var panel = document.getElementById('authority-panel');
   var body  = document.getElementById('authority-panel-body');
@@ -30590,6 +31148,160 @@ function loadGuardTab() {
   loadGuardSessions();
   loadGuardPolicies();
   loadGuardActions();
+  loadGuardSelfReports();
+}
+
+// ── Agent self-reports (WO-59) ────────────────────────────────────────────
+// Category chips share one label table so the Guard card and the transcript
+// panel say the same thing.
+var SELFREPORT_CATEGORY_LABEL = {
+  missing_context: 'Missing context',
+  repeatedly_broken_tool: 'Tool kept failing',
+  capability_gap: 'Capability gap',
+  task_failure: 'Task not finished',
+  bypassed_block: 'Worked around a block',
+  noteworthy: 'Noteworthy'
+};
+var SELFREPORT_UNCORROBORATED_HINT =
+  'No independent evidence was found for this report. That is not the same as false.';
+
+function selfReportCategoryLabel(cat) {
+  if (SELFREPORT_CATEGORY_LABEL[cat]) return SELFREPORT_CATEGORY_LABEL[cat];
+  return String(cat || 'unknown').replace(/_/g, ' ');
+}
+
+function selfReportWhen(ms) {
+  var n = Number(ms) || 0;
+  if (!n) return '';
+  try { return new Date(n).toLocaleString(); } catch (e) { return ''; }
+}
+
+function selfReportCorroborationChip(r) {
+  if (r && r.corroborated) {
+    return '<span class="pill pill-ok" title="' + guardEsc('Independent evidence: ' + (r.corroboration_ref || '')) + '">Corroborated</span>';
+  }
+  return '<span class="pill" title="' + guardEsc(SELFREPORT_UNCORROBORATED_HINT) + '">Uncorroborated</span>';
+}
+
+function loadGuardSelfReports() {
+  var el = document.getElementById('guard-selfreports-body');
+  if (!el) return;
+  var winEl = document.getElementById('guard-selfreports-window');
+  if (window.CLOUD_MODE) {
+    el.innerHTML = '<div class="empty-state">Agent reports are read from the local store. They reach the hosted dashboard with a later cloud release.</div>';
+    return;
+  }
+  var rt = '';
+  try { rt = (typeof _cmRuntimeFilter === 'function') ? String(_cmRuntimeFilter() || '') : ''; } catch (e) { rt = ''; }
+  if (rt === 'all') rt = '';
+  var qs = '?window=7d' + (rt ? '&runtime=' + encodeURIComponent(rt) : '');
+  Promise.all([
+    fetch('/api/self-reports/honesty' + qs).then(function (r) { return r.json(); }),
+    fetch('/api/self-reports/support').then(function (r) { return r.json(); }).catch(function () { return null; })
+  ]).then(function (res) {
+    var d = res[0] || {};
+    var support = (res[1] && res[1].runtimes) || [];
+    if (winEl) winEl.textContent = 'last 7 days' + (rt ? ' on ' + rt : ', all runtimes');
+    var counts = d.counts || {};
+    var honesty = d.honesty || [];
+    var runtimes = Object.keys(counts).sort();
+    var html = '';
+
+    // Runtime-scoped honesty about MCP support comes first: a runtime that
+    // cannot register the server must say so, not show an empty table.
+    if (rt) {
+      var row = null;
+      support.forEach(function (s) { if (s.runtime === rt) row = s; });
+      if (row && row.mcp === 'not_supported') {
+        html += '<div class="empty-state">' + guardEsc(rt) + ' has no MCP support, so it cannot send reports. ' + guardEsc(row.detail || '') + '</div>';
+      } else if (row && row.mcp === 'unknown') {
+        html += '<div class="empty-state">ClawMetry has not verified where ' + guardEsc(rt) + ' keeps its MCP configuration. Register the server by hand to receive reports.</div>';
+      } else if (row && row.status !== 'registered' && row.status !== 'already_present') {
+        html += '<div class="empty-state">The ClawMetry MCP server is not registered with ' + guardEsc(rt) + ' yet. Run <code>clawmetry mcp install --runtime ' + guardEsc(rt) + '</code>.</div>';
+      }
+    } else {
+      var registered = support.filter(function (s) { return s.status === 'registered' || s.status === 'already_present'; });
+      var supported = support.filter(function (s) { return s.mcp === 'supported'; });
+      if (!registered.length && supported.length) {
+        html += '<div class="empty-state">No runtime has the ClawMetry MCP server registered yet, so agents cannot send reports. Run <code>clawmetry mcp install</code> (' + supported.map(function (s) { return guardEsc(s.label || s.runtime); }).join(', ') + ').</div>';
+      }
+    }
+
+    if (!runtimes.length) {
+      html += '<div class="empty-state">No agent reports in the last 7 days' + (rt ? ' from ' + guardEsc(rt) : '') + '.</div>';
+    } else {
+      var cats = {};
+      runtimes.forEach(function (r) { Object.keys(counts[r] || {}).forEach(function (c) { cats[c] = 1; }); });
+      var catList = Object.keys(cats).sort();
+      html += '<table class="data-table"><thead><tr><th>Runtime</th>' +
+        catList.map(function (c) { return '<th>' + guardEsc(selfReportCategoryLabel(c)) + '</th>'; }).join('') +
+        '<th>Total</th></tr></thead><tbody>';
+      runtimes.forEach(function (r) {
+        var total = 0;
+        var cells = catList.map(function (c) {
+          var n = Number((counts[r] || {})[c]) || 0; total += n;
+          return '<td>' + (n || '<span class="muted">0</span>') + '</td>';
+        }).join('');
+        html += '<tr><td>' + guardEsc(r) + '</td>' + cells + '<td>' + total + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    html += '<div style="margin-top:10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);">Honesty: detector findings the agent also reported</div>';
+    if (!honesty.length) {
+      html += '<div class="empty-state">No detector findings in this window, so there is nothing to compare reports against yet.</div>';
+    } else {
+      html += '<table class="data-table"><thead><tr><th>Runtime</th><th>Model</th><th>Findings</th><th>Reported</th><th>Share</th></tr></thead><tbody>';
+      honesty.forEach(function (h) {
+        var share;
+        if (h.withheld || h.honesty === null || h.honesty === undefined) {
+          share = '<span class="muted" title="' + guardEsc(h.reason || '') + '">Withheld: ' + guardEsc(h.reason || 'too few findings') + '</span>';
+        } else {
+          share = Math.round(Number(h.honesty) * 100) + '%';
+        }
+        html += '<tr><td>' + guardEsc(h.runtime) + '</td><td>' + guardEsc(h.model || 'unknown') + '</td>' +
+          '<td>' + (Number(h.incidents) || 0) + '</td><td>' + (Number(h.reported) || 0) + '</td><td>' + share + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    el.innerHTML = html;
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load agent reports.</div>';
+  });
+}
+
+// Transcript view: the notes this session's agent sent, in time order.
+async function _loadSelfReportsPanel(sessionId) {
+  var panel = document.getElementById('selfreports-panel');
+  var body = document.getElementById('selfreports-panel-body');
+  var sumEl = document.getElementById('selfreports-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  if (window.CLOUD_MODE) return;  // local-store view; hosted copy comes with the snapshot slice
+  try {
+    var d = await fetch('/api/self-reports?session=' + encodeURIComponent(sessionId) + '&limit=200')
+      .then(function (r) { return r.json(); });
+    if (!d || d.error) return;
+    var rows = (d.reports || []).slice().sort(function (a, b) { return (Number(a.ts) || 0) - (Number(b.ts) || 0); });
+    panel.style.display = '';
+    if (!rows.length) {
+      if (sumEl) sumEl.textContent = 'none';
+      body.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:6px 0;">The agent sent no notes for this session. Reports need the ClawMetry MCP server registered with the runtime (clawmetry mcp install).</div>';
+      return;
+    }
+    var corroborated = rows.filter(function (r) { return r.corroborated; }).length;
+    if (sumEl) sumEl.textContent = rows.length + ' note' + (rows.length === 1 ? '' : 's') + ' · ' + corroborated + ' corroborated';
+    var html = '<div style="font-size:11px;color:var(--text-muted);margin:4px 0 8px;">' + escHtml(SELFREPORT_UNCORROBORATED_HINT) + '</div>';
+    rows.forEach(function (r) {
+      html += '<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--border-secondary);">' +
+        '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;min-width:120px;">' + escHtml(selfReportWhen(r.ts)) + '</span>' +
+        '<span class="pill" style="white-space:nowrap;">' + escHtml(selfReportCategoryLabel(r.category)) + '</span>' +
+        '<span style="flex:1;font-size:12px;color:var(--text-primary);">' + escHtml(r.summary_redacted || '') + '</span>' +
+        selfReportCorroborationChip(r) +
+        '</div>';
+    });
+    body.innerHTML = html;
+  } catch (e) { /* the panel is optional decoration on the transcript */ }
 }
 
 function loadGuardSessions() {
@@ -30945,4 +31657,271 @@ function loadGuardActions() {
   }).catch(function () {
     el.innerHTML = '<div class="empty-state">Could not load decisions.</div>';
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIGNALS TAB (WO-58 Behaviour Signals): what people and agents say about a
+// run. Reads /api/signals (local: DuckDB via the daemon proxy; cloud: the
+// signals / signalsByRuntime snapshot slice). Every number re-derives from the
+// runtime switcher (_cmRuntimeFilter()). Polls only while the tab is active.
+// Copy rule: no em dashes, no double dashes, plain words.
+// ═══════════════════════════════════════════════════════════════════════════
+var _sigState = { window: '7d', timer: null, open: null, data: null };
+var SIGNALS_POLL_MS = 60000;
+var SIGNAL_ORDER = ['user_frustration', 'user_praise', 'assistant_refusal',
+  'assistant_laziness', 'task_failure', 'user_retry'];
+var SIGNAL_LABEL = {
+  user_frustration: 'Frustration', user_praise: 'Praise',
+  assistant_refusal: 'Refusals', assistant_laziness: 'Work handed back',
+  task_failure: 'Gave up', user_retry: 'Retries'
+};
+var SIGNAL_HINT = {
+  user_frustration: 'People swearing at or correcting the agent.',
+  user_praise: 'Thanks, perfect, nice work.',
+  assistant_refusal: 'The agent declines to do the work.',
+  assistant_laziness: 'The agent hands the work back to the person.',
+  task_failure: 'The agent says it could not finish.',
+  user_retry: 'The same request sent again. A floor: retries across ingest gaps are missed.'
+};
+
+function _sigT(key, args, fallback) {
+  if (typeof t === 'function') { try { return t(key, args, fallback); } catch (e) {} }
+  var s = fallback || key;
+  if (args) Object.keys(args).forEach(function (k) { s = s.replace('{' + k + '}', args[k]); });
+  return s;
+}
+function sigEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function sigPct(rate) {
+  if (rate == null || isNaN(rate)) return null;
+  var p = rate * 100;
+  return (p < 10 ? p.toFixed(1) : Math.round(p)) + '%';
+}
+function sigRuntimeLabel(rt) {
+  if (!rt || rt === 'all') return 'all runtimes';
+  if (typeof _cmRuntimeLabel === 'function') { try { return _cmRuntimeLabel(rt); } catch (e) {} }
+  return rt;
+}
+function _sigIsActive() {
+  return (typeof _cmCurrentTab !== 'undefined') && _cmCurrentTab === 'signals';
+}
+
+function signalsSetWindow(w) {
+  _sigState.window = (w === '1d' || w === '30d') ? w : '7d';
+  document.querySelectorAll('#signals-window-seg button').forEach(function (b) {
+    b.classList.toggle('active', b.dataset.window === _sigState.window);
+  });
+  loadSignalsTab();
+}
+
+function loadSignalsTab() {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/signals?window=' + encodeURIComponent(_sigState.window) +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    _sigState.data = d || {};
+    signalsRenderHeadline(d, rt);
+    signalsRenderTable(d, rt);
+    signalsRenderCoverage(d, rt);
+    if (_sigState.open) signalsOpenSessions(_sigState.open, true);
+  }).catch(function () {
+    var h = document.getElementById('signals-headline');
+    if (h) h.textContent = _sigT('signals.err', null, 'Could not load signals.');
+    var b = document.getElementById('signals-table-body');
+    if (b) b.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.err', null, 'Could not load signals.')) + '</div>';
+  });
+  if (_sigState.timer) clearInterval(_sigState.timer);
+  _sigState.timer = visibilitySetInterval(function () {
+    if (!_sigIsActive()) { clearInterval(_sigState.timer); _sigState.timer = null; return; }
+    loadSignalsTab();
+  }, SIGNALS_POLL_MS);
+}
+
+// The one sentence the tab leads with. Honest states: no daemon, nothing
+// measured yet, a runtime that exposes no text.
+function signalsRenderHeadline(d, rt) {
+  var h = document.getElementById('signals-headline');
+  var sub = document.getElementById('signals-headline-sub');
+  if (!h) return;
+  var elig = (d && d.eligible_turns) || {};
+  var total = (Number(elig.user) || 0) + (Number(elig.assistant) || 0);
+  if (d && d.store === 'unavailable' && !total) {
+    h.textContent = _sigT('signals.no_daemon', null, 'Signals need the ClawMetry daemon running. Nothing has been measured on this node yet.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  var rc = d && d.runtime_coverage;
+  if (rt && rt !== 'all' && rc && rc.state === 'none') {
+    h.textContent = _sigT('signals.not_exposed_headline', { runtime: sigRuntimeLabel(rt) },
+      'Not exposed by {runtime}: it does not write user or assistant text where ClawMetry can read it.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  if (!total) {
+    h.textContent = _sigT('signals.nothing_yet', null, 'Nothing measured yet. Signals appear once a session with readable turns lands.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  var head = (d && d.headline) || {};
+  h.textContent = head.text || '';
+  if (sub) {
+    sub.textContent = _sigT('signals.measured_over', {
+      user: Number(elig.user) || 0, assistant: Number(elig.assistant) || 0,
+      scope: sigRuntimeLabel(rt)
+    }, 'Measured over {user} user turns and {assistant} agent turns on {scope}.');
+  }
+}
+
+function signalsTrendCell(s) {
+  var tr = (s && s.trend) || {};
+  if (tr.delta == null) return '<span class="sig-muted">' + sigEsc(_sigT('signals.no_prior', null, 'no earlier window')) + '</span>';
+  var pts = Math.abs(Math.round(tr.delta * 1000) / 10);
+  if (tr.direction === 'up') return '<span class="sig-trend sig-up">&#9650; ' + pts + ' pts</span>';
+  if (tr.direction === 'down') return '<span class="sig-trend sig-down">&#9660; ' + pts + ' pts</span>';
+  return '<span class="sig-trend sig-flat">' + sigEsc(_sigT('signals.flat', null, 'about the same')) + '</span>';
+}
+
+function signalsRenderTable(d, rt) {
+  var el = document.getElementById('signals-table-body');
+  var note = document.getElementById('signals-scope-note');
+  if (!el) return;
+  if (note) note.textContent = _sigT('signals.scope', { scope: sigRuntimeLabel(rt) }, 'Scope: {scope}');
+  var sigs = (d && d.signals) || {};
+  var rc = (d && d.runtime_coverage) || null;
+  var elig = (d && d.eligible_turns) || {};
+  var total = (Number(elig.user) || 0) + (Number(elig.assistant) || 0);
+  if (!total) {
+    var msg = (d && d.store === 'unavailable')
+      ? _sigT('signals.no_daemon_short', null, 'No daemon connected.')
+      : (rt !== 'all' && rc && rc.state === 'none'
+        ? _sigT('signals.not_exposed', { runtime: sigRuntimeLabel(rt) }, 'Not exposed by {runtime}')
+        : _sigT('signals.no_turns', null, 'No turns measured in this window.'));
+    el.innerHTML = '<div class="sig-empty">' + sigEsc(msg) + '</div>';
+    return;
+  }
+  var html = '<table class="sig-table"><thead><tr>' +
+    '<th>' + sigEsc(_sigT('signals.col_signal', null, 'Signal')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_rate', null, 'Rate')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_count', null, 'Matches')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_turns', null, 'Of turns')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_trend', null, 'Vs window before')) + '</th>' +
+    '<th></th></tr></thead><tbody>';
+  SIGNAL_ORDER.forEach(function (name) {
+    var s = sigs[name] || {};
+    var side = s.side || (name.indexOf('user_') === 0 ? 'user' : 'assistant');
+    var exposed = !rc || rc.state == null || rc.state === 'unknown' ||
+      (side === 'user' ? rc.user_text !== false : rc.assistant_text !== false);
+    var rateCell, countCell, turnsCell, trendCell, openCell;
+    if (!exposed) {
+      rateCell = '<span class="sig-muted">' + sigEsc(_sigT('signals.not_exposed', { runtime: sigRuntimeLabel(rt) }, 'Not exposed by {runtime}')) + '</span>';
+      countCell = turnsCell = trendCell = openCell = '';
+    } else if (!s.eligible) {
+      rateCell = '<span class="sig-muted">' + sigEsc(_sigT('signals.no_turns_side', { side: side === 'user' ? 'user' : 'agent' }, 'no {side} turns yet')) + '</span>';
+      countCell = turnsCell = trendCell = openCell = '';
+    } else {
+      var p = sigPct(s.rate);
+      rateCell = '<span class="sig-rate' + (s.count ? '' : ' sig-muted') + '">' + (p == null ? '0%' : p) + '</span>';
+      countCell = String(s.count || 0);
+      turnsCell = String(s.eligible || 0);
+      trendCell = signalsTrendCell(s);
+      openCell = s.count
+        ? '<button class="sig-btn sig-btn-sm" data-sig="' + sigEsc(name) + '" onclick="signalsOpenSessions(this.dataset.sig)">' + sigEsc(_sigT('signals.open_sessions', null, 'Sessions')) + '</button>'
+        : '';
+    }
+    html += '<tr' + (_sigState.open === name ? ' class="sig-row-open"' : '') + '>' +
+      '<td><div class="sig-name">' + sigEsc(SIGNAL_LABEL[name] || s.label || name) + '</div>' +
+      '<div class="sig-hint">' + sigEsc(SIGNAL_HINT[name] || '') + '</div></td>' +
+      '<td>' + rateCell + '</td><td>' + countCell + '</td><td>' + turnsCell + '</td>' +
+      '<td>' + trendCell + '</td><td>' + openCell + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+// Drill-down: the sessions behind one row. Reuses the transcript deep-link
+// the stuck banner and Security findings use (#session=<id> + the
+// Transcripts tab), so every entry point behaves alike.
+function signalsOpenSessions(name, silent) {
+  if (!name) return;
+  _sigState.open = name;
+  var card = document.getElementById('signals-sessions-card');
+  var title = document.getElementById('signals-sessions-title');
+  var body = document.getElementById('signals-sessions-body');
+  if (!card || !body) return;
+  card.style.display = '';
+  if (title) title.textContent = _sigT('signals.sessions_title', { signal: SIGNAL_LABEL[name] || name }, '{signal}: sessions this window');
+  if (!silent) body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.loading', null, 'Loading signals...')) + '</div>';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/signals/' + encodeURIComponent(name) + '/sessions?window=' + encodeURIComponent(_sigState.window) +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    var rows = (d && d.sessions) || [];
+    if (!rows.length) {
+      body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.no_sessions', null, 'No sessions matched in this window.')) + '</div>';
+      return;
+    }
+    var html = '<table class="sig-table"><thead><tr><th>Session</th><th>Runtime</th><th>Model</th><th>Started</th><th>Cost</th><th>Matches</th><th></th></tr></thead><tbody>';
+    rows.forEach(function (s) {
+      var started = s.started ? String(s.started).slice(0, 16).replace('T', ' ') : '';
+      html += '<tr><td title="' + sigEsc(s.session_id) + '">' + sigEsc((s.title || s.session_id || '').slice(0, 56)) + '</td>' +
+        '<td>' + sigEsc(sigRuntimeLabel(s.runtime)) + '</td>' +
+        '<td>' + sigEsc(s.model || 'unknown') + '</td>' +
+        '<td>' + sigEsc(started) + '</td>' +
+        '<td>$' + (Number(s.cost_usd) || 0).toFixed(2) + '</td>' +
+        '<td>' + (Number(s.matches) || 0) + '</td>' +
+        '<td><button class="sig-btn sig-btn-sm" data-sid="' + sigEsc(s.session_id) + '" onclick="signalsOpenTranscript(this.dataset.sid)">' + sigEsc(_sigT('signals.open', null, 'Open')) + '</button></td></tr>';
+    });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+  }).catch(function () {
+    body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.err', null, 'Could not load signals.')) + '</div>';
+  });
+  if (_sigState.data) signalsRenderTable(_sigState.data, rt);
+}
+function signalsCloseSessions() {
+  _sigState.open = null;
+  var card = document.getElementById('signals-sessions-card');
+  if (card) card.style.display = 'none';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (_sigState.data) signalsRenderTable(_sigState.data, rt);
+}
+function signalsOpenTranscript(sessionId) {
+  if (!sessionId) return;
+  if (typeof cmOpenFindingSession === 'function') return cmOpenFindingSession(sessionId);
+  try { window.location.hash = 'session=' + encodeURIComponent(sessionId); } catch (e) {}
+  if (typeof switchTab === 'function') switchTab('transcripts');
+}
+
+// Coverage strip: one chip per runtime with three honest states. A runtime
+// with no readable text is "not exposed", never 0%.
+function signalsRenderCoverage(d, rt) {
+  var el = document.getElementById('signals-coverage-body');
+  if (!el) return;
+  var cov = (d && d.coverage) || {};
+  var keys = Object.keys(cov).sort();
+  if (!keys.length) {
+    el.innerHTML = '<div class="sig-empty">' + sigEsc(d && d.store === 'unavailable'
+      ? _sigT('signals.no_daemon_short', null, 'No daemon connected.')
+      : _sigT('signals.no_runtimes', null, 'No runtime has landed a session yet.')) + '</div>';
+    return;
+  }
+  var html = '<div class="sig-cov">';
+  keys.forEach(function (k) {
+    var c = cov[k] || {};
+    var state = c.state || 'none';
+    var text;
+    if (state === 'none') text = _sigT('signals.cov_none', null, 'not exposed');
+    else if (state === 'user_text') text = _sigT('signals.cov_user', null, 'user text only');
+    else if (state === 'assistant_text') text = _sigT('signals.cov_assistant', null, 'agent text only');
+    else text = _sigT('signals.cov_both', null, 'user and agent text');
+    var src = c.source === 'adapter' ? _sigT('signals.cov_declared', null, 'declared by the adapter') : _sigT('signals.cov_inferred', null, 'seen in the store');
+    html += '<div class="sig-chip sig-chip-' + sigEsc(state === 'none' ? 'none' : 'ok') + (rt === k ? ' sig-chip-active' : '') + '" title="' + sigEsc(src) + '">' +
+      '<span class="sig-chip-rt">' + sigEsc(sigRuntimeLabel(k)) + '</span>' +
+      '<span class="sig-chip-state">' + sigEsc(text) + '</span></div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
 }

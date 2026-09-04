@@ -3371,6 +3371,40 @@ class OpenClawAdapter(AgentAdapter):
             Capability.LOGS,
             Capability.GATEWAY_RPC,
             Capability.CHANNELS,
+            # The trajectory recorder writes ``context.compiled`` (system
+            # prompt + tool definitions) next to every transcript; the daemon
+            # ingests it into session_context (sync._sync_trajectory_context).
+            Capability.INPUTS,
+            # Reasoning: OpenClaw persists assistant ``message.content[]``
+            # blocks of ``type: "thinking"`` (the transcript writer keeps them
+            # when a thinking level is set); the tracing/anatomy readers turn
+            # each block into a reasoning span. See trail_coverage().
+            Capability.REASONING,
+        }
+
+    def trail_coverage(self) -> dict:
+        """Decision-trail coverage for OpenClaw session JSONL.
+
+        Inputs are ``full``: the trajectory sidecar's ``context.compiled``
+        carries the system prompt, the prompt and the tool definitions on
+        every model call, and the daemon reads that event out of the sidecar
+        (``sync._sync_trajectory_context``). It is written only when
+        ``OPENCLAW_TRAJECTORY`` is not turned off. Reasoning is ``partial``:
+        the session transcript keeps assistant ``message.content[]`` blocks
+        of ``type: "thinking"`` only when the session runs with a thinking
+        level set (``thinking_level_change`` events record the switch); with
+        thinking off, or a model that has no extended thinking, the
+        transcript carries plain ``text`` blocks and there is nothing to show.
+        """
+        return {
+            "inputs": "full",
+            "reasoning": "partial",
+            "note": ("<sid>.trajectory.jsonl context.compiled carries systemPrompt, "
+                     "prompt, tools[] (name/description/parameters), transport, "
+                     "streamStrategy, imagesCount plus workspaceDir/provider/modelId "
+                     "on the line (written only when OPENCLAW_TRAJECTORY is not off); "
+                     "assistant message.content[] thinking blocks are written only "
+                     "while a thinking level is set for the session"),
         }
 
     # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────────────
