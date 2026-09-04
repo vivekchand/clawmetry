@@ -376,6 +376,7 @@ jobs:
             tests/test_moat_regression_1129.py \
             tests/test_e2e_real_openclaw_pipeline.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
+            tests/test_query_events_keys_first.py \
             tests/test_moat_cloud_roundtrip_e2e.py \
             tests/test_channel_event_chokepoint.py \
             tests/test_no_direct_get_store_in_routes.py \
