@@ -10,13 +10,20 @@ stream — NOT an expensive judge. Each detector is pure (no I/O, no store, no
 clock dependence beyond what the caller passes), operates on the last ``W``
 events, never crashes on malformed events, and returns a structured incident.
 
-Eight detectors in two families. TRAJECTORY (is it stuck?) reads the shape of
-the tool stream and lives here. BEHAVIOUR (is it doing something it does not
-normally do?) reads what the calls DID and lives in ``detector_behaviour``:
+Eleven detectors in three families. TRAJECTORY (is it stuck?) reads the shape
+of the tool stream and lives here. BEHAVIOUR (is it doing something it does
+not normally do?) reads what the calls DID and lives in ``detector_behaviour``:
 ``file_blast_radius``, ``credential_access``, ``network_egress``,
 ``privilege_change``. Those read tool ARGUMENTS rather than syscalls, and every
-incident says so. Thresholds are resolved in ``detector_calibration``; what a
-finding costs is computed in ``detector_money``.
+incident says so. SILENT FAILURE (it stopped, and nobody was told) lives here
+too, defined and registered in ``_ALL_DETECTORS`` below: ``rate_limited``
+(HTTP 429/529 or rate-limit / overloaded / quota text on tool results and API
+error events), ``blocked_on_user`` (a pending approval for the session, or an
+unanswered question / permission request with the session idle past a
+threshold), ``crashed`` (>= 2 session (re)starts inside a short window,
+matching the outcome classifier's ``crash-loop`` tag). Thresholds are resolved
+in ``detector_calibration``; what a finding costs is computed in
+``detector_money``.
 
 The four trajectory detectors:
 
