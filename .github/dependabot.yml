@@ -31,6 +31,18 @@ updates:
     cooldown:
       default-days: 7
 
+  # Docker base images. Required because the Dockerfile pins its base image by
+  # sha256 digest: a digest never moves on its own, so without an updater the
+  # image would stay on whatever CVEs it shipped with on the day it was pinned.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
