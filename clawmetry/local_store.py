@@ -2325,9 +2325,21 @@ def _migrate_session_context_runtime(conn) -> None:
     dropped rather than merged — they are the same facts, and the survivor
     is the one the current ingest wrote.
 
+    The same pass heals ``turns`` counts the old ingest inflated. ``turns``
+    used to advance on every re-ingest, and the family ingest re-reads a whole
+    session each time it grows, so a row whose ``first_ts`` equals its
+    ``last_ts`` and yet claims several turns was counted, not observed: the
+    fact never recurred at a later timestamp. Those go back to 1, the only
+    number the stored evidence supports. A genuine recurrence has a later
+    ``last_ts`` and is left alone.
+
     Idempotent: a second run finds nothing left to move. Failure is
     contained by the caller, which logs and continues.
     """
+    conn.execute("""
+        UPDATE session_context SET turns = 1
+        WHERE turns > 1 AND last_ts = first_ts
+    """)
     mislabelled = conn.execute("""
         SELECT COUNT(*) FROM session_context
         WHERE agent_type = 'openclaw'

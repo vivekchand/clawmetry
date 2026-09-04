@@ -394,3 +394,36 @@ def test_migration_drops_the_stale_copy_instead_of_colliding(store):
     rows = store.query_session_context(
         session_id="cursor:77777777-aaaa-bbbb-cccc-888888888888")
     assert len(rows) == 1 and rows[0]["agent_type"] == "cursor"
+
+
+def test_migration_heals_turn_counts_the_old_ingest_inflated(store):
+    """``turns`` used to advance on every re-ingest. A row whose first_ts
+    equals its last_ts never recurred at a later timestamp, so a count above
+    1 there was counted, not observed."""
+    store._conn.execute("""
+        INSERT INTO session_context (agent_type, session_id, node_id, kind,
+            sha256, size_bytes, content, summary, first_ts, last_ts, turns,
+            source, created_at)
+        VALUES ('claude_code', 'claude_code:99999999-aaaa-bbbb-cccc-000000000000',
+                'n', 'user_prompt', 'f00dface', 9, NULL, '{"chars":9}',
+                '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z', 7,
+                'context.compiled', 0)
+    """)
+    # A genuine recurrence: seen again at a later timestamp.
+    store._conn.execute("""
+        INSERT INTO session_context (agent_type, session_id, node_id, kind,
+            sha256, size_bytes, content, summary, first_ts, last_ts, turns,
+            source, created_at)
+        VALUES ('openclaw', 'aaaaaaaa-0000-1111-2222-333333333333', 'n',
+                'system_prompt', 'beadfeed', 9, NULL, '{"chars":9}',
+                '2026-09-01T00:00:00Z', '2026-09-01T06:00:00Z', 40,
+                'context.compiled', 0)
+    """)
+    import clawmetry.local_store as ls
+    ls._apply_migrations(store._conn)
+    inflated = store.query_session_context(
+        session_id="claude_code:99999999-aaaa-bbbb-cccc-000000000000")
+    assert inflated[0]["turns"] == 1
+    real = store.query_session_context(
+        session_id="aaaaaaaa-0000-1111-2222-333333333333")
+    assert real[0]["turns"] == 40
