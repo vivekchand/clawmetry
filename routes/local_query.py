@@ -1067,6 +1067,22 @@ _DAEMON_METHODS = frozenset({
     "query_signal_coverage",
     "query_signal_sessions",
     "query_signal_rate_window",
+    # Signal shifts + briefs (WO-62, clawmetry/signal_shifts.py, briefs.py).
+    # Issues are written by the daemon tick and transitioned by the operator
+    # from the Signals tab; briefs are edited from the tab and run by the
+    # daemon scheduler. Same proxy for the same reason as above.
+    "query_signal_shift_inputs",
+    "query_signal_shift_breakdown",
+    "upsert_signal_issue",
+    "get_signal_issue",
+    "query_signal_issues",
+    "set_signal_issue_status",
+    "list_briefs",
+    "get_brief",
+    "upsert_brief",
+    "delete_brief",
+    "mark_brief_run",
+    "dives_table_columns",
 })
 
 
