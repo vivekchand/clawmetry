@@ -6980,6 +6980,124 @@ def _try_local_store_model_transitions(sid: str):
     }
 
 
+# ── Inputs & context: what the agent was given ──────────────────────────────
+
+
+def _trail_coverage_for(runtime: str) -> dict:
+    """The adapter's own declaration of what it can capture (see
+    ``AgentAdapter.trail_coverage``). ``unknown`` when no adapter for the
+    runtime is loaded in this process (a paid adapter without the pro wheel),
+    which is a different statement from "the runtime does not expose it"."""
+    try:
+        from clawmetry.adapters import registry as _reg
+        adapter = _reg.get(runtime)
+    except Exception:
+        adapter = None
+    if adapter is None and runtime in ("openclaw", "nemoclaw"):
+        # The two FREE adapters ship in this wheel; answer from the class even
+        # when nothing has populated the registry (tests, single-process boots).
+        try:
+            if runtime == "openclaw":
+                from clawmetry.adapters.openclaw import OpenClawAdapter as _A
+            else:
+                from clawmetry.adapters.nemo import NemoClawAdapter as _A
+            adapter = _A()
+        except Exception:
+            adapter = None
+    if adapter is None:
+        return {"inputs": "unknown", "reasoning": "unknown",
+                "note": "no adapter loaded for this runtime"}
+    try:
+        cov = adapter.trail_coverage()
+    except Exception:
+        cov = None
+    if not isinstance(cov, dict):
+        return {"inputs": "none", "reasoning": "none", "note": ""}
+    return {
+        "inputs": str(cov.get("inputs") or "none"),
+        "reasoning": str(cov.get("reasoning") or "none"),
+        "note": str(cov.get("note") or ""),
+    }
+
+
+def _runtime_of_session_id(sid: str, rows: list, requested: str) -> str:
+    for r in rows:
+        at = (r.get("agent_type") or "").strip()
+        if at:
+            return at
+    if requested:
+        return requested
+    # Family sessions carry their runtime as a prefix (claude_code:<uuid>).
+    if ":" in sid:
+        head = sid.split(":", 1)[0]
+        if head and " " not in head and len(head) <= 32:
+            return head
+    return "openclaw"
+
+
+@bp_sessions.route("/api/sessions/<path:session_id>/context")
+def api_session_context(session_id):
+    """Inputs & context for one session, from the DuckDB ``session_context``
+    table only (no raw-file fallback: a session ingested from a machine other
+    than this one has no file here).
+
+    Returns ``{session_id, runtime, coverage:{inputs, reasoning, note},
+    items:[{kind, sha256, size_bytes, summary, turns, first_ts, last_ts,
+    content, content_truncated}]}``. ``content`` is the redacted, capped text
+    for ``system_prompt`` / ``user_prompt`` / ``context_file`` only; for
+    ``tools_available`` and ``mcp_servers`` the JSON ``summary`` carries the
+    names and ``names`` is the parsed list. Honours ``?runtime=``.
+    """
+    sid = (session_id or "").strip()
+    if not sid or any(c in sid for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+    requested = (request.args.get("runtime") or "").strip().lower()
+    if requested == "all":
+        requested = ""
+    rows = _ls_call(
+        "query_session_context",
+        session_id=sid,
+        agent_type=requested or None,
+        limit=200,
+    ) or []
+    runtime = _runtime_of_session_id(sid, rows, requested)
+    items = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        item = {
+            "kind": r.get("kind"),
+            "sha256": r.get("sha256"),
+            "size_bytes": r.get("size_bytes"),
+            "summary": r.get("summary"),
+            "turns": r.get("turns"),
+            "first_ts": r.get("first_ts"),
+            "last_ts": r.get("last_ts"),
+            "content": r.get("content"),
+            "content_truncated": bool(r.get("content_truncated")),
+        }
+        if item["kind"] in ("tools_available", "mcp_servers", "runtime_meta"):
+            try:
+                parsed = json.loads(r.get("summary") or "null")
+            except Exception:
+                parsed = None
+            if item["kind"] == "runtime_meta":
+                item["meta"] = parsed if isinstance(parsed, dict) else {}
+            else:
+                item["names"] = parsed if isinstance(parsed, list) else []
+        items.append(item)
+    return jsonify({
+        "session_id": sid,
+        "runtime": runtime,
+        "coverage": _trail_coverage_for(runtime),
+        "items": items,
+        "count": len(items),
+        # Every row is measured from the runtime's own event; nothing here
+        # is estimated, so the UI never needs an "estimated" badge for it.
+        "basis": "measured",
+    })
+
+
 @bp_sessions.route("/api/sessions/<sid>/model-transitions")
 def api_session_model_transitions(sid):
     """Return model/provider transitions detected within a single session."""

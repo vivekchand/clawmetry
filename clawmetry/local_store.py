@@ -1077,6 +1077,33 @@ _DDL = [
         PRIMARY KEY (node_id, agent_id, content_sha256)
     )
     """,
+    # Inputs & context (Trail triad, INPUTS pillar): what the agent was GIVEN,
+    # per session. Fed by ``context.compiled`` events (OpenClaw trajectory
+    # recorder; paid adapters emit the same shape) through
+    # ``clawmetry/session_context.py`` at the ingest chokepoint. ``sha256`` +
+    # ``size_bytes`` describe the FULL text; ``content`` is the redacted copy
+    # capped at 64 KB. The same sha recurring on a later turn bumps ``turns``
+    # and ``last_ts`` instead of storing the prompt again. Idempotent DDL, so
+    # no schema-version bump is needed (CREATE TABLE IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS session_context (
+        agent_type      VARCHAR,
+        session_id      VARCHAR,
+        node_id         VARCHAR,
+        kind            VARCHAR,
+        sha256          VARCHAR,
+        size_bytes      INTEGER,
+        content         BLOB,
+        summary         VARCHAR,
+        first_ts        VARCHAR,
+        last_ts         VARCHAR,
+        turns           INTEGER DEFAULT 1,
+        source          VARCHAR,
+        created_at      BIGINT,
+        PRIMARY KEY (agent_type, session_id, kind, sha256)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_session_context_session ON session_context(agent_type, session_id)",
     "CREATE INDEX IF NOT EXISTS idx_bootstrap_node ON bootstrap_archive(node_id, captured_at)",
     # Issue #1007 (Phase 1 of epic #1006) — OTel-compatible span storage.
     # One row per OTel span received via the /v1/traces OTLP receiver. Shape
@@ -3740,6 +3767,23 @@ class LocalStore:
                 raise ValueError("event must include 'event_type'")
             if not event.get("ts"):
                 raise ValueError("event must include 'ts'")
+            if event.get("event_type") == "context.compiled":
+                # Inputs & context: fingerprint the system prompt / user
+                # prompt / tool definitions ONCE here and shrink the raw
+                # copy (the payload repeats the whole conversation every
+                # turn). Runs BEFORE redaction so sha256/size describe the
+                # text the agent actually received; the stored content is
+                # redacted inside session_context itself. Best-effort;
+                # never blocks the event.
+                try:
+                    from clawmetry import session_context as _sctx
+                    _ctx_rows = _sctx.rows_from_event(event)
+                    if _ctx_rows:
+                        self.ingest_session_context(_ctx_rows)
+                    event = dict(event)
+                    event["data"] = _sctx.compact_raw_event_data(event.get("data"))
+                except Exception:
+                    pass
             if redact is not None:
                 try:
                     event = redact(event)
@@ -12633,6 +12677,118 @@ class LocalStore:
                 event.get("action"),
                 event.get("latency_ms"),
             ])
+
+    # ── Inputs & context (session_context) ─────────────────────────────────
+
+    def ingest_session_context(self, rows: list[dict[str, Any]]) -> int:
+        """Upsert session_context rows (see ``clawmetry/session_context.py``).
+
+        Keyed on (agent_type, session_id, kind, sha256). A row whose sha is
+        already present bumps ``turns`` and ``last_ts`` and keeps the first
+        stored content: the same system prompt on turn 40 is one fact seen 40
+        times, not 40 rows. Returns the number of rows written."""
+        if self._read_only:
+            raise RuntimeError("local_store: ingest_session_context() on read-only store")
+        n = 0
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            for r in rows or ():
+                if not isinstance(r, dict):
+                    continue
+                sid = str(r.get("session_id") or "")
+                kind = str(r.get("kind") or "")
+                sha = str(r.get("sha256") or "")
+                if not (sid and kind and sha):
+                    continue
+                content = r.get("content")
+                if isinstance(content, str):
+                    content = content.encode("utf-8", "ignore")
+                elif content is not None and not isinstance(content, (bytes, bytearray)):
+                    content = str(content).encode("utf-8", "ignore")
+                ts = str(r.get("last_ts") or r.get("first_ts") or "")
+                self._conn.execute("""
+                    INSERT INTO session_context (
+                        agent_type, session_id, node_id, kind, sha256, size_bytes,
+                        content, summary, first_ts, last_ts, turns, source, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    ON CONFLICT (agent_type, session_id, kind, sha256) DO UPDATE SET
+                        turns    = session_context.turns + 1,
+                        last_ts  = CASE WHEN excluded.last_ts > session_context.last_ts
+                                        THEN excluded.last_ts ELSE session_context.last_ts END,
+                        first_ts = CASE WHEN excluded.first_ts < session_context.first_ts
+                                        THEN excluded.first_ts ELSE session_context.first_ts END,
+                        summary  = COALESCE(excluded.summary, session_context.summary)
+                """, [
+                    str(r.get("agent_type") or "openclaw"),
+                    sid,
+                    str(r.get("node_id") or ""),
+                    kind,
+                    sha,
+                    int(r.get("size_bytes") or 0),
+                    content,
+                    r.get("summary"),
+                    str(r.get("first_ts") or ts),
+                    ts,
+                    str(r.get("source") or "context.compiled"),
+                    now_ms,
+                ])
+                n += 1
+        return n
+
+    def query_session_context(
+        self,
+        *,
+        session_id: str,
+        agent_type: str | None = None,
+        include_content: bool = True,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Inputs & context rows for one session, newest-last per kind.
+
+        ``session_id`` may be the bare id or the runtime-prefixed one
+        (``claude_code:<uuid>``): family sessions are stored prefixed, the
+        transcript viewer often holds the bare form. ``content`` is decoded
+        to text for ``system_prompt`` / ``user_prompt`` only (the tool
+        definitions JSON stays out of the response; ``summary`` carries the
+        names) and omitted entirely when ``include_content`` is False."""
+        sid = str(session_id or "")
+        if not sid:
+            return []
+        clauses = ["(session_id = ? OR session_id LIKE ? )"]
+        params: list[Any] = [sid, "%:" + sid]
+        if agent_type:
+            clauses.append("agent_type = ?")
+            params.append(str(agent_type))
+        sql = f"""
+            SELECT agent_type, session_id, node_id, kind, sha256, size_bytes,
+                   content, summary, first_ts, last_ts, turns, source
+            FROM session_context
+            WHERE {" AND ".join(clauses)}
+            ORDER BY kind, first_ts, sha256
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["agent_type", "session_id", "node_id", "kind", "sha256",
+                "size_bytes", "content", "summary", "first_ts", "last_ts",
+                "turns", "source"]
+        out: list[dict[str, Any]] = []
+        for tup in self._fetch(sql, params):
+            row = dict(zip(cols, tup))
+            blob = row.pop("content", None)
+            if include_content and row["kind"] in ("system_prompt", "user_prompt", "context_file") and blob is not None:
+                try:
+                    row["content"] = bytes(blob).decode("utf-8", "ignore")
+                except Exception:
+                    row["content"] = None
+            else:
+                row["content"] = None
+            try:
+                from clawmetry.session_context import CONTENT_CAP as _cap
+            except Exception:
+                _cap = 64 * 1024
+            row["content_truncated"] = bool(int(row.get("size_bytes") or 0) > _cap)
+            out.append(row)
+        return out
 
     def query_guardrail_events(
         self,
