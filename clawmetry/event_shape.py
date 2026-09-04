@@ -70,6 +70,75 @@ ROLES = ("user", "assistant", "system", "tool", "")
 #: log file is not an intent, and the column rides the encrypted cloud slice.
 INTENT_MAX_CHARS = 4000
 
+
+# ── Public API (the three entry points other modules call) ─────────────────
+
+def typed_columns(event_type: Any, data: Any) -> tuple:
+    """The four typed ``events`` columns for one row, in insert order:
+    ``(role, block_kind, tool_name, is_error)``.
+
+    Called by the store's row builder for EVERY new event row, so a row
+    written after schema v15 carries its classification from the moment it
+    is inserted; the daemon's bounded back-fill only exists for rows that
+    predate v15. ``block_kind`` is never NULL on a stamped row (``other``
+    when nothing fits), which is also the marker the back-fill uses to skip
+    rows it has already visited.
+    """
+    shape = classify(event_type, data)
+    return (
+        shape["role"] or None,
+        shape["block_kind"] or "other",
+        shape["tool_name"] or None,
+        bool(shape["is_error"]),
+    )
+
+
+def first_user_prompt(rows: Iterable[Any], max_chars: int = INTENT_MAX_CHARS) -> str:
+    """The full text of the first real user prompt in ``rows``.
+
+    ``rows`` are stored event dicts (``event_type`` + ``data``, oldest first
+    or not; the earliest by ``ts`` wins), the raw dicts a transcript batch
+    hands the ingester, or adapter ``Event`` objects (``type`` / ``role`` /
+    ``content``). Capped at ``max_chars`` with an ellipsis marker. "" when
+    no qualifying prompt exists. Never raises."""
+    best_ts: Any = None
+    best = ""
+    try:
+        for r in rows:
+            et, data, ts = _row_parts(r)
+            shape = classify(et, data)
+            if shape["role"] != "user" or shape["block_kind"] != "text":
+                continue
+            text = clean_prompt_text(shape["text"])
+            if not text:
+                continue
+            key = _s(ts)
+            if best and best_ts is not None and key and key >= best_ts:
+                continue
+            best, best_ts = text, key
+            if not key:
+                break  # unordered input: first hit wins
+    except Exception:  # noqa: BLE001
+        return best[:max_chars]
+    if len(best) > max_chars:
+        best = best[: max_chars - 3].rstrip() + "..."
+    return best
+
+
+def clean_prompt_text(text: Any) -> str:
+    """Whitespace-normalised prompt text, or "" when it cannot be a human
+    prompt (harness wrappers such as ``<system-reminder>``, the resumed-
+    session ``Caveat:`` preamble). Same rule ``session_titles`` applies, so
+    the 80-char title and the full intent always come from the same turn."""
+    if not isinstance(text, str):
+        return ""
+    stripped = text.strip()
+    if not stripped or stripped.startswith(_PROMPT_SKIP_PREFIXES):
+        return ""
+    return "\n".join(" ".join(line.split()) for line in stripped.splitlines()).strip()
+
+
+# ── Classifier + helpers ───────────────────────────────────────────────────
 # Pure plumbing: never a turn, never a span. Kept in sync with the reader
 # constants (routes/tracing._TRACE_PLUMBING_TYPES, turn_anatomy._PLUMBING_TYPES).
 _PLUMBING = frozenset({
@@ -555,51 +624,6 @@ def _classify(event_type: Any, data: Any) -> dict[str, Any]:
 
 # ── intent (first user prompt) ────────────────────────────────────────────
 
-def clean_prompt_text(text: Any) -> str:
-    """Whitespace-normalised prompt text, or "" when it cannot be a human
-    prompt (harness wrappers such as ``<system-reminder>``, the resumed-
-    session ``Caveat:`` preamble). Same rule ``session_titles`` applies, so
-    the 80-char title and the full intent always come from the same turn."""
-    if not isinstance(text, str):
-        return ""
-    stripped = text.strip()
-    if not stripped or stripped.startswith(_PROMPT_SKIP_PREFIXES):
-        return ""
-    return "\n".join(" ".join(line.split()) for line in stripped.splitlines()).strip()
-
-
-def first_user_prompt(rows: Iterable[Any], max_chars: int = INTENT_MAX_CHARS) -> str:
-    """The full text of the first real user prompt in ``rows``.
-
-    ``rows`` are stored event dicts (``event_type`` + ``data``, oldest first
-    or not; the earliest by ``ts`` wins), the raw dicts a transcript batch
-    hands the ingester, or adapter ``Event`` objects (``type`` / ``role`` /
-    ``content``). Capped at ``max_chars`` with an ellipsis marker. "" when
-    no qualifying prompt exists. Never raises."""
-    best_ts: Any = None
-    best = ""
-    try:
-        for r in rows:
-            et, data, ts = _row_parts(r)
-            shape = classify(et, data)
-            if shape["role"] != "user" or shape["block_kind"] != "text":
-                continue
-            text = clean_prompt_text(shape["text"])
-            if not text:
-                continue
-            key = _s(ts)
-            if best and best_ts is not None and key and key >= best_ts:
-                continue
-            best, best_ts = text, key
-            if not key:
-                break  # unordered input: first hit wins
-    except Exception:  # noqa: BLE001
-        return best[:max_chars]
-    if len(best) > max_chars:
-        best = best[: max_chars - 3].rstrip() + "..."
-    return best
-
-
 def _row_parts(r: Any) -> tuple:
     if isinstance(r, dict):
         if "event_type" in r and "data" in r:
@@ -616,23 +640,3 @@ def _row_parts(r: Any) -> tuple:
         "tool_name": getattr(r, "tool_name", "") or "",
     }
     return et, data, getattr(r, "ts", "") or ""
-
-
-def typed_columns(event_type: Any, data: Any) -> tuple:
-    """The four typed ``events`` columns for one row, in insert order:
-    ``(role, block_kind, tool_name, is_error)``.
-
-    Called by the store's row builder for EVERY new event row, so a row
-    written after schema v15 carries its classification from the moment it
-    is inserted; the daemon's bounded back-fill only exists for rows that
-    predate v15. ``block_kind`` is never NULL on a stamped row (``other``
-    when nothing fits), which is also the marker the back-fill uses to skip
-    rows it has already visited.
-    """
-    shape = classify(event_type, data)
-    return (
-        shape["role"] or None,
-        shape["block_kind"] or "other",
-        shape["tool_name"] or None,
-        bool(shape["is_error"]),
-    )

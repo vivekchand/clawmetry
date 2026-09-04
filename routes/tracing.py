@@ -785,7 +785,9 @@ def _build_spans(rows):
         if low == "thinking":
             # Standalone reasoning event (family adapters: claude_code, codex,
             # kimi, ...; replay_events kind=thinking via the fallback below).
-            think_text = text or ""
+            # event_shape keeps reasoning in ``thinking`` (never ``text``),
+            # so read that first; ``text`` covers the bare ``data.text`` shape.
+            think_text = shape["thinking"] or text or ""
             if not think_text.strip():
                 continue
             rs = _mk(eid, agent_parent, "think", "reasoning", start, nxt,

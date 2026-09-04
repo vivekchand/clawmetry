@@ -9613,7 +9613,7 @@ class LocalStore(TrailStoreMixin):
     _EVENT_INSERT_NCOLS = 20
 
     def _insert_event_rows_locked(self, rows16: list[tuple]) -> None:
-        """Bulk INSERT of fully-built event rows (the 18 ``_event_to_row``
+        """Bulk INSERT of fully-built event rows (the 20 ``_event_to_row``
         columns + the two chain columns). Multi-row VALUES in chunks so each
         statement is ONE vectorized insert — DuckDB's Python ``executemany``
         runs row-at-a-time and pays index maintenance per row, which is what
