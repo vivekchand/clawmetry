@@ -87,7 +87,10 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
                                # #4813 session-replay: canonical replay-event
                                # rows for one session, e2e-classed (carries
                                # LLM message + tool-arg payloads).
-                               "replay_events"}, (
+                               "replay_events",
+                               # Inputs & context: system prompt / tool
+                               # definitions per session, e2e-classed.
+                               "session_context"}, (
         "the dispatch allowlist changed — review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"

@@ -45,6 +45,7 @@ test enforces both directions).
 | `rollup_sessions` | live | e2e | `query_rollup_sessions` | `runtime`, `limit` (default 200, range 1..2000) | Per-session materialized summary (title, status, totals, stuck flag). |
 | `runtimes` | live | plaintext | `query_rollup_runtime_daily` | `since`, `until`, `limit` (default 1000, range 1..10000) | Per-runtime daily activity/cost rollup (claude_code, openclaw, ...). |
 | `search` | live | e2e | `query_search` | `q` (required), `model`, `status`, `since`, `until`, `limit` (default 50, range 1..500) | Full-text search over session titles and eval reasons. |
+| `session_context` | live | e2e | `query_session_context` | `session_id` (required), `agent_type`, `limit` (default 200, range 1..1000) | Inputs & context rows for one session: system prompt, first user prompt, tool definitions, MCP servers, context files and runtime setup captured from context.compiled events. Content is redacted + capped; sha256/size describe the full text. |
 | `sessions` | live | e2e | `query_sessions` | `agent_id`, `since`, `until`, `limit` (default 100, range 1..2000) | One row per session_id with start/end, event count, cost. |
 | `spans` | live | e2e | `query_spans` | `trace_id`, `session_id`, `agent_type`, `since`, `until`, `limit` (default 200, range 1..2000) | OTel span rows with full filters (trace/session/agent/time). |
 | `traces` | live | e2e | `query_traces` | `session_id`, `agent_type`, `since`, `until`, `limit` (default 100, range 1..1000) | One row per trace_id with aggregate span stats. |
@@ -56,4 +57,4 @@ test enforces both directions).
 | `session` | planned | e2e | `query_sessions_table` | `session_id` (required) | Single-session detail row (title, status, outcome, totals). |
 | `usage` | planned | plaintext | `rollup_usage_daily` | `runtime`, `since`, `until` | Daily token/cost usage series (input/output/cache splits). |
 
-Live methods: 15. Planned methods: 5.
+Live methods: 16. Planned methods: 5.

@@ -294,6 +294,15 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "session_id": sid,
             "limit": _safe_int(raw.get("limit"), default=2000, lo=1, hi=10000),
         }
+    if shape == "session_context":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("session_context shape requires session_id")
+        return {
+            "session_id": sid,
+            "agent_type": raw.get("agent_type") or None,
+            "limit": _safe_int(raw.get("limit"), default=200, lo=1, hi=1000),
+        }
     raise ValueError(f"unknown shape: {shape}")
 
 
@@ -602,6 +611,9 @@ def http_query():
 
 _DAEMON_METHODS = frozenset({
     "query_events",
+    # Inputs & context: /api/sessions/<id>/context reads the session_context
+    # table (system prompt, tools, runtime setup) through the daemon.
+    "query_session_context",
     # Runtime event counts. NemoClawAdapter.detect() used to run
     # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses
     # (private helpers would be arbitrary SQL over the RPC), so on every

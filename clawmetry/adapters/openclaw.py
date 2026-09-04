@@ -3371,6 +3371,20 @@ class OpenClawAdapter(AgentAdapter):
             Capability.LOGS,
             Capability.GATEWAY_RPC,
             Capability.CHANNELS,
+            # The trajectory recorder writes ``context.compiled`` (system
+            # prompt + tool definitions) next to every transcript; the daemon
+            # ingests it into session_context (sync._sync_trajectory_context).
+            Capability.INPUTS,
+        }
+
+    def trail_coverage(self) -> dict:
+        return {
+            "inputs": "full",
+            "reasoning": "partial",
+            "note": "<sid>.trajectory.jsonl context.compiled carries systemPrompt, "
+                    "prompt, tools[] (name/description/parameters), transport, "
+                    "streamStrategy, imagesCount plus workspaceDir/provider/modelId "
+                    "on the line. Written only when OPENCLAW_TRAJECTORY is not off.",
         }
 
     # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────────────

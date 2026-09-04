@@ -1477,6 +1477,20 @@ class NemoClawAdapter(AgentAdapter):
             Capability.SUBAGENTS,
         }
 
+    def trail_coverage(self) -> dict:
+        # The sandbox hosts a full OpenClaw workspace, so the trajectory
+        # sidecar with context.compiled EXISTS inside the sandbox, but the
+        # sandbox sync (sync.py, openshell ls/cat) pulls the transcript only
+        # and skips ".trajectory." files. Until that reader is extended the
+        # honest answer is none: nothing is captured, not "partially".
+        return {
+            "inputs": "none",
+            "reasoning": "partial",
+            "note": "Sandbox sync reads <sid>.jsonl only; the .trajectory.jsonl "
+                    "sidecar that carries context.compiled is not pulled from "
+                    "the sandbox yet.",
+        }
+
 
 # Back-compat alias: the previous (mis-named) class still imports OK so
 # any out-of-tree code that referenced ``NeMoReaderAdapter`` from

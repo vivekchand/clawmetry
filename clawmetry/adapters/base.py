@@ -42,6 +42,12 @@ class Capability(str, Enum):
     LOGS = "logs"
     GATEWAY_RPC = "gateway_rpc"
     CHANNELS = "channels"
+    # Trail triad (decision-trail observability). INPUTS: the adapter can
+    # emit what the agent was GIVEN (system prompt / tool definitions /
+    # runtime setup) as ``context.compiled`` events. REASONING: it can emit
+    # the model's thinking as ``thinking`` events.
+    INPUTS = "inputs"
+    REASONING = "reasoning"
 
 
 @dataclass
@@ -388,6 +394,16 @@ class AgentAdapter(ABC):
     def capabilities(self) -> set[Capability]:
         """Return the set of :class:`Capability` flags this adapter exposes."""
         ...
+
+    def trail_coverage(self) -> dict:
+        """What this adapter can capture for the decision trail, honestly.
+
+        ``inputs`` / ``reasoning`` are each ``"full"`` / ``"partial"`` /
+        ``"none"``; ``note`` names the native field the verdict rests on.
+        The UI renders "not exposed by <runtime>" next to an empty slot
+        when a value is ``"none"``. Default: nothing declared.
+        """
+        return {"inputs": "none", "reasoning": "none", "note": ""}
 
     def running(self) -> bool:
         """Best-effort liveness check. Default: delegate to detect()."""
