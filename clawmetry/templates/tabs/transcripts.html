@@ -49,6 +49,15 @@
       </div>
       <div id="inputs-panel-body" style="padding:0 12px 10px 12px;display:none;"></div>
     </div>
+    <!-- What the agent reported (WO-59): notes the agent sent through the
+         ClawMetry MCP tool, in time order, with the corroboration label. -->
+    <div id="selfreports-panel" style="display:none;margin-bottom:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+      <div onclick="var b=document.getElementById('selfreports-panel-body');b.style.display=b.style.display==='none'?'':'none'" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none;">
+        <span style="font-size:12px;font-weight:700;color:var(--text-primary);">📝 <span data-i18n="transcripts.agent_reported">What the agent reported</span></span>
+        <span id="selfreports-panel-summary" style="font-size:11px;color:var(--text-muted);"></span>
+      </div>
+      <div id="selfreports-panel-body" style="padding:0 12px 10px 12px;"></div>
+    </div>
     <!-- Session Replay Controls -->
     <div id="replay-controls" style="
       display:none;
