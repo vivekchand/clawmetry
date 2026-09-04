@@ -42,7 +42,7 @@ def _ordered_tabs(html: str) -> list:
 def test_tier1_order_and_membership():
     nav = _nav_block()
     tabs = _ordered_tabs(nav)
-    tier1 = tabs[:13]
+    tier1 = tabs[:14]
     # Session-first IA (Trail, 2026-09): Sessions is the landing item and
     # comes first; Home + the raw-signal views (Agents, Activity, Cost,
     # Models, Context usage) sit under a "Monitoring" label; Quality +
@@ -53,7 +53,7 @@ def test_tier1_order_and_membership():
         "transcripts",
         "overview", "inventory", "brain", "usage", "models", "context-economics",
         "evals", "bench",
-        "approvals", "guard", "alerts", "notifications",
+        "approvals", "guard", "signals", "alerts", "notifications",
     ], f"Tier-1 must be the beginner items in order, got {tier1}"
 
 

@@ -440,7 +440,13 @@
     if (!entry || typeof entry !== 'object') { el.style.display = 'none'; return; }
     function grade(v) {
       var k = String(v || 'none').toLowerCase();
-      var word = k === 'full' ? T('trail.cov_full', 'captured') : k === 'partial' ? T('trail.cov_partial', 'partly captured') : T('trail.cov_none', 'not exposed by this runtime');
+      // Levels from routes/trail.py: full | partial | none | unknown. "unknown"
+      // means the adapter has not declared anything yet, which is not the
+      // same claim as "the runtime does not expose it".
+      var word = k === 'full' ? T('trail.cov_full', 'captured')
+        : k === 'partial' ? T('trail.cov_partial', 'partly captured')
+        : k === 'none' ? T('trail.cov_none', 'not exposed by this runtime')
+        : T('trail.cov_unknown', 'not declared yet');
       return '<span class="trail-cov trail-cov-' + esc(k) + '">' + esc(word) + '</span>';
     }
     var html = '<span class="trail-k">' + esc(T('trail.coverage', 'Coverage for')) + ' ' + esc(runtimeLabel(rt)) + ':</span> ' +

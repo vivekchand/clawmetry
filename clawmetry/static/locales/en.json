@@ -1477,5 +1477,6 @@
   "trail.git_none": "No commits or pull requests were made while this session ran.",
   "trail.commits": "Commits",
   "trail.prs": "Pull requests",
-  "evals.locked": "Session scoring is a Pro feature."
+  "evals.locked": "Session scoring is a Pro feature.",
+  "trail.cov_unknown": "not declared yet"
 }
