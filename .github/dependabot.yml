@@ -1,4 +1,23 @@
 version: 2
+
+# Every ecosystem below carries `cooldown: default-days: 7`.
+#
+# A version update that lands the hour a release is published is the window
+# a compromised package is published INTO. Registry takeovers are
+# opportunistic and short-lived: the malicious version is typically yanked
+# within a day or two, so the whole attack depends on somebody pulling it
+# before that happens. Waiting a week means an automated bump adopts a
+# release the rest of the ecosystem has already had time to look at. It
+# also keeps ordinary regressions out of the tree.
+#
+# This does NOT delay security fixes. Cooldown applies to version updates
+# only; a Dependabot SECURITY update opens immediately regardless of what
+# is configured here, so an advisory fix still arrives the day it exists.
+# That distinction is the reason the value can be this conservative --
+# nothing on the advisory path is slowed by it.
+#
+# Seven days rather than the built-in three: three is GitHub's default, and
+# it is inside the window where a compromised release is often still up.
 updates:
   # Python (pip) dependencies
   - package-ecosystem: "pip"
@@ -9,6 +28,8 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    cooldown:
+      default-days: 7
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
@@ -19,6 +40,8 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    cooldown:
+      default-days: 7
 
   # npm — the React SPA. This is the repo's largest JS dependency tree and
   # the only one with a committed lockfile that ships into clawmetry/static/.
@@ -36,6 +59,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    cooldown:
+      default-days: 7
 
   # npm — Playwright E2E harness. Runs in CI on every PR, so its
   # dependencies are part of the CI supply chain.
@@ -52,6 +77,8 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    cooldown:
+      default-days: 7
 
   # npm — the ClawHub/OpenClaw plugin, which is published to npm
   # (openclaw.release.publishToNpm). No lockfile, so Dependabot updates the
@@ -64,3 +91,5 @@ updates:
     open-pull-requests-limit: 3
     labels:
       - "dependencies"
+    cooldown:
+      default-days: 7
