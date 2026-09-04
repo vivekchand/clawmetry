@@ -10207,14 +10207,44 @@ class LocalStore:
             clauses.append("ts <= ?")
             params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        sql = f"""
-            SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
-                   event_type, ts, data, cost_usd, token_count, model
-            FROM events
-            {where}
-            ORDER BY ts DESC, id DESC
-            LIMIT ?
-        """
+        # Keys first when nothing narrows the scan. The Brain feed and the
+        # Home poll ask for "the newest N events" with at most the
+        # exclude_daemon predicate, which rejects almost nothing, so DuckDB's
+        # TOP_N sees every row and materialises the ``data`` BLOB (the bulk
+        # of the table, ~1 KB a row) for all of them before keeping N. Sorting
+        # the narrow key columns first and fetching the N BLOBs by primary
+        # key touches a few MB instead of the whole column: 0.41 s -> 0.11 s
+        # on a 215k-row store read cold, and on a memory-starved laptop where
+        # the daemon's buffer pool had been paged out, the same call measured
+        # 13-34 s live (2026-09-04). A selective predicate (session, agent,
+        # type, time bounds, runtime) already cuts the scan down before the
+        # sort, and there the two-phase form is slower (0.01 s -> 0.16 s for
+        # one session), so it is used only on the unfiltered shape.
+        selective = bool(
+            session_id or agent_id or event_type or since or until or _rt_clause
+        )
+        if selective:
+            sql = f"""
+                SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
+                       event_type, ts, data, cost_usd, token_count, model
+                FROM events
+                {where}
+                ORDER BY ts DESC, id DESC
+                LIMIT ?
+            """
+        else:
+            sql = f"""
+                SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
+                       event_type, ts, data, cost_usd, token_count, model
+                FROM events
+                WHERE id IN (
+                    SELECT id FROM events
+                    {where}
+                    ORDER BY ts DESC, id DESC
+                    LIMIT ?
+                )
+                ORDER BY ts DESC, id DESC
+            """
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
 
