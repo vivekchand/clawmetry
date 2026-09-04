@@ -224,7 +224,10 @@ def test_list_events_limit(db_path):
 
 def test_capabilities_includes_cost():
     caps = GooseAdapter().capabilities()
-    assert caps == {Capability.SESSIONS, Capability.EVENTS, Capability.COST}
+    # REASONING: content_json thinking blocks become thinking events (see
+    # trail_coverage: partial, provider-dependent).
+    assert caps == {Capability.SESSIONS, Capability.EVENTS, Capability.COST,
+                    Capability.REASONING}
     # honest scope: we do NOT advertise what we don't implement
     assert Capability.SUBAGENTS not in caps
     assert Capability.CRONS not in caps
