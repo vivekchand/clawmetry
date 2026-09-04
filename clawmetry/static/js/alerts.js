@@ -281,6 +281,7 @@
     error_rate:       { icon: '🛠', verb: 'Tool error rate >' },
     eval_score_below:     { icon: '⭐', verb: 'Quality score drops below' },
     outcome_failure_rate: { icon: '🚦', verb: 'Failure rate exceeds' },
+    signal_rate_above:    { icon: '💬', verb: 'Behaviour signal rate exceeds' },
   };
 
   // On/off slider that matches the Approvals protection-rule toggle. Clicking
@@ -466,6 +467,7 @@
     subagent_depth:   'Sub-agent nesting depth crossed your threshold.',
     eval_score_below:     'Average quality score (judged 0-5) of recent sessions dropped below your threshold.',
     outcome_failure_rate: 'Too many recent sessions ended badly (failed or got stuck) as a share of finished sessions.',
+    signal_rate_above:    'A behaviour signal (frustration, praise, refusals, work handed back, giving up, retries) crossed your rate over the window, with enough turns to mean it.',
   };
   // Hide alerts older than this from the history view. Stops the list from
   // accumulating forever; the user only cares about recent activity.
@@ -972,6 +974,7 @@
       error_rate:     { unit: '%',           placeholder: 20,    label: 'Tool failure rate exceeds', name: 'Tool failures' },
       eval_score_below:     { unit: '/ 5',  placeholder: 3,  label: 'Average quality score drops below', name: 'Quality drop' },
       outcome_failure_rate: { unit: '%',    placeholder: 20, label: 'Session failure rate exceeds', name: 'Failure rate' },
+      signal_rate_above:    { unit: '% of turns', placeholder: 10, label: 'Signal rate exceeds', name: 'Frustration rate' },
     };
     const p = presets[t] || { unit: '', placeholder: 0, label: 'Threshold', name: 'Custom alert' };
     const val = r.threshold_value ?? p.placeholder;
@@ -999,7 +1002,41 @@
         <label>Applies to</label>
         <select id="alerts-rule-scope">${scopeOpts}</select>
       </div>
-    `;
+    ` + (t === 'signal_rate_above' ? signalRuleRows(r) : '');
+  }
+
+  // Behaviour-signal rules name the preset signal they watch plus the window
+  // and the minimum sample. Kept off the other types' forms so nothing else
+  // grows a field it does not read.
+  const SIGNAL_CHOICES = [
+    ['user_frustration', 'Frustration (people swearing at or correcting the agent)'],
+    ['user_praise', 'Praise (thanks, perfect, nice)'],
+    ['assistant_refusal', 'Refusals (the agent declines)'],
+    ['assistant_laziness', 'Work handed back (do this yourself, left as an exercise)'],
+    ['task_failure', 'Gave up (the agent says it could not finish)'],
+    ['user_retry', 'Retries (the same request sent again)'],
+  ];
+  function signalRuleRows(r) {
+    const cur = String((r.condition_json && r.condition_json.signal) || r.signal || 'user_frustration');
+    const opts = SIGNAL_CHOICES.map(([k, label]) =>
+      `<option value="${k}" ${k === cur ? 'selected' : ''}>${escape(label)}</option>`).join('');
+    const win = Number((r.condition_json && r.condition_json.window_minutes) || r.window_minutes || 1440);
+    const min = Number((r.condition_json && r.condition_json.min_turns) || r.min_turns || 20);
+    return `
+      <div class="alerts-form-row">
+        <label>Signal</label>
+        <select id="alerts-rule-signal">${opts}</select>
+      </div>
+      <div class="alerts-form-row">
+        <label>Over the last</label>
+        <input type="number" id="alerts-rule-window" value="${win}" min="1" step="1" style="width:120px;" />
+        <span class="alerts-form-unit">minutes</span>
+      </div>
+      <div class="alerts-form-row">
+        <label>Only with at least</label>
+        <input type="number" id="alerts-rule-minturns" value="${min}" min="1" step="1" style="width:120px;" />
+        <span class="alerts-form-unit">turns in the window</span>
+      </div>`;
   }
 
   function renderEditorChannels() {
@@ -1058,6 +1095,14 @@
       re_alert_policy: policy,
       runtime,
     };
+    if (alertsState.editorType === 'signal_rate_above') {
+      const sigSel = document.getElementById('alerts-rule-signal');
+      body.signal = sigSel ? sigSel.value : 'user_frustration';
+      const winEl = document.getElementById('alerts-rule-window');
+      const minEl = document.getElementById('alerts-rule-minturns');
+      if (winEl && Number(winEl.value) > 0) body.window_minutes = Math.round(Number(winEl.value));
+      if (minEl && Number(minEl.value) > 0) body.min_turns = Math.round(Number(minEl.value));
+    }
 
     // An example row has no server-side rule — saving it is a create, not an
     // update (PUT /api/alerts/rules/example_cost would 404).

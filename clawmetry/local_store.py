@@ -1692,6 +1692,50 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_session_instructions_sha ON session_instructions(sha256)",
+    # ── Behaviour Signals (WO-58, clawmetry/behaviour_signals.py) ───────────
+    # What people and agents SAY about a run: one row per eligible user or
+    # assistant turn (the rate's denominator) and one row per (turn, signal)
+    # match. Neither table stores the matched text; a match points at the
+    # turn (``event_id``) and the transcript viewer shows it under existing
+    # access rules. ``turn_ms`` is the turn's own timestamp so a session
+    # ingested late still lands on the day it happened. Additive: CREATE IF
+    # NOT EXISTS, no schema-version bump.
+    """
+    CREATE TABLE IF NOT EXISTS signal_turns (
+        event_id        VARCHAR PRIMARY KEY,
+        session_id      VARCHAR NOT NULL,
+        agent_type      VARCHAR NOT NULL,
+        node_id         VARCHAR,
+        model           VARCHAR,
+        runtime_version VARCHAR,
+        side            VARCHAR NOT NULL,
+        turn_ts         VARCHAR,
+        turn_ms         BIGINT NOT NULL,
+        created_at      BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_signal_turns_ms ON signal_turns(turn_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_signal_turns_rt_ms ON signal_turns(agent_type, turn_ms)",
+    """
+    CREATE TABLE IF NOT EXISTS signal_matches (
+        event_id        VARCHAR NOT NULL,
+        signal          VARCHAR NOT NULL,
+        session_id      VARCHAR NOT NULL,
+        agent_type      VARCHAR NOT NULL,
+        node_id         VARCHAR,
+        model           VARCHAR,
+        runtime_version VARCHAR,
+        turn_ts         VARCHAR,
+        turn_ms         BIGINT NOT NULL,
+        matcher         VARCHAR,
+        category        VARCHAR,
+        created_at      BIGINT NOT NULL,
+        PRIMARY KEY (event_id, signal)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_signal_matches_ms ON signal_matches(turn_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_signal_matches_sig_ms ON signal_matches(signal, turn_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_signal_matches_session ON signal_matches(session_id)",
 ]
 
 
@@ -3303,6 +3347,264 @@ class LocalStore:
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
+    # ── Behaviour Signals (WO-58) ─────────────────────────────────────────
+    # Thin store surface for clawmetry/behaviour_signals.py: the daemon writes
+    # turns + matches on its tick, the dashboard and the snapshot read grouped
+    # counts back. Kept here, near the top of the class, so the surface is
+    # readable without paging through the module. Every method returns an
+    # empty value on failure rather than raising into a caller.
+
+    def record_signal_turns(self, turns: list, matches: list) -> int:
+        """Persist one tick's evaluated turns and their signal matches.
+
+        Idempotent: ``signal_turns`` is keyed on ``event_id`` and
+        ``signal_matches`` on ``(event_id, signal)``, both INSERT ... ON
+        CONFLICT DO NOTHING, so re-running a tick over the same rows never
+        double counts. Returns the number of match rows offered.
+        """
+        now_ms = int(time.time() * 1000)
+        t_rows = []
+        for t in turns or []:
+            if not isinstance(t, dict) or not t.get("event_id"):
+                continue
+            t_rows.append([
+                str(t.get("event_id"))[:128], str(t.get("session_id") or "")[:200],
+                str(t.get("agent_type") or "openclaw")[:64],
+                str(t.get("node_id") or "")[:128] or None,
+                str(t.get("model") or "unknown")[:128],
+                (str(t.get("runtime_version"))[:32] if t.get("runtime_version") else None),
+                str(t.get("side") or "")[:16], str(t.get("turn_ts") or "")[:64] or None,
+                int(t.get("turn_ms") or now_ms), now_ms,
+            ])
+        m_rows = []
+        for m in matches or []:
+            if not isinstance(m, dict) or not m.get("event_id") or not m.get("signal"):
+                continue
+            m_rows.append([
+                str(m.get("event_id"))[:128], str(m.get("signal"))[:48],
+                str(m.get("session_id") or "")[:200],
+                str(m.get("agent_type") or "openclaw")[:64],
+                str(m.get("node_id") or "")[:128] or None,
+                str(m.get("model") or "unknown")[:128],
+                (str(m.get("runtime_version"))[:32] if m.get("runtime_version") else None),
+                str(m.get("turn_ts") or "")[:64] or None,
+                int(m.get("turn_ms") or now_ms),
+                str(m.get("matcher") or "")[:64], str(m.get("category") or "")[:32],
+                now_ms,
+            ])
+        if not t_rows and not m_rows:
+            return 0
+        try:
+            with self._write_lock:
+                if t_rows:
+                    self._conn.executemany("""
+                        INSERT INTO signal_turns (event_id, session_id, agent_type,
+                            node_id, model, runtime_version, side, turn_ts, turn_ms,
+                            created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (event_id) DO NOTHING
+                    """, t_rows)
+                if m_rows:
+                    self._conn.executemany("""
+                        INSERT INTO signal_matches (event_id, signal, session_id,
+                            agent_type, node_id, model, runtime_version, turn_ts,
+                            turn_ms, matcher, category, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (event_id, signal) DO NOTHING
+                    """, m_rows)
+        except Exception as e:  # noqa: BLE001
+            log.warning("signals: record_signal_turns failed: %s", e)
+            return 0
+        return len(m_rows)
+
+    def query_signal_grouped(self, *, since_ms: int, runtime: str | None = None) -> dict:
+        """Grouped counts since ``since_ms`` for ``behaviour_signals.shape_rates``::
+
+            {"turns":   [{agent_type, side, model, runtime_version, day, n}],
+             "matches": [{agent_type, signal, model, runtime_version, day, n}]}
+
+        ``day`` is ``turn_ms // 86400000`` (a UTC day index). ``{}`` on error.
+        """
+        try:
+            since = int(since_ms)
+        except (TypeError, ValueError):
+            return {}
+        rt = str(runtime or "").strip().lower()
+        rt_clause = " AND agent_type = ?" if rt and rt != "all" else ""
+        params: list = [since] + ([rt] if rt_clause else [])
+        try:
+            t_rows = self._fetch(f"""
+                SELECT agent_type, side, model, runtime_version,
+                       CAST(turn_ms / 86400000 AS BIGINT) AS day, COUNT(*)
+                FROM signal_turns
+                WHERE turn_ms >= ?{rt_clause}
+                GROUP BY 1, 2, 3, 4, 5
+            """, params)
+            m_rows = self._fetch(f"""
+                SELECT agent_type, signal, model, runtime_version,
+                       CAST(turn_ms / 86400000 AS BIGINT) AS day, COUNT(*)
+                FROM signal_matches
+                WHERE turn_ms >= ?{rt_clause}
+                GROUP BY 1, 2, 3, 4, 5
+            """, params)
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_grouped failed: %s", e)
+            return {}
+        return {
+            "turns": [{"agent_type": r[0], "side": r[1], "model": r[2],
+                       "runtime_version": r[3], "day": int(r[4] or 0),
+                       "n": int(r[5] or 0)} for r in t_rows],
+            "matches": [{"agent_type": r[0], "signal": r[1], "model": r[2],
+                         "runtime_version": r[3], "day": int(r[4] or 0),
+                         "n": int(r[5] or 0)} for r in m_rows],
+        }
+
+    def query_signal_coverage(self, *, days: int = 30) -> dict:
+        """``{runtime: {"user_turns": n, "assistant_turns": n}}`` for every
+        runtime that had a session in the window, from what the store holds.
+        A runtime present in ``sessions`` but with no text turns reports both
+        counts as 0, which the surface renders as "not exposed". ``{}`` on
+        error.
+        """
+        try:
+            since = int((time.time() - max(1, int(days)) * 86400) * 1000)
+        except (TypeError, ValueError):
+            since = 0
+        out: dict = {}
+        try:
+            for sid, in self._fetch(
+                "SELECT session_id FROM sessions WHERE updated_at >= ? LIMIT 20000",
+                [since],
+            ):
+                sid = str(sid or "")
+                if not sid:
+                    continue
+                rt = sid.split(":", 1)[0].lower() if ":" in sid else "openclaw"
+                out.setdefault(rt, {"user_turns": 0, "assistant_turns": 0})
+            for rt, side, n in self._fetch("""
+                SELECT agent_type, side, COUNT(*) FROM signal_turns
+                WHERE turn_ms >= ? GROUP BY 1, 2
+            """, [since]):
+                cur = out.setdefault(str(rt), {"user_turns": 0, "assistant_turns": 0})
+                key = "user_turns" if side == "user" else "assistant_turns"
+                cur[key] = int(n or 0)
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_coverage failed: %s", e)
+            return {}
+        return out
+
+    def query_signal_session_flags(self, *, session_ids: list) -> dict:
+        """``{session_id: {"programmatic": bool}}`` from the session rows'
+        metadata: an SDK entrypoint or an ``isSubagent`` flag means the
+        user role is a program, not a person. Missing rows are absent from
+        the result; ``{}`` on error."""
+        ids = [str(x)[:200] for x in (session_ids or []) if x][:2000]
+        if not ids:
+            return {}
+        out: dict = {}
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            rows = self._fetch(
+                f"SELECT session_id, metadata FROM sessions WHERE session_id IN ({placeholders})",
+                ids,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_session_flags failed: %s", e)
+            return {}
+        for sid, raw in rows:
+            meta: dict = {}
+            if raw is not None:
+                try:
+                    txt = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(txt) if txt else {}
+                    if isinstance(parsed, dict):
+                        meta = parsed
+                except Exception:
+                    meta = {}
+            ent = str(meta.get("entrypoint") or "").lower()
+            surf = str(meta.get("surface") or meta.get("source") or "").lower()
+            prog = bool(meta.get("isSubagent")) or ent.startswith("sdk") or surf == "sdk"
+            out[str(sid)] = {"programmatic": prog}
+        return out
+
+    def query_signal_sessions(self, *, signal: str, since_ms: int,
+                              runtime: str | None = None, limit: int = 50) -> list:
+        """Sessions that matched ``signal`` in the window, most matches first:
+        ``[{session_id, runtime, model, started, cost_usd, title, matches,
+        last_match_ts}]``. Never the matched phrases. ``[]`` on error."""
+        sig = str(signal or "").strip()
+        if not sig:
+            return []
+        try:
+            since = int(since_ms)
+            lim = max(1, min(int(limit or 50), 500))
+        except (TypeError, ValueError):
+            return []
+        rt = str(runtime or "").strip().lower()
+        rt_clause = " AND m.agent_type = ?" if rt and rt != "all" else ""
+        params: list = [sig, since] + ([rt] if rt_clause else []) + [lim]
+        try:
+            rows = self._fetch(f"""
+                SELECT m.session_id, ANY_VALUE(m.agent_type), ANY_VALUE(m.model),
+                       COUNT(*) AS n, MAX(m.turn_ts),
+                       ANY_VALUE(s.title), ANY_VALUE(s.started_at), ANY_VALUE(s.cost_usd)
+                FROM signal_matches m
+                LEFT JOIN sessions s ON s.session_id = m.session_id
+                WHERE m.signal = ? AND m.turn_ms >= ?{rt_clause}
+                GROUP BY m.session_id
+                ORDER BY n DESC, MAX(m.turn_ms) DESC
+                LIMIT ?
+            """, params)
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_sessions failed: %s", e)
+            return []
+        return [{
+            "session_id": r[0], "runtime": r[1], "model": r[2] or "unknown",
+            "matches": int(r[3] or 0), "last_match_ts": r[4],
+            "title": (str(r[5])[:120] if r[5] else ""),
+            "started": r[6], "cost_usd": round(float(r[7] or 0), 4),
+        } for r in rows]
+
+    def query_signal_rate_window(self, *, signal: str, window_minutes: int,
+                                 runtime: str | None = None) -> dict:
+        """One signal's rate over the last ``window_minutes``, for the
+        ``signal_rate_above`` alert rule: ``{signal, rate, matches, turns,
+        window_minutes, runtime, top_model}``. ``rate`` is ``None`` when
+        no turn was eligible. ``{}`` on error."""
+        sig = str(signal or "").strip()
+        from clawmetry.behaviour_signals import SIGNALS as _SIG
+        if sig not in _SIG:
+            return {}
+        side = _SIG[sig]["side"]
+        try:
+            mins = max(1, int(window_minutes or 60))
+        except (TypeError, ValueError):
+            mins = 60
+        since = int(time.time() * 1000) - mins * 60 * 1000
+        rt = str(runtime or "").strip().lower()
+        rt_clause = " AND agent_type = ?" if rt and rt != "all" else ""
+        extra = [rt] if rt_clause else []
+        try:
+            turns = self._fetch(f"""
+                SELECT COUNT(*) FROM signal_turns
+                WHERE side = ? AND turn_ms >= ?{rt_clause}
+            """, [side, since] + extra)
+            matches = self._fetch(f"""
+                SELECT COUNT(*), ANY_VALUE(model) FROM signal_matches
+                WHERE signal = ? AND turn_ms >= ?{rt_clause}
+            """, [sig, since] + extra)
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_rate_window failed: %s", e)
+            return {}
+        n_turns = int(turns[0][0] or 0) if turns else 0
+        n_match = int(matches[0][0] or 0) if matches else 0
+        top_model = (matches[0][1] if matches and matches[0][1] else None)
+        return {
+            "signal": sig, "matches": n_match, "turns": n_turns,
+            "rate": (round(n_match / n_turns, 4) if n_turns else None),
+            "window_minutes": mins, "runtime": rt or "all", "top_model": top_model,
+        }
+
     def start(self) -> None:
         """Start the background flusher. Safe to call multiple times.
         No-op in read-only mode."""
@@ -4078,6 +4380,36 @@ class LocalStore:
                     d[k] = meta[k]
             out.append(d)
         return out
+
+    # ── Cohort compare + similar runs (WO-60) ─────────────────────────────
+    # The SQL lives in clawmetry/cohort_queries.py (a leaf module); these two
+    # are the daemon-proxy surface routes/cohort.py reads through.
+
+    def query_cohort_sessions(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 3000,
+    ) -> list[dict[str, Any]]:
+        """Session rows with the fields cohort compare reads (runtime, model,
+        repo, developer, branch, cost, tokens, steps, tool health, outcome,
+        git links, behaviour signals when the store has them)."""
+        from clawmetry.cohort_queries import cohort_sessions
+        return cohort_sessions(self, since=since, until=until, limit=limit)
+
+    def query_similar_sessions(
+        self,
+        *,
+        session_id: str,
+        window_days: int = 30,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Nearest sessions by tool-call shape (n-gram weighted Jaccard),
+        bounded to a capped candidate set, same runtime first."""
+        from clawmetry.cohort_queries import similar_sessions
+        return similar_sessions(self, session_id=session_id,
+                                window_days=window_days, limit=limit)
 
     def ingest_memory_blob(self, blob_row: dict[str, Any]) -> bool:
         """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
