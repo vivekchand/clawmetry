@@ -423,6 +423,7 @@ jobs:
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
             tests/test_hooks_claude_code.py \
+            tests/test_hook_ownership_quoted_launcher.py \
             tests/test_hook_lifecycle.py \
             tests/test_redaction_pii.py \
             tests/test_goose_adapter.py \
