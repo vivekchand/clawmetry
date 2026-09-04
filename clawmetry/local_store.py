@@ -457,6 +457,9 @@ _DDL = [
         PRIMARY KEY (agent_type, session_id)
     )
     """,
+    # #5496 — same content-hash skip as spans (50 dead versions per live
+    # session on a real store, one per daemon restart).
+    "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS content_hash VARCHAR",
     "CREATE INDEX IF NOT EXISTS idx_sessions_active    ON sessions(agent_type, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_outcome   ON sessions(outcome, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_node      ON sessions(node_id, last_active_at)",
@@ -1139,6 +1142,12 @@ _DDL = [
         created_at         BIGINT NOT NULL
     )
     """,
+    # #5496 — content hash of the row as last written, so a re-delivery that
+    # carries the same content is skipped instead of re-run as DELETE+INSERT
+    # (each daemon restart used to rewrite every span; 47 dead versions per
+    # live span on a real store). ALTER (not a new CREATE) so existing stores
+    # pick it up; NULL on legacy rows means "unknown", written once, then set.
+    "ALTER TABLE spans ADD COLUMN IF NOT EXISTS content_hash VARCHAR",
     "CREATE INDEX IF NOT EXISTS idx_spans_trace_id    ON spans(trace_id, span_id)",
     "CREATE INDEX IF NOT EXISTS idx_spans_trace_start ON spans(trace_id, start_ts)",
     "CREATE INDEX IF NOT EXISTS idx_spans_parent      ON spans(parent_span_id)",
@@ -2111,6 +2120,36 @@ def _slim_heartbeat_data(hb: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# #5496 — upsert dedupe. Family adapters re-emit every span and session they
+# can see on each daemon tick after a restart; without a change check each
+# re-delivery is a DELETE+INSERT that leaves a dead row version behind and
+# DuckDB never compacts them away (a 575 MB dataset had grown to 1.6 GB).
+# The store keeps the content hash of the last row it wrote, in the table
+# (survives restarts) and in memory (no lookup per row), and skips rows
+# whose content has not changed. ``CLAWMETRY_UPSERT_DEDUPE=0`` restores the
+# always-write behaviour.
+try:
+    _FWDPROG_DEFAULT_HOURS = float(os.environ.get("CLAWMETRY_FWDPROG_DEFAULT_HOURS", "24") or "24")
+except ValueError:
+    _FWDPROG_DEFAULT_HOURS = 24.0
+_UPSERT_DEDUPE = os.environ.get("CLAWMETRY_UPSERT_DEDUPE", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+try:
+    _UPSERT_HASH_CACHE_MAX = int(os.environ.get("CLAWMETRY_UPSERT_HASH_CACHE_MAX", "2000000"))
+except ValueError:
+    _UPSERT_HASH_CACHE_MAX = 2_000_000
+
+
+def _content_hash(parts: list[Any]) -> str:
+    """Stable 128-bit digest of a row's content columns (timestamps such as
+    ``created_at`` / ``updated_at`` must be excluded by the caller, or every
+    delivery would look new). ``repr`` of the coerced parameter list is
+    deterministic for the str/float/int/bytes/None values the row builders
+    emit."""
+    return hashlib.blake2b(repr(parts).encode("utf-8"), digest_size=16).hexdigest()
+
+
 def _to_blob(value: Any) -> bytes | None:
     """Coerce arbitrary value (dict / list / str / bytes / None) to a BLOB
     suitable for DuckDB. Used by the non-event ingest helpers (sessions,
@@ -2840,6 +2879,12 @@ class LocalStore:
         self._conn_generation = 0
         # Per-thread read cursors (see ``_read_cursor``).
         self._read_local = threading.local()
+        # #5496 — last-written content hash per span_id / (agent_type,
+        # session_id). ``None`` until first use, then seeded from the table
+        # so a restart does not rewrite everything once. Guarded by
+        # ``_write_lock`` (only the write paths touch them).
+        self._span_hashes: dict[str, str] | None = None
+        self._session_hashes: dict[tuple[str, str], str] | None = None
         self._last_oom_reopen_ts: float | None = None
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
@@ -3755,6 +3800,21 @@ class LocalStore:
             return 0
         now_ms = int(time.time() * 1000)
         with self._write_lock:
+            # #5496 — skip rows whose content matches the last write. The
+            # hash covers every column we send except ``updated_at``; the
+            # ON CONFLICT COALESCEs below are deterministic given the same
+            # input, so an identical re-delivery cannot change the row.
+            cache = self._session_hashes_locked()
+            if cache is not None:
+                kept: list[tuple[str, str, dict[str, Any]]] = []
+                for atype, sid, session in prepared:
+                    h = _content_hash(_session_content_parts(session))
+                    if cache.get((atype, sid)) == h:
+                        continue
+                    kept.append((atype, sid, session))
+                prepared = kept
+                if not prepared:
+                    return 0
             # #2988 — snapshot the pre-upsert day keys so the rollup session
             # counts only recompute the (runtime, day) cells that could
             # change. Direct conn read (NOT _fetch — it takes _write_lock
@@ -3772,27 +3832,14 @@ class LocalStore:
                     f" FROM sessions WHERE session_id IN ({ph})", chunk,
                 ).fetchall():
                     prev_map[(str(r[0]), str(r[1]))] = (r[2], r[3])
-            upsert_params = [
-                [
-                    atype, sid,
-                    session.get("node_id"),
-                    session.get("agent_id") or "main",
-                    session.get("workspace_id"),
-                    session.get("title"),
-                    session.get("started_at"),
-                    session.get("last_active_at"),
-                    session.get("ended_at"),
-                    session.get("status"),
-                    int(session.get("total_tokens") or 0),
-                    float(session.get("cost_usd") or 0),
-                    int(session.get("message_count") or 0),
-                    _to_blob(session.get("metadata")),
-                    now_ms,
-                    _clean_str(session.get("cwd")),
-                    _clean_str(session.get("git_branch")),
-                ]
-                for atype, sid, session in prepared
-            ]
+            upsert_params = []
+            for atype, sid, session in prepared:
+                parts = _session_content_parts(session)
+                # content columns ... then updated_at, cwd, git_branch, hash
+                upsert_params.append(
+                    [atype, sid] + parts[2:14] + [now_ms] + parts[14:16]
+                    + [_content_hash(parts)]
+                )
             with _txn(self._conn):
                 # Upsert: replace if (agent_type, session_id) exists.
                 self._conn.executemany("""
@@ -3800,8 +3847,8 @@ class LocalStore:
                         agent_type, session_id, node_id, agent_id, workspace_id,
                         title, started_at, last_active_at, ended_at, status,
                         total_tokens, cost_usd, message_count, metadata, updated_at,
-                        cwd, git_branch
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cwd, git_branch, content_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (agent_type, session_id) DO UPDATE SET
                         node_id        = excluded.node_id,
                         agent_id       = excluded.agent_id,
@@ -3820,7 +3867,8 @@ class LocalStore:
                         -- the field keeps what we already knew, but an agent
                         -- that cd'd or switched branch moves the row.
                         cwd            = COALESCE(excluded.cwd, sessions.cwd),
-                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch)
+                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch),
+                        content_hash   = excluded.content_hash
                 """, upsert_params)
                 try:
                     self._mirror_session_rollups_locked(prepared, prev_map)
@@ -3828,6 +3876,9 @@ class LocalStore:
                     log.exception(
                         "local store: session rollup upsert failed (non-fatal)"
                     )
+            if cache is not None:
+                for row in upsert_params:
+                    cache[(row[0], row[1])] = row[-1]
         return len(prepared)
 
     def update_session_location(
@@ -7490,8 +7541,12 @@ class LocalStore:
         then one executemany INSERT — instead of a per-span autocommit
         DELETE+INSERT transaction, which dominated family-runtime span
         reconstruction on fresh installs. In-batch duplicate span_ids keep
-        the LAST occurrence (matches sequential REPLACE ordering). Returns
-        the number of span rows written."""
+        the LAST occurrence (matches sequential REPLACE ordering).
+
+        #5496 — a span whose content matches what the store last wrote for
+        that ``span_id`` is skipped entirely (no DELETE, no INSERT, no dead
+        row version). A changed field (late ``end_ts``, cost, status) still
+        overwrites. Returns the number of span rows actually written."""
         if self._read_only:
             raise RuntimeError(
                 "local_store: ingest_span() called on read-only store"
@@ -7503,8 +7558,17 @@ class LocalStore:
         if not rows:
             return 0
         with self._write_lock:
+            cache = self._span_hashes_locked()
+            to_write: list[list[Any]] = []
+            for sid, params in rows.items():
+                h = _content_hash(params[:-1])  # created_at is not content
+                if cache is not None and cache.get(sid) == h:
+                    continue
+                to_write.append(params + [h])
+            if not to_write:
+                return 0
             with _txn(self._conn):
-                ids = list(rows.keys())
+                ids = [p[0] for p in to_write]
                 for off in range(0, len(ids), 500):
                     chunk = ids[off:off + 500]
                     ph = ",".join("?" * len(chunk))
@@ -7520,7 +7584,7 @@ class LocalStore:
                         model, tool_name, cost_usd, token_count,
                         tokens_input, tokens_output,
                         input, output, attributes, events, links,
-                        ts, created_at
+                        ts, created_at, content_hash
                     ) VALUES (?, ?, ?, ?, ?,
                               ?, ?, ?, ?, ?,
                               ?, ?, ?,
@@ -7528,9 +7592,56 @@ class LocalStore:
                               ?, ?, ?, ?,
                               ?, ?,
                               ?, ?, ?, ?, ?,
-                              ?, ?)
-                """, list(rows.values()))
-        return len(rows)
+                              ?, ?, ?)
+                """, to_write)
+            if cache is not None:
+                for p in to_write:
+                    cache[p[0]] = p[-1]
+        return len(to_write)
+
+    def _span_hashes_locked(self) -> dict[str, str] | None:
+        """The span content-hash map (caller holds ``_write_lock``). ``None``
+        when dedupe is off. Seeded once per process from the table so the
+        first tick after a restart skips unchanged spans too; bounded so a
+        pathological node cannot grow it without limit (a clear just means
+        one more rewrite pass)."""
+        if not _UPSERT_DEDUPE:
+            return None
+        if self._span_hashes is None:
+            seeded: dict[str, str] = {}
+            try:
+                for sid, h in self._conn.execute(
+                    "SELECT span_id, content_hash FROM spans "
+                    "WHERE content_hash IS NOT NULL"
+                ).fetchall():
+                    seeded[str(sid)] = str(h)
+            except Exception:
+                log.exception("local store: span hash seed failed (dedupe starts cold)")
+                seeded = {}
+            self._span_hashes = seeded
+        elif len(self._span_hashes) > _UPSERT_HASH_CACHE_MAX:
+            self._span_hashes.clear()
+        return self._span_hashes
+
+    def _session_hashes_locked(self) -> dict[tuple[str, str], str] | None:
+        """Session counterpart of :meth:`_span_hashes_locked`."""
+        if not _UPSERT_DEDUPE:
+            return None
+        if self._session_hashes is None:
+            seeded: dict[tuple[str, str], str] = {}
+            try:
+                for atype, sid, h in self._conn.execute(
+                    "SELECT agent_type, session_id, content_hash FROM sessions "
+                    "WHERE content_hash IS NOT NULL"
+                ).fetchall():
+                    seeded[(str(atype), str(sid))] = str(h)
+            except Exception:
+                log.exception("local store: session hash seed failed (dedupe starts cold)")
+                seeded = {}
+            self._session_hashes = seeded
+        elif len(self._session_hashes) > _UPSERT_HASH_CACHE_MAX:
+            self._session_hashes.clear()
+        return self._session_hashes
 
     # Alias used by the issue body / callers that prefer "put" semantics.
     def put_span(self, span: dict[str, Any]) -> None:
@@ -8909,6 +9020,32 @@ class LocalStore:
         return out
 
     def query_forward_progress(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-session forward-progress signal; see ``_query_forward_progress_impl``.
+
+        #5497 — this is a whole-window event walk with a JSON decode per row
+        (4.6 s on a 210K-event store when called unbounded), so two guards
+        sit in front of the real query: a default ``since`` of the last
+        ``CLAWMETRY_FWDPROG_DEFAULT_HOURS`` (24) when the caller passes
+        neither ``since`` nor ``session_id``, and the bounded read cache
+        (``_cached_read``) so repeated calls inside one TTL pay once."""
+        if not since and not session_id:
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            since = (_dt.now(_tz.utc) - _td(hours=_FWDPROG_DEFAULT_HOURS)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+        return self._cached_read(
+            "query_forward_progress",
+            {"since": since, "until": until, "session_id": session_id},
+            lambda: self._query_forward_progress_impl(
+                since=since, until=until, session_id=session_id),
+        )
+
+    def _query_forward_progress_impl(
         self,
         *,
         since: str | None = None,
@@ -16841,6 +16978,33 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
         int(time.time() * 1000),
         e.get("runtime_kind") or None,
     )
+
+
+def _session_content_parts(session: dict[str, Any]) -> list[Any]:
+    """The 16 content columns of a sessions upsert, coerced exactly as the
+    INSERT binds them, in column order: agent_type, session_id, node_id,
+    agent_id, workspace_id, title, started_at, last_active_at, ended_at,
+    status, total_tokens, cost_usd, message_count, metadata, cwd, git_branch.
+    ``updated_at`` is deliberately absent: it is a write timestamp, not
+    content, and the #5496 dedupe hashes this list."""
+    return [
+        str(session.get("agent_type") or "openclaw"),
+        str(session.get("session_id")),
+        session.get("node_id"),
+        session.get("agent_id") or "main",
+        session.get("workspace_id"),
+        session.get("title"),
+        session.get("started_at"),
+        session.get("last_active_at"),
+        session.get("ended_at"),
+        session.get("status"),
+        int(session.get("total_tokens") or 0),
+        float(session.get("cost_usd") or 0),
+        int(session.get("message_count") or 0),
+        _to_blob(session.get("metadata")),
+        _clean_str(session.get("cwd")),
+        _clean_str(session.get("git_branch")),
+    ]
 
 
 def _span_row(span: dict[str, Any]) -> list[Any]:
