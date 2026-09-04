@@ -20169,6 +20169,10 @@ def _emit_stuck_signals(store, state: dict) -> int:
 # ZERO cloud/firmware changes. Detection only — never a kill; the incident text
 # tells the human they can Stop/Pause from the dashboard or device.
 DETECT_EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_DETECT_INTERVAL", "60"))
+# Behaviour Signals (WO-58): how often the daemon evaluates the six preset
+# signals over NEW turns. Bounded per pass (see behaviour_signals.py), so a
+# 60s cadence keeps the surface within a minute of a transcript landing.
+SIGNALS_EVAL_INTERVAL_SEC = int(os.environ.get("CLAWMETRY_SIGNALS_INTERVAL", "60"))
 # loop_signals' device-alert gate is repeat_count>=5 (see _build_device_summary).
 # Map detector severity to a count that clears that gate so an incident actually
 # surfaces; the count is illustrative (it is the alert's "how loud", not a tool
@@ -22186,6 +22190,22 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_rr:
         log.debug("snapshot: repo-readiness slice failed: %s", _e_rr)
 
+    # Behaviour Signals (WO-58): the same shape /api/signals serves, per
+    # window (1d / 7d / 30d) and per runtime, so the hosted dashboard renders
+    # the identical numbers. No per-session lists ride the snapshot. Same
+    # store handle as above; a failure here leaves both slices empty and
+    # never breaks the snapshot.
+    _signals_slice: dict = {}
+    _signals_by_rt: dict = {}
+    try:
+        from clawmetry import behaviour_signals as _bsig_snap
+        from clawmetry import local_store as _ls_sig
+        _sig_store = _ls_sig.get_store()
+        if _sig_store is not None:
+            _signals_slice, _signals_by_rt = _bsig_snap.build_snapshot_slices(_sig_store)
+    except Exception as _e_sig:
+        log.debug("snapshot: signals slice failed: %s", _e_sig)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -22215,6 +22235,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # ``scope: "all_runtimes"`` so a hosted renderer labels it instead of
         # passing node-wide data off as runtime-scoped.
         "repoReadiness": _readiness_slice,
+        # WO-58 Behaviour Signals: rates + coverage + headline per window,
+        # node-wide and per runtime (the cloud serves signalsByRuntime[rt]
+        # for ?runtime= and falls back to the node-wide slice).
+        "signals": _signals_slice,
+        "signalsByRuntime": _signals_by_rt,
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),
@@ -23627,6 +23652,7 @@ def run_daemon() -> None:
     # start surfaces immediately.
     last_stuck_eval = 0.0
     last_detect_eval = 0.0
+    last_signals_eval = 0.0
     last_git_scan = 0.0
 
     while True:
@@ -23957,6 +23983,30 @@ def run_daemon() -> None:
                             f"detectors: tick errored: {_de}"
                         )
                     last_detect_eval = now_detect
+                    try:
+                        save_state(state)
+                    except Exception:
+                        pass
+
+            # ── Behaviour Signals (WO-58) ──
+            # What people and agents SAY about a run: six preset keyword /
+            # structural signals over every new user + assistant turn in the
+            # store, for every runtime. Judge-free, bounded per pass, and the
+            # matched text is never stored (clawmetry/behaviour_signals.py).
+            # Own opt-out (CLAWMETRY_SIGNALS=0); never raises into the cycle.
+            if os.environ.get("CLAWMETRY_SIGNALS", "1") != "0":
+                now_sig = time.time()
+                if (now_sig - last_signals_eval) >= SIGNALS_EVAL_INTERVAL_SEC:
+                    try:
+                        from clawmetry import behaviour_signals as _bsig
+                        from clawmetry import local_store as _ls_sig
+                        store_for_sig = _ls_sig.get_store()
+                        n_sig = _bsig.run_tick(store_for_sig, state)
+                        if n_sig:
+                            log.info(f"signals: {n_sig} match(es) recorded")
+                    except Exception as _sge:
+                        log.warning(f"signals: tick errored: {_sge}")
+                    last_signals_eval = now_sig
                     try:
                         save_state(state)
                     except Exception:
@@ -25265,6 +25315,54 @@ def _alerts_quality_window_minutes(rules: list) -> int:
     return widest
 
 
+def _alerts_signal_windows(rules: list, store) -> tuple:
+    """``(signals, signals_by_runtime)`` for ``alert_evaluator.evaluate``:
+    one ``query_signal_rate_window`` result per enabled ``signal_rate_above``
+    rule, keyed by rule id (scoped rules land under their runtime). Returns
+    ``(None, None)`` when no such rule exists so the common case pays
+    nothing. Never raises."""
+    try:
+        from clawmetry import alert_evaluator
+    except Exception:
+        return None, None
+    sig_types = getattr(alert_evaluator, "SIGNAL_RULE_TYPES", frozenset())
+    node: dict = {}
+    by_rt: dict = {}
+    for raw in (rules or []):
+        try:
+            if not raw.get("enabled", True):
+                continue
+            cond = raw.get("condition_json")
+            if isinstance(cond, str):
+                cond = json.loads(cond)
+            if not isinstance(cond, dict):
+                continue
+            rtype = cond.get("type") or cond.get("alert_type")
+            if rtype not in sig_types:
+                continue
+            fields = alert_evaluator.signal_rule_fields(
+                {"condition": cond, "threshold": cond.get("threshold_value",
+                                                          cond.get("threshold"))})
+            if not fields.get("signal"):
+                continue
+            rt = alert_evaluator._rule_runtime(raw)
+            win = store.query_signal_rate_window(
+                signal=fields["signal"], window_minutes=fields["window_minutes"],
+                runtime=(None if rt == "all" else rt),
+            ) or {}
+            rid = str(raw.get("id") or "")
+            if rt == "all":
+                node[rid] = win
+            else:
+                by_rt.setdefault(rt, {})[rid] = win
+        except Exception as e:  # noqa: BLE001
+            log.debug("alerts: signal window for rule %r skipped: %s", raw.get("id"), e)
+            continue
+    if not node and not by_rt:
+        return None, None
+    return node, by_rt
+
+
 # ── Local-only alerting (licensed self-hosted nodes, no cloud account) ───────
 # A self-hosted Pro/Enterprise customer (signed CLAW1 license at
 # ~/.clawmetry/license.key, empty api_key, optional ~/.clawmetry/nocloud
@@ -25629,10 +25727,12 @@ def _evaluate_alerts_local(config: dict, state: dict) -> int:
         except Exception:
             quality_by_runtime = None
 
+    sig_node, sig_by_rt = _alerts_signal_windows(rules, store)
     try:
         matches = alert_evaluator.evaluate(
             rules, events, last_eval_state, quality,
             quality_by_runtime=quality_by_runtime,
+            signals=sig_node, signals_by_runtime=sig_by_rt,
         )
     except Exception as e:
         log.warning("alerts(local): evaluator errored: %s", e)
@@ -25772,8 +25872,10 @@ def evaluate_alerts(config: dict, state: dict) -> int:
             log.warning("alerts: query_session_quality_window failed: %s", e)
             quality = None
 
+    sig_node, sig_by_rt = _alerts_signal_windows(rules, store)
     try:
-        matches = alert_evaluator.evaluate(rules, events, last_eval_state, quality)
+        matches = alert_evaluator.evaluate(rules, events, last_eval_state, quality,
+                                           signals=sig_node, signals_by_runtime=sig_by_rt)
     except Exception as e:
         log.warning("alerts: evaluator errored: %s", e)
         state["alerts_last_eval_ts"] = _iso_now()

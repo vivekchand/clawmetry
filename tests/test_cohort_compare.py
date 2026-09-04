@@ -587,7 +587,10 @@ class TestStoreReads:
         r = rows[0]
         assert r["metadata"]["model"] == "m1" and r["cwd"] == "/w/repo-a"
         assert r["git_commits_linked"] is None
-        assert "signals" not in r and "instructions_hash" not in r
+        # WO-58 ships the signal_matches table with the store (CREATE IF NOT
+        # EXISTS), so the signals input is present on every store; a session
+        # no tick has matched carries an empty list, never a missing key.
+        assert r.get("signals") == [] and "instructions_hash" not in r
         from clawmetry.cohort_compare import session_view
         v = session_view(r)
         assert v["repo"] == "repo-a" and v["developer"] == "n1" and v["tool_errors"] == 1

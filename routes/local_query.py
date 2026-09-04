@@ -1057,6 +1057,16 @@ _DAEMON_METHODS = frozenset({
     # fan-out stats. Unlisted -> the proxy 400s, the fast path returns
     # None, and the bench silently shows every harness as unseen.
     "query_subagent_stats_by_runtime",
+    # Behaviour Signals (WO-58, clawmetry/behaviour_signals.py). The daemon
+    # writes turns + matches on its tick; the Signals tab, the alert rule
+    # and the snapshot read grouped counts back through the same proxy
+    # because the daemon holds the writer lock. Unlisted -> 400 -> the tab
+    # shows "no daemon" instead of numbers.
+    "record_signal_turns",
+    "query_signal_grouped",
+    "query_signal_coverage",
+    "query_signal_sessions",
+    "query_signal_rate_window",
 })
 
 

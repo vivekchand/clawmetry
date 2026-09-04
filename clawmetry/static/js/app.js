@@ -2098,6 +2098,7 @@ function switchTab(name) {
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
   if (name === 'guard') { if (typeof loadGuardTab === 'function') loadGuardTab(); }
+  if (name === 'signals') { if (typeof loadSignalsTab === 'function') loadSignalsTab(); }
   if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
   if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
@@ -12438,11 +12439,13 @@ var _CM_CAP_TABS = {
 // guard: one Guard view ranks running sessions from EVERY runtime by spend
 // at risk, and policies apply node-wide. It was in _CM_RT_ALL_TABS but in
 // no capability map, so selecting any runtime hid it (0.12.806 field hit).
-var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','memory','skills'];
+// signals: the behaviour-signal surface covers every runtime that lands
+// text in the store and states its coverage per runtime, so it is node-level.
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','memory','skills','signals'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
-  'context-economics','approvals','guard','alerts','usage','dives','crons','memory',
+  'context-economics','approvals','guard','signals','alerts','usage','dives','crons','memory',
   'notifications','security','policy','skills','selfevolve','subagents',
   'nemoclaw','logs','version-impact','agents'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
@@ -31459,4 +31462,271 @@ function loadGuardActions() {
   }).catch(function () {
     el.innerHTML = '<div class="empty-state">Could not load decisions.</div>';
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIGNALS TAB (WO-58 Behaviour Signals): what people and agents say about a
+// run. Reads /api/signals (local: DuckDB via the daemon proxy; cloud: the
+// signals / signalsByRuntime snapshot slice). Every number re-derives from the
+// runtime switcher (_cmRuntimeFilter()). Polls only while the tab is active.
+// Copy rule: no em dashes, no double dashes, plain words.
+// ═══════════════════════════════════════════════════════════════════════════
+var _sigState = { window: '7d', timer: null, open: null, data: null };
+var SIGNALS_POLL_MS = 60000;
+var SIGNAL_ORDER = ['user_frustration', 'user_praise', 'assistant_refusal',
+  'assistant_laziness', 'task_failure', 'user_retry'];
+var SIGNAL_LABEL = {
+  user_frustration: 'Frustration', user_praise: 'Praise',
+  assistant_refusal: 'Refusals', assistant_laziness: 'Work handed back',
+  task_failure: 'Gave up', user_retry: 'Retries'
+};
+var SIGNAL_HINT = {
+  user_frustration: 'People swearing at or correcting the agent.',
+  user_praise: 'Thanks, perfect, nice work.',
+  assistant_refusal: 'The agent declines to do the work.',
+  assistant_laziness: 'The agent hands the work back to the person.',
+  task_failure: 'The agent says it could not finish.',
+  user_retry: 'The same request sent again. A floor: retries across ingest gaps are missed.'
+};
+
+function _sigT(key, args, fallback) {
+  if (typeof t === 'function') { try { return t(key, args, fallback); } catch (e) {} }
+  var s = fallback || key;
+  if (args) Object.keys(args).forEach(function (k) { s = s.replace('{' + k + '}', args[k]); });
+  return s;
+}
+function sigEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function sigPct(rate) {
+  if (rate == null || isNaN(rate)) return null;
+  var p = rate * 100;
+  return (p < 10 ? p.toFixed(1) : Math.round(p)) + '%';
+}
+function sigRuntimeLabel(rt) {
+  if (!rt || rt === 'all') return 'all runtimes';
+  if (typeof _cmRuntimeLabel === 'function') { try { return _cmRuntimeLabel(rt); } catch (e) {} }
+  return rt;
+}
+function _sigIsActive() {
+  return (typeof _cmCurrentTab !== 'undefined') && _cmCurrentTab === 'signals';
+}
+
+function signalsSetWindow(w) {
+  _sigState.window = (w === '1d' || w === '30d') ? w : '7d';
+  document.querySelectorAll('#signals-window-seg button').forEach(function (b) {
+    b.classList.toggle('active', b.dataset.window === _sigState.window);
+  });
+  loadSignalsTab();
+}
+
+function loadSignalsTab() {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/signals?window=' + encodeURIComponent(_sigState.window) +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    _sigState.data = d || {};
+    signalsRenderHeadline(d, rt);
+    signalsRenderTable(d, rt);
+    signalsRenderCoverage(d, rt);
+    if (_sigState.open) signalsOpenSessions(_sigState.open, true);
+  }).catch(function () {
+    var h = document.getElementById('signals-headline');
+    if (h) h.textContent = _sigT('signals.err', null, 'Could not load signals.');
+    var b = document.getElementById('signals-table-body');
+    if (b) b.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.err', null, 'Could not load signals.')) + '</div>';
+  });
+  if (_sigState.timer) clearInterval(_sigState.timer);
+  _sigState.timer = visibilitySetInterval(function () {
+    if (!_sigIsActive()) { clearInterval(_sigState.timer); _sigState.timer = null; return; }
+    loadSignalsTab();
+  }, SIGNALS_POLL_MS);
+}
+
+// The one sentence the tab leads with. Honest states: no daemon, nothing
+// measured yet, a runtime that exposes no text.
+function signalsRenderHeadline(d, rt) {
+  var h = document.getElementById('signals-headline');
+  var sub = document.getElementById('signals-headline-sub');
+  if (!h) return;
+  var elig = (d && d.eligible_turns) || {};
+  var total = (Number(elig.user) || 0) + (Number(elig.assistant) || 0);
+  if (d && d.store === 'unavailable' && !total) {
+    h.textContent = _sigT('signals.no_daemon', null, 'Signals need the ClawMetry daemon running. Nothing has been measured on this node yet.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  var rc = d && d.runtime_coverage;
+  if (rt && rt !== 'all' && rc && rc.state === 'none') {
+    h.textContent = _sigT('signals.not_exposed_headline', { runtime: sigRuntimeLabel(rt) },
+      'Not exposed by {runtime}: it does not write user or assistant text where ClawMetry can read it.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  if (!total) {
+    h.textContent = _sigT('signals.nothing_yet', null, 'Nothing measured yet. Signals appear once a session with readable turns lands.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  var head = (d && d.headline) || {};
+  h.textContent = head.text || '';
+  if (sub) {
+    sub.textContent = _sigT('signals.measured_over', {
+      user: Number(elig.user) || 0, assistant: Number(elig.assistant) || 0,
+      scope: sigRuntimeLabel(rt)
+    }, 'Measured over {user} user turns and {assistant} agent turns on {scope}.');
+  }
+}
+
+function signalsTrendCell(s) {
+  var tr = (s && s.trend) || {};
+  if (tr.delta == null) return '<span class="sig-muted">' + sigEsc(_sigT('signals.no_prior', null, 'no earlier window')) + '</span>';
+  var pts = Math.abs(Math.round(tr.delta * 1000) / 10);
+  if (tr.direction === 'up') return '<span class="sig-trend sig-up">&#9650; ' + pts + ' pts</span>';
+  if (tr.direction === 'down') return '<span class="sig-trend sig-down">&#9660; ' + pts + ' pts</span>';
+  return '<span class="sig-trend sig-flat">' + sigEsc(_sigT('signals.flat', null, 'about the same')) + '</span>';
+}
+
+function signalsRenderTable(d, rt) {
+  var el = document.getElementById('signals-table-body');
+  var note = document.getElementById('signals-scope-note');
+  if (!el) return;
+  if (note) note.textContent = _sigT('signals.scope', { scope: sigRuntimeLabel(rt) }, 'Scope: {scope}');
+  var sigs = (d && d.signals) || {};
+  var rc = (d && d.runtime_coverage) || null;
+  var elig = (d && d.eligible_turns) || {};
+  var total = (Number(elig.user) || 0) + (Number(elig.assistant) || 0);
+  if (!total) {
+    var msg = (d && d.store === 'unavailable')
+      ? _sigT('signals.no_daemon_short', null, 'No daemon connected.')
+      : (rt !== 'all' && rc && rc.state === 'none'
+        ? _sigT('signals.not_exposed', { runtime: sigRuntimeLabel(rt) }, 'Not exposed by {runtime}')
+        : _sigT('signals.no_turns', null, 'No turns measured in this window.'));
+    el.innerHTML = '<div class="sig-empty">' + sigEsc(msg) + '</div>';
+    return;
+  }
+  var html = '<table class="sig-table"><thead><tr>' +
+    '<th>' + sigEsc(_sigT('signals.col_signal', null, 'Signal')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_rate', null, 'Rate')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_count', null, 'Matches')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_turns', null, 'Of turns')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_trend', null, 'Vs window before')) + '</th>' +
+    '<th></th></tr></thead><tbody>';
+  SIGNAL_ORDER.forEach(function (name) {
+    var s = sigs[name] || {};
+    var side = s.side || (name.indexOf('user_') === 0 ? 'user' : 'assistant');
+    var exposed = !rc || rc.state == null || rc.state === 'unknown' ||
+      (side === 'user' ? rc.user_text !== false : rc.assistant_text !== false);
+    var rateCell, countCell, turnsCell, trendCell, openCell;
+    if (!exposed) {
+      rateCell = '<span class="sig-muted">' + sigEsc(_sigT('signals.not_exposed', { runtime: sigRuntimeLabel(rt) }, 'Not exposed by {runtime}')) + '</span>';
+      countCell = turnsCell = trendCell = openCell = '';
+    } else if (!s.eligible) {
+      rateCell = '<span class="sig-muted">' + sigEsc(_sigT('signals.no_turns_side', { side: side === 'user' ? 'user' : 'agent' }, 'no {side} turns yet')) + '</span>';
+      countCell = turnsCell = trendCell = openCell = '';
+    } else {
+      var p = sigPct(s.rate);
+      rateCell = '<span class="sig-rate' + (s.count ? '' : ' sig-muted') + '">' + (p == null ? '0%' : p) + '</span>';
+      countCell = String(s.count || 0);
+      turnsCell = String(s.eligible || 0);
+      trendCell = signalsTrendCell(s);
+      openCell = s.count
+        ? '<button class="sig-btn sig-btn-sm" data-sig="' + sigEsc(name) + '" onclick="signalsOpenSessions(this.dataset.sig)">' + sigEsc(_sigT('signals.open_sessions', null, 'Sessions')) + '</button>'
+        : '';
+    }
+    html += '<tr' + (_sigState.open === name ? ' class="sig-row-open"' : '') + '>' +
+      '<td><div class="sig-name">' + sigEsc(SIGNAL_LABEL[name] || s.label || name) + '</div>' +
+      '<div class="sig-hint">' + sigEsc(SIGNAL_HINT[name] || '') + '</div></td>' +
+      '<td>' + rateCell + '</td><td>' + countCell + '</td><td>' + turnsCell + '</td>' +
+      '<td>' + trendCell + '</td><td>' + openCell + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+// Drill-down: the sessions behind one row. Reuses the transcript deep-link
+// the stuck banner and Security findings use (#session=<id> + the
+// Transcripts tab), so every entry point behaves alike.
+function signalsOpenSessions(name, silent) {
+  if (!name) return;
+  _sigState.open = name;
+  var card = document.getElementById('signals-sessions-card');
+  var title = document.getElementById('signals-sessions-title');
+  var body = document.getElementById('signals-sessions-body');
+  if (!card || !body) return;
+  card.style.display = '';
+  if (title) title.textContent = _sigT('signals.sessions_title', { signal: SIGNAL_LABEL[name] || name }, '{signal}: sessions this window');
+  if (!silent) body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.loading', null, 'Loading signals...')) + '</div>';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/signals/' + encodeURIComponent(name) + '/sessions?window=' + encodeURIComponent(_sigState.window) +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    var rows = (d && d.sessions) || [];
+    if (!rows.length) {
+      body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.no_sessions', null, 'No sessions matched in this window.')) + '</div>';
+      return;
+    }
+    var html = '<table class="sig-table"><thead><tr><th>Session</th><th>Runtime</th><th>Model</th><th>Started</th><th>Cost</th><th>Matches</th><th></th></tr></thead><tbody>';
+    rows.forEach(function (s) {
+      var started = s.started ? String(s.started).slice(0, 16).replace('T', ' ') : '';
+      html += '<tr><td title="' + sigEsc(s.session_id) + '">' + sigEsc((s.title || s.session_id || '').slice(0, 56)) + '</td>' +
+        '<td>' + sigEsc(sigRuntimeLabel(s.runtime)) + '</td>' +
+        '<td>' + sigEsc(s.model || 'unknown') + '</td>' +
+        '<td>' + sigEsc(started) + '</td>' +
+        '<td>$' + (Number(s.cost_usd) || 0).toFixed(2) + '</td>' +
+        '<td>' + (Number(s.matches) || 0) + '</td>' +
+        '<td><button class="sig-btn sig-btn-sm" data-sid="' + sigEsc(s.session_id) + '" onclick="signalsOpenTranscript(this.dataset.sid)">' + sigEsc(_sigT('signals.open', null, 'Open')) + '</button></td></tr>';
+    });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+  }).catch(function () {
+    body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.err', null, 'Could not load signals.')) + '</div>';
+  });
+  if (_sigState.data) signalsRenderTable(_sigState.data, rt);
+}
+function signalsCloseSessions() {
+  _sigState.open = null;
+  var card = document.getElementById('signals-sessions-card');
+  if (card) card.style.display = 'none';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (_sigState.data) signalsRenderTable(_sigState.data, rt);
+}
+function signalsOpenTranscript(sessionId) {
+  if (!sessionId) return;
+  if (typeof cmOpenFindingSession === 'function') return cmOpenFindingSession(sessionId);
+  try { window.location.hash = 'session=' + encodeURIComponent(sessionId); } catch (e) {}
+  if (typeof switchTab === 'function') switchTab('transcripts');
+}
+
+// Coverage strip: one chip per runtime with three honest states. A runtime
+// with no readable text is "not exposed", never 0%.
+function signalsRenderCoverage(d, rt) {
+  var el = document.getElementById('signals-coverage-body');
+  if (!el) return;
+  var cov = (d && d.coverage) || {};
+  var keys = Object.keys(cov).sort();
+  if (!keys.length) {
+    el.innerHTML = '<div class="sig-empty">' + sigEsc(d && d.store === 'unavailable'
+      ? _sigT('signals.no_daemon_short', null, 'No daemon connected.')
+      : _sigT('signals.no_runtimes', null, 'No runtime has landed a session yet.')) + '</div>';
+    return;
+  }
+  var html = '<div class="sig-cov">';
+  keys.forEach(function (k) {
+    var c = cov[k] || {};
+    var state = c.state || 'none';
+    var text;
+    if (state === 'none') text = _sigT('signals.cov_none', null, 'not exposed');
+    else if (state === 'user_text') text = _sigT('signals.cov_user', null, 'user text only');
+    else if (state === 'assistant_text') text = _sigT('signals.cov_assistant', null, 'agent text only');
+    else text = _sigT('signals.cov_both', null, 'user and agent text');
+    var src = c.source === 'adapter' ? _sigT('signals.cov_declared', null, 'declared by the adapter') : _sigT('signals.cov_inferred', null, 'seen in the store');
+    html += '<div class="sig-chip sig-chip-' + sigEsc(state === 'none' ? 'none' : 'ok') + (rt === k ? ' sig-chip-active' : '') + '" title="' + sigEsc(src) + '">' +
+      '<span class="sig-chip-rt">' + sigEsc(sigRuntimeLabel(k)) + '</span>' +
+      '<span class="sig-chip-state">' + sigEsc(text) + '</span></div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
 }
