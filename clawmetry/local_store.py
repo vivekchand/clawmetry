@@ -391,21 +391,29 @@ _DDL = [
         is_error        BOOLEAN
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
+    # #5500 — one secondary index on events: the session timeline lookup,
+    # the only filter selective enough for an ART index to beat a scan.
+    # Range and low-cardinality filters (ts windows, event_type, agent_type,
+    # agent_id, created_at) are served by DuckDB's per-row-group zone maps
+    # since rows arrive in time order; the indexes that used to cover them
+    # never appeared in a profiled plan, cost about 115 MB on a real store,
+    # and turned every UPDATE on the table into a DELETE plus INSERT. The
+    # DROP statements below shed them from existing stores at the next boot.
     "CREATE INDEX IF NOT EXISTS idx_events_session     ON events(session_id, ts)",
-    "CREATE INDEX IF NOT EXISTS idx_events_agent_ts    ON events(agent_id, ts)",
-    "CREATE INDEX IF NOT EXISTS idx_events_type_ts     ON events(event_type, ts)",
-    "CREATE INDEX IF NOT EXISTS idx_events_atype_ts    ON events(agent_type, ts)",
+    "DROP INDEX IF EXISTS idx_events_ts",
+    "DROP INDEX IF EXISTS idx_events_agent_ts",
+    "DROP INDEX IF EXISTS idx_events_type_ts",
+    "DROP INDEX IF EXISTS idx_events_atype_ts",
     # Speeds up the v7 dedup migration (#1232) and any future analytical
     # query that wants to scan a single session's timeline by event_type
     # without hitting the full ts index.
-    "CREATE INDEX IF NOT EXISTS idx_events_session_ts_type ON events(session_id, ts, event_type)",
+    "DROP INDEX IF EXISTS idx_events_session_ts_type",
     # Ingest-order scans: the approvals watcher advances its watermark on
     # created_at (the INSERT stamp) rather than the event's own ts, so a
     # session ingested minutes after its events' timestamps is still
     # evaluated (the 2026-07-02 watermark race). Without this index every
     # watcher poll would be a full-table scan on created_at.
-    "CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)",
+    "DROP INDEX IF EXISTS idx_events_created_at",
     """
     CREATE TABLE IF NOT EXISTS sessions (
         agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
@@ -1195,12 +1203,14 @@ _DDL = [
     # live span on a real store). ALTER (not a new CREATE) so existing stores
     # pick it up; NULL on legacy rows means "unknown", written once, then set.
     "ALTER TABLE spans ADD COLUMN IF NOT EXISTS content_hash VARCHAR",
+    # #5500 — point lookups only (trace, parent, session); the range
+    # indexes on ts / start_ts / agent_type are zone-map work, see events.
     "CREATE INDEX IF NOT EXISTS idx_spans_trace_id    ON spans(trace_id, span_id)",
-    "CREATE INDEX IF NOT EXISTS idx_spans_trace_start ON spans(trace_id, start_ts)",
     "CREATE INDEX IF NOT EXISTS idx_spans_parent      ON spans(parent_span_id)",
     "CREATE INDEX IF NOT EXISTS idx_spans_session     ON spans(session_id, start_ts)",
-    "CREATE INDEX IF NOT EXISTS idx_spans_agent_ts    ON spans(agent_type, start_ts)",
-    "CREATE INDEX IF NOT EXISTS idx_spans_ts          ON spans(ts)",
+    "DROP INDEX IF EXISTS idx_spans_trace_start",
+    "DROP INDEX IF EXISTS idx_spans_agent_ts",
+    "DROP INDEX IF EXISTS idx_spans_ts",
     # Issue #1364 — loop-detection signals from clawmetry/proxy.py's
     # ``LoopDetector``. Today the detector logs + writes to its private
     # SQLite (``~/.clawmetry/proxy.db``); the dashboard had no view into
