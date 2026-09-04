@@ -167,3 +167,18 @@ def test_v15_migration_is_idempotent_on_reopen(v14_store, monkeypatch):
         assert row == ("assistant", "text")
     finally:
         again.stop(flush=True)
+
+
+def test_event_to_row_stamps_typed_columns_on_insert():
+    """The insert path types every row: 14 legacy columns + 4 typed ones
+    (+ 2 chain columns appended by the flush), matching _EVENT_INSERT_COLS."""
+    import clawmetry.local_store as ls
+    row = ls._event_to_row({"id": "r1", "node_id": "n", "event_type": "tool_result",
+                            "ts": "2026-09-01T00:00:00Z",
+                            "data": {"role": "user", "content": "boom", "tool_name": "Bash",
+                                     "extra": {"toolUseId": "c1", "isError": True}}})
+    assert len(row) == 18
+    assert row[-4:] == ("tool", "tool_result", "Bash", True)
+    assert ls.LocalStore._EVENT_INSERT_NCOLS == 20
+    assert ls.LocalStore._EVENT_INSERT_COLS.split(", ")[14:18] == \
+        ["role", "block_kind", "tool_name", "is_error"]
