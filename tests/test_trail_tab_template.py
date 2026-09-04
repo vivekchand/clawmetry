@@ -52,24 +52,31 @@ def _live_html_source() -> str:
     return src[start:end]
 
 
+_INCLUDE_RE = re.compile(r"""\{%\s*include\s+['"]([^'"]+)['"]\s*%\}""")
+
+
 def _rendered_live_html() -> str:
-    """Render the live template through Jinja so ``{% include %}`` resolves.
-
-    Uses the same template folder Flask is configured with in dashboard.py,
-    without booting the app: the includes are plain files under
-    ``clawmetry/templates``.
+    """The live template with every ``{% include %}`` expanded from
+    ``clawmetry/templates`` (the folder Flask renders from), so the proof is
+    about the markup that is actually served, not a template file nobody
+    includes. Plain string expansion: no template engine needed in the lint
+    job, and nothing here is rendered for a browser.
     """
-    from jinja2 import Environment, FileSystemLoader
-
     tpl_dir = os.path.join(_ROOT, "clawmetry", "templates")
-    env = Environment(loader=FileSystemLoader(tpl_dir), autoescape=False)
-    # dashboard.py uses url_for(); a stub keeps the render self-contained.
-    env.globals["url_for"] = lambda endpoint, **kw: "/" + endpoint + "/" + kw.get("filename", "")
     src = _live_html_source()
     body = src[src.index('r"""') + 4:]
-    tpl = env.from_string(body)
-    return tpl.render(version="0.0.0-test", legacy_nav=False, is_pro=False,
-                      cloud_mode=False, CLOUD_MODE=False)
+
+    def expand(text: str, depth: int = 0) -> str:
+        if depth > 5:
+            return text
+
+        def sub(m):
+            with open(os.path.join(tpl_dir, m.group(1)), encoding="utf-8") as fh:
+                return expand(fh.read(), depth + 1)
+
+        return _INCLUDE_RE.sub(sub, text)
+
+    return expand(body)
 
 
 def test_trail_template_is_included_in_live_html():

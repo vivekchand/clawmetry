@@ -30,9 +30,11 @@
     try { if (typeof t === 'function') return t(key, vars || null, fallback); } catch (e) {}
     return fallback;
   }
+  // Attribute-safe: every value here may land inside a quoted attribute
+  // (title="", data-full=""), and app.js's escHtml leaves double quotes alone.
   function esc(s) {
-    if (typeof escHtml === 'function') return escHtml(s);
-    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
   function $(id) { return document.getElementById(id); }
   function setHtml(id, html) { var el = $(id); if (el) el.innerHTML = html; }

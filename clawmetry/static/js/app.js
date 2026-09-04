@@ -19708,7 +19708,8 @@ async function loadTranscripts() {
       // trail. Both come from static/js/trail.js; an absent verdict renders
       // nothing rather than a "no data" chip on every row.
       if (typeof _cmVerdictBadge === 'function') html += _cmVerdictBadge(tx);
-      html += '<button type="button" class="cm-open-trail" data-sid="' + escHtml(raw) + '" onclick="event.stopPropagation();openTrail(this.getAttribute(\'data-sid\'))" title="' + escHtml(t('trail.open_tooltip', null, 'What it was asked, what it did, how it ended')) + '">' + escHtml(t('trail.open', null, 'Open trail')) + ' &rarr;</button>';
+      var _attrSafe = function (s) { return escHtml(s).replace(/"/g, '&quot;'); };
+      html += '<button type="button" class="cm-open-trail" data-sid="' + _attrSafe(raw) + '" onclick="event.stopPropagation();openTrail(this.getAttribute(\'data-sid\'))" title="' + _attrSafe(t('trail.open_tooltip', null, 'What it was asked, what it did, how it ended')) + '">' + escHtml(t('trail.open', null, 'Open trail')) + ' &rarr;</button>';
       html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });
