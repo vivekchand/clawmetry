@@ -352,6 +352,30 @@ def issue_headline(issue: dict, now_ms: int | None = None) -> str:
     return head + "."
 
 
+# ── snapshot slice ─────────────────────────────────────────────────────────
+
+def build_snapshot_slice(store, *, resolved_limit: int = 20) -> dict:
+    """``signalIssues`` for ``sync_system_snapshot``: every open issue plus
+    the last ``resolved_limit`` resolved ones, each with its plain-words
+    headline. No session ids, no text. ``{}`` on any failure."""
+    try:
+        opened = store.query_signal_issues(status="open", limit=200) or []
+        resolved = store.query_signal_issues(status="resolved", limit=resolved_limit) or []
+        ignored = store.query_signal_issues(status="ignored", limit=50) or []
+        items = []
+        for it in list(opened) + list(resolved) + list(ignored):
+            if not isinstance(it, dict):
+                continue
+            it = dict(it)
+            it["headline"] = issue_headline(it)
+            items.append(it)
+        return {"issues": items, "open": len(opened), "resolved": len(resolved),
+                "ignored": len(ignored), "generated_at": int(time.time() * 1000)}
+    except Exception as e:  # noqa: BLE001
+        log.debug("signal shifts: snapshot slice failed: %s", e)
+        return {}
+
+
 # ── alert payload ───────────────────────────────────────────────────────────
 
 SHIFT_RULE_KIND = "signal_shift"
@@ -482,25 +506,3 @@ def run_shift_tick(store, *, now_ms: int | None = None, deliver=None,
         log.warning("signal shifts: tick failed: %s", e)
         stats["errors"] += 1
     return stats
-
-
-def build_snapshot_slice(store, *, resolved_limit: int = 20) -> dict:
-    """``signalIssues`` for ``sync_system_snapshot``: every open issue plus
-    the last ``resolved_limit`` resolved ones, each with its plain-words
-    headline. No session ids, no text. ``{}`` on any failure."""
-    try:
-        opened = store.query_signal_issues(status="open", limit=200) or []
-        resolved = store.query_signal_issues(status="resolved", limit=resolved_limit) or []
-        ignored = store.query_signal_issues(status="ignored", limit=50) or []
-        items = []
-        for it in list(opened) + list(resolved) + list(ignored):
-            if not isinstance(it, dict):
-                continue
-            it = dict(it)
-            it["headline"] = issue_headline(it)
-            items.append(it)
-        return {"issues": items, "open": len(opened), "resolved": len(resolved),
-                "ignored": len(ignored), "generated_at": int(time.time() * 1000)}
-    except Exception as e:  # noqa: BLE001
-        log.debug("signal shifts: snapshot slice failed: %s", e)
-        return {}
