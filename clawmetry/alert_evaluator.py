@@ -86,7 +86,17 @@ _LEGACY_ALERT_TYPE_MAP = {
     # Harness Engineering "Watch $/done": cost per finished job crossed a
     # dollar threshold. Quality-slice fed, maps to itself.
     "dollars_per_done_above": "dollars_per_done_above",
+    # Behaviour Signals (WO-58): a named signal's rate over a window crossed
+    # a threshold. Fed by the ``signal_turns`` / ``signal_matches`` tables the
+    # daemon fills (clawmetry/behaviour_signals.py), never by matched text.
+    "signal_rate_above": "signal_rate_above",
 }
+
+# Rule types that read the behaviour-signal rate slice. Like the quality
+# types, the daemon only queries that slice when such a rule is enabled.
+SIGNAL_RULE_TYPES = frozenset({"signal_rate_above"})
+DEFAULT_SIGNAL_WINDOW_MINUTES = 24 * 60
+DEFAULT_SIGNAL_MIN_TURNS = 20
 
 # Rule types that read the per-session quality slice (eval scores + outcome
 # labels) instead of the raw event stream. The daemon only bothers to query
@@ -142,8 +152,15 @@ def evaluate(
     last_eval_state: dict[str, Any] | None,
     quality: dict[str, Any] | None = None,
     quality_by_runtime: dict[str, dict[str, Any]] | None = None,
+    signals: dict[str, Any] | None = None,
+    signals_by_runtime: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Pure evaluator. Walks ``events`` against ``rules``, returns matches.
+
+    ``signals`` / ``signals_by_runtime``: the behaviour-signal rate slice for
+    the ``signal_rate_above`` rule type, keyed ``{rule_id: rate_window}``
+    (each ``rate_window`` is ``LocalStore.query_signal_rate_window``'s dict).
+    ``None`` means the daemon did not fetch it and those rules no-fire.
 
     No I/O. ``last_eval_state`` is mutated in place to remember the most
     recent fire time per rule so a second call within the cooldown window
@@ -220,12 +237,15 @@ def evaluate(
             # tick (honest under-fire; never a node-wide number under a
             # runtime label).
             rule_quality = (quality_by_runtime or {}).get(rule_rt)
+            rule_signals = ((signals_by_runtime or {}).get(rule_rt) or {})
         else:
             rule_events = events_chrono
             rule_quality = quality
+            rule_signals = signals or {}
 
         try:
-            match = _evaluate_one(rule, rule_events, rule_quality)
+            match = _evaluate_one(rule, rule_events, rule_quality,
+                                  signal_window=(rule_signals or {}).get(rid))
         except Exception as e:
             log.warning("alerts: rule %s evaluator errored: %s", rid, e)
             continue
@@ -335,10 +355,13 @@ def _evaluate_one(
     rule: dict[str, Any],
     events_chrono: list[dict[str, Any]],
     quality: dict[str, Any] | None = None,
+    signal_window: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Dispatch on ``rule['type']``. Returns the match dict (rule-agnostic
     shape) or ``None`` when the rule didn't fire."""
     rt = rule.get("type")
+    if rt == "signal_rate_above":
+        return _eval_signal_rate_above(rule, signal_window)
     if rt == "count_over_threshold":
         return _eval_count_over_threshold(rule, events_chrono)
     if rt == "error_rate":
@@ -481,6 +504,80 @@ def _eval_outcome_failure_rate(
             "outcome_counts":   quality.get("outcome_counts") or {},
             "min_sessions":     min_sessions,
             "window_minutes":   window_minutes,
+        },
+    }
+
+
+def signal_rule_fields(rule: dict[str, Any]) -> dict[str, Any]:
+    """``{signal, threshold, window_minutes, min_turns}`` for a
+    ``signal_rate_above`` rule, reading the normalised rule and its raw
+    condition body. ``threshold`` is a fraction in [0, 1]; a percent (> 1)
+    is divided by 100 the way ``outcome_failure_rate`` does."""
+    cond = rule.get("condition") or {}
+    sig = str(cond.get("signal") or rule.get("signal") or "").strip()
+    thr = rule.get("threshold")
+    if thr is None:
+        thr = cond.get("threshold", cond.get("threshold_value"))
+    try:
+        thr = float(thr) if thr is not None else None
+    except (TypeError, ValueError):
+        thr = None
+    if thr is not None and thr > 1.0:
+        thr = thr / 100.0
+    wm = cond.get("window_minutes")
+    if wm is None and cond.get("window_sec") is not None:
+        wm = _coerce_int(cond.get("window_sec"), DEFAULT_SIGNAL_WINDOW_MINUTES * 60) // 60
+    return {
+        "signal": sig,
+        "threshold": thr,
+        "window_minutes": max(1, _coerce_int(wm, DEFAULT_SIGNAL_WINDOW_MINUTES)),
+        "min_turns": max(1, _coerce_int(cond.get("min_turns"), DEFAULT_SIGNAL_MIN_TURNS)),
+    }
+
+
+def _eval_signal_rate_above(
+    rule: dict[str, Any],
+    window: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Fire when a behaviour signal's rate over the window EXCEEDS
+    ``threshold`` (fraction 0..1) with at least ``min_turns`` eligible turns,
+    so one session cannot trip it. ``window`` is
+    ``LocalStore.query_signal_rate_window``'s dict for this rule; ``None`` or
+    an empty store -> no fire. The payload names the signal, the rate, the
+    window, the runtime and the model. It never carries matched text."""
+    if not isinstance(window, dict) or not window:
+        return None
+    f = signal_rule_fields(rule)
+    if not f["signal"] or f["threshold"] is None or f["threshold"] < 0:
+        return None
+    turns = int(window.get("turns") or 0)
+    if turns < f["min_turns"]:
+        return None
+    rate = window.get("rate")
+    if rate is None:
+        return None
+    rate = float(rate)
+    if rate <= f["threshold"]:
+        return None
+    wm = int(window.get("window_minutes") or f["window_minutes"])
+    runtime = str(window.get("runtime") or "all")
+    model = window.get("top_model") or "unknown"
+    return {
+        "event": _quality_pseudo_event(f"signal_rate_above:{f['signal']}", wm),
+        "summary": (f"rule fired: {f['signal']} rate {rate:.1%} "
+                    f"({int(window.get('matches') or 0)}/{turns} turns) in {wm}m "
+                    f"on {runtime} (threshold={f['threshold']:.1%})"),
+        "metadata": {
+            "signal":         f["signal"],
+            "rate":           round(rate, 4),
+            "matches":        int(window.get("matches") or 0),
+            "turns":          turns,
+            "threshold":      round(f["threshold"], 4),
+            "window_minutes": wm,
+            "window":         f"{wm}m",
+            "runtime":        runtime,
+            "model":          model,
+            "min_turns":      f["min_turns"],
         },
     }
 

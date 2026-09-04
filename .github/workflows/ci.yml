@@ -416,6 +416,8 @@ jobs:
             tests/test_wake_poll.py \
             tests/test_cli_unattended_update.py \
             tests/test_cli_help_no_dashboard_import.py \
+            tests/test_behaviour_signals.py \
+            tests/test_signals_ui_contract.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
