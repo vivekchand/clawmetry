@@ -3494,3 +3494,48 @@ body.has-profile-menu #logout-btn { display: none !important; }
   font-size: 13px; margin-bottom: 16px; border: 1px solid transparent;
 }
 #page-guard .banner-info { background: var(--bg-warning); color: var(--text-warning); border-color: rgba(245,158,11,0.3); }
+
+/* ── Signals tab (WO-58 Behaviour Signals) ─────────────────────────────────
+   Scoped to #page-signals (the .page/#page-<stem> wrapper the dashboard hides
+   and shows) so short class names cannot collide with other tabs. Follows the
+   Guard/inventory idiom: section header, cards, a compact table, pills. */
+#page-signals .sig-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+#page-signals .sig-header h2 { margin: 0; font-size: 19px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.01em; }
+#page-signals .sig-sub { color: var(--text-muted); font-size: 13px; line-height: 1.55; margin: 6px 0 0; max-width: 78ch; }
+#page-signals .sig-controls { display: flex; align-items: center; gap: 10px; }
+#page-signals .sig-seg { display: inline-flex; border: 1px solid var(--border-primary); border-radius: 8px; overflow: hidden; }
+#page-signals .sig-seg button { font: inherit; font-size: 12px; padding: 5px 11px; background: var(--button-bg); color: var(--text-secondary); border: none; cursor: pointer; }
+#page-signals .sig-seg button + button { border-left: 1px solid var(--border-primary); }
+#page-signals .sig-seg button.active { background: var(--bg-accent); color: #fff; }
+#page-signals .sig-card { margin-bottom: 16px; background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px 16px; }
+#page-signals .sig-card-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+#page-signals .sig-card-head h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+#page-signals .sig-card-head .sig-btn { margin-left: auto; }
+#page-signals .sig-headline-card { border-left: 3px solid var(--bg-accent); }
+#page-signals .sig-headline { font-size: 17px; font-weight: 600; color: var(--text-primary); line-height: 1.4; }
+#page-signals .sig-headline-sub { color: var(--text-muted); font-size: 12px; margin-top: 6px; }
+#page-signals .sig-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#page-signals .sig-table thead th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; padding: 8px 12px; white-space: nowrap; border-bottom: 1px solid var(--border-primary); }
+#page-signals .sig-table tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border-secondary); color: var(--text-secondary); vertical-align: middle; font-variant-numeric: tabular-nums; }
+#page-signals .sig-table tbody tr:last-child td { border-bottom: none; }
+#page-signals .sig-table tbody tr:hover { background: var(--bg-hover); }
+#page-signals .sig-table tr.sig-row-open td { background: var(--bg-hover); }
+#page-signals .sig-name { font-weight: 600; color: var(--text-primary); }
+#page-signals .sig-hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+#page-signals .sig-rate { font-weight: 600; color: var(--text-primary); }
+#page-signals .sig-muted { color: var(--text-muted); font-size: 12px; }
+#page-signals .sig-trend { font-size: 12px; font-weight: 600; white-space: nowrap; }
+#page-signals .sig-up { color: var(--text-warning); }
+#page-signals .sig-down { color: var(--text-success); }
+#page-signals .sig-flat { color: var(--text-muted); font-weight: 500; }
+#page-signals .sig-empty { padding: 22px 12px; text-align: center; color: var(--text-muted); font-size: 13px; background: var(--bg-primary); border: 1px dashed var(--border-primary); border-radius: 8px; }
+#page-signals .sig-btn { font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; padding: 5px 11px; border-radius: 7px; background: var(--button-bg); color: var(--text-secondary); border: 1px solid var(--border-primary); transition: background 0.12s, color 0.12s; }
+#page-signals .sig-btn:hover { background: var(--button-hover); color: var(--text-primary); }
+#page-signals .sig-btn:focus-visible { outline: 2px solid var(--text-accent); outline-offset: 2px; }
+#page-signals .sig-btn-sm { font-size: 11px; padding: 3px 9px; border-radius: 6px; }
+#page-signals .sig-cov { display: flex; flex-wrap: wrap; gap: 8px; }
+#page-signals .sig-chip { display: inline-flex; flex-direction: column; gap: 2px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-secondary); background: var(--bg-primary); min-width: 120px; }
+#page-signals .sig-chip-rt { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+#page-signals .sig-chip-state { font-size: 11px; color: var(--text-muted); }
+#page-signals .sig-chip-none .sig-chip-state { color: var(--text-warning); }
+#page-signals .sig-chip-active { border-color: var(--bg-accent); }
