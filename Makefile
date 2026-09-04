@@ -15,6 +15,10 @@ test-compat:
 # Mirrored in .github/workflows/ci.yml (moat-tests job).
 test-hooks:
 	python3 -m pytest tests/test_hooks_claude_code.py tests/test_hook_lifecycle.py tests/test_redaction_pii.py -q
+# WO-59 self-diagnostics: MCP report tool, corroboration, honesty rollup,
+# multi-runtime MCP installer. Mirrored in .github/workflows/ci.yml (moat-tests).
+test-selfdiag:
+	python3 -m pytest tests/test_self_diagnostics.py -q
 
 test-fast:
 	CLAWMETRY_URL=http://localhost:8900 CLAWMETRY_TOKEN=dev-token python3 -m pytest tests/test_api.py -v
