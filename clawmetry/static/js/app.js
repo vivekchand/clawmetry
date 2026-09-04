@@ -4173,7 +4173,7 @@ function _cohortSessionList(side, sessions) {
   return sessions.map(function (r) {
     var label = r.title || r.session_id;
     return '<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-top:1px solid var(--border-primary);font-size:11px;">'
-      + '<a href="#" onclick="openCohortSession(\'' + escapeHtmlSafe(r.session_id).replace(/'/g, '\\\'') + '\');return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(label) + '</a>'
+      + '<a href="#" data-sid="' + escapeHtmlSafe(r.session_id) + '" onclick="openCohortSession(this.getAttribute(\'data-sid\'));return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(label) + '</a>'
       + '<span style="color:var(--text-muted);white-space:nowrap;">' + _cmOutcomeChip(r.outcome) + ' ' + escapeHtmlSafe(_cohortFmt('cost_usd', r.cost_usd)) + '</span>'
       + '</div>';
   }).join('');
@@ -4304,7 +4304,7 @@ async function loadSimilarRuns(sessionId) {
     + rows.map(function (r) {
       var pct = Math.round((r.score || 0) * 100);
       return '<div style="font-weight:700;color:var(--text-primary);">' + pct + '%</div>'
-        + '<a href="#" onclick="openCohortSession(\'' + escapeHtmlSafe(r.session_id).replace(/'/g, '\\\'') + '\');return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(r.title || r.session_id) + '</a>'
+        + '<a href="#" data-sid="' + escapeHtmlSafe(r.session_id) + '" onclick="openCohortSession(this.getAttribute(\'data-sid\'));return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(r.title || r.session_id) + '</a>'
         + '<span style="color:var(--text-muted);">' + escapeHtmlSafe((r.runtime || '') + (r.model ? ' · ' + r.model : '')) + '</span>'
         + '<span>' + _cmOutcomeChip(r.outcome) + '</span>'
         + '<span style="color:var(--text-muted);">' + escapeHtmlSafe(_cohortFmt('cost_usd', r.cost_usd)) + '</span>';
