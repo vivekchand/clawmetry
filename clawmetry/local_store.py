@@ -391,21 +391,29 @@ _DDL = [
         is_error        BOOLEAN
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
+    # #5500 — one secondary index on events: the session timeline lookup,
+    # the only filter selective enough for an ART index to beat a scan.
+    # Range and low-cardinality filters (ts windows, event_type, agent_type,
+    # agent_id, created_at) are served by DuckDB's per-row-group zone maps
+    # since rows arrive in time order; the indexes that used to cover them
+    # never appeared in a profiled plan, cost about 115 MB on a real store,
+    # and turned every UPDATE on the table into a DELETE plus INSERT. The
+    # DROP statements below shed them from existing stores at the next boot.
     "CREATE INDEX IF NOT EXISTS idx_events_session     ON events(session_id, ts)",
-    "CREATE INDEX IF NOT EXISTS idx_events_agent_ts    ON events(agent_id, ts)",
-    "CREATE INDEX IF NOT EXISTS idx_events_type_ts     ON events(event_type, ts)",
-    "CREATE INDEX IF NOT EXISTS idx_events_atype_ts    ON events(agent_type, ts)",
+    "DROP INDEX IF EXISTS idx_events_ts",
+    "DROP INDEX IF EXISTS idx_events_agent_ts",
+    "DROP INDEX IF EXISTS idx_events_type_ts",
+    "DROP INDEX IF EXISTS idx_events_atype_ts",
     # Speeds up the v7 dedup migration (#1232) and any future analytical
     # query that wants to scan a single session's timeline by event_type
     # without hitting the full ts index.
-    "CREATE INDEX IF NOT EXISTS idx_events_session_ts_type ON events(session_id, ts, event_type)",
+    "DROP INDEX IF EXISTS idx_events_session_ts_type",
     # Ingest-order scans: the approvals watcher advances its watermark on
     # created_at (the INSERT stamp) rather than the event's own ts, so a
     # session ingested minutes after its events' timestamps is still
     # evaluated (the 2026-07-02 watermark race). Without this index every
     # watcher poll would be a full-table scan on created_at.
-    "CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)",
+    "DROP INDEX IF EXISTS idx_events_created_at",
     """
     CREATE TABLE IF NOT EXISTS sessions (
         agent_type      VARCHAR NOT NULL DEFAULT 'openclaw',
@@ -1195,12 +1203,14 @@ _DDL = [
     # live span on a real store). ALTER (not a new CREATE) so existing stores
     # pick it up; NULL on legacy rows means "unknown", written once, then set.
     "ALTER TABLE spans ADD COLUMN IF NOT EXISTS content_hash VARCHAR",
+    # #5500 — point lookups only (trace, parent, session); the range
+    # indexes on ts / start_ts / agent_type are zone-map work, see events.
     "CREATE INDEX IF NOT EXISTS idx_spans_trace_id    ON spans(trace_id, span_id)",
-    "CREATE INDEX IF NOT EXISTS idx_spans_trace_start ON spans(trace_id, start_ts)",
     "CREATE INDEX IF NOT EXISTS idx_spans_parent      ON spans(parent_span_id)",
     "CREATE INDEX IF NOT EXISTS idx_spans_session     ON spans(session_id, start_ts)",
-    "CREATE INDEX IF NOT EXISTS idx_spans_agent_ts    ON spans(agent_type, start_ts)",
-    "CREATE INDEX IF NOT EXISTS idx_spans_ts          ON spans(ts)",
+    "DROP INDEX IF EXISTS idx_spans_trace_start",
+    "DROP INDEX IF EXISTS idx_spans_agent_ts",
+    "DROP INDEX IF EXISTS idx_spans_ts",
     # Issue #1364 — loop-detection signals from clawmetry/proxy.py's
     # ``LoopDetector``. Today the detector logs + writes to its private
     # SQLite (``~/.clawmetry/proxy.db``); the dashboard had no view into
@@ -1830,6 +1840,38 @@ _DDL = [
         last_status     VARCHAR,
         last_error      VARCHAR,
         created_at      BIGINT NOT NULL
+    )
+    """,
+    # Silent failure -> human. One row per (session, detector kind) that was
+    # DELIVERED to a person (banner / Telegram / webhook). It is the cooldown
+    # latch: the daemon re-detects an incident every tick, and without a
+    # durable "already told them at T" a restart would re-fire every channel.
+    # Additive; CREATE TABLE IF NOT EXISTS, no schema-version bump.
+    """
+    CREATE TABLE IF NOT EXISTS incident_alerts (
+        session_id     VARCHAR NOT NULL,
+        kind           VARCHAR NOT NULL,
+        last_sent_at   BIGINT NOT NULL,
+        delivered_via  VARCHAR,
+        severity       VARCHAR,
+        fire_count     INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (session_id, kind)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_incident_alerts_sent ON incident_alerts(last_sent_at DESC)",
+    # Non-determinism: the same session replayed N times; how often did the
+    # outcome label agree with the majority? ``agreement_pct`` is null-free
+    # here but a session with no row reads as null ("not measured") on the
+    # API. Written by clawmetry/eval_regression_replay.update_agreement_stats.
+    """
+    CREATE TABLE IF NOT EXISTS session_replay_stats (
+        agent_type     VARCHAR NOT NULL DEFAULT 'openclaw',
+        session_id     VARCHAR NOT NULL,
+        runs           INTEGER NOT NULL DEFAULT 0,
+        agreement_pct  DOUBLE,
+        outcomes_json  VARCHAR,
+        updated_at     BIGINT NOT NULL,
+        PRIMARY KEY (session_id)
     )
     """,
     # ── Agent self-reports (WO-59) ──────────────────────────────────────
@@ -6428,6 +6470,166 @@ class LocalStore(TrailStoreMixin):
                 ])
         except Exception:
             return
+
+    # ── Silent failure -> human: delivery latch ─────────────────────────────
+    def incident_alert_last_sent(self, session_id: str, kind: str) -> int:
+        """Epoch ms the (session, kind) incident was last delivered to a
+        human, or 0 when never. Never raises."""
+        sid = str(session_id or "").strip()[:128]
+        k = str(kind or "").strip()[:64]
+        if not sid or not k:
+            return 0
+        try:
+            rows = self._fetch(
+                "SELECT last_sent_at FROM incident_alerts "
+                "WHERE session_id = ? AND kind = ?", [sid, k])
+            return int(rows[0][0] or 0) if rows else 0
+        except Exception:
+            return 0
+
+    def record_incident_alert(self, session_id: str, kind: str,
+                              delivered_via: Any = None,
+                              severity: str = "") -> None:
+        """Latch one delivery. ``delivered_via`` is a list of channel ids
+        (stored comma-joined). Upsert on the (session, kind) key so the
+        row is the cooldown clock AND a fire counter. Never raises."""
+        sid = str(session_id or "").strip()[:128]
+        k = str(kind or "").strip()[:64]
+        if not sid or not k:
+            return
+        if isinstance(delivered_via, (list, tuple, set)):
+            via = ",".join(sorted(str(c) for c in delivered_via))
+        else:
+            via = str(delivered_via or "")
+        try:
+            with self._write_lock:
+                self._conn.execute("""
+                    INSERT INTO incident_alerts (
+                        session_id, kind, last_sent_at, delivered_via,
+                        severity, fire_count
+                    ) VALUES (?, ?, ?, ?, ?, 1)
+                    ON CONFLICT (session_id, kind) DO UPDATE SET
+                        last_sent_at  = excluded.last_sent_at,
+                        delivered_via = excluded.delivered_via,
+                        severity      = excluded.severity,
+                        fire_count    = incident_alerts.fire_count + 1
+                """, [sid, k, int(time.time() * 1000), via[:200],
+                      str(severity or "")[:16]])
+        except Exception:
+            return
+
+    def query_incident_alerts(self, limit: int = 100) -> list:
+        """Recent human-delivered incidents, newest first. ``[]`` on error."""
+        try:
+            lim = max(1, min(500, int(limit)))
+        except (TypeError, ValueError):
+            lim = 100
+        try:
+            rows = self._fetch(
+                "SELECT session_id, kind, last_sent_at, delivered_via, "
+                "severity, fire_count FROM incident_alerts "
+                "ORDER BY last_sent_at DESC LIMIT ?", [lim])
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            out.append({
+                "session_id": r[0], "kind": r[1],
+                "last_sent_at": int(r[2] or 0),
+                "delivered_via": [c for c in str(r[3] or "").split(",") if c],
+                "severity": r[4] or "", "fire_count": int(r[5] or 0),
+            })
+        return out
+
+    # ── Non-determinism: replay agreement per session ───────────────────────
+    def upsert_session_replay_stats(self, session_id: str, *, runs: int,
+                                    agreement_pct: Any,
+                                    outcomes: Any = None,
+                                    agent_type: str = "openclaw") -> None:
+        """Persist one session's replay agreement. Never raises."""
+        sid = str(session_id or "").strip()[:128]
+        if not sid:
+            return
+        try:
+            pct = None if agreement_pct is None else float(agreement_pct)
+        except (TypeError, ValueError):
+            pct = None
+        try:
+            outcomes_json = json.dumps(outcomes if outcomes is not None else [])[:4000]
+        except Exception:
+            outcomes_json = "[]"
+        try:
+            with self._write_lock:
+                self._conn.execute("""
+                    INSERT INTO session_replay_stats (
+                        agent_type, session_id, runs, agreement_pct,
+                        outcomes_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        agent_type    = excluded.agent_type,
+                        runs          = excluded.runs,
+                        agreement_pct = excluded.agreement_pct,
+                        outcomes_json = excluded.outcomes_json,
+                        updated_at    = excluded.updated_at
+                """, [str(agent_type or "openclaw")[:64], sid,
+                      max(0, int(runs or 0)), pct, outcomes_json,
+                      int(time.time() * 1000)])
+        except Exception:
+            return
+
+    def query_replay_outcomes(self, session_id: str) -> list:
+        """``new_outcome`` labels from every persisted replay of one session,
+        oldest first. ``[]`` on any error or when never replayed."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return []
+        try:
+            rows = self._fetch(
+                "SELECT new_outcome FROM eval_regression_runs "
+                "WHERE session_id = ? ORDER BY replayed_at ASC", [sid])
+        except Exception:
+            return []
+        return [str(r[0] or "unknown") for r in rows]
+
+    def query_session_replay_stats(self, session_ids: Any = None,
+                                   limit: int = 500) -> list:
+        """Replay agreement rows, newest first. Filtered to ``session_ids``
+        when given (list). ``[]`` on error. Shape per row:
+        ``{session_id, agent_type, runs, agreement_pct, outcomes, updated_at}``."""
+        try:
+            lim = max(1, min(5000, int(limit)))
+        except (TypeError, ValueError):
+            lim = 500
+        params: list = []
+        where = ""
+        if isinstance(session_ids, (list, tuple, set)) and session_ids:
+            ids = [str(x) for x in session_ids if x][:2000]
+            if not ids:
+                return []
+            where = "WHERE session_id IN (" + ",".join("?" for _ in ids) + ") "
+            params.extend(ids)
+        params.append(lim)
+        try:
+            rows = self._fetch(
+                "SELECT session_id, agent_type, runs, agreement_pct, "
+                "outcomes_json, updated_at FROM session_replay_stats "
+                + where + "ORDER BY updated_at DESC LIMIT ?", params)
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            try:
+                outcomes = json.loads(r[4]) if r[4] else []
+            except Exception:
+                outcomes = []
+            out.append({
+                "session_id": r[0], "agent_type": r[1] or "openclaw",
+                "runs": int(r[2] or 0),
+                "agreement_pct": None if r[3] is None else float(r[3]),
+                "outcomes": outcomes,
+                "updated_at": int(r[5] or 0),
+            })
+        return out
 
     def query_policy_actions(self, limit: int = 50) -> list:
         """Recent policy decisions, newest first. ``[]`` on any error."""
@@ -11155,14 +11357,44 @@ class LocalStore(TrailStoreMixin):
             clauses.append("ts <= ?")
             params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        sql = f"""
-            SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
-                   event_type, ts, data, cost_usd, token_count, model
-            FROM events
-            {where}
-            ORDER BY ts DESC, id DESC
-            LIMIT ?
-        """
+        # Keys first when nothing narrows the scan. The Brain feed and the
+        # Home poll ask for "the newest N events" with at most the
+        # exclude_daemon predicate, which rejects almost nothing, so DuckDB's
+        # TOP_N sees every row and materialises the ``data`` BLOB (the bulk
+        # of the table, ~1 KB a row) for all of them before keeping N. Sorting
+        # the narrow key columns first and fetching the N BLOBs by primary
+        # key touches a few MB instead of the whole column: 0.41 s -> 0.11 s
+        # on a 215k-row store read cold, and on a memory-starved laptop where
+        # the daemon's buffer pool had been paged out, the same call measured
+        # 13-34 s live (2026-09-04). A selective predicate (session, agent,
+        # type, time bounds, runtime) already cuts the scan down before the
+        # sort, and there the two-phase form is slower (0.01 s -> 0.16 s for
+        # one session), so it is used only on the unfiltered shape.
+        selective = bool(
+            session_id or agent_id or event_type or since or until or _rt_clause
+        )
+        if selective:
+            sql = f"""
+                SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
+                       event_type, ts, data, cost_usd, token_count, model
+                FROM events
+                {where}
+                ORDER BY ts DESC, id DESC
+                LIMIT ?
+            """
+        else:
+            sql = f"""
+                SELECT id, agent_type, node_id, agent_id, session_id, workspace_id,
+                       event_type, ts, data, cost_usd, token_count, model
+                FROM events
+                WHERE id IN (
+                    SELECT id FROM events
+                    {where}
+                    ORDER BY ts DESC, id DESC
+                    LIMIT ?
+                )
+                ORDER BY ts DESC, id DESC
+            """
         params.append(int(limit))
         return [_row_to_event(r, _EVENT_COLS) for r in self._fetch(sql, params)]
 

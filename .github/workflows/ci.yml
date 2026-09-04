@@ -252,6 +252,14 @@ jobs:
       - name: Trial pill + upgrade modal
         run: python3 -m pytest tests/test_trial_pill_wiring.py -q
 
+      # Trail page + session-first landing: the live HTML must include
+      # tabs/trail.html (Jinja render, not a template grep), the default
+      # active page must be the Sessions list, and every Trail string must
+      # have an en.json key. The Phase-A nav guard runs alongside because the
+      # landing change re-ordered Tier-1.
+      - name: Trail page + session-first nav
+        run: python3 -m pytest tests/test_trail_tab_template.py tests/test_beginner_nav_phase_a.py -q
+
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) — the
       # 2026-08-29 Windows "PyPI install failed" brick. Runs here because
@@ -376,6 +384,7 @@ jobs:
             tests/test_moat_regression_1129.py \
             tests/test_e2e_real_openclaw_pipeline.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
+            tests/test_query_events_keys_first.py \
             tests/test_moat_cloud_roundtrip_e2e.py \
             tests/test_channel_event_chokepoint.py \
             tests/test_no_direct_get_store_in_routes.py \
@@ -402,6 +411,7 @@ jobs:
             tests/test_heartbeat_rows_stay_small.py \
             tests/test_reads_never_take_the_write_lock.py \
             tests/test_ingest_upsert_dedupe.py \
+            tests/test_store_range_indexes_dropped.py \
             tests/test_launchd_dashboard_runs_waitress.py \
             tests/test_scan_read_cache.py \
             tests/test_cache_push_gating.py \
@@ -425,6 +435,12 @@ jobs:
             tests/test_signals_ui_contract.py \
             tests/test_signal_shifts.py \
             tests/test_briefs.py \
+            tests/test_detector_incident_delivery.py \
+            tests/test_detectors_rate_limited_blocked_crashed.py \
+            tests/test_waste_flags_free_default.py \
+            tests/test_alert_rule_types_new.py \
+            tests/test_regression_replay_optin.py \
+            tests/test_insights_outcome_templates.py \
             tests/test_event_shape.py \
             tests/test_schema_v15_migration.py \
             tests/test_session_intent.py \
