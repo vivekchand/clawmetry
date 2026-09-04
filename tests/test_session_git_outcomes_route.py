@@ -8,7 +8,9 @@ on /api/sessions rows. Temp DuckDB only.
 """
 from __future__ import annotations
 
+import datetime
 import importlib
+import time
 
 import pytest
 from flask import Flask
@@ -40,15 +42,26 @@ SID = "claude_code:git-sess-1"
 OTHER = "claude_code:git-sess-2"
 
 
+def _now_iso():
+    return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _drain(store):
+    store._flush_now()
+    for _ in range(20):
+        if not store._ring:
+            break
+        time.sleep(0.05)
+
+
 def _seed(store):
+    now = _now_iso()
     store.ingest_session({"agent_type": "claude_code", "session_id": SID, "node_id": "n",
                           "title": "ship the fix", "cwd": REPO, "git_branch": "fix/rounding",
-                          "started_at": "2026-09-01T10:00:00Z",
-                          "last_active_at": "2026-09-01T10:30:00Z"})
+                          "started_at": now, "last_active_at": now})
     store.ingest_session({"agent_type": "claude_code", "session_id": OTHER, "node_id": "n",
                           "title": "nothing shipped", "cwd": REPO,
-                          "started_at": "2026-09-01T11:00:00Z",
-                          "last_active_at": "2026-09-01T11:10:00Z"})
+                          "started_at": now, "last_active_at": now})
     scan = {
         "repo_root": REPO, "remote_url": "git@github.com:acme/demo.git",
         "host": "github.com", "owner": "acme", "name": "demo",
@@ -79,6 +92,7 @@ def _seed(store):
     }
     counts = store.ingest_git_scan(scan)
     assert counts["commits"] == 3 and counts["links"] == 2
+    _drain(store)
 
 
 def test_disabled_returns_honest_reason(app, monkeypatch):

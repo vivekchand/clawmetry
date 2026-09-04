@@ -7,6 +7,7 @@ plaintext key. Temp DuckDB only.
 """
 from __future__ import annotations
 
+import datetime
 import importlib
 import json
 import time
@@ -144,9 +145,10 @@ def test_api_sessions_rows_and_transcript_expose_intent(app):
     a, ls = app
     store = ls.get_store()
     sid = "gemini_cli:api-1"
+    now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     store.ingest_session({"agent_type": "gemini_cli", "session_id": sid, "node_id": "n",
-                          "title": "Write release notes", "started_at": "2026-09-01T00:00:00Z",
-                          "last_active_at": "2026-09-01T00:01:00Z"})
+                          "title": "Write release notes", "started_at": now,
+                          "last_active_at": now})
     store.ingest(_ev("g1", sid, "user", "Write release notes for 0.13 covering the guard changes",
                      "2026-09-01T00:00:00Z"))
     store.ingest(_ev("g2", sid, "assistant", "Here they are", "2026-09-01T00:00:05Z"))
