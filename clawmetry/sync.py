@@ -22593,6 +22593,17 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _att_e:  # noqa: BLE001
         log.debug("attention snapshot slice failed (continuing): %s", _att_e)
 
+    # Agent self-reports (WO-59): counts per category per runtime plus the
+    # honesty rollup. No summaries ride the snapshot; those stay on the
+    # node. Built on the daemon's own store handle. Best-effort: the
+    # snapshot must still ship on a store without the table.
+    try:
+        from clawmetry import self_diagnostics as _sd
+        from clawmetry import local_store as _ls_sd
+        payload["selfReports"] = _sd.snapshot_slice(_ls_sd.get_store())
+    except Exception as _sd_e:  # noqa: BLE001
+        log.debug("selfReports snapshot slice failed (continuing): %s", _sd_e)
+
     log.info(
         f"System snapshot: {len(subagents_list)} subagents ({active_count} active)"
     )
@@ -24122,6 +24133,19 @@ def run_daemon() -> None:
                             log.info(
                                 f"detectors: {n_det} incident(s) emitted"
                             )
+                        # Self-diagnostics (WO-59): place each agent
+                        # self-report next to the independent record for
+                        # the same session, if one exists. Same store
+                        # handle, same tick, read-mostly; never raises.
+                        try:
+                            from clawmetry import self_diagnostics as _sd
+                            n_cor = _sd.corroborate_pending(store_for_det)
+                            if n_cor:
+                                log.info(
+                                    f"self-diagnostics: {n_cor} report(s) corroborated"
+                                )
+                        except Exception as _sde:  # noqa: BLE001
+                            log.debug(f"self-diagnostics: tick errored: {_sde}")
                     except Exception as _de:
                         log.warning(
                             f"detectors: tick errored: {_de}"
