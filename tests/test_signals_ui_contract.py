@@ -128,6 +128,8 @@ def test_canonical_tabs_and_screenshot_sweep_cover_signals():
     assert '"signals",' in e2e
     shots = (ROOT / ".github" / "workflows" / "pr-screenshots.yml").read_text(encoding="utf-8")
     assert ",signals," in shots
+    vd = (ROOT / ".github" / "scripts" / "visual-diff.mjs").read_text(encoding="utf-8")
+    assert ",signals," in vd, "DEFAULT_TABS in visual-diff.mjs is the third tab-list source"
 
 
 # ── locale ──────────────────────────────────────────────────────────────────
