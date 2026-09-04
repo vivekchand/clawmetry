@@ -252,6 +252,7 @@ def store(tmp_path, monkeypatch):
     from clawmetry import local_store as ls
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(db)))
+    monkeypatch.setattr(ls, "_writer_owner", True)
     try:
         ls._reset_singleton_for_tests()
     except Exception:
