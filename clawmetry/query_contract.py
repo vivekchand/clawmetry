@@ -304,6 +304,34 @@ QUERY_CONTRACT: dict = {
                "kind-agnostic order; the /api/replay-tree endpoint groups "
                "them into turns/delegations/workflows/approvals.",
     },
+    "session_context": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True),
+            "agent_type": _arg(),
+            "limit": _arg(default=200, lo=1, hi=1000),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_session_context",
+        "doc": "Inputs & context rows for one session: system prompt, first "
+               "user prompt, tool definitions, MCP servers, context files and "
+               "runtime setup captured from context.compiled events. Content "
+               "is redacted + capped; sha256/size describe the full text.",
+    },
+    "similar_sessions": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True),
+            "window_days": _arg(default=30, lo=1, hi=365),
+            "limit": _arg(default=10, lo=1, hi=50),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_similar_sessions",
+        "doc": "Runs shaped like this one (WO-60): nearest sessions by "
+               "tool-call n-gram similarity inside a window, same runtime "
+               "first, with score, runtime, model, cost, outcome. Carries "
+               "session titles, so content class.",
+    },
 }
 
 

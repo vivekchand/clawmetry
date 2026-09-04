@@ -1,4 +1,4 @@
-.PHONY: test test-api test-e2e test-e2e-duckdb test-fast test-workflow test-moat test-moat-real test-compat moat-check moat-check-drive dev lint lint-daemon-allowlist
+.PHONY: test test-api test-e2e test-e2e-duckdb test-fast test-hooks test-workflow test-moat test-moat-real test-compat moat-check moat-check-drive dev lint lint-daemon-allowlist
 
 dev:
 	OPENCLAW_GATEWAY_TOKEN=dev-token python3 dashboard.py --port 8900
@@ -10,6 +10,15 @@ test: test-api test-e2e test-e2e-duckdb test-workflow test-compat
 # network. Mirror in .github/workflows/ci.yml (moat-tests job).
 test-compat:
 	python3 -m pytest tests/test_picoclaw_adapter.py tests/test_nanoclaw_adapter.py tests/test_runtime_detection_snapshot.py tests/test_family_runtime_ingest.py tests/test_codex_adapter.py tests/test_cursor_adapter.py tests/test_claude_code_adapter.py tests/test_aider_adapter.py tests/test_goose_adapter.py tests/test_goose_platform_paths.py tests/test_opencode_adapter.py tests/test_qwen_code_adapter.py -v
+
+# Claude Code hook lifecycle + personal-data redaction tier (WO-61).
+# Mirrored in .github/workflows/ci.yml (moat-tests job).
+test-hooks:
+	python3 -m pytest tests/test_hooks_claude_code.py tests/test_hook_lifecycle.py tests/test_redaction_pii.py -q
+# WO-59 self-diagnostics: MCP report tool, corroboration, honesty rollup,
+# multi-runtime MCP installer. Mirrored in .github/workflows/ci.yml (moat-tests).
+test-selfdiag:
+	python3 -m pytest tests/test_self_diagnostics.py -q
 
 test-fast:
 	CLAWMETRY_URL=http://localhost:8900 CLAWMETRY_TOKEN=dev-token python3 -m pytest tests/test_api.py -v
@@ -46,6 +55,9 @@ test-moat:
 	    tests/test_local_query_api.py \
 	    tests/test_harness_bench.py \
 	    tests/test_bench_route.py \
+	    tests/test_cohort_compare.py \
+	    tests/test_behaviour_signals.py \
+	    tests/test_signals_ui_contract.py \
 	    -q
 
 # MOAT real-data E2E (2026-05-19 mandate). Drives a REAL ``openclaw agent

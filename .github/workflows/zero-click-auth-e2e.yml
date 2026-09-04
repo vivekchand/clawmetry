@@ -66,7 +66,11 @@ jobs:
       - name: Install Playwright + Chromium
         working-directory: tests/e2e
         run: |
-          npm install
+          # `npm ci`, not `npm install`: installs exactly what the committed
+          # package-lock.json resolves to and fails if the lockfile and
+          # package.json disagree, so CI cannot silently drift onto a newer
+          # transitive dependency than the one that was reviewed.
+          npm ci
           npx playwright install --with-deps chromium
 
       - name: Run zero-click-auth E2E
