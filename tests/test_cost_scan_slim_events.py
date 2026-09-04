@@ -181,3 +181,43 @@ def test_rpc_memo_ignores_shapes_that_did_not_opt_in(monkeypatch):
     # keeps its exact previous semantics.
     assert len(calls) == 3
     lq.invalidate_rpc_memo()
+
+
+def test_scan_falls_back_to_full_shape_when_daemon_lacks_slim(monkeypatch):
+    """An upgraded dashboard against a not-yet-restarted daemon must not
+    empty the Cost tab.
+
+    The dashboard and the sync daemon are separate processes that restart
+    independently, so during an upgrade the dashboard can ask a daemon whose
+    allowlist predates ``query_events_slim`` for that shape. The proxy answers
+    400, ``_ls_call`` yields None, and without a fallback every Cost roll-up
+    renders a confident empty. Reproduced live 2026-09-05: with only the
+    dashboard restarted, /api/model-attribution went from 4 models to 0 and
+    /api/usage/by-plugin from 84%-thinking to [].
+    """
+    import routes.usage as U
+    seen = []
+
+    def fake_ls_call(method_name, **kwargs):
+        seen.append(method_name)
+        # Old daemon: slim is not allowlisted, proxy fails -> None.
+        if method_name == "query_events_slim":
+            return None
+        return [{"id": "ev-1", "data": {"tool": "Bash"}}]
+
+    monkeypatch.setattr(U, "_ls_call", fake_ls_call)
+    rows = U._scan_events_slim(limit=20000)
+    assert rows == [{"id": "ev-1", "data": {"tool": "Bash"}}], \
+        "version skew must cost bytes, not correctness"
+    assert seen == ["query_events_slim", "query_events"]
+
+
+def test_scan_does_not_refetch_when_slim_returns_empty(monkeypatch):
+    """An genuinely empty store returns ``[]``, not ``None`` — and ``[]`` is a
+    real answer, so it must NOT trigger the heavyweight fallback."""
+    import routes.usage as U
+    seen = []
+    monkeypatch.setattr(U, "_ls_call",
+                        lambda m, **k: (seen.append(m), [])[1])
+    assert U._scan_events_slim(limit=20000) == []
+    assert seen == ["query_events_slim"], "empty is an answer, not a failure"
