@@ -3371,6 +3371,32 @@ class OpenClawAdapter(AgentAdapter):
             Capability.LOGS,
             Capability.GATEWAY_RPC,
             Capability.CHANNELS,
+            # Reasoning: OpenClaw persists assistant ``message.content[]``
+            # blocks of ``type: "thinking"`` (the transcript writer keeps them
+            # when a thinking level is set); the tracing/anatomy readers turn
+            # each block into a reasoning span. See trail_coverage().
+            Capability.REASONING,
+        }
+
+    def trail_coverage(self) -> dict:
+        """Decision-trail coverage for OpenClaw session JSONL.
+
+        Reasoning is ``partial``: the session transcript keeps assistant
+        ``message.content[]`` blocks of ``type: "thinking"`` only when the
+        session runs with a thinking level set (``thinking_level_change``
+        events record the switch); with thinking off, or a model that has no
+        extended thinking, the transcript carries plain ``text`` blocks and
+        there is nothing to show. Inputs are ``partial``: ``context.compiled``
+        carries the system prompt + tool list per turn, but only when the
+        gateway emits it (not on every install).
+        """
+        return {
+            "inputs": "partial",
+            "reasoning": "partial",
+            "note": ("assistant message.content[] thinking blocks are written "
+                     "only while a thinking level is set for the session; "
+                     "inputs come from context.compiled when the gateway "
+                     "emits it"),
         }
 
     # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────────────

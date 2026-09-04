@@ -15783,13 +15783,46 @@ window._traceSpanCopyBuf = '';
 window._traceCollapsed = {};
 
 var _TRACE_KIND_COLORS = {
-  agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
-  retrieval: '#06b6d4', attachment: '#6b7280', event: '#94a3b8'
+  agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', reasoning: '#e879f9',
+  tool: '#10b981', retrieval: '#06b6d4', attachment: '#6b7280', event: '#94a3b8'
 };
 var _TRACE_KIND_ICONS = {
-  agent: '🤖', llm: '🧠', tool: '🔧', prompt: '💬', retrieval: '📚',
+  agent: '🤖', llm: '🧠', reasoning: '💭', tool: '🔧', prompt: '💬', retrieval: '📚',
   attachment: '📎', event: '•'
 };
+// Legend order for the trace header. `reasoning` is the model's thinking
+// (its own span kind); the execute_tool spans it drove nest under it.
+var _TRACE_LEGEND_KINDS = [
+  ['agent', 'tracing.legend_agent', 'Agent'],
+  ['prompt', 'tracing.legend_prompt', 'Prompt'],
+  ['llm', 'tracing.legend_llm', 'Model call'],
+  ['reasoning', 'tracing.legend_reasoning', 'Reasoning'],
+  ['tool', 'tracing.legend_tool', 'Tool']
+];
+function _traceLegendHtml() {
+  return '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:var(--text-muted);">'
+    + _TRACE_LEGEND_KINDS.map(function(k) {
+        return '<span style="display:inline-flex;align-items:center;gap:5px;">'
+          + '<span style="width:9px;height:9px;border-radius:2px;background:' + _TRACE_KIND_COLORS[k[0]] + ';"></span>'
+          + t(k[1], null, k[2]) + '</span>';
+      }).join('')
+    + '</div>';
+}
+// Honest empty state for the reasoning lane. `r` is the API's `reasoning`
+// block {runtime, span_count, coverage, note}. Returns '' when there are
+// reasoning spans to show or the coverage is unknown.
+function _traceReasoningNoteHtml(r) {
+  if (!r || (r.span_count || 0) > 0) return '';
+  var rt = escHtml(r.runtime || 'this runtime');
+  var msg = '';
+  if (r.coverage === 'none') msg = t('tracing.reasoning_not_exposed', {runtime: rt}, 'Reasoning is not exposed by {runtime}');
+  else if (r.coverage === 'partial' || r.coverage === 'full') msg = t('tracing.reasoning_none_recorded', {runtime: rt}, 'No reasoning was recorded for this session. {runtime} exposes it only under some settings.');
+  else return '';
+  var note = r.note ? '<span style="color:var(--text-muted);"> ' + escHtml(r.note) + '</span>' : '';
+  return '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;">'
+    + '<span style="width:9px;height:9px;border-radius:2px;background:' + _TRACE_KIND_COLORS.reasoning + ';opacity:0.5;"></span>'
+    + '<span>' + msg + '.' + note + '</span></div>';
+}
 function _traceColor(s) {
   // Sub-agent ROOT span is orange; everything else (incl. spans inside a
   // sub-agent) is colored by its kind so chat/tool stay readable.
@@ -15818,11 +15851,11 @@ window._traceListSearch = '';
 // Reuses the trace list (one row per session) for picking a session, then
 // /api/turn-anatomy decomposes that session into turns of ordered spans.
 var _TA_KIND_COLORS = {
-  prompt: '#a78bfa', model: '#22d3ee', tool: '#f59e0b',
+  prompt: '#a78bfa', thinking: '#e879f9', model: '#22d3ee', tool: '#f59e0b',
   compaction: '#f472b6', reply: '#34d399'
 };
 var _TA_KIND_ICONS = {
-  prompt: '💬', model: '🧠', tool: '🔧', compaction: '🗜️', reply: '✅'
+  prompt: '💬', thinking: '💭', model: '🧠', tool: '🔧', compaction: '🗜️', reply: '✅'
 };
 function _taColor(kind) { return _TA_KIND_COLORS[kind] || '#94a3b8'; }
 function _taIcon(kind) { return _TA_KIND_ICONS[kind] || '•'; }
@@ -15958,7 +15991,8 @@ async function viewTurnAnatomy(sessionId) {
   var turns = data.turns || [];
   if (meta) {
     meta.innerHTML = '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:var(--text-primary);">' + escHtml(sessionId) + '</div>'
-      + '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">' + turns.length + ' turn' + (turns.length === 1 ? '' : 's') + '</div>';
+      + '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">' + turns.length + ' turn' + (turns.length === 1 ? '' : 's') + '</div>'
+      + _traceReasoningNoteHtml(data.reasoning);
   }
   if (!turns.length) {
     if (turnsEl) turnsEl.innerHTML = '<div class="card" style="padding:18px;color:var(--text-muted);">' + t("app.no_turns_in_this_session", null, "No turns in this session.") + '</div>';
@@ -15992,6 +16026,7 @@ function _taRenderTurn(t) {
     var color = _taColor(s.kind);
     var spanErr = s.status === 'error';
     var label = (s.label || s.kind || '');
+    if (s.kind === 'thinking' && s.text) label = 'thinking: ' + s.text.replace(/\s+/g, ' ').slice(0, 80);
     var spanCostTip = ((s.cost || 0) > 0 ? ' · ' + _taFmtCost(s.cost) : '') + ((s.tokens || 0) > 0 ? ' · ' + (s.tokens >= 1000 ? (s.tokens / 1000).toFixed(1) + 'K' : s.tokens) + ' tok' : '');
     bars += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;" title="' + escHtml(label) + ' · ' + _traceFmtDur(s.duration_ms) + spanCostTip + (spanErr ? ' · error' : '') + '">'
       + '<span style="width:18px;flex-shrink:0;text-align:center;font-size:11px;">' + _taIcon(s.kind) + '</span>'
@@ -16184,6 +16219,8 @@ async function viewTrace(traceId) {
           + '</div>'
           + (title ? '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-muted);margin-top:2px;">' + escHtml((data.trace_id || '').slice(0, 40)) + '</div>' : '')
           + '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;">' + stats.join('') + '</div>'
+          + _traceLegendHtml()
+          + _traceReasoningNoteHtml(data.reasoning)
         + '</div>'
       + '</div>';
   }
@@ -16528,9 +16565,10 @@ function _traceSpanRenderChat(s) {
   msgs.forEach(function(m) {
     var isUser = m.role === 'user';
     var isAssistant = m.role === 'assistant';
-    var bg = isUser ? 'rgba(99,102,241,0.10)' : isAssistant ? 'var(--bg-primary)' : 'rgba(245,158,11,0.08)';
-    var border = isUser ? '#6366f1' : isAssistant ? 'var(--border-secondary)' : '#f59e0b';
-    var label = isUser ? 'User' : isAssistant ? 'Assistant' : (m.role || 'system');
+    var isThinking = m.role === 'thinking';
+    var bg = isUser ? 'rgba(99,102,241,0.10)' : isAssistant ? 'var(--bg-primary)' : isThinking ? 'rgba(232,121,249,0.10)' : 'rgba(245,158,11,0.08)';
+    var border = isUser ? '#6366f1' : isAssistant ? 'var(--border-secondary)' : isThinking ? '#e879f9' : '#f59e0b';
+    var label = isUser ? 'User' : isAssistant ? 'Assistant' : isThinking ? t('tracing.thinking', null, 'Thinking') : (m.role || 'system');
     html += '<div style="background:' + bg + ';border:1px solid ' + border + ';border-left:3px solid ' + border + ';border-radius:6px;padding:8px 10px;">'
       + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:4px;">' + escHtml(label) + '</div>'
       + '<div style="font-size:13px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;line-height:1.4;">' + escHtml(m.text || '') + '</div>'
@@ -16590,6 +16628,7 @@ function _traceExtractMessages(s, full) {
         .forEach(function(c) {
           if (c.kind === 'prompt') add('user', c.detail);
           else if (c.kind === 'llm') add('assistant', c.detail);
+          else if (c.kind === 'reasoning') add('thinking', c.detail);
           else if (c.kind === 'tool') {
             if (c.detail) add('tool', (c.tool ? c.tool + ': ' : '') + c.detail);
             if (c.output) add('tool_result', c.output);
@@ -16605,6 +16644,7 @@ function _traceExtractMessages(s, full) {
   if (!out.length && s) {
     var role = s.kind === 'llm' ? 'assistant'
              : s.kind === 'prompt' ? 'user'
+             : s.kind === 'reasoning' ? 'thinking'
              : s.kind === 'tool' ? 'tool' : 'system';
     if (s.detail) add(role, s.detail);
     if (s.output) add('tool_result', s.output);
