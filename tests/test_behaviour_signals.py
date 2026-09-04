@@ -245,10 +245,13 @@ def test_evaluate_rows_records_no_text():
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "signals.duckdb"))
+    db = tmp_path / "signals.duckdb"
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(db))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
     from clawmetry import local_store as ls
+    from pathlib import Path
+    monkeypatch.setattr(ls, "DB_PATH", Path(str(db)))
     try:
         ls._reset_singleton_for_tests()
     except Exception:
