@@ -45,8 +45,11 @@ import logging
 import os
 import sys
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
+from clawmetry import event_shape as _event_shape  # v15 typed event columns
+from clawmetry.trail_store import TrailStoreMixin  # intent / back-fill / git join
 import threading
 import time
+import uuid
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -314,7 +317,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # A heartbeat row is a liveness ping, not a transport envelope. The daemon's
 # heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
@@ -376,7 +379,16 @@ _DDL = [
         created_at      BIGINT NOT NULL,
         chain_prev_hash VARCHAR,
         chain_hash      VARCHAR,
-        runtime_kind    VARCHAR
+        runtime_kind    VARCHAR,
+        -- v15 Trail typed columns, filled by clawmetry.event_shape.classify
+        -- at ingest (and lazily back-filled for older rows). ``block_kind``
+        -- uses the replay_schema vocabulary: text | thinking | tool_use |
+        -- tool_result | system | other. NULL means "not yet classified",
+        -- never "no shape": the back-fill stamps every row it visits.
+        role            VARCHAR,
+        block_kind      VARCHAR,
+        tool_name       VARCHAR,
+        is_error        BOOLEAN
     )
     """,
     # #5500 — one secondary index on events: the session timeline lookup,
@@ -462,6 +474,14 @@ _DDL = [
         attention_since         BIGINT,
         attention_signal        VARCHAR,
         attention_tool          VARCHAR,
+        -- v15 Trail: what the user asked for. The FULL first user prompt
+        -- (the title is an 80-char truncation of the same turn), redacted
+        -- through clawmetry.redaction and capped at
+        -- event_shape.INTENT_MAX_CHARS. Set once and never overwritten;
+        -- intent_source records where it came from ('events', 'adapter',
+        -- 'none' when a session has events but no human prompt).
+        intent                  VARCHAR,
+        intent_source           VARCHAR,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
@@ -1782,6 +1802,31 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_signal_matches_ms ON signal_matches(turn_ms)",
     "CREATE INDEX IF NOT EXISTS idx_signal_matches_sig_ms ON signal_matches(signal, turn_ms)",
     "CREATE INDEX IF NOT EXISTS idx_signal_matches_session ON signal_matches(session_id)",
+    # ── Agent self-reports (WO-59) ──────────────────────────────────────
+    # A note an agent filed about its own trouble through the MCP
+    # ``report_to_operator`` tool. ``summary_redacted`` has already been
+    # through ``clawmetry.redaction``; the raw text is never stored.
+    # ``corroborated`` / ``corroboration_ref`` are filled by the daemon's
+    # corroboration pass when a detector incident or a permission denial
+    # exists for the same session near the report. Additive: CREATE TABLE
+    # IF NOT EXISTS, no schema-version bump.
+    """
+    CREATE TABLE IF NOT EXISTS agent_self_reports (
+        id                 VARCHAR PRIMARY KEY,
+        session_id         VARCHAR NOT NULL DEFAULT '',
+        agent_type         VARCHAR DEFAULT '',
+        node_id            VARCHAR DEFAULT '',
+        model              VARCHAR DEFAULT '',
+        category           VARCHAR NOT NULL,
+        summary_redacted   VARCHAR DEFAULT '',
+        ts                 BIGINT NOT NULL,
+        created_at         BIGINT NOT NULL,
+        corroborated       BOOLEAN DEFAULT FALSE,
+        corroboration_ref  VARCHAR DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_self_reports_ts ON agent_self_reports(ts DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_self_reports_session ON agent_self_reports(session_id, ts)",
 ]
 
 
@@ -1886,6 +1931,15 @@ _MIGRATIONS_V2 = [
     # existing rows, which normalize_steps() reads as the single `action` —
     # so every policy authored before ladders keeps its exact behaviour.
     ("session_policy", "steps",       "VARCHAR DEFAULT ''"),
+    # v15 Trail typed event columns + session intent. NULL on existing rows;
+    # the daemon's bounded lazy back-fill (backfill_event_shapes /
+    # backfill_session_intents) fills them a few hundred rows per tick.
+    ("events",   "role",          "VARCHAR"),
+    ("events",   "block_kind",    "VARCHAR"),
+    ("events",   "tool_name",     "VARCHAR"),
+    ("events",   "is_error",      "BOOLEAN"),
+    ("sessions", "intent",        "VARCHAR"),
+    ("sessions", "intent_source", "VARCHAR"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -2111,6 +2165,28 @@ def _clean_str(value: Any, limit: int = _MAX_PATH_LEN) -> str | None:
     except Exception:
         return None
     return s[:limit] if s else None
+
+
+def _clean_intent(value: Any) -> str | None:
+    """``sessions.intent`` value: the first user prompt, redacted through
+    ``clawmetry.redaction`` (secret-shaped substrings become fingerprints)
+    and capped at ``event_shape.INTENT_MAX_CHARS``. ``None`` for anything
+    that is not a non-empty string, so the upsert's COALESCE keeps what the
+    row already has."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        from clawmetry import redaction as _redaction
+        text = _redaction.redact_text(text)
+    except Exception:  # noqa: BLE001 - never lose the row on a redaction bug
+        pass
+    cap = _event_shape.INTENT_MAX_CHARS
+    if len(text) > cap:
+        text = text[: cap - 3].rstrip() + "..."
+    return text or None
 
 
 def _iso_utc(ts: float) -> str | None:
@@ -2836,7 +2912,7 @@ _DEDUPED_EVENTS_CTE = """
 """
 
 
-class LocalStore:
+class LocalStore(TrailStoreMixin):
     """Thread-safe local event store with a background batched flusher.
 
     `read_only=True` opens the DuckDB in RO mode — read paths work the same,
@@ -3392,6 +3468,38 @@ class LocalStore:
                         )
                         migration_failed = True
                         _migration_err = str(exc)
+                if not migration_failed and current < 15:
+                    # v14 -> v15: typed event columns (role / block_kind /
+                    # tool_name / is_error) and sessions.intent. The
+                    # column-adds themselves ran in _apply_migrations above
+                    # (idempotent ALTERs); nothing is rewritten here on
+                    # purpose. A multi-GB events table must not be scanned
+                    # inside a startup transaction (the v14 lesson), so the
+                    # existing rows are classified lazily by the daemon
+                    # tick, a bounded batch at a time.
+                    try:
+                        _v15_cols = {
+                            row[1] for row in self._conn.execute(
+                                "PRAGMA table_info('events')"
+                            ).fetchall()
+                        }
+                        if not {"role", "block_kind", "tool_name",
+                                "is_error"} <= _v15_cols:
+                            raise RuntimeError(
+                                "v15 typed event columns missing after ALTER"
+                            )
+                        log.info(
+                            "local store: v15 typed event columns ready; "
+                            "existing rows are classified by the daemon's "
+                            "lazy back-fill"
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v15 column check FAILED; schema "
+                            "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
                 # Step 4: stamp the version — ONLY if every gated migration
                 # succeeded. Stamping after a swallowed failure is the #1602
                 # silent-half-state bug.
@@ -3889,9 +3997,16 @@ class LocalStore:
             upsert_params = []
             for atype, sid, session in prepared:
                 parts = _session_content_parts(session)
-                # content columns ... then updated_at, cwd, git_branch, hash
+                _intent = _clean_intent(session.get("intent"))
+                _intent_src = (
+                    (_clean_str(session.get("intent_source")) or "adapter")
+                    if _intent else None
+                )
+                # content columns ... then updated_at, cwd, git_branch,
+                # intent, intent_source, hash
                 upsert_params.append(
                     [atype, sid] + parts[2:14] + [now_ms] + parts[14:16]
+                    + [_intent, _intent_src]
                     + [_content_hash(parts)]
                 )
             with _txn(self._conn):
@@ -3901,8 +4016,8 @@ class LocalStore:
                         agent_type, session_id, node_id, agent_id, workspace_id,
                         title, started_at, last_active_at, ended_at, status,
                         total_tokens, cost_usd, message_count, metadata, updated_at,
-                        cwd, git_branch, content_hash
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cwd, git_branch, intent, intent_source, content_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (agent_type, session_id) DO UPDATE SET
                         node_id        = excluded.node_id,
                         agent_id       = excluded.agent_id,
@@ -3922,6 +4037,12 @@ class LocalStore:
                         -- that cd'd or switched branch moves the row.
                         cwd            = COALESCE(excluded.cwd, sessions.cwd),
                         git_branch     = COALESCE(excluded.git_branch, sessions.git_branch),
+                        -- FIRST wins: the intent is the opening prompt and a
+                        -- re-ingest must never replace it with a later one.
+                        intent         = COALESCE(sessions.intent, excluded.intent),
+                        intent_source  = CASE WHEN sessions.intent IS NULL
+                                              THEN excluded.intent_source
+                                              ELSE sessions.intent_source END,
                         content_hash   = excluded.content_hash
                 """, upsert_params)
                 try:
@@ -3935,6 +4056,8 @@ class LocalStore:
                     cache[(row[0], row[1])] = row[-1]
         return len(prepared)
 
+    # Trail: session intent, typed-event back-fill and per-session git
+    # outcomes live in clawmetry/trail_store.py (TrailStoreMixin).
     def update_session_location(
         self,
         session_id: str,
@@ -5898,6 +6021,344 @@ class LocalStore:
             d["evidence"] = _from_blob(d.get("evidence"))
             out.append(d)
         return out
+
+    # ── Agent self-reports (WO-59) ─────────────────────────────────────────
+    #
+    # Written by the MCP ``report_to_operator`` tool through the daemon's
+    # ``/__local_query__/ingest_self_report`` (the daemon owns the writer
+    # lock; the MCP server process never opens DuckDB). Read by
+    # ``routes/selfdiag.py``, the MCP read tools and the snapshot slice.
+
+    _SELF_REPORT_COLS = ("id", "session_id", "agent_type", "node_id", "model",
+                         "category", "summary_redacted", "ts", "created_at",
+                         "corroborated", "corroboration_ref")
+
+    def _session_model(self, session_id: str) -> str:
+        """The model the session most recently used, or ``""``. Reads the
+        typed events table; family adapters stamp ``model`` per request."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return ""
+        try:
+            from clawmetry.self_diagnostics import bare_session_id as _bare
+            candidates = [sid]
+            bare = _bare(sid)
+            if bare and bare != sid:
+                candidates.append(bare)
+            for cand in candidates:
+                rows = self._fetch(
+                    "SELECT model FROM events WHERE session_id = ? "
+                    "AND model IS NOT NULL AND model <> '' "
+                    "ORDER BY ts DESC LIMIT 1", [cand])
+                if rows and rows[0][0]:
+                    return str(rows[0][0])[:128]
+                rows = self._fetch(
+                    "SELECT model FROM events WHERE session_id LIKE ? "
+                    "AND model IS NOT NULL AND model <> '' "
+                    "ORDER BY ts DESC LIMIT 1", ["%:" + cand])
+                if rows and rows[0][0]:
+                    return str(rows[0][0])[:128]
+        except Exception:
+            return ""
+        return ""
+
+    def ingest_self_report(self, session_id: str = "", category: str = "",
+                           summary: str = "", agent_type: str = "",
+                           model: str = "", node_id: str = "",
+                           ts: Any = None, report_id: str = "") -> dict:
+        """Store one agent self-report. Returns the stored row, or a dict
+        with ``error`` when the category is not allowed.
+
+        The summary is redacted with the same rules as every other stored
+        text (``clawmetry.redaction``) and capped BEFORE it reaches the
+        table; the raw string is never written anywhere. ``model`` and
+        ``agent_type`` are filled from the store when the caller omits them.
+        Idempotent per ``report_id``.
+        """
+        from clawmetry import self_diagnostics as _sd
+        cat = _sd.normalize_category(category)
+        if not cat:
+            return {"error": "category not allowed",
+                    "allowed": list(_sd.allowed_categories())}
+        try:
+            from clawmetry.redaction import redact_text as _redact
+        except Exception:  # pragma: no cover - redaction ships with the package
+            def _redact(x):  # type: ignore
+                return x
+        text = _sd.clip_summary(_redact(_sd.clip_summary(summary)))
+        sid = str(session_id or "").strip()[:128]
+        runtime = str(agent_type or "").strip().lower()[:64]
+        if not runtime and sid:
+            runtime = _sd.runtime_from_session_id(sid)
+        if not runtime:
+            runtime = "unknown"
+        mdl = str(model or "").strip()[:128] or (self._session_model(sid) if sid else "")
+        now_ms = int(time.time() * 1000)
+        ts_epoch = _sd.to_epoch(ts)
+        ts_ms = int(ts_epoch * 1000) if ts_epoch else now_ms
+        rid = str(report_id or "").strip()[:64] or uuid.uuid4().hex
+        row = {
+            "id": rid, "session_id": sid, "agent_type": runtime,
+            "node_id": str(node_id or "")[:128], "model": mdl,
+            "category": cat, "summary_redacted": text, "ts": ts_ms,
+            "created_at": now_ms, "corroborated": False, "corroboration_ref": "",
+        }
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO agent_self_reports (
+                    id, session_id, agent_type, node_id, model, category,
+                    summary_redacted, ts, created_at, corroborated,
+                    corroboration_ref
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, '')
+                ON CONFLICT (id) DO NOTHING
+            """, [rid, sid, runtime, row["node_id"], mdl, cat, text, ts_ms, now_ms])
+        return row
+
+    def query_self_reports(self, *, since_secs: int = 0, runtime: str = "",
+                           category: str = "", session_id: str = "",
+                           uncorroborated_only: bool = False,
+                           limit: int = 200) -> list:
+        """Self-reports newest first. ``since_secs <= 0`` means no window.
+        ``session_id`` matches the stored id or its bare form."""
+        clauses: list = []
+        params: list = []
+        try:
+            since = int(since_secs or 0)
+        except (TypeError, ValueError):
+            since = 0
+        if since > 0:
+            clauses.append("ts >= ?")
+            params.append(int((time.time() - since) * 1000))
+        rt = str(runtime or "").strip().lower()
+        if rt and rt != "all":
+            clauses.append("agent_type = ?")
+            params.append(rt)
+        cat = str(category or "").strip().lower()
+        if cat:
+            clauses.append("category = ?")
+            params.append(cat)
+        sid = str(session_id or "").strip()
+        if sid:
+            from clawmetry.self_diagnostics import bare_session_id as _bare
+            bare = _bare(sid)
+            clauses.append("(session_id = ? OR session_id = ? OR session_id LIKE ?)")
+            params.extend([sid, bare, "%:" + bare])
+        if uncorroborated_only:
+            clauses.append("corroborated = FALSE")
+        try:
+            lim = max(1, min(int(limit or 200), 5000))
+        except (TypeError, ValueError):
+            lim = 200
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (f"SELECT {', '.join(self._SELF_REPORT_COLS)} FROM agent_self_reports "
+               f"{where} ORDER BY ts DESC, id LIMIT ?")
+        params.append(lim)
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            d = dict(zip(self._SELF_REPORT_COLS, r))
+            d["corroborated"] = bool(d.get("corroborated"))
+            out.append(d)
+        return out
+
+    def mark_self_report_corroborated(self, report_id: str, ref: str) -> bool:
+        """Attach independent evidence to one report. Idempotent; returns
+        True when a row was updated."""
+        rid = str(report_id or "").strip()
+        if not rid:
+            return False
+        try:
+            with self._write_lock:
+                pre = self._conn.execute(
+                    "SELECT corroborated FROM agent_self_reports WHERE id = ?",
+                    [rid]).fetchone()
+                if pre is None or bool(pre[0]):
+                    return False
+                self._conn.execute(
+                    "UPDATE agent_self_reports SET corroborated = TRUE, "
+                    "corroboration_ref = ? WHERE id = ?",
+                    [str(ref or "")[:256], rid])
+            return True
+        except Exception:
+            return False
+
+    def query_guard_incidents(self, *, since_secs: int = 3600, runtime: str = "",
+                              session_id: str = "", limit: int = 200) -> list:
+        """Detector incidents (the daemon's ``loop_signals`` rows), newest
+        first, each carrying the session's model so the honesty rollup can
+        group by (runtime, model). Never raises; ``[]`` on error."""
+        clauses = ["signature LIKE 'daemon_detect_%'"]
+        params: list = []
+        try:
+            since = int(since_secs or 0)
+        except (TypeError, ValueError):
+            since = 3600
+        if since > 0:
+            clauses.append(
+                "last_seen >= (current_timestamp::TIMESTAMP - INTERVAL (?) SECOND)")
+            params.append(since)
+        rt = str(runtime or "").strip().lower()
+        if rt and rt != "all":
+            clauses.append("agent_type = ?")
+            params.append(rt)
+        sid = str(session_id or "").strip()
+        if sid:
+            from clawmetry.self_diagnostics import bare_session_id as _bare
+            bare = _bare(sid)
+            clauses.append("(session_id = ? OR session_id = ? OR session_id LIKE ?)")
+            params.extend([sid, bare, "%:" + bare])
+        try:
+            lim = max(1, min(int(limit or 200), 5000))
+        except (TypeError, ValueError):
+            lim = 200
+        sql = f"""
+            SELECT l.session_id, l.signature, l.repeat_count, l.first_seen,
+                   l.last_seen, l.severity, l.agent_type, l.details,
+                   (SELECT e.model FROM events e WHERE e.session_id = l.session_id
+                      AND e.model IS NOT NULL AND e.model <> ''
+                    ORDER BY e.ts DESC LIMIT 1) AS model
+            FROM loop_signals l
+            WHERE {' AND '.join(clauses)}
+            ORDER BY l.last_seen DESC, l.session_id, l.signature
+            LIMIT ?
+        """
+        params.append(lim)
+        cols = ["session_id", "signature", "repeat_count", "first_seen",
+                "last_seen", "severity", "agent_type", "details", "model"]
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            for tcol in ("first_seen", "last_seen"):
+                v = d.get(tcol)
+                if hasattr(v, "isoformat"):
+                    d[tcol] = v.isoformat()
+            raw = d.get("details")
+            details = None
+            if raw is not None:
+                try:
+                    raw = _ccr.maybe_decompress(raw)
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    details = json.loads(text)
+                except Exception:
+                    details = None
+            d["details"] = details if isinstance(details, dict) else {}
+            d["kind"] = str(d["details"].get("kind") or
+                            str(d.get("signature") or "").replace("daemon_detect_", ""))
+            d["title"] = str(d["details"].get("message") or "")
+            d["runtime"] = str(d.get("agent_type") or "")
+            d["model"] = str(d.get("model") or "")
+            out.append(d)
+        return out
+
+    def query_session_denials(self, *, session_id: str = "", since_secs: int = 3600,
+                              limit: int = 200) -> list:
+        """Permission denials from the approvals queue (a human or a policy
+        refused a call). Newest first. ``[]`` on error."""
+        clauses = ["status = 'denied'"]
+        params: list = []
+        try:
+            since = int(since_secs or 0)
+        except (TypeError, ValueError):
+            since = 3600
+        sid = str(session_id or "").strip()
+        if sid:
+            from clawmetry.self_diagnostics import bare_session_id as _bare
+            bare = _bare(sid)
+            clauses.append("(requestor_session_id = ? OR requestor_session_id = ? "
+                           "OR requestor_session_id LIKE ?)")
+            params.extend([sid, bare, "%:" + bare])
+        try:
+            lim = max(1, min(int(limit or 200), 5000))
+        except (TypeError, ValueError):
+            lim = 200
+        sql = f"""
+            SELECT id, requestor_session_id, action, status, created_at,
+                   resolved_at, resolver, decision_reason
+            FROM approvals WHERE {' AND '.join(clauses)}
+            ORDER BY COALESCE(resolved_at, created_at) DESC LIMIT ?
+        """
+        params.append(lim)
+        cols = ["id", "session_id", "action", "status", "created_at",
+                "resolved_at", "resolver", "decision_reason"]
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return []
+        from clawmetry.self_diagnostics import to_epoch as _to_epoch
+        cutoff = time.time() - since if since > 0 else None
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            t = _to_epoch(d.get("resolved_at") or d.get("created_at"))
+            if cutoff is not None and t is not None and t < cutoff:
+                continue
+            d["ts"] = t
+            out.append(d)
+        return out
+
+    def query_self_report_counts(self, *, since_secs: int = 7 * 86400,
+                                 runtime: str = "") -> dict:
+        """``{runtime: {category: n}}`` over the window."""
+        from clawmetry.self_diagnostics import count_by_runtime_category
+        return count_by_runtime_category(
+            self.query_self_reports(since_secs=since_secs, runtime=runtime, limit=5000))
+
+    def query_self_report_honesty(self, *, since_secs: int = 7 * 86400,
+                                  runtime: str = "") -> list:
+        """Per (runtime, model): the share of detector incidents the agent
+        also reported, withheld below the configured minimum."""
+        from clawmetry import self_diagnostics as _sd
+        window = _sd.corroboration_window_secs()
+        incidents = self.query_guard_incidents(
+            since_secs=since_secs, runtime=runtime, limit=5000)
+        reports = self.query_self_reports(
+            since_secs=int(since_secs) + window, runtime=runtime, limit=5000)
+        return _sd.honesty_rollup(incidents, reports, window)
+
+    def find_session_by_cwd(self, cwd: str = "", runtime: str = "") -> Any:
+        """The most recently active session whose recorded working directory
+        is ``cwd`` (or a parent of it). Used to infer which session an MCP
+        report belongs to when the agent did not say. ``None`` when unknown."""
+        path = str(cwd or "").strip()
+        if not path:
+            return None
+        rt = str(runtime or "").strip().lower()
+        try:
+            norm = os.path.normcase(os.path.realpath(os.path.expanduser(path)))
+        except Exception:
+            norm = path
+        clauses = ["cwd IS NOT NULL", "cwd <> ''"]
+        params: list = []
+        if rt:
+            clauses.append("(agent_type = ? OR session_id LIKE ?)")
+            params.extend([rt, rt + ":%"])
+        sql = (f"SELECT session_id, agent_type, cwd, last_active_at FROM sessions "
+               f"WHERE {' AND '.join(clauses)} ORDER BY last_active_at DESC NULLS LAST "
+               f"LIMIT 400")
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return None
+        best = None
+        best_len = -1
+        for sid, atype, scwd, last in rows:
+            try:
+                cand = os.path.normcase(os.path.realpath(os.path.expanduser(str(scwd))))
+            except Exception:
+                continue
+            if norm == cand or norm.startswith(cand.rstrip(os.sep) + os.sep):
+                if len(cand) > best_len:
+                    best_len = len(cand)
+                    best = {"session_id": sid, "agent_type": atype, "cwd": scwd,
+                            "last_active_at": last}
+        return best
 
     # ── Guard baselines ───────────────────────────────────────────────────
     def record_guard_observation(self, session_id: str, cohort: str,
@@ -9520,11 +9981,13 @@ class LocalStore:
     _EVENT_INSERT_COLS = (
         "id, agent_type, node_id, agent_id, session_id, workspace_id, "
         "event_type, ts, data, cost_usd, token_count, model, created_at, "
-        "runtime_kind, chain_prev_hash, chain_hash"
+        "runtime_kind, role, block_kind, tool_name, is_error, "
+        "chain_prev_hash, chain_hash"
     )
+    _EVENT_INSERT_NCOLS = 20
 
     def _insert_event_rows_locked(self, rows16: list[tuple]) -> None:
-        """Bulk INSERT of fully-built event rows (the 14 ``_event_to_row``
+        """Bulk INSERT of fully-built event rows (the 20 ``_event_to_row``
         columns + the two chain columns). Multi-row VALUES in chunks so each
         statement is ONE vectorized insert — DuckDB's Python ``executemany``
         runs row-at-a-time and pays index maintenance per row, which is what
@@ -9533,9 +9996,9 @@ class LocalStore:
         (OR IGNORE stays as a belt-and-braces guard only)."""
         if not rows16:
             return
-        ncols = 16
+        ncols = self._EVENT_INSERT_NCOLS
         row_ph = "(" + ",".join("?" * ncols) + ")"
-        chunk_rows = 250  # 4000 bind params per statement — well within limits
+        chunk_rows = 200  # 4000 bind params per statement, well within limits
         for off in range(0, len(rows16), chunk_rows):
             chunk = rows16[off:off + chunk_rows]
             sql = (
@@ -14250,7 +14713,12 @@ class LocalStore:
                    ) AS message_count,
                    s.metadata, s.cwd, s.git_branch,
                    s.attention_state, s.attention_since, s.attention_signal,
-                   s.attention_tool
+                   s.attention_tool,
+                   s.intent, s.intent_source,
+                   -- Trail outcome counts from the git join (plaintext,
+                   -- no subjects). 0 when no scan has linked this session.
+                   (SELECT COUNT(DISTINCT l.sha) FROM git_session_commits l
+                     WHERE l.session_id = s.session_id) AS commits
             FROM sessions s
             LEFT JOIN _ev_agg ea
                    ON ea.session_id = s.session_id AND ea.agent_type = s.agent_type
@@ -14264,10 +14732,17 @@ class LocalStore:
                 "last_active_at", "ended_at", "status", "total_tokens",
                 "cost_usd", "message_count", "metadata", "cwd", "git_branch",
                 "attention_state", "attention_since", "attention_signal",
-                "attention_tool"]
+                "attention_tool", "intent", "intent_source", "commits"]
+        # PR counts need the commit -> PR join; one grouped query for the
+        # page rather than a correlated subquery per row.
+        pr_counts: dict[str, dict[str, int]] = {}
+        if any(int(r[-1] or 0) for r in rows):
+            pr_counts = self.query_session_git_counts()
         out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(zip(cols, r))
+            d["commits"] = int(d.get("commits") or 0)
+            d["prs"] = int((pr_counts.get(str(d.get("session_id"))) or {}).get("prs") or 0)
             raw = d.get("metadata")
             meta: dict[str, Any] = {}
             if raw:
@@ -17128,6 +17603,8 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
                 data = _ccr.compress(data)
     u = usage if usage is not None else _extract_event_usage(e)
     cost, tokens, model = u["cost"], u["tokens"], u["model"]
+    role, block_kind, tool_name, is_error = _event_shape.typed_columns(
+        e.get("event_type"), e.get("data"))
     return (
         str(e["id"]),
         str(e.get("agent_type") or "openclaw"),
@@ -17143,6 +17620,8 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
         model,
         int(time.time() * 1000),
         e.get("runtime_kind") or None,
+        # v15 Trail typed columns, stamped on every new row (clawmetry.event_shape).
+        role, block_kind, tool_name, is_error,
     )
 
 
