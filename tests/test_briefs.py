@@ -27,7 +27,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from clawmetry import briefs as br  # noqa: E402
+from clawmetry import briefs as br
 
 pytest.importorskip("duckdb")
 
@@ -201,7 +201,7 @@ def store(tmp_path, monkeypatch):
     yield s
     try:
         s.stop(flush=False)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -268,6 +268,7 @@ def test_scheduler_start_is_gated_and_idempotent(monkeypatch):
 @pytest.fixture()
 def client(store, monkeypatch):
     from flask import Flask
+
     import routes.signals as rs
     monkeypatch.setattr(rs, "_ls_call",
                         lambda method, **kw: getattr(store, method)(**kw))
@@ -307,7 +308,7 @@ def test_brief_routes(client, store, monkeypatch):
 
     posts = []
     monkeypatch.setattr(br, "_http_post_json", lambda u, p: posts.append((u, p)) or True)
-    monkeypatch.setattr(br, "_load_channel_config", lambda: {})
+    monkeypatch.setattr(br, "_load_channel_config", dict)
     monkeypatch.setattr(br, "_narrate", lambda b, rows, n: None)
     r = client.post(f"/api/briefs/{br.BUILTIN_DAILY_DIGEST_ID}/run", json={})
     assert r.status_code == 200

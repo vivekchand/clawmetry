@@ -257,7 +257,7 @@ def _origin_ok() -> bool:
     try:
         from routes.guard import _same_origin_ok
         return bool(_same_origin_ok())
-    except Exception:
+    except Exception:  # noqa: BLE001
         return True
 
 
@@ -266,7 +266,7 @@ def _with_headline(issue: dict) -> dict:
     out = dict(issue)
     try:
         out["headline"] = _shifts.issue_headline(out)
-    except Exception:
+    except Exception:  # noqa: BLE001
         out["headline"] = ""
     return out
 

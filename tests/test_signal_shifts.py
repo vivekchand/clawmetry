@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import sys
 import time
 
@@ -35,7 +36,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from clawmetry import signal_shifts as ss  # noqa: E402
+from clawmetry import signal_shifts as ss
 
 pytest.importorskip("duckdb")
 
@@ -49,7 +50,7 @@ def _hist(rate, days=28, turns=20, jitter=None):
     rows = []
     for d in range(days):
         r = rate + (jitter[d % len(jitter)] if jitter else 0.0)
-        rows.append({"day": d, "turns": turns, "matches": int(round(max(0.0, r) * turns))})
+        rows.append({"day": d, "turns": turns, "matches": round(max(0.0, r) * turns)})
     return rows
 
 
@@ -185,7 +186,7 @@ def store(tmp_path, monkeypatch):
     yield s
     try:
         s.stop(flush=False)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -208,7 +209,7 @@ def _seed_shift(store, *, runtime="cursor", hist_rate=0.04, short_rate=0.25,
             turns.append({"event_id": eid, "session_id": sid, "agent_type": runtime,
                           "node_id": "n1", "model": model, "runtime_version": "1.0",
                           "side": "user", "turn_ms": ms + i})
-            if i < int(round(n * rate)):
+            if i < round(n * rate):
                 matches.append({"event_id": eid, "signal": "user_frustration", "session_id": sid,
                                 "agent_type": runtime, "node_id": "n1", "model": model,
                                 "runtime_version": "1.0", "turn_ms": ms + i,
@@ -323,6 +324,7 @@ def test_tick_never_raises_on_a_broken_store():
 @pytest.fixture()
 def client(store, monkeypatch):
     from flask import Flask
+
     import routes.signals as rs
     monkeypatch.setattr(rs, "_ls_call",
                         lambda method, **kw: getattr(store, method)(**kw))
@@ -373,7 +375,7 @@ def test_snapshot_slice_shape_and_no_sessions(store):
 
 
 def test_sync_emits_the_slice_and_runs_the_pass():
-    src = open(os.path.join(ROOT, "clawmetry", "sync.py"), encoding="utf-8").read()
+    src = pathlib.Path(ROOT, "clawmetry", "sync.py").read_text(encoding="utf-8")
     assert '"signalIssues": _signal_issues_slice,' in src
     assert "build_snapshot_slice(" in src
     assert "_signal_shift_pass(store_for_sig, config, state)" in src
@@ -389,12 +391,11 @@ def test_daemon_allowlist_names_every_store_method():
 
 
 def test_signals_tab_has_issues_and_briefs_surfaces_without_em_dashes():
-    tab = open(os.path.join(ROOT, "clawmetry", "templates", "tabs", "signals.html"),
-               encoding="utf-8").read()
+    tab = pathlib.Path(ROOT, "clawmetry", "templates", "tabs", "signals.html").read_text(encoding="utf-8")
     for el in ("signals-issues-card", "signals-issues-body", "signals-briefs-card",
                "signals-briefs-body", "signals-brief-form"):
         assert f'id="{el}"' in tab, el
-    js = open(os.path.join(ROOT, "clawmetry", "static", "js", "app.js"), encoding="utf-8").read()
+    js = pathlib.Path(ROOT, "clawmetry", "static", "js", "app.js").read_text(encoding="utf-8")
     for fn in ("function loadSignalsIssues", "function signalsSetIssueStatus",
                "function loadSignalsBriefs", "function signalsRunBrief", "function signalsEnableDigest"):
         assert fn in js, fn

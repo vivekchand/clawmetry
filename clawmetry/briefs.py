@@ -38,7 +38,9 @@ import os
 import threading
 import time
 import urllib.request
-from typing import Any, Callable
+import uuid
+from collections.abc import Callable
+from typing import Any
 
 log = logging.getLogger("clawmetry.briefs")
 
@@ -150,7 +152,7 @@ def _now_in_tz(now: _dt.datetime, tz: str | None) -> _dt.datetime:
         from zoneinfo import ZoneInfo
         base = now if now.tzinfo else now.astimezone()
         return base.astimezone(ZoneInfo(str(tz)))
-    except Exception:
+    except Exception:  # noqa: BLE001
         return now
 
 
@@ -201,7 +203,6 @@ def validate_brief(raw: dict) -> tuple[dict | None, str | None]:
     tz = str(raw.get("tz") or "").strip()[:64]
     bid = str(raw.get("id") or "").strip()[:64]
     if not bid:
-        import uuid
         bid = "brief_" + uuid.uuid4().hex[:12]
     if not all(c.isalnum() or c in "_-" for c in bid):
         return None, "id may only contain letters, digits, _ and -"
@@ -227,7 +228,9 @@ def _sql_for(brief: dict, store, now: _dt.datetime, llm_sql: Callable | None) ->
         return canned.format(since=since), None
     if llm_sql is None:
         try:
-            from routes.dives import _call_llm_for_sql as llm_sql  # type: ignore[no-redef]
+            from routes.dives import (
+                _call_llm_for_sql as llm_sql,  # type: ignore[no-redef]
+            )
         except Exception as e:  # noqa: BLE001
             return None, f"question-to-query step unavailable: {e}"
     try:
@@ -278,7 +281,7 @@ def _narrate(brief: dict, rows: list[dict], narrate: Callable | None) -> str | N
     if narrate is None:
         try:
             from clawmetry.narrator import narrate  # type: ignore[no-redef]
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
     try:
         return narrate("brief", {
@@ -313,7 +316,7 @@ def _load_channel_config() -> dict:
         with open(_ALERTS_CONFIG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception:  # noqa: BLE001
         return {}
 
 

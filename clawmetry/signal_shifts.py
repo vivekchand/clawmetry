@@ -56,7 +56,8 @@ import logging
 import math
 import os
 import time
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 log = logging.getLogger("clawmetry.signal_shifts")
 
@@ -328,7 +329,7 @@ def issue_headline(issue: dict, now_ms: int | None = None) -> str:
     if isinstance(bd, str):
         try:
             bd = json.loads(bd)
-        except Exception:
+        except Exception:  # noqa: BLE001
             bd = {}
     top = bd.get("top") if isinstance(bd, dict) else None
     if isinstance(top, dict) and top.get("value") and top.get("share", 0) >= 0.2:
@@ -353,7 +354,7 @@ def shift_alert_match(issue: dict, *, node_id: str = "", link: str = "",
     if isinstance(bd, str):
         try:
             bd = json.loads(bd)
-        except Exception:
+        except Exception:  # noqa: BLE001
             bd = {}
     top = bd.get("top") if isinstance(bd, dict) else None
     top_line = ""
