@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Release: the local store stays compact and snappy (#5502, #5504, #5503) (2026-09-04)
+- **Why:** three store fixes from the 2026-09-04 investigation are on main but the last two are not yet in a published wheel: unchanged span and session re-deliveries no longer rewrite the store (#5502), only point-lookup indexes remain on events and spans (#5504), and a mostly-dead store file compacts itself at writer startup (#5503). The reference node's store is 1,634 MB on disk for 575 MB of data until its daemon runs the compacting version.
+- **What:** this release carries them. Daemon-side change; the cloud pin follows once the wheel is verified on PyPI.
+- **Verified:** each PR's own tests ran green in CI before merge; post-release verification on the reference node is the compaction log line and the store file size at the first daemon start after upgrade.
+
 ### Perf: the newest-events scan behind Brain and Home sorts keys first, so it stops reading the whole event payload column (2026-09-04)
 - **Why:** on a founder laptop with 122 MB of free memory and 13 GB in the compressor, the daemon's DuckDB buffer pool was paged out between polls and "the newest 300 events" took 13 to 34 seconds live, six times a minute, while the same call on a fresh copy of the store took 0.4 s. The query asks DuckDB to keep the newest N rows of a 215k-row table with no selective predicate, so its TOP_N materialises the 1 KB `data` blob for every row before discarding all but N: the whole column, every poll, straight through swap.
 - **What:** when nothing narrows the scan (only `exclude_daemon`, which rejects almost nothing), `query_events` sorts the narrow key columns first and fetches the N payloads by primary key. Cold on the same store: 0.41 s to 0.11 s. Shapes with a selective predicate (session, agent, event type, time bounds, runtime) keep the single-statement form, because there the two-phase form is slower (0.01 s to 0.16 s for one session).
