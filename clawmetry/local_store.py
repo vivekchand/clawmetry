@@ -457,6 +457,9 @@ _DDL = [
         PRIMARY KEY (agent_type, session_id)
     )
     """,
+    # #5496 — same content-hash skip as spans (50 dead versions per live
+    # session on a real store, one per daemon restart).
+    "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS content_hash VARCHAR",
     "CREATE INDEX IF NOT EXISTS idx_sessions_active    ON sessions(agent_type, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_outcome   ON sessions(outcome, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_node      ON sessions(node_id, last_active_at)",
@@ -1074,6 +1077,33 @@ _DDL = [
         PRIMARY KEY (node_id, agent_id, content_sha256)
     )
     """,
+    # Inputs & context (Trail triad, INPUTS pillar): what the agent was GIVEN,
+    # per session. Fed by ``context.compiled`` events (OpenClaw trajectory
+    # recorder; paid adapters emit the same shape) through
+    # ``clawmetry/session_context.py`` at the ingest chokepoint. ``sha256`` +
+    # ``size_bytes`` describe the FULL text; ``content`` is the redacted copy
+    # capped at 64 KB. The same sha recurring on a later turn bumps ``turns``
+    # and ``last_ts`` instead of storing the prompt again. Idempotent DDL, so
+    # no schema-version bump is needed (CREATE TABLE IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS session_context (
+        agent_type      VARCHAR,
+        session_id      VARCHAR,
+        node_id         VARCHAR,
+        kind            VARCHAR,
+        sha256          VARCHAR,
+        size_bytes      INTEGER,
+        content         BLOB,
+        summary         VARCHAR,
+        first_ts        VARCHAR,
+        last_ts         VARCHAR,
+        turns           INTEGER DEFAULT 1,
+        source          VARCHAR,
+        created_at      BIGINT,
+        PRIMARY KEY (agent_type, session_id, kind, sha256)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_session_context_session ON session_context(agent_type, session_id)",
     "CREATE INDEX IF NOT EXISTS idx_bootstrap_node ON bootstrap_archive(node_id, captured_at)",
     # Issue #1007 (Phase 1 of epic #1006) — OTel-compatible span storage.
     # One row per OTel span received via the /v1/traces OTLP receiver. Shape
@@ -1139,6 +1169,12 @@ _DDL = [
         created_at         BIGINT NOT NULL
     )
     """,
+    # #5496 — content hash of the row as last written, so a re-delivery that
+    # carries the same content is skipped instead of re-run as DELETE+INSERT
+    # (each daemon restart used to rewrite every span; 47 dead versions per
+    # live span on a real store). ALTER (not a new CREATE) so existing stores
+    # pick it up; NULL on legacy rows means "unknown", written once, then set.
+    "ALTER TABLE spans ADD COLUMN IF NOT EXISTS content_hash VARCHAR",
     "CREATE INDEX IF NOT EXISTS idx_spans_trace_id    ON spans(trace_id, span_id)",
     "CREATE INDEX IF NOT EXISTS idx_spans_trace_start ON spans(trace_id, start_ts)",
     "CREATE INDEX IF NOT EXISTS idx_spans_parent      ON spans(parent_span_id)",
@@ -2111,6 +2147,36 @@ def _slim_heartbeat_data(hb: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# #5496 — upsert dedupe. Family adapters re-emit every span and session they
+# can see on each daemon tick after a restart; without a change check each
+# re-delivery is a DELETE+INSERT that leaves a dead row version behind and
+# DuckDB never compacts them away (a 575 MB dataset had grown to 1.6 GB).
+# The store keeps the content hash of the last row it wrote, in the table
+# (survives restarts) and in memory (no lookup per row), and skips rows
+# whose content has not changed. ``CLAWMETRY_UPSERT_DEDUPE=0`` restores the
+# always-write behaviour.
+try:
+    _FWDPROG_DEFAULT_HOURS = float(os.environ.get("CLAWMETRY_FWDPROG_DEFAULT_HOURS", "24") or "24")
+except ValueError:
+    _FWDPROG_DEFAULT_HOURS = 24.0
+_UPSERT_DEDUPE = os.environ.get("CLAWMETRY_UPSERT_DEDUPE", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+try:
+    _UPSERT_HASH_CACHE_MAX = int(os.environ.get("CLAWMETRY_UPSERT_HASH_CACHE_MAX", "2000000"))
+except ValueError:
+    _UPSERT_HASH_CACHE_MAX = 2_000_000
+
+
+def _content_hash(parts: list[Any]) -> str:
+    """Stable 128-bit digest of a row's content columns (timestamps such as
+    ``created_at`` / ``updated_at`` must be excluded by the caller, or every
+    delivery would look new). ``repr`` of the coerced parameter list is
+    deterministic for the str/float/int/bytes/None values the row builders
+    emit."""
+    return hashlib.blake2b(repr(parts).encode("utf-8"), digest_size=16).hexdigest()
+
+
 def _to_blob(value: Any) -> bytes | None:
     """Coerce arbitrary value (dict / list / str / bytes / None) to a BLOB
     suitable for DuckDB. Used by the non-event ingest helpers (sessions,
@@ -2840,6 +2906,12 @@ class LocalStore:
         self._conn_generation = 0
         # Per-thread read cursors (see ``_read_cursor``).
         self._read_local = threading.local()
+        # #5496 — last-written content hash per span_id / (agent_type,
+        # session_id). ``None`` until first use, then seeded from the table
+        # so a restart does not rewrite everything once. Guarded by
+        # ``_write_lock`` (only the write paths touch them).
+        self._span_hashes: dict[str, str] | None = None
+        self._session_hashes: dict[tuple[str, str], str] | None = None
         self._last_oom_reopen_ts: float | None = None
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
@@ -3695,6 +3767,23 @@ class LocalStore:
                 raise ValueError("event must include 'event_type'")
             if not event.get("ts"):
                 raise ValueError("event must include 'ts'")
+            if event.get("event_type") == "context.compiled":
+                # Inputs & context: fingerprint the system prompt / user
+                # prompt / tool definitions ONCE here and shrink the raw
+                # copy (the payload repeats the whole conversation every
+                # turn). Runs BEFORE redaction so sha256/size describe the
+                # text the agent actually received; the stored content is
+                # redacted inside session_context itself. Best-effort;
+                # never blocks the event.
+                try:
+                    from clawmetry import session_context as _sctx
+                    _ctx_rows = _sctx.rows_from_event(event)
+                    if _ctx_rows:
+                        self.ingest_session_context(_ctx_rows)
+                    event = dict(event)
+                    event["data"] = _sctx.compact_raw_event_data(event.get("data"))
+                except Exception:
+                    pass
             if redact is not None:
                 try:
                     event = redact(event)
@@ -3755,6 +3844,21 @@ class LocalStore:
             return 0
         now_ms = int(time.time() * 1000)
         with self._write_lock:
+            # #5496 — skip rows whose content matches the last write. The
+            # hash covers every column we send except ``updated_at``; the
+            # ON CONFLICT COALESCEs below are deterministic given the same
+            # input, so an identical re-delivery cannot change the row.
+            cache = self._session_hashes_locked()
+            if cache is not None:
+                kept: list[tuple[str, str, dict[str, Any]]] = []
+                for atype, sid, session in prepared:
+                    h = _content_hash(_session_content_parts(session))
+                    if cache.get((atype, sid)) == h:
+                        continue
+                    kept.append((atype, sid, session))
+                prepared = kept
+                if not prepared:
+                    return 0
             # #2988 — snapshot the pre-upsert day keys so the rollup session
             # counts only recompute the (runtime, day) cells that could
             # change. Direct conn read (NOT _fetch — it takes _write_lock
@@ -3772,27 +3876,14 @@ class LocalStore:
                     f" FROM sessions WHERE session_id IN ({ph})", chunk,
                 ).fetchall():
                     prev_map[(str(r[0]), str(r[1]))] = (r[2], r[3])
-            upsert_params = [
-                [
-                    atype, sid,
-                    session.get("node_id"),
-                    session.get("agent_id") or "main",
-                    session.get("workspace_id"),
-                    session.get("title"),
-                    session.get("started_at"),
-                    session.get("last_active_at"),
-                    session.get("ended_at"),
-                    session.get("status"),
-                    int(session.get("total_tokens") or 0),
-                    float(session.get("cost_usd") or 0),
-                    int(session.get("message_count") or 0),
-                    _to_blob(session.get("metadata")),
-                    now_ms,
-                    _clean_str(session.get("cwd")),
-                    _clean_str(session.get("git_branch")),
-                ]
-                for atype, sid, session in prepared
-            ]
+            upsert_params = []
+            for atype, sid, session in prepared:
+                parts = _session_content_parts(session)
+                # content columns ... then updated_at, cwd, git_branch, hash
+                upsert_params.append(
+                    [atype, sid] + parts[2:14] + [now_ms] + parts[14:16]
+                    + [_content_hash(parts)]
+                )
             with _txn(self._conn):
                 # Upsert: replace if (agent_type, session_id) exists.
                 self._conn.executemany("""
@@ -3800,8 +3891,8 @@ class LocalStore:
                         agent_type, session_id, node_id, agent_id, workspace_id,
                         title, started_at, last_active_at, ended_at, status,
                         total_tokens, cost_usd, message_count, metadata, updated_at,
-                        cwd, git_branch
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cwd, git_branch, content_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (agent_type, session_id) DO UPDATE SET
                         node_id        = excluded.node_id,
                         agent_id       = excluded.agent_id,
@@ -3820,7 +3911,8 @@ class LocalStore:
                         -- the field keeps what we already knew, but an agent
                         -- that cd'd or switched branch moves the row.
                         cwd            = COALESCE(excluded.cwd, sessions.cwd),
-                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch)
+                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch),
+                        content_hash   = excluded.content_hash
                 """, upsert_params)
                 try:
                     self._mirror_session_rollups_locked(prepared, prev_map)
@@ -3828,6 +3920,9 @@ class LocalStore:
                     log.exception(
                         "local store: session rollup upsert failed (non-fatal)"
                     )
+            if cache is not None:
+                for row in upsert_params:
+                    cache[(row[0], row[1])] = row[-1]
         return len(prepared)
 
     def update_session_location(
@@ -7490,8 +7585,12 @@ class LocalStore:
         then one executemany INSERT — instead of a per-span autocommit
         DELETE+INSERT transaction, which dominated family-runtime span
         reconstruction on fresh installs. In-batch duplicate span_ids keep
-        the LAST occurrence (matches sequential REPLACE ordering). Returns
-        the number of span rows written."""
+        the LAST occurrence (matches sequential REPLACE ordering).
+
+        #5496 — a span whose content matches what the store last wrote for
+        that ``span_id`` is skipped entirely (no DELETE, no INSERT, no dead
+        row version). A changed field (late ``end_ts``, cost, status) still
+        overwrites. Returns the number of span rows actually written."""
         if self._read_only:
             raise RuntimeError(
                 "local_store: ingest_span() called on read-only store"
@@ -7503,8 +7602,17 @@ class LocalStore:
         if not rows:
             return 0
         with self._write_lock:
+            cache = self._span_hashes_locked()
+            to_write: list[list[Any]] = []
+            for sid, params in rows.items():
+                h = _content_hash(params[:-1])  # created_at is not content
+                if cache is not None and cache.get(sid) == h:
+                    continue
+                to_write.append(params + [h])
+            if not to_write:
+                return 0
             with _txn(self._conn):
-                ids = list(rows.keys())
+                ids = [p[0] for p in to_write]
                 for off in range(0, len(ids), 500):
                     chunk = ids[off:off + 500]
                     ph = ",".join("?" * len(chunk))
@@ -7520,7 +7628,7 @@ class LocalStore:
                         model, tool_name, cost_usd, token_count,
                         tokens_input, tokens_output,
                         input, output, attributes, events, links,
-                        ts, created_at
+                        ts, created_at, content_hash
                     ) VALUES (?, ?, ?, ?, ?,
                               ?, ?, ?, ?, ?,
                               ?, ?, ?,
@@ -7528,9 +7636,56 @@ class LocalStore:
                               ?, ?, ?, ?,
                               ?, ?,
                               ?, ?, ?, ?, ?,
-                              ?, ?)
-                """, list(rows.values()))
-        return len(rows)
+                              ?, ?, ?)
+                """, to_write)
+            if cache is not None:
+                for p in to_write:
+                    cache[p[0]] = p[-1]
+        return len(to_write)
+
+    def _span_hashes_locked(self) -> dict[str, str] | None:
+        """The span content-hash map (caller holds ``_write_lock``). ``None``
+        when dedupe is off. Seeded once per process from the table so the
+        first tick after a restart skips unchanged spans too; bounded so a
+        pathological node cannot grow it without limit (a clear just means
+        one more rewrite pass)."""
+        if not _UPSERT_DEDUPE:
+            return None
+        if self._span_hashes is None:
+            seeded: dict[str, str] = {}
+            try:
+                for sid, h in self._conn.execute(
+                    "SELECT span_id, content_hash FROM spans "
+                    "WHERE content_hash IS NOT NULL"
+                ).fetchall():
+                    seeded[str(sid)] = str(h)
+            except Exception:
+                log.exception("local store: span hash seed failed (dedupe starts cold)")
+                seeded = {}
+            self._span_hashes = seeded
+        elif len(self._span_hashes) > _UPSERT_HASH_CACHE_MAX:
+            self._span_hashes.clear()
+        return self._span_hashes
+
+    def _session_hashes_locked(self) -> dict[tuple[str, str], str] | None:
+        """Session counterpart of :meth:`_span_hashes_locked`."""
+        if not _UPSERT_DEDUPE:
+            return None
+        if self._session_hashes is None:
+            seeded: dict[tuple[str, str], str] = {}
+            try:
+                for atype, sid, h in self._conn.execute(
+                    "SELECT agent_type, session_id, content_hash FROM sessions "
+                    "WHERE content_hash IS NOT NULL"
+                ).fetchall():
+                    seeded[(str(atype), str(sid))] = str(h)
+            except Exception:
+                log.exception("local store: session hash seed failed (dedupe starts cold)")
+                seeded = {}
+            self._session_hashes = seeded
+        elif len(self._session_hashes) > _UPSERT_HASH_CACHE_MAX:
+            self._session_hashes.clear()
+        return self._session_hashes
 
     # Alias used by the issue body / callers that prefer "put" semantics.
     def put_span(self, span: dict[str, Any]) -> None:
@@ -8909,6 +9064,32 @@ class LocalStore:
         return out
 
     def query_forward_progress(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Per-session forward-progress signal; see ``_query_forward_progress_impl``.
+
+        #5497 — this is a whole-window event walk with a JSON decode per row
+        (4.6 s on a 210K-event store when called unbounded), so two guards
+        sit in front of the real query: a default ``since`` of the last
+        ``CLAWMETRY_FWDPROG_DEFAULT_HOURS`` (24) when the caller passes
+        neither ``since`` nor ``session_id``, and the bounded read cache
+        (``_cached_read``) so repeated calls inside one TTL pay once."""
+        if not since and not session_id:
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            since = (_dt.now(_tz.utc) - _td(hours=_FWDPROG_DEFAULT_HOURS)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+        return self._cached_read(
+            "query_forward_progress",
+            {"since": since, "until": until, "session_id": session_id},
+            lambda: self._query_forward_progress_impl(
+                since=since, until=until, session_id=session_id),
+        )
+
+    def _query_forward_progress_impl(
         self,
         *,
         since: str | None = None,
@@ -12466,6 +12647,118 @@ class LocalStore:
                 event.get("action"),
                 event.get("latency_ms"),
             ])
+
+    # ── Inputs & context (session_context) ─────────────────────────────────
+
+    def ingest_session_context(self, rows: list[dict[str, Any]]) -> int:
+        """Upsert session_context rows (see ``clawmetry/session_context.py``).
+
+        Keyed on (agent_type, session_id, kind, sha256). A row whose sha is
+        already present bumps ``turns`` and ``last_ts`` and keeps the first
+        stored content: the same system prompt on turn 40 is one fact seen 40
+        times, not 40 rows. Returns the number of rows written."""
+        if self._read_only:
+            raise RuntimeError("local_store: ingest_session_context() on read-only store")
+        n = 0
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            for r in rows or ():
+                if not isinstance(r, dict):
+                    continue
+                sid = str(r.get("session_id") or "")
+                kind = str(r.get("kind") or "")
+                sha = str(r.get("sha256") or "")
+                if not (sid and kind and sha):
+                    continue
+                content = r.get("content")
+                if isinstance(content, str):
+                    content = content.encode("utf-8", "ignore")
+                elif content is not None and not isinstance(content, (bytes, bytearray)):
+                    content = str(content).encode("utf-8", "ignore")
+                ts = str(r.get("last_ts") or r.get("first_ts") or "")
+                self._conn.execute("""
+                    INSERT INTO session_context (
+                        agent_type, session_id, node_id, kind, sha256, size_bytes,
+                        content, summary, first_ts, last_ts, turns, source, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    ON CONFLICT (agent_type, session_id, kind, sha256) DO UPDATE SET
+                        turns    = session_context.turns + 1,
+                        last_ts  = CASE WHEN excluded.last_ts > session_context.last_ts
+                                        THEN excluded.last_ts ELSE session_context.last_ts END,
+                        first_ts = CASE WHEN excluded.first_ts < session_context.first_ts
+                                        THEN excluded.first_ts ELSE session_context.first_ts END,
+                        summary  = COALESCE(excluded.summary, session_context.summary)
+                """, [
+                    str(r.get("agent_type") or "openclaw"),
+                    sid,
+                    str(r.get("node_id") or ""),
+                    kind,
+                    sha,
+                    int(r.get("size_bytes") or 0),
+                    content,
+                    r.get("summary"),
+                    str(r.get("first_ts") or ts),
+                    ts,
+                    str(r.get("source") or "context.compiled"),
+                    now_ms,
+                ])
+                n += 1
+        return n
+
+    def query_session_context(
+        self,
+        *,
+        session_id: str,
+        agent_type: str | None = None,
+        include_content: bool = True,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Inputs & context rows for one session, newest-last per kind.
+
+        ``session_id`` may be the bare id or the runtime-prefixed one
+        (``claude_code:<uuid>``): family sessions are stored prefixed, the
+        transcript viewer often holds the bare form. ``content`` is decoded
+        to text for ``system_prompt`` / ``user_prompt`` only (the tool
+        definitions JSON stays out of the response; ``summary`` carries the
+        names) and omitted entirely when ``include_content`` is False."""
+        sid = str(session_id or "")
+        if not sid:
+            return []
+        clauses = ["(session_id = ? OR session_id LIKE ? )"]
+        params: list[Any] = [sid, "%:" + sid]
+        if agent_type:
+            clauses.append("agent_type = ?")
+            params.append(str(agent_type))
+        sql = f"""
+            SELECT agent_type, session_id, node_id, kind, sha256, size_bytes,
+                   content, summary, first_ts, last_ts, turns, source
+            FROM session_context
+            WHERE {" AND ".join(clauses)}
+            ORDER BY kind, first_ts, sha256
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["agent_type", "session_id", "node_id", "kind", "sha256",
+                "size_bytes", "content", "summary", "first_ts", "last_ts",
+                "turns", "source"]
+        out: list[dict[str, Any]] = []
+        for tup in self._fetch(sql, params):
+            row = dict(zip(cols, tup))
+            blob = row.pop("content", None)
+            if include_content and row["kind"] in ("system_prompt", "user_prompt", "context_file") and blob is not None:
+                try:
+                    row["content"] = bytes(blob).decode("utf-8", "ignore")
+                except Exception:
+                    row["content"] = None
+            else:
+                row["content"] = None
+            try:
+                from clawmetry.session_context import CONTENT_CAP as _cap
+            except Exception:
+                _cap = 64 * 1024
+            row["content_truncated"] = bool(int(row.get("size_bytes") or 0) > _cap)
+            out.append(row)
+        return out
 
     def query_guardrail_events(
         self,
@@ -16841,6 +17134,33 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
         int(time.time() * 1000),
         e.get("runtime_kind") or None,
     )
+
+
+def _session_content_parts(session: dict[str, Any]) -> list[Any]:
+    """The 16 content columns of a sessions upsert, coerced exactly as the
+    INSERT binds them, in column order: agent_type, session_id, node_id,
+    agent_id, workspace_id, title, started_at, last_active_at, ended_at,
+    status, total_tokens, cost_usd, message_count, metadata, cwd, git_branch.
+    ``updated_at`` is deliberately absent: it is a write timestamp, not
+    content, and the #5496 dedupe hashes this list."""
+    return [
+        str(session.get("agent_type") or "openclaw"),
+        str(session.get("session_id")),
+        session.get("node_id"),
+        session.get("agent_id") or "main",
+        session.get("workspace_id"),
+        session.get("title"),
+        session.get("started_at"),
+        session.get("last_active_at"),
+        session.get("ended_at"),
+        session.get("status"),
+        int(session.get("total_tokens") or 0),
+        float(session.get("cost_usd") or 0),
+        int(session.get("message_count") or 0),
+        _to_blob(session.get("metadata")),
+        _clean_str(session.get("cwd")),
+        _clean_str(session.get("git_branch")),
+    ]
 
 
 def _span_row(span: dict[str, Any]) -> list[Any]:

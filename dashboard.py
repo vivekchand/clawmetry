@@ -75,6 +75,7 @@ from flask import (
 # truth for module-level helpers — see routes/sessions.py for the pattern.
 from routes.sessions import bp_sessions
 from routes.tracing import bp_tracing
+from routes.trail import bp_trail
 from routes.brain import bp_brain
 from routes.advisor import bp_advisor
 from routes.selfevolve import bp_selfevolve
@@ -13370,6 +13371,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_sla)
     app.register_blueprint(bp_tracing)
+    app.register_blueprint(bp_trail)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
     app.register_blueprint(bp_version_impact)
