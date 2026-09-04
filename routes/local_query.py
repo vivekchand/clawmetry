@@ -1083,6 +1083,18 @@ _DAEMON_METHODS = frozenset({
     "delete_brief",
     "mark_brief_run",
     "dives_table_columns",
+    # ── Agent self-diagnostics (WO-59) ───────────────────────────────────
+    # The MCP ``report_to_operator`` tool runs in the agent's own process
+    # and writes through the daemon (which owns the writer lock); the
+    # dashboard's /api/self-reports and the MCP read tools read the same
+    # way. An unlisted method here is a silent 400 -> "no reports".
+    "ingest_self_report",
+    "query_self_reports",
+    "query_self_report_counts",
+    "query_self_report_honesty",
+    "query_guard_incidents",
+    "query_session_denials",
+    "find_session_by_cwd",
 })
 
 

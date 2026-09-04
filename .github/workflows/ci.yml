@@ -425,6 +425,7 @@ jobs:
             tests/test_signals_ui_contract.py \
             tests/test_signal_shifts.py \
             tests/test_briefs.py \
+            tests/test_self_diagnostics.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
