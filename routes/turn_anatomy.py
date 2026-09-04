@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
+from routes.tracing import _thinking_texts
+
 bp_turn_anatomy = Blueprint("turn_anatomy", __name__)
 
 # Pure-plumbing event types that never become a span of their own.
@@ -156,7 +158,9 @@ def _classify(e, otlp_prompt_ok=False):
         return "model"
 
     if et == "thinking":
-        return "model"
+        # Its own kind: the reasoning that drove the next action, never folded
+        # into "model" (a model call is what the thinking produced).
+        return "thinking"
     return ""
 
 
@@ -332,6 +336,16 @@ def _build_turns(rows):
                 })
                 continue
 
+            if kind == "thinking":
+                _txt = _data(e).get("content")
+                spans.append({
+                    "kind": "thinking", "label": "thinking",
+                    "started_ms": s_ms, "ended_ms": nxt,
+                    "duration_ms": max(0, nxt - s_ms), "status": "ok",
+                    "text": (str(_txt)[:600] if isinstance(_txt, str) else ""),
+                })
+                continue
+
             if kind == "compaction":
                 spans.append({
                     "kind": "compaction", "label": "context compaction",
@@ -352,6 +366,17 @@ def _build_turns(rows):
                     "duration_ms": max(0, nxt - s_ms), "status": "ok",
                 })
                 continue
+
+            # Thinking blocks carried inside the assistant message (OpenClaw
+            # content lists, extra.thinking) get their own span ahead of the
+            # model span so the reasoning is never hidden inside "model call".
+            for _think in _thinking_texts(_data(e)):
+                spans.append({
+                    "kind": "thinking", "label": "thinking",
+                    "started_ms": s_ms, "ended_ms": nxt,
+                    "duration_ms": max(0, nxt - s_ms), "status": "ok",
+                    "text": _think[:600],
+                })
 
             # model: the last model event of the turn is the reply.
             is_last = (j == n - 1)
@@ -430,8 +455,23 @@ def api_turn_anatomy():
         "session_id": session_id,
         "turns": turns,
         "turn_count": len(turns),
+        "reasoning": _reasoning_summary(session_id, turns),
         "_source": "local_store",
     })
+
+
+def _reasoning_summary(session_id, turns):
+    """Thinking-span count plus the adapter's declared reasoning coverage, so
+    the UI can say "not exposed by <runtime>" instead of showing a gap."""
+    runtime = session_id.split(":", 1)[0].lower() if ":" in session_id else "openclaw"
+    try:
+        from routes.trail import coverage_for_runtime
+        cov = coverage_for_runtime(runtime)
+    except Exception:
+        cov = {"reasoning": "unknown", "note": ""}
+    n = sum(1 for t in turns for sp in (t.get("spans") or []) if sp.get("kind") == "thinking")
+    return {"runtime": runtime, "span_count": n,
+            "coverage": cov.get("reasoning", "unknown"), "note": cov.get("note", "")}
 
 
 @bp_turn_anatomy.route("/api/turn-anatomy/stalled")
@@ -482,7 +522,7 @@ def api_turn_anatomy_stalled():
         opened = sum(1 for k in kinds_only if k == "tool_call")
         closed = sum(1 for k in kinds_only if k == "tool_result")
         pending_tool = opened > closed
-        running = last_kind in ("prompt", "tool_call", "model") or pending_tool
+        running = last_kind in ("prompt", "tool_call", "model", "thinking") or pending_tool
         if not running:
             continue
         stalled.append({
