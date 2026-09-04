@@ -32,6 +32,7 @@ def fresh(tmp_path, monkeypatch):
     importlib.reload(ls)
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "t.duckdb")))
+    monkeypatch.setattr(ls, "_writer_owner", True)
     store = ls.get_store()
     sys.modules.pop("clawmetry.insights", None)
     import clawmetry.insights as ins

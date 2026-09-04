@@ -52,6 +52,7 @@ def _incident(kind="rate_limited", sev="warning", sid="codex:abc"):
 def sinks(monkeypatch, tmp_path):
     """Temp fleet DB for the banner, recorded senders, no entitlement gate."""
     monkeypatch.setenv("CLAWMETRY_FLEET_DB", str(tmp_path / "fleet.db"))
+    monkeypatch.setattr(ia, "_fleet_db_path", lambda: str(tmp_path / "fleet.db"))
     monkeypatch.setattr(ia, "_BUILTIN_PREFS_FILE", str(tmp_path / "prefs.json"))
     monkeypatch.setattr(ia, "_ALERTS_CONFIG_FILE", str(tmp_path / "alerts.json"))
     monkeypatch.setattr(ia, "_load_alerts_config", lambda: {})
@@ -189,6 +190,7 @@ def test_latch_survives_a_restart_on_a_real_store(sinks, tmp_path, monkeypatch):
     importlib.reload(ls)
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "t.duckdb")))
+    monkeypatch.setattr(ls, "_writer_owner", True)
     store = ls.get_store()
     try:
         assert ia.deliver_incident(store, _incident())["delivered"] is True
