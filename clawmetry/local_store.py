@@ -43,6 +43,7 @@ import inspect
 import json
 import logging
 import os
+import subprocess
 import sys
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
 from clawmetry import event_shape as _event_shape  # v15 typed event columns
@@ -150,6 +151,10 @@ try:
     AUTO_COMPACT_BACKUP_KEEP_DAYS = float(os.environ.get("CLAWMETRY_AUTO_COMPACT_BACKUP_KEEP_DAYS", "7"))
 except ValueError:
     AUTO_COMPACT_BACKUP_KEEP_DAYS = 7.0
+try:
+    AUTO_COMPACT_TIMEOUT_S = float(os.environ.get("CLAWMETRY_AUTO_COMPACT_TIMEOUT_S", "900"))
+except ValueError:
+    AUTO_COMPACT_TIMEOUT_S = 900.0
 # Last compaction outcome for this process (surfaced by ``health()``).
 _LAST_COMPACTION: dict[str, Any] = {}
 
@@ -338,13 +343,85 @@ def compact_store_file(db_path: Path, *, force: bool = False) -> dict[str, Any]:
         _LAST_COMPACTION["at"] = int(time.time() * 1000)
 
 
+_COMPACT_CHILD_CODE = (
+    "import json, sys\n"
+    "from pathlib import Path\n"
+    "from clawmetry import local_store as ls\n"
+    "print(json.dumps(ls.compact_store_file(Path(sys.argv[1]))))\n"
+)
+
+
+def _restore_after_failed_compaction(db_path: Path) -> str | None:
+    """Put the store back after a helper process died mid-compaction. The
+    swap is old -> ``.pre-compact`` then ``.compacting`` -> store, both atomic
+    renames, so the only bad state a crash can leave is "store missing,
+    backup present": move the backup back. A leftover ``.compacting`` file
+    is never a valid store and is removed. Returns a note for the log."""
+    tmp = db_path.with_name(db_path.name + ".compacting")
+    bak = _compaction_backup_path(db_path)
+    note = None
+    if not db_path.exists() and bak.exists():
+        os.replace(bak, db_path)
+        note = "restored the previous store file from the backup"
+    for leftover in (tmp, tmp.with_suffix(tmp.suffix + ".wal")):
+        try:
+            leftover.unlink()
+        except OSError:
+            pass
+    return note
+
+
+def compact_store_file_in_child(db_path: Path) -> dict[str, Any]:
+    """Run :func:`compact_store_file` in a helper process and report its
+    result. The rewrite is native DuckDB work (checkpoint, copy, verify) on a
+    file the daemon is about to trust for its whole life; a crash inside the
+    engine there would otherwise take the daemon down at startup, and under
+    launchd or systemd that is a restart loop. In a child, a crash or a hang
+    costs one log line, the store stays as it was, and the daemon boots."""
+    out: dict[str, Any] = {"ran": False, "path": str(db_path)}
+    env = dict(os.environ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _COMPACT_CHILD_CODE, str(db_path)],
+            capture_output=True, text=True, timeout=AUTO_COMPACT_TIMEOUT_S, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        note = _restore_after_failed_compaction(db_path)
+        out["reason"] = f"helper timed out after {AUTO_COMPACT_TIMEOUT_S:.0f}s"
+        log.error("local store: compaction helper timed out; %s", note or "store untouched")
+        return out
+    except Exception as exc:
+        out["reason"] = f"helper could not start: {str(exc)[:160]}"
+        log.exception("local store: compaction helper could not start")
+        return out
+    if proc.returncode != 0:
+        note = _restore_after_failed_compaction(db_path)
+        tail = (proc.stderr or "").strip().splitlines()[-3:]
+        out["reason"] = f"helper exited {proc.returncode}"
+        log.error(
+            "local store: compaction helper exited %s (%s); %s",
+            proc.returncode, " | ".join(tail)[:300], note or "store untouched",
+        )
+        return out
+    line = (proc.stdout or "").strip().splitlines()
+    try:
+        out = json.loads(line[-1]) if line else out
+    except ValueError:
+        out["reason"] = "helper produced no result"
+    return out
+
+
 def _maybe_compact_on_startup() -> None:
-    """Writer-startup hook: prune an old backup, then compact if warranted."""
+    """Writer-startup hook: prune an old backup, then compact (in a helper
+    process) if warranted. Records the outcome for ``health()``."""
     if not AUTO_COMPACT_ENABLED:
         return
     try:
         _prune_compaction_backup(DB_PATH)
-        compact_store_file(DB_PATH)
+        out = compact_store_file_in_child(DB_PATH)
+        _LAST_COMPACTION.clear()
+        _LAST_COMPACTION.update(out)
+        _LAST_COMPACTION.setdefault("at", int(time.time() * 1000))
     except Exception:
         log.exception("local store: startup compaction check failed (continuing)")
 
