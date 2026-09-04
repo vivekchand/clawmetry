@@ -429,6 +429,10 @@ jobs:
             tests/test_alert_rule_types_new.py \
             tests/test_regression_replay_optin.py \
             tests/test_insights_outcome_templates.py \
+            tests/test_event_shape.py \
+            tests/test_schema_v15_migration.py \
+            tests/test_session_intent.py \
+            tests/test_session_git_outcomes_route.py \
             tests/test_self_diagnostics.py \
             -q
 
