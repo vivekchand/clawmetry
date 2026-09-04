@@ -39,7 +39,7 @@ from clawmetry import alert_evaluator as ae  # noqa: E402
 pytest.importorskip("duckdb")
 
 
-# ── matchers ───────────────────────────────────────────────────────────────
+# ── matchers ──────────────────────────────────────────────────────────────────────
 
 FRUSTRATED = [
     "wtf why did you delete the whole file",
@@ -180,7 +180,7 @@ def test_retry_jaccard():
     assert bs.retry_match(None, bs.tokens_of("anything at all here")) is None
 
 
-# ── turn classification across both dialects ───────────────────────────────
+# ── turn classification across both dialects ───────────────────────────────────────────
 
 def _row(i, sid, role=None, text="", et="message", ts=None, model="claude-x",
          created=None, extra=None):
@@ -200,7 +200,7 @@ def test_classify_family_and_v3_dialects():
     side, text, model, ver = bs.classify_turn(_row(1, "claude_code:a", "user", "hi"))
     assert (side, text, model) == ("user", "hi", "claude-x")
     v3 = _row(2, "abc", None, "", et="prompt.submitted", model=None,
-              extra={"finalPromptText": "why did you do that"})
+               extra={"finalPromptText": "why did you do that"})
     assert bs.classify_turn(v3)[0] == "user"
     v3a = _row(3, "abc", None, "", et="model.completed", model=None,
                extra={"completionText": "I can't help with that", "modelId": "m1"})
@@ -241,7 +241,7 @@ def test_evaluate_rows_records_no_text():
         assert "wtf" not in json.dumps(m)
 
 
-# ── store + tick (isolated DuckDB) ─────────────────────────────────────────
+# ── store + tick (isolated DuckDB) ────────────────────────────────────────────────────
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
@@ -253,6 +253,8 @@ def store(tmp_path, monkeypatch):
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(db)))
     monkeypatch.setattr(ls, "_writer_owner", True)
+    monkeypatch.setattr(ls, "_daemon_registered", lambda: False)
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
     try:
         ls._reset_singleton_for_tests()
     except Exception:
@@ -378,7 +380,7 @@ def test_sessions_query_lists_sessions_not_phrases(store):
     assert "wtf" not in json.dumps(rows)
 
 
-# ── routes ─────────────────────────────────────────────────────────────────
+# ── routes ───────────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
 def client(store):
@@ -419,7 +421,7 @@ def test_routes_shapes(client, store):
     assert client.get("/api/signals/not_a_signal/sessions").status_code == 404
 
 
-# ── alert rule ─────────────────────────────────────────────────────────────
+# ── alert rule ────────────────────────────────────────────────────────────────────
 
 def _rule(threshold=10, signal="user_frustration", runtime=None, min_turns=None):
     cond = {"alert_type": "signal_rate_above", "threshold_value": threshold,
@@ -476,7 +478,7 @@ def test_store_rate_window(store):
     assert store.query_signal_rate_window(signal="nope", window_minutes=60) == {}
 
 
-# ── snapshot slice ─────────────────────────────────────────────────────────
+# ── snapshot slice ──────────────────────────────────────────────────────────────────
 
 def test_snapshot_slices_keys_and_no_sessions(store):
     _seed(store)
