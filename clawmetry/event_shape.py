@@ -53,6 +53,7 @@ import json
 from typing import Any, Iterable
 
 __all__ = [
+    "typed_columns",
     "BLOCK_KINDS",
     "ROLES",
     "classify",
@@ -615,3 +616,23 @@ def _row_parts(r: Any) -> tuple:
         "tool_name": getattr(r, "tool_name", "") or "",
     }
     return et, data, getattr(r, "ts", "") or ""
+
+
+def typed_columns(event_type: Any, data: Any) -> tuple:
+    """The four typed ``events`` columns for one row, in insert order:
+    ``(role, block_kind, tool_name, is_error)``.
+
+    Called by the store's row builder for EVERY new event row, so a row
+    written after schema v15 carries its classification from the moment it
+    is inserted; the daemon's bounded back-fill only exists for rows that
+    predate v15. ``block_kind`` is never NULL on a stamped row (``other``
+    when nothing fits), which is also the marker the back-fill uses to skip
+    rows it has already visited.
+    """
+    shape = classify(event_type, data)
+    return (
+        shape["role"] or None,
+        shape["block_kind"] or "other",
+        shape["tool_name"] or None,
+        bool(shape["is_error"]),
+    )
