@@ -4691,9 +4691,10 @@ def _format_uptime(seconds):
 
 
 def _cmd_mcp(args) -> None:
-    """Start the ClawMetry MCP server on stdio (refs #2859)."""
-    from clawmetry.mcp_server import run
-    run()
+    """`clawmetry mcp ...` (refs #2859, WO-59). Normally intercepted by the
+    fast path in main(); kept for callers that build a Namespace directly."""
+    from clawmetry.mcp_install import cli_main as _mcp_cli
+    raise SystemExit(_mcp_cli(list(getattr(args, "mcp_args", None) or [])))
 
 
 def _cmd_reports(args) -> None:
@@ -7657,6 +7658,12 @@ def main() -> None:
     # dashboard import. Stdlib-only; `stamp` always exits 0 (fail-open).
     if len(sys.argv) > 1 and sys.argv[1] == "trace":
         raise SystemExit(trace_main(sys.argv[2:]))
+    # FAST PATH — `clawmetry mcp [serve|install|uninstall|status]` (WO-59).
+    # `serve` is started by the agent host on every session and must not
+    # pay the dashboard import; the installer is stdlib-only as well.
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        from clawmetry.mcp_install import cli_main as _mcp_cli
+        raise SystemExit(_mcp_cli(sys.argv[2:]))
     # FAST PATH — `clawmetry instrument <runtime> …` (WO-57): writes the
     # runtime's own OpenTelemetry exporter settings so it reports to this
     # ClawMetry. Which runtimes: whatever profiles are registered (free ones
@@ -8169,11 +8176,15 @@ def main() -> None:
         ),
     )
 
-    # mcp — start MCP server on stdio (issue #2859)
-    sub.add_parser(
+    # mcp — intercepted by the fast path at the top of main() (WO-59); the
+    # parser entry exists so `clawmetry --help` discovery shows it.
+    p_mcp = sub.add_parser(
         "mcp",
-        help="Start ClawMetry MCP server (stdio) — lets agents query their own telemetry",
+        help="MCP server: `mcp` serves on stdio; `mcp install [--runtime <id>|all] "
+             "[--dry-run] [--write-guidance]` registers it with each runtime; "
+             "`mcp uninstall`; `mcp status`",
     )
+    p_mcp.add_argument("mcp_args", nargs="*")
 
     # uninstall — fully remove clawmetry
     p_uninstall = sub.add_parser(
