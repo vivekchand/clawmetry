@@ -131,6 +131,7 @@ CANONICAL_TABS = [
     "inventory",         # inventory.html: tool/resource inventory
     "nemoclaw",          # nemoclaw.html: NeMo Guardrails governance
     "guard",             # guard.html: Guard incidents + session controls + policies
+    "signals",           # signals.html: Behaviour Signals (frustration, praise, refusals, giving up)
     "policy",            # policy.html: policy management
     "selfevolve",        # selfevolve.html: self-evolve feature
     "swimlane",          # swimlane.html: swimlane visualization
