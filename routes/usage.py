@@ -412,7 +412,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
             daily_tokens[day] = daily_tokens.get(day, 0) + int(r.get("token_count") or 0)
             daily_cost[day] = daily_cost.get(day, 0.0) + float(r.get("cost_usd") or 0.0)
     else:
-        evs = _ls_call("query_events", limit=10000)
+        evs = _ls_call("query_events_slim", limit=10000)
         if not evs:
             return None
         # query_events has no SQL runtime filter; apply the same prefix logic
@@ -504,7 +504,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
 
     # Per-model breakdown: scan recent events and group.
     model_usage = {}
-    recent = _ls_call("query_events", limit=5000) or []
+    recent = _ls_call("query_events_slim", limit=5000) or []
     recent = _filter_evs_by_runtime(recent, runtime)
     for ev in recent:
         m = ev.get("model") or "unknown"
@@ -762,7 +762,7 @@ def _try_local_store_usage_by_plugin(threshold_pct, runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = store.query_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -822,7 +822,7 @@ def _try_local_store_usage_by_plugin_trend(days_back):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = store.query_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -892,7 +892,7 @@ def _try_local_store_cost_comparison():
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=50000)
+        evs = store.query_events_slim(limit=50000)
     except Exception:
         return None
     if not evs:
@@ -1152,7 +1152,7 @@ def _try_local_store_model_attribution(runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = store.query_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -1294,7 +1294,7 @@ def _try_local_store_usage_by_model(runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = store.query_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -1357,7 +1357,7 @@ def _try_local_store_skill_attribution():
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=50000)
+        evs = store.query_events_slim(limit=50000)
     except Exception:
         return None
     if not evs:
@@ -2544,7 +2544,7 @@ def _try_local_store_sessions_clusters(days: int):
     if not sessions:
         return None
     # One bulk events fetch; group by session_id (avoids N+1 daemon hops).
-    events = _ls_call("query_events", since=cutoff_iso, limit=20000) or []
+    events = _ls_call("query_events_slim", since=cutoff_iso, limit=20000) or []
     # Issue #1451: sibling-dedupe so the per-session token fallback below
     # doesn't double-count assistant + model.completed pairs on v3 installs.
     bucket_max = build_sibling_bucket_max(events)
@@ -3186,7 +3186,7 @@ def api_runtime_summary():
     out = {}
     if store is not None:
         try:
-            evs = store.query_events(limit=20000) or []
+            evs = store.query_events_slim(limit=20000) or []
             agg = {}
             for ev in evs:
                 rt = _runtime_of(ev.get("session_id"))
