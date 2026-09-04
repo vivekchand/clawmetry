@@ -673,7 +673,10 @@ class EvalRunner:
 _NO_KEY_LOGGED = False
 
 # Email PII pattern, redacted before the transcript goes to the third-party
-# judge LLM (the secret redactor in clawmetry/redaction.py handles keys/tokens).
+# judge LLM. The personal-data tier in clawmetry/redaction.py (WO-61) now
+# does this inside redact_text with the same ``[email]`` placeholder; this
+# stays as the belt-and-braces scrub for an operator who switched that
+# category off, because the judge is a third party either way.
 _JUDGE_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
 
 
@@ -690,13 +693,13 @@ def _redact_for_judge(text: str) -> str:
         if _redaction._disabled():
             return text
         text = _redaction.redact_text(text)
-        text = _JUDGE_EMAIL_RE.sub("[REDACTED:email]", text)
+        text = _JUDGE_EMAIL_RE.sub("[email]", text)
     except Exception:
         # Never lose the transcript on a redaction bug, but also never send raw
         # if we cannot confirm redaction ran: on import/other failure, drop a
         # conservative best-effort email scrub at minimum.
         try:
-            text = _JUDGE_EMAIL_RE.sub("[REDACTED:email]", text)
+            text = _JUDGE_EMAIL_RE.sub("[email]", text)
         except Exception:
             pass
     return text
