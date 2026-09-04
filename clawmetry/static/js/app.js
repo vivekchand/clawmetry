@@ -20653,6 +20653,7 @@ async function viewTranscript(sessionId) {
       + '</div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
     _loadInputsPanel(sessionId);
+    _loadLifecycleCoverageLine(sessionId);
     _loadAuthorityPanel(sessionId);
     _loadOrchestrationPanel(sessionId);
     _loadReplayTree(sessionId);   // wire-up per #4814 — no-op until adapters land (#4815, #4816)
@@ -20999,6 +21000,56 @@ async function _loadCeInputsMeasured(sessionId) {
       + '<span style="font-size:11px;color:var(--text-muted);">' + r.summary + '</span></div>'
       + r.html + '</div>';
   } catch (e) { el.innerHTML = ''; }
+}
+
+// Per-runtime lifecycle honesty (WO-61). An empty "permission denials" row
+// on a Cursor session means Cursor never exposes one, not that nothing was
+// refused; this line says which. Reads /api/lifecycle/coverage, the one
+// declaration both dashboards render. A missing route (older server, hosted
+// dashboard before its interceptor lands) renders nothing rather than a
+// blank or invented state.
+async function _loadLifecycleCoverageLine(sessionId) {
+  var meta = document.getElementById('transcript-meta');
+  if (!meta) return;
+  var prev = document.getElementById('lifecycle-coverage-line');
+  if (prev) prev.remove();
+  var rt = '';
+  var sid = String(sessionId || '');
+  if (sid.indexOf(':') > 0) rt = sid.slice(0, sid.indexOf(':'));
+  if (!rt) {
+    try {
+      var pf = _cmClientFilterRt(_cmRuntimeFilter());
+      if (pf && pf !== 'all') rt = pf;
+    } catch (e) {}
+  }
+  if (!rt) rt = 'openclaw';
+  var data = null;
+  try {
+    var r = await fetch('/api/lifecycle/coverage?runtime=' + encodeURIComponent(rt));
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (e) { return; }
+  if (!data || !data.facts) return;
+  var lines = (data.lines || []).filter(function(l){ return !!l; });
+  var full = (data.full || []).length;
+  var labels = { tool_failed: 'Tool failures', subagent_started: 'Subagent starts',
+                 subagent_stopped: 'Subagent stops', permission_denied: 'Permission denials',
+                 context_compacted: 'Context compactions', session_started: 'Session start',
+                 instructions_loaded: 'Instructions loaded' };
+  var label = rt;
+  try { label = _cmRuntimeLabel(rt) || rt; } catch (e) {}
+  var html = '<div id="lifecycle-coverage-line" class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-secondary);align-items:flex-start;">'
+    + '<span class="stat-label" title="Which lifecycle facts ' + escHtml(label) + ' can put on this trail. Full: reported as it happens. Partial: recovered after the event. Not exposed: the runtime never tells anyone.">Trail facts</span>'
+    + '<span class="stat-val" style="font-size:11px;line-height:1.5;">';
+  if (!lines.length) {
+    html += '<span style="color:#16a34a;">All ' + full + ' lifecycle facts reported as they happen</span>';
+  } else {
+    var fullNames = (data.full || []).map(function(f){ return labels[f] || f; });
+    if (fullNames.length) html += '<span style="color:#16a34a;">' + escHtml(fullNames.join(', ')) + ': live</span><br>';
+    html += lines.map(function(l){ return '<span style="color:#d97706;">' + escHtml(l) + '</span>'; }).join('<br>');
+  }
+  html += '</span></div>';
+  meta.insertAdjacentHTML('beforeend', html);
 }
 
 async function _loadAuthorityPanel(sessionId) {

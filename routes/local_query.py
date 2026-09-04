@@ -631,6 +631,13 @@ _DAEMON_METHODS = frozenset({
     # simply never appear.
     "set_session_attention",
     "clear_session_attention",
+    # Lifecycle facts from runtime hooks (WO-61). The intake in
+    # routes/hooks.py runs in the DASHBOARD process; an unlisted writer is a
+    # silent no-op, so the trail would simply never show a denial.
+    "ingest_lifecycle_events",
+    "upsert_session_instructions",
+    "get_session_instructions",
+    "query_lifecycle_events",
     # Agent-Inventory roster (#task-12): ``sync._build_runtime_summary`` runs
     # in the DASHBOARD process when /api/inventory composes locally; without
     # this method the proxy returned None, ``by_runtime``/``by_runtime_model``
