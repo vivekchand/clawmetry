@@ -100,19 +100,35 @@
     <div id="health-timeline-body"></div>
   </div>
 
-  <!-- Per-run A/B compare (#2196 item #2). Pick two sessions, see the deltas
-       side by side. Result panel is hidden until the first successful fetch. -->
+  <!-- Compare surface (WO-60 cohort compare). Leads with suggested
+       comparisons (a model first seen, a runtime version first seen, this
+       week vs last week), then one verdict word with the sample size next to
+       it, then the metric table coloured by favourable direction, then a
+       drill-down to the sessions on either side. The raw two-session compare
+       (#2196 item #2) stays one click deeper under Advanced. JS: app.js
+       loadCohortSuggested() -> /api/cohort-compare/suggested (cloud: served
+       from the snapshot's cohortSuggested slice; custom filters stay local). -->
   <div id="compare-runs-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
-    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
-      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">⚖️ <span data-i18n="overview.compare_runs_title">Compare two runs</span></div>
-      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.compare_runs_hint">Paste session ids; green = improvement, red = regression</div>
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;gap:12px;flex-wrap:wrap;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">⚖️ <span data-i18n="overview.compare_title">Did the change help?</span></div>
+      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.compare_hint">Pick a comparison. One word, with the number of sessions it rests on.</div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;">
-      <input id="compare-input-a" type="text" placeholder="Session A id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
-      <input id="compare-input-b" type="text" placeholder="Session B id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
-      <button onclick="submitCompare()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;" data-i18n="app.compare">Compare</button>
+    <div id="cohort-suggestions" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;">
+      <div style="color:var(--text-muted);font-size:12px;" data-i18n="overview.compare_loading">Looking for recent changes...</div>
     </div>
-    <div id="compare-runs-body" style="margin-top:12px;"></div>
+    <div id="cohort-result" style="display:none;margin-top:14px;"></div>
+    <details id="cohort-advanced" style="margin-top:12px;border-top:1px solid var(--border-primary);padding-top:8px;">
+      <summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);font-weight:600;list-style:none;">⚙️ <span data-i18n="overview.compare_advanced">Advanced: compare two runs by id</span></summary>
+      <div id="cohort-advanced-body">
+        <div style="font-size:11px;color:var(--text-muted);margin:8px 0;" data-i18n="overview.compare_runs_hint">Paste session ids; green = improvement, red = regression</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;">
+          <input id="compare-input-a" type="text" placeholder="Session A id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
+          <input id="compare-input-b" type="text" placeholder="Session B id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
+          <button onclick="submitCompare()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;" data-i18n="app.compare">Compare</button>
+        </div>
+        <div id="compare-runs-body" style="margin-top:12px;"></div>
+      </div>
+    </details>
   </div>
 
   <!-- Error triage (#2196 item #5). List + manage resolved errors. -->

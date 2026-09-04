@@ -191,8 +191,9 @@ jobs:
           for i in $(seq 1 30); do
             count=$(
               curl -s -H "Authorization: Bearer ci-golden-token" \
-                http://localhost:8920/api/sessions \
-                | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('sessions', [])))"
+                http://localhost:8920/api/sessions -o /tmp/golden-sessions.json \
+                2>/dev/null &&
+              python3 -c "import json; d=json.load(open('/tmp/golden-sessions.json')); print(len(d.get('sessions', [])))" \
                 2>/dev/null || echo 0
             )
             if [ "${count:-0}" -ge 1 ]; then

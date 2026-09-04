@@ -27,6 +27,9 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry import event_shape as _event_shape
+from routes.tracing import _thinking_texts
+
 bp_turn_anatomy = Blueprint("turn_anatomy", __name__)
 
 # Pure-plumbing event types that never become a span of their own.
@@ -135,10 +138,16 @@ def _classify(e, otlp_prompt_ok=False):
     if "compact" in et:
         return "compaction"
     d = _data(e)
-    role = (d.get("role") or "").lower()
+    # Speaker / tool / error come from the ONE normaliser
+    # (clawmetry.event_shape) rather than a private ``data.role`` sniff, so
+    # a Claude Code ``tool_result`` block, a Codex ``tool_result`` row and an
+    # OpenClaw ``tool.result`` event all land on the same span kind.
+    shape = _event_shape.classify(et, d)
+    role = shape["role"] or (d.get("role") or "").lower()
 
     # Tool plumbing first (a tool_call row may also have role=assistant).
-    if "tool_result" in et or "tool_use_result" in et or role == "tool":
+    if "tool_result" in et or "tool_use_result" in et or role == "tool" \
+            or shape["block_kind"] == "tool_result":
         return "tool_result"
     if "tool_call" in et or "tool.call" in et or d.get("tool_name") or d.get("tool_calls"):
         return "tool_call"
@@ -155,19 +164,23 @@ def _classify(e, otlp_prompt_ok=False):
             or (role == "assistant" and et in ("message", "text")):
         return "model"
 
-    if et == "thinking":
+    if et == "thinking" or shape["block_kind"] == "thinking":
+        # Its own kind: the reasoning that drove the next action, never folded
+        # into "model" (a model call is what the thinking produced).
+        return "thinking"
+    if role == "user" and shape["block_kind"] == "text" and shape["text"]:
+        return "prompt"
+    if role == "assistant" and shape["block_kind"] in ("text", "tool_use"):
         return "model"
     return ""
 
 
 def _tool_name(e):
-    d = _data(e)
-    name = d.get("tool_name")
-    if name:
-        return str(name).replace("mcp__openclaw__", "")
-    tcs = d.get("tool_calls")
-    if isinstance(tcs, list) and tcs and isinstance(tcs[0], dict):
-        n = tcs[0].get("name") or (tcs[0].get("function") or {}).get("name")
+    shape = _event_shape.classify(e.get("event_type"), _data(e))
+    if shape["tool_name"]:
+        return shape["tool_name"]
+    if shape["tool_uses"]:
+        n = shape["tool_uses"][0].get("name")
         if n:
             return str(n).replace("mcp__openclaw__", "")
     return "tool"
@@ -194,6 +207,8 @@ def _tool_result_id(e):
 
 def _is_error(e):
     d = _data(e)
+    if _event_shape.classify(e.get("event_type"), d)["is_error"]:
+        return True
     ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
     return bool(ex.get("isError") or d.get("isError") or d.get("is_error")
                 or (e.get("event_type") or "").endswith("error"))
@@ -332,6 +347,16 @@ def _build_turns(rows):
                 })
                 continue
 
+            if kind == "thinking":
+                _txt = _data(e).get("content")
+                spans.append({
+                    "kind": "thinking", "label": "thinking",
+                    "started_ms": s_ms, "ended_ms": nxt,
+                    "duration_ms": max(0, nxt - s_ms), "status": "ok",
+                    "text": (str(_txt)[:600] if isinstance(_txt, str) else ""),
+                })
+                continue
+
             if kind == "compaction":
                 spans.append({
                     "kind": "compaction", "label": "context compaction",
@@ -352,6 +377,17 @@ def _build_turns(rows):
                     "duration_ms": max(0, nxt - s_ms), "status": "ok",
                 })
                 continue
+
+            # Thinking blocks carried inside the assistant message (OpenClaw
+            # content lists, extra.thinking) get their own span ahead of the
+            # model span so the reasoning is never hidden inside "model call".
+            for _think in _thinking_texts(_data(e)):
+                spans.append({
+                    "kind": "thinking", "label": "thinking",
+                    "started_ms": s_ms, "ended_ms": nxt,
+                    "duration_ms": max(0, nxt - s_ms), "status": "ok",
+                    "text": _think[:600],
+                })
 
             # model: the last model event of the turn is the reply.
             is_last = (j == n - 1)
@@ -430,8 +466,23 @@ def api_turn_anatomy():
         "session_id": session_id,
         "turns": turns,
         "turn_count": len(turns),
+        "reasoning": _reasoning_summary(session_id, turns),
         "_source": "local_store",
     })
+
+
+def _reasoning_summary(session_id, turns):
+    """Thinking-span count plus the adapter's declared reasoning coverage, so
+    the UI can say "not exposed by <runtime>" instead of showing a gap."""
+    runtime = session_id.split(":", 1)[0].lower() if ":" in session_id else "openclaw"
+    try:
+        from routes.trail import coverage_for_runtime
+        cov = coverage_for_runtime(runtime)
+    except Exception:
+        cov = {"reasoning": "unknown", "note": ""}
+    n = sum(1 for t in turns for sp in (t.get("spans") or []) if sp.get("kind") == "thinking")
+    return {"runtime": runtime, "span_count": n,
+            "coverage": cov.get("reasoning", "unknown"), "note": cov.get("note", "")}
 
 
 @bp_turn_anatomy.route("/api/turn-anatomy/stalled")
@@ -482,7 +533,7 @@ def api_turn_anatomy_stalled():
         opened = sum(1 for k in kinds_only if k == "tool_call")
         closed = sum(1 for k in kinds_only if k == "tool_result")
         pending_tool = opened > closed
-        running = last_kind in ("prompt", "tool_call", "model") or pending_tool
+        running = last_kind in ("prompt", "tool_call", "model", "thinking") or pending_tool
         if not running:
             continue
         stalled.append({
