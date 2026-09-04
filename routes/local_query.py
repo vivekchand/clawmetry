@@ -225,6 +225,15 @@ def _coerce_args(shape: str, raw: dict) -> dict:
         }
     if shape == "health":
         return {}
+    if shape == "similar_sessions":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("similar_sessions shape requires session_id")
+        return {
+            "session_id":  sid,
+            "window_days": _safe_int(raw.get("window_days"), default=30, lo=1, hi=365),
+            "limit":       _safe_int(raw.get("limit"), default=10, lo=1, hi=50),
+        }
     if shape == "spans":
         return {
             "trace_id":   raw.get("trace_id"),
@@ -373,7 +382,7 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -601,6 +610,10 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    # Cohort compare + similar runs (WO-60): routes/cohort.py reads both
+    # through the proxy; the similarity walk runs in the daemon process.
+    "query_cohort_sessions",
+    "query_similar_sessions",
     "query_events",
     # Runtime event counts. NemoClawAdapter.detect() used to run
     # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses

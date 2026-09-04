@@ -21201,6 +21201,48 @@ def _build_evals_judge_status() -> dict | None:
         return None
 
 
+_COHORT_SLICE_CACHE: dict = {"at": 0.0, "body": None}
+_COHORT_SLICE_TTL_SECS = 600
+
+
+def _build_cohort_suggested_slice(store, *, days: int = 28) -> dict:
+    """Suggested cohort comparisons with their computed results (WO-60).
+
+    Mirrors GET /api/cohort-compare/suggested so the hosted dashboard renders
+    the same cards from ``sp.cohortSuggested``. Built on the daemon's OWN
+    store handle, capped to 5 suggestions, and recomputed at most every ten
+    minutes: the session scan is the whole cohort universe and ten-minute
+    freshness is plenty for a question asked once a day. Raises to the
+    caller's honest-empty on failure.
+    """
+    now = time.time()
+    cached = _COHORT_SLICE_CACHE.get("body")
+    if cached is not None and now - float(_COHORT_SLICE_CACHE.get("at") or 0) < _COHORT_SLICE_TTL_SECS:
+        return cached
+    from datetime import datetime, timedelta, timezone
+
+    from clawmetry.cohort_compare import session_view
+    from routes.cohort import SUGGESTED_CAP, build_suggested_payload
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+        "%Y-%m-%dT%H:%M:%S")
+    rows = [r for r in (store.query_cohort_sessions(since=since) or [])
+            if isinstance(r, dict)]
+    views = [session_view(r) for r in rows]
+    body = build_suggested_payload(
+        views,
+        signals_available=any("signals" in r for r in rows),
+        context_available=any("instructions_hash" in r for r in rows),
+        runtime=None, cap=SUGGESTED_CAP,
+    )
+    body["store_available"] = True
+    body["session_count"] = len(views)
+    body["generated_at"] = int(now)
+    _COHORT_SLICE_CACHE["at"] = now
+    _COHORT_SLICE_CACHE["body"] = body
+    return body
+
+
 def _build_bench_slice(store, *, days: int = 30) -> dict:
     """Harness Engineering bench slice for the encrypted snapshot.
 
@@ -21816,6 +21858,19 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_bench:
         log.debug("snapshot: bench slice failed: %s", _e_bench)
 
+    # Cohort compare (WO-60): the suggested comparisons with their verdicts,
+    # so the hosted Compare surface leads with real cards. Arbitrary filters
+    # stay local (the cloud has no store to run them against) and the UI
+    # says so. Best-effort; honest empty on any failure.
+    cohort_slice = {"schema": 1, "suggestions": [], "store_available": False}
+    try:
+        from clawmetry import local_store as _ls_cohort
+        _cohort_store = _ls_cohort.get_store()
+        if _cohort_store is not None:
+            cohort_slice = _build_cohort_suggested_slice(_cohort_store)
+    except Exception as _e_cohort:
+        log.debug("snapshot: cohort slice failed: %s", _e_cohort)
+
     # Eval (LLM-judge) scores, so the hosted dashboard's Eval card populates from
     # the encrypted snapshot (cloud stays blind; E2E preserved). Built on the
     # daemon's own store handle. Best-effort; empty until evals run (needs a
@@ -22022,6 +22077,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Harness Engineering bench: verdict stamps, $/done, profiles,
         # recommendations, head-to-head. Read by cm-cloud-bench as sp.bench.
         "bench": bench_slice,
+        # Suggested cohort comparisons + verdicts. Read by the hosted Compare
+        # surface as sp.cohortSuggested (WO-60).
+        "cohortSuggested": cohort_slice,
         "autonomy": _build_autonomy_snapshot(),
         "flowRuns": _build_flow_runs_snapshot(),
         "flowLanes": _build_flow_lanes_snapshot(),

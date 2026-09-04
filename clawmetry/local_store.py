@@ -4079,6 +4079,36 @@ class LocalStore:
             out.append(d)
         return out
 
+    # ── Cohort compare + similar runs (WO-60) ─────────────────────────────
+    # The SQL lives in clawmetry/cohort_queries.py (a leaf module); these two
+    # are the daemon-proxy surface routes/cohort.py reads through.
+
+    def query_cohort_sessions(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 3000,
+    ) -> list[dict[str, Any]]:
+        """Session rows with the fields cohort compare reads (runtime, model,
+        repo, developer, branch, cost, tokens, steps, tool health, outcome,
+        git links, behaviour signals when the store has them)."""
+        from clawmetry.cohort_queries import cohort_sessions
+        return cohort_sessions(self, since=since, until=until, limit=limit)
+
+    def query_similar_sessions(
+        self,
+        *,
+        session_id: str,
+        window_days: int = 30,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Nearest sessions by tool-call shape (n-gram weighted Jaccard),
+        bounded to a capped candidate set, same runtime first."""
+        from clawmetry.cohort_queries import similar_sessions
+        return similar_sessions(self, session_id=session_id,
+                                window_days=window_days, limit=limit)
+
     def ingest_memory_blob(self, blob_row: dict[str, Any]) -> bool:
         """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
 
