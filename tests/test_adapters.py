@@ -236,3 +236,21 @@ def test_api_agent_sessions_returns_unified_shape():
     assert len(body["sessions"]) == 2
     assert body["sessions"][0]["id"] == "s1"
     assert body["sessions"][0]["agent"] == "fake"
+
+
+# ── Trail triad: Capability members + base trail_coverage ──────────────────
+
+
+def test_trail_capability_members():
+    assert Capability.REASONING.value == "reasoning"
+    assert Capability.INPUTS.value == "inputs"
+    assert Capability("reasoning") is Capability.REASONING
+
+
+def test_base_trail_coverage_default_is_none_with_empty_note():
+    from clawmetry.adapters.base import TRAIL_LEVELS
+    cov = _FakeAdapter().trail_coverage()
+    assert cov == {"inputs": "none", "reasoning": "none", "note": ""}
+    assert cov["inputs"] in TRAIL_LEVELS and cov["reasoning"] in TRAIL_LEVELS
+    # Callers can tell "never declared" from "declared none".
+    assert type(_FakeAdapter()).trail_coverage is AgentAdapter.trail_coverage

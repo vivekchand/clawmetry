@@ -109,6 +109,51 @@ jobs:
           path: clawmetry-sbom.json
           retention-days: 90
 
+  fuzz:
+    name: Fuzz untrusted parsers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Atheris publishes Linux wheels up to CPython 3.11; 3.12+ would build
+      # from source and need clang. Pinning 3.11 here keeps the job a wheel
+      # install, independent of what the rest of the matrix moves to.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # requests is needed because tests/conftest.py imports it at module
+      # scope, so pytest exits 4 (collection error) without it, before a
+      # single test runs. Asserted by tests/test_workflow_yaml_valid.py.
+      - run: python3 -m pip install --quiet atheris pytest requests
+
+      # The seed corpus first: it is the set of inputs that have ALREADY broken
+      # these contracts, it runs in under a second, and it fails loudly. If a
+      # refactor reintroduces a known bug, this names it before the fuzzer
+      # spends any time rediscovering it.
+      - name: Known-bad corpus (regressions)
+        run: python3 -m pytest tests/test_fuzz_targets.py -q
+
+      # Bounded run counts, not a time budget, so the job cannot become the
+      # slowest thing on the PR. The scheduled Monday run is where a long
+      # search would belong if we ever want one.
+      - name: Fuzz clawmetry.otlp_json (network-facing decoder)
+        run: python3 tests/fuzz/fuzz_otlp_json.py -atheris_runs=50000 -artifact_prefix=fuzz-crash-
+
+      - name: Fuzz clawmetry.event_shape (transcript classifier)
+        run: python3 tests/fuzz/fuzz_event_shape.py -atheris_runs=50000 -artifact_prefix=fuzz-crash-
+
+      # A crashing input is the whole product of a fuzz run. Without this the
+      # bytes that triggered the failure exist only in a deleted runner.
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashes
+          path: fuzz-crash-*
+          if-no-files-found: ignore
+          retention-days: 30
+
   action-refs:
     name: Action references resolve
     runs-on: ubuntu-latest

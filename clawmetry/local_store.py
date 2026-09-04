@@ -45,8 +45,11 @@ import logging
 import os
 import sys
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
+from clawmetry import event_shape as _event_shape  # v15 typed event columns
+from clawmetry.trail_store import TrailStoreMixin  # intent / back-fill / git join
 import threading
 import time
+import uuid
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -314,7 +317,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # A heartbeat row is a liveness ping, not a transport envelope. The daemon's
 # heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
@@ -376,7 +379,16 @@ _DDL = [
         created_at      BIGINT NOT NULL,
         chain_prev_hash VARCHAR,
         chain_hash      VARCHAR,
-        runtime_kind    VARCHAR
+        runtime_kind    VARCHAR,
+        -- v15 Trail typed columns, filled by clawmetry.event_shape.classify
+        -- at ingest (and lazily back-filled for older rows). ``block_kind``
+        -- uses the replay_schema vocabulary: text | thinking | tool_use |
+        -- tool_result | system | other. NULL means "not yet classified",
+        -- never "no shape": the back-fill stamps every row it visits.
+        role            VARCHAR,
+        block_kind      VARCHAR,
+        tool_name       VARCHAR,
+        is_error        BOOLEAN
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_events_ts          ON events(ts)",
@@ -454,9 +466,20 @@ _DDL = [
         attention_since         BIGINT,
         attention_signal        VARCHAR,
         attention_tool          VARCHAR,
+        -- v15 Trail: what the user asked for. The FULL first user prompt
+        -- (the title is an 80-char truncation of the same turn), redacted
+        -- through clawmetry.redaction and capped at
+        -- event_shape.INTENT_MAX_CHARS. Set once and never overwritten;
+        -- intent_source records where it came from ('events', 'adapter',
+        -- 'none' when a session has events but no human prompt).
+        intent                  VARCHAR,
+        intent_source           VARCHAR,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
+    # #5496 — same content-hash skip as spans (50 dead versions per live
+    # session on a real store, one per daemon restart).
+    "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS content_hash VARCHAR",
     "CREATE INDEX IF NOT EXISTS idx_sessions_active    ON sessions(agent_type, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_outcome   ON sessions(outcome, last_active_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_node      ON sessions(node_id, last_active_at)",
@@ -1074,6 +1097,33 @@ _DDL = [
         PRIMARY KEY (node_id, agent_id, content_sha256)
     )
     """,
+    # Inputs & context (Trail triad, INPUTS pillar): what the agent was GIVEN,
+    # per session. Fed by ``context.compiled`` events (OpenClaw trajectory
+    # recorder; paid adapters emit the same shape) through
+    # ``clawmetry/session_context.py`` at the ingest chokepoint. ``sha256`` +
+    # ``size_bytes`` describe the FULL text; ``content`` is the redacted copy
+    # capped at 64 KB. The same sha recurring on a later turn bumps ``turns``
+    # and ``last_ts`` instead of storing the prompt again. Idempotent DDL, so
+    # no schema-version bump is needed (CREATE TABLE IF NOT EXISTS).
+    """
+    CREATE TABLE IF NOT EXISTS session_context (
+        agent_type      VARCHAR,
+        session_id      VARCHAR,
+        node_id         VARCHAR,
+        kind            VARCHAR,
+        sha256          VARCHAR,
+        size_bytes      INTEGER,
+        content         BLOB,
+        summary         VARCHAR,
+        first_ts        VARCHAR,
+        last_ts         VARCHAR,
+        turns           INTEGER DEFAULT 1,
+        source          VARCHAR,
+        created_at      BIGINT,
+        PRIMARY KEY (agent_type, session_id, kind, sha256)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_session_context_session ON session_context(agent_type, session_id)",
     "CREATE INDEX IF NOT EXISTS idx_bootstrap_node ON bootstrap_archive(node_id, captured_at)",
     # Issue #1007 (Phase 1 of epic #1006) — OTel-compatible span storage.
     # One row per OTel span received via the /v1/traces OTLP receiver. Shape
@@ -1139,6 +1189,12 @@ _DDL = [
         created_at         BIGINT NOT NULL
     )
     """,
+    # #5496 — content hash of the row as last written, so a re-delivery that
+    # carries the same content is skipped instead of re-run as DELETE+INSERT
+    # (each daemon restart used to rewrite every span; 47 dead versions per
+    # live span on a real store). ALTER (not a new CREATE) so existing stores
+    # pick it up; NULL on legacy rows means "unknown", written once, then set.
+    "ALTER TABLE spans ADD COLUMN IF NOT EXISTS content_hash VARCHAR",
     "CREATE INDEX IF NOT EXISTS idx_spans_trace_id    ON spans(trace_id, span_id)",
     "CREATE INDEX IF NOT EXISTS idx_spans_trace_start ON spans(trace_id, start_ts)",
     "CREATE INDEX IF NOT EXISTS idx_spans_parent      ON spans(parent_span_id)",
@@ -1669,6 +1725,98 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_policy_actions_created ON policy_actions(created_at DESC)",
+    # WO-61: the instructions file(s) a session ran under, as the agent saw
+    # them. Content is stored REDACTED (secrets + personal data) and capped
+    # by the hook; ``sha256`` covers the full file so a changed CLAUDE.md is
+    # a comparable property across sessions. One row per (session, path):
+    # a re-load of the same path replaces the row and bumps ``loads``.
+    """
+    CREATE TABLE IF NOT EXISTS session_instructions (
+        agent_type        VARCHAR NOT NULL DEFAULT 'claude_code',
+        session_id        VARCHAR NOT NULL,
+        instruction_path  VARCHAR NOT NULL,
+        instruction_type  VARCHAR,
+        load_reason       VARCHAR,
+        sha256            VARCHAR,
+        byte_len          INTEGER,
+        truncated         BOOLEAN DEFAULT FALSE,
+        content           VARCHAR,
+        loads             INTEGER DEFAULT 1,
+        loaded_at         VARCHAR,
+        updated_at        BIGINT NOT NULL,
+        PRIMARY KEY (session_id, instruction_path)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_session_instructions_sha ON session_instructions(sha256)",
+    # ── Behaviour Signals (WO-58, clawmetry/behaviour_signals.py) ───────────
+    # What people and agents SAY about a run: one row per eligible user or
+    # assistant turn (the rate's denominator) and one row per (turn, signal)
+    # match. Neither table stores the matched text; a match points at the
+    # turn (``event_id``) and the transcript viewer shows it under existing
+    # access rules. ``turn_ms`` is the turn's own timestamp so a session
+    # ingested late still lands on the day it happened. Additive: CREATE IF
+    # NOT EXISTS, no schema-version bump.
+    """
+    CREATE TABLE IF NOT EXISTS signal_turns (
+        event_id        VARCHAR PRIMARY KEY,
+        session_id      VARCHAR NOT NULL,
+        agent_type      VARCHAR NOT NULL,
+        node_id         VARCHAR,
+        model           VARCHAR,
+        runtime_version VARCHAR,
+        side            VARCHAR NOT NULL,
+        turn_ts         VARCHAR,
+        turn_ms         BIGINT NOT NULL,
+        created_at      BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_signal_turns_ms ON signal_turns(turn_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_signal_turns_rt_ms ON signal_turns(agent_type, turn_ms)",
+    """
+    CREATE TABLE IF NOT EXISTS signal_matches (
+        event_id        VARCHAR NOT NULL,
+        signal          VARCHAR NOT NULL,
+        session_id      VARCHAR NOT NULL,
+        agent_type      VARCHAR NOT NULL,
+        node_id         VARCHAR,
+        model           VARCHAR,
+        runtime_version VARCHAR,
+        turn_ts         VARCHAR,
+        turn_ms         BIGINT NOT NULL,
+        matcher         VARCHAR,
+        category        VARCHAR,
+        created_at      BIGINT NOT NULL,
+        PRIMARY KEY (event_id, signal)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_signal_matches_ms ON signal_matches(turn_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_signal_matches_sig_ms ON signal_matches(signal, turn_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_signal_matches_session ON signal_matches(session_id)",
+    # ── Agent self-reports (WO-59) ──────────────────────────────────────
+    # A note an agent filed about its own trouble through the MCP
+    # ``report_to_operator`` tool. ``summary_redacted`` has already been
+    # through ``clawmetry.redaction``; the raw text is never stored.
+    # ``corroborated`` / ``corroboration_ref`` are filled by the daemon's
+    # corroboration pass when a detector incident or a permission denial
+    # exists for the same session near the report. Additive: CREATE TABLE
+    # IF NOT EXISTS, no schema-version bump.
+    """
+    CREATE TABLE IF NOT EXISTS agent_self_reports (
+        id                 VARCHAR PRIMARY KEY,
+        session_id         VARCHAR NOT NULL DEFAULT '',
+        agent_type         VARCHAR DEFAULT '',
+        node_id            VARCHAR DEFAULT '',
+        model              VARCHAR DEFAULT '',
+        category           VARCHAR NOT NULL,
+        summary_redacted   VARCHAR DEFAULT '',
+        ts                 BIGINT NOT NULL,
+        created_at         BIGINT NOT NULL,
+        corroborated       BOOLEAN DEFAULT FALSE,
+        corroboration_ref  VARCHAR DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_self_reports_ts ON agent_self_reports(ts DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_self_reports_session ON agent_self_reports(session_id, ts)",
 ]
 
 
@@ -1773,6 +1921,15 @@ _MIGRATIONS_V2 = [
     # existing rows, which normalize_steps() reads as the single `action` —
     # so every policy authored before ladders keeps its exact behaviour.
     ("session_policy", "steps",       "VARCHAR DEFAULT ''"),
+    # v15 Trail typed event columns + session intent. NULL on existing rows;
+    # the daemon's bounded lazy back-fill (backfill_event_shapes /
+    # backfill_session_intents) fills them a few hundred rows per tick.
+    ("events",   "role",          "VARCHAR"),
+    ("events",   "block_kind",    "VARCHAR"),
+    ("events",   "tool_name",     "VARCHAR"),
+    ("events",   "is_error",      "BOOLEAN"),
+    ("sessions", "intent",        "VARCHAR"),
+    ("sessions", "intent_source", "VARCHAR"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -2000,6 +2157,28 @@ def _clean_str(value: Any, limit: int = _MAX_PATH_LEN) -> str | None:
     return s[:limit] if s else None
 
 
+def _clean_intent(value: Any) -> str | None:
+    """``sessions.intent`` value: the first user prompt, redacted through
+    ``clawmetry.redaction`` (secret-shaped substrings become fingerprints)
+    and capped at ``event_shape.INTENT_MAX_CHARS``. ``None`` for anything
+    that is not a non-empty string, so the upsert's COALESCE keeps what the
+    row already has."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        from clawmetry import redaction as _redaction
+        text = _redaction.redact_text(text)
+    except Exception:  # noqa: BLE001 - never lose the row on a redaction bug
+        pass
+    cap = _event_shape.INTENT_MAX_CHARS
+    if len(text) > cap:
+        text = text[: cap - 3].rstrip() + "..."
+    return text or None
+
+
 def _iso_utc(ts: float) -> str | None:
     """Unix seconds -> ISO-8601 UTC string (the sessions table's timestamp
     dialect). None for a missing/zero timestamp rather than the epoch."""
@@ -2042,6 +2221,36 @@ def _slim_heartbeat_data(hb: dict[str, Any]) -> dict[str, Any]:
     if dropped:
         out["_dropped"] = dropped
     return out
+
+
+# #5496 — upsert dedupe. Family adapters re-emit every span and session they
+# can see on each daemon tick after a restart; without a change check each
+# re-delivery is a DELETE+INSERT that leaves a dead row version behind and
+# DuckDB never compacts them away (a 575 MB dataset had grown to 1.6 GB).
+# The store keeps the content hash of the last row it wrote, in the table
+# (survives restarts) and in memory (no lookup per row), and skips rows
+# whose content has not changed. ``CLAWMETRY_UPSERT_DEDUPE=0`` restores the
+# always-write behaviour.
+try:
+    _FWDPROG_DEFAULT_HOURS = float(os.environ.get("CLAWMETRY_FWDPROG_DEFAULT_HOURS", "24") or "24")
+except ValueError:
+    _FWDPROG_DEFAULT_HOURS = 24.0
+_UPSERT_DEDUPE = os.environ.get("CLAWMETRY_UPSERT_DEDUPE", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
+try:
+    _UPSERT_HASH_CACHE_MAX = int(os.environ.get("CLAWMETRY_UPSERT_HASH_CACHE_MAX", "2000000"))
+except ValueError:
+    _UPSERT_HASH_CACHE_MAX = 2_000_000
+
+
+def _content_hash(parts: list[Any]) -> str:
+    """Stable 128-bit digest of a row's content columns (timestamps such as
+    ``created_at`` / ``updated_at`` must be excluded by the caller, or every
+    delivery would look new). ``repr`` of the coerced parameter list is
+    deterministic for the str/float/int/bytes/None values the row builders
+    emit."""
+    return hashlib.blake2b(repr(parts).encode("utf-8"), digest_size=16).hexdigest()
 
 
 def _to_blob(value: Any) -> bytes | None:
@@ -2693,7 +2902,7 @@ _DEDUPED_EVENTS_CTE = """
 """
 
 
-class LocalStore:
+class LocalStore(TrailStoreMixin):
     """Thread-safe local event store with a background batched flusher.
 
     `read_only=True` opens the DuckDB in RO mode — read paths work the same,
@@ -2773,6 +2982,12 @@ class LocalStore:
         self._conn_generation = 0
         # Per-thread read cursors (see ``_read_cursor``).
         self._read_local = threading.local()
+        # #5496 — last-written content hash per span_id / (agent_type,
+        # session_id). ``None`` until first use, then seeded from the table
+        # so a restart does not rewrite everything once. Guarded by
+        # ``_write_lock`` (only the write paths touch them).
+        self._span_hashes: dict[str, str] | None = None
+        self._session_hashes: dict[tuple[str, str], str] | None = None
         self._last_oom_reopen_ts: float | None = None
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
@@ -3243,6 +3458,38 @@ class LocalStore:
                         )
                         migration_failed = True
                         _migration_err = str(exc)
+                if not migration_failed and current < 15:
+                    # v14 -> v15: typed event columns (role / block_kind /
+                    # tool_name / is_error) and sessions.intent. The
+                    # column-adds themselves ran in _apply_migrations above
+                    # (idempotent ALTERs); nothing is rewritten here on
+                    # purpose. A multi-GB events table must not be scanned
+                    # inside a startup transaction (the v14 lesson), so the
+                    # existing rows are classified lazily by the daemon
+                    # tick, a bounded batch at a time.
+                    try:
+                        _v15_cols = {
+                            row[1] for row in self._conn.execute(
+                                "PRAGMA table_info('events')"
+                            ).fetchall()
+                        }
+                        if not {"role", "block_kind", "tool_name",
+                                "is_error"} <= _v15_cols:
+                            raise RuntimeError(
+                                "v15 typed event columns missing after ALTER"
+                            )
+                        log.info(
+                            "local store: v15 typed event columns ready; "
+                            "existing rows are classified by the daemon's "
+                            "lazy back-fill"
+                        )
+                    except Exception as exc:
+                        log.exception(
+                            "local store: v15 column check FAILED; schema "
+                            "version will NOT be stamped; next boot will retry"
+                        )
+                        migration_failed = True
+                        _migration_err = str(exc)
                 # Step 4: stamp the version — ONLY if every gated migration
                 # succeeded. Stamping after a swallowed failure is the #1602
                 # silent-half-state bug.
@@ -3279,6 +3526,264 @@ class LocalStore:
                 raise
 
     # ── lifecycle ────────────────────────────────────────────────────────
+
+    # ── Behaviour Signals (WO-58) ─────────────────────────────────────────
+    # Thin store surface for clawmetry/behaviour_signals.py: the daemon writes
+    # turns + matches on its tick, the dashboard and the snapshot read grouped
+    # counts back. Kept here, near the top of the class, so the surface is
+    # readable without paging through the module. Every method returns an
+    # empty value on failure rather than raising into a caller.
+
+    def record_signal_turns(self, turns: list, matches: list) -> int:
+        """Persist one tick's evaluated turns and their signal matches.
+
+        Idempotent: ``signal_turns`` is keyed on ``event_id`` and
+        ``signal_matches`` on ``(event_id, signal)``, both INSERT ... ON
+        CONFLICT DO NOTHING, so re-running a tick over the same rows never
+        double counts. Returns the number of match rows offered.
+        """
+        now_ms = int(time.time() * 1000)
+        t_rows = []
+        for t in turns or []:
+            if not isinstance(t, dict) or not t.get("event_id"):
+                continue
+            t_rows.append([
+                str(t.get("event_id"))[:128], str(t.get("session_id") or "")[:200],
+                str(t.get("agent_type") or "openclaw")[:64],
+                str(t.get("node_id") or "")[:128] or None,
+                str(t.get("model") or "unknown")[:128],
+                (str(t.get("runtime_version"))[:32] if t.get("runtime_version") else None),
+                str(t.get("side") or "")[:16], str(t.get("turn_ts") or "")[:64] or None,
+                int(t.get("turn_ms") or now_ms), now_ms,
+            ])
+        m_rows = []
+        for m in matches or []:
+            if not isinstance(m, dict) or not m.get("event_id") or not m.get("signal"):
+                continue
+            m_rows.append([
+                str(m.get("event_id"))[:128], str(m.get("signal"))[:48],
+                str(m.get("session_id") or "")[:200],
+                str(m.get("agent_type") or "openclaw")[:64],
+                str(m.get("node_id") or "")[:128] or None,
+                str(m.get("model") or "unknown")[:128],
+                (str(m.get("runtime_version"))[:32] if m.get("runtime_version") else None),
+                str(m.get("turn_ts") or "")[:64] or None,
+                int(m.get("turn_ms") or now_ms),
+                str(m.get("matcher") or "")[:64], str(m.get("category") or "")[:32],
+                now_ms,
+            ])
+        if not t_rows and not m_rows:
+            return 0
+        try:
+            with self._write_lock:
+                if t_rows:
+                    self._conn.executemany("""
+                        INSERT INTO signal_turns (event_id, session_id, agent_type,
+                            node_id, model, runtime_version, side, turn_ts, turn_ms,
+                            created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (event_id) DO NOTHING
+                    """, t_rows)
+                if m_rows:
+                    self._conn.executemany("""
+                        INSERT INTO signal_matches (event_id, signal, session_id,
+                            agent_type, node_id, model, runtime_version, turn_ts,
+                            turn_ms, matcher, category, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (event_id, signal) DO NOTHING
+                    """, m_rows)
+        except Exception as e:  # noqa: BLE001
+            log.warning("signals: record_signal_turns failed: %s", e)
+            return 0
+        return len(m_rows)
+
+    def query_signal_grouped(self, *, since_ms: int, runtime: str | None = None) -> dict:
+        """Grouped counts since ``since_ms`` for ``behaviour_signals.shape_rates``::
+
+            {"turns":   [{agent_type, side, model, runtime_version, day, n}],
+             "matches": [{agent_type, signal, model, runtime_version, day, n}]}
+
+        ``day`` is ``turn_ms // 86400000`` (a UTC day index). ``{}`` on error.
+        """
+        try:
+            since = int(since_ms)
+        except (TypeError, ValueError):
+            return {}
+        rt = str(runtime or "").strip().lower()
+        rt_clause = " AND agent_type = ?" if rt and rt != "all" else ""
+        params: list = [since] + ([rt] if rt_clause else [])
+        try:
+            t_rows = self._fetch(f"""
+                SELECT agent_type, side, model, runtime_version,
+                       CAST(turn_ms / 86400000 AS BIGINT) AS day, COUNT(*)
+                FROM signal_turns
+                WHERE turn_ms >= ?{rt_clause}
+                GROUP BY 1, 2, 3, 4, 5
+            """, params)
+            m_rows = self._fetch(f"""
+                SELECT agent_type, signal, model, runtime_version,
+                       CAST(turn_ms / 86400000 AS BIGINT) AS day, COUNT(*)
+                FROM signal_matches
+                WHERE turn_ms >= ?{rt_clause}
+                GROUP BY 1, 2, 3, 4, 5
+            """, params)
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_grouped failed: %s", e)
+            return {}
+        return {
+            "turns": [{"agent_type": r[0], "side": r[1], "model": r[2],
+                       "runtime_version": r[3], "day": int(r[4] or 0),
+                       "n": int(r[5] or 0)} for r in t_rows],
+            "matches": [{"agent_type": r[0], "signal": r[1], "model": r[2],
+                         "runtime_version": r[3], "day": int(r[4] or 0),
+                         "n": int(r[5] or 0)} for r in m_rows],
+        }
+
+    def query_signal_coverage(self, *, days: int = 30) -> dict:
+        """``{runtime: {"user_turns": n, "assistant_turns": n}}`` for every
+        runtime that had a session in the window, from what the store holds.
+        A runtime present in ``sessions`` but with no text turns reports both
+        counts as 0, which the surface renders as "not exposed". ``{}`` on
+        error.
+        """
+        try:
+            since = int((time.time() - max(1, int(days)) * 86400) * 1000)
+        except (TypeError, ValueError):
+            since = 0
+        out: dict = {}
+        try:
+            for sid, in self._fetch(
+                "SELECT session_id FROM sessions WHERE updated_at >= ? LIMIT 20000",
+                [since],
+            ):
+                sid = str(sid or "")
+                if not sid:
+                    continue
+                rt = sid.split(":", 1)[0].lower() if ":" in sid else "openclaw"
+                out.setdefault(rt, {"user_turns": 0, "assistant_turns": 0})
+            for rt, side, n in self._fetch("""
+                SELECT agent_type, side, COUNT(*) FROM signal_turns
+                WHERE turn_ms >= ? GROUP BY 1, 2
+            """, [since]):
+                cur = out.setdefault(str(rt), {"user_turns": 0, "assistant_turns": 0})
+                key = "user_turns" if side == "user" else "assistant_turns"
+                cur[key] = int(n or 0)
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_coverage failed: %s", e)
+            return {}
+        return out
+
+    def query_signal_session_flags(self, *, session_ids: list) -> dict:
+        """``{session_id: {"programmatic": bool}}`` from the session rows'
+        metadata: an SDK entrypoint or an ``isSubagent`` flag means the
+        user role is a program, not a person. Missing rows are absent from
+        the result; ``{}`` on error."""
+        ids = [str(x)[:200] for x in (session_ids or []) if x][:2000]
+        if not ids:
+            return {}
+        out: dict = {}
+        try:
+            placeholders = ",".join("?" for _ in ids)
+            rows = self._fetch(
+                f"SELECT session_id, metadata FROM sessions WHERE session_id IN ({placeholders})",
+                ids,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_session_flags failed: %s", e)
+            return {}
+        for sid, raw in rows:
+            meta: dict = {}
+            if raw is not None:
+                try:
+                    txt = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    parsed = json.loads(txt) if txt else {}
+                    if isinstance(parsed, dict):
+                        meta = parsed
+                except Exception:
+                    meta = {}
+            ent = str(meta.get("entrypoint") or "").lower()
+            surf = str(meta.get("surface") or meta.get("source") or "").lower()
+            prog = bool(meta.get("isSubagent")) or ent.startswith("sdk") or surf == "sdk"
+            out[str(sid)] = {"programmatic": prog}
+        return out
+
+    def query_signal_sessions(self, *, signal: str, since_ms: int,
+                              runtime: str | None = None, limit: int = 50) -> list:
+        """Sessions that matched ``signal`` in the window, most matches first:
+        ``[{session_id, runtime, model, started, cost_usd, title, matches,
+        last_match_ts}]``. Never the matched phrases. ``[]`` on error."""
+        sig = str(signal or "").strip()
+        if not sig:
+            return []
+        try:
+            since = int(since_ms)
+            lim = max(1, min(int(limit or 50), 500))
+        except (TypeError, ValueError):
+            return []
+        rt = str(runtime or "").strip().lower()
+        rt_clause = " AND m.agent_type = ?" if rt and rt != "all" else ""
+        params: list = [sig, since] + ([rt] if rt_clause else []) + [lim]
+        try:
+            rows = self._fetch(f"""
+                SELECT m.session_id, ANY_VALUE(m.agent_type), ANY_VALUE(m.model),
+                       COUNT(*) AS n, MAX(m.turn_ts),
+                       ANY_VALUE(s.title), ANY_VALUE(s.started_at), ANY_VALUE(s.cost_usd)
+                FROM signal_matches m
+                LEFT JOIN sessions s ON s.session_id = m.session_id
+                WHERE m.signal = ? AND m.turn_ms >= ?{rt_clause}
+                GROUP BY m.session_id
+                ORDER BY n DESC, MAX(m.turn_ms) DESC
+                LIMIT ?
+            """, params)
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_sessions failed: %s", e)
+            return []
+        return [{
+            "session_id": r[0], "runtime": r[1], "model": r[2] or "unknown",
+            "matches": int(r[3] or 0), "last_match_ts": r[4],
+            "title": (str(r[5])[:120] if r[5] else ""),
+            "started": r[6], "cost_usd": round(float(r[7] or 0), 4),
+        } for r in rows]
+
+    def query_signal_rate_window(self, *, signal: str, window_minutes: int,
+                                 runtime: str | None = None) -> dict:
+        """One signal's rate over the last ``window_minutes``, for the
+        ``signal_rate_above`` alert rule: ``{signal, rate, matches, turns,
+        window_minutes, runtime, top_model}``. ``rate`` is ``None`` when
+        no turn was eligible. ``{}`` on error."""
+        sig = str(signal or "").strip()
+        from clawmetry.behaviour_signals import SIGNALS as _SIG
+        if sig not in _SIG:
+            return {}
+        side = _SIG[sig]["side"]
+        try:
+            mins = max(1, int(window_minutes or 60))
+        except (TypeError, ValueError):
+            mins = 60
+        since = int(time.time() * 1000) - mins * 60 * 1000
+        rt = str(runtime or "").strip().lower()
+        rt_clause = " AND agent_type = ?" if rt and rt != "all" else ""
+        extra = [rt] if rt_clause else []
+        try:
+            turns = self._fetch(f"""
+                SELECT COUNT(*) FROM signal_turns
+                WHERE side = ? AND turn_ms >= ?{rt_clause}
+            """, [side, since] + extra)
+            matches = self._fetch(f"""
+                SELECT COUNT(*), ANY_VALUE(model) FROM signal_matches
+                WHERE signal = ? AND turn_ms >= ?{rt_clause}
+            """, [sig, since] + extra)
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_rate_window failed: %s", e)
+            return {}
+        n_turns = int(turns[0][0] or 0) if turns else 0
+        n_match = int(matches[0][0] or 0) if matches else 0
+        top_model = (matches[0][1] if matches and matches[0][1] else None)
+        return {
+            "signal": sig, "matches": n_match, "turns": n_turns,
+            "rate": (round(n_match / n_turns, 4) if n_turns else None),
+            "window_minutes": mins, "runtime": rt or "all", "top_model": top_model,
+        }
 
     def start(self) -> None:
         """Start the background flusher. Safe to call multiple times.
@@ -3370,6 +3875,23 @@ class LocalStore:
                 raise ValueError("event must include 'event_type'")
             if not event.get("ts"):
                 raise ValueError("event must include 'ts'")
+            if event.get("event_type") == "context.compiled":
+                # Inputs & context: fingerprint the system prompt / user
+                # prompt / tool definitions ONCE here and shrink the raw
+                # copy (the payload repeats the whole conversation every
+                # turn). Runs BEFORE redaction so sha256/size describe the
+                # text the agent actually received; the stored content is
+                # redacted inside session_context itself. Best-effort;
+                # never blocks the event.
+                try:
+                    from clawmetry import session_context as _sctx
+                    _ctx_rows = _sctx.rows_from_event(event)
+                    if _ctx_rows:
+                        self.ingest_session_context(_ctx_rows)
+                    event = dict(event)
+                    event["data"] = _sctx.compact_raw_event_data(event.get("data"))
+                except Exception:
+                    pass
             if redact is not None:
                 try:
                     event = redact(event)
@@ -3430,6 +3952,21 @@ class LocalStore:
             return 0
         now_ms = int(time.time() * 1000)
         with self._write_lock:
+            # #5496 — skip rows whose content matches the last write. The
+            # hash covers every column we send except ``updated_at``; the
+            # ON CONFLICT COALESCEs below are deterministic given the same
+            # input, so an identical re-delivery cannot change the row.
+            cache = self._session_hashes_locked()
+            if cache is not None:
+                kept: list[tuple[str, str, dict[str, Any]]] = []
+                for atype, sid, session in prepared:
+                    h = _content_hash(_session_content_parts(session))
+                    if cache.get((atype, sid)) == h:
+                        continue
+                    kept.append((atype, sid, session))
+                prepared = kept
+                if not prepared:
+                    return 0
             # #2988 — snapshot the pre-upsert day keys so the rollup session
             # counts only recompute the (runtime, day) cells that could
             # change. Direct conn read (NOT _fetch — it takes _write_lock
@@ -3447,27 +3984,21 @@ class LocalStore:
                     f" FROM sessions WHERE session_id IN ({ph})", chunk,
                 ).fetchall():
                     prev_map[(str(r[0]), str(r[1]))] = (r[2], r[3])
-            upsert_params = [
-                [
-                    atype, sid,
-                    session.get("node_id"),
-                    session.get("agent_id") or "main",
-                    session.get("workspace_id"),
-                    session.get("title"),
-                    session.get("started_at"),
-                    session.get("last_active_at"),
-                    session.get("ended_at"),
-                    session.get("status"),
-                    int(session.get("total_tokens") or 0),
-                    float(session.get("cost_usd") or 0),
-                    int(session.get("message_count") or 0),
-                    _to_blob(session.get("metadata")),
-                    now_ms,
-                    _clean_str(session.get("cwd")),
-                    _clean_str(session.get("git_branch")),
-                ]
-                for atype, sid, session in prepared
-            ]
+            upsert_params = []
+            for atype, sid, session in prepared:
+                parts = _session_content_parts(session)
+                _intent = _clean_intent(session.get("intent"))
+                _intent_src = (
+                    (_clean_str(session.get("intent_source")) or "adapter")
+                    if _intent else None
+                )
+                # content columns ... then updated_at, cwd, git_branch,
+                # intent, intent_source, hash
+                upsert_params.append(
+                    [atype, sid] + parts[2:14] + [now_ms] + parts[14:16]
+                    + [_intent, _intent_src]
+                    + [_content_hash(parts)]
+                )
             with _txn(self._conn):
                 # Upsert: replace if (agent_type, session_id) exists.
                 self._conn.executemany("""
@@ -3475,8 +4006,8 @@ class LocalStore:
                         agent_type, session_id, node_id, agent_id, workspace_id,
                         title, started_at, last_active_at, ended_at, status,
                         total_tokens, cost_usd, message_count, metadata, updated_at,
-                        cwd, git_branch
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cwd, git_branch, intent, intent_source, content_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT (agent_type, session_id) DO UPDATE SET
                         node_id        = excluded.node_id,
                         agent_id       = excluded.agent_id,
@@ -3495,7 +4026,14 @@ class LocalStore:
                         -- the field keeps what we already knew, but an agent
                         -- that cd'd or switched branch moves the row.
                         cwd            = COALESCE(excluded.cwd, sessions.cwd),
-                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch)
+                        git_branch     = COALESCE(excluded.git_branch, sessions.git_branch),
+                        -- FIRST wins: the intent is the opening prompt and a
+                        -- re-ingest must never replace it with a later one.
+                        intent         = COALESCE(sessions.intent, excluded.intent),
+                        intent_source  = CASE WHEN sessions.intent IS NULL
+                                              THEN excluded.intent_source
+                                              ELSE sessions.intent_source END,
+                        content_hash   = excluded.content_hash
                 """, upsert_params)
                 try:
                     self._mirror_session_rollups_locked(prepared, prev_map)
@@ -3503,8 +4041,13 @@ class LocalStore:
                     log.exception(
                         "local store: session rollup upsert failed (non-fatal)"
                     )
+            if cache is not None:
+                for row in upsert_params:
+                    cache[(row[0], row[1])] = row[-1]
         return len(prepared)
 
+    # Trail: session intent, typed-event back-fill and per-session git
+    # outcomes live in clawmetry/trail_store.py (TrailStoreMixin).
     def update_session_location(
         self,
         session_id: str,
@@ -4055,6 +4598,36 @@ class LocalStore:
                     d[k] = meta[k]
             out.append(d)
         return out
+
+    # ── Cohort compare + similar runs (WO-60) ─────────────────────────────
+    # The SQL lives in clawmetry/cohort_queries.py (a leaf module); these two
+    # are the daemon-proxy surface routes/cohort.py reads through.
+
+    def query_cohort_sessions(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 3000,
+    ) -> list[dict[str, Any]]:
+        """Session rows with the fields cohort compare reads (runtime, model,
+        repo, developer, branch, cost, tokens, steps, tool health, outcome,
+        git links, behaviour signals when the store has them)."""
+        from clawmetry.cohort_queries import cohort_sessions
+        return cohort_sessions(self, since=since, until=until, limit=limit)
+
+    def query_similar_sessions(
+        self,
+        *,
+        session_id: str,
+        window_days: int = 30,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """Nearest sessions by tool-call shape (n-gram weighted Jaccard),
+        bounded to a capped candidate set, same runtime first."""
+        from clawmetry.cohort_queries import similar_sessions
+        return similar_sessions(self, session_id=session_id,
+                                window_days=window_days, limit=limit)
 
     def ingest_memory_blob(self, blob_row: dict[str, Any]) -> bool:
         """Upsert one memory blob (e.g. CLAUDE.md, ~/.openclaw/memory/notes.md).
@@ -5438,6 +6011,344 @@ class LocalStore:
             d["evidence"] = _from_blob(d.get("evidence"))
             out.append(d)
         return out
+
+    # ── Agent self-reports (WO-59) ─────────────────────────────────────────
+    #
+    # Written by the MCP ``report_to_operator`` tool through the daemon's
+    # ``/__local_query__/ingest_self_report`` (the daemon owns the writer
+    # lock; the MCP server process never opens DuckDB). Read by
+    # ``routes/selfdiag.py``, the MCP read tools and the snapshot slice.
+
+    _SELF_REPORT_COLS = ("id", "session_id", "agent_type", "node_id", "model",
+                         "category", "summary_redacted", "ts", "created_at",
+                         "corroborated", "corroboration_ref")
+
+    def _session_model(self, session_id: str) -> str:
+        """The model the session most recently used, or ``""``. Reads the
+        typed events table; family adapters stamp ``model`` per request."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return ""
+        try:
+            from clawmetry.self_diagnostics import bare_session_id as _bare
+            candidates = [sid]
+            bare = _bare(sid)
+            if bare and bare != sid:
+                candidates.append(bare)
+            for cand in candidates:
+                rows = self._fetch(
+                    "SELECT model FROM events WHERE session_id = ? "
+                    "AND model IS NOT NULL AND model <> '' "
+                    "ORDER BY ts DESC LIMIT 1", [cand])
+                if rows and rows[0][0]:
+                    return str(rows[0][0])[:128]
+                rows = self._fetch(
+                    "SELECT model FROM events WHERE session_id LIKE ? "
+                    "AND model IS NOT NULL AND model <> '' "
+                    "ORDER BY ts DESC LIMIT 1", ["%:" + cand])
+                if rows and rows[0][0]:
+                    return str(rows[0][0])[:128]
+        except Exception:
+            return ""
+        return ""
+
+    def ingest_self_report(self, session_id: str = "", category: str = "",
+                           summary: str = "", agent_type: str = "",
+                           model: str = "", node_id: str = "",
+                           ts: Any = None, report_id: str = "") -> dict:
+        """Store one agent self-report. Returns the stored row, or a dict
+        with ``error`` when the category is not allowed.
+
+        The summary is redacted with the same rules as every other stored
+        text (``clawmetry.redaction``) and capped BEFORE it reaches the
+        table; the raw string is never written anywhere. ``model`` and
+        ``agent_type`` are filled from the store when the caller omits them.
+        Idempotent per ``report_id``.
+        """
+        from clawmetry import self_diagnostics as _sd
+        cat = _sd.normalize_category(category)
+        if not cat:
+            return {"error": "category not allowed",
+                    "allowed": list(_sd.allowed_categories())}
+        try:
+            from clawmetry.redaction import redact_text as _redact
+        except Exception:  # pragma: no cover - redaction ships with the package
+            def _redact(x):  # type: ignore
+                return x
+        text = _sd.clip_summary(_redact(_sd.clip_summary(summary)))
+        sid = str(session_id or "").strip()[:128]
+        runtime = str(agent_type or "").strip().lower()[:64]
+        if not runtime and sid:
+            runtime = _sd.runtime_from_session_id(sid)
+        if not runtime:
+            runtime = "unknown"
+        mdl = str(model or "").strip()[:128] or (self._session_model(sid) if sid else "")
+        now_ms = int(time.time() * 1000)
+        ts_epoch = _sd.to_epoch(ts)
+        ts_ms = int(ts_epoch * 1000) if ts_epoch else now_ms
+        rid = str(report_id or "").strip()[:64] or uuid.uuid4().hex
+        row = {
+            "id": rid, "session_id": sid, "agent_type": runtime,
+            "node_id": str(node_id or "")[:128], "model": mdl,
+            "category": cat, "summary_redacted": text, "ts": ts_ms,
+            "created_at": now_ms, "corroborated": False, "corroboration_ref": "",
+        }
+        with self._write_lock:
+            self._conn.execute("""
+                INSERT INTO agent_self_reports (
+                    id, session_id, agent_type, node_id, model, category,
+                    summary_redacted, ts, created_at, corroborated,
+                    corroboration_ref
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, '')
+                ON CONFLICT (id) DO NOTHING
+            """, [rid, sid, runtime, row["node_id"], mdl, cat, text, ts_ms, now_ms])
+        return row
+
+    def query_self_reports(self, *, since_secs: int = 0, runtime: str = "",
+                           category: str = "", session_id: str = "",
+                           uncorroborated_only: bool = False,
+                           limit: int = 200) -> list:
+        """Self-reports newest first. ``since_secs <= 0`` means no window.
+        ``session_id`` matches the stored id or its bare form."""
+        clauses: list = []
+        params: list = []
+        try:
+            since = int(since_secs or 0)
+        except (TypeError, ValueError):
+            since = 0
+        if since > 0:
+            clauses.append("ts >= ?")
+            params.append(int((time.time() - since) * 1000))
+        rt = str(runtime or "").strip().lower()
+        if rt and rt != "all":
+            clauses.append("agent_type = ?")
+            params.append(rt)
+        cat = str(category or "").strip().lower()
+        if cat:
+            clauses.append("category = ?")
+            params.append(cat)
+        sid = str(session_id or "").strip()
+        if sid:
+            from clawmetry.self_diagnostics import bare_session_id as _bare
+            bare = _bare(sid)
+            clauses.append("(session_id = ? OR session_id = ? OR session_id LIKE ?)")
+            params.extend([sid, bare, "%:" + bare])
+        if uncorroborated_only:
+            clauses.append("corroborated = FALSE")
+        try:
+            lim = max(1, min(int(limit or 200), 5000))
+        except (TypeError, ValueError):
+            lim = 200
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (f"SELECT {', '.join(self._SELF_REPORT_COLS)} FROM agent_self_reports "
+               f"{where} ORDER BY ts DESC, id LIMIT ?")
+        params.append(lim)
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            d = dict(zip(self._SELF_REPORT_COLS, r))
+            d["corroborated"] = bool(d.get("corroborated"))
+            out.append(d)
+        return out
+
+    def mark_self_report_corroborated(self, report_id: str, ref: str) -> bool:
+        """Attach independent evidence to one report. Idempotent; returns
+        True when a row was updated."""
+        rid = str(report_id or "").strip()
+        if not rid:
+            return False
+        try:
+            with self._write_lock:
+                pre = self._conn.execute(
+                    "SELECT corroborated FROM agent_self_reports WHERE id = ?",
+                    [rid]).fetchone()
+                if pre is None or bool(pre[0]):
+                    return False
+                self._conn.execute(
+                    "UPDATE agent_self_reports SET corroborated = TRUE, "
+                    "corroboration_ref = ? WHERE id = ?",
+                    [str(ref or "")[:256], rid])
+            return True
+        except Exception:
+            return False
+
+    def query_guard_incidents(self, *, since_secs: int = 3600, runtime: str = "",
+                              session_id: str = "", limit: int = 200) -> list:
+        """Detector incidents (the daemon's ``loop_signals`` rows), newest
+        first, each carrying the session's model so the honesty rollup can
+        group by (runtime, model). Never raises; ``[]`` on error."""
+        clauses = ["signature LIKE 'daemon_detect_%'"]
+        params: list = []
+        try:
+            since = int(since_secs or 0)
+        except (TypeError, ValueError):
+            since = 3600
+        if since > 0:
+            clauses.append(
+                "last_seen >= (current_timestamp::TIMESTAMP - INTERVAL (?) SECOND)")
+            params.append(since)
+        rt = str(runtime or "").strip().lower()
+        if rt and rt != "all":
+            clauses.append("agent_type = ?")
+            params.append(rt)
+        sid = str(session_id or "").strip()
+        if sid:
+            from clawmetry.self_diagnostics import bare_session_id as _bare
+            bare = _bare(sid)
+            clauses.append("(session_id = ? OR session_id = ? OR session_id LIKE ?)")
+            params.extend([sid, bare, "%:" + bare])
+        try:
+            lim = max(1, min(int(limit or 200), 5000))
+        except (TypeError, ValueError):
+            lim = 200
+        sql = f"""
+            SELECT l.session_id, l.signature, l.repeat_count, l.first_seen,
+                   l.last_seen, l.severity, l.agent_type, l.details,
+                   (SELECT e.model FROM events e WHERE e.session_id = l.session_id
+                      AND e.model IS NOT NULL AND e.model <> ''
+                    ORDER BY e.ts DESC LIMIT 1) AS model
+            FROM loop_signals l
+            WHERE {' AND '.join(clauses)}
+            ORDER BY l.last_seen DESC, l.session_id, l.signature
+            LIMIT ?
+        """
+        params.append(lim)
+        cols = ["session_id", "signature", "repeat_count", "first_seen",
+                "last_seen", "severity", "agent_type", "details", "model"]
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            for tcol in ("first_seen", "last_seen"):
+                v = d.get(tcol)
+                if hasattr(v, "isoformat"):
+                    d[tcol] = v.isoformat()
+            raw = d.get("details")
+            details = None
+            if raw is not None:
+                try:
+                    raw = _ccr.maybe_decompress(raw)
+                    text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+                    details = json.loads(text)
+                except Exception:
+                    details = None
+            d["details"] = details if isinstance(details, dict) else {}
+            d["kind"] = str(d["details"].get("kind") or
+                            str(d.get("signature") or "").replace("daemon_detect_", ""))
+            d["title"] = str(d["details"].get("message") or "")
+            d["runtime"] = str(d.get("agent_type") or "")
+            d["model"] = str(d.get("model") or "")
+            out.append(d)
+        return out
+
+    def query_session_denials(self, *, session_id: str = "", since_secs: int = 3600,
+                              limit: int = 200) -> list:
+        """Permission denials from the approvals queue (a human or a policy
+        refused a call). Newest first. ``[]`` on error."""
+        clauses = ["status = 'denied'"]
+        params: list = []
+        try:
+            since = int(since_secs or 0)
+        except (TypeError, ValueError):
+            since = 3600
+        sid = str(session_id or "").strip()
+        if sid:
+            from clawmetry.self_diagnostics import bare_session_id as _bare
+            bare = _bare(sid)
+            clauses.append("(requestor_session_id = ? OR requestor_session_id = ? "
+                           "OR requestor_session_id LIKE ?)")
+            params.extend([sid, bare, "%:" + bare])
+        try:
+            lim = max(1, min(int(limit or 200), 5000))
+        except (TypeError, ValueError):
+            lim = 200
+        sql = f"""
+            SELECT id, requestor_session_id, action, status, created_at,
+                   resolved_at, resolver, decision_reason
+            FROM approvals WHERE {' AND '.join(clauses)}
+            ORDER BY COALESCE(resolved_at, created_at) DESC LIMIT ?
+        """
+        params.append(lim)
+        cols = ["id", "session_id", "action", "status", "created_at",
+                "resolved_at", "resolver", "decision_reason"]
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return []
+        from clawmetry.self_diagnostics import to_epoch as _to_epoch
+        cutoff = time.time() - since if since > 0 else None
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            t = _to_epoch(d.get("resolved_at") or d.get("created_at"))
+            if cutoff is not None and t is not None and t < cutoff:
+                continue
+            d["ts"] = t
+            out.append(d)
+        return out
+
+    def query_self_report_counts(self, *, since_secs: int = 7 * 86400,
+                                 runtime: str = "") -> dict:
+        """``{runtime: {category: n}}`` over the window."""
+        from clawmetry.self_diagnostics import count_by_runtime_category
+        return count_by_runtime_category(
+            self.query_self_reports(since_secs=since_secs, runtime=runtime, limit=5000))
+
+    def query_self_report_honesty(self, *, since_secs: int = 7 * 86400,
+                                  runtime: str = "") -> list:
+        """Per (runtime, model): the share of detector incidents the agent
+        also reported, withheld below the configured minimum."""
+        from clawmetry import self_diagnostics as _sd
+        window = _sd.corroboration_window_secs()
+        incidents = self.query_guard_incidents(
+            since_secs=since_secs, runtime=runtime, limit=5000)
+        reports = self.query_self_reports(
+            since_secs=int(since_secs) + window, runtime=runtime, limit=5000)
+        return _sd.honesty_rollup(incidents, reports, window)
+
+    def find_session_by_cwd(self, cwd: str = "", runtime: str = "") -> Any:
+        """The most recently active session whose recorded working directory
+        is ``cwd`` (or a parent of it). Used to infer which session an MCP
+        report belongs to when the agent did not say. ``None`` when unknown."""
+        path = str(cwd or "").strip()
+        if not path:
+            return None
+        rt = str(runtime or "").strip().lower()
+        try:
+            norm = os.path.normcase(os.path.realpath(os.path.expanduser(path)))
+        except Exception:
+            norm = path
+        clauses = ["cwd IS NOT NULL", "cwd <> ''"]
+        params: list = []
+        if rt:
+            clauses.append("(agent_type = ? OR session_id LIKE ?)")
+            params.extend([rt, rt + ":%"])
+        sql = (f"SELECT session_id, agent_type, cwd, last_active_at FROM sessions "
+               f"WHERE {' AND '.join(clauses)} ORDER BY last_active_at DESC NULLS LAST "
+               f"LIMIT 400")
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            return None
+        best = None
+        best_len = -1
+        for sid, atype, scwd, last in rows:
+            try:
+                cand = os.path.normcase(os.path.realpath(os.path.expanduser(str(scwd))))
+            except Exception:
+                continue
+            if norm == cand or norm.startswith(cand.rstrip(os.sep) + os.sep):
+                if len(cand) > best_len:
+                    best_len = len(cand)
+                    best = {"session_id": sid, "agent_type": atype, "cwd": scwd,
+                            "last_active_at": last}
+        return best
 
     # ── Guard baselines ───────────────────────────────────────────────────
     def record_guard_observation(self, session_id: str, cohort: str,
@@ -7135,8 +8046,12 @@ class LocalStore:
         then one executemany INSERT — instead of a per-span autocommit
         DELETE+INSERT transaction, which dominated family-runtime span
         reconstruction on fresh installs. In-batch duplicate span_ids keep
-        the LAST occurrence (matches sequential REPLACE ordering). Returns
-        the number of span rows written."""
+        the LAST occurrence (matches sequential REPLACE ordering).
+
+        #5496 — a span whose content matches what the store last wrote for
+        that ``span_id`` is skipped entirely (no DELETE, no INSERT, no dead
+        row version). A changed field (late ``end_ts``, cost, status) still
+        overwrites. Returns the number of span rows actually written."""
         if self._read_only:
             raise RuntimeError(
                 "local_store: ingest_span() called on read-only store"
@@ -7148,8 +8063,17 @@ class LocalStore:
         if not rows:
             return 0
         with self._write_lock:
+            cache = self._span_hashes_locked()
+            to_write: list[list[Any]] = []
+            for sid, params in rows.items():
+                h = _content_hash(params[:-1])  # created_at is not content
+                if cache is not None and cache.get(sid) == h:
+                    continue
+                to_write.append(params + [h])
+            if not to_write:
+                return 0
             with _txn(self._conn):
-                ids = list(rows.keys())
+                ids = [p[0] for p in to_write]
                 for off in range(0, len(ids), 500):
                     chunk = ids[off:off + 500]
                     ph = ",".join("?" * len(chunk))
@@ -7165,7 +8089,7 @@ class LocalStore:
                         model, tool_name, cost_usd, token_count,
                         tokens_input, tokens_output,
                         input, output, attributes, events, links,
-                        ts, created_at
+                        ts, created_at, content_hash
                     ) VALUES (?, ?, ?, ?, ?,
                               ?, ?, ?, ?, ?,
                               ?, ?, ?,
@@ -7173,9 +8097,56 @@ class LocalStore:
                               ?, ?, ?, ?,
                               ?, ?,
                               ?, ?, ?, ?, ?,
-                              ?, ?)
-                """, list(rows.values()))
-        return len(rows)
+                              ?, ?, ?)
+                """, to_write)
+            if cache is not None:
+                for p in to_write:
+                    cache[p[0]] = p[-1]
+        return len(to_write)
+
+    def _span_hashes_locked(self) -> dict[str, str] | None:
+        """The span content-hash map (caller holds ``_write_lock``). ``None``
+        when dedupe is off. Seeded once per process from the table so the
+        first tick after a restart skips unchanged spans too; bounded so a
+        pathological node cannot grow it without limit (a clear just means
+        one more rewrite pass)."""
+        if not _UPSERT_DEDUPE:
+            return None
+        if self._span_hashes is None:
+            seeded: dict[str, str] = {}
+            try:
+                for sid, h in self._conn.execute(
+                    "SELECT span_id, content_hash FROM spans "
+                    "WHERE content_hash IS NOT NULL"
+                ).fetchall():
+                    seeded[str(sid)] = str(h)
+            except Exception:
+                log.exception("local store: span hash seed failed (dedupe starts cold)")
+                seeded = {}
+            self._span_hashes = seeded
+        elif len(self._span_hashes) > _UPSERT_HASH_CACHE_MAX:
+            self._span_hashes.clear()
+        return self._span_hashes
+
+    def _session_hashes_locked(self) -> dict[tuple[str, str], str] | None:
+        """Session counterpart of :meth:`_span_hashes_locked`."""
+        if not _UPSERT_DEDUPE:
+            return None
+        if self._session_hashes is None:
+            seeded: dict[tuple[str, str], str] = {}
+            try:
+                for atype, sid, h in self._conn.execute(
+                    "SELECT agent_type, session_id, content_hash FROM sessions "
+                    "WHERE content_hash IS NOT NULL"
+                ).fetchall():
+                    seeded[(str(atype), str(sid))] = str(h)
+            except Exception:
+                log.exception("local store: session hash seed failed (dedupe starts cold)")
+                seeded = {}
+            self._session_hashes = seeded
+        elif len(self._session_hashes) > _UPSERT_HASH_CACHE_MAX:
+            self._session_hashes.clear()
+        return self._session_hashes
 
     # Alias used by the issue body / callers that prefer "put" semantics.
     def put_span(self, span: dict[str, Any]) -> None:
@@ -8560,6 +9531,32 @@ class LocalStore:
         until: str | None = None,
         session_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        """Per-session forward-progress signal; see ``_query_forward_progress_impl``.
+
+        #5497 — this is a whole-window event walk with a JSON decode per row
+        (4.6 s on a 210K-event store when called unbounded), so two guards
+        sit in front of the real query: a default ``since`` of the last
+        ``CLAWMETRY_FWDPROG_DEFAULT_HOURS`` (24) when the caller passes
+        neither ``since`` nor ``session_id``, and the bounded read cache
+        (``_cached_read``) so repeated calls inside one TTL pay once."""
+        if not since and not session_id:
+            from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+            since = (_dt.now(_tz.utc) - _td(hours=_FWDPROG_DEFAULT_HOURS)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+        return self._cached_read(
+            "query_forward_progress",
+            {"since": since, "until": until, "session_id": session_id},
+            lambda: self._query_forward_progress_impl(
+                since=since, until=until, session_id=session_id),
+        )
+
+    def _query_forward_progress_impl(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        session_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Per-session "forward-progress" signal (issue #1707).
 
         Returns one row per session within ``[since, until]`` of shape
@@ -8974,11 +9971,13 @@ class LocalStore:
     _EVENT_INSERT_COLS = (
         "id, agent_type, node_id, agent_id, session_id, workspace_id, "
         "event_type, ts, data, cost_usd, token_count, model, created_at, "
-        "runtime_kind, chain_prev_hash, chain_hash"
+        "runtime_kind, role, block_kind, tool_name, is_error, "
+        "chain_prev_hash, chain_hash"
     )
+    _EVENT_INSERT_NCOLS = 20
 
     def _insert_event_rows_locked(self, rows16: list[tuple]) -> None:
-        """Bulk INSERT of fully-built event rows (the 14 ``_event_to_row``
+        """Bulk INSERT of fully-built event rows (the 20 ``_event_to_row``
         columns + the two chain columns). Multi-row VALUES in chunks so each
         statement is ONE vectorized insert — DuckDB's Python ``executemany``
         runs row-at-a-time and pays index maintenance per row, which is what
@@ -8987,9 +9986,9 @@ class LocalStore:
         (OR IGNORE stays as a belt-and-braces guard only)."""
         if not rows16:
             return
-        ncols = 16
+        ncols = self._EVENT_INSERT_NCOLS
         row_ph = "(" + ",".join("?" * ncols) + ")"
-        chunk_rows = 250  # 4000 bind params per statement — well within limits
+        chunk_rows = 200  # 4000 bind params per statement, well within limits
         for off in range(0, len(rows16), chunk_rows):
             chunk = rows16[off:off + chunk_rows]
             sql = (
@@ -12112,6 +13111,118 @@ class LocalStore:
                 event.get("latency_ms"),
             ])
 
+    # ── Inputs & context (session_context) ─────────────────────────────────
+
+    def ingest_session_context(self, rows: list[dict[str, Any]]) -> int:
+        """Upsert session_context rows (see ``clawmetry/session_context.py``).
+
+        Keyed on (agent_type, session_id, kind, sha256). A row whose sha is
+        already present bumps ``turns`` and ``last_ts`` and keeps the first
+        stored content: the same system prompt on turn 40 is one fact seen 40
+        times, not 40 rows. Returns the number of rows written."""
+        if self._read_only:
+            raise RuntimeError("local_store: ingest_session_context() on read-only store")
+        n = 0
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            for r in rows or ():
+                if not isinstance(r, dict):
+                    continue
+                sid = str(r.get("session_id") or "")
+                kind = str(r.get("kind") or "")
+                sha = str(r.get("sha256") or "")
+                if not (sid and kind and sha):
+                    continue
+                content = r.get("content")
+                if isinstance(content, str):
+                    content = content.encode("utf-8", "ignore")
+                elif content is not None and not isinstance(content, (bytes, bytearray)):
+                    content = str(content).encode("utf-8", "ignore")
+                ts = str(r.get("last_ts") or r.get("first_ts") or "")
+                self._conn.execute("""
+                    INSERT INTO session_context (
+                        agent_type, session_id, node_id, kind, sha256, size_bytes,
+                        content, summary, first_ts, last_ts, turns, source, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    ON CONFLICT (agent_type, session_id, kind, sha256) DO UPDATE SET
+                        turns    = session_context.turns + 1,
+                        last_ts  = CASE WHEN excluded.last_ts > session_context.last_ts
+                                        THEN excluded.last_ts ELSE session_context.last_ts END,
+                        first_ts = CASE WHEN excluded.first_ts < session_context.first_ts
+                                        THEN excluded.first_ts ELSE session_context.first_ts END,
+                        summary  = COALESCE(excluded.summary, session_context.summary)
+                """, [
+                    str(r.get("agent_type") or "openclaw"),
+                    sid,
+                    str(r.get("node_id") or ""),
+                    kind,
+                    sha,
+                    int(r.get("size_bytes") or 0),
+                    content,
+                    r.get("summary"),
+                    str(r.get("first_ts") or ts),
+                    ts,
+                    str(r.get("source") or "context.compiled"),
+                    now_ms,
+                ])
+                n += 1
+        return n
+
+    def query_session_context(
+        self,
+        *,
+        session_id: str,
+        agent_type: str | None = None,
+        include_content: bool = True,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Inputs & context rows for one session, newest-last per kind.
+
+        ``session_id`` may be the bare id or the runtime-prefixed one
+        (``claude_code:<uuid>``): family sessions are stored prefixed, the
+        transcript viewer often holds the bare form. ``content`` is decoded
+        to text for ``system_prompt`` / ``user_prompt`` only (the tool
+        definitions JSON stays out of the response; ``summary`` carries the
+        names) and omitted entirely when ``include_content`` is False."""
+        sid = str(session_id or "")
+        if not sid:
+            return []
+        clauses = ["(session_id = ? OR session_id LIKE ? )"]
+        params: list[Any] = [sid, "%:" + sid]
+        if agent_type:
+            clauses.append("agent_type = ?")
+            params.append(str(agent_type))
+        sql = f"""
+            SELECT agent_type, session_id, node_id, kind, sha256, size_bytes,
+                   content, summary, first_ts, last_ts, turns, source
+            FROM session_context
+            WHERE {" AND ".join(clauses)}
+            ORDER BY kind, first_ts, sha256
+            LIMIT ?
+        """
+        params.append(int(limit))
+        cols = ["agent_type", "session_id", "node_id", "kind", "sha256",
+                "size_bytes", "content", "summary", "first_ts", "last_ts",
+                "turns", "source"]
+        out: list[dict[str, Any]] = []
+        for tup in self._fetch(sql, params):
+            row = dict(zip(cols, tup))
+            blob = row.pop("content", None)
+            if include_content and row["kind"] in ("system_prompt", "user_prompt", "context_file") and blob is not None:
+                try:
+                    row["content"] = bytes(blob).decode("utf-8", "ignore")
+                except Exception:
+                    row["content"] = None
+            else:
+                row["content"] = None
+            try:
+                from clawmetry.session_context import CONTENT_CAP as _cap
+            except Exception:
+                _cap = 64 * 1024
+            row["content_truncated"] = bool(int(row.get("size_bytes") or 0) > _cap)
+            out.append(row)
+        return out
+
     def query_guardrail_events(
         self,
         *,
@@ -13592,7 +14703,12 @@ class LocalStore:
                    ) AS message_count,
                    s.metadata, s.cwd, s.git_branch,
                    s.attention_state, s.attention_since, s.attention_signal,
-                   s.attention_tool
+                   s.attention_tool,
+                   s.intent, s.intent_source,
+                   -- Trail outcome counts from the git join (plaintext,
+                   -- no subjects). 0 when no scan has linked this session.
+                   (SELECT COUNT(DISTINCT l.sha) FROM git_session_commits l
+                     WHERE l.session_id = s.session_id) AS commits
             FROM sessions s
             LEFT JOIN _ev_agg ea
                    ON ea.session_id = s.session_id AND ea.agent_type = s.agent_type
@@ -13606,10 +14722,17 @@ class LocalStore:
                 "last_active_at", "ended_at", "status", "total_tokens",
                 "cost_usd", "message_count", "metadata", "cwd", "git_branch",
                 "attention_state", "attention_since", "attention_signal",
-                "attention_tool"]
+                "attention_tool", "intent", "intent_source", "commits"]
+        # PR counts need the commit -> PR join; one grouped query for the
+        # page rather than a correlated subquery per row.
+        pr_counts: dict[str, dict[str, int]] = {}
+        if any(int(r[-1] or 0) for r in rows):
+            pr_counts = self.query_session_git_counts()
         out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(zip(cols, r))
+            d["commits"] = int(d.get("commits") or 0)
+            d["prs"] = int((pr_counts.get(str(d.get("session_id"))) or {}).get("prs") or 0)
             raw = d.get("metadata")
             meta: dict[str, Any] = {}
             if raw:
@@ -14270,6 +15393,214 @@ class LocalStore:
             "compactions":       compactions,
             "overflow_sessions": overflow_sessions,
         }
+
+    # ── lifecycle facts from runtime hooks (WO-61) ─────────────────────────
+    #
+    # Written by routes/hooks.py::api_hook_claude_code_lifecycle through the
+    # daemon proxy. Events ride the normal ring buffer, so they are redacted
+    # at the same chokepoint as everything else and the INSERT OR IGNORE on
+    # ``id`` is what makes a second arrival of the same fact a no-op.
+
+    LIFECYCLE_EVENT_TYPES = (
+        "tool.failed", "subagent.started", "subagent.stopped",
+        "permission.denied", "context.compacted", "session.started",
+        "instructions.loaded",
+    )
+
+    def ingest_lifecycle_events(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        node_id: str | None = None,
+        agent_type: str = "claude_code",
+    ) -> int:
+        """Queue typed lifecycle events for a family-runtime session.
+
+        Each event needs ``id`` (deterministic, from the hook), ``session_id``
+        (bare or already prefixed), ``event_type`` (one of
+        ``LIFECYCLE_EVENT_TYPES``) and ``ts``. ``data`` is stored as the
+        event payload with ``source='hook'`` forced on, so a reader can tell
+        a hook-sourced row from a transcript-derived one. Returns the number
+        of rows queued. Never raises on a bad row: it is skipped.
+        """
+        if self._read_only:
+            raise RuntimeError("local_store: ingest_lifecycle_events() on read-only store")
+        rt = _clean_str(agent_type) or "claude_code"
+        nid = _clean_str(node_id) or "unknown"
+        rows: list[dict[str, Any]] = []
+        for ev in events or []:
+            if not isinstance(ev, dict):
+                continue
+            etype = str(ev.get("event_type") or "")
+            sid = str(ev.get("session_id") or "").strip()
+            eid = str(ev.get("id") or "").strip()
+            ts = str(ev.get("ts") or "").strip()
+            if etype not in self.LIFECYCLE_EVENT_TYPES or not sid or not eid or not ts:
+                continue
+            if rt != "openclaw" and not sid.startswith(rt + ":"):
+                sid = f"{rt}:{sid}"
+            data = dict(ev.get("data") or {}) if isinstance(ev.get("data"), dict) else {}
+            data["source"] = "hook"
+            rows.append({
+                "id": eid[:64],
+                "node_id": nid,
+                "agent_type": rt,
+                "agent_id": _clean_str(data.get("agent_id")) or "main",
+                "session_id": sid,
+                "workspace_id": _clean_str(data.get("cwd")),
+                "event_type": etype,
+                "ts": ts[:40],
+                "data": data,
+                "runtime_kind": rt,
+            })
+        if rows:
+            self.ingest_many(rows)
+        return len(rows)
+
+    def upsert_session_instructions(
+        self,
+        row: dict[str, Any],
+        *,
+        agent_type: str = "claude_code",
+    ) -> bool:
+        """Store the instructions file a session loaded, redacted and capped.
+
+        Redaction (secret tier + personal-data tier) runs HERE, on the
+        daemon, so the hook process stays cheap and the contents never rest
+        unredacted. Content is capped again defensively at 32 KB; the hash
+        is the caller's (it covers the full file). Returns True when the
+        write went through; never raises.
+        """
+        if self._read_only or not isinstance(row, dict):
+            return False
+        sid = str(row.get("session_id") or "").strip()
+        path = str(row.get("instruction_path") or "").strip()
+        if not sid or not path:
+            return False
+        rt = _clean_str(agent_type) or "claude_code"
+        if rt != "openclaw" and not sid.startswith(rt + ":"):
+            sid = f"{rt}:{sid}"
+        content = row.get("content")
+        content = content if isinstance(content, str) else ""
+        cap = 32 * 1024
+        truncated = bool(row.get("truncated")) or len(content.encode("utf-8", "ignore")) > cap
+        if len(content.encode("utf-8", "ignore")) > cap:
+            content = content.encode("utf-8", "ignore")[:cap].decode("utf-8", "ignore")
+        try:
+            from clawmetry import redaction as _redaction
+            content = _redaction.redact_text(content)
+        except Exception:
+            pass  # never lose the row on a redaction bug
+        try:
+            byte_len = int(row.get("bytes")) if row.get("bytes") is not None else None
+        except (TypeError, ValueError):
+            byte_len = None
+        try:
+            with self._write_lock:
+                with _txn(self._conn):
+                    self._conn.execute(
+                        """
+                        INSERT INTO session_instructions (
+                            agent_type, session_id, instruction_path,
+                            instruction_type, load_reason, sha256, byte_len,
+                            truncated, content, loads, loaded_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                        ON CONFLICT (session_id, instruction_path) DO UPDATE SET
+                            instruction_type = COALESCE(excluded.instruction_type, session_instructions.instruction_type),
+                            load_reason      = COALESCE(excluded.load_reason, session_instructions.load_reason),
+                            sha256           = excluded.sha256,
+                            byte_len         = excluded.byte_len,
+                            truncated        = excluded.truncated,
+                            content          = excluded.content,
+                            loads            = CASE WHEN session_instructions.loaded_at = excluded.loaded_at
+                                                     AND session_instructions.sha256 = excluded.sha256
+                                                    THEN session_instructions.loads
+                                                    ELSE session_instructions.loads + 1 END,
+                            loaded_at        = excluded.loaded_at,
+                            updated_at       = excluded.updated_at
+                        """,
+                        [rt, sid, path[:1000],
+                         _clean_str(row.get("instruction_type")),
+                         _clean_str(row.get("load_reason")),
+                         _clean_str(row.get("sha256")),
+                         byte_len, truncated, content,
+                         _clean_str(row.get("loaded_at")),
+                         int(time.time() * 1000)],
+                    )
+            return True
+        except Exception:
+            log.debug("local store: upsert_session_instructions failed for %s",
+                      sid, exc_info=True)
+            return False
+
+    def get_session_instructions(self, session_id: str) -> list[dict[str, Any]]:
+        """Every instructions row for a session (bare or prefixed id)."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return []
+        try:
+            rows = self._fetch(
+                """
+                SELECT agent_type, session_id, instruction_path,
+                       instruction_type, load_reason, sha256, byte_len,
+                       truncated, content, loads, loaded_at, updated_at
+                FROM session_instructions
+                WHERE session_id = ? OR session_id LIKE ?
+                ORDER BY loaded_at, instruction_path
+                """,
+                [sid, f"%:{sid}"],
+            )
+        except Exception:
+            return []
+        cols = ("agent_type", "session_id", "instruction_path",
+                "instruction_type", "load_reason", "sha256", "byte_len",
+                "truncated", "content", "loads", "loaded_at", "updated_at")
+        return [dict(zip(cols, r)) for r in rows]
+
+    def query_lifecycle_events(
+        self,
+        session_id: str,
+        *,
+        event_type: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Lifecycle rows for one session, newest last, ``data`` decoded.
+
+        This is the read the Behaviour Signals work counts denials from:
+        ``event_type='permission.denied'`` rows carry ``tool_name`` and
+        ``reason`` and nothing else about the call.
+        """
+        sid = str(session_id or "").strip()
+        if not sid:
+            return []
+        try:
+            limit = max(1, min(2000, int(limit)))
+        except (TypeError, ValueError):
+            limit = 200
+        types = [event_type] if event_type in self.LIFECYCLE_EVENT_TYPES \
+            else list(self.LIFECYCLE_EVENT_TYPES)
+        placeholders = ",".join("?" for _ in types)
+        try:
+            rows = self._fetch(
+                f"""
+                SELECT id, session_id, event_type, ts, data, agent_type
+                FROM events
+                WHERE (session_id = ? OR session_id LIKE ?)
+                  AND event_type IN ({placeholders})
+                ORDER BY ts
+                LIMIT ?
+                """,
+                [sid, f"%:{sid}", *types, limit],
+            )
+        except Exception:
+            return []
+        out = []
+        for r in rows:
+            d = _from_blob(r[4])
+            out.append({"id": r[0], "session_id": r[1], "event_type": r[2],
+                        "ts": r[3], "data": d if isinstance(d, dict) else {},
+                        "agent_type": r[5]})
+        return out
 
     def query_context_coverage(
         self,
@@ -16262,6 +17593,8 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
                 data = _ccr.compress(data)
     u = usage if usage is not None else _extract_event_usage(e)
     cost, tokens, model = u["cost"], u["tokens"], u["model"]
+    role, block_kind, tool_name, is_error = _event_shape.typed_columns(
+        e.get("event_type"), e.get("data"))
     return (
         str(e["id"]),
         str(e.get("agent_type") or "openclaw"),
@@ -16277,7 +17610,36 @@ def _event_to_row(e: dict[str, Any], usage: dict[str, Any] | None = None) -> tup
         model,
         int(time.time() * 1000),
         e.get("runtime_kind") or None,
+        # v15 Trail typed columns, stamped on every new row (clawmetry.event_shape).
+        role, block_kind, tool_name, is_error,
     )
+
+
+def _session_content_parts(session: dict[str, Any]) -> list[Any]:
+    """The 16 content columns of a sessions upsert, coerced exactly as the
+    INSERT binds them, in column order: agent_type, session_id, node_id,
+    agent_id, workspace_id, title, started_at, last_active_at, ended_at,
+    status, total_tokens, cost_usd, message_count, metadata, cwd, git_branch.
+    ``updated_at`` is deliberately absent: it is a write timestamp, not
+    content, and the #5496 dedupe hashes this list."""
+    return [
+        str(session.get("agent_type") or "openclaw"),
+        str(session.get("session_id")),
+        session.get("node_id"),
+        session.get("agent_id") or "main",
+        session.get("workspace_id"),
+        session.get("title"),
+        session.get("started_at"),
+        session.get("last_active_at"),
+        session.get("ended_at"),
+        session.get("status"),
+        int(session.get("total_tokens") or 0),
+        float(session.get("cost_usd") or 0),
+        int(session.get("message_count") or 0),
+        _to_blob(session.get("metadata")),
+        _clean_str(session.get("cwd")),
+        _clean_str(session.get("git_branch")),
+    ]
 
 
 def _span_row(span: dict[str, Any]) -> list[Any]:

@@ -33,6 +33,7 @@ from flask import Blueprint, jsonify, request, Response
 from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 from clawmetry._gate import gate
+from clawmetry import event_shape as _event_shape
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_sessions = Blueprint('sessions', __name__)
@@ -677,6 +678,15 @@ def _try_local_store_sessions():
             "attention":        r.get("attention_state") or "",
             "attention_signal": r.get("attention_signal") or "",
             "attention_tool":   r.get("attention_tool") or "",
+            # Trail (outcome alignment): what the user asked for, in full,
+            # and what the session produced in git. ``intent`` is the first
+            # user prompt (redacted, capped at 4000 chars) rather than the
+            # 80-char title; ``commits`` / ``prs`` are counts from the
+            # read-only git join (0 until a scan has linked the session).
+            "intent":           r.get("intent") or "",
+            "intent_source":    r.get("intent_source") or "",
+            "commits":          int(r.get("commits") or 0),
+            "prs":              int(r.get("prs") or 0),
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.
@@ -684,6 +694,92 @@ def _try_local_store_sessions():
     _decorate_with_channel_context(out)
     _decorate_with_authority_counts(out)
     return {"sessions": out, "_source": "local_store"}
+
+
+def _fetch_session_intent(session_id: str) -> dict:
+    """``{intent, intent_source}`` for one session via the daemon proxy, with
+    the single-process read-only fallback. Empty strings when unknown."""
+    empty = {"intent": "", "intent_source": ""}
+    try:
+        from routes.local_query import local_store_via_daemon
+        row = local_store_via_daemon("get_session_intent", session_id=session_id)
+        if isinstance(row, dict):
+            return {"intent": row.get("intent") or "",
+                    "intent_source": row.get("intent_source") or ""}
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        row = local_store.get_store(read_only=True).get_session_intent(session_id)
+        return {"intent": row.get("intent") or "",
+                "intent_source": row.get("intent_source") or ""}
+    except Exception:
+        return empty
+
+
+def _fetch_session_git_outcomes(session_id: str):
+    """Per-session git outcome payload via the daemon proxy, falling back to
+    a read-only open. ``None`` when the store cannot be reached at all."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        body = local_store_via_daemon(
+            "query_session_git_outcomes", session_id=session_id)
+        if isinstance(body, dict):
+            return body
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        return local_store.get_store(read_only=True).query_session_git_outcomes(
+            session_id=session_id)
+    except Exception:
+        return None
+
+
+@bp_sessions.route("/api/sessions/<session_id>/git-outcomes")
+def api_session_git_outcomes(session_id):
+    """What this session produced in git: the commits the read-only
+    correlator linked to it (sha, subject, authored time, merged verdict, PR
+    state when the code host answered) with the confidence and basis behind
+    each link, plus the pull requests those commits rode in.
+
+    Honest empties: when the git join is switched off
+    (``CLAWMETRY_GIT_OUTCOMES=0``) the response says so with
+    ``{"enabled": false, "reason": ...}`` rather than an empty list that
+    reads as "this session shipped nothing"; when no scan has reached a
+    repository yet, ``available`` is false with its own reason.
+    """
+    sid = (session_id or "").strip()
+    if not sid or len(sid) > 300:
+        return jsonify({"error": "session_id required"}), 400
+    try:
+        from clawmetry import git_outcomes as _git
+        enabled = bool(_git.is_enabled())
+    except Exception:
+        enabled = False
+    if not enabled:
+        return jsonify({
+            "session_id": sid,
+            "enabled": False,
+            "available": False,
+            "reason": "git outcome scanning is disabled on this node "
+                      "(CLAWMETRY_GIT_OUTCOMES=0)",
+            "commits": [], "prs": [],
+            "counts": {"commits": 0, "merged": 0, "prs": 0, "prs_merged": 0},
+        })
+    body = _fetch_session_git_outcomes(sid)
+    if body is None:
+        return jsonify({
+            "session_id": sid, "enabled": True, "available": False,
+            "reason": "local store unreachable",
+            "commits": [], "prs": [],
+            "counts": {"commits": 0, "merged": 0, "prs": 0, "prs_merged": 0},
+        })
+    body["enabled"] = True
+    body.setdefault("session_id", sid)
+    if not body.get("available") and not body.get("reason"):
+        body["reason"] = "no_repositories_scanned"
+    return jsonify(body)
 
 
 @bp_sessions.route("/api/sessions/by-type")
@@ -4725,25 +4821,19 @@ def _anthropic_tool_turns(blocks, ts_ms, name_by_id):
     references the id) can show which tool it came from.
     """
     tool_turns: list[dict] = []
-    texts: list[str] = []
-    thinkings: list[str] = []
     if not isinstance(blocks, list):
         return tool_turns, "", ""
+    # One block walker for every reader (clawmetry.event_shape); this
+    # function only decides how the transcript RENDERS each part. Turns are
+    # emitted in block order so a call and its result keep their sequence.
     for b in blocks:
         if not isinstance(b, dict):
             continue
         bt = b.get("type")
-        if bt == "text":
-            t = b.get("text")
-            if t:
-                texts.append(t if isinstance(t, str) else str(t))
-        elif bt == "thinking":
-            t = b.get("thinking")
-            if t:
-                thinkings.append(t if isinstance(t, str) else str(t))
-        elif bt == "tool_use":
-            name = b.get("name") or "tool"
-            tid = b.get("id")
+        if bt == "tool_use":
+            part = _event_shape.split_blocks([b])["tool_uses"][0]
+            name = part["name"]
+            tid = part["id"]
             if tid:
                 name_by_id[tid] = name
             tool_turns.append({
@@ -4754,11 +4844,12 @@ def _anthropic_tool_turns(blocks, ts_ms, name_by_id):
                 "tool": {
                     "kind": "call",
                     "name": name,
-                    "input": _pretty_json(b.get("input") or {}),
+                    "input": _pretty_json(part["input"] or {}),
                 },
             })
         elif bt == "tool_result":
-            name = name_by_id.get(b.get("tool_use_id"), "")
+            part = _event_shape.split_blocks([b])["tool_results"][0]
+            name = name_by_id.get(part["tool_use_id"], "")
             tool_turns.append({
                 "role": "tool",
                 "content": "",
@@ -4767,11 +4858,12 @@ def _anthropic_tool_turns(blocks, ts_ms, name_by_id):
                 "tool": {
                     "kind": "result",
                     "name": name,
-                    "output": _cap_text(_stringify_content(b.get("content"))),
-                    "is_error": bool(b.get("is_error")),
+                    "output": _cap_text(_stringify_content(part["content"])),
+                    "is_error": part["is_error"],
                 },
             })
-    return tool_turns, "\n".join(texts), "\n".join(thinkings)
+    parts = _event_shape.split_blocks(blocks)
+    return tool_turns, parts["text"], parts["thinking"]
 
 
 def _expand_openclaw_event(obj: dict, ts_ms):
@@ -4792,9 +4884,12 @@ def _expand_openclaw_event(obj: dict, ts_ms):
     ):
         return turns
 
+    # Shape questions (who spoke, which tool, what text) are answered ONCE
+    # in clawmetry.event_shape; this function only renders turns.
+    shape = _event_shape.classify(etype, obj)
+
     if etype == "prompt.submitted":
-        text = data.get("finalPromptText") or data.get("text") or data.get("prompt") or ""
-        text = _stringify_content(text)
+        text = shape["text"]
         if text.strip():
             turns.append({"role": "user", "content": text, "timestamp": ts_ms})
         return turns
@@ -4842,25 +4937,15 @@ def _expand_openclaw_event(obj: dict, ts_ms):
         return turns
 
     if etype == "model.completed":
-        text = (
-            data.get("completionText")
-            or data.get("text")
-            or data.get("assistantText")
-        )
-        if text is None:
-            atexts = data.get("assistantTexts")
-            if isinstance(atexts, list):
-                text = "\n".join(_stringify_content(a) for a in atexts if a)
-            elif isinstance(atexts, str):
-                text = atexts
-        text = _stringify_content(text) if text is not None else ""
+        text = shape["text"]
         if text.strip():
             turns.append({"role": "assistant", "content": text, "timestamp": ts_ms})
         return turns
 
     if etype in ("tool.call", "tool.invoked"):
-        tname = data.get("name") or data.get("tool") or "tool"
-        tinput = data.get("input") or data.get("arguments") or data.get("args") or {}
+        call = shape["tool_uses"][0] if shape["tool_uses"] else {}
+        tname = shape["tool_name"] or call.get("name") or "tool"
+        tinput = call.get("input") or {}
         try:
             body = json.dumps(tinput, indent=2)[:500]
         except (TypeError, ValueError):
@@ -4873,7 +4958,7 @@ def _expand_openclaw_event(obj: dict, ts_ms):
         return turns
 
     if etype in ("tool.result", "tool.completed"):
-        tname = data.get("name") or data.get("tool") or "tool"
+        tname = shape["tool_name"] or "tool"
         result = data.get("output") or data.get("result") or ""
         try:
             body = json.dumps(result, indent=2)[:500] if not isinstance(result, str) else result[:500]
@@ -5309,6 +5394,11 @@ def _try_local_store_transcript(session_id: str, _events=None, _msg_cap: int = 5
                 _cap_transcript_messages(messages, _msg_cap))
         except Exception:
             out_messages = messages[:_msg_cap]
+    # Trail: the session's intent (full first user prompt) rides the
+    # transcript payload so the replay can show "what was asked" above the
+    # turns without a second request. Best-effort: an unreachable store
+    # yields an empty string, never a missing key.
+    _intent = _fetch_session_intent(session_id)
     ret = {
         "name": session_id[:40],
         "messageCount": len(messages),
@@ -5317,6 +5407,8 @@ def _try_local_store_transcript(session_id: str, _events=None, _msg_cap: int = 5
         "duration": duration,
         "messages": out_messages,
         "external_api_calls": ext_calls,
+        "intent": _intent.get("intent") or "",
+        "intent_source": _intent.get("intent_source") or "",
         "_source": "local_store",
     }
     if truncated:
@@ -6980,6 +7072,124 @@ def _try_local_store_model_transitions(sid: str):
     }
 
 
+# ── Inputs & context: what the agent was given ──────────────────────────────
+
+
+def _trail_coverage_for(runtime: str) -> dict:
+    """The adapter's own declaration of what it can capture (see
+    ``AgentAdapter.trail_coverage``). ``unknown`` when no adapter for the
+    runtime is loaded in this process (a paid adapter without the pro wheel),
+    which is a different statement from "the runtime does not expose it"."""
+    try:
+        from clawmetry.adapters import registry as _reg
+        adapter = _reg.get(runtime)
+    except Exception:
+        adapter = None
+    if adapter is None and runtime in ("openclaw", "nemoclaw"):
+        # The two FREE adapters ship in this wheel; answer from the class even
+        # when nothing has populated the registry (tests, single-process boots).
+        try:
+            if runtime == "openclaw":
+                from clawmetry.adapters.openclaw import OpenClawAdapter as _A
+            else:
+                from clawmetry.adapters.nemo import NemoClawAdapter as _A
+            adapter = _A()
+        except Exception:
+            adapter = None
+    if adapter is None:
+        return {"inputs": "unknown", "reasoning": "unknown",
+                "note": "no adapter loaded for this runtime"}
+    try:
+        cov = adapter.trail_coverage()
+    except Exception:
+        cov = None
+    if not isinstance(cov, dict):
+        return {"inputs": "none", "reasoning": "none", "note": ""}
+    return {
+        "inputs": str(cov.get("inputs") or "none"),
+        "reasoning": str(cov.get("reasoning") or "none"),
+        "note": str(cov.get("note") or ""),
+    }
+
+
+def _runtime_of_session_id(sid: str, rows: list, requested: str) -> str:
+    for r in rows:
+        at = (r.get("agent_type") or "").strip()
+        if at:
+            return at
+    if requested:
+        return requested
+    # Family sessions carry their runtime as a prefix (claude_code:<uuid>).
+    if ":" in sid:
+        head = sid.split(":", 1)[0]
+        if head and " " not in head and len(head) <= 32:
+            return head
+    return "openclaw"
+
+
+@bp_sessions.route("/api/sessions/<path:session_id>/context")
+def api_session_context(session_id):
+    """Inputs & context for one session, from the DuckDB ``session_context``
+    table only (no raw-file fallback: a session ingested from a machine other
+    than this one has no file here).
+
+    Returns ``{session_id, runtime, coverage:{inputs, reasoning, note},
+    items:[{kind, sha256, size_bytes, summary, turns, first_ts, last_ts,
+    content, content_truncated}]}``. ``content`` is the redacted, capped text
+    for ``system_prompt`` / ``user_prompt`` / ``context_file`` only; for
+    ``tools_available`` and ``mcp_servers`` the JSON ``summary`` carries the
+    names and ``names`` is the parsed list. Honours ``?runtime=``.
+    """
+    sid = (session_id or "").strip()
+    if not sid or any(c in sid for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+    requested = (request.args.get("runtime") or "").strip().lower()
+    if requested == "all":
+        requested = ""
+    rows = _ls_call(
+        "query_session_context",
+        session_id=sid,
+        agent_type=requested or None,
+        limit=200,
+    ) or []
+    runtime = _runtime_of_session_id(sid, rows, requested)
+    items = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        item = {
+            "kind": r.get("kind"),
+            "sha256": r.get("sha256"),
+            "size_bytes": r.get("size_bytes"),
+            "summary": r.get("summary"),
+            "turns": r.get("turns"),
+            "first_ts": r.get("first_ts"),
+            "last_ts": r.get("last_ts"),
+            "content": r.get("content"),
+            "content_truncated": bool(r.get("content_truncated")),
+        }
+        if item["kind"] in ("tools_available", "mcp_servers", "runtime_meta"):
+            try:
+                parsed = json.loads(r.get("summary") or "null")
+            except Exception:
+                parsed = None
+            if item["kind"] == "runtime_meta":
+                item["meta"] = parsed if isinstance(parsed, dict) else {}
+            else:
+                item["names"] = parsed if isinstance(parsed, list) else []
+        items.append(item)
+    return jsonify({
+        "session_id": sid,
+        "runtime": runtime,
+        "coverage": _trail_coverage_for(runtime),
+        "items": items,
+        "count": len(items),
+        # Every row is measured from the runtime's own event; nothing here
+        # is estimated, so the UI never needs an "estimated" badge for it.
+        "basis": "measured",
+    })
+
+
 @bp_sessions.route("/api/sessions/<sid>/model-transitions")
 def api_session_model_transitions(sid):
     """Return model/provider transitions detected within a single session."""
@@ -8369,28 +8579,13 @@ def _run_compare_stats(sid, quality=None):
 def _run_compare_deltas(a, b):
     """Signed deltas for every numeric metric in both stats panels. Each entry
     carries ``favorable`` so the UI can colour improvements green and
-    regressions red without re-applying the rule."""
-    out = {}
-    for key in (_RUN_COMPARE_LOWER_BETTER + _RUN_COMPARE_HIGHER_BETTER):
-        va = a.get(key)
-        vb = b.get(key)
-        if va is None or vb is None:
-            continue
-        try:
-            absd = vb - va
-        except TypeError:
-            continue
-        # percent change relative to A; None when A is zero (avoid /0).
-        pct = (absd / va * 100.0) if va not in (0, 0.0) else None
-        if key in _RUN_COMPARE_LOWER_BETTER:
-            favorable = absd < 0  # decreased -> improvement
-        else:
-            favorable = absd > 0
-        out[key] = {
-            "a": va, "b": vb, "abs": absd, "pct": pct,
-            "favorable": favorable, "favorable_lower": key in _RUN_COMPARE_LOWER_BETTER,
-        }
-    return out
+    regressions red without re-applying the rule.
+
+    The arithmetic is :func:`clawmetry.cohort_compare.signed_deltas`, the one
+    delta rule shared with ``/api/cohort-compare`` (WO-60), so a green cell
+    means the same thing on both surfaces."""
+    from clawmetry.cohort_compare import signed_deltas
+    return signed_deltas(a, b, _RUN_COMPARE_LOWER_BETTER, _RUN_COMPARE_HIGHER_BETTER)
 
 
 @bp_sessions.route("/api/run-compare")

@@ -55,12 +55,14 @@ concurrency:
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   c6-pr-gate:
     name: C6 Required-status-checks gate
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     timeout-minutes: 2
 
     steps:
