@@ -76,12 +76,14 @@ concurrency:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   c6-auto-heal:
     name: C6 auto-heal (apply required checks if E2E_ADMIN_PAT is set)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     # Guard: only execute on the events this workflow actively uses (schedule
     # and workflow_dispatch). The push trigger is defined solely so that when
     # a PR touches this file, GitHub runs the workflow with event=push and

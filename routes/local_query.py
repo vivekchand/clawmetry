@@ -225,6 +225,15 @@ def _coerce_args(shape: str, raw: dict) -> dict:
         }
     if shape == "health":
         return {}
+    if shape == "similar_sessions":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("similar_sessions shape requires session_id")
+        return {
+            "session_id":  sid,
+            "window_days": _safe_int(raw.get("window_days"), default=30, lo=1, hi=365),
+            "limit":       _safe_int(raw.get("limit"), default=10, lo=1, hi=50),
+        }
     if shape == "spans":
         return {
             "trace_id":   raw.get("trace_id"),
@@ -293,6 +302,15 @@ def _coerce_args(shape: str, raw: dict) -> dict:
         return {
             "session_id": sid,
             "limit": _safe_int(raw.get("limit"), default=2000, lo=1, hi=10000),
+        }
+    if shape == "session_context":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("session_context shape requires session_id")
+        return {
+            "session_id": sid,
+            "agent_type": raw.get("agent_type") or None,
+            "limit": _safe_int(raw.get("limit"), default=200, lo=1, hi=1000),
         }
     raise ValueError(f"unknown shape: {shape}")
 
@@ -373,7 +391,7 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -601,7 +619,21 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    # Cohort compare + similar runs (WO-60): routes/cohort.py reads both
+    # through the proxy; the similarity walk runs in the daemon process.
+    "query_cohort_sessions",
+    "query_similar_sessions",
     "query_events",
+    # Inputs & context: /api/sessions/<id>/context reads the session_context
+    # table (system prompt, tools, runtime setup) through the daemon.
+    "query_session_context",
+    # Trail (schema v15): per-session intent + git outcome join. Read by
+    # routes/sessions.py (/api/transcript, /api/sessions/<id>/git-outcomes)
+    # from the dashboard process while the daemon holds the writer lock.
+    "get_session_intent",
+    "query_session_intents",
+    "query_session_git_outcomes",
+    "query_session_git_counts",
     # Runtime event counts. NemoClawAdapter.detect() used to run
     # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses
     # (private helpers would be arbitrary SQL over the RPC), so on every
@@ -619,6 +651,13 @@ _DAEMON_METHODS = frozenset({
     # simply never appear.
     "set_session_attention",
     "clear_session_attention",
+    # Lifecycle facts from runtime hooks (WO-61). The intake in
+    # routes/hooks.py runs in the DASHBOARD process; an unlisted writer is a
+    # silent no-op, so the trail would simply never show a denial.
+    "ingest_lifecycle_events",
+    "upsert_session_instructions",
+    "get_session_instructions",
+    "query_lifecycle_events",
     # Agent-Inventory roster (#task-12): ``sync._build_runtime_summary`` runs
     # in the DASHBOARD process when /api/inventory composes locally; without
     # this method the proxy returned None, ``by_runtime``/``by_runtime_model``
@@ -1025,6 +1064,28 @@ _DAEMON_METHODS = frozenset({
     # fan-out stats. Unlisted -> the proxy 400s, the fast path returns
     # None, and the bench silently shows every harness as unseen.
     "query_subagent_stats_by_runtime",
+    # Behaviour Signals (WO-58, clawmetry/behaviour_signals.py). The daemon
+    # writes turns + matches on its tick; the Signals tab, the alert rule
+    # and the snapshot read grouped counts back through the same proxy
+    # because the daemon holds the writer lock. Unlisted -> 400 -> the tab
+    # shows "no daemon" instead of numbers.
+    "record_signal_turns",
+    "query_signal_grouped",
+    "query_signal_coverage",
+    "query_signal_sessions",
+    "query_signal_rate_window",
+    # ── Agent self-diagnostics (WO-59) ───────────────────────────────────
+    # The MCP ``report_to_operator`` tool runs in the agent's own process
+    # and writes through the daemon (which owns the writer lock); the
+    # dashboard's /api/self-reports and the MCP read tools read the same
+    # way. An unlisted method here is a silent 400 -> "no reports".
+    "ingest_self_report",
+    "query_self_reports",
+    "query_self_report_counts",
+    "query_self_report_honesty",
+    "query_guard_incidents",
+    "query_session_denials",
+    "find_session_by_cwd",
 })
 
 

@@ -253,7 +253,11 @@ def test_install_idempotent_and_correct_timeouts(monkeypatch, tmp_path):
     sp = str(tmp_path / "settings.json")
     r1 = h.install(settings_path=sp)
     assert r1["status"] == "installed"
-    assert sorted(r1["added"]) == ["Notification", "PreToolUse", "Stop"]
+    # The three originals always; the lifecycle events (WO-61) follow the
+    # binary probe on this machine, so only their membership is pinned here
+    # (tests/test_hook_lifecycle.py drives the probe explicitly).
+    assert {"Notification", "PreToolUse", "Stop"} <= set(r1["added"])
+    assert set(r1["added"]) - {"Notification", "PreToolUse", "Stop"} <= set(h.LIFECYCLE_EVENTS)
     r2 = h.install(settings_path=sp)
     assert r2["status"] == "already_present"
     s = json.load(open(sp))
