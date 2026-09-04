@@ -397,6 +397,7 @@ jobs:
             tests/test_duckdb_cpu_cap.py \
             tests/test_heartbeat_rows_stay_small.py \
             tests/test_reads_never_take_the_write_lock.py \
+            tests/test_ingest_upsert_dedupe.py \
             tests/test_launchd_dashboard_runs_waitress.py \
             tests/test_scan_read_cache.py \
             tests/test_cache_push_gating.py \
