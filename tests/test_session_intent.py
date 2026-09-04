@@ -25,6 +25,13 @@ def app(tmp_path, monkeypatch):
     importlib.reload(ls)
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(tmp_path / "events.duckdb")))
+    monkeypatch.setattr(ls, "_writer_owner", True)
+    monkeypatch.setattr(ls, "_daemon_registered", lambda: False)
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
+    try:
+        ls._reset_singleton_for_tests()
+    except Exception:
+        pass
     import routes.sessions as sessions_mod
     importlib.reload(sessions_mod)
     a = Flask(__name__)

@@ -89,6 +89,13 @@ def v14_store(tmp_path, monkeypatch):
     importlib.reload(ls)
     from pathlib import Path
     monkeypatch.setattr(ls, "DB_PATH", Path(str(path)))
+    monkeypatch.setattr(ls, "_writer_owner", True)
+    monkeypatch.setattr(ls, "_daemon_registered", lambda: False)
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
+    try:
+        ls._reset_singleton_for_tests()
+    except Exception:
+        pass
     store = ls.get_store()
     yield store, ls, sid
     try:
