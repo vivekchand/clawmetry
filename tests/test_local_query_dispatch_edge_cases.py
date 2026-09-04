@@ -90,7 +90,10 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
                                "replay_events",
                                # Inputs & context: system prompt / tool
                                # definitions per session, e2e-classed.
-                               "session_context"}, (
+                               "session_context",
+                               # WO-60: runs shaped like this one (tool-call
+                               # n-gram similarity, e2e-classed: titles).
+                               "similar_sessions"}, (
         "the dispatch allowlist changed — review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"

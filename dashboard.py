@@ -141,6 +141,7 @@ from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
 from routes.bench import bp_bench
+from routes.cohort import bp_cohort
 from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
@@ -13508,6 +13509,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
     app.register_blueprint(bp_bench)
+    app.register_blueprint(bp_cohort)
     app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
     app.register_blueprint(bp_rules)

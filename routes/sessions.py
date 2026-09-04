@@ -8487,28 +8487,13 @@ def _run_compare_stats(sid, quality=None):
 def _run_compare_deltas(a, b):
     """Signed deltas for every numeric metric in both stats panels. Each entry
     carries ``favorable`` so the UI can colour improvements green and
-    regressions red without re-applying the rule."""
-    out = {}
-    for key in (_RUN_COMPARE_LOWER_BETTER + _RUN_COMPARE_HIGHER_BETTER):
-        va = a.get(key)
-        vb = b.get(key)
-        if va is None or vb is None:
-            continue
-        try:
-            absd = vb - va
-        except TypeError:
-            continue
-        # percent change relative to A; None when A is zero (avoid /0).
-        pct = (absd / va * 100.0) if va not in (0, 0.0) else None
-        if key in _RUN_COMPARE_LOWER_BETTER:
-            favorable = absd < 0  # decreased -> improvement
-        else:
-            favorable = absd > 0
-        out[key] = {
-            "a": va, "b": vb, "abs": absd, "pct": pct,
-            "favorable": favorable, "favorable_lower": key in _RUN_COMPARE_LOWER_BETTER,
-        }
-    return out
+    regressions red without re-applying the rule.
+
+    The arithmetic is :func:`clawmetry.cohort_compare.signed_deltas`, the one
+    delta rule shared with ``/api/cohort-compare`` (WO-60), so a green cell
+    means the same thing on both surfaces."""
+    from clawmetry.cohort_compare import signed_deltas
+    return signed_deltas(a, b, _RUN_COMPARE_LOWER_BETTER, _RUN_COMPARE_HIGHER_BETTER)
 
 
 @bp_sessions.route("/api/run-compare")

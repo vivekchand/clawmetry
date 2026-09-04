@@ -53,6 +53,8 @@ DISPATCH_ARGS = {
     "replay_events": {"session_id": "sess-a"},
     # Inputs & context: system prompt / tools / setup rows for one session.
     "session_context": {"session_id": "sess-a"},
+    # WO-60 similar runs: nearest sessions by tool-call shape for one session.
+    "similar_sessions": {"session_id": "sess-a"},
 }
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.

@@ -4048,6 +4048,271 @@ function renderCompareResult(data) {
   body.innerHTML = html;
 }
 
+// ── Cohort compare: "did the change help?" (WO-60) ─────────────────────────
+// Suggestions first (cards a newcomer clicks), then one verdict word with the
+// sample size next to it, then the metric table coloured by favourable
+// direction, then the sessions behind either side. The raw two-session
+// compare above stays one click deeper under "Advanced". On the hosted
+// dashboard the suggestions come from the snapshot's cohortSuggested slice
+// (served on the same URL by the cloud); custom filters stay local and the
+// surface says so instead of rendering blank.
+
+var _cohortSuggested = null;
+
+var _COHORT_ROWS = [
+  ['cost_per_done', 'Cost per finished job'],
+  ['cost_per_session', 'Cost per session'],
+  ['cost_usd', 'Total cost'],
+  ['tokens_per_session', 'Tokens per session'],
+  ['steps_per_session', 'Tool calls per session'],
+  ['tool_error_rate', 'Tool error rate'],
+  ['failure_rate', 'Failure rate'],
+  ['done_rate', 'Finished'],
+  ['cache_hit', 'Cache hit'],
+  ['frustration_rate', 'Frustration rate']
+];
+
+function _cohortFmt(key, v) {
+  if (v == null) return 'n/a';
+  if (/rate|cache_hit/.test(key)) return (v * 100).toFixed(v * 100 < 10 ? 1 : 0) + '%';
+  if (/cost/.test(key)) return '$' + (v < 0.01 ? Number(v).toFixed(4) : Number(v).toFixed(2));
+  if (typeof v === 'number' && Math.abs(v) >= 1000) return Math.round(v).toLocaleString();
+  if (typeof v === 'number') return (Math.round(v * 10) / 10).toString();
+  return String(v);
+}
+
+function _cohortDelta(key, d) {
+  if (!d || d.abs == null) return '';
+  var color = d.favorable ? 'var(--ok, #22c55e)' : 'var(--err, #ef4444)';
+  if (d.abs === 0) color = 'var(--text-muted)';
+  var sign = d.abs > 0 ? '+' : '';
+  var pct = d.pct == null ? '' : ' (' + (d.pct > 0 ? '+' : '') + d.pct.toFixed(0) + '%)';
+  return ' <span style="color:' + color + ';font-size:11px;font-weight:600;">' + sign + escapeHtmlSafe(_cohortFmt(key, d.abs)) + pct + '</span>';
+}
+
+function _cohortVerdictColor(word) {
+  if (word === 'Better') return 'var(--ok, #22c55e)';
+  if (word === 'Worse') return 'var(--err, #ef4444)';
+  if (word === 'Same') return 'var(--text-secondary)';
+  return 'var(--text-muted)';
+}
+
+function _cohortRuntimeParam() {
+  var rt = 'all';
+  try { if (typeof _cmRuntimeFilter === 'function') rt = _cmRuntimeFilter() || 'all'; } catch (e) {}
+  return rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '';
+}
+
+async function loadCohortSuggested() {
+  var host = document.getElementById('cohort-suggestions');
+  if (!host) return;
+  var adv = document.getElementById('cohort-advanced-body');
+  if (adv && window.CLOUD_MODE) {
+    adv.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">'
+      + escapeHtmlSafe(t('overview.compare_cloud_custom', null, 'Custom filters run on the local dashboard. The hosted view shows the suggested comparisons your node computed.')) + '</div>';
+  }
+  var data = null;
+  try {
+    var resp = await fetch('/api/cohort-compare/suggested' + _cohortRuntimeParam());
+    if (resp.status === 402) {
+      var up = null; try { up = await resp.json(); } catch (e) {}
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+        + escapeHtmlSafe(t('overview.compare_upgrade', null, 'Cohort compare is a paid feature.'))
+        + (up && up.required_tier ? ' <a href="/upgrade?feature=per_run_compare" style="color:var(--accent, #3b82f6);">' + escapeHtmlSafe(t('app.upgrade', null, 'Upgrade')) + '</a>' : '')
+        + '</div>';
+      return;
+    }
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    data = await resp.json();
+  } catch (e) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+      + escapeHtmlSafe(window.CLOUD_MODE
+          ? t('overview.compare_cloud_wait', null, 'Suggested comparisons arrive with the next snapshot from your node.')
+          : t('overview.compare_unreachable', null, 'Could not reach the local store.')) + '</div>';
+    return;
+  }
+  _cohortSuggested = data;
+  var list = (data && data.suggestions) || [];
+  if (!list.length) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+      + escapeHtmlSafe(data && data.store_available === false
+          ? t('overview.compare_unreachable', null, 'Could not reach the local store.')
+          : t('overview.compare_none', null, 'Nothing changed recently. Suggestions appear when a new model or runtime version shows up, or after a week of sessions.'))
+      + '</div>';
+    return;
+  }
+  host.innerHTML = list.map(function (s, i) {
+    var res = s.result || {};
+    var v = (res.verdict || {});
+    var word = v.verdict || '';
+    var na = v.sample ? v.sample.a : (res.a && res.a.stats ? res.a.stats.session_count : 0);
+    var nb = v.sample ? v.sample.b : (res.b && res.b.stats ? res.b.stats.session_count : 0);
+    return '<button type="button" class="cohort-card" data-idx="' + i + '" onclick="showCohortSuggestion(' + i + ')" '
+      + 'style="text-align:left;cursor:pointer;padding:10px 12px;border:1px solid var(--border-primary);border-radius:10px;background:var(--bg-primary);color:var(--text-primary);">'
+      + '<div style="font-size:12px;font-weight:600;line-height:1.35;">' + escapeHtmlSafe(s.title || '') + '</div>'
+      + '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);display:flex;gap:8px;align-items:baseline;">'
+      + '<span style="font-weight:700;color:' + _cohortVerdictColor(word) + ';">' + escapeHtmlSafe(word) + '</span>'
+      + '<span>' + escapeHtmlSafe(na + ' vs ' + nb + ' ' + t('overview.compare_sessions', null, 'sessions')) + '</span>'
+      + '</div></button>';
+  }).join('');
+}
+
+function showCohortSuggestion(idx) {
+  var s = _cohortSuggested && _cohortSuggested.suggestions && _cohortSuggested.suggestions[idx];
+  if (!s) return;
+  try {
+    var cards = document.querySelectorAll('#cohort-suggestions .cohort-card');
+    cards.forEach(function (c) { c.style.borderColor = (String(c.getAttribute('data-idx')) === String(idx)) ? 'var(--accent, #3b82f6)' : 'var(--border-primary)'; });
+  } catch (e) {}
+  renderCohortResult(s.result, s.title, s.why);
+}
+
+function _cohortSessionList(side, sessions) {
+  if (!sessions || !sessions.length) {
+    return '<div style="font-size:11px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, 'No data.')) + '</div>';
+  }
+  return sessions.map(function (r) {
+    var label = r.title || r.session_id;
+    return '<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-top:1px solid var(--border-primary);font-size:11px;">'
+      + '<a href="#" data-sid="' + escapeHtmlSafe(r.session_id) + '" onclick="openCohortSession(this.getAttribute(\'data-sid\'));return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(label) + '</a>'
+      + '<span style="color:var(--text-muted);white-space:nowrap;">' + _cmOutcomeChip(r.outcome) + ' ' + escapeHtmlSafe(_cohortFmt('cost_usd', r.cost_usd)) + '</span>'
+      + '</div>';
+  }).join('');
+}
+
+function openCohortSession(sessionId) {
+  if (!sessionId) return;
+  try { switchTab('transcripts'); } catch (e) {}
+  try { viewTranscript(sessionId); } catch (e) {}
+}
+
+function renderCohortResult(res, title, why) {
+  var host = document.getElementById('cohort-result');
+  if (!host) return;
+  if (!res || !res.a || !res.b) {
+    host.style.display = '';
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, 'No data.')) + '</div>';
+    return;
+  }
+  var v = res.verdict || {};
+  var word = v.verdict || t('overview.compare_not_enough', null, 'Not enough data');
+  var sa = res.a.stats || {}, sb = res.b.stats || {};
+  var html = '<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">'
+    + '<div style="font-size:26px;font-weight:800;color:' + _cohortVerdictColor(word) + ';letter-spacing:-0.5px;">' + escapeHtmlSafe(word) + '</div>'
+    + '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe((sa.session_count || 0) + ' vs ' + (sb.session_count || 0) + ' ' + t('overview.compare_sessions', null, 'sessions')) + '</div>'
+    + (title ? '<div style="font-size:12px;color:var(--text-secondary);">' + escapeHtmlSafe(title) + '</div>' : '')
+    + '</div>';
+  if (v.reason) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtmlSafe(v.reason) + '</div>';
+  if (v.mixed) {
+    html += '<div style="font-size:11px;color:var(--warn, #eab308);margin-top:4px;">' + escapeHtmlSafe(t('overview.compare_mixed', null, 'Mixed: some numbers moved the other way.'))
+      + ' ' + escapeHtmlSafe((v.against || []).map(function (k) { return k.replace(/_/g, ' '); }).join(', ')) + '</div>';
+  }
+  var comp = res.comparability || {};
+  (comp.warnings || []).forEach(function (w) {
+    html += '<div style="font-size:11px;color:var(--warn, #eab308);margin-top:4px;">⚠ ' + escapeHtmlSafe(w.note || '') + '</div>';
+  });
+  if (why) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtmlSafe(why) + '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:170px 1fr 1fr;gap:10px;font-size:12px;margin-top:12px;">'
+    + '<div></div>'
+    + '<div style="font-size:11px;color:var(--text-muted);">A: ' + escapeHtmlSafe(res.a.label || '') + '</div>'
+    + '<div style="font-size:11px;color:var(--text-muted);">B: ' + escapeHtmlSafe(res.b.label || '') + '</div>';
+  _COHORT_ROWS.forEach(function (kv) {
+    var key = kv[0], label = kv[1];
+    var va = sa[key], vb = sb[key];
+    if (va == null && vb == null) return;
+    html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(label) + '</div>'
+      + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cohortFmt(key, va)) + '</div>'
+      + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cohortFmt(key, vb)) + _cohortDelta(key, (res.deltas || {})[key]) + '</div>';
+  });
+  var mixA = sa.outcome_mix || {}, mixB = sb.outcome_mix || {};
+  var mixFmt = function (m) { return Object.keys(m).map(function (k) { return _cmOutcomeChip(k) + ' ' + m[k]; }).join(' ') || 'n/a'; };
+  html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(t('app.compare_outcome', null, 'Outcome')) + '</div>'
+    + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + mixFmt(mixA) + '</div>'
+    + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + mixFmt(mixB) + '</div>';
+  if (res.signals === 'not available') {
+    html += '<div style="grid-column:1 / -1;font-size:11px;color:var(--text-muted);padding-top:6px;">' + escapeHtmlSafe(t('overview.compare_no_signals', null, 'Behaviour signals are not recorded in this store yet.')) + '</div>';
+  }
+  html += '</div>';
+
+  html += '<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);font-weight:600;list-style:none;">▸ ' + escapeHtmlSafe(t('overview.compare_show_sessions', null, 'Show sessions')) + '</summary>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px;">'
+    + '<div><div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">A</div>' + _cohortSessionList('a', res.a.sessions) + '</div>'
+    + '<div><div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">B</div>' + _cohortSessionList('b', res.b.sessions) + '</div>'
+    + '</div></details>';
+  host.style.display = '';
+  host.innerHTML = html;
+}
+
+// Custom filters (local dashboard): a and b are filter objects.
+async function runCohortCompare(a, b, title) {
+  var host = document.getElementById('cohort-result');
+  if (!host) return;
+  if (window.CLOUD_MODE) {
+    host.style.display = '';
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('overview.compare_cloud_custom', null, 'Custom filters run on the local dashboard. The hosted view shows the suggested comparisons your node computed.')) + '</div>';
+    return;
+  }
+  host.style.display = '';
+  host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.loading_2', null, 'Loading…')) + '</div>';
+  var qs = 'a=' + encodeURIComponent(JSON.stringify(a || {})) + '&b=' + encodeURIComponent(JSON.stringify(b || {}));
+  var rtp = _cohortRuntimeParam();
+  if (rtp) qs += '&' + rtp.slice(1);
+  try {
+    var resp = await fetch('/api/cohort-compare?' + qs);
+    if (!resp.ok) {
+      var err = null; try { err = await resp.json(); } catch (e) {}
+      host.innerHTML = '<div style="font-size:12px;color:var(--err);">' + escapeHtmlSafe((err && (err.hint || err.error)) || ('Request failed (' + resp.status + ')')) + '</div>';
+      return;
+    }
+    renderCohortResult(await resp.json(), title);
+  } catch (e) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--err);">' + escapeHtmlSafe(t('app.network_error', null, 'Network error')) + '</div>';
+  }
+}
+
+// ── Runs shaped like this one (WO-60) ──────────────────────────────────────
+// Rendered below the fold of the session view. Tool-call n-gram similarity,
+// computed in the daemon; no model call.
+async function loadSimilarRuns(sessionId) {
+  var card = document.getElementById('similar-runs-card');
+  var body = document.getElementById('similar-runs-body');
+  if (!card || !body || !sessionId) return;
+  card.style.display = '';
+  if (window.CLOUD_MODE) {
+    body.innerHTML = escapeHtmlSafe(t('transcripts.similar_runs_cloud', null, 'Available on the local dashboard.'));
+    return;
+  }
+  body.innerHTML = escapeHtmlSafe(t('app.loading_2', null, 'Loading…'));
+  var data = null;
+  try {
+    var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/similar?window=30d&limit=10');
+    if (resp.status === 402) { card.style.display = 'none'; return; }
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    data = await resp.json();
+  } catch (e) {
+    body.innerHTML = escapeHtmlSafe(t('overview.compare_unreachable', null, 'Could not reach the local store.'));
+    return;
+  }
+  var rows = (data && data.neighbours) || [];
+  if (!rows.length) {
+    var cov = data && data.coverage ? String(data.coverage) : '';
+    body.innerHTML = escapeHtmlSafe(/no tool stream/.test(cov) ? cov
+      : t('transcripts.similar_runs_none', null, 'No other session in the window follows this order of tool calls.'));
+    return;
+  }
+  body.innerHTML = '<div style="display:grid;grid-template-columns:auto 1fr auto auto auto;gap:6px 12px;align-items:center;">'
+    + rows.map(function (r) {
+      var pct = Math.round((r.score || 0) * 100);
+      return '<div style="font-weight:700;color:var(--text-primary);">' + pct + '%</div>'
+        + '<a href="#" data-sid="' + escapeHtmlSafe(r.session_id) + '" onclick="openCohortSession(this.getAttribute(\'data-sid\'));return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(r.title || r.session_id) + '</a>'
+        + '<span style="color:var(--text-muted);">' + escapeHtmlSafe((r.runtime || '') + (r.model ? ' · ' + r.model : '')) + '</span>'
+        + '<span>' + _cmOutcomeChip(r.outcome) + '</span>'
+        + '<span style="color:var(--text-muted);">' + escapeHtmlSafe(_cohortFmt('cost_usd', r.cost_usd)) + '</span>';
+    }).join('')
+    + '</div>';
+}
+
 // ── Error triage (#2196 item #5) ────────────────────────────────────────────
 
 async function loadTriageList() {
@@ -4638,6 +4903,8 @@ async function loadAll() {
     try { loadHealthTimeline(); } catch (e) {}
     // Error-triage list (#2196 item #5) — also fire-and-forget.
     try { loadTriageList(); } catch (e) {}
+    // Cohort compare suggestions (WO-60), fire-and-forget; honest empty states.
+    try { loadCohortSuggested(); } catch (e) {}
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
@@ -20579,6 +20846,8 @@ async function viewTranscript(sessionId) {
         '</div>';
       return;
     }
+    // Runs shaped like this one (WO-60): below the fold, never blocks the replay.
+    try { loadSimilarRuns(sessionId); } catch (e) {}
     var compactions = compactionsData.compactions || [];
     var evalChips = (evalMetricsData && evalMetricsData.metrics) || [];
     // Family runtimes store metrics under the canonical prefixed id
