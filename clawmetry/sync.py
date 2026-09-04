@@ -14302,16 +14302,19 @@ def _family_ingest_rev() -> str:
     means an upgrade re-ingests every session once instead of trusting a
     mark written by older extraction code. "" when pro is absent.
 
-    The ``/cwd1`` salt is OSS-side: 2026-08-19 the family upsert started
+    The ``/ctx1`` salt is OSS-side: 2026-08-19 the family upsert started
     persisting ``cwd``/``git_branch`` (kill/pause pid resolution reads them),
-    and only a rev change makes existing sessions re-ingest to backfill the
-    column. Bump the salt when the OSS extraction changes without a pro
-    release.
+    and 2026-09-04 the ``context.compiled`` event each adapter prepends
+    started landing under its own runtime (Inputs & context). Only a rev
+    change makes an already-ingested session re-read its transcript, so
+    without a bump the "What the agent was given" panel stays empty for every
+    session that had already been seen. Bump the salt when the OSS extraction
+    changes without a pro release.
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/cwd1"
+        return _ilm.version("clawmetry-pro") + "/ctx1"
     except Exception:
         return ""
 
