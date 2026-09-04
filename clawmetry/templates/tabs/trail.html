@@ -11,15 +11,15 @@
    code paths the Sessions / Tracing / Turn anatomy tabs run. #}
 <div class="page" id="page-trail" data-trail-tab="1">
   <div class="trail-topbar">
-    <button type="button" class="refresh-btn trail-back" onclick="trailBackToSessions()">&larr; <span data-i18n="trail.back">All sessions</span></button>
+    <button type="button" class="refresh-btn trail-back" onclick="trailBackToSessions()">← <span data-i18n="trail.back">All sessions</span></button>
     <div class="trail-title-wrap">
-      <div class="trail-title" id="trail-title" data-i18n="trail.loading_title">Opening the trail&hellip;</div>
+      <div class="trail-title" id="trail-title" data-i18n="trail.loading_title">Opening the trail…</div>
       <div class="trail-subtitle" id="trail-subtitle"></div>
     </div>
     <div class="trail-actions">
       <span id="trail-export-note" class="trail-muted" style="display:none;" data-i18n="trail.export_cloud_note">Export runs on the machine your agent runs on</span>
-      <button type="button" class="refresh-btn" id="trail-export-btn" onclick="trailExport()" data-i18n-title="trail.export_tooltip" title="Download this session as JSON, in a new tab">&#8681; <span data-i18n="trail.export">Export</span></button>
-      <button type="button" class="refresh-btn" onclick="trailReload()" title="Reload this trail">&#8635;</button>
+      <button type="button" class="refresh-btn" id="trail-export-btn" onclick="trailExport()" data-i18n-title="trail.export_tooltip" title="Download this session as JSON, in a new tab">⇩ <span data-i18n="trail.export">Export</span></button>
+      <button type="button" class="refresh-btn" onclick="trailReload()" title="Reload this trail">↻</button>
     </div>
   </div>
 
