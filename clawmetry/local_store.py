@@ -47,6 +47,7 @@ import sys
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
 import threading
 import time
+import uuid
 from collections import deque
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -1772,6 +1773,46 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_signal_matches_ms ON signal_matches(turn_ms)",
     "CREATE INDEX IF NOT EXISTS idx_signal_matches_sig_ms ON signal_matches(signal, turn_ms)",
     "CREATE INDEX IF NOT EXISTS idx_signal_matches_session ON signal_matches(session_id)",
+    # ── Signal shifts + briefs (WO-62, clawmetry/signal_shifts.py, briefs.py) ─
+    # One issue per (signal, runtime) whose short-window rate left its learned
+    # band; ``breakdown_json`` is the ranked split (model / runtime version /
+    # tool / repository) with each value's share of the shift. Briefs are
+    # saved Dives questions on a cron with a destination channel. Both
+    # additive: CREATE IF NOT EXISTS, no schema-version bump, no text stored.
+    """
+    CREATE TABLE IF NOT EXISTS signal_issues (
+        id              VARCHAR PRIMARY KEY,
+        signal          VARCHAR NOT NULL,
+        agent_type      VARCHAR NOT NULL,
+        node_id         VARCHAR,
+        status          VARCHAR NOT NULL,
+        opened_at       BIGINT NOT NULL,
+        resolved_at     BIGINT,
+        rate_before     DOUBLE,
+        rate_during     DOUBLE,
+        n_before        BIGINT,
+        n_during        BIGINT,
+        breakdown_json  VARCHAR,
+        last_seen_at    BIGINT,
+        reopen_count    INTEGER DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_signal_issues_pair ON signal_issues(signal, agent_type)",
+    """
+    CREATE TABLE IF NOT EXISTS briefs (
+        id              VARCHAR PRIMARY KEY,
+        title           VARCHAR NOT NULL,
+        question        VARCHAR NOT NULL,
+        cron_expr       VARCHAR NOT NULL,
+        tz              VARCHAR,
+        channel_ref     VARCHAR,
+        enabled         BOOLEAN DEFAULT FALSE,
+        last_run_at     BIGINT,
+        last_status     VARCHAR,
+        last_error      VARCHAR,
+        created_at      BIGINT NOT NULL
+    )
+    """,
 ]
 
 
@@ -3676,6 +3717,407 @@ class LocalStore:
             "rate": (round(n_match / n_turns, 4) if n_turns else None),
             "window_minutes": mins, "runtime": rt or "all", "top_model": top_model,
         }
+
+    # ── Signal shifts (WO-62) ───────────────────────────────────────────────
+
+    _ISSUE_COLS = ("id", "signal", "agent_type", "node_id", "status", "opened_at",
+                   "resolved_at", "rate_before", "rate_during", "n_before", "n_during",
+                   "breakdown_json", "last_seen_at", "reopen_count")
+
+    def _issue_row(self, r) -> dict:
+        d = {c: r[i] for i, c in enumerate(self._ISSUE_COLS)}
+        bd = d.pop("breakdown_json", None)
+        try:
+            d["breakdown"] = json.loads(bd) if bd else {}
+        except Exception:
+            d["breakdown"] = {}
+        for k in ("opened_at", "resolved_at", "last_seen_at", "n_before", "n_during", "reopen_count"):
+            if d.get(k) is not None:
+                try:
+                    d[k] = int(d[k])
+                except (TypeError, ValueError):
+                    pass
+        for k in ("rate_before", "rate_during"):
+            if d.get(k) is not None:
+                try:
+                    d[k] = float(d[k])
+                except (TypeError, ValueError):
+                    pass
+        return d
+
+    def query_signal_shift_inputs(self, *, now_ms: int, short_hours: int = 24,
+                                  history_days: int = 28) -> dict:
+        """Per (signal, runtime): the last ``short_hours`` as one bucket and
+        the ``history_days`` before it as daily buckets, for
+        ``signal_shifts.detect_shift``::
+
+            {"pairs": [{signal, agent_type, node_id,
+                        short: {matches, turns}, history: [{day, matches, turns}]}]}
+
+        The history EXCLUDES the short window. ``{}`` on error.
+        """
+        from clawmetry.behaviour_signals import SIGNALS as _SIG
+        try:
+            now = int(now_ms)
+            short_ms = max(1, int(short_hours)) * 3600 * 1000
+            hist_ms = max(1, int(history_days)) * 86400 * 1000
+        except (TypeError, ValueError):
+            return {}
+        short_start = now - short_ms
+        hist_start = short_start - hist_ms
+        try:
+            t_rows = self._fetch("""
+                SELECT agent_type, side,
+                       CASE WHEN turn_ms >= ? THEN -1 ELSE CAST(turn_ms / 86400000 AS BIGINT) END AS bucket,
+                       COUNT(*), ANY_VALUE(node_id)
+                FROM signal_turns
+                WHERE turn_ms >= ? AND turn_ms <= ?
+                GROUP BY 1, 2, 3
+            """, [short_start, hist_start, now])
+            m_rows = self._fetch("""
+                SELECT agent_type, signal,
+                       CASE WHEN turn_ms >= ? THEN -1 ELSE CAST(turn_ms / 86400000 AS BIGINT) END AS bucket,
+                       COUNT(*)
+                FROM signal_matches
+                WHERE turn_ms >= ? AND turn_ms <= ?
+                GROUP BY 1, 2, 3
+            """, [short_start, hist_start, now])
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_shift_inputs failed: %s", e)
+            return {}
+        turns: dict = {}
+        node_of: dict = {}
+        for rt, side, bucket, n, node in t_rows:
+            turns.setdefault((str(rt), str(side)), {})[int(bucket)] = int(n or 0)
+            if node and str(rt) not in node_of:
+                node_of[str(rt)] = str(node)
+        matches: dict = {}
+        for rt, sig, bucket, n in m_rows:
+            matches.setdefault((str(rt), str(sig)), {})[int(bucket)] = int(n or 0)
+        pairs = []
+        for (rt, side), by_bucket in turns.items():
+            for sig, meta in _SIG.items():
+                if meta.get("side") != side:
+                    continue
+                m_by = matches.get((rt, sig), {})
+                short = {"turns": by_bucket.get(-1, 0), "matches": m_by.get(-1, 0)}
+                history = [{"day": b, "turns": t, "matches": m_by.get(b, 0)}
+                           for b, t in sorted(by_bucket.items()) if b >= 0]
+                pairs.append({"signal": sig, "agent_type": rt, "node_id": node_of.get(rt),
+                              "short": short, "history": history})
+        return {"pairs": pairs, "short_start_ms": short_start, "history_start_ms": hist_start}
+
+    def query_signal_shift_breakdown(self, *, signal: str, runtime: str, now_ms: int,
+                                     short_hours: int = 24, history_days: int = 28,
+                                     max_sessions: int = 5000) -> dict:
+        """Per-session inputs for ``signal_shifts.rank_breakdown`` on ONE
+        (signal, runtime): turn and match counts split into ``during`` /
+        ``before``, plus each session's working directory and most-used
+        tool. ``{}`` on error. Never returns turn text."""
+        from clawmetry.behaviour_signals import SIGNALS as _SIG
+        sig = str(signal or "").strip()
+        rt = str(runtime or "").strip().lower()
+        if sig not in _SIG or not rt:
+            return {}
+        side = _SIG[sig]["side"]
+        try:
+            now = int(now_ms)
+            short_start = now - max(1, int(short_hours)) * 3600 * 1000
+            hist_start = short_start - max(1, int(history_days)) * 86400 * 1000
+        except (TypeError, ValueError):
+            return {}
+        period_sql = "CASE WHEN turn_ms >= ? THEN 'during' ELSE 'before' END"
+        try:
+            t_rows = self._fetch(f"""
+                SELECT session_id, model, runtime_version, {period_sql} AS period, COUNT(*)
+                FROM signal_turns
+                WHERE agent_type = ? AND side = ? AND turn_ms >= ? AND turn_ms <= ?
+                GROUP BY 1, 2, 3, 4
+                ORDER BY 5 DESC LIMIT ?
+            """, [short_start, rt, side, hist_start, now, int(max_sessions)])
+            m_rows = self._fetch(f"""
+                SELECT session_id, model, runtime_version, {period_sql} AS period, COUNT(*)
+                FROM signal_matches
+                WHERE agent_type = ? AND signal = ? AND turn_ms >= ? AND turn_ms <= ?
+                GROUP BY 1, 2, 3, 4
+                ORDER BY 5 DESC LIMIT ?
+            """, [short_start, rt, sig, hist_start, now, int(max_sessions)])
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_shift_breakdown failed: %s", e)
+            return {}
+        turns = [{"session_id": r[0], "model": r[1], "runtime_version": r[2],
+                  "period": r[3], "n": int(r[4] or 0)} for r in t_rows]
+        matches = [{"session_id": r[0], "model": r[1], "runtime_version": r[2],
+                    "period": r[3], "n": int(r[4] or 0)} for r in m_rows]
+        sids = sorted({str(t["session_id"]) for t in turns if t.get("session_id")})
+        cwd_of: dict = {}
+        tool_of: dict = {}
+        if sids:
+            try:
+                marks = ",".join("?" for _ in sids)
+                for sid, cwd in self._fetch(
+                        f"SELECT session_id, cwd FROM sessions WHERE session_id IN ({marks})", sids):
+                    if cwd:
+                        cwd_of[str(sid)] = str(cwd)
+            except Exception as e:  # noqa: BLE001
+                log.debug("signals: breakdown cwd lookup failed: %s", e)
+            try:
+                since_iso = datetime.fromtimestamp(
+                    hist_start / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                marks = ",".join("?" for _ in sids)
+                rows = self._fetch(f"""
+                    SELECT session_id, event_type, data FROM events
+                    WHERE session_id IN ({marks}) AND ts >= ?
+                      AND event_type IN ('tool.call', 'toolCall', 'tool_use', 'tool_call',
+                                         'assistant', 'message')
+                    LIMIT 20000
+                """, sids + [since_iso])
+                counts: dict = {}
+                for sid, et, blob in rows:
+                    try:
+                        data = _from_blob(blob)
+                    except Exception:
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    for name in _iter_tool_invocation_names(et, data):
+                        if name:
+                            c = counts.setdefault(str(sid), {})
+                            c[str(name)[:64]] = c.get(str(name)[:64], 0) + 1
+                for sid, c in counts.items():
+                    tool_of[sid] = max(c.items(), key=lambda kv: kv[1])[0]
+            except Exception as e:  # noqa: BLE001
+                log.debug("signals: breakdown tool lookup failed: %s", e)
+        return {"turns": turns, "matches": matches, "cwd": cwd_of, "tool": tool_of}
+
+    def upsert_signal_issue(self, *, signal: str, agent_type: str, node_id: str = "",
+                            rate_before: float, rate_during: float, n_before: int,
+                            n_during: int, breakdown_json: str, now_ms: int,
+                            reopen_after_ms: int = 86400000) -> dict:
+        """Open / refresh / reopen the ONE issue for (signal, runtime).
+        Returns ``{"action": opened|updated|reopened|ignored|none, "issue"}``.
+        A resolved issue reopens only once ``reopen_after_ms`` has passed
+        since it was resolved, so resolving a live shift does not reopen it
+        on the next tick. An ignored issue is refreshed silently."""
+        sig = str(signal or "").strip()[:48]
+        rt = str(agent_type or "").strip().lower()[:64]
+        if not sig or not rt:
+            return {"action": "none", "issue": None}
+        now = int(now_ms)
+        try:
+            existing = self._fetch(f"""
+                SELECT {", ".join(self._ISSUE_COLS)} FROM signal_issues
+                WHERE signal = ? AND agent_type = ?
+                ORDER BY opened_at DESC LIMIT 1
+            """, [sig, rt])
+        except Exception as e:  # noqa: BLE001
+            log.warning("signals: upsert_signal_issue read failed: %s", e)
+            return {"action": "none", "issue": None}
+        vals = [float(rate_before), float(rate_during), int(n_before), int(n_during),
+                str(breakdown_json or "{}")[:20000], now]
+        try:
+            with self._write_lock:
+                if not existing:
+                    iid = "si_" + uuid.uuid4().hex[:16]
+                    self._conn.execute("""
+                        INSERT INTO signal_issues (id, signal, agent_type, node_id, status,
+                            opened_at, resolved_at, rate_before, rate_during, n_before,
+                            n_during, breakdown_json, last_seen_at, reopen_count)
+                        VALUES (?, ?, ?, ?, 'open', ?, NULL, ?, ?, ?, ?, ?, ?, 0)
+                    """, [iid, sig, rt, str(node_id or "")[:128] or None, now] + vals)
+                    action = "opened"
+                else:
+                    row = self._issue_row(existing[0])
+                    iid = row["id"]
+                    status = str(row.get("status") or "open")
+                    if status == "open":
+                        self._conn.execute("""
+                            UPDATE signal_issues SET rate_before = ?, rate_during = ?,
+                                n_before = ?, n_during = ?, breakdown_json = ?, last_seen_at = ?
+                            WHERE id = ?
+                        """, vals + [iid])
+                        action = "updated"
+                    elif status == "ignored":
+                        self._conn.execute(
+                            "UPDATE signal_issues SET last_seen_at = ? WHERE id = ?", [now, iid])
+                        action = "ignored"
+                    else:  # resolved
+                        resolved_at = int(row.get("resolved_at") or 0)
+                        if now - resolved_at < int(reopen_after_ms):
+                            self._conn.execute(
+                                "UPDATE signal_issues SET last_seen_at = ? WHERE id = ?", [now, iid])
+                            action = "none"
+                        else:
+                            self._conn.execute("""
+                                UPDATE signal_issues SET status = 'open', opened_at = ?,
+                                    resolved_at = NULL, rate_before = ?, rate_during = ?,
+                                    n_before = ?, n_during = ?, breakdown_json = ?,
+                                    last_seen_at = ?, reopen_count = COALESCE(reopen_count, 0) + 1
+                                WHERE id = ?
+                            """, [now] + vals + [iid])
+                            action = "reopened"
+        except Exception as e:  # noqa: BLE001
+            log.warning("signals: upsert_signal_issue write failed: %s", e)
+            return {"action": "none", "issue": None}
+        return {"action": action, "issue": self.get_signal_issue(issue_id=iid)}
+
+    def get_signal_issue(self, *, issue_id: str) -> dict | None:
+        try:
+            rows = self._fetch(
+                f"SELECT {', '.join(self._ISSUE_COLS)} FROM signal_issues WHERE id = ?",
+                [str(issue_id or "")])
+        except Exception:
+            return None
+        return self._issue_row(rows[0]) if rows else None
+
+    def query_signal_issues(self, *, status: str | None = None, runtime: str | None = None,
+                            limit: int = 100) -> list:
+        """Issues newest first, optionally filtered by status and runtime.
+        Each carries its parsed ``breakdown``; no session ids, no text."""
+        clauses: list = []
+        params: list = []
+        st = str(status or "").strip().lower()
+        if st and st != "all":
+            clauses.append("status = ?")
+            params.append(st)
+        rt = str(runtime or "").strip().lower()
+        if rt and rt != "all":
+            clauses.append("agent_type = ?")
+            params.append(rt)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        try:
+            rows = self._fetch(f"""
+                SELECT {', '.join(self._ISSUE_COLS)} FROM signal_issues{where}
+                ORDER BY CASE status WHEN 'open' THEN 0 WHEN 'ignored' THEN 1 ELSE 2 END,
+                         opened_at DESC
+                LIMIT ?
+            """, params + [max(1, min(int(limit or 100), 500))])
+        except Exception as e:  # noqa: BLE001
+            log.debug("signals: query_signal_issues failed: %s", e)
+            return []
+        return [self._issue_row(r) for r in rows]
+
+    def set_signal_issue_status(self, *, issue_id: str, status: str,
+                                now_ms: int | None = None) -> dict | None:
+        """Operator transition: resolved / ignored / open. ``None`` when the
+        issue does not exist or the status is not one of the three."""
+        st = str(status or "").strip().lower()
+        if st not in ("open", "resolved", "ignored"):
+            return None
+        iid = str(issue_id or "")
+        if not self.get_signal_issue(issue_id=iid):
+            return None
+        now = int(now_ms or time.time() * 1000)
+        try:
+            with self._write_lock:
+                if st == "resolved":
+                    self._conn.execute(
+                        "UPDATE signal_issues SET status = 'resolved', resolved_at = ? WHERE id = ?",
+                        [now, iid])
+                elif st == "ignored":
+                    self._conn.execute(
+                        "UPDATE signal_issues SET status = 'ignored', resolved_at = NULL WHERE id = ?",
+                        [iid])
+                else:
+                    self._conn.execute("""
+                        UPDATE signal_issues SET status = 'open', resolved_at = NULL,
+                            opened_at = CASE WHEN status = 'open' THEN opened_at ELSE ? END
+                        WHERE id = ?
+                    """, [now, iid])
+        except Exception as e:  # noqa: BLE001
+            log.warning("signals: set_signal_issue_status failed: %s", e)
+            return None
+        return self.get_signal_issue(issue_id=iid)
+
+    # ── Briefs (WO-62) ──────────────────────────────────────────────────────
+
+    _BRIEF_COLS = ("id", "title", "question", "cron_expr", "tz", "channel_ref", "enabled",
+                   "last_run_at", "last_status", "last_error", "created_at")
+
+    def _brief_row(self, r) -> dict:
+        d = {c: r[i] for i, c in enumerate(self._BRIEF_COLS)}
+        d["enabled"] = bool(d.get("enabled"))
+        for k in ("last_run_at", "created_at"):
+            if d.get(k) is not None:
+                try:
+                    d[k] = int(d[k])
+                except (TypeError, ValueError):
+                    pass
+        return d
+
+    def list_briefs(self, *, enabled_only: bool = False, limit: int = 200) -> list:
+        where = " WHERE enabled" if enabled_only else ""
+        try:
+            rows = self._fetch(
+                f"SELECT {', '.join(self._BRIEF_COLS)} FROM briefs{where} "
+                f"ORDER BY created_at ASC LIMIT ?", [max(1, min(int(limit or 200), 500))])
+        except Exception as e:  # noqa: BLE001
+            log.debug("briefs: list failed: %s", e)
+            return []
+        return [self._brief_row(r) for r in rows]
+
+    def get_brief(self, *, brief_id: str) -> dict | None:
+        try:
+            rows = self._fetch(
+                f"SELECT {', '.join(self._BRIEF_COLS)} FROM briefs WHERE id = ?",
+                [str(brief_id or "")])
+        except Exception:
+            return None
+        return self._brief_row(rows[0]) if rows else None
+
+    def upsert_brief(self, *, brief: dict) -> dict | None:
+        """Insert or replace one brief (validated by the caller). Returns
+        the stored row or ``None`` on a write failure."""
+        if not isinstance(brief, dict) or not brief.get("id"):
+            return None
+        now = int(time.time() * 1000)
+        existing = self.get_brief(brief_id=str(brief["id"]))
+        vals = [
+            str(brief["id"])[:64], str(brief.get("title") or "")[:200],
+            str(brief.get("question") or "")[:2000], str(brief.get("cron_expr") or "")[:64],
+            str(brief.get("tz") or "")[:64] or None, str(brief.get("channel_ref") or "")[:64] or None,
+            bool(brief.get("enabled")),
+        ]
+        try:
+            with self._write_lock:
+                if existing:
+                    self._conn.execute("""
+                        UPDATE briefs SET title = ?, question = ?, cron_expr = ?, tz = ?,
+                            channel_ref = ?, enabled = ? WHERE id = ?
+                    """, vals[1:] + [vals[0]])
+                else:
+                    self._conn.execute("""
+                        INSERT INTO briefs (id, title, question, cron_expr, tz, channel_ref,
+                            enabled, last_run_at, last_status, last_error, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+                    """, vals + [now])
+        except Exception as e:  # noqa: BLE001
+            log.warning("briefs: upsert failed: %s", e)
+            return None
+        return self.get_brief(brief_id=vals[0])
+
+    def delete_brief(self, *, brief_id: str) -> bool:
+        try:
+            with self._write_lock:
+                self._conn.execute("DELETE FROM briefs WHERE id = ?", [str(brief_id or "")])
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.warning("briefs: delete failed: %s", e)
+            return False
+
+    def mark_brief_run(self, *, brief_id: str, status: str, error: str | None = None,
+                       now_ms: int | None = None) -> dict | None:
+        now = int(now_ms or time.time() * 1000)
+        try:
+            with self._write_lock:
+                self._conn.execute("""
+                    UPDATE briefs SET last_run_at = ?, last_status = ?, last_error = ? WHERE id = ?
+                """, [now, str(status or "")[:32], (str(error)[:500] if error else None),
+                      str(brief_id or "")])
+        except Exception as e:  # noqa: BLE001
+            log.warning("briefs: mark run failed: %s", e)
+            return None
+        return self.get_brief(brief_id=str(brief_id or ""))
 
     def start(self) -> None:
         """Start the background flusher. Safe to call multiple times.
