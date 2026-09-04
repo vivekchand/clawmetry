@@ -39,7 +39,7 @@ from clawmetry import alert_evaluator as ae  # noqa: E402
 pytest.importorskip("duckdb")
 
 
-# ── matchers ──────────────────────────────────────────────────────────────────────
+# ── matchers ───────────────────────────────────────────────────────────────
 
 FRUSTRATED = [
     "wtf why did you delete the whole file",
@@ -180,7 +180,7 @@ def test_retry_jaccard():
     assert bs.retry_match(None, bs.tokens_of("anything at all here")) is None
 
 
-# ── turn classification across both dialects ───────────────────────────────────────────
+# ── turn classification across both dialects ───────────────────────────────
 
 def _row(i, sid, role=None, text="", et="message", ts=None, model="claude-x",
          created=None, extra=None):
@@ -200,7 +200,7 @@ def test_classify_family_and_v3_dialects():
     side, text, model, ver = bs.classify_turn(_row(1, "claude_code:a", "user", "hi"))
     assert (side, text, model) == ("user", "hi", "claude-x")
     v3 = _row(2, "abc", None, "", et="prompt.submitted", model=None,
-               extra={"finalPromptText": "why did you do that"})
+              extra={"finalPromptText": "why did you do that"})
     assert bs.classify_turn(v3)[0] == "user"
     v3a = _row(3, "abc", None, "", et="model.completed", model=None,
                extra={"completionText": "I can't help with that", "modelId": "m1"})
@@ -241,32 +241,25 @@ def test_evaluate_rows_records_no_text():
         assert "wtf" not in json.dumps(m)
 
 
-# ── store + tick (isolated DuckDB) ────────────────────────────────────────────────────
+# ── store + tick (isolated DuckDB) ─────────────────────────────────────────
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
-    db = tmp_path / "signals.duckdb"
-    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(db))
-    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
-    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
+    """A direct LocalStore on an isolated DuckDB file.
+
+    Built with the class, not ``get_store()``: in the CI batch an earlier
+    test leaves a daemon discovery file behind, ``get_store()`` then returns
+    the ``_ProxyStore`` stand-in, and every write silently no-ops (the
+    2026-09-04 MOAT run: six failures, all "0 == 8"). Flushes are explicit,
+    so nothing here depends on the background flusher's timing either.
+    """
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "signals.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "3600")
     from clawmetry import local_store as ls
-    from pathlib import Path
-    monkeypatch.setattr(ls, "DB_PATH", Path(str(db)))
-    monkeypatch.setattr(ls, "_writer_owner", True)
-    monkeypatch.setattr(ls, "_daemon_registered", lambda: False)
-    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
-    try:
-        ls._reset_singleton_for_tests()
-    except Exception:
-        pass
-    s = ls.get_store()
+    s = ls.LocalStore()
     yield s
     try:
-        s.stop()
-    except Exception:
-        pass
-    try:
-        ls._reset_singleton_for_tests()
+        s.stop(flush=False)
     except Exception:
         pass
 
@@ -290,14 +283,9 @@ def _seed(store, n_frustrated=3, n_calm=5, sid="claude_code:s1", ts=None):
         store.ingest(e)
     store.ingest_session({"session_id": sid, "agent_type": "openclaw", "node_id": "n1",
                           "title": "seed", "started_at": ts, "cost_usd": 1.5})
-    # flush synchronously
-    for _ in range(50):
-        try:
-            if store._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] >= len(evs):
-                break
-        except Exception:
-            pass
-        time.sleep(0.05)
+    store.flush()
+    landed = store._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    assert landed >= len(evs), f"seed did not land: {landed} of {len(evs)} events"
     return evs
 
 
@@ -380,18 +368,21 @@ def test_sessions_query_lists_sessions_not_phrases(store):
     assert "wtf" not in json.dumps(rows)
 
 
-# ── routes ───────────────────────────────────────────────────────────────────────
+# ── routes ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
-def client(store):
+def client(store, monkeypatch):
     """A bare Flask app with only the signals blueprint, the way
-    ``test_guard_control_route.py`` does it: no auth gate, no daemon, reads
-    fall through ``_ls_call`` to the isolated store above."""
+    ``test_guard_control_route.py`` does it: no auth gate, and ``_ls_call``
+    is pointed at the isolated store above rather than at whichever daemon
+    proxy an earlier test in the batch left discoverable."""
     from flask import Flask
-    from routes.signals import bp_signals
+    import routes.signals as rs
+    monkeypatch.setattr(rs, "_ls_call",
+                        lambda method, **kw: getattr(store, method)(**kw))
     app = Flask(__name__)
     app.config["TESTING"] = True
-    app.register_blueprint(bp_signals)
+    app.register_blueprint(rs.bp_signals)
     return app.test_client()
 
 
@@ -421,7 +412,7 @@ def test_routes_shapes(client, store):
     assert client.get("/api/signals/not_a_signal/sessions").status_code == 404
 
 
-# ── alert rule ────────────────────────────────────────────────────────────────────
+# ── alert rule ─────────────────────────────────────────────────────────────
 
 def _rule(threshold=10, signal="user_frustration", runtime=None, min_turns=None):
     cond = {"alert_type": "signal_rate_above", "threshold_value": threshold,
@@ -478,7 +469,7 @@ def test_store_rate_window(store):
     assert store.query_signal_rate_window(signal="nope", window_minutes=60) == {}
 
 
-# ── snapshot slice ──────────────────────────────────────────────────────────────────
+# ── snapshot slice ─────────────────────────────────────────────────────────
 
 def test_snapshot_slices_keys_and_no_sessions(store):
     _seed(store)
