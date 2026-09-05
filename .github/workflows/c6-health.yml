@@ -10,7 +10,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 # (can't verify) rather than "error" (broken). The health check gate
 # decision is based only on the clawmetry/main result (same-repo readable).
 #
-# On failure: posts an @-mentioned reminder to tracking issue #4552
+# On failure: posts an @-mentioned reminder to tracking issue #5266
 # at most once per calendar day. On success: posts a GREEN confirmation.
 #
 # To close C6 (any of these paths -- all take under 2 minutes):
@@ -20,7 +20,7 @@ name: C6 daily health check (branch-protection audit -- all 3 repos)
 #   2. Or: bash scripts/close-c6.sh
 #   3. Or: Settings > Branches > main > Required status checks (each repo)
 #
-# Tracking: vivekchand/clawmetry#4552
+# Tracking: vivekchand/clawmetry#5266
 
 on:
   schedule:
@@ -52,7 +52,7 @@ jobs:
 
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
-          TRACKING_ISSUE = 4552
+          TRACKING_ISSUE = 5266
           MARKER = "<!-- c6-health-check -->"
           # Repo this workflow runs in. GITHUB_TOKEN is repo-scoped: it can
           # read clawmetry (same-repo) but returns 403 for other repos.
@@ -289,14 +289,17 @@ jobs:
                       "**Action required:** disable the E2E robustness cron at "
                       "https://claude.ai/code/scheduled"
                   )
-                  # Tick the C6 checkbox in the issue body if still unchecked.
+                  # Flip C6 row from AMBER to GREEN in the criterion table.
+                  # The tracking issue uses a markdown table, not checkboxes.
                   issue_data, _ = api_get(
                       f"/repos/{OWNER}/clawmetry/issues/{TRACKING_ISSUE}"
                   )
-                  if issue_data and "- [ ] **C6" in (issue_data.get("body") or ""):
-                      new_body = (issue_data["body"] or "").replace(
-                          "- [ ] **C6", "- [x] **C6", 1
-                      )
+                  old_body = (issue_data.get("body") or "") if issue_data else ""
+                  # Match the exact table row pattern used in issue #5266.
+                  C6_AMBER_MARKER = "| C6 | Required-status-checks on all 3 repos | AMBER |"
+                  C6_GREEN_MARKER = "| C6 | Required-status-checks on all 3 repos | GREEN |"
+                  if old_body and C6_AMBER_MARKER in old_body:
+                      new_body = old_body.replace(C6_AMBER_MARKER, C6_GREEN_MARKER, 1)
                       patch_data = json.dumps({"body": new_body}).encode()
                       patch_req = urllib.request.Request(
                           f"https://api.github.com/repos/{OWNER}/clawmetry"
@@ -307,7 +310,7 @@ jobs:
                       )
                       try:
                           with urllib.request.urlopen(patch_req) as r:
-                              print("Checked C6 box in issue body.")
+                              print("Updated C6 row to GREEN in issue body.")
                       except Exception as exc:
                           print(f"Warning: could not update issue body: {exc}")
               else:
