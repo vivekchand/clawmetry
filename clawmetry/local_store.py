@@ -11688,6 +11688,49 @@ class LocalStore(TrailStoreMixin):
             lambda: self._query_events_impl(session_id=session_id, agent_id=agent_id, event_type=event_type, since=since, until=until, runtime=runtime, exclude_daemon=exclude_daemon, limit=limit),
         )
 
+    def query_events_slim(
+        self,
+        *,
+        session_id: str | None = None,
+        agent_id: str | None = None,
+        event_type: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        runtime: str | None = None,
+        exclude_daemon: bool = False,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """``query_events`` with the bulk payload keys stripped from ``data``.
+
+        Same rows, same filters, same order — only ``_SLIM_DROP_KEYS`` are
+        removed from each event's decoded ``data`` dict. Every other key
+        survives, so callers that read ``plugin``/``tool``/``tool_name``/
+        ``name``/``skill``/``role``/``_runtime``/``model``/``extra`` behave
+        identically; this is a denylist, not an allowlist, precisely so a
+        roll-up that reads some rarely-set key does not silently change its
+        numbers.
+
+        Why it exists: the token/cost/plugin/skill/model roll-ups behind the
+        Cost tab each scan 20k-50k events, and every one of those rows is
+        JSON-marshalled across the daemon RPC. Measured 2026-09-05 on a
+        46k-row store, one ``query_events(limit=20000)`` is 37.7 MB and the
+        SQL is only 0.9 s of it — the other ~5 s (far more on a loaded box)
+        is decode + dumps + loads. ``content`` and ``tool_calls`` are 95% of
+        those bytes and no roll-up reads either. Dropping them takes the same
+        call to ~2 MB, which is what keeps these scans from monopolising the
+        daemon's single DuckDB connection until sibling requests trip
+        ``routes.local_query._PROXY_TIMEOUTS`` and render a false EMPTY tab.
+
+        Transcript/Brain/replay paths must keep calling ``query_events`` —
+        they are exactly the readers that need ``content``.
+        """
+        # Its own cache key: the slim and full shapes must never serve each
+        # other's rows out of ``_READ_CACHE``.
+        return self._cached_read(
+            "query_events_slim", {"session_id": session_id, "agent_id": agent_id, "event_type": event_type, "since": since, "until": until, "runtime": runtime, "exclude_daemon": exclude_daemon, "limit": limit},
+            lambda: _slim_event_rows(self._query_events_impl(session_id=session_id, agent_id=agent_id, event_type=event_type, since=since, until=until, runtime=runtime, exclude_daemon=exclude_daemon, limit=limit)),
+        )
+
     def _query_events_impl(
         self,
         *,
@@ -18810,6 +18853,32 @@ def _row_to_event(row: tuple, cols: list[str]) -> dict[str, Any]:
                 out["data"] = text
         except UnicodeDecodeError:
             out["data"] = None
+    return out
+
+
+# The two ``data`` keys that carry an event's bulk. Measured 2026-09-05 over
+# the newest 20k events of a real 46k-row store: ``content`` 19.5 MB (66.5%)
+# and ``tool_calls`` 8.4 MB (28.5%) of 29.3 MB of decoded payload. Everything
+# the Cost-tab roll-ups actually read — ``_runtime``, ``role``, ``tool_name``,
+# ``extra`` — is under 1.5 MB combined. See ``LocalStore.query_events_slim``.
+_SLIM_DROP_KEYS = ("content", "tool_calls")
+
+
+def _slim_event_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip ``_SLIM_DROP_KEYS`` from each row's decoded ``data`` dict.
+
+    ``rows`` come straight from ``_query_events_impl``, which builds a fresh
+    dict per row, so the ``data`` dicts are rebuilt (not mutated in place) —
+    a row handed to a caller must never be the same object another cache
+    entry is holding.
+    """
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        data = r.get("data")
+        if isinstance(data, dict) and any(k in data for k in _SLIM_DROP_KEYS):
+            r = dict(r)
+            r["data"] = {k: v for k, v in data.items() if k not in _SLIM_DROP_KEYS}
+        out.append(r)
     return out
 
 
