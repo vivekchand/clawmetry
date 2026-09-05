@@ -439,9 +439,6 @@ jobs:
             tests/test_guard_control_capability.py \
             tests/test_process_control.py \
             tests/test_process_control_windows.py \
-            tests/test_guard_control_capability.py \
-            tests/test_process_control.py \
-            tests/test_process_control_windows.py \
             tests/test_detector_incident_delivery.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
             tests/test_waste_flags_free_default.py \
