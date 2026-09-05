@@ -385,6 +385,7 @@ jobs:
             tests/test_e2e_real_openclaw_pipeline.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
             tests/test_query_events_keys_first.py \
+            tests/test_cost_scan_slim_events.py \
             tests/test_moat_cloud_roundtrip_e2e.py \
             tests/test_channel_event_chokepoint.py \
             tests/test_no_direct_get_store_in_routes.py \
@@ -413,6 +414,7 @@ jobs:
             tests/test_ingest_upsert_dedupe.py \
             tests/test_store_range_indexes_dropped.py \
             tests/test_store_startup_compaction.py \
+            tests/test_store_phase_context_dedupe.py \
             tests/test_launchd_dashboard_runs_waitress.py \
             tests/test_scan_read_cache.py \
             tests/test_cache_push_gating.py \
@@ -436,6 +438,9 @@ jobs:
             tests/test_signals_ui_contract.py \
             tests/test_signal_shifts.py \
             tests/test_briefs.py \
+            tests/test_guard_control_capability.py \
+            tests/test_process_control.py \
+            tests/test_process_control_windows.py \
             tests/test_detector_incident_delivery.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
             tests/test_waste_flags_free_default.py \
