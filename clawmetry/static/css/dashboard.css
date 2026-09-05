@@ -688,6 +688,14 @@
      the right. TOC hides on narrow viewports (< 1100px) so mobile falls
      back to plain vertical scroll. */
   .transcript-layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 18px; align-items: start; }
+  /* Only the message stream and the TOC are columns. Everything the replay
+     injects here at runtime (#replay-load-earlier, #replay-tree-container)
+     spans the row: as a plain auto-placed sibling it would take the wide
+     first column and push #transcript-messages into the narrow 240px TOC
+     column, which renders the replay as an overflowing strip on the right
+     with the left half of the page blank. Twice shipped that way; the rule
+     lives here so the next injected node cannot repeat it. */
+  .transcript-layout > *:not(#transcript-messages):not(.transcript-toc) { grid-column: 1 / -1; }
   .transcript-toc {
     position: sticky; top: 12px; align-self: start;
     max-height: calc(100vh - 40px); overflow-y: auto;
