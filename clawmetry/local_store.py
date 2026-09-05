@@ -2700,6 +2700,12 @@ except ValueError:
     _UPSERT_HASH_CACHE_MAX = 2_000_000
 
 
+try:
+    _PHASE_REFRESH_SECS = float(os.environ.get("CLAWMETRY_PHASE_REFRESH_SECS", "600") or "0")
+except ValueError:
+    _PHASE_REFRESH_SECS = 600.0
+
+
 def _content_hash(parts: list[Any]) -> str:
     """Stable 128-bit digest of a row's content columns (timestamps such as
     ``created_at`` / ``updated_at`` must be excluded by the caller, or every
@@ -3446,6 +3452,10 @@ class LocalStore(TrailStoreMixin):
         # ``_write_lock`` (only the write paths touch them).
         self._span_hashes: dict[str, str] | None = None
         self._session_hashes: dict[tuple[str, str], str] | None = None
+        # #5528 — session_phase: (content hash, observed_at ms) per session,
+        # so a tick that observed the same phase writes nothing (bounded by a
+        # freshness floor so observed_at never goes stale for long).
+        self._phase_hashes: dict[str, tuple[str, int]] | None = None
         self._last_oom_reopen_ts: float | None = None
         self._conn = _open_connection(read_only=read_only)
         if not read_only:
@@ -7579,8 +7589,27 @@ class LocalStore(TrailStoreMixin):
         ph = str(phase).strip().lower()[:32] if phase else None
         st = str(status).strip().lower()[:64] if status else None
         res = None if resolvable is None else bool(resolvable)
+        # #5528 — content columns only: the transition stamp and the
+        # first-sighting directory are derived by the upsert, and observed_at
+        # is a write timestamp. Same content within the freshness floor means
+        # the tick writes nothing; the stored row is what it was.
+        content = [str(runtime or "")[:64], ph, st, str(phase_basis or "")[:32],
+                   str(end_reason or "")[:128], res, str(cwd or "")[:1024]]
+        h = _content_hash(content)
         try:
             with self._write_lock:
+                cache = self._phase_hashes_locked()
+                hit = cache.get(sid) if cache is not None else None
+                if hit is not None and hit[0] == h and (now_ms - hit[1]) < _PHASE_REFRESH_SECS * 1000:
+                    if not return_row:
+                        return {}
+                    row = self._conn.execute("""
+                        SELECT session_id, runtime, phase, status, phase_basis,
+                               phase_since, end_reason, resolvable, initial_cwd,
+                               cwd, observed_at
+                          FROM session_phase WHERE session_id = ?
+                    """, [sid]).fetchone()
+                    return _session_phase_row(row)
                 self._conn.execute("""
                     INSERT INTO session_phase (
                         session_id, runtime, phase, status, phase_basis,
@@ -7614,6 +7643,8 @@ class LocalStore(TrailStoreMixin):
                       str(end_reason or "")[:128], res,
                       str(initial_cwd or cwd or "")[:1024],
                       str(cwd or "")[:1024], now_ms])
+                if cache is not None:
+                    cache[sid] = (h, now_ms)
                 if not return_row:
                     return {}
                 row = self._conn.execute("""
@@ -9146,6 +9177,30 @@ class LocalStore(TrailStoreMixin):
         elif len(self._span_hashes) > _UPSERT_HASH_CACHE_MAX:
             self._span_hashes.clear()
         return self._span_hashes
+
+    def _phase_hashes_locked(self) -> dict[str, tuple[str, int]] | None:
+        """session_phase counterpart of :meth:`_span_hashes_locked`: content
+        hash plus the stored observed_at, seeded from the table once."""
+        if not _UPSERT_DEDUPE:
+            return None
+        if self._phase_hashes is None:
+            seeded: dict[str, tuple[str, int]] = {}
+            try:
+                for (sid, runtime, phase, status, basis, end_reason, res, cwd, observed) in self._conn.execute(
+                    "SELECT session_id, runtime, phase, status, phase_basis, "
+                    "end_reason, resolvable, cwd, observed_at FROM session_phase"
+                ).fetchall():
+                    content = [str(runtime or "")[:64], phase or None, status or None,
+                               str(basis or "")[:32], str(end_reason or "")[:128],
+                               None if res is None else bool(res), str(cwd or "")[:1024]]
+                    seeded[str(sid)] = (_content_hash(content), int(observed or 0))
+            except Exception:
+                log.exception("local store: phase hash seed failed (dedupe starts cold)")
+                seeded = {}
+            self._phase_hashes = seeded
+        elif len(self._phase_hashes) > _UPSERT_HASH_CACHE_MAX:
+            self._phase_hashes.clear()
+        return self._phase_hashes
 
     def _session_hashes_locked(self) -> dict[tuple[str, str], str] | None:
         """Session counterpart of :meth:`_span_hashes_locked`."""
@@ -14182,6 +14237,27 @@ class LocalStore(TrailStoreMixin):
         n = 0
         now_ms = int(time.time() * 1000)
         with self._write_lock:
+            # #5528 — the family ingest re-reads a whole session on every
+            # tick and re-delivers every context row; an upsert that changes
+            # nothing is still a DELETE plus INSERT on a keyed table. Look
+            # up what the table already holds for these sessions once, and
+            # skip a row whose stored first_ts/last_ts already cover it and
+            # that brings no summary the row lacks.
+            existing: dict[tuple[str, str, str, str], tuple[str, str, Any]] = {}
+            if _UPSERT_DEDUPE:
+                sids = sorted({str(r.get("session_id") or "") for r in (rows or ()) if isinstance(r, dict)} - {""})
+                for off in range(0, len(sids), 500):
+                    chunk = sids[off:off + 500]
+                    ph_ = ",".join("?" * len(chunk))
+                    try:
+                        for (at, sid_, kind_, sha_, first_, last_, summ_) in self._conn.execute(
+                            "SELECT agent_type, session_id, kind, sha256, first_ts, last_ts, summary "
+                            f"FROM session_context WHERE session_id IN ({ph_})", chunk,
+                        ).fetchall():
+                            existing[(str(at), str(sid_), str(kind_), str(sha_))] = (str(first_ or ""), str(last_ or ""), summ_)
+                    except Exception:
+                        existing = {}
+                        break
             for r in rows or ():
                 if not isinstance(r, dict):
                     continue
@@ -14189,6 +14265,12 @@ class LocalStore(TrailStoreMixin):
                 kind = str(r.get("kind") or "")
                 sha = str(r.get("sha256") or "")
                 if not (sid and kind and sha):
+                    continue
+                _ts = str(r.get("last_ts") or r.get("first_ts") or "")
+                _first = str(r.get("first_ts") or _ts)
+                _have = existing.get((str(r.get("agent_type") or "openclaw"), sid, kind, sha))
+                if _have is not None and _ts <= _have[1] and _first >= _have[0] \
+                        and (r.get("summary") is None or _have[2] is not None):
                     continue
                 content = r.get("content")
                 if isinstance(content, str):
