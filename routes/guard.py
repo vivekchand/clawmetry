@@ -235,9 +235,14 @@ def _live_only_rows(store_rows: list) -> list:
     a brand-new agent had no Kill button at all. The process itself is knowable
     in ~5ms, so Guard asks it directly and fills the gap.
 
-    Matching is on the NATIVE id: store rows are namespaced ``<runtime>:<id>``
-    by ``sync.sync_family_runtimes`` while the probe reports what the runtime
-    itself wrote, so comparing raw ids would duplicate every single session.
+    Matching compares the probe's native id against the store's RAW ids, in
+    both the bare and namespaced spellings, and never asks what runtime a store
+    row is. That indirection is the trap: ``_session_runtime`` resolves through
+    ``waste_flags.runtime_from_session_id``, which returns ``"openclaw"`` for
+    everything unless clawmetry-pro is installed. Keying on the row's runtime
+    label therefore matched nothing on a Free install and duplicated every
+    Claude Code session already in the store — invisible on a Pro laptop and on
+    every developer machine, caught only by CI, which runs OSS-only.
 
     Cost, tokens and incidents are left at zero and the row is stamped
     ``pending_ingest`` — the daemon has not measured them yet, and a fabricated
@@ -252,21 +257,18 @@ def _live_only_rows(store_rows: list) -> list:
     if not live:
         return []
 
-    seen = set()
-    for row in store_rows:
-        rt = str(row.get("runtime") or "")
-        sid = str(row.get("session_id") or "")
-        try:
-            native = _pc.native_session_id(rt, sid)
-        except Exception:  # noqa: BLE001
-            native = sid
-        seen.add((rt, native))
+    seen = {str(row.get("session_id") or "") for row in store_rows}
 
     rows = []
     for entry in live:
         rt = str(entry.get("runtime") or "")
         native = str(entry.get("session_id") or "")
-        if not rt or not native or (rt, native) in seen:
+        if not rt or not native:
+            continue
+        # Both spellings, because only the store knows whether it namespaced
+        # this row, and asking it to tell us its runtime is the thing that
+        # broke on Free.
+        if native in seen or f"{rt}:{native}" in seen:
             continue
         # Namespace it the way the store would, so the id the UI posts back to
         # /api/guard/control is identical whichever source the row came from,

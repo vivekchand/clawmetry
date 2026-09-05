@@ -143,6 +143,28 @@ def test_the_probe_does_not_duplicate_a_session_the_store_already_has(
     assert rows[0].get("pending_ingest") is not True
 
 
+def test_no_duplicate_when_the_store_row_resolves_to_openclaw(
+        client, fake_map, store_rows, monkeypatch):
+    """The Free-tier shape, which is what CI runs and what most users install.
+
+    ``_session_runtime`` resolves through ``waste_flags.runtime_from_session_id``,
+    which returns "openclaw" for EVERY id unless clawmetry-pro is installed. A
+    de-duplication keyed on the store row's runtime label therefore matched
+    nothing on Free and listed every Claude Code session twice — once from the
+    store and once from the probe. This passed on a Pro laptop and failed in
+    CI, so it is pinned with the resolver forced to its Free answer.
+    """
+    monkeypatch.setattr(guard, "_session_runtime", lambda sid, agent: "openclaw")
+    store_rows["sessions"] = [{
+        "session_id": "claude_code:aaaa-1111", "agent_type": "openclaw",
+        "status": "active", "title": "Father of India", "cost_usd": 0.23,
+        "last_active_at": "2026-09-05T00:38:13+00:00", "metadata": {},
+    }]
+    rows = _rows(client)
+    assert len(rows) == 1
+    assert rows[0]["cost_usd"] == 0.23
+
+
 def test_a_just_started_session_outranks_older_unflagged_ones(
         client, fake_map, store_rows):
     # A new row appended at the end of a 50-row table is still "not showing
