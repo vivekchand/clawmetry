@@ -197,6 +197,111 @@ def _session_runtime(session_id: str, agent_type: str) -> str:
     return rt or str(agent_type or "").strip().lower()
 
 
+def _ts_epoch(value) -> float:
+    """Best-effort epoch seconds for a store timestamp; ``0.0`` when unknown.
+
+    Only ever used as a SORT key, so an unparseable timestamp must sink to the
+    bottom rather than raise or reorder anything else.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value) / 1000.0 if value > 1e12 else float(value)
+    if not isinstance(value, str) or not value.strip():
+        return 0.0
+    import datetime as _dt
+    raw = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = _dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+    return parsed.timestamp()
+
+
+def _iso(epoch) -> str:
+    """Epoch seconds -> the UTC ISO string the rest of the payload uses."""
+    if not isinstance(epoch, (int, float)) or isinstance(epoch, bool) or epoch <= 0:
+        return ""
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(float(epoch), _dt.timezone.utc).isoformat()
+
+
+def _live_only_rows(store_rows: list) -> list:
+    """Rows for processes that are running but absent from ``store_rows``.
+
+    The store learns about a session when the sync daemon next walks its
+    transcript. That is a whole cycle away — 60-80s on a busy node, and one
+    measured 288s pass behind a 1088-session ``runtime_backfill``, during which
+    a brand-new agent had no Kill button at all. The process itself is knowable
+    in ~5ms, so Guard asks it directly and fills the gap.
+
+    Matching is on the NATIVE id: store rows are namespaced ``<runtime>:<id>``
+    by ``sync.sync_family_runtimes`` while the probe reports what the runtime
+    itself wrote, so comparing raw ids would duplicate every single session.
+
+    Cost, tokens and incidents are left at zero and the row is stamped
+    ``pending_ingest`` — the daemon has not measured them yet, and a fabricated
+    dollar figure in the column the tab sorts by would be worse than a blank.
+    """
+    try:
+        import clawmetry.process_control as _pc
+        live = _pc.live_sessions()
+    except Exception:  # noqa: BLE001 — never break the list over a probe
+        log.exception("guard: live session probe failed")
+        return []
+    if not live:
+        return []
+
+    seen = set()
+    for row in store_rows:
+        rt = str(row.get("runtime") or "")
+        sid = str(row.get("session_id") or "")
+        try:
+            native = _pc.native_session_id(rt, sid)
+        except Exception:  # noqa: BLE001
+            native = sid
+        seen.add((rt, native))
+
+    rows = []
+    for entry in live:
+        rt = str(entry.get("runtime") or "")
+        native = str(entry.get("session_id") or "")
+        if not rt or not native or (rt, native) in seen:
+            continue
+        # Namespace it the way the store would, so the id the UI posts back to
+        # /api/guard/control is identical whichever source the row came from,
+        # and so the row de-duplicates cleanly once ingest catches up.
+        sid = f"{rt}:{native}"
+        cwd = str(entry.get("cwd") or "")
+        support = _runtime_supports_signals(rt, sid, cwd)
+        last_active = entry.get("updated_at") or entry.get("started_at")
+        rows.append({
+            "session_id": sid,
+            "runtime": rt,
+            "agent_id": "",
+            "title": str(entry.get("title") or "")[:160],
+            "status": str(entry.get("status") or "running"),
+            "started_at": _iso(entry.get("started_at")),
+            "last_active_at": _iso(last_active),
+            "cost_usd": 0.0,
+            "total_tokens": 0,
+            "message_count": 0,
+            "cwd": cwd,
+            "incident": None,
+            # The tab must not print "$0.00" for a session whose cost simply
+            # has not been read yet; this is the flag that says "unknown", not
+            # "zero".
+            "pending_ingest": True,
+            "controllable": support["controllable"],
+            "control_reason": support.get("reason", ""),
+            "no_pause": support.get("no_pause", False),
+            "control_actions": support.get("actions", []),
+            "control_note": support.get("note", "")
+                            or support.get("platform", {}).get("note", ""),
+        })
+    return rows
+
+
 # Severity ladder shared with ``clawmetry.detectors`` (higher is louder).
 _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 
@@ -342,13 +447,22 @@ def api_guard_sessions():
                             or support.get("platform", {}).get("note", ""),
         })
 
+    # Anything running that the store has not caught up with yet. Without this
+    # the tab is only as fresh as a full sync cycle (60-80s on a busy node,
+    # minutes behind a backfill), which is not a kill switch.
+    out.extend(_live_only_rows(out))
+
     # Flagged sessions first, most expensive to ignore at the top; unflagged
-    # sessions keep their recency order below. Sorting by severity alone put a
-    # $0.02 "continued after a failed command" above a $170 loop, which is the
-    # ranking the money model exists to fix.
+    # sessions ordered newest-active first below. Sorting by severity alone put
+    # a $0.02 "continued after a failed command" above a $170 loop, which is
+    # the ranking the money model exists to fix. Recency is the LAST key, so it
+    # only breaks exact ties among flagged rows — but it decides the whole
+    # unflagged group, which is what puts a just-started session at the top of
+    # it instead of at the bottom of a 50-row table.
     out.sort(key=lambda r: (
         1 if r.get("incident") else 0,
         _incident_rank(r.get("incident")),
+        _ts_epoch(r.get("last_active_at")),
     ), reverse=True)
 
     flagged = [r for r in out if r.get("incident")]

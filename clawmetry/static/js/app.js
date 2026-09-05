@@ -31423,6 +31423,12 @@ function loadGuardSessions() {
           guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') +
           (inc.count ? ' &middot; ' + inc.count : '') + '</span>'
         : '<span class="pill pill-ok">Running</span>';
+      // Listed from the live process probe, so it can be stopped now, but the
+      // sync daemon has not read its transcript yet. Say that rather than let
+      // the blank cost and missing detector status read as "nothing to see".
+      if (!inc && s.pending_ingest) {
+        statusCell += ' <span class="muted" title="This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.">&middot; just started</span>';
+      }
       // The estimate says what it is: a burn-rate figure and a
       // window-fraction figure are not the same kind of number, and the
       // tooltip is where that distinction lives instead of being hidden.
@@ -31478,7 +31484,9 @@ function loadGuardSessions() {
         '<td>' + guardEsc(s.runtime) + '</td>' +
         '<td>' + statusCell + '</td>' +
         '<td>' + riskCell + '</td>' +
-        '<td>$' + (Number(s.cost_usd) || 0).toFixed(2) + '</td>' +
+        '<td>' + (s.pending_ingest
+          ? '<span class="muted" title="Not measured yet - the sync daemon has not read this session\'s transcript.">&mdash;</span>'
+          : '$' + (Number(s.cost_usd) || 0).toFixed(2)) + '</td>' +
         '<td>' + guardEsc(guardAgo(s.last_active_at)) + '</td>' +
         '<td>' + control + '</td></tr>';
     });
