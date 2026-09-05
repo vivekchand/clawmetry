@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import importlib
 
-import pytest
 
 
 def _fresh(tmp_path, monkeypatch, name="phase.duckdb", **env):
