@@ -324,6 +324,61 @@ def test_brief_routes(client, store, monkeypatch):
     assert client.post("/api/briefs/nope/run", json={}).status_code == 404
 
 
+# ── snapshot slice (hosted dashboard) ──────────────────────────────────────
+
+SNAPSHOT_BRIEF_KEYS = {"id", "title", "question", "cron_expr", "tz", "channel_ref", "enabled",
+                       "last_run_at", "last_status", "last_error", "created_at", "builtin"}
+
+
+def test_snapshot_slice_has_the_api_shape_and_offers_the_digest(store):
+    store.upsert_brief(brief=_brief(1))
+    store.mark_brief_run(brief_id="b1", status="failed", error="channel exploded")
+    sl = br.build_snapshot_slice(store)
+    assert set(sl) == {"briefs", "count", "max", "channels", "offered", "generated_at"}
+    assert sl["count"] == 1 and sl["max"] == br.BRIEFS_MAX
+    assert set(sl["channels"]) == set(br.CHANNELS)
+    assert sl["offered"]["id"] == br.BUILTIN_DAILY_DIGEST_ID and sl["offered"]["enabled"] is False
+    row = sl["briefs"][0]
+    assert set(row) == SNAPSHOT_BRIEF_KEYS, sorted(row)
+    assert row["last_status"] == "failed" and "channel exploded" in row["last_error"]
+    assert row["builtin"] is False
+    # Saving the digest removes the offer and marks the row built in.
+    store.upsert_brief(brief=dict(br.BUILTIN_DAILY_DIGEST))
+    sl = br.build_snapshot_slice(store)
+    assert sl["offered"] is None
+    assert any(b["builtin"] for b in sl["briefs"])
+
+
+def test_snapshot_slice_is_capped_and_never_raises(store, monkeypatch):
+    for i in range(br.SNAPSHOT_MAX + 7):
+        store.upsert_brief(brief=_brief(i))
+    assert len(store.list_briefs(limit=500)) == br.SNAPSHOT_MAX + 7
+    sl = br.build_snapshot_slice(store)
+    assert br.SNAPSHOT_MAX == 50
+    assert len(sl["briefs"]) == 50 and sl["count"] == 50
+    # A caller cannot lift the cap above the module ceiling.
+    assert len(br.build_snapshot_slice(store, limit=500)["briefs"]) == 50
+    # A store without the method, or one that raises, yields {} (the
+    # snapshot carries an empty slice, never a traceback).
+    assert br.build_snapshot_slice(object()) == {}
+
+    class Boom:
+        def list_briefs(self, **kw):
+            raise RuntimeError("disk gone")
+    assert br.build_snapshot_slice(Boom()) == {}
+
+
+def test_sync_emits_the_briefs_slice_next_to_signal_issues():
+    import pathlib
+    src = pathlib.Path(__file__).resolve().parents[1].joinpath("clawmetry", "sync.py") \
+        .read_text(encoding="utf-8")
+    assert '"briefs": _briefs_slice,' in src
+    assert "_briefs_snap.build_snapshot_slice(_br_store)" in src
+    # Wrapped like the neighbouring slices: a failure logs and moves on.
+    assert 'log.debug("snapshot: briefs slice failed: %s", _e_br)' in src
+    assert src.index('"signalIssues": _signal_issues_slice,') < src.index('"briefs": _briefs_slice,')
+
+
 def test_narrator_has_a_brief_prompt():
     from clawmetry import narrator
     assert "brief" in narrator._PROMPTS
