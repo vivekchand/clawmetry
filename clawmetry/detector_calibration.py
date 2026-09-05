@@ -76,6 +76,18 @@ BLAST_RADIUS_FILES = int(os.environ.get("CLAWMETRY_BLAST_FILES", "25"))
 # network_egress: distinct external hosts in one window that counts as fan-out.
 EGRESS_HOST_FANOUT = int(os.environ.get("CLAWMETRY_EGRESS_HOSTS", "8"))
 
+# Silent-failure detectors (rate limited / blocked on a human / crashed).
+# How many rate-limit style refusals (429 / overloaded / quota) in the window
+# before the agent is called rate limited. One is normal; providers retry.
+RATE_LIMIT_MIN = int(os.environ.get("CLAWMETRY_RATE_LIMIT_MIN", "2"))
+# How many session (re)starts inside CRASH_WINDOW_SEC count as a crash loop.
+# Two matches the outcome classifier's ``crash-loop`` impact tag.
+CRASH_RESTARTS = int(os.environ.get("CLAWMETRY_CRASH_RESTARTS", "2"))
+CRASH_WINDOW_SEC = int(os.environ.get("CLAWMETRY_CRASH_WINDOW_SEC", "900"))
+# How long a session must have sat on a question or approval before it is
+# reported as blocked on a human (seconds). Below this it is just a prompt.
+BLOCKED_WAIT_SEC = int(os.environ.get("CLAWMETRY_BLOCKED_WAIT_SEC", "120"))
+
 # ── Learned baselines (thresholds that stop being constants) ─────────────────
 # A cohort (runtime, or a single agent) needs this many observed sessions
 # before its measured mean/stddev is allowed to move a threshold. Below it we
@@ -153,6 +165,10 @@ _THRESHOLD_ENV = {
     "action_discrepancy_min": "CLAWMETRY_ACTION_DISCREPANCY_MIN",
     "blast_files": "CLAWMETRY_BLAST_FILES",
     "egress_hosts": "CLAWMETRY_EGRESS_HOSTS",
+    "rate_limit_min": "CLAWMETRY_RATE_LIMIT_MIN",
+    "crash_restarts": "CLAWMETRY_CRASH_RESTARTS",
+    "crash_window_sec": "CLAWMETRY_CRASH_WINDOW_SEC",
+    "blocked_wait_sec": "CLAWMETRY_BLOCKED_WAIT_SEC",
 }
 
 
@@ -168,6 +184,10 @@ def _static_thresholds() -> dict:
         "action_discrepancy_min": ACTION_DISCREPANCY_MIN,
         "blast_files": BLAST_RADIUS_FILES,
         "egress_hosts": EGRESS_HOST_FANOUT,
+        "rate_limit_min": RATE_LIMIT_MIN,
+        "crash_restarts": CRASH_RESTARTS,
+        "crash_window_sec": CRASH_WINDOW_SEC,
+        "blocked_wait_sec": BLOCKED_WAIT_SEC,
     }
 
 

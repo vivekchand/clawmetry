@@ -92,11 +92,18 @@ def test_severity_from_counts_defaults_to_info(monkeypatch):
     assert _w.severity_from_counts(10, 5) == "info"
 
 
-def test_event_is_real_error_defaults_to_false(monkeypatch):
+def test_event_is_real_error_free_default_is_structured(monkeypatch):
+    """The OSS default is a structured check, not a constant False: a flagged
+    tool result counts, a reply that merely says "error" does not, and a
+    bare dict with no event shape is not an error."""
     _hide_pro(monkeypatch)
     import clawmetry.waste_flags as _w
     importlib.reload(_w)
     assert _w.event_is_real_error({"is_error": True}) is False
+    assert _w.event_is_real_error(
+        {"event_type": "tool_result", "data": {"is_error": True}}) is True
+    assert _w.event_is_real_error(
+        {"event_type": "message", "data": {"content": "no error here"}}) is False
 
 
 # ── error_signal shim ────────────────────────────────────────────────────────
