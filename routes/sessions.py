@@ -359,9 +359,10 @@ def session_runtime(row: dict) -> str:
     ``openclaw`` and puts the real adapter in ``metadata.runtime``, so on a
     live node all 300 rows read ``agent_type='openclaw'`` while their ids are
     ``claude_code:<uuid>``. Any surface that filters on ``agent_type``
-    therefore matches nothing for 25 of the 26 runtimes — which is how the
-    needs-you strip came to say "No agents running" directly above a hero
-    naming three working Claude Code sessions (founder report 2026-09-05).
+    therefore matches nothing for every runtime except OpenClaw — which is
+    how the needs-you strip came to say "No agents running" directly above a
+    hero naming three working Claude Code sessions (founder report
+    2026-09-05).
 
     Resolution order, most trustworthy first:
       1. ``metadata.runtime`` — written by the family ingest.

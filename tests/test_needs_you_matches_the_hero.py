@@ -16,8 +16,8 @@ they disagreed for two independent reasons:
      Claude Code filter in the screenshot NOTHING matched, so ``working``
      was 0 -- and, far worse than a wrong count, a genuinely blocked Claude
      Code session would have been dropped from ``items`` too. The strip whose
-     entire job is "tell me when an agent needs me" was silent for 25 of the
-     26 runtimes whenever a runtime was selected.
+     entire job is "tell me when an agent needs me" was silent for every
+     runtime except OpenClaw whenever a runtime was selected.
 
   2. The two components defined "working" differently (15 minutes here, 2
      minutes there), so even node-wide they could print different numbers
