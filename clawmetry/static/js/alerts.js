@@ -880,14 +880,14 @@
 
   // ── Paywall modal ─────────────────────────────────────────────────────────
 
-  // Issue #1717: the alerts modal nodes are templated inside #zoom-wrapper,
-  // which gets `transform: scale(currentZoom)` applied unconditionally by
-  // app.js applyZoom() at boot — even when currentZoom === 1. Any non-`none`
-  // transform creates a containing block for descendants with `position:
-  // fixed`, so `inset: 0` no longer means viewport — it means the wrapper.
-  // Result: the modal renders pinned to the wrapper's top-left (which
-  // scrolls with the page) instead of centered in the viewport. Reparent
-  // the modal to <body> on first open to escape the transform.
+  // Issue #1717: the alerts modal nodes are templated inside #zoom-wrapper.
+  // Any non-`none` transform on an ancestor creates a containing block for
+  // descendants with `position: fixed`, so `inset: 0` no longer means
+  // viewport — it means the wrapper, and the modal renders pinned to the
+  // wrapper's top-left (which scrolls with the page) instead of centered.
+  // The zoom controls that put a `transform: scale()` there are gone (header
+  // cleanup 2026-09), but #zoom-wrapper still animates a transform while
+  // booting, so keep reparenting the modal to <body> on first open.
   function detachModalToBody(modalId) {
     const modal = document.getElementById(modalId);
     if (modal && modal.parentNode !== document.body) {
