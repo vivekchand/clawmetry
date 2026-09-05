@@ -22546,6 +22546,20 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_iss:
         log.debug("snapshot: signalIssues slice failed: %s", _e_iss)
 
+    # Briefs (WO-62): the list the hosted Signals tab shows, in the shape
+    # GET /api/briefs serves (capped at 50; title and question are the only
+    # free text). Read-only on the cloud: saving, running and deleting a
+    # brief stay on the local dashboard. Never breaks the snapshot.
+    _briefs_slice: dict = {}
+    try:
+        from clawmetry import briefs as _briefs_snap
+        from clawmetry import local_store as _ls_briefs_snap
+        _br_store = _ls_briefs_snap.get_store()
+        if _br_store is not None:
+            _briefs_slice = _briefs_snap.build_snapshot_slice(_br_store)
+    except Exception as _e_br:
+        log.debug("snapshot: briefs slice failed: %s", _e_br)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -22582,6 +22596,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "signalsByRuntime": _signals_by_rt,
         # WO-62 Signal shifts: issues opened when a rate left its band.
         "signalIssues": _signal_issues_slice,
+        # WO-62 Briefs: saved questions with a schedule and a channel, read-only
+        # on the cloud (manage them on the local dashboard).
+        "briefs": _briefs_slice,
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),
