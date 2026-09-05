@@ -123,14 +123,6 @@ jobs:
       - name: Module map matches the source tree
         run: python3 scripts/gen_module_map.py --check
 
-      # Named explicitly because this repo's CI runs FILE LISTS, not
-      # `pytest tests/`: a guard added without a line here runs in no job at
-      # all. Covers the half the --check above cannot: every blueprint
-      # dashboard.py registers is in the map, and CLAUDE.md / ARCHITECTURE.md
-      # name no module that has since moved or been deleted.
-      - name: Architecture docs name modules that exist
-        run: python3 -m pytest tests/test_module_map_drift.py -q
-
       # Acceptance-criteria traceability (FLYWHEEL.md 1g). Drift Bot asks "does
       # this diff contradict a Blueprint?"; it is a changed-code check and has
       # no opinion on whether untouched code still SATISFIES a criterion
@@ -165,6 +157,16 @@ jobs:
       # was itself dead, silently, for months.
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
+
+      # Named explicitly because this repo's CI runs FILE LISTS, not
+      # `pytest tests/`: a guard added without a line here runs in no job at
+      # all. Covers the half `gen_module_map.py --check` cannot: every
+      # blueprint dashboard.py registers is in the map, and CLAUDE.md /
+      # ARCHITECTURE.md name no module that has since moved or been deleted.
+      # Must sit AFTER "Install verification test deps" -- this job's
+      # interpreter has no pytest before that step.
+      - name: Architecture docs name modules that exist
+        run: python3 -m pytest tests/test_module_map_drift.py -q
 
       # The declared product surface must match reality: every cell names a
       # verifier that exists, and nothing claims to be "gated" while sitting

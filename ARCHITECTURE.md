@@ -485,8 +485,9 @@ a warehouse.
   every core on the box. Hot rollups are result-cached with a short TTL
   (`CLAWMETRY_AGG_CACHE_TTL`, default 20s) so handlers never run a full-table
   scan per request.
-- **Memory**: tens of MB for the dashboard; the daemon's footprint follows the
-  DuckDB buffer pool.
+- **Memory**: the daemon idles near 50 MB. The DuckDB memory limit is a
+  ceiling on the buffer pool, not a reservation, so a large number there does
+  not mean a large resident process.
 - **Disk**: the store grows with your history. It is compacted, and
   `docs/EVENT_RETENTION.md` covers trimming it.
 - **Startup**: under 2 seconds.
