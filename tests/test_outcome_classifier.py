@@ -753,7 +753,9 @@ def test_settled_labels_never_re_resolve(isolated_store):
             {"outcome": label, "outcome_classified_at": old}), label
 
 
-def test_reclassify_retires_a_dead_session_that_reads_as_ongoing(isolated_store):
+def test_reclassify_retires_a_dead_session_that_reads_as_ongoing(
+    isolated_store, monkeypatch, tmp_path
+):
     """End to end, on the store: the exact 9a3e3302 shape.
 
     A two-message session, last event moments old, stamped ``ongoing`` — then
@@ -761,6 +763,13 @@ def test_reclassify_retires_a_dead_session_that_reads_as_ongoing(isolated_store)
     read, with no new event to trigger it (there will never be one).
     """
     import datetime as _dt
+    # Point process_control at an empty sessions dir so absence of a per-pid
+    # record reads as LIVE_DEAD, not "cannot tell" (which is what an absent
+    # directory returns — the distinction between a container with no ~/.claude
+    # mount and a terminal that was closed).
+    sessions_dir = tmp_path / "claude_cfg" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude_cfg"))
     _ls, store = isolated_store
     sid = "claude_code:dead-one"
 
