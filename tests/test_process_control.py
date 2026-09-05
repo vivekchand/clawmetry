@@ -398,31 +398,41 @@ def test_start_tokens_unparseable_fail_closed():
     assert pc._start_tokens_equivalent("epoch:1000", "epoch:1010") is False
 
 
-def test_claude_session_map_prefers_started_at_epoch(tmp_path, monkeypatch):
-    """When claude_code provides startedAt (epoch ms, timezone-unambiguous) the
-    map must prefer it over the ambiguous procStart ctime string."""
+def test_claude_session_map_records_the_process_start_not_the_session_start(
+        tmp_path, monkeypatch):
+    """`startedAt` is when claude_code wrote the record; `procStart` is when the
+    PROCESS began. The pid-reuse guard compares against the live process start,
+    so recording `startedAt` compares two different quantities and refuses every
+    action with start_mismatch. Found live: a 7-second gap blocked Pause on
+    every real session."""
     import json
 
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "12345.json").write_text(json.dumps({
         "pid": 12345,
-        "sessionId": "sid-startedat",
-        "startedAt": 1751430415123,  # ms
+        "sessionId": "sid-both",
+        # 7s AFTER the process start below, exactly as claude_code writes it.
+        "startedAt": 1751430422000,
         "procStart": "Thu Jul  2 04:26:55 2026",
         "status": "running",
     }))
     (sessions_dir / "12346.json").write_text(json.dumps({
         "pid": 12346,
-        "sessionId": "sid-ctime-only",
-        "procStart": "Thu Jul  2 04:26:55 2026",
+        "sessionId": "sid-no-procstart",
+        "startedAt": 1751430422000,
         "status": "running",
     }))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    pc._CLAUDE_MAP_CACHE.update({"key": None, "at": 0.0, "map": {}})
     m = pc.claude_code_session_map()
-    assert m["sid-startedat"]["procStart"] == pytest.approx(1751430415.123)
-    # Without startedAt the ctime string still flows through (TZ bridge handles it).
-    assert m["sid-ctime-only"]["procStart"] == "Thu Jul  2 04:26:55 2026"
+
+    # The guard's input is the process start, never the record's timestamp.
+    assert m["sid-both"]["procStart"] == "Thu Jul  2 04:26:55 2026"
+    assert m["sid-both"]["started_at"] == 1751430422000
+    # No process start recorded: None, so verify_pid degrades to a liveness
+    # check. A value that is guaranteed to mismatch would refuse everything.
+    assert m["sid-no-procstart"]["procStart"] is None
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -832,3 +842,42 @@ def test_qwen_sidecar_unverifiable_pid_fails_closed(tmp_path, monkeypatch):
     info = pc.resolve_qwen_code("sid-x")
     assert info["ok"] is False
     assert info["reason"] == "sidecar_pid_unverifiable"
+
+
+def test_pid_guard_accepts_a_utc_proc_start_against_local_ps(spawned, tmp_path,
+                                                             monkeypatch):
+    """The end-to-end shape of the bug above: claude_code renders procStart in
+    UTC while `ps -o lstart=` prints local time. The tz bridge already handles
+    that, so a session whose recorded process start is correct must PASS the
+    guard and be signalled."""
+    import json
+    import time as _t
+
+    p = spawned()
+    live = pc._proc_start_token(p.pid)
+    assert live is not None
+    kind, _, value = live.partition(":")
+    if kind == "epoch":                      # psutil present
+        secs = float(value)
+    else:                                    # `ps -o lstart=`, local time
+        secs = _t.mktime(_t.strptime(value.strip()))
+    # Render the SAME instant the way claude_code does: a UTC ctime string.
+    utc_ctime = _t.asctime(_t.gmtime(secs))
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / f"{p.pid}.json").write_text(json.dumps({
+        "pid": p.pid,
+        "sessionId": "tz-session",
+        "cwd": os.getcwd(),
+        "procStart": utc_ctime,
+        "startedAt": int((secs + 7) * 1000),   # the misleading field
+        "status": "running",
+    }))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    pc._CLAUDE_MAP_CACHE.update({"key": None, "at": 0.0, "map": {}})
+
+    info = pc.resolve_session("claude_code", "claude_code:tz-session")
+    assert info["ok"] is True and info["pid"] == p.pid
+    ok, reason = pc.verify_pid(info["pid"], info["recorded_start"])
+    assert ok is True, reason
