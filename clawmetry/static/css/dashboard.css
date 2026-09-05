@@ -3465,6 +3465,25 @@ body.has-profile-menu #logout-btn { display: none !important; }
 #page-guard .pill-warn { background: rgba(245,158,11,0.15); color: var(--text-warning); border-color: transparent; }
 #page-guard .pill-crit { background: rgba(239,68,68,0.15); color: var(--text-error); border-color: transparent; }
 
+/* The resume instruction stands in for the controls, so it lives in the same
+   column and must not widen it: the command truncates, the full text (plus its
+   provenance) is on the hover title, and Copy hands over the untruncated line. */
+#page-guard .guard-resume {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 320px; vertical-align: middle;
+}
+#page-guard .guard-resume code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px; color: var(--text-secondary);
+  background: var(--bg-secondary); border: 1px solid var(--border-secondary);
+  border-radius: 6px; padding: 2px 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#page-guard .guard-resume-note {
+  display: inline-block; max-width: 320px; font-size: 11px; line-height: 1.45;
+  white-space: normal;
+}
+
 #page-guard .btn {
   font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
   padding: 5px 11px; border-radius: 7px;

@@ -215,11 +215,28 @@ def runtime_control_support(runtime: str, session_id: str = "",
 
     Never raises: any resolver error degrades to "not controllable, here's
     why".
+
+    ``state`` is the machine-readable half of that answer, and callers must
+    branch on it rather than on the prose ``reason``. "I stopped this agent a
+    second ago" and "this runtime can never be signalled" both used to arrive
+    as ``controllable: False``, so the Guard tab printed one label — "Not
+    controllable" — for a session the operator had just killed. They are
+    different facts and lead to different next steps:
+
+    * ``controllable`` — buttons work.
+    * ``exited``       — this runtime IS controllable, but the session has no
+                         live process. Nothing to signal; offer the resume
+                         instruction instead (:mod:`clawmetry.resume_hints`).
+    * ``unsupported``  — no per-session process exists here, ever (a hosted
+                         agent, a shared IDE process, an OS with no primitive).
+    * ``unknown``      — we could not determine it. Say so; do not guess either
+                         way.
     """
     rt = (runtime or "").strip().lower()
     plat = platform_support()
     if not plat.get("controllable"):
         return {"controllable": False, "actions": [], "runtime": rt,
+                "state": "unsupported",
                 "reason": plat.get("reason", ""), "platform": plat}
 
     if rt == "openclaw":
@@ -230,6 +247,7 @@ def runtime_control_support(runtime: str, session_id: str = "",
         if pause_cap["effective"]:
             actions = ["pause", "resume"] + actions
         return {"controllable": True, "runtime": rt, "actions": actions,
+                "state": "controllable",
                 "reason": "", "no_pause": not pause_cap["effective"],
                 "pause_capability": pause_cap,
                 "note": pause_cap["detail"], "platform": plat}
@@ -239,12 +257,14 @@ def runtime_control_support(runtime: str, session_id: str = "",
         if info.get("ok"):
             return {"controllable": True, "runtime": rt,
                     "actions": ["pause", "resume", "stop", "kill"],
+                    "state": "controllable",
                     "reason": "", "resolved_pid": info.get("pid"),
                     "platform": plat}
+        code = str(info.get("reason") or "")
         return {"controllable": False, "runtime": rt, "actions": [],
+                "state": _SPLIT_SUPPORT_STATES.get(code, "unknown"),
                 "reason": _SPLIT_SUPPORT_REASONS.get(
-                    info.get("reason") or "",
-                    info.get("reason") or "session could not be located"),
+                    code, code or "session could not be located"),
                 "platform": plat}
 
     if rt == "claude_code" and session_id:
@@ -254,8 +274,14 @@ def runtime_control_support(runtime: str, session_id: str = "",
         # a dict hit on the memoized session map plus a liveness check, cheap
         # enough to run once per row.
         info = resolve_session(rt, session_id, cwd)
+        # Claude Code writes one ``<sessions_dir>/<pid>.json`` per RUNNING
+        # process and removes it on exit (verified 2026-09-05: 28 records, 28
+        # live pids, zero stale). Absence is therefore evidence the process is
+        # gone, not evidence we failed to look — which is what lets this answer
+        # ``exited`` rather than a shrug.
         if not info.get("ok"):
             return {"controllable": False, "runtime": rt, "actions": [],
+                    "state": "exited",
                     "reason": ("Claude Code records no running process for "
                                "this session, so it cannot be signalled from "
                                "this node"),
@@ -263,22 +289,38 @@ def runtime_control_support(runtime: str, session_id: str = "",
         pid = int(info.get("pid") or 0)
         if pid <= 0 or not is_alive(pid):
             return {"controllable": False, "runtime": rt, "actions": [],
+                    "state": "exited",
                     "reason": (f"The process for this session (pid {pid}) has "
                                "exited"),
                     "platform": plat}
         return {"controllable": True, "runtime": rt,
                 "actions": ["pause", "resume", "stop", "kill"],
+                "state": "controllable",
                 "reason": "", "resolved_pid": pid, "platform": plat}
 
     if rt == "claude_code" or rt in SUPPORTED_RUNTIMES:
         return {"controllable": True, "runtime": rt,
                 "actions": ["pause", "resume", "stop", "kill"],
+                "state": "controllable",
                 "reason": "", "platform": plat}
 
     return {"controllable": False, "runtime": rt, "actions": [],
+            "state": "unsupported",
             "reason": f"No signal support for {rt or 'unknown runtime'}",
             "platform": plat}
 
+
+# Which of those reasons mean "the process is gone" (offer a resume command)
+# and which mean "there was never one to signal" (offer nothing but the truth).
+# Keyed on the resolver's own codes, so a new code defaults to ``unknown``
+# rather than silently claiming a session ended.
+_SPLIT_SUPPORT_STATES = {
+    "cursor_editor_session_no_per_session_signal": "unsupported",
+    "cursor_single_ide_process_no_per_session_signal": "unsupported",
+    "cursor_cli_session_process_not_found": "exited",
+    "no_matching_process": "exited",
+    "no_cwd": "unknown",
+}
 
 # Resolver reasons rendered as something an operator can act on.
 _SPLIT_SUPPORT_REASONS = {

@@ -175,14 +175,36 @@ def _runtime_supports_signals(runtime: str, session_id: str = "",
         from clawmetry import process_control as _pc
     except Exception:
         return {"controllable": False, "reason": "process_control unavailable",
-                "actions": []}
+                "state": "unknown", "actions": []}
     try:
         return _pc.runtime_control_support(runtime, session_id, cwd)
     except Exception:  # noqa: BLE001 — never break the list render
         log.exception("guard capability check failed for %s",
                       _log_safe(session_id))
-        return {"controllable": False, "actions": [],
+        return {"controllable": False, "actions": [], "state": "unknown",
                 "reason": "capability check failed; see the server log"}
+
+
+# States in which a row is offered a resume instruction instead of buttons.
+# ``unknown`` is included on purpose: we could not find the process, so the
+# honest thing is to hand over the resume path as well as the reason.
+_RESUME_STATES = ("exited", "unknown")
+
+
+def _resume_for(runtime: str, session_id: str, metadata) -> dict:
+    """How a human restarts this session by hand.
+
+    Sent on EVERY row, not only the dead ones, so the client never has to
+    re-ask after a Stop lands — and so a row that flips to ``exited`` between
+    two polls already has the answer in hand.
+    """
+    try:
+        from clawmetry import resume_hints as _rh
+        return _rh.resume_hint(runtime, session_id,
+                               metadata if isinstance(metadata, dict) else None)
+    except Exception:  # noqa: BLE001 — a missing hint must never break the tab
+        return {"runtime": runtime, "kind": "unknown", "command": "",
+                "note": "", "source": "", "session_id": session_id}
 
 
 def _session_runtime(session_id: str, agent_type: str) -> str:
@@ -296,10 +318,15 @@ def _live_only_rows(store_rows: list) -> list:
             "pending_ingest": True,
             "controllable": support["controllable"],
             "control_reason": support.get("reason", ""),
+            # Why it is not controllable, in one machine-readable word, so the
+            # tab can tell "you just killed this" from "this can never be
+            # signalled" instead of printing one label for both.
+            "control_state": support.get("state", "unknown"),
             "no_pause": support.get("no_pause", False),
             "control_actions": support.get("actions", []),
             "control_note": support.get("note", "")
                             or support.get("platform", {}).get("note", ""),
+            "resume": _resume_for(rt, sid, None),
         })
     return rows
 
@@ -440,6 +467,12 @@ def api_guard_sessions():
             "incident": incident_by_session.get(sid),
             "controllable": support["controllable"],
             "control_reason": support.get("reason", ""),
+            # Why it is not controllable, in one machine-readable word (see
+            # ``process_control.runtime_control_support``). The tab branches on
+            # this, never on the prose reason.
+            "control_state": support.get("state", "unknown"),
+            # How a human restarts it by hand once nothing here can.
+            "resume": _resume_for(runtime, sid, meta),
             "no_pause": support.get("no_pause", False),
             # Which buttons may be enabled for THIS session. Empty means none.
             "control_actions": support.get("actions", []),

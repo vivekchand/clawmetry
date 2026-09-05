@@ -31460,11 +31460,29 @@ function loadGuardSessions() {
     rows.forEach(function (s) {
       var inc = s.incident;
       if (inc) flagged++;
-      var statusCell = inc
-        ? '<span class="pill ' + guardSeverityClass(inc.severity) + '" title="' + guardEsc(inc.detail || '') + '">' +
+      // The store's `status` column is only as fresh as the last sync cycle, so
+      // a session the operator killed a second ago still reads "running" there.
+      // The live capability probe knows better: `exited` means this runtime CAN
+      // be signalled and this session has no process left. Printing "Running"
+      // next to a greyed-out control was the tab contradicting itself.
+      var exited = (s.control_state === 'exited');
+      var statusCell;
+      if (exited) {
+        statusCell = '<span class="pill" title="' +
+          guardEsc(s.control_reason || 'No live process for this session on this node.') +
+          '">Stopped</span>';
+        // The detector finding still happened; it is history now, not a state.
+        if (inc) {
+          statusCell += ' <span class="muted" title="' + guardEsc(inc.detail || '') + '">&middot; ' +
+            guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') + '</span>';
+        }
+      } else if (inc) {
+        statusCell = '<span class="pill ' + guardSeverityClass(inc.severity) + '" title="' + guardEsc(inc.detail || '') + '">' +
           guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') +
-          (inc.count ? ' &middot; ' + inc.count : '') + '</span>'
-        : '<span class="pill pill-ok">Running</span>';
+          (inc.count ? ' &middot; ' + inc.count : '') + '</span>';
+      } else {
+        statusCell = '<span class="pill pill-ok">Running</span>';
+      }
       // Listed from the live process probe, so it can be stopped now, but the
       // sync daemon has not read its transcript yet. Say that rather than let
       // the blank cost and missing detector status read as "nothing to see".
@@ -31487,8 +31505,10 @@ function loadGuardSessions() {
 
       var control;
       if (!s.controllable) {
-        // Say WHY rather than showing a button that quietly does nothing.
-        control = '<span class="muted" title="' + guardEsc(s.control_reason) + '">Not controllable</span>';
+        // A stopped agent's next question is "how do I get back in?", so answer
+        // that instead of restating what ClawMetry cannot do. Where no resume
+        // path is known the old honest label still stands.
+        control = guardResumeCell(s);
       } else {
         // Store session fields in data-attributes so onclick handlers read
         // them after HTML parsing — HTML entity encoding alone is insufficient
@@ -31538,6 +31558,61 @@ function loadGuardSessions() {
   }).catch(function () {
     el.innerHTML = '<div class="empty-state">Could not load sessions.</div>';
   });
+}
+
+// What to put in the Control column when nothing here can signal the session.
+//
+// Three shapes, because there are three different truths (see
+// clawmetry/resume_hints.py):
+//   command  a real command line -> show it, and offer one click to copy it
+//   app      no command line exists -> say where the conversation reopens
+//   unknown  we have not verified one -> the old honest label, plus the reason
+// A fabricated command would be the worst of the three: the operator pastes
+// it, it fails, and the whole tab stops being believable.
+function guardResumeCell(s) {
+  var r = s.resume || {};
+  var reason = s.control_reason || '';
+  if (r.kind === 'command' && r.command) {
+    var tip = r.command;
+    if (r.note) tip += '\n\n' + r.note;
+    if (r.source) tip += '\n\nVerified: ' + r.source;
+    return '<span class="guard-resume" title="' + guardEsc(tip) + '">' +
+      '<code>' + guardEsc(r.command) + '</code>' +
+      '<button class="btn btn-xs" data-cmd="' + guardEsc(r.command) +
+      '" onclick="guardCopyResume(this)">Copy</button></span>';
+  }
+  if (r.kind === 'app' && r.note) {
+    return '<span class="muted guard-resume-note" title="' +
+      guardEsc(reason || r.note) + '">' + guardEsc(r.note) + '</span>';
+  }
+  return '<span class="muted" title="' + guardEsc(reason) + '">Not controllable</span>' +
+    (r.note ? ' <span class="muted guard-resume-note">' + guardEsc(r.note) + '</span>' : '');
+}
+
+// Copy the resume command. Reads it from the data-attribute rather than a JS
+// string literal in the markup, for the same reason the control buttons do:
+// entity encoding is decoded before the JS is evaluated, so it is no defence.
+function guardCopyResume(btn) {
+  var cmd = btn && btn.dataset ? (btn.dataset.cmd || '') : '';
+  if (!cmd) return;
+  function done() {
+    var old = btn.textContent;
+    btn.textContent = t("app.copied", null, "Copied");
+    setTimeout(function () { btn.textContent = old || 'Copy'; }, 1200);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).then(done).catch(function () {});
+    return;
+  }
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = cmd;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    done();
+  } catch (e) {}
 }
 
 // 300 -> "5m". Used wherever a ladder delay is shown.
