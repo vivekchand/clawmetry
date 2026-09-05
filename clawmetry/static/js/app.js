@@ -2357,7 +2357,7 @@ function cmRenderNeedsYou(d) {
   var box = document.getElementById('needs-you');
   if (!box) return;
   var sig = JSON.stringify([
-    d && d.fresh, (d && d.working) || 0,
+    d && d.fresh, (d && d.working) || 0, (d && d.quiet) || 0,
     ((d && d.items) || []).map(function (i) {
       // Wait time is excluded on purpose: a ticking counter would make every
       // poll a change and defeat the guard. The row's identity is what it is
@@ -2398,11 +2398,24 @@ function cmRenderNeedsYou(d) {
   // 2. Nothing waiting. The reassuring case, and the one people see most.
   if (!items.length) {
     var working = parseInt(d.working, 10) || 0;
-    var sub = working === 1
-      ? t('needs.one_working', null, '1 agent working')
-      : (working > 0
-          ? t('needs.n_working', { n: working }, working + ' agents working')
-          : t('needs.none_running', null, 'No agents running'));
+    var quiet = parseInt(d.quiet, 10) || 0;
+    // The hero renders the same two buckets, by name, a few hundred pixels
+    // below this line. "No agents running" while it lists open sessions is
+    // one screen answering one question twice, so the quiet bucket gets said
+    // out loud rather than collapsing into "none".
+    var sub;
+    if (working === 1) {
+      sub = t('needs.one_working', null, '1 agent working');
+    } else if (working > 0) {
+      sub = t('needs.n_working', { n: working }, working + ' agents working');
+    } else if (quiet === 1) {
+      sub = t('needs.one_quiet', null, '1 agent is open but has gone quiet');
+    } else if (quiet > 0) {
+      sub = t('needs.n_quiet', { n: quiet },
+              quiet + ' agents are open but have gone quiet');
+    } else {
+      sub = t('needs.none_running', null, 'No agents running');
+    }
     // Some runtimes have no permission prompt at all (Pi's trust machinery
     // guards loading config, not running tools). Filtered to one of those,
     // "nothing needs you" would imply we looked and found nothing — so say
@@ -4626,7 +4639,14 @@ function _cmLiveRowsHtml(live) {
     if (!working && !sawWaiting) {
       sawWaiting = true;
       if (shown[0] && shown[0].state === 'working') {
-        html += '<div class="cm-live-group">Waiting on you</div>';
+        // "Gone quiet", NOT "waiting on you". `state` here is an age bucket
+        // (last output 2-10 minutes ago), equally consistent with thinking, a
+        // long tool call, or a dead process. The needs-you strip is the only
+        // component with evidence for intent, and it renders directly above
+        // this list — a header claiming these rows want something reads as a
+        // flat contradiction of the "Nothing needs you right now" it sits
+        // under.
+        html += '<div class="cm-live-group">Gone quiet</div>';
       }
     }
     var col = working ? '#22c55e' : '#f59e0b';
@@ -12959,7 +12979,10 @@ function _invLive(a) {
                   + ' produced output in the last 2 minutes.' };
   }
   if (waiting > 0) {
-    return { key: 'waiting', word: 'Waiting on you', cls: 'inv-doing-idle', color: '#f59e0b',
+    // Age bucket, not evidence — the tooltip below hedges ("usually parked at
+    // the prompt") and the word must hedge with it. Only the needs-you strip
+    // can say a session wants something.
+    return { key: 'waiting', word: 'Gone quiet', cls: 'inv-doing-idle', color: '#f59e0b',
              sessions: waiting, secs: secs,
              tip: waiting + (waiting === 1 ? ' session is' : ' sessions are')
                   + ' open but quiet, usually parked at the prompt.' };
@@ -31442,6 +31465,12 @@ function loadGuardSessions() {
           guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') +
           (inc.count ? ' &middot; ' + inc.count : '') + '</span>'
         : '<span class="pill pill-ok">Running</span>';
+      // Listed from the live process probe, so it can be stopped now, but the
+      // sync daemon has not read its transcript yet. Say that rather than let
+      // the blank cost and missing detector status read as "nothing to see".
+      if (!inc && s.pending_ingest) {
+        statusCell += ' <span class="muted" title="This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.">&middot; just started</span>';
+      }
       // The estimate says what it is: a burn-rate figure and a
       // window-fraction figure are not the same kind of number, and the
       // tooltip is where that distinction lives instead of being hidden.
@@ -31497,7 +31526,9 @@ function loadGuardSessions() {
         '<td>' + guardEsc(s.runtime) + '</td>' +
         '<td>' + statusCell + '</td>' +
         '<td>' + riskCell + '</td>' +
-        '<td>$' + (Number(s.cost_usd) || 0).toFixed(2) + '</td>' +
+        '<td>' + (s.pending_ingest
+          ? '<span class="muted" title="Not measured yet - the sync daemon has not read this session\'s transcript.">&mdash;</span>'
+          : '$' + (Number(s.cost_usd) || 0).toFixed(2)) + '</td>' +
         '<td>' + guardEsc(guardAgo(s.last_active_at)) + '</td>' +
         '<td>' + control + '</td></tr>';
     });
