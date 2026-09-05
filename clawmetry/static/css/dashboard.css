@@ -85,11 +85,6 @@
   .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
   .theme-toggle:active { transform: scale(0.98); }
   
-  /* === Zoom Controls === */
-  .zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: 12px; }
-  .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
-  .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
-  .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
   .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
   /* Brain tab */
   /* Always allow the row to wrap so the turn-summary badges go BELOW the
@@ -830,7 +825,10 @@
   .status-dot.complete { background: #3b82f6; }
   .status-dot.failed { background: #ef4444; }
 
-  /* === Zoom Wrapper === */
+  /* === Page Wrapper ===
+     Named #zoom-wrapper for historical reasons; the zoom controls it used to
+     scale are gone (header cleanup 2026-09). It still animates in on boot,
+     so keep the transform-origin. */
   .zoom-wrapper { transform-origin: top left; transition: transform 0.3s ease; }
 
   /* === Split-Screen Overview === */
@@ -1207,17 +1205,11 @@
     .fj-sub { font-size: 10px; }
     .fj-arrow { font-size: 12px; }
     .brain-group { animation-duration: 1.8s; } /* Faster on mobile */
-    
-    /* Mobile zoom controls */
-    .zoom-controls { margin-left: 8px; gap: 2px; }
-    .zoom-btn { width: 24px; height: 24px; font-size: 14px; }
-    .zoom-level { min-width: 32px; font-size: 10px; }
 
     /* Nav: logo+icons row, tabs scroll row below */
     .nav { flex-wrap: wrap; padding: 6px 10px; gap: 6px; }
     .nav h1 { order: 1; font-size: 15px; }
     .theme-toggle { order: 2; }
-    .zoom-controls { order: 3; margin-left: auto; }
     .nav-tabs {
       order: 4; width: 100%; margin-left: 0;
       overflow-x: auto; flex-wrap: nowrap;
@@ -1757,8 +1749,7 @@
    explicit *physical* properties (margin-left, left/right anchors, slide
    direction) the browser does not auto-flip. A full logical-property migration
    is tracked separately; this makes RTL functional. */
-[dir="rtl"] .theme-toggle,
-[dir="rtl"] .zoom-controls { margin-left: 0; margin-right: 12px; }
+[dir="rtl"] .theme-toggle { margin-left: 0; margin-right: 12px; }
 [dir="rtl"] .nav-tabs { margin-left: 0; margin-right: auto; }
 [dir="rtl"] .advanced-tabs-dropdown { right: auto; left: 0; }
 [dir="rtl"] #i18n-switcher-menu { right: auto !important; left: 0 !important; }
