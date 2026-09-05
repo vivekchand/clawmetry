@@ -25,8 +25,5 @@ jobs:
           git rm .github/scripts/fix_changelog.py
           git add CHANGELOG.md
           git diff --cached --stat
-          git commit -m "fix: resolve CHANGELOG.md merge conflict with main
-
-Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01K1RkJbErrt5UaL1zjXgA6a"
+          git commit -m "fix: resolve CHANGELOG.md merge conflict with main"
           git push
