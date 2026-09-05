@@ -258,7 +258,7 @@ jobs:
       # have an en.json key. The Phase-A nav guard runs alongside because the
       # landing change re-ordered Tier-1.
       - name: Trail page + session-first nav
-        run: python3 -m pytest tests/test_trail_tab_template.py tests/test_beginner_nav_phase_a.py -q
+        run: python3 -m pytest tests/test_trail_tab_template.py tests/test_beginner_nav_phase_a.py tests/test_transcript_layout_grid.py -q
 
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) — the
@@ -440,6 +440,7 @@ jobs:
             tests/test_signal_shifts.py \
             tests/test_briefs.py \
             tests/test_guard_control_capability.py \
+            tests/test_guard_live_probe.py \
             tests/test_process_control.py \
             tests/test_process_control_windows.py \
             tests/test_detector_incident_delivery.py \
@@ -453,6 +454,11 @@ jobs:
             tests/test_session_intent.py \
             tests/test_session_git_outcomes_route.py \
             tests/test_self_diagnostics.py \
+            tests/test_needs_you_matches_the_hero.py \
+            tests/test_live_session_truth.py \
+            tests/test_live_sessions_all_runtimes.py \
+            tests/test_needs_you_ui_contract.py \
+            tests/test_overview_claims_are_evidenced.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
