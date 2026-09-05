@@ -247,6 +247,29 @@ def runtime_control_support(runtime: str, session_id: str = "",
                     info.get("reason") or "session could not be located"),
                 "platform": plat}
 
+    if rt == "claude_code" and session_id:
+        # Ask the map instead of assuming. This branch answered "controllable"
+        # for EVERY claude_code session, so the Guard tab lit four buttons for
+        # sessions whose only possible outcome was an alert box. The lookup is
+        # a dict hit on the memoized session map plus a liveness check, cheap
+        # enough to run once per row.
+        info = resolve_session(rt, session_id, cwd)
+        if not info.get("ok"):
+            return {"controllable": False, "runtime": rt, "actions": [],
+                    "reason": ("Claude Code records no running process for "
+                               "this session, so it cannot be signalled from "
+                               "this node"),
+                    "platform": plat}
+        pid = int(info.get("pid") or 0)
+        if pid <= 0 or not is_alive(pid):
+            return {"controllable": False, "runtime": rt, "actions": [],
+                    "reason": (f"The process for this session (pid {pid}) has "
+                               "exited"),
+                    "platform": plat}
+        return {"controllable": True, "runtime": rt,
+                "actions": ["pause", "resume", "stop", "kill"],
+                "reason": "", "resolved_pid": pid, "platform": plat}
+
     if rt == "claude_code" or rt in SUPPORTED_RUNTIMES:
         return {"controllable": True, "runtime": rt,
                 "actions": ["pause", "resume", "stop", "kill"],
@@ -1593,6 +1616,14 @@ def resume(pid: int, runtime: str = "") -> Dict[str, Any]:
 # ──────────────────────────────────────────────────────────────────────────
 # Session -> process discovery
 # ──────────────────────────────────────────────────────────────────────────
+# Memo for the per-pid session map. Keyed on the sessions dir AND its mtime, so
+# a session that starts or ends invalidates it immediately; the short TTL is a
+# backstop for in-place rewrites. Without it, a 50-row Guard list re-scanned the
+# whole directory once per row (see runtime_control_support).
+_CLAUDE_MAP_TTL_SECS = 2.0
+_CLAUDE_MAP_CACHE: Dict[str, Any] = {"key": None, "at": 0.0, "map": {}}
+
+
 def _claude_sessions_dir() -> str:
     """The directory claude_code writes per-pid session json files into.
 
@@ -1614,11 +1645,21 @@ def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
     """
     import json
 
-    out: Dict[str, Dict[str, Any]] = {}
+    now = time.time()
     d = _claude_sessions_dir()
+    try:
+        key = (d, os.stat(d).st_mtime_ns)
+    except Exception:  # noqa: BLE001 — dir absent is itself a valid cache key
+        key = (d, 0)
+    if (_CLAUDE_MAP_CACHE.get("key") == key
+            and (now - _CLAUDE_MAP_CACHE.get("at", 0.0)) < _CLAUDE_MAP_TTL_SECS):
+        return dict(_CLAUDE_MAP_CACHE.get("map") or {})
+
+    out: Dict[str, Dict[str, Any]] = {}
     try:
         names = os.listdir(d)
     except Exception:  # noqa: BLE001 - dir absent
+        _CLAUDE_MAP_CACHE.update({"key": key, "at": now, "map": out})
         return out
     for name in names:
         if not name.endswith(".json"):
@@ -1655,6 +1696,7 @@ def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
             "status": rec.get("status"),
             "version": rec.get("version"),
         }
+    _CLAUDE_MAP_CACHE.update({"key": key, "at": now, "map": dict(out)})
     return out
 
 
@@ -2042,6 +2084,32 @@ def resolve_by_cwd(runtime: str, cwd: str) -> Dict[str, Any]:
     }
 
 
+def native_session_id(runtime: str, session_id: str) -> str:
+    """Strip the store's ``<runtime>:`` namespace off a session id.
+
+    ``sync.sync_family_runtimes`` namespaces every family-runtime session as
+    ``f"{runtime}:{s.id}"``, and that prefixed id is what the Guard tab, the
+    policy engine and the cloud relay all carry. The runtimes themselves know
+    only the NATIVE id — Claude Code records a bare uuid in
+    ``~/.claude/sessions/<pid>.json`` — so every resolver below looked up
+    ``claude_code:<uuid>`` in a map keyed by ``<uuid>``, missed, and
+    Pause/Stop/Kill answered ``session_not_in_claude_map``.
+
+    That made the kill switch inert for every non-OpenClaw runtime, through
+    BOTH doors: the Guard tab's buttons and the daemon's policy actuator
+    (``sync._emit_detector_incidents`` feeds the same store id to the same
+    resolver). OpenClaw was unaffected only because its ids are bare.
+
+    Only an exact ``<runtime>:`` head is removed, so a native id that itself
+    contains a colon keeps every character after the first one.
+    """
+    rt = (runtime or "").strip().lower()
+    sid = str(session_id or "")
+    if rt and sid.lower().startswith(rt + ":"):
+        return sid[len(rt) + 1:]
+    return sid
+
+
 def resolve_session(runtime: str, session_id: str = "",
                     cwd: str = "") -> Dict[str, Any]:
     """Resolve any supported runtime's session to a process descriptor.
@@ -2055,6 +2123,9 @@ def resolve_session(runtime: str, session_id: str = "",
     * anything else -> unsupported.
     """
     runtime = (runtime or "").lower()
+    # Store ids are namespaced ``<runtime>:<native id>``; every resolver below
+    # matches on the native id the runtime itself writes.
+    session_id = native_session_id(runtime, session_id)
     if runtime in SPLIT_SUPPORT_RUNTIMES:
         # Support decided per session, not per runtime (today: cursor).
         return _SPLIT_RESOLVERS[runtime](session_id, cwd)

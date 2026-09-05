@@ -245,6 +245,29 @@ def _ls_call(method_name, **kwargs):
         return None
 
 
+def _scan_events_slim(**kwargs):
+    """The Cost roll-ups' event scan: slim shape, full shape as the fallback.
+
+    ``query_events_slim`` is what keeps a Cost page load from marshalling
+    ~38 MB per scan across the daemon RPC (see ``LocalStore.query_events_slim``).
+    It is a newer shape than the daemon allowlist of any previous release,
+    and the dashboard and the sync daemon are separate processes that restart
+    independently — so during an upgrade there is a real window where an
+    upgraded dashboard asks a not-yet-restarted daemon for it. The proxy
+    answers 400, the caller gets ``None``, and these roll-ups would render
+    that as a confident EMPTY Cost tab.
+
+    Falling back to the full shape makes that skew cost bytes, not
+    correctness: the numbers are identical either way (the slim projection
+    only drops keys no roll-up reads), the page is merely heavier until the
+    daemon catches up.
+    """
+    rows = _ls_call("query_events_slim", **kwargs)
+    if rows is None:
+        rows = _ls_call("query_events", **kwargs)
+    return rows
+
+
 def _runtime_coverage(runtime, *, has_data):
     """Coverage block for a runtime-scoped cost/usage payload.
 
@@ -412,7 +435,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
             daily_tokens[day] = daily_tokens.get(day, 0) + int(r.get("token_count") or 0)
             daily_cost[day] = daily_cost.get(day, 0.0) + float(r.get("cost_usd") or 0.0)
     else:
-        evs = _ls_call("query_events", limit=10000)
+        evs = _scan_events_slim(limit=10000)
         if not evs:
             return None
         # query_events has no SQL runtime filter; apply the same prefix logic
@@ -504,7 +527,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
 
     # Per-model breakdown: scan recent events and group.
     model_usage = {}
-    recent = _ls_call("query_events", limit=5000) or []
+    recent = _scan_events_slim(limit=5000) or []
     recent = _filter_evs_by_runtime(recent, runtime)
     for ev in recent:
         m = ev.get("model") or "unknown"
@@ -762,7 +785,7 @@ def _try_local_store_usage_by_plugin(threshold_pct, runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -822,7 +845,7 @@ def _try_local_store_usage_by_plugin_trend(days_back):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -892,7 +915,7 @@ def _try_local_store_cost_comparison():
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=50000)
+        evs = _scan_events_slim(limit=50000)
     except Exception:
         return None
     if not evs:
@@ -1152,7 +1175,7 @@ def _try_local_store_model_attribution(runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -1294,7 +1317,7 @@ def _try_local_store_usage_by_model(runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -1357,7 +1380,7 @@ def _try_local_store_skill_attribution():
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=50000)
+        evs = _scan_events_slim(limit=50000)
     except Exception:
         return None
     if not evs:
@@ -2544,7 +2567,7 @@ def _try_local_store_sessions_clusters(days: int):
     if not sessions:
         return None
     # One bulk events fetch; group by session_id (avoids N+1 daemon hops).
-    events = _ls_call("query_events", since=cutoff_iso, limit=20000) or []
+    events = _scan_events_slim(since=cutoff_iso, limit=20000) or []
     # Issue #1451: sibling-dedupe so the per-session token fallback below
     # doesn't double-count assistant + model.completed pairs on v3 installs.
     bucket_max = build_sibling_bucket_max(events)
@@ -3186,7 +3209,7 @@ def api_runtime_summary():
     out = {}
     if store is not None:
         try:
-            evs = store.query_events(limit=20000) or []
+            evs = _scan_events_slim(limit=20000) or []
             agg = {}
             for ev in evs:
                 rt = _runtime_of(ev.get("session_id"))
