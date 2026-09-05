@@ -405,6 +405,41 @@ def run_brief(brief: dict, store, *, now: _dt.datetime | None = None,
     return out
 
 
+# ── snapshot slice ──────────────────────────────────────────────────────────
+
+SNAPSHOT_MAX = 50
+# What rides the cloud snapshot per brief: the same public fields
+# GET /api/briefs serves. Title and question are the only free text.
+SNAPSHOT_FIELDS = ("id", "title", "question", "cron_expr", "tz", "channel_ref", "enabled",
+                   "last_run_at", "last_status", "last_error", "created_at", "builtin")
+
+
+def build_snapshot_slice(store, *, limit: int = SNAPSHOT_MAX) -> dict:
+    """``briefs`` for ``sync_system_snapshot``: the shape ``GET /api/briefs``
+    returns (``briefs``, ``count``, ``max``, ``channels``, ``offered``) plus
+    ``generated_at``, capped at ``limit`` rows so a node cannot inflate the
+    snapshot. ``{}`` on any failure, so the snapshot never breaks here."""
+    try:
+        cap = max(1, min(int(limit or SNAPSHOT_MAX), SNAPSHOT_MAX))
+        rows = store.list_briefs(limit=cap) or []
+        out = []
+        for b in rows[:cap]:
+            if not isinstance(b, dict) or not b.get("id"):
+                continue
+            b = dict(b)
+            b["builtin"] = str(b.get("id") or "") == BUILTIN_DAILY_DIGEST_ID
+            out.append({k: b.get(k) for k in SNAPSHOT_FIELDS})
+        offered = None
+        if not any(b.get("id") == BUILTIN_DAILY_DIGEST_ID for b in out):
+            offered = dict(BUILTIN_DAILY_DIGEST)
+        return {"briefs": out, "count": len(out), "max": BRIEFS_MAX,
+                "channels": list(CHANNELS), "offered": offered,
+                "generated_at": int(time.time() * 1000)}
+    except Exception as e:  # noqa: BLE001
+        log.debug("briefs: snapshot slice failed: %s", e)
+        return {}
+
+
 # ── scheduler ───────────────────────────────────────────────────────────────
 
 def due_briefs(briefs: list[dict], now: _dt.datetime, cap: int | None = None) -> list[dict]:
