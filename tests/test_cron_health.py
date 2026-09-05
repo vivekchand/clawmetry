@@ -68,7 +68,8 @@ class TestCronHealthSummary:
         totals = d["totals"]
         assert_keys(totals, "total", "ok", "error", "silent", "disabled", "warning",
                     "quarantined")
-        assert totals["total"] >= 0
+        for key in ("total", "ok", "error", "silent", "disabled", "warning", "quarantined"):
+            assert totals[key] >= 0, f"totals.{key} must be non-negative, got {totals[key]}"
 
     def test_quarantine_fields_types(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
