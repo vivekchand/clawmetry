@@ -228,10 +228,23 @@ def test_js_hero_reads_named_live_sessions():
 
 
 def test_js_names_the_waiting_group():
-    """A dot colour alone does not teach a first-timer what amber means."""
+    """A dot colour alone does not teach a first-timer what amber means.
+
+    The label must also HEDGE. This test used to require the literal
+    "Waiting on you</div>", which put it in direct conflict with
+    ``test_overview_claims_are_evidenced`` -- the rule that only the
+    needs-you strip may claim a session wants something, because only it has
+    evidence. Two guards asserting opposite things is how the claim came back
+    and sat under "Nothing needs you right now" (founder report 2026-09-05).
+    The boundary is still named; it is named after the silence it measures.
+    """
     js = open(APP_JS).read()
-    assert "cm-live-group" in js and "Waiting on you</div>" in js, (
+    assert "cm-live-group" in js and "Gone quiet</div>" in js, (
         "the working/waiting boundary lost its written label"
+    )
+    assert "Waiting on you</div>" not in js, (
+        "the group header claims intent again -- this bucket is an age "
+        "window (last output 2-10 minutes ago) with no evidence behind it"
     )
     css = open(os.path.join(REPO, "clawmetry", "static", "css",
                             "dashboard.css")).read()

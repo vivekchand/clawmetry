@@ -46,8 +46,20 @@ def _claim_lines(js: str, pattern: str):
 
 
 def test_age_alone_never_claims_waiting_on_you(app_js):
-    """The hero renders from `counts.waiting`, which is an age bucket."""
-    hits = _claim_lines(app_js, r"waiting on you")
+    """The hero renders from `counts.waiting`, which is an age bucket.
+
+    Case-INSENSITIVE. The original pattern was lower-case only, and the claim
+    walked straight back in as ``'Waiting on you'`` in two places (the live-row
+    group header and the Inventory "doing" word), where it rendered a few
+    hundred pixels under "Nothing needs you right now" (founder report
+    2026-09-05). A guard that only catches the spelling nobody writes is not
+    a guard.
+
+    ``blocked_on_user`` is exempt: that is a state a runtime REPORTS, which is
+    exactly the evidence this rule asks for.
+    """
+    hits = [(n, t) for n, t in _claim_lines(app_js, r"(?i)waiting on you")
+            if "blocked_on_user" not in t]
     assert not hits, (
         "'waiting on you' is asserted outside the needs-you strip:\n"
         + "\n".join(f"  app.js:{n}  {t}" for n, t in hits)
@@ -70,3 +82,18 @@ def test_quiet_wording_matches_its_own_subtitle(app_js):
     assert "Nothing has produced output in the last two minutes" in app_js, (
         "the honest sub-line disappeared — if the window changed, the "
         "headline wording should be revisited with it")
+
+
+def test_the_quiet_bucket_is_worded_as_silence_everywhere(app_js):
+    """Every surface that renders the age bucket must use the same hedge.
+
+    Three components read `state === 'waiting'` / `counts.waiting`: the hero
+    headline, the live-row group header beneath it, and the Inventory "doing"
+    column. They render the same fact, so they cannot use different words for
+    it -- one saying "gone quiet" while its neighbour says the session wants
+    something is the contradiction this file exists to stop.
+    """
+    for marker in ("cm-live-group", "inv-doing-idle"):
+        assert marker in app_js, "%s disappeared; re-check its wording" % marker
+    assert "'Gone quiet'" in app_js or '"Gone quiet"' in app_js, (
+        "the quiet bucket lost its hedged label")
