@@ -944,6 +944,8 @@
   "needs.never_asks": "{runtime} never asks for permission, so nothing here waits on you.",
   "needs.none_running": "No agents running",
   "needs.one_waiting": "1 agent needs you",
+  "needs.one_quiet": "1 agent is open but has gone quiet",
+  "needs.n_quiet": "{n} agents are open but have gone quiet",
   "needs.one_working": "1 agent working",
   "needs.unknown_sub": "ClawMetry has not heard from your machine recently, so it cannot say what needs you.",
   "needs.unknown_title": "Can't tell right now",

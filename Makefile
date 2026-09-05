@@ -14,7 +14,7 @@ test-compat:
 # Claude Code hook lifecycle + personal-data redaction tier (WO-61).
 # Mirrored in .github/workflows/ci.yml (moat-tests job).
 test-hooks:
-	python3 -m pytest tests/test_hooks_claude_code.py tests/test_hook_lifecycle.py tests/test_redaction_pii.py -q
+	python3 -m pytest tests/test_hooks_claude_code.py tests/test_hook_ownership_quoted_launcher.py tests/test_hook_lifecycle.py tests/test_redaction_pii.py -q
 # WO-59 self-diagnostics: MCP report tool, corroboration, honesty rollup,
 # multi-runtime MCP installer. Mirrored in .github/workflows/ci.yml (moat-tests).
 test-selfdiag:
@@ -61,8 +61,14 @@ test-moat:
 	    tests/test_signal_shifts.py \
 	    tests/test_briefs.py \
 	    tests/test_guard_control_capability.py \
+	    tests/test_guard_live_probe.py \
 	    tests/test_process_control.py \
 	    tests/test_process_control_windows.py \
+	    tests/test_needs_you_matches_the_hero.py \
+	    tests/test_live_session_truth.py \
+	    tests/test_live_sessions_all_runtimes.py \
+	    tests/test_needs_you_ui_contract.py \
+	    tests/test_overview_claims_are_evidenced.py \
 	    -q
 
 # MOAT real-data E2E (2026-05-19 mandate). Drives a REAL ``openclaw agent
