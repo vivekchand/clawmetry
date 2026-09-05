@@ -685,6 +685,11 @@ _DAEMON_METHODS = frozenset({
     "query_cohort_sessions",
     "query_similar_sessions",
     "query_events",
+    # Same rows as query_events with the two bulk ``data`` keys dropped
+    # (content / tool_calls). The Cost-tab roll-ups scan 20k-50k events and
+    # the full shape marshals ~38 MB per call, which is what starves sibling
+    # reads until they trip _PROXY_TIMEOUTS and render a false empty tab.
+    "query_events_slim",
     # Inputs & context: /api/sessions/<id>/context reads the session_context
     # table (system prompt, tools, runtime setup) through the daemon.
     "query_session_context",
@@ -1247,6 +1252,82 @@ class _ProxyUnavailable:
 PROXY_UNAVAILABLE = _ProxyUnavailable()
 
 
+# ── Page-load fan-out collapse for the heavy event scans ──────────────────
+#
+# The Cost tab's roll-ups (token split, per-plugin, per-model, per-skill,
+# runtime summary) live behind SEPARATE endpoints that the browser fires
+# concurrently, and each one independently asks the daemon for the newest
+# 20k-50k events. Ten such scans per page load, every one marshalled as JSON
+# across the RPC, is what saturates the daemon's single DuckDB connection
+# until sibling reads exceed ``_PROXY_TIMEOUTS`` and their handlers return
+# ``None`` — which the tabs render as a confident EMPTY ("no sessions have a
+# transcript yet" over a store holding thousands).
+#
+# The daemon's own ``_READ_CACHE`` cannot fix this: it spares the SQL, not
+# the per-call marshalling, and the dashboard still pays a round trip each
+# time. So memoise HERE, and single-flight it — concurrent callers asking
+# for the same scan share one in-flight RPC instead of queueing N of them.
+#
+# Deliberately narrow: only shapes named in ``_RPC_MEMO_METHODS`` are
+# eligible, so this can never serve a stale answer to a shape that did not
+# opt in. TTL matches the store's own ``CLAWMETRY_AGG_CACHE_TTL`` contract
+# (a roll-up may lag by seconds; a wrong number is worse than a late one).
+import threading as _threading
+
+_RPC_MEMO_METHODS = frozenset({"query_events_slim"})
+try:
+    _RPC_MEMO_TTL = float(_os.environ.get("CLAWMETRY_RPC_MEMO_TTL", "10") or "0")
+except ValueError:
+    _RPC_MEMO_TTL = 10.0
+_RPC_MEMO_MAX = 8
+_RPC_MEMO: dict = {}
+_RPC_MEMO_LOCK = _threading.Lock()
+_RPC_INFLIGHT: dict = {}
+
+
+def _rpc_memo_key(method_name: str, kwargs: dict):
+    return (method_name, tuple(sorted((k, repr(v)) for k, v in kwargs.items())))
+
+
+def invalidate_rpc_memo() -> None:
+    """Drop every memoised scan. For tests and for callers that just wrote."""
+    with _RPC_MEMO_LOCK:
+        _RPC_MEMO.clear()
+
+
+def _rpc_memoized(method_name: str, kwargs: dict, compute):
+    """Serve ``compute()`` from the bounded per-shape memo, single-flighted."""
+    if _RPC_MEMO_TTL <= 0 or method_name not in _RPC_MEMO_METHODS:
+        return compute()
+    key = _rpc_memo_key(method_name, kwargs)
+    with _RPC_MEMO_LOCK:
+        hit = _RPC_MEMO.get(key)
+        if hit is not None and (time.monotonic() - hit[0]) < _RPC_MEMO_TTL:
+            return hit[1]
+        flight = _RPC_INFLIGHT.get(key)
+        if flight is None:
+            flight = _threading.Lock()
+            if len(_RPC_INFLIGHT) < _RPC_MEMO_MAX:
+                _RPC_INFLIGHT[key] = flight
+    # One caller runs the RPC; the rest block here and then read the memo the
+    # leader just filled, rather than firing duplicate 8 MB round trips.
+    with flight:
+        with _RPC_MEMO_LOCK:
+            hit = _RPC_MEMO.get(key)
+            if hit is not None and (time.monotonic() - hit[0]) < _RPC_MEMO_TTL:
+                return hit[1]
+        result = compute()
+        # Never memoise the unavailable sentinel: the daemon being down for
+        # one call must not blind the next one for the whole TTL.
+        if result is not PROXY_UNAVAILABLE:
+            with _RPC_MEMO_LOCK:
+                if len(_RPC_MEMO) >= _RPC_MEMO_MAX:
+                    oldest = min(_RPC_MEMO, key=lambda k: _RPC_MEMO[k][0])
+                    _RPC_MEMO.pop(oldest, None)
+                _RPC_MEMO[key] = (time.monotonic(), result)
+        return result
+
+
 def local_store_via_daemon(method_name: str, **kwargs):
     """Cross-process LocalStore call.
 
@@ -1275,6 +1356,14 @@ def local_store_call_via_daemon(method_name: str, **kwargs):
     errored. Use this whenever ``None`` / ``{}`` / ``[]`` is a legitimate
     result and you need to know whether to fall back to a direct store.
     """
+    return _rpc_memoized(
+        method_name, kwargs,
+        lambda: _local_store_call_via_daemon_uncached(method_name, **kwargs),
+    )
+
+
+def _local_store_call_via_daemon_uncached(method_name: str, **kwargs):
+    """The real round trip. Split out so :func:`_rpc_memoized` can wrap it."""
     # Loop-break: when local_server is hosted in THIS process (the daemon)
     # the proxy hop is pointless — talk to the LocalStore directly.
     try:
