@@ -415,28 +415,107 @@
       context_file: T('trail.kind_context_file', 'Project notes it read'),
       runtime_meta: T('trail.kind_runtime_meta', 'Runtime details')
     };
+    /* ONE section per kind, and read the field the endpoint actually fills.
+       Two bugs met here (founder report 2026-09-05: "why are runtime details,
+       tools used repeated & both empty?"):
+
+       1. `/api/sessions/<id>/context` documents that `content` is the text
+          for `system_prompt`/`user_prompt`/`context_file` ONLY -- for
+          `tools_available` and `mcp_servers` the names arrive in `names`,
+          and for `runtime_meta` the fields arrive in `meta`. This renderer
+          read `content` alone, so exactly the kinds whose payload lives
+          elsewhere printed "Empty" while their data sat in the response.
+          (`app.js`'s Inputs block reads `names`, which is why the same
+          session showed its tools there and not here.)
+
+       2. A kind legitimately has SEVERAL rows: the store keys them by
+          sha256, so a context that changed mid-session is several versions,
+          not a duplicate. The reported session loaded tools through
+          ToolSearch and went 1 -> 5 tools, giving two `tools_available` rows
+          and two `runtime_meta` rows. Rendering them as two identically
+          labelled sections is unreadable -- there is nothing on screen to
+          tell them apart. They are folded into one section that says what
+          changed. */
+    var order = [], byKind = {};
     items.forEach(function (it) {
       if (it.kind === 'user_prompt') return; // already shown as "The request"
-      var label = KIND_LABEL[it.kind] || it.kind;
-      var content = it.content;
-      var body = '';
-      if (Array.isArray(content)) {
-        body = content.slice(0, 60).map(function (x) {
-          var name = (x && typeof x === 'object') ? (x.name || x.id || JSON.stringify(x)) : String(x);
-          return '<span class="trail-chip">' + esc(name) + '</span>';
-        }).join(' ');
-        if (content.length > 60) body += ' <span class="trail-muted">+' + (content.length - 60) + '</span>';
-      } else if (content && typeof content === 'object') {
-        body = '<pre class="trail-pre">' + esc(JSON.stringify(content, null, 2).slice(0, 4000)) + '</pre>';
-      } else {
-        var s = String(content == null ? '' : content);
-        body = s ? '<pre class="trail-pre">' + esc(s.slice(0, 4000)) + (s.length > 4000 ? '…' : '') + '</pre>' : muted(T('trail.empty_slot', 'Empty'));
+      if (!byKind[it.kind]) { byKind[it.kind] = []; order.push(it.kind); }
+      byKind[it.kind].push(it);
+    });
+    order.forEach(function (kind) {
+      var versions = byKind[kind];
+      var label = KIND_LABEL[kind] || kind;
+      var body = '', note = '';
+
+      // Names live in `names` for the list kinds. Across versions the honest
+      // answer to "tools it could use" is every tool it could use at some
+      // point, so union them rather than pick a version by a timestamp the
+      // rows often share.
+      var names = null;
+      if (kind === 'tools_available' || kind === 'mcp_servers') {
+        var seen = {}; names = [];
+        versions.forEach(function (v) {
+          var list = Array.isArray(v.names) ? v.names : (Array.isArray(v.content) ? v.content : []);
+          list.forEach(function (x) {
+            var n = (x && typeof x === 'object') ? (x.name || x.id || JSON.stringify(x)) : String(x);
+            if (n && !seen[n]) { seen[n] = 1; names.push(n); }
+          });
+        });
       }
-      var meta = [];
-      if (it.size) meta.push(it.size + ' ' + T('trail.bytes', 'bytes'));
-      if (it.redacted) meta.push(T('trail.redacted', 'secrets redacted'));
-      html += '<details class="trail-details"' + (it.kind === 'tools_available' || it.kind === 'mcp_servers' ? ' open' : '') + '><summary>' + esc(label) +
-        (meta.length ? ' <span class="trail-muted">(' + esc(meta.join(', ')) + ')</span>' : '') + '</summary>' + body + '</details>';
+
+      if (names) {
+        body = names.slice(0, 60).map(function (n) {
+          return '<span class="trail-chip">' + esc(n) + '</span>';
+        }).join(' ');
+        if (names.length > 60) body += ' <span class="trail-muted">+' + (names.length - 60) + '</span>';
+        if (!names.length) body = muted(T('trail.empty_slot', 'Empty'));
+        if (versions.length > 1) {
+          note = T('trail.ctx_grew', 'The list changed during the session; this is everything it could use at some point.');
+        }
+      } else if (kind === 'runtime_meta') {
+        // An object cannot be unioned honestly. Show the last version and
+        // name the fields that moved, which is the interesting part anyway.
+        var last = versions[versions.length - 1];
+        var m = (last.meta && typeof last.meta === 'object') ? last.meta
+              : ((last.content && typeof last.content === 'object') ? last.content : null);
+        body = m ? '<pre class="trail-pre">' + esc(JSON.stringify(m, null, 2).slice(0, 4000)) + '</pre>'
+                 : muted(T('trail.empty_slot', 'Empty'));
+        if (versions.length > 1) {
+          var changed = {};
+          versions.forEach(function (v) {
+            var vm = (v.meta && typeof v.meta === 'object') ? v.meta : {};
+            Object.keys(vm).forEach(function (k) {
+              if (JSON.stringify(vm[k]) !== JSON.stringify(m ? m[k] : undefined)) changed[k] = 1;
+            });
+          });
+          var keys = Object.keys(changed);
+          note = keys.length
+            ? T('trail.ctx_changed_keys', 'Changed during the session: {keys}. Showing the last.', { keys: keys.join(', ') })
+            : T('trail.ctx_changed', 'Recorded {n} times during the session. Showing the last.', { n: versions.length });
+        }
+      } else {
+        // Text kinds. Several versions means the text was rewritten; the
+        // fullest one is the one worth showing.
+        var best = '';
+        versions.forEach(function (v) {
+          var s = String(v.content == null ? '' : v.content);
+          if (s.length > best.length) best = s;
+        });
+        body = best ? '<pre class="trail-pre">' + esc(best.slice(0, 4000)) + (best.length > 4000 ? '…' : '') + '</pre>'
+                    : muted(T('trail.empty_slot', 'Empty'));
+        if (versions.length > 1 && best) {
+          note = T('trail.ctx_rewritten', 'Rewritten during the session. Showing the fullest version.');
+        }
+      }
+
+      var bits = [];
+      var size = versions.reduce(function (a, v) { return a + (Number(v.size || v.size_bytes) || 0); }, 0);
+      if (size) bits.push(size + ' ' + T('trail.bytes', 'bytes'));
+      if (versions.some(function (v) { return v.redacted; })) bits.push(T('trail.redacted', 'secrets redacted'));
+      html += '<details class="trail-details"' + (kind === 'tools_available' || kind === 'mcp_servers' ? ' open' : '') +
+        '><summary>' + esc(label) +
+        (bits.length ? ' <span class="trail-muted">(' + esc(bits.join(', ')) + ')</span>' : '') + '</summary>' +
+        body + (note ? '<div class="trail-muted">' + esc(note) + '</div>' : '') + '</details>';
     });
     if (!items.length) {
       var why = (d && d.reason) ? String(d.reason) : '';
