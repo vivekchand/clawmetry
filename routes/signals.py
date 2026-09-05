@@ -17,6 +17,19 @@ dashboard can serve the same shape from the snapshot slice
   GET /api/signals/coverage
       which runtimes expose user text, assistant text, both or neither.
 
+Signal shifts + briefs (WO-62, clawmetry/signal_shifts.py, briefs.py):
+
+  GET  /api/signals/issues?status=open|resolved|ignored|all&runtime=
+      issues opened when a rate left its learned band, each with a
+      plain-words headline and the ranked breakdown. Never text.
+  POST /api/signals/issues/<id>/status   {status: resolved|ignored|open}
+  GET  /api/briefs            saved questions on a schedule (+ the built-in
+                              daily digest offer when it is not saved yet)
+  POST /api/briefs            create or update one (capped per node)
+  DELETE /api/briefs/<id>
+  POST /api/briefs/<id>/run   run it now and post to its channel
+  The mutating routes are origin-checked like the Guard controls.
+
 Entitlement: free on every tier. Paid runtimes are gated where they are
 ingested (the daemon loads only entitled adapters), so a runtime with rows
 in the store is one the install is entitled to see; the response is also
@@ -80,6 +93,47 @@ class _ProxyStore:
 
     def query_signal_sessions(self, **kw):
         return self._call("query_signal_sessions", **kw)
+
+    def _call_nullable(self, method, probe, probe_kw, **kw):
+        """For store methods whose honest answer can be ``None`` ("no such
+        row"): a ``None`` is only "unavailable" when a cheap probe read is
+        ``None`` too."""
+        r = _ls_call(method, **kw)
+        if r is None and _ls_call(probe, **probe_kw) is None:
+            self.unavailable = True
+        return r
+
+    def query_signal_issues(self, **kw):
+        return self._call("query_signal_issues", **kw)
+
+    def get_signal_issue(self, **kw):
+        return self._call_nullable("get_signal_issue", "query_signal_issues", {"limit": 1}, **kw)
+
+    def set_signal_issue_status(self, **kw):
+        return self._call_nullable("set_signal_issue_status", "query_signal_issues", {"limit": 1}, **kw)
+
+    def list_briefs(self, **kw):
+        return self._call("list_briefs", **kw)
+
+    def get_brief(self, **kw):
+        return self._call_nullable("get_brief", "list_briefs", {"limit": 1}, **kw)
+
+    def upsert_brief(self, **kw):
+        return self._call("upsert_brief", **kw)
+
+    def delete_brief(self, **kw):
+        return self._call("delete_brief", **kw)
+
+    def mark_brief_run(self, **kw):
+        return self._call("mark_brief_run", **kw)
+
+    def raw_select_safe(self, **kw):
+        return self._call("raw_select_safe", **kw)
+
+    def dives_table_columns(self, table=None, **kw):
+        if table is not None:
+            kw["table"] = table
+        return self._call("dives_table_columns", **kw)
 
 
 def _window() -> tuple[str, int]:
@@ -195,3 +249,154 @@ def api_signal_sessions(name):
         "sessions": rows, "count": len(rows),
         "store": "unavailable" if store.unavailable else "ok",
     })
+
+
+# ── Signal shifts: issues (WO-62) ──────────────────────────────────────────
+
+def _origin_ok() -> bool:
+    try:
+        from routes.guard import _same_origin_ok
+        return bool(_same_origin_ok())
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _with_headline(issue: dict) -> dict:
+    from clawmetry import signal_shifts as _shifts
+    out = dict(issue)
+    try:
+        out["headline"] = _shifts.issue_headline(out)
+    except Exception:  # noqa: BLE001
+        out["headline"] = ""
+    return out
+
+
+@bp_signals.route("/api/signals/issues")
+def api_signal_issues():
+    """Issues newest first. ``status`` defaults to ``open``; ``all`` lists
+    every state. Scoped to ``runtime`` when the switcher names one."""
+    from clawmetry import signal_shifts as _shifts
+    status = str(request.args.get("status") or "open").strip().lower()
+    if status not in ("open", "resolved", "ignored", "all"):
+        status = "open"
+    rt = _runtime()
+    if rt and not _runtime_allowed(rt):
+        return jsonify({"error": "runtime not entitled", "runtime": rt}), 402
+    try:
+        limit = max(1, min(int(request.args.get("limit", 100)), 500))
+    except (TypeError, ValueError):
+        limit = 100
+    store = _ProxyStore()
+    rows = store.query_signal_issues(status=None if status == "all" else status,
+                                     runtime=rt, limit=limit) or []
+    items = [_with_headline(r) for r in rows if isinstance(r, dict)
+             and _runtime_allowed(str(r.get("agent_type") or ""))]
+    return jsonify({
+        "issues": items, "count": len(items), "status": status, "runtime": rt or "all",
+        "store": "unavailable" if store.unavailable else "ok",
+        "min_samples": {"short": _shifts.MIN_SHORT, "history": _shifts.MIN_HISTORY,
+                        "short_hours": _shifts.SHORT_HOURS, "history_days": _shifts.HISTORY_DAYS},
+    })
+
+
+@bp_signals.route("/api/signals/issues/<issue_id>/status", methods=["POST"])
+def api_signal_issue_status(issue_id):
+    """Operator transition. ``resolved`` lets the issue reopen if the rate
+    shifts again later; ``ignored`` keeps it silent until reopened here."""
+    if not _origin_ok():
+        return jsonify({"ok": False, "error": "cross-origin request refused"}), 403
+    body = request.get_json(silent=True) or {}
+    status = str(body.get("status") or "").strip().lower()
+    if status not in ("open", "resolved", "ignored"):
+        return jsonify({"ok": False, "error": "status must be open, resolved or ignored"}), 400
+    store = _ProxyStore()
+    issue = store.set_signal_issue_status(issue_id=str(issue_id)[:64], status=status)
+    if not issue:
+        code = 503 if store.unavailable else 404
+        return jsonify({"ok": False, "error": "store unavailable" if store.unavailable
+                        else "no such issue"}), code
+    return jsonify({"ok": True, "issue": _with_headline(issue)})
+
+
+# ── Briefs (WO-62) ─────────────────────────────────────────────────────────
+
+def _brief_public(b: dict) -> dict:
+    from clawmetry import briefs as _briefs
+    out = dict(b)
+    out["builtin"] = str(out.get("id") or "") == _briefs.BUILTIN_DAILY_DIGEST_ID
+    return out
+
+
+@bp_signals.route("/api/briefs")
+def api_briefs_list():
+    from clawmetry import briefs as _briefs
+    store = _ProxyStore()
+    rows = [_brief_public(b) for b in (store.list_briefs() or []) if isinstance(b, dict)]
+    offered = None
+    if not any(b.get("id") == _briefs.BUILTIN_DAILY_DIGEST_ID for b in rows):
+        offered = dict(_briefs.BUILTIN_DAILY_DIGEST)
+    return jsonify({
+        "briefs": rows, "count": len(rows), "max": _briefs.BRIEFS_MAX,
+        "channels": list(_briefs.CHANNELS), "offered": offered,
+        "store": "unavailable" if store.unavailable else "ok",
+    })
+
+
+@bp_signals.route("/api/briefs", methods=["POST"])
+def api_briefs_save():
+    """Create or update a brief. Sending ``{"id": "builtin_daily_digest",
+    "enabled": true}`` saves the built-in digest with its defaults."""
+    from clawmetry import briefs as _briefs
+    if not _origin_ok():
+        return jsonify({"ok": False, "error": "cross-origin request refused"}), 403
+    raw = request.get_json(silent=True) or {}
+    if not isinstance(raw, dict):
+        return jsonify({"ok": False, "error": "body must be an object"}), 400
+    if str(raw.get("id") or "") == _briefs.BUILTIN_DAILY_DIGEST_ID:
+        merged = dict(_briefs.BUILTIN_DAILY_DIGEST)
+        for k in ("cron_expr", "tz", "channel_ref", "enabled"):
+            if k in raw:
+                merged[k] = raw[k]
+        raw = merged
+    brief, err = _briefs.validate_brief(raw)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    store = _ProxyStore()
+    existing = store.list_briefs() or []
+    if not any(b.get("id") == brief["id"] for b in existing if isinstance(b, dict)) \
+            and len(existing) >= _briefs.BRIEFS_MAX:
+        return jsonify({"ok": False, "error": f"this node already has {_briefs.BRIEFS_MAX} briefs",
+                        "max": _briefs.BRIEFS_MAX}), 409
+    saved = store.upsert_brief(brief=brief)
+    if not saved:
+        return jsonify({"ok": False, "error": "store unavailable"}), 503
+    return jsonify({"ok": True, "brief": _brief_public(saved)})
+
+
+@bp_signals.route("/api/briefs/<brief_id>", methods=["DELETE"])
+def api_briefs_delete(brief_id):
+    if not _origin_ok():
+        return jsonify({"ok": False, "error": "cross-origin request refused"}), 403
+    store = _ProxyStore()
+    if not store.get_brief(brief_id=str(brief_id)[:64]):
+        return jsonify({"ok": False, "error": "no such brief"}), 404
+    ok = store.delete_brief(brief_id=str(brief_id)[:64])
+    return jsonify({"ok": bool(ok)}), (200 if ok else 503)
+
+
+@bp_signals.route("/api/briefs/<brief_id>/run", methods=["POST"])
+def api_briefs_run(brief_id):
+    """Run now, post to the brief's channel, record the outcome. A failure
+    is posted too and returned here with ``status: failed``."""
+    from clawmetry import briefs as _briefs
+    if not _origin_ok():
+        return jsonify({"ok": False, "error": "cross-origin request refused"}), 403
+    store = _ProxyStore()
+    brief = store.get_brief(brief_id=str(brief_id)[:64])
+    if not brief:
+        return jsonify({"ok": False, "error": "no such brief"}), 404
+    res = _briefs.run_brief(brief, store)
+    store.mark_brief_run(brief_id=brief["id"], status=res.get("status") or "failed",
+                         error=res.get("error"))
+    return jsonify({"ok": res.get("status") == "ok", "result": res,
+                    "brief": _brief_public(store.get_brief(brief_id=brief["id"]) or brief)})
