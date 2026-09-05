@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Release: startup compaction runs in a helper process (#5519) (2026-09-05)
+- **Why:** 0.12.811 shipped the store compaction (#5503) running inside the daemon process at startup. A torn copy of a live store segfaulted Python inside DuckDB's CHECKPOINT during release verification; a daemon never sees a torn file at its own start, but a native crash in that path would restart-loop the daemon with no traceback. #5519 moves the rewrite into a helper process with a timeout and rolls back a half-finished swap. Every node auto-updates, so this should reach them before the next restart cycle.
+- **What:** this release carries #5519. Daemon-side change; the cloud pin follows automatically.
+- **Verified:** #5519's tests ran green in CI before merge (real helper path, simulated crash mid-swap, simulated timeout).
+
 ### Release: the Raindrop gap closure, for every runtime (2026-09-05)
 
 - **Why:** operators could see cost and stuck loops but not what people and agents were saying about a run, could not compare a fleet before and after a change, and could not let an agent report its own trouble. These signals are now computed from transcripts ClawMetry already holds, judge-free and local, across every runtime in the store.
