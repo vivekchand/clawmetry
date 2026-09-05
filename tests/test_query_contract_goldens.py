@@ -59,6 +59,8 @@ DISPATCH_ARGS = {
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.
 _HEALTH_VOLATILE = {
+    # #5498 — startup compaction outcome: path, byte counts and a timestamp.
+    "last_compaction",
     "db_path", "size_bytes", "size_mb", "size_cap_bytes", "cap_exceeded",
     "auto_vacuum_enabled", "ring_depth", "ring_max", "ring_dropped_total",
     "schema_version", "last_flush_ago_s", "sync_dlq_depth",
