@@ -63,6 +63,11 @@ test-moat:
 	    tests/test_guard_control_capability.py \
 	    tests/test_process_control.py \
 	    tests/test_process_control_windows.py \
+	    tests/test_needs_you_matches_the_hero.py \
+	    tests/test_live_session_truth.py \
+	    tests/test_live_sessions_all_runtimes.py \
+	    tests/test_needs_you_ui_contract.py \
+	    tests/test_overview_claims_are_evidenced.py \
 	    -q
 
 # MOAT real-data E2E (2026-05-19 mandate). Drives a REAL ``openclaw agent
