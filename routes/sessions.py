@@ -351,6 +351,63 @@ _LIVE_WORKING_SECS = 120
 _LIVE_WAITING_SECS = 600
 
 
+def session_runtime(row: dict) -> str:
+    """Which runtime a ``sessions`` row belongs to. ONE definition.
+
+    ``sessions.agent_type`` is NOT it. The family ingest
+    (``sync.sync_family_runtimes``) stamps every row it writes as
+    ``openclaw`` and puts the real adapter in ``metadata.runtime``, so on a
+    live node all 300 rows read ``agent_type='openclaw'`` while their ids are
+    ``claude_code:<uuid>``. Any surface that filters on ``agent_type``
+    therefore matches nothing for every runtime except OpenClaw — which is
+    how the needs-you strip came to say "No agents running" directly above a
+    hero naming three working Claude Code sessions (founder report
+    2026-09-05).
+
+    Resolution order, most trustworthy first:
+      1. ``metadata.runtime`` — written by the family ingest.
+      2. the ``<runtime>:`` head of the session id — the namespace the store
+         itself uses, so it survives a metadata blob that failed to decode.
+      3. ``agent_type`` — correct for genuine OpenClaw rows, which have
+         neither of the above.
+    """
+    if not isinstance(row, dict):
+        return "openclaw"
+    meta = row.get("metadata")
+    if isinstance(meta, dict):
+        rt = str(meta.get("runtime") or "").strip().lower()
+        if rt:
+            return rt
+    sid = str(row.get("session_id") or "")
+    if ":" in sid:
+        head = sid.split(":", 1)[0].strip().lower()
+        # Only a real runtime name, never an arbitrary id that happens to
+        # carry a colon.
+        try:
+            from clawmetry.entitlements import ALL_RUNTIMES
+            if head in ALL_RUNTIMES:
+                return head
+        except Exception:
+            pass
+    return str(row.get("agent_type") or "").strip().lower() or "openclaw"
+
+
+def is_listable_session(session_id: str) -> bool:
+    """Is this row a top-level conversation a person would expect to see?
+
+    Excludes ClawMetry's own sessions and sub-agent children, which belong
+    under their parent rather than beside it. Shared so every "how many are
+    running" count applies the same exclusions — two counts on one screen
+    that disagree because one of them counted sub-agents is the same defect
+    as one that disagrees about the time window.
+    """
+    sid = str(session_id or "")
+    if hide_clawmetry_session(sid):
+        return False
+    low = sid.lower()
+    return "subagent" not in low and "sub-agent" not in low
+
+
 def _live_state(last_active_iso: str, status: str) -> tuple:
     """Classify one session row into ``(state, age_seconds)``.
 
@@ -433,14 +490,11 @@ def api_live_sessions():
         if not isinstance(r, dict):
             continue
         sid = r.get("session_id") or ""
-        if hide_clawmetry_session(sid):
-            continue
-        low = sid.lower()
-        if "subagent" in low or "sub-agent" in low:
+        if not is_listable_session(sid):
             continue  # sub-agents are shown under their parent, not as peers
         meta = r.get("metadata") or {}
-        runtime = (meta.get("runtime") or "").strip() or "openclaw"
-        if rt_filter and runtime.lower() != rt_filter:
+        runtime = session_runtime(r)
+        if rt_filter and runtime != rt_filter:
             continue
         last_active = r.get("last_active_at") or r.get("started_at") or ""
         state, age = _live_state(last_active, r.get("status"))

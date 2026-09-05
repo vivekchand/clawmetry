@@ -2069,7 +2069,17 @@ function switchTab(name) {
       if (btn) btn.setAttribute('aria-expanded', 'true');
     }
   });
-  if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  // Fallback for tabs with no nav item of their own: highlight whatever the
+  // user clicked. `event.target` is only a real element when a click brought
+  // us here - on a boot-time deep link (#trail=...) window.event is the
+  // DOMContentLoaded event, whose target is `document` and has no classList.
+  // The resulting TypeError threw out of switchTab BEFORE the per-tab loader
+  // dispatch below, so a reloaded/bookmarked trail link sat on its static
+  // "Opening the trail..." skeleton forever (founder report 2026-09-05).
+  if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active')
+      && typeof event !== 'undefined' && event && event.target && event.target.classList) {
+    event.target.classList.add('active');
+  }
   // Auto-close mobile drawer when a nav item is picked.
   var leftNav = document.getElementById('left-nav');
   if (leftNav && leftNav.classList.contains('open')) leftNav.classList.remove('open');
@@ -2347,7 +2357,7 @@ function cmRenderNeedsYou(d) {
   var box = document.getElementById('needs-you');
   if (!box) return;
   var sig = JSON.stringify([
-    d && d.fresh, (d && d.working) || 0,
+    d && d.fresh, (d && d.working) || 0, (d && d.quiet) || 0,
     ((d && d.items) || []).map(function (i) {
       // Wait time is excluded on purpose: a ticking counter would make every
       // poll a change and defeat the guard. The row's identity is what it is
@@ -2388,11 +2398,24 @@ function cmRenderNeedsYou(d) {
   // 2. Nothing waiting. The reassuring case, and the one people see most.
   if (!items.length) {
     var working = parseInt(d.working, 10) || 0;
-    var sub = working === 1
-      ? t('needs.one_working', null, '1 agent working')
-      : (working > 0
-          ? t('needs.n_working', { n: working }, working + ' agents working')
-          : t('needs.none_running', null, 'No agents running'));
+    var quiet = parseInt(d.quiet, 10) || 0;
+    // The hero renders the same two buckets, by name, a few hundred pixels
+    // below this line. "No agents running" while it lists open sessions is
+    // one screen answering one question twice, so the quiet bucket gets said
+    // out loud rather than collapsing into "none".
+    var sub;
+    if (working === 1) {
+      sub = t('needs.one_working', null, '1 agent working');
+    } else if (working > 0) {
+      sub = t('needs.n_working', { n: working }, working + ' agents working');
+    } else if (quiet === 1) {
+      sub = t('needs.one_quiet', null, '1 agent is open but has gone quiet');
+    } else if (quiet > 0) {
+      sub = t('needs.n_quiet', { n: quiet },
+              quiet + ' agents are open but have gone quiet');
+    } else {
+      sub = t('needs.none_running', null, 'No agents running');
+    }
     // Some runtimes have no permission prompt at all (Pi's trust machinery
     // guards loading config, not running tools). Filtered to one of those,
     // "nothing needs you" would imply we looked and found nothing — so say
@@ -4616,7 +4639,14 @@ function _cmLiveRowsHtml(live) {
     if (!working && !sawWaiting) {
       sawWaiting = true;
       if (shown[0] && shown[0].state === 'working') {
-        html += '<div class="cm-live-group">Waiting on you</div>';
+        // "Gone quiet", NOT "waiting on you". `state` here is an age bucket
+        // (last output 2-10 minutes ago), equally consistent with thinking, a
+        // long tool call, or a dead process. The needs-you strip is the only
+        // component with evidence for intent, and it renders directly above
+        // this list — a header claiming these rows want something reads as a
+        // flat contradiction of the "Nothing needs you right now" it sits
+        // under.
+        html += '<div class="cm-live-group">Gone quiet</div>';
       }
     }
     var col = working ? '#22c55e' : '#f59e0b';
@@ -12949,7 +12979,10 @@ function _invLive(a) {
                   + ' produced output in the last 2 minutes.' };
   }
   if (waiting > 0) {
-    return { key: 'waiting', word: 'Waiting on you', cls: 'inv-doing-idle', color: '#f59e0b',
+    // Age bucket, not evidence — the tooltip below hedges ("usually parked at
+    // the prompt") and the word must hedge with it. Only the needs-you strip
+    // can say a session wants something.
+    return { key: 'waiting', word: 'Gone quiet', cls: 'inv-doing-idle', color: '#f59e0b',
              sessions: waiting, secs: secs,
              tip: waiting + (waiting === 1 ? ' session is' : ' sessions are')
                   + ' open but quiet, usually parked at the prompt.' };
@@ -21464,6 +21497,15 @@ async function _loadReplayTree(sessionId) {
   if (!mount) {
     mount = document.createElement('div');
     mount.id = 'replay-tree-container';
+    // Span the full row of .transcript-layout's grid. That parent is a
+    // two-column grid (messages | sticky turn TOC); as a plain auto-placed
+    // sibling this mount takes the wide first column and pushes
+    // #transcript-messages into the narrow 240px TOC column - the replay
+    // then renders as a squeezed, overflowing strip on the right with the
+    // whole left half blank (founder report 2026-09-05, same trap as
+    // #replay-load-earlier). The CSS rule on .transcript-layout children
+    // covers this too; the inline style keeps the node correct on its own.
+    mount.style.gridColumn = '1 / -1';
     // The Trail page re-parents #transcript-messages into its own card, so
     // the anchor is not always a child of #transcript-viewer; inserting
     // relative to the anchor's real parent avoids the NotFoundError seen on
@@ -31418,11 +31460,35 @@ function loadGuardSessions() {
     rows.forEach(function (s) {
       var inc = s.incident;
       if (inc) flagged++;
-      var statusCell = inc
-        ? '<span class="pill ' + guardSeverityClass(inc.severity) + '" title="' + guardEsc(inc.detail || '') + '">' +
+      // The store's `status` column is only as fresh as the last sync cycle, so
+      // a session the operator killed a second ago still reads "running" there.
+      // The live capability probe knows better: `exited` means this runtime CAN
+      // be signalled and this session has no process left. Printing "Running"
+      // next to a greyed-out control was the tab contradicting itself.
+      var exited = (s.control_state === 'exited');
+      var statusCell;
+      if (exited) {
+        statusCell = '<span class="pill" title="' +
+          guardEsc(s.control_reason || 'No live process for this session on this node.') +
+          '">Stopped</span>';
+        // The detector finding still happened; it is history now, not a state.
+        if (inc) {
+          statusCell += ' <span class="muted" title="' + guardEsc(inc.detail || '') + '">&middot; ' +
+            guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') + '</span>';
+        }
+      } else if (inc) {
+        statusCell = '<span class="pill ' + guardSeverityClass(inc.severity) + '" title="' + guardEsc(inc.detail || '') + '">' +
           guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') +
-          (inc.count ? ' &middot; ' + inc.count : '') + '</span>'
-        : '<span class="pill pill-ok">Running</span>';
+          (inc.count ? ' &middot; ' + inc.count : '') + '</span>';
+      } else {
+        statusCell = '<span class="pill pill-ok">Running</span>';
+      }
+      // Listed from the live process probe, so it can be stopped now, but the
+      // sync daemon has not read its transcript yet. Say that rather than let
+      // the blank cost and missing detector status read as "nothing to see".
+      if (!inc && s.pending_ingest) {
+        statusCell += ' <span class="muted" title="This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.">&middot; just started</span>';
+      }
       // The estimate says what it is: a burn-rate figure and a
       // window-fraction figure are not the same kind of number, and the
       // tooltip is where that distinction lives instead of being hidden.
@@ -31439,8 +31505,10 @@ function loadGuardSessions() {
 
       var control;
       if (!s.controllable) {
-        // Say WHY rather than showing a button that quietly does nothing.
-        control = '<span class="muted" title="' + guardEsc(s.control_reason) + '">Not controllable</span>';
+        // A stopped agent's next question is "how do I get back in?", so answer
+        // that instead of restating what ClawMetry cannot do. Where no resume
+        // path is known the old honest label still stands.
+        control = guardResumeCell(s);
       } else {
         // Store session fields in data-attributes so onclick handlers read
         // them after HTML parsing — HTML entity encoding alone is insufficient
@@ -31478,7 +31546,9 @@ function loadGuardSessions() {
         '<td>' + guardEsc(s.runtime) + '</td>' +
         '<td>' + statusCell + '</td>' +
         '<td>' + riskCell + '</td>' +
-        '<td>$' + (Number(s.cost_usd) || 0).toFixed(2) + '</td>' +
+        '<td>' + (s.pending_ingest
+          ? '<span class="muted" title="Not measured yet - the sync daemon has not read this session\'s transcript.">&mdash;</span>'
+          : '$' + (Number(s.cost_usd) || 0).toFixed(2)) + '</td>' +
         '<td>' + guardEsc(guardAgo(s.last_active_at)) + '</td>' +
         '<td>' + control + '</td></tr>';
     });
@@ -31488,6 +31558,61 @@ function loadGuardSessions() {
   }).catch(function () {
     el.innerHTML = '<div class="empty-state">Could not load sessions.</div>';
   });
+}
+
+// What to put in the Control column when nothing here can signal the session.
+//
+// Three shapes, because there are three different truths (see
+// clawmetry/resume_hints.py):
+//   command  a real command line -> show it, and offer one click to copy it
+//   app      no command line exists -> say where the conversation reopens
+//   unknown  we have not verified one -> the old honest label, plus the reason
+// A fabricated command would be the worst of the three: the operator pastes
+// it, it fails, and the whole tab stops being believable.
+function guardResumeCell(s) {
+  var r = s.resume || {};
+  var reason = s.control_reason || '';
+  if (r.kind === 'command' && r.command) {
+    var tip = r.command;
+    if (r.note) tip += '\n\n' + r.note;
+    if (r.source) tip += '\n\nVerified: ' + r.source;
+    return '<span class="guard-resume" title="' + guardEsc(tip) + '">' +
+      '<code>' + guardEsc(r.command) + '</code>' +
+      '<button class="btn btn-xs" data-cmd="' + guardEsc(r.command) +
+      '" onclick="guardCopyResume(this)">Copy</button></span>';
+  }
+  if (r.kind === 'app' && r.note) {
+    return '<span class="muted guard-resume-note" title="' +
+      guardEsc(reason || r.note) + '">' + guardEsc(r.note) + '</span>';
+  }
+  return '<span class="muted" title="' + guardEsc(reason) + '">Not controllable</span>' +
+    (r.note ? ' <span class="muted guard-resume-note">' + guardEsc(r.note) + '</span>' : '');
+}
+
+// Copy the resume command. Reads it from the data-attribute rather than a JS
+// string literal in the markup, for the same reason the control buttons do:
+// entity encoding is decoded before the JS is evaluated, so it is no defence.
+function guardCopyResume(btn) {
+  var cmd = btn && btn.dataset ? (btn.dataset.cmd || '') : '';
+  if (!cmd) return;
+  function done() {
+    var old = btn.textContent;
+    btn.textContent = t("app.copied", null, "Copied");
+    setTimeout(function () { btn.textContent = old || 'Copy'; }, 1200);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).then(done).catch(function () {});
+    return;
+  }
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = cmd;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    done();
+  } catch (e) {}
 }
 
 // 300 -> "5m". Used wherever a ladder delay is shown.
@@ -31505,22 +31630,198 @@ function guardSetBadge(n) {
   else { b.style.display = 'none'; }
 }
 
+var GUARD_VERB = { kill: 'Kill', stop: 'Stop', pause: 'Pause', resume: 'Resume' };
+
+// The session the open modal is about. Held here rather than on the confirm
+// button so a re-render of the table underneath cannot change what a click on
+// "Kill" is about to signal.
+var _guardPending = null;
+
+// Pause / Stop / Kill signal real processes and Kill cannot be undone. Asking
+// "Kill this agent?" and then reporting one word made the most dangerous
+// control in the product the least legible one, so the flow is now:
+//   1. ask the server what this would do  (/api/guard/control/preflight)
+//   2. show the operator the target, the process tree and the signal plan
+//   3. on confirm, run it and render the step-by-step record it returns
+// Nothing is sent to any process until step 3.
 function guardControl(sessionId, runtime, cwd, action) {
-  var verb = action === 'kill' ? 'Kill' : (action === 'stop' ? 'Stop' : 'Pause');
-  if (action !== 'pause' &&
-      !confirm(verb + ' this agent?\n\n' + sessionId + '\n\nThis signals the real process.')) {
+  _guardPending = { session_id: sessionId, runtime: runtime, cwd: cwd, action: action };
+  var verb = GUARD_VERB[action] || action;
+  guardControlOpen(verb + ' this agent?',
+    '<div class="empty-state">Checking what this would do...</div>', '');
+  fetch('/api/guard/control/preflight', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_guardPending)
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    guardRenderPreflight(d || {}, verb);
+  }).catch(function () {
+    // A preflight that cannot run must not block the control: say the preview
+    // is unavailable and let the operator decide with what they do know.
+    guardControlOpen(verb + ' this agent?',
+      '<p class="guard-modal-warn">The preview could not be loaded, so what ' +
+      'follows is unverified. ' + guardEsc(verb) + ' signals the real process.</p>' +
+      guardIdBlock(_guardPending),
+      verb + ' anyway');
+  });
+}
+
+function guardIdBlock(p) {
+  return '<dl class="guard-facts">' +
+    '<dt>Session</dt><dd><code>' + guardEsc(p.session_id) + '</code></dd>' +
+    '<dt>Runtime</dt><dd>' + guardEsc(p.runtime || 'unknown') + '</dd>' +
+    '</dl>';
+}
+
+// What the server says this button would do. Every number here is measured on
+// this node right now — the pid tree in particular, because "Kill" ending nine
+// processes instead of one is exactly the surprise this dialog exists to remove.
+function guardRenderPreflight(d, verb) {
+  var p = _guardPending || {};
+  var html = guardIdBlock(p);
+
+  if (d.blocked_reason) {
+    html += '<p class="guard-modal-warn">This action would be refused: ' +
+      guardEsc(d.blocked_reason) + '</p>';
+    guardControlOpen(verb + ' this agent?', html, '');
     return;
   }
+
+  html += '<dl class="guard-facts">';
+  if (d.pid) html += '<dt>Process</dt><dd><code>pid ' + guardEsc(d.pid) + '</code>' +
+    (d.command ? ' <span class="muted">' + guardEsc(d.command) + '</span>' : '') + '</dd>';
+  if (d.cwd) html += '<dt>Working dir</dt><dd><code>' + guardEsc(d.cwd) + '</code></dd>';
+  if (d.guard) html += '<dt>Pid-reuse guard</dt><dd>' + guardEsc(d.guard) +
+    ' <span class="muted">(confirms this pid is still the same process, not a recycled one)</span></dd>';
+  html += '</dl>';
+
+  if (d.plan) html += '<p class="guard-modal-plan">' + guardEsc(d.plan) + '</p>';
+
+  if (d.steps && d.steps.length) {
+    html += '<h4>What will happen, in order</h4><ol class="guard-steps">';
+    d.steps.forEach(function (s) { html += '<li>' + guardEsc(s) + '</li>'; });
+    html += '</ol>';
+  }
+
+  if (d.processes && d.processes.length) {
+    html += '<h4>' + guardEsc(d.tree_size || d.processes.length) +
+      ' process' + ((d.tree_size || d.processes.length) === 1 ? '' : 'es') +
+      ' in this session\u2019s tree</h4><ul class="guard-tree">';
+    d.processes.forEach(function (pr) {
+      html += '<li><code>' + guardEsc(pr.pid) + '</code> ' +
+        (pr.main ? '<span class="pill">main</span> ' : '') +
+        '<span class="muted">' + guardEsc(pr.command || 'unknown command') +
+        '</span></li>';
+    });
+    if (d.tree_size > d.processes.length) {
+      html += '<li class="muted">and ' + guardEsc(d.tree_size - d.processes.length) +
+        ' more</li>';
+    }
+    html += '</ul>';
+  }
+
+  if (d.destructive) {
+    html += '<p class="guard-modal-warn">This cannot be undone. The session ends.</p>';
+  } else if (d.reversible) {
+    html += '<p class="muted">Reversible: Resume continues the agent from here.</p>';
+  }
+  guardControlOpen(verb + ' this agent?', html, verb);
+}
+
+// Run it, then show what the server actually did rather than an alert box.
+function guardControlRun() {
+  var p = _guardPending;
+  if (!p) return;
+  var verb = GUARD_VERB[p.action] || p.action;
+  var go = document.getElementById('guard-control-go');
+  if (go) { go.disabled = true; go.textContent = verb + 'ing...'; }
   fetch('/api/guard/control', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, runtime: runtime, cwd: cwd, action: action })
+    body: JSON.stringify(p)
   }).then(function (r) { return r.json(); }).then(function (d) {
-    if (!d || !d.ok) {
-      alert(verb + ' did not succeed: ' + ((d && d.detail) || 'unknown reason'));
-    }
+    guardRenderOutcome(d || {}, verb);
     loadGuardSessions();
-  }).catch(function () { alert(verb + ' request failed.'); });
+  }).catch(function () {
+    guardRenderOutcome({ ok: false, detail: 'the request did not reach the server' }, verb);
+  });
+}
+
+function guardRenderOutcome(d, verb) {
+  var html = '<p class="' + (d.ok ? 'guard-modal-ok' : 'guard-modal-warn') + '">' +
+    guardEsc(verb) + (d.ok ? ' completed.' : ' did not succeed.') +
+    (d.detail ? ' <span class="muted">' + guardEsc(d.detail) + '</span>' : '') +
+    '</p>';
+  // An advisory result is the one an operator most needs spelled out: the
+  // request succeeded and the agent is still running.
+  if (d.advisory_only) {
+    html += '<p class="guard-modal-warn">Advisory only \u2014 nothing on this ' +
+      'node enforces it, so the agent keeps running.' +
+      (d.note ? ' ' + guardEsc(d.note) : '') + '</p>';
+  }
+  if (d.trace && d.trace.length) {
+    html += '<h4>What was done</h4><ol class="guard-steps guard-trace">';
+    d.trace.forEach(function (s) {
+      html += '<li class="' + (s.ok ? 'ok' : 'bad') + '">' +
+        '<span class="guard-trace-mark">' + (s.ok ? '\u2713' : '\u2717') + '</span> ' +
+        guardEsc(s.step) +
+        (s.detail ? ' <span class="muted">' + guardEsc(s.detail) + '</span>' : '') +
+        '</li>';
+    });
+    html += '</ol>';
+  } else {
+    html += '<p class="muted">The server returned no step record for this action.</p>';
+  }
+  if (d.mechanism) {
+    html += '<p class="muted">Mechanism: <code>' + guardEsc(d.mechanism) + '</code></p>';
+  }
+  guardControlOpen(verb + (d.ok ? ' \u2014 done' : ' \u2014 failed'), html, '');
+}
+
+// Open (or re-render) the modal. An empty `confirmLabel` means "nothing left to
+// confirm": the footer collapses to a single Close, which is the state both the
+// outcome and a blocked preflight land in.
+function guardControlOpen(title, bodyHtml, confirmLabel) {
+  var modal = document.getElementById('guard-control-modal');
+  if (!modal) return;
+  var h = document.getElementById('guard-control-title');
+  var body = document.getElementById('guard-control-body');
+  var go = document.getElementById('guard-control-go');
+  var cancel = document.getElementById('guard-control-cancel');
+  if (h) h.textContent = title;
+  if (body) body.innerHTML = bodyHtml;
+  if (go) {
+    go.disabled = false;
+    go.hidden = !confirmLabel;
+    go.textContent = confirmLabel || '';
+    go.onclick = confirmLabel ? guardControlRun : null;
+    // Kill reads as destructive before it is pressed, here as in the table.
+    var act = (_guardPending || {}).action;
+    go.className = 'btn btn-sm ' + (act === 'kill' ? 'btn-danger' : 'btn-primary');
+  }
+  if (cancel) cancel.textContent = confirmLabel ? 'Cancel' : 'Close';
+  if (!modal.open) {
+    // showModal() puts it in the top layer (see the note in guard.html) and
+    // brings Esc + focus trapping. `cancel` fires on Esc; clear the pending
+    // session there too so a dismissed dialog leaves nothing armed.
+    if (typeof modal.showModal === 'function') {
+      modal.addEventListener('cancel', function () { _guardPending = null; },
+                             { once: true });
+      modal.showModal();
+    } else {
+      modal.setAttribute('open', '');  // very old browser: inline, still legible
+    }
+  }
+  if (go && confirmLabel) go.focus();
+}
+
+function guardControlClose() {
+  var modal = document.getElementById('guard-control-modal');
+  if (modal) {
+    if (typeof modal.close === 'function' && modal.open) modal.close();
+    else modal.removeAttribute('open');
+  }
+  _guardPending = null;
 }
 
 function loadGuardPolicies() {

@@ -688,6 +688,14 @@
      the right. TOC hides on narrow viewports (< 1100px) so mobile falls
      back to plain vertical scroll. */
   .transcript-layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 18px; align-items: start; }
+  /* Only the message stream and the TOC are columns. Everything the replay
+     injects here at runtime (#replay-load-earlier, #replay-tree-container)
+     spans the row: as a plain auto-placed sibling it would take the wide
+     first column and push #transcript-messages into the narrow 240px TOC
+     column, which renders the replay as an overflowing strip on the right
+     with the left half of the page blank. Twice shipped that way; the rule
+     lives here so the next injected node cannot repeat it. */
+  .transcript-layout > *:not(#transcript-messages):not(.transcript-toc) { grid-column: 1 / -1; }
   .transcript-toc {
     position: sticky; top: 12px; align-self: start;
     max-height: calc(100vh - 40px); overflow-y: auto;
@@ -3456,6 +3464,92 @@ body.has-profile-menu #logout-btn { display: none !important; }
 #page-guard .pill-ok { background: rgba(34,197,94,0.13); color: var(--text-success); border-color: transparent; }
 #page-guard .pill-warn { background: rgba(245,158,11,0.15); color: var(--text-warning); border-color: transparent; }
 #page-guard .pill-crit { background: rgba(239,68,68,0.15); color: var(--text-error); border-color: transparent; }
+
+/* The confirmation dialog for Pause / Stop / Kill. It replaced a browser
+   confirm() because these buttons signal real processes: the operator sees the
+   pid, the tree and the ordered plan before committing, and the step record
+   afterwards. Scoped under #page-guard like the rest of the tab, and fixed
+   rather than absolute so a scrolled table cannot push it off screen. */
+#page-guard .guard-modal {
+  /* `margin: auto` is what centres a modal dialog in the viewport. It comes
+     from the UA sheet, and the app's own reset zeroes it — without restating it
+     here the dialog pins to the top-left corner. */
+  margin: auto; padding: 0; border: none; background: transparent;
+  max-width: min(620px, 92vw); max-height: 84vh; overflow: visible;
+}
+#page-guard .guard-modal::backdrop { background: rgba(0,0,0,0.55); }
+#page-guard .guard-modal-card {
+  display: flex; flex-direction: column; max-height: 84vh;
+  background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-primary); border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+}
+#page-guard .guard-modal-head,
+#page-guard .guard-modal-foot {
+  display: flex; align-items: center; gap: 10px; padding: 14px 18px;
+}
+#page-guard .guard-modal-head { border-bottom: 1px solid var(--border-secondary); }
+#page-guard .guard-modal-head h3 { margin: 0; flex: 1; font-size: 15px; }
+#page-guard .guard-modal-foot {
+  border-top: 1px solid var(--border-secondary); justify-content: flex-end;
+}
+#page-guard #guard-control-body {
+  padding: 16px 18px; overflow-y: auto; font-size: 13px; line-height: 1.55;
+}
+#page-guard #guard-control-body h4 {
+  margin: 16px 0 6px; font-size: 12px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+}
+#page-guard #guard-control-body code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px; word-break: break-all;
+}
+#page-guard .guard-facts {
+  display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0 0 12px;
+}
+#page-guard .guard-facts dt { color: var(--text-muted); font-size: 12px; }
+#page-guard .guard-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+#page-guard .guard-modal-plan {
+  margin: 0 0 8px; padding: 10px 12px; border-radius: 8px;
+  background: var(--bg-secondary); border: 1px solid var(--border-secondary);
+}
+#page-guard .guard-modal-warn {
+  margin: 12px 0 0; padding: 10px 12px; border-radius: 8px;
+  background: rgba(239,68,68,0.12); color: var(--text-error);
+  border: 1px solid rgba(239,68,68,0.3);
+}
+#page-guard .guard-modal-ok {
+  margin: 0 0 4px; padding: 10px 12px; border-radius: 8px;
+  background: rgba(34,197,94,0.12); color: var(--text-success);
+  border: 1px solid rgba(34,197,94,0.3);
+}
+#page-guard .guard-steps { margin: 0; padding-left: 22px; }
+#page-guard .guard-steps li { margin: 4px 0; }
+#page-guard .guard-trace { list-style: none; padding-left: 0; }
+#page-guard .guard-trace .guard-trace-mark { font-weight: 700; }
+#page-guard .guard-trace li.ok .guard-trace-mark { color: var(--text-success); }
+#page-guard .guard-trace li.bad .guard-trace-mark { color: var(--text-error); }
+#page-guard .guard-tree { list-style: none; margin: 0; padding-left: 0; }
+#page-guard .guard-tree li { margin: 3px 0; overflow-wrap: anywhere; }
+
+/* The resume instruction stands in for the controls, so it lives in the same
+   column and must not widen it: the command truncates, the full text (plus its
+   provenance) is on the hover title, and Copy hands over the untruncated line. */
+#page-guard .guard-resume {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 320px; vertical-align: middle;
+}
+#page-guard .guard-resume code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px; color: var(--text-secondary);
+  background: var(--bg-secondary); border: 1px solid var(--border-secondary);
+  border-radius: 6px; padding: 2px 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#page-guard .guard-resume-note {
+  display: inline-block; max-width: 320px; font-size: 11px; line-height: 1.45;
+  white-space: normal;
+}
 
 #page-guard .btn {
   font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;

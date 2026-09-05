@@ -1,4 +1,33 @@
 <div class="page" id="page-guard">
+  <!-- Pause / Stop / Kill open here rather than in a browser confirm(). These
+       buttons signal real processes and Kill is irreversible; the operator is
+       shown the target, the process tree and the ordered signal plan BEFORE
+       committing, then the step-by-step record of what actually happened.
+       Built empty and filled by guardControl() in static/js/app.js. -->
+  <!-- A native <dialog>, not a positioned div: the app root (#zoom-wrapper)
+       carries a transform for the zoom control, which makes it the containing
+       block for `position: fixed`. A fixed overlay inside it covers the whole
+       SCROLLED document rather than the viewport, so it drifts off screen the
+       moment the table below is scrolled. showModal() puts the dialog in the
+       browser's top layer, which no ancestor transform can capture, and brings
+       Esc-to-close and focus trapping with it. -->
+  <dialog id="guard-control-modal" class="guard-modal"
+          aria-labelledby="guard-control-title">
+    <div class="guard-modal-card" role="document">
+      <div class="guard-modal-head">
+        <h3 id="guard-control-title">Confirm</h3>
+        <button class="btn btn-xs" onclick="guardControlClose()"
+                aria-label="Close">&times;</button>
+      </div>
+      <div id="guard-control-body"></div>
+      <div class="guard-modal-foot">
+        <button class="btn btn-sm" id="guard-control-cancel"
+                onclick="guardControlClose()">Cancel</button>
+        <button class="btn btn-sm btn-primary" id="guard-control-go"></button>
+      </div>
+    </div>
+  </dialog>
+
   <div class="section-header">
     <h2 data-i18n="guard.title">Guard</h2>
     <p class="section-sub" data-i18n="guard.sub">
