@@ -363,10 +363,10 @@ def test_drift_bot_is_read_from_the_commit_status_api(entry) -> None:
 
     queue-priority.yml's ``requeue`` job did not: it asked
     ``/commits/<sha>/check-runs?check_name=drift-bot``, which returns an empty
-    list for every commit. The verdict defaulted to "missing", the green-drift
-    guard rejected every PR, and the job re-ran nothing for as long as it
-    existed -- so every run its sibling ``clear-queue`` cancelled stayed
-    cancelled. Dependabot's npm security bumps were the visible casualty.
+    list for every commit. The verdict defaulted to "missing", so the
+    green-drift guard rejected every PR -- including PRs whose drift-bot
+    status was in fact green -- and the job re-ran nothing for as long as it
+    existed. Every run its sibling ``clear-queue`` cancelled stayed cancelled.
 
     Auto-discovered over every run block, so any future consumer that reaches
     for the wrong surface is caught here rather than by silence.

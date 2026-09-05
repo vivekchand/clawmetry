@@ -10,8 +10,8 @@
 #   2. requeue      — once main is quiet again (Auto-deploy Cloud completed, or
 #      the half-hourly sweep finds main idle), re-run the latest cancelled run
 #      of each workflow for every open PR whose drift-bot commit status is
-#      green, or which never receives one (frontend-only npm bumps).
-#      Red-drift PRs stay parked until their drift is fixed and re-reported.
+#      green. Red-drift PRs stay parked until their drift is fixed and
+#      re-reported.
 #
 # No third-party actions on purpose: every step is `gh api` against
 # GITHUB_TOKEN, so there is nothing to SHA-pin and no checkout needed.
@@ -127,17 +127,15 @@ jobs:
             drift=$(gh api "/repos/$REPO/commits/$sha/status" \
                       --jq '[.statuses[] | select(.context == "drift-bot") | .state]
                             | first // "unreported"')
-            # Mirrors the E2E Gate's skip_if_unreported for the same spec: the
-            # App only posts on PRs touching Python or product-record files, so
-            # a frontend-only Dependabot npm bump never receives a status at
-            # all. Parking on "unreported" would strand precisely the security
-            # updates this workflow cancels -- #5376 (esbuild/vite, high
-            # severity) sat cancelled for days. A real failure, or an analysis
-            # still pending, still parks.
-            case "$drift" in
-              success|unreported) ;;
-              *) echo "PR #$pr: drift=$drift, parked"; continue ;;
-            esac
+            # Success-only, exactly as the Main-First Runner Queue Priority
+            # requirement states. "unreported" is its own case and is NOT
+            # treated as green here: the App only posts on PRs touching Python
+            # or product-record files, so a frontend-only Dependabot npm bump
+            # never receives a status and stays parked. Widening the condition
+            # to cover it is a change to the requirement, not to this file --
+            # see the PR discussion. Kept distinct from "missing" only so the
+            # log says which of the two happened.
+            [ "$drift" = "success" ] || { echo "PR #$pr: drift=$drift, parked"; continue; }
             # Latest run per workflow on this head branch; re-run it only if it
             # ended cancelled (i.e. we parked it) and recently.
             gh api "/repos/$REPO/actions/runs?branch=$branch&event=pull_request&per_page=100" \
