@@ -58,6 +58,8 @@ test-moat:
 	    tests/test_cohort_compare.py \
 	    tests/test_behaviour_signals.py \
 	    tests/test_signals_ui_contract.py \
+	    tests/test_signal_shifts.py \
+	    tests/test_briefs.py \
 	    -q
 
 # MOAT real-data E2E (2026-05-19 mandate). Drives a REAL ``openclaw agent

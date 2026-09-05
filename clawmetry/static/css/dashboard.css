@@ -3539,3 +3539,158 @@ body.has-profile-menu #logout-btn { display: none !important; }
 #page-signals .sig-chip-state { font-size: 11px; color: var(--text-muted); }
 #page-signals .sig-chip-none .sig-chip-state { color: var(--text-warning); }
 #page-signals .sig-chip-active { border-color: var(--bg-accent); }
+#page-signals .sig-issues-card { border-left: 3px solid var(--text-warning); }
+#page-signals .sig-issue, #page-signals .sig-brief { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-secondary); }
+#page-signals .sig-issue:last-child, #page-signals .sig-brief:last-child { border-bottom: none; }
+#page-signals .sig-issue-main { flex: 1; min-width: 0; }
+#page-signals .sig-issue-head { font-size: 14px; font-weight: 600; color: var(--text-primary); line-height: 1.4; }
+#page-signals .sig-issue-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+#page-signals .sig-issue-tag { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); border: 1px solid var(--border-secondary); border-radius: 5px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; }
+#page-signals .sig-brief-off .sig-issue-head { color: var(--text-secondary); }
+#page-signals .sig-brief-offer { background: var(--bg-primary); border: 1px dashed var(--border-primary); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+#page-signals .sig-brief-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-secondary); }
+#page-signals .sig-brief-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
+#page-signals .sig-brief-form input, #page-signals .sig-brief-form select { font: inherit; font-size: 13px; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--border-primary); background: var(--bg-primary); color: var(--text-primary); }
+#page-signals .sig-brief-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; }
+@media (max-width: 720px) { #page-signals .sig-brief-form { grid-template-columns: 1fr; } #page-signals .sig-issue, #page-signals .sig-brief { flex-direction: column; } }
+/* ── Trail page (#page-trail): one session as Inputs / Decisions / Outcome ──
+   Scoped under #page-trail. The replay / trace / turn renderers are borrowed
+   DOM nodes (static/js/trail.js) and keep their own global styles. */
+#page-trail .trail-topbar {
+  display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+#page-trail .trail-back { flex: 0 0 auto; margin-top: 2px; }
+#page-trail .trail-title-wrap { flex: 1 1 320px; min-width: 0; }
+#page-trail .trail-title {
+  font-size: 20px; font-weight: 700; line-height: 1.25; letter-spacing: -0.01em;
+  color: var(--text-primary); overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+#page-trail .trail-subtitle {
+  margin-top: 5px; font-size: 12px; color: var(--text-muted);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+#page-trail .trail-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+#page-trail .trail-actions .refresh-btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+#page-trail .trail-dot { color: var(--text-faint, var(--text-muted)); }
+#page-trail .trail-muted { color: var(--text-muted); font-size: 12.5px; line-height: 1.5; }
+#page-trail .trail-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--text-muted); }
+#page-trail .trail-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px;
+  background: var(--bg-secondary); color: var(--text-secondary);
+  border: 1px solid var(--border-secondary, var(--border-primary));
+  white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+#page-trail .trail-chip.is-ok { color: #22c55e; border-color: rgba(34,197,94,0.35); }
+#page-trail .trail-chip.is-bad { color: #ef4444; border-color: rgba(239,68,68,0.35); }
+#page-trail .trail-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+#page-trail .trail-empty {
+  text-align: center; padding: 56px 20px; display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+#page-trail .trail-empty-title { font-size: 17px; font-weight: 700; color: var(--text-primary); }
+
+#page-trail .trail-section { margin-bottom: 30px; }
+#page-trail .trail-section-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+#page-trail .trail-step {
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; color: #fff; background: #E5443A;
+  margin-top: 1px;
+}
+#page-trail .trail-section-title { margin: 0; font-size: 16px; font-weight: 700; color: var(--text-primary); line-height: 1.3; }
+
+#page-trail .trail-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; }
+#page-trail .trail-grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 12px; }
+#page-trail .trail-card { padding: 14px 16px; min-width: 0; }
+#page-trail .trail-card-label {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted); margin-bottom: 8px;
+}
+#page-trail .trail-prose { font-size: 13.5px; line-height: 1.55; color: var(--text-primary); margin-top: 6px; }
+#page-trail .trail-request-text {
+  font-size: 14px; line-height: 1.6; color: var(--text-primary);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 320px; overflow: auto;
+}
+#page-trail .trail-link {
+  background: none; border: none; padding: 0; margin-top: 8px; cursor: pointer;
+  color: var(--text-accent, #8b5cf6); font-size: 12px; font-weight: 600;
+}
+#page-trail .trail-kv { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; font-size: 13px; color: var(--text-primary); }
+#page-trail .trail-k { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+#page-trail .trail-pre {
+  margin: 6px 0 0; padding: 10px 12px; border-radius: 8px; max-height: 260px; overflow: auto;
+  background: var(--bg-primary); border: 1px solid var(--border-secondary, var(--border-primary));
+  font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary);
+}
+#page-trail .trail-details { margin-top: 8px; font-size: 13px; color: var(--text-primary); }
+#page-trail .trail-details > summary { cursor: pointer; font-weight: 600; color: var(--text-secondary); font-size: 12.5px; }
+#page-trail .trail-details > summary:hover { color: var(--text-primary); }
+#page-trail .trail-coverage {
+  margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border-secondary, var(--border-primary));
+  font-size: 12px; color: var(--text-secondary);
+}
+#page-trail .trail-cov { font-weight: 700; }
+#page-trail .trail-cov-full { color: #22c55e; }
+#page-trail .trail-cov-partial { color: #f59e0b; }
+#page-trail .trail-cov-none { color: var(--text-muted); }
+
+#page-trail .trail-subtabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+#page-trail .trail-subtab {
+  padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border-secondary, var(--border-primary));
+}
+#page-trail .trail-subtab:hover { color: var(--text-primary); }
+#page-trail .trail-subtab.active { background: #6366f1; border-color: #6366f1; color: #fff; }
+#page-trail .trail-view { min-width: 0; }
+/* Borrowed renderers: while inside the trail they are the view, so the
+   fixed height / hidden state their home tabs set must not apply here. */
+#page-trail #transcript-viewer, #page-trail #trace-detail, #page-trail #ta-detail { display: block; }
+
+#page-trail .trail-verdict {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 18px; font-weight: 700; color: var(--verdict, var(--text-primary));
+}
+#page-trail .trail-verdict .cm-verdict-dot { width: 12px; height: 12px; }
+#page-trail .trail-verdict-unknown { color: var(--text-muted); }
+#page-trail .trail-verdict-unknown .cm-verdict-dot { --verdict: var(--text-muted); background: transparent; }
+#page-trail .trail-legend { margin-top: 12px; }
+#page-trail .trail-legend-row { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12.5px; }
+#page-trail .trail-legend-row .cm-verdict-dot { position: relative; top: 1px; }
+#page-trail .trail-big { font-size: 28px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; color: var(--text-primary); }
+#page-trail .trail-big-denom { font-size: 14px; font-weight: 600; margin-left: 2px; }
+#page-trail .trail-big.trail-inline { font-size: 20px; }
+#page-trail .trail-locked { font-size: 12.5px; color: var(--text-muted); display: flex; gap: 6px; align-items: baseline; }
+#page-trail .trail-list { margin: 4px 0 10px; padding-left: 18px; font-size: 13px; line-height: 1.6; color: var(--text-primary); }
+#page-trail .trail-tree { margin: 8px 0 0; padding-left: 0; list-style: none; }
+#page-trail .trail-tree > li { margin-bottom: 6px; }
+#page-trail .trail-tree-events { margin: 6px 0 0; padding-left: 18px; font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); list-style: none; }
+#page-trail .trail-tree-children { margin: 6px 0 0; padding-left: 18px; border-left: 2px solid var(--border-secondary, var(--border-primary)); list-style: none; }
+
+@media (max-width: 900px) {
+  #page-trail .trail-grid, #page-trail .trail-grid-3 { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Verdict badge on Sessions list rows (shared with the Trail's verdict card). */
+.cm-verdict {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px;
+  color: var(--verdict, var(--text-muted));
+  background: color-mix(in srgb, var(--verdict, var(--text-muted)) 14%, transparent);
+  white-space: nowrap; margin-left: 6px;
+}
+.cm-verdict-dot {
+  flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--verdict, var(--text-muted)); box-sizing: border-box;
+}
+.cm-open-trail {
+  margin-left: 8px; padding: 4px 10px; border-radius: 6px; cursor: pointer;
+  font-size: 11.5px; font-weight: 700; white-space: nowrap;
+  background: var(--button-bg); color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+}
+.cm-open-trail:hover { color: var(--text-primary); border-color: #6366f1; }
