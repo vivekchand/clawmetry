@@ -796,10 +796,7 @@ def _cmd_binary_exists(cmd: str) -> bool:
     """
     if not cmd:
         return False
-    first = cmd.split()[0]
-    if os.path.isabs(first):
-        return os.access(first, os.X_OK)
-    return True
+    return hook_ownership.command_binary_exists(cmd)
 
 
 def _drop_stale_our_hooks(entries: list) -> bool:
@@ -821,7 +818,7 @@ def _has_our_hook(entries: list) -> bool:
     for entry in entries or []:
         for h in (entry.get("hooks") or []):
             cmd = h.get("command") or ""
-            if any(m in cmd for m in _HOOK_CMD_MARKERS):
+            if hook_ownership.hook_is_ours(h, _HOOK_CMD_MARKERS):
                 if _cmd_binary_exists(cmd):
                     return True
     return False

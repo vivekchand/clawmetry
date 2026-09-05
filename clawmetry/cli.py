@@ -2720,6 +2720,24 @@ def _cmd_uninstall(args=None) -> None:
     except Exception as _e:
         print(f"  ⚠️  Could not drain runtime hooks: {_e}")
 
+    # 1b-ii. Drain the Claude Code PreToolUse gate + PermissionRequest
+    # mirror. These are installed by clawmetry/claude_code_gate.py, NOT by
+    # the clawmetry.hooks registry the step above drains, so an uninstall
+    # used to walk straight past them and leave settings.json naming a
+    # binary it was about to delete — a hook error on every tool call, with
+    # no ClawMetry left running that could ever clean it up. Same #4817
+    # rule as above: BEFORE the pip uninstall, while the module still
+    # imports.
+    try:
+        from clawmetry import claude_code_gate as _cc_gate
+        _gate_res = _cc_gate.uninstall_all_hooks()
+        if _gate_res.get("gate") or _gate_res.get("mirror"):
+            print("  ✅  Removed Claude Code gate hooks from settings.json")
+        for _err in _gate_res.get("errors") or []:
+            print(f"  ⚠️  Could not remove Claude Code hook ({_err})")
+    except Exception as _e:
+        print(f"  ⚠️  Could not remove Claude Code gate hooks: {_e}")
+
     # 1c. Drain numbat hooks (clawmetry secure). MUST run BEFORE the
     # ~/.clawmetry purge below: the drain shells out to the managed binary
     # in ~/.clawmetry/bin, and the hooks numbat registered in each agent's
