@@ -3,104 +3,153 @@
 > **Read [`FLYWHEEL.md`](./FLYWHEEL.md) first.** It is how you ship a change end to end here (code → PR → green CI → `[RELEASE]` → PyPI → cloud → verified live) and the non-negotiable "done" bar. This file is the architecture reference; FLYWHEEL.md is the shipping loop.
 
 ## What is this?
-ClawMetry is an open-source, real-time observability dashboard for [OpenClaw](https://github.com/openclaw/openclaw) AI agents. `pip install clawmetry && clawmetry` — that's it. Zero config, observation by default.
+ClawMetry is an open-source, real-time observability and governance layer for **30 AI agent runtimes** — [OpenClaw](https://github.com/openclaw/openclaw), NVIDIA NemoClaw and Goose free in OSS, the other 27 (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Hermes, Aider, opencode, ...) with the optional Pro plugin. `pip install clawmetry && clawmetry` — that's it. Zero config, observation by default.
+
+**Never hardcode the runtime count or the runtime list anywhere new.** The authoritative sources are `entitlements.FREE_RUNTIMES | entitlements.PAID_RUNTIMES` (the catalogue, and what every quoted number is derived from) and `sync._FAMILY_ADAPTER_SPECS` (what the daemon actually loads — a `clawmetry-pro` adapter is inert until it is named there). `scripts/sync_runtime_count.py` rewrites the number in prose and CI fails on drift; the same script checks the chat-channel count against `entitlements.ALL_CHANNELS`.
 
 ## Architecture
-See `ARCHITECTURE.md` for the full deep dive. TL;DR:
+See `ARCHITECTURE.md` for the full deep dive, and `docs/MODULE_MAP.md` (generated) for every module and blueprint. TL;DR:
 - **Flask app** with embedded HTML/CSS/JS frontend (no build step, no npm)
-- **Per-feature route modules** under `routes/` — `routes/sessions.py`, `routes/usage.py`, etc. — each owns one Blueprint and the endpoints registered on it. New endpoints land in their feature's module so parallel PRs don't stomp on each other.
-- **Shared helpers** stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d`. (Helpers will migrate to `helpers/` over time.)
-- **Zero config** — auto-detects OpenClaw workspace, gateway, sessions, logs
+- **Per-feature route modules** under `routes/` — `routes/sessions.py`, `routes/usage.py`, etc. — each owns one or more Blueprints and the endpoints registered on them. New endpoints land in their feature's module so parallel PRs don't stomp on each other.
+- **Shared helpers** are migrating out of `dashboard.py` into `helpers/`; route modules reach the ones still in `dashboard.py` via late `import dashboard as _d`.
+- **Zero config** — auto-detects runtimes, OpenClaw workspace, gateway, sessions, logs
 - **Observation by default, control when asked** — see "Control plane" below. Reads never require permission; writes are always user-initiated or policy-declared
 - **DuckDB-first** — the sync daemon ingests filesystem/gateway/OTLP into a local **DuckDB** store (`clawmetry/local_store.py`; the daemon owns the writer lock). Request handlers read from DuckDB via `routes/local_query.py`, **not** raw files — reading raw JSONL/logs inside a handler works locally but returns empty in cloud (the container has no `~/.openclaw`). Optional `history.py` adds a separate SQLite time-series.
-- **Three ingest sources** (all land in DuckDB): filesystem (JSONL/logs), gateway WebSocket (JSON-RPC), optional OTLP receiver
+- **Five ingest paths** (all land in DuckDB): filesystem (JSONL/logs), gateway WebSocket (JSON-RPC), optional OTLP receiver (`/v1/metrics`, `/v1/traces`, `/v1/logs`), runtime hooks (`clawmetry hook <runtime>`, the only pre-tool path), and the HTTP ingest API (`/api/v1/runs/*`) for a runtime with no adapter
 
 ## Key Files
 
+`docs/MODULE_MAP.md` is the **generated** inventory: every module, the blueprints it defines, the URL space it owns, and a coarse size band. `scripts/gen_module_map.py` regenerates it and CI fails when it drifts. The tables below are a short curated index of what you reach for most often, deliberately without line counts (they went stale within weeks every time they were written down).
+
+**Five files are big enough to change how you work on them**: `routes/entitlement.py` (~48k lines), `clawmetry/entitlements.py` (~31k), `clawmetry/sync.py` (~26k), `dashboard.py` (~21k), `clawmetry/local_store.py` (~20k). Drift Bot reads only the head of a long file, so anything added deep inside one is reported as "not implemented" forever. Put new capability in a new short module and re-export it, rather than appending 300 lines to a 20k-line file.
+
 ### Core
-| File | Lines | Purpose |
-|------|-------|---------|
-| `dashboard.py` | ~17,300 | Flask app, blueprint registration, shared helpers (live frontend now lives in `static/` + `templates/`) |
-| `history.py` | ~555 | Optional time-series collector (SQLite, polls gateway every 60s) |
+| File | Purpose |
+|------|---------|
+| `dashboard.py` | Flask app, blueprint registration, `before_request` auth, the shared helpers that have not moved yet (the live frontend lives in `clawmetry/static/` + `clawmetry/templates/`) |
+| `helpers/gateway.py` | OpenClaw gateway WebSocket RPC + HTTP invoke client |
+| `helpers/logs.py` | Log directory discovery, tail and grep |
+| `helpers/openapi.py` | `bp_openapi` — the OpenAPI 3.1 spec generated from the Flask URL map, served at `/openapi.json` and `/api/docs` |
+| `history.py` | Optional time-series collector (SQLite, polls gateway every 60s) |
 
 ### Route modules (`routes/`)
-All HTTP endpoints live here, organised by feature. Each module owns one or more Flask Blueprints; handlers do late `import dashboard as _d` to reach shared helpers still in `dashboard.py`.
+All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, listed in full in `docs/MODULE_MAP.md`. Handlers do late `import dashboard as _d` to reach shared helpers still in `dashboard.py`.
 
-| File | Lines | Blueprints / Purpose |
-|------|-------|----------------------|
-| `routes/sessions.py` | ~7,300 | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
-| `routes/channels.py` | ~2,800 | `bp_channels` — 21 chat-channel adapters (Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat, …) |
-| `routes/components.py` | ~2,100 | `bp_components` — Flow-panel detail endpoints (tool / runtime / machine / gateway / brain) |
-| `routes/usage.py` | ~4,500 | `bp_usage` — token/cost analytics, anomaly detection, model + skill attribution |
-| `routes/health.py` | ~3,500 | `bp_health` — system-health, reliability, diagnostics, rate-limits, sandbox-status, health-stream (SSE) |
-| `routes/brain.py` | ~1,900 | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
-| `routes/local_query.py` | ~850 | `bp_local_query` — `/api/local/*` DuckDB read API + the daemon-proxy `_dispatch` (shape→store bridge shared by HTTP and the cloud relay) |
-| `routes/infra.py` | ~2,400 | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
-| `routes/overview.py` | ~1,900 | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
-| `routes/crons.py` | ~1,500 | `bp_crons` — cron CRUD + run log + health summary |
-| `routes/meta.py` | ~1,600 | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_cloud_relay` + `bp_otlp_traces` — auth, gateway proxy, OTLP ingestion, version meta |
-| `routes/alerts.py` | ~980 | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
-| `routes/signals.py` | ~200 | `bp_signals` — Behaviour Signals read API: `/api/signals` (per signal: rate, count, eligible turns, trend, per-day, by model, by runtime version; plus coverage per runtime and a plain-words headline), `/api/signals/<name>/sessions` (sessions, never phrases), `/api/signals/coverage`. Reads the store through the daemon proxy |
-| `routes/fleet_history.py` | ~240 | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
-| `routes/nemoclaw.py` | ~125 | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
-| `routes/runtime_ingest.py` | ~87 | `bp_runtime_ingest` — custom runtime HTTP ingest API (`/api/v1/runtimes`, `/api/v1/runs/*`; Pro feature) |
-| `routes/__init__.py` | — | Package marker |
+| File | Blueprints / Purpose |
+|------|----------------------|
+| `routes/sessions.py` | `bp_sessions` — sessions list, transcripts, compactions, tool timeline, cost split, subagents, exports |
+| `routes/usage.py` | `bp_usage` — token/cost analytics, anomaly detection, model + skill attribution, `/api/usage/outcomes` |
+| `routes/health.py` | `bp_health` — system-health, reliability, diagnostics, rate-limits, sandbox-status, health-stream (SSE) |
+| `routes/overview.py` | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
+| `routes/brain.py` | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
+| `routes/channels.py` | `bp_channels` — 23 chat-channel adapters (Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat, …) |
+| `routes/components.py` | `bp_components` — Flow-panel detail endpoints (tool / runtime / machine / gateway / brain) |
+| `routes/local_query.py` | `bp_local_query` — `/api/local/*` DuckDB read API + the daemon-proxy `_dispatch` (shape→store bridge shared by HTTP and the cloud relay) |
+| `routes/guard.py` | `bp_guard` — live session control (Pause/Stop/Kill), Guard policy CRUD, policy decision log, learned baselines. Sessions ranked by **spend at risk**, not severity |
+| `routes/policy.py` | `bp_policy` — the *pre-tool* sandbox/permission surface (`/api/tool-policy`). Deliberately a different axis from `routes/guard.py`: different table, no shared state |
+| `routes/hooks.py` | `bp_hooks` — hook install / status / uninstall per runtime, and the gate's decision log |
+| `routes/infra.py` | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
+| `routes/meta.py` | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_cloud_relay` + `bp_otlp_traces` — auth, gateway proxy, OTLP ingestion, version meta |
+| `routes/entitlement.py` | `bp_entitlement` — the resolved entitlement plus the preview / diff / batch family at `/api/entitlement*` |
+| `routes/alerts.py` | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
+| `routes/crons.py` | `bp_crons` — cron CRUD + run log + health summary |
+| `routes/signals.py` | `bp_signals` — Behaviour Signals read API: `/api/signals` (rate, count, eligible turns, trend, by model and runtime, coverage, plain-words headline), `/api/signals/<name>/sessions` (sessions, never phrases) |
+| `routes/tracing.py` | `bp_tracing` — spans and the trace view |
+| `routes/trail.py` | `bp_trail` — `/api/trail/coverage`: per runtime, which trail streams it can actually expose |
+| `routes/fleet_history.py` | `bp_fleet` + `bp_history` — multi-node fleet + SQLite time-series |
+| `routes/nemoclaw.py` | `bp_nemoclaw` — NeMo Guardrails governance + approval queue |
+| `routes/runtime_ingest.py` | `bp_runtime_ingest` — custom runtime HTTP ingest API (`/api/v1/runs/*`; Pro feature) |
+| `routes/__init__.py` | Package marker plus the `@event_data` / `@source_exempt` route markers the source canary reads |
 
 ### Package (`clawmetry/`)
-| File | Lines | Purpose |
-|------|-------|---------|
-| `clawmetry/cli.py` | ~6,100 | CLI entry point — `clawmetry`, `clawmetry connect`, `clawmetry sync`, `clawmetry status` |
-| `clawmetry/sync.py` | ~20,200 | Cloud sync daemon — ingests into DuckDB, owns the writer lock, E2E-encrypted (AES-256-GCM) snapshot streaming to `ingest.clawmetry.com` |
-| `clawmetry/local_store.py` | ~12,000 | **DuckDB store** — the single data layer features read/write (daemon holds the writer lock) |
-| `clawmetry/local_server.py` | ~200 | Daemon-hosted localhost query server (`/__local_query__/<method>`) so the dashboard/sync read DuckDB without grabbing the writer lock |
-| `clawmetry/proxy.py` | ~2,700 | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
-| `clawmetry/detectors.py` | ~870 | Event normalization, the four **trajectory** detectors (is it stuck?), the registry, `run_all` and `session_profile`. Keeps its original shape; the new capability lives in the four modules below and is re-exported here, so `clawmetry.detectors` stays the single import |
-| `clawmetry/detector_surface.py` | ~290 | What a tool call touched (paths, command, hosts, heredoc bodies stripped) and what a finding may repeat back. Every function here is new in this change |
-| `clawmetry/detector_behaviour.py` | ~470 | The four **behavioural** detectors (is it doing something it does not normally do?): `file_blast_radius`, `credential_access`, `network_egress`, `privilege_change`, with their pattern tables |
-| `clawmetry/detector_calibration.py` | ~280 | Where a threshold comes from: module defaults → `RUNTIME_PROFILES` → the cohort's learned baseline → a per-runtime env override. `resolve_thresholds` reports which layer set each value |
-| `clawmetry/behaviour_signals.py` | ~750 | Behaviour Signals (WO-58): six preset judge-free signals over every transcript in the store (`user_frustration`, `user_praise`, `assistant_refusal`, `assistant_laziness`, `task_failure`, `user_retry`). Precompiled word-boundary matchers with negation, positive-context and front-of-turn guards, evaluated on the daemon tick over new turns (watermark on `events.created_at`, capped per pass), persisted to the additive `signal_turns` + `signal_matches` tables (never the text; PK dedupes re-runs). Also the rate aggregation, per-runtime coverage (`user_text` / `assistant_text` / `none`; an adapter's `signal_coverage()` wins over inference), the headline sentence and the `signals` / `signalsByRuntime` snapshot slices |
-| `clawmetry/detector_money.py` | ~130 | `spend_at_risk_usd` and the ranking. Only a measured basis may promote a warning to `critical` |
-| `clawmetry/git_outcomes.py` | ~660 | **Read-only** Git reader (REQ-OBS-CEA-022) — commits, merge state by default-branch reachability, pull-request state via `gh` when present, line survival for rework, and session↔commit correlation with a recorded confidence. Every subprocess passes one chokepoint that rejects anything outside an allowlist of read-only plumbing subcommands |
-| `clawmetry/interceptor.py` | ~630 | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
-| `clawmetry/providers_pricing.py` | ~430 | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
-| `clawmetry/config.py` | ~200 | Configuration dataclass |
-| `clawmetry/extensions.py` | ~300 | Plugin/hook system |
-| `clawmetry/track.py` | ~60 | Zero-config interceptor shorthand |
-| `clawmetry/providers/` | — | Pluggable data provider layer (LocalDataProvider, TursoDataProvider) |
+130 modules, listed in full in `docs/MODULE_MAP.md`.
+
+| File | Purpose |
+|------|---------|
+| `clawmetry/cli.py` | CLI entry point — `clawmetry`, `connect`, `sync`, `status`, `license`, `hook`, `update` |
+| `clawmetry/sync.py` | Cloud sync daemon — ingests into DuckDB, owns the writer lock, runs the detectors and Guard policies, streams the E2E-encrypted (AES-256-GCM) snapshot to `ingest.clawmetry.com`. Holds `_FAMILY_ADAPTER_SPECS` (the adapters that actually load) and `_CHANNEL_DIRS` |
+| `clawmetry/local_store.py` | **DuckDB store** — the single data layer features read and write (the daemon holds the writer lock). Schema v15 |
+| `clawmetry/local_server.py` | Daemon-hosted localhost query server (`/local/query`, discovered through `~/.clawmetry/local_query.json`) so the dashboard reads DuckDB without grabbing the writer lock |
+| `clawmetry/query_contract.py` | The declared node query surface (`q/1`), rendered to `docs/QUERY_CONTRACT.md`. Additive-only inside a version |
+| `clawmetry/entitlements.py` | Single source of truth for tiers, `FREE_RUNTIMES` / `PAID_RUNTIMES`, `ALL_CHANNELS` and every capacity limit. GRACE by default |
+| `clawmetry/license.py` | Offline Ed25519 verification of self-hosted license keys |
+| `clawmetry/proxy.py` | Enforcement proxy — budget limits, loop detection, model routing (port 4100) |
+| `clawmetry/detectors.py` | Event normalization, the four **trajectory** detectors (is it stuck?), the registry, `run_all` and `session_profile`. Re-exports the modules below, so `clawmetry.detectors` stays the single import |
+| `clawmetry/detector_behaviour.py` | The four **behavioural** detectors (is it doing something it does not normally do?): `file_blast_radius`, `credential_access`, `network_egress`, `privilege_change`, with their pattern tables |
+| `clawmetry/detector_surface.py` | What a tool call touched (paths, command, hosts, heredoc bodies stripped) and what a finding may repeat back |
+| `clawmetry/detector_calibration.py` | Where a threshold comes from: module defaults → `RUNTIME_PROFILES` → the cohort's learned baseline → a per-runtime env override. `resolve_thresholds` reports which layer set each value |
+| `clawmetry/detector_money.py` | `spend_at_risk_usd` and the ranking. Only a measured basis may promote a warning to `critical` |
+| `clawmetry/policy_engine.py` | **Pure** Guard policy evaluator — detector incident + policies → at most one enforcement decision per session, including the escalation ladder |
+| `clawmetry/guard_actuator.py` | The one place a decision becomes a signal. Both the manual and the automatic path go through it |
+| `clawmetry/process_control.py` | Signal actuators — pause (SIGSTOP / `NtSuspendProcess`), stop (SIGINT / a console Ctrl+C), kill (SIGTERM→SIGKILL tree / `taskkill /T`), pid-reuse guarded. Owns `runtime_control_support()` |
+| `clawmetry/resume_hints.py` | A verified resume command per runtime, with its native session id. Coverage is CI-enforced |
+| `clawmetry/approvals.py` | Approval queue and audit table; an approval denial can end a session |
+| `clawmetry/hook_ownership.py` | Hook install and removal at **hook** granularity, so ClawMetry never deletes a hook it did not write |
+| `clawmetry/behaviour_signals.py` | Six preset judge-free signals over every transcript in the store, persisted to `signal_turns` / `signal_matches` (never the matched text) |
+| `clawmetry/git_outcomes.py` | **Read-only** Git reader — commits, merge state, pull-request state via `gh`, line survival, session↔commit correlation. Every subprocess passes one allowlist chokepoint |
+| `clawmetry/interceptor.py` | Zero-config HTTP monkey-patching for LLM cost tracking (patches httpx/requests) |
+| `clawmetry/providers_pricing.py` | Multi-provider pricing table (Anthropic, OpenAI, Google, OpenRouter, etc.) |
+| `clawmetry/runtime_probe.py` | Which runtimes are actually installed on this machine |
+| `clawmetry/config.py` | Configuration dataclass |
+| `clawmetry/extensions.py` | Plugin/hook system — the `clawmetry.extensions` entry point `clawmetry-pro` registers through |
+| `clawmetry/track.py` | Zero-config interceptor shorthand |
+| `clawmetry/adapters/` | The FREE runtime adapters (OpenClaw, NemoClaw, Goose) plus the adapter base SDK the paid ones build on |
+| `clawmetry/providers/` | Pluggable data provider layer (LocalDataProvider, TursoDataProvider) |
 
 ### Config & Build
 | File | Purpose |
 |------|---------|
-| `setup.py` | PyPI package definition (entry point: `clawmetry` CLI) |
+| `setup.py` | PyPI package definition (entry point: `clawmetry` CLI). Derives the PyPI summary from `clawmetry/entitlements.py`, so the advertised runtime count cannot drift |
 | `requirements.txt` | pip dependencies |
 | `Dockerfile` | Docker image (Python 3.11-slim base) |
-| `Makefile` | Dev commands: `make dev`, `make test`, `make lint` |
+| `Makefile` | Dev commands: `make dev`, `make test`, `make lint` (which runs every `lint-*` guard) |
 | `install.sh` | One-liner installer script |
+| `desktop/` | The thin-shell desktop app (`.dmg` / `.exe` / `.deb` / `.AppImage`) that pip-installs clawmetry |
+| `scripts/` | The drift guards CI runs: `scripts/sync_runtime_count.py`, `scripts/gen_module_map.py`, `scripts/gen_query_contract_doc.py`, `scripts/check_ac_coverage.py`, `scripts/check_product_record.py`, `scripts/lint_daemon_allowlist.py` |
 
 ### Documentation
 | File | Purpose |
 |------|---------|
-| `ARCHITECTURE.md` | Detailed architecture guide with diagrams |
-| `CHANGELOG.md` | Version history (~11,600 lines) |
+| `ARCHITECTURE.md` | Architecture deep dive with C4 diagrams: the five intervention surfaces, the ingest paths, the store, Guard |
+| `docs/MODULE_MAP.md` | **Generated** inventory of every module, blueprint and URL prefix (`scripts/gen_module_map.py`) |
+| `docs/QUERY_CONTRACT.md` | **Generated** node query surface (`clawmetry/query_contract.py`) |
+| `docs/ENTITLEMENTS.md` | Open-core split: FREE runtimes/features, paid tiers, GRACE mode, `/api/entitlement` shape, `clawmetry license` CLI |
+| `docs/EGRESS.md` | Every outbound destination, what it carries, and how to verify it on the wire |
+| `docs/HOOK_COEXISTENCE.md` | How ClawMetry shares a runtime's hook config with other writers |
+| `docs/CUSTOM_RUNTIME_INGEST.md` | The HTTP ingest API for a runtime with no adapter |
+| `docs/EVENT_RETENTION.md` | Store growth and trimming |
+| `CHANGELOG.md` | Version history |
 | `CONTRIBUTING.md` | Contribution guidelines |
 | `SECURITY.md` | Security posture |
 | `CLOUD_EXTENSION_DESIGN.md` | Cloud feature design |
-| `docs/ENTITLEMENTS.md` | Open-core split: FREE runtimes/features, paid tiers, GRACE mode, `/api/entitlement` shape, `clawmetry license` CLI |
 
 ## How it works
 The **sync daemon** (`clawmetry/sync.py`) ingests these sources into the local **DuckDB** store; the Flask app reads DuckDB (via `routes/local_query.py`) to serve the UI:
-1. Session transcripts from `~/.openclaw/agents/main/sessions/*.jsonl`
-2. Chat-channel transcripts from `~/.openclaw/<channel>/*.jsonl` —
+1. OpenClaw session transcripts from `~/.openclaw/agents/main/sessions/*.jsonl`
+2. Every other runtime's own store, read by its adapter and loaded from the
+   hardcoded `sync._FAMILY_ADAPTER_SPECS` tuple (Claude Code under
+   `~/.claude/projects/<slug>/*.jsonl`, Codex, Cursor, Goose, …). There is no
+   dynamic discovery: an adapter absent from that tuple never loads.
+3. Chat-channel transcripts from `~/.openclaw/<channel>/*.jsonl` —
    one directory per adapter (`telegram/`, `signal/`, `whatsapp/`,
-   `discord/`, `slack/`, `irc/`, `imessage/`, `webchat/`, …). The 21
+   `discord/`, `slack/`, `irc/`, `imessage/`, `webchat/`, …). The 23
    adapter directories match the routes in `routes/channels.py`. New
-   adapter? Add its dir name to `_CHANNEL_DIRS` in `clawmetry/sync.py`.
-3. OpenClaw gateway via WebSocket (JSON-RPC, port 18789) for live data
-4. Optional OpenTelemetry metrics/traces/logs on `/v1/metrics`, `/v1/traces`, and `/v1/logs`
+   adapter? Add its dir name to `_CHANNEL_DIRS` in `clawmetry/sync.py`
+   (`tests/test_entitlement_channel_catalog.py` pins it to `ALL_CHANNELS`).
+4. OpenClaw gateway via WebSocket (JSON-RPC, port 18789) for live data
+5. Optional OpenTelemetry metrics/traces/logs on `/v1/metrics`, `/v1/traces`, and `/v1/logs`
+6. Runtime hooks (`clawmetry hook <runtime>`), the only path that sees a tool
+   call *before* it runs, and the HTTP ingest API (`/api/v1/runs/*`) for a
+   runtime with no adapter
 
-The daemon owns the DuckDB writer lock and runs a localhost query server so the dashboard reads through it. The dashboard serves the UI at `http://localhost:8900`; for cloud, the daemon also pushes an E2E-encrypted snapshot to `ingest.clawmetry.com` (decrypted client-side in the browser).
+Cadence: the daemon's main loop runs every 15s (`sync.POLL_INTERVAL`), family
+runtimes and the system snapshot every 60s.
+
+The daemon owns the DuckDB writer lock and runs a localhost query server so the dashboard reads through it. The dashboard serves the UI at `http://127.0.0.1:8900` (loopback by default; `--host` widens it deliberately); for cloud, the daemon also pushes an E2E-encrypted snapshot to `ingest.clawmetry.com` (decrypted client-side in the browser).
 
 ## API Endpoints (key ones)
+The complete surface is generated at `/openapi.json` and browsable at `/api/docs`; `docs/MODULE_MAP.md` maps each URL prefix to the module that owns it.
+
 - `/api/overview` — Main dashboard data (sessions, tokens, crons, health)
 - `/api/sessions` — Active session list
 - `/api/subagents` — Sub-agent tracker with status and costs
@@ -116,6 +165,10 @@ The daemon owns the DuckDB writer lock and runs a localhost query server so the 
 - `/api/budget/*` — Budget monitoring and alerts
 - `/api/alerts/*` — Custom alert rules (incl. the `signal_rate_above` rule type: a behaviour signal's rate over a window with a minimum sample)
 - `/api/signals` — Behaviour signal rates per window (`1d|7d|30d`) and `?runtime=`, with coverage and headline; `/api/signals/<name>/sessions` lists matching sessions, never phrases
+- `/api/guard/sessions` — What is running, what a detector thinks has gone off track, and whether each session can be controlled at all; `/api/guard/control` is the Pause / Stop / Kill button and `/api/guard/policies` the autonomous rules
+- `/api/entitlement` — The resolved entitlement (tier, allowed runtimes, features, capacity). GRACE mode answers "allowed" for everything until the announced enforce date
+- `/api/local/*` — The DuckDB read API, proxied to the daemon. The method set is declared in `clawmetry/query_contract.py`; `make lint-daemon-allowlist` fails when a route calls one the daemon does not serve
+- `/v1/metrics`, `/v1/traces`, `/v1/logs` — OTLP receiver (binds `127.0.0.1` by default)
 
 ## Dependencies
 Minimal by design, and this list had drifted — `setup.py` is the source of truth:
@@ -126,7 +179,9 @@ Minimal by design, and this list had drifted — `setup.py` is the source of tru
 - **websocket-client** (>=1.6) — cloud cold-data relay tunnel
 - **truststore** (>=0.8, 3.10+ only) — OS trust store, so corporate TLS-interception root CAs work
 - **certifi** (>=2024.2.2) — CA bundle; the trust-store fallback on 3.8/3.9 and on any interpreter whose OpenSSL has no CA store. Without one, every outbound HTTPS call fails `CERTIFICATE_VERIFY_FAILED`, and for the fire-and-forget pings that failure is silent
-- **Optional**: `opentelemetry-proto` for OTLP support (`pip install clawmetry[otel]`)
+- **cffi** (`<2` below 3.10, `>=2` on 3.10+) — not a direct import; it is what sets the `cryptography` ceiling above. The `<2` half exists because cffi 2.0.0 has a Python 3.9 finalizer SIGSEGV and cffi 2.1+ ships no cp39 wheels
+- **Optional**: `opentelemetry-proto` + `protobuf` for OTLP (`pip install clawmetry[otel]`), `deepeval` for the eval bridge (`clawmetry[deepeval]`, 3.10+)
+- `python_requires=">=3.8"`
 
 ## Running locally
 ```bash
@@ -152,25 +207,32 @@ make test-api
 # E2E browser tests (Playwright)
 make test-e2e
 
-# Syntax + lint check
+# Syntax + every drift guard (runtime/channel counts, module map,
+# daemon allowlist, py3.9 annotations, AC coverage, JS parse)
 make lint
 ```
 
 Tests use `CLAWMETRY_URL` and `CLAWMETRY_TOKEN` env vars. Test matrix in CI: 3 OS (Ubuntu, macOS, Windows) x 2 Python versions (3.9, 3.11).
 
+**CI runs explicit FILE LISTS, not `pytest tests/`.** A new test file that is not named in a workflow step runs in no job at all, which has shipped guards that never once executed. Add yours to `.github/workflows/ci.yml` in the same PR.
+
 ## Deploy
 - **PyPI**: `pip install clawmetry && clawmetry`
 - **Docker**: `docker build -t clawmetry . && docker run -p 8900:8900 -v ~/.openclaw:/root/.openclaw:ro clawmetry`
-- **Current version**: `0.12.650` (in `dashboard.py` `__version__`)
+- **Version**: `__version__` in `dashboard.py`. Don't hand-edit it and don't trust it as "what is released": `release-on-merge.yml` computes `max(PyPI, file) + 1` on a `[RELEASE]` merge, and the write-back bump PR often goes unmerged, so `main` legitimately lags PyPI by tens of releases. `https://pypi.org/pypi/clawmetry/json` is the released number.
 
 ## CI/CD (GitHub Actions)
-- `.github/workflows/ci.yml` — Lint + test matrix on push/PR
+36 workflows; the ones you will actually touch:
+- `.github/workflows/ci.yml` — Lint + drift guards + test matrix on push/PR
+- `.github/workflows/e2e-gate.yml` — The aggregating merge gate (`E2E Gate (required)`), which counts Drift Bot as a leg
+- `.github/workflows/release-on-merge.yml` — Publishes when a `[RELEASE]` PR merges (see FLYWHEEL.md §5)
 - `.github/workflows/publish.yml` — PyPI publish on git tag `v*`
-- `.github/workflows/release-on-merge.yml` — Auto-release when version bumped on main
 - `.github/workflows/sync-test.yml` — Cloud sync daemon tests
 - `.github/workflows/install-test.yml` — Cross-platform pip install smoke tests
+- `.github/workflows/product-record-gate.yml` — Fails a PR touching product code whose body cites no Factory record or `No-PRD:` line
 - `.github/workflows/auto-deploy-cloud.yml` — Cloud deployment
 - `.github/workflows/browserstack.yml` — Cross-browser E2E testing
+- `.github/workflows/queue-priority.yml` — Cancels queued non-main runs when main moves, so releases are not stuck behind PR jobs
 
 ## Environment Variables
 ```bash
@@ -193,12 +255,29 @@ CLAWMETRY_GIT_MAX_BLAME_FILES=40       # Files blamed for line survival (rework)
 CLAWMETRY_GIT_BLAME_BUDGET=10          # Seconds the whole blame pass may take
 CLAWMETRY_GIT_REPO_BUDGET=25           # Seconds one repository's whole scan may take
 CLAWMETRY_SIGNALS=1                    # Behaviour Signals tick on/off; CLAWMETRY_SIGNALS_EVENTS_PER_TICK (2000) and CLAWMETRY_SIGNALS_SCAN_CHARS (2000) bound each pass
+
+# Guard / enforcement. Every one of these defaults to the safe side.
+CLAWMETRY_DETECTORS=1                  # Trajectory + behavioural detectors on/off
+CLAWMETRY_GUARD_POLICIES=1             # Evaluate Guard policies at all (0 = skip the pass entirely)
+CLAWMETRY_POLICY_ENFORCE=0             # Let a policy actually signal a process. Default 0 = dry run; this one env var disables every policy on the node
+CLAWMETRY_GUARD_CRITICAL_USD=...       # Spend-at-risk above which a warning becomes critical
+CLAWMETRY_NOPROG_TOOLS__<RUNTIME>=40   # Per-runtime threshold override (highest layer in resolve_thresholds)
+CLAWMETRY_ENFORCE=1                    # Turn entitlement enforcement on (default: GRACE, everything allowed)
+
+# Resource budget (FLYWHEEL.md 1e: the daemon must stay near-invisible)
+CLAWMETRY_DUCKDB_THREADS=2             # DuckDB defaults to every core; never ship an uncapped connection
+CLAWMETRY_DUCKDB_MEMORY_LIMIT=...      # Ceiling; derived from store size when unset
+CLAWMETRY_AGG_CACHE_TTL=20             # Seconds a hot rollup is reused instead of re-scanned
+CLAWMETRY_AUTO_COMPACT=0               # Kill switch for startup compaction
+
+# Egress
+CLAWMETRY_OFFLINE=1                    # Air-gapped: no install ping, no version check. See docs/EGRESS.md
 DEBUG=1                                # Enable debug logging
 ```
 
 ## Conventions
 - **Product record before code (FLYWHEEL.md section 0c).** 8090 Software Factory is the product reviewer, not a lint gate. Write the requirement first -- problem, who is hurt, non-goals, alternatives rejected, risk accepted -- then the blueprint, then the code. A requirement written after the fact reviews nothing, and `scripts/check_product_record.py` gates PRs on citing one (or an explicit `No-PRD: <reason>`).
-- **Per-feature route modules** — new endpoints live in `routes/<feature>.py`, registered on a feature Blueprint that `dashboard.py` imports and registers. This replaces the old "single file" rule, which became counterproductive at ~33K lines (illegible to humans, constant PR conflicts on a single anchor point). Helpers and shared state stay in `dashboard.py` for now and are accessed from route modules via late `import dashboard as _d` to avoid circular imports.
+- **Per-feature route modules** — new endpoints live in `routes/<feature>.py`, registered on a feature Blueprint that `dashboard.py` imports and registers. This replaces the old "single file" rule, which became counterproductive at ~33K lines (illegible to humans, constant PR conflicts on a single anchor point). Helpers are migrating into `helpers/` (gateway RPC, log discovery, pricing, system stats, the OpenAPI spec); the ones still in `dashboard.py` are reached from route modules via late `import dashboard as _d` to avoid circular imports. `docs/MODULE_MAP.md` is the generated index of where everything currently lives.
 - **Embedded frontend, no build step** — the live UI is served from `clawmetry/static/` (`clawmetry/static/css/dashboard.css`, `clawmetry/static/js/app.js`) + `clawmetry/templates/tabs/*.html`. (`dashboard.py` defines `DASHBOARD_HTML` twice; the **second** wins and loads the static/template files — the earlier inline `<style>`/HTML is dead, so edit the static/template files.) No npm, no webpack.
 - **Minimal dependencies** — Flask + waitress + cryptography. Don't add heavy libraries.
 - **Control plane that defaults to observation** — ClawMetry is NOT read-only, and hasn't been for a long time. It already kills, pauses, blocks and reroutes running agents through five surfaces: approval denial → session kill (`clawmetry/approvals.py`), POSIX signals across the agent's descendant tree (`clawmetry/process_control.py`), HITL pause → proxy `503` (`routes/hitl.py`), the enforcement proxy's budget block / loop detection / model routing (`clawmetry/proxy.py`), and cron CRUD via gateway RPC (`routes/crons.py`). Do NOT reject a feature because "we're read-only" — that rule is retired.
