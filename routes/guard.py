@@ -55,6 +55,26 @@ def _detail_safe(v) -> str:
     """
     return _DETAIL_OK.sub("", str(v or ""))[:300]
 
+def _safe_trace(steps) -> list:
+    """Reduce an actuator trace to something safe to render.
+
+    Same reasoning as ``_detail_safe``: the steps are built from resolver
+    output and process argv, so they are stripped to plain words and bounded
+    before they reach the page. Length-capped too — a runaway tree must not
+    turn one button press into a thousand-line response.
+    """
+    out = []
+    for s in (steps or [])[:24]:
+        if not isinstance(s, dict):
+            continue
+        out.append({
+            "step": _detail_safe(s.get("step"))[:160],
+            "ok": bool(s.get("ok")),
+            "detail": _detail_safe(s.get("detail"))[:200],
+        })
+    return out
+
+
 bp_guard = Blueprint("guard", __name__)
 
 # Actions a caller may ask for. `resume` is control-only (there is no policy
@@ -175,14 +195,36 @@ def _runtime_supports_signals(runtime: str, session_id: str = "",
         from clawmetry import process_control as _pc
     except Exception:
         return {"controllable": False, "reason": "process_control unavailable",
-                "actions": []}
+                "state": "unknown", "actions": []}
     try:
         return _pc.runtime_control_support(runtime, session_id, cwd)
     except Exception:  # noqa: BLE001 — never break the list render
         log.exception("guard capability check failed for %s",
                       _log_safe(session_id))
-        return {"controllable": False, "actions": [],
+        return {"controllable": False, "actions": [], "state": "unknown",
                 "reason": "capability check failed; see the server log"}
+
+
+# States in which a row is offered a resume instruction instead of buttons.
+# ``unknown`` is included on purpose: we could not find the process, so the
+# honest thing is to hand over the resume path as well as the reason.
+_RESUME_STATES = ("exited", "unknown")
+
+
+def _resume_for(runtime: str, session_id: str, metadata) -> dict:
+    """How a human restarts this session by hand.
+
+    Sent on EVERY row, not only the dead ones, so the client never has to
+    re-ask after a Stop lands — and so a row that flips to ``exited`` between
+    two polls already has the answer in hand.
+    """
+    try:
+        from clawmetry import resume_hints as _rh
+        return _rh.resume_hint(runtime, session_id,
+                               metadata if isinstance(metadata, dict) else None)
+    except Exception:  # noqa: BLE001 — a missing hint must never break the tab
+        return {"runtime": runtime, "kind": "unknown", "command": "",
+                "note": "", "source": "", "session_id": session_id}
 
 
 def _session_runtime(session_id: str, agent_type: str) -> str:
@@ -296,10 +338,15 @@ def _live_only_rows(store_rows: list) -> list:
             "pending_ingest": True,
             "controllable": support["controllable"],
             "control_reason": support.get("reason", ""),
+            # Why it is not controllable, in one machine-readable word, so the
+            # tab can tell "you just killed this" from "this can never be
+            # signalled" instead of printing one label for both.
+            "control_state": support.get("state", "unknown"),
             "no_pause": support.get("no_pause", False),
             "control_actions": support.get("actions", []),
             "control_note": support.get("note", "")
                             or support.get("platform", {}).get("note", ""),
+            "resume": _resume_for(rt, sid, None),
         })
     return rows
 
@@ -440,6 +487,12 @@ def api_guard_sessions():
             "incident": incident_by_session.get(sid),
             "controllable": support["controllable"],
             "control_reason": support.get("reason", ""),
+            # Why it is not controllable, in one machine-readable word (see
+            # ``process_control.runtime_control_support``). The tab branches on
+            # this, never on the prose reason.
+            "control_state": support.get("state", "unknown"),
+            # How a human restarts it by hand once nothing here can.
+            "resume": _resume_for(runtime, sid, meta),
             "no_pause": support.get("no_pause", False),
             # Which buttons may be enabled for THIS session. Empty means none.
             "control_actions": support.get("actions", []),
@@ -480,6 +533,119 @@ def api_guard_sessions():
     })
 
 
+def _validated_target(data) -> tuple:
+    """Validate a control request and resolve it against the STORE.
+
+    Returns ``(payload, error_response, status)``; exactly one of the first and
+    second is not None. Shared by the preflight and the control endpoint so the
+    plan an operator is shown is computed for the same session the action will
+    reach — a preflight that validated differently would be a preview of a
+    different command.
+    """
+    action = str(data.get("action") or "").strip().lower()
+    session_id = str(data.get("session_id") or "").strip()
+    runtime = str(data.get("runtime") or "").strip().lower()
+    cwd = str(data.get("cwd") or "").strip()
+
+    # Literal tuple on purpose: a comparison against constants is the one
+    # sanitizer static analysis credits, and ``action`` is echoed into the
+    # audit trail and the log.
+    if action not in ("pause", "resume", "stop", "kill"):
+        return None, {"ok": False,
+                      "error": f"action must be one of {list(_CONTROL_ACTIONS)}"}, 400
+    if not session_id:
+        return None, {"ok": False, "error": "session_id is required"}, 400
+    if not _SID_SAFE_RE.match(session_id) or ".." in session_id:
+        return None, {"ok": False, "error": "invalid session_id"}, 400
+    if runtime and not _RUNTIME_SAFE_RE.match(runtime):
+        return None, {"ok": False, "error": "invalid runtime"}, 400
+    if cwd:
+        try:
+            cwd = os.path.realpath(cwd)
+        except Exception:
+            return None, {"ok": False, "error": "invalid cwd"}, 400
+
+    # Act on the STORED session, not the request. The store's own copy of the
+    # id and working directory are what reach the signal helpers, so a
+    # request can name a session but never supply the strings a process is
+    # located or signalled with. A session the store does not know cannot be
+    # controlled from here — it is not on any list this dashboard renders.
+    recorded = _ls_call("get_session_location", session_id=session_id)
+    if not isinstance(recorded, dict) or not recorded.get("session_id"):
+        return None, {"ok": False, "error": "unknown session",
+                      "detail": "session_not_in_store"}, 404
+    stored_sid = str(recorded.get("session_id") or "")
+    stored_cwd = str(recorded.get("cwd") or "")
+    if cwd and stored_cwd and os.path.realpath(stored_cwd) != cwd:
+        # A crafted request cannot redirect signals to an arbitrary
+        # working directory.
+        return None, {"ok": False,
+                      "error": "cwd does not match session record"}, 400
+    return ({"action": action, "session_id": session_id, "runtime": runtime,
+             "stored_sid": stored_sid, "stored_cwd": stored_cwd}, None, 200)
+
+
+@bp_guard.route("/api/guard/control/preflight", methods=["POST"])
+def api_guard_control_preflight():
+    """What pressing this button would do — computed, and sending nothing.
+
+    Pause / Stop / Kill signal real processes and Kill is irreversible. Asking
+    "Kill this agent?" and then reporting a one-word outcome makes the most
+    dangerous control in the product the least legible one. This endpoint
+    returns the target (pid, working directory, argv), the process tree that
+    would be signalled, the pid-reuse guard's verdict, and the ordered signal
+    plan, so the confirmation can show the operator what they are about to do.
+
+    Read-only, and origin-checked anyway: it discloses local pids and command
+    lines, which is not something a cross-site page should be able to ask for.
+    """
+    if not _same_origin_ok():
+        return jsonify({"ok": False, "error": "cross-origin request refused"}), 403
+
+    payload, err, status = _validated_target(request.get_json(silent=True) or {})
+    if err is not None:
+        return jsonify(err), status
+
+    try:
+        from clawmetry import process_control as _pc
+        plan = _pc.control_preflight(payload["runtime"], payload["stored_sid"],
+                                     payload["stored_cwd"], payload["action"])
+    except Exception:  # noqa: BLE001 — a missing preview must not block the act
+        log.exception("guard preflight failed for %s",
+                      _log_safe(payload["session_id"]))
+        return jsonify({"ok": False, "action": payload["action"],
+                        "blocked_reason": "",
+                        "error": "preflight failed; see the server log"}), 200
+
+    plan = plan if isinstance(plan, dict) else {}
+    # Same treatment the control response gets: free text from a resolver or a
+    # process argv is reduced to plain words before it reaches the page.
+    return jsonify({
+        "ok": bool(plan.get("ok")),
+        "action": payload["action"],
+        "runtime": payload["runtime"],
+        "session_id": payload["stored_sid"],
+        "pid": plan.get("pid"),
+        "cwd": _detail_safe(plan.get("cwd"))[:300],
+        "command": _detail_safe(plan.get("command"))[:300],
+        "plan": _detail_safe(plan.get("plan")),
+        "steps": [_detail_safe(s) for s in (plan.get("steps") or [])][:12],
+        "processes": [
+            {"pid": pr.get("pid"),
+             "command": _detail_safe(pr.get("command"))[:160],
+             "main": bool(pr.get("main"))}
+            for pr in (plan.get("processes") or [])[:25]
+            if isinstance(pr, dict)
+        ],
+        "tree_size": len(plan.get("tree") or []),
+        "guard": _detail_safe(plan.get("guard"))[:80],
+        "destructive": bool(plan.get("destructive")),
+        "reversible": bool(plan.get("reversible")),
+        "mechanism": _detail_safe(plan.get("mechanism"))[:80],
+        "blocked_reason": _detail_safe(plan.get("blocked_reason")),
+    })
+
+
 @bp_guard.route("/api/guard/control", methods=["POST"])
 def api_guard_control():
     """Pause / resume / stop / kill one session, on the user's explicit click.
@@ -491,53 +657,27 @@ def api_guard_control():
     if not _same_origin_ok():
         return jsonify({"ok": False, "error": "cross-origin request refused"}), 403
 
-    data = request.get_json(silent=True) or {}
-    action = str(data.get("action") or "").strip().lower()
-    session_id = str(data.get("session_id") or "").strip()
-    runtime = str(data.get("runtime") or "").strip().lower()
-    cwd = str(data.get("cwd") or "").strip()
+    payload, err, status = _validated_target(request.get_json(silent=True) or {})
+    if err is not None:
+        return jsonify(err), status
+    action = payload["action"]
+    session_id = payload["session_id"]
+    runtime = payload["runtime"]
+    stored_sid = payload["stored_sid"]
+    stored_cwd = payload["stored_cwd"]
 
-    # Literal tuple on purpose: a comparison against constants is the one
-    # sanitizer static analysis credits, and ``action`` is echoed into the
-    # audit trail and the log.
-    if action not in ("pause", "resume", "stop", "kill"):
-        return jsonify({"ok": False,
-                        "error": f"action must be one of {list(_CONTROL_ACTIONS)}"}), 400
-    if not session_id:
-        return jsonify({"ok": False, "error": "session_id is required"}), 400
-    if not _SID_SAFE_RE.match(session_id) or ".." in session_id:
-        return jsonify({"ok": False, "error": "invalid session_id"}), 400
-    if runtime and not _RUNTIME_SAFE_RE.match(runtime):
-        return jsonify({"ok": False, "error": "invalid runtime"}), 400
-    if cwd:
-        try:
-            cwd = os.path.realpath(cwd)
-        except Exception:
-            return jsonify({"ok": False, "error": "invalid cwd"}), 400
-
-    # Act on the STORED session, not the request. The store's own copy of the
-    # id and working directory are what reach the signal helpers, so a
-    # request can name a session but never supply the strings a process is
-    # located or signalled with. A session the store does not know cannot be
-    # controlled from here — it is not on any list this dashboard renders.
-    recorded = _ls_call("get_session_location", session_id=session_id)
-    if not isinstance(recorded, dict) or not recorded.get("session_id"):
-        return jsonify({"ok": False, "error": "unknown session",
-                        "detail": "session_not_in_store"}), 404
-    stored_sid = str(recorded.get("session_id") or "")
-    stored_cwd = str(recorded.get("cwd") or "")
-    if cwd and stored_cwd and os.path.realpath(stored_cwd) != cwd:
-        # A crafted request cannot redirect signals to an arbitrary
-        # working directory.
-        return jsonify({"ok": False,
-                        "error": "cwd does not match session record"}), 400
+    # The ordered record of what the actuator does. Built even when the action
+    # fails — a failed Kill is exactly the case where an operator needs to see
+    # which step refused.
+    steps = []
 
     try:
         # Every control action — resume included — goes through the actuator
         # the daemon's policies use, so a manual pause and an automatic one
         # are indistinguishable to the agent process.
         from clawmetry.guard_actuator import guard_actuate
-        result = guard_actuate(runtime, stored_sid, stored_cwd, action)
+        result = guard_actuate(runtime, stored_sid, stored_cwd, action,
+                               trace=steps)
     except Exception:  # noqa: BLE001
         # Full detail goes to the server log; the client gets a generic
         # message so an exception can never leak internals to the page.
@@ -547,7 +687,8 @@ def api_guard_control():
                       _log_safe(action), _log_safe(session_id))
         return jsonify({"ok": False,
                         "error": "control action failed; see the server log",
-                        "session_id": session_id, "action": action}), 500
+                        "session_id": session_id, "action": action,
+                        "trace": _safe_trace(steps)}), 500
 
     result = result if isinstance(result, dict) else {"ok": False}
     ok = bool(result.get("ok"))
@@ -583,6 +724,10 @@ def api_guard_control():
         "note": _detail_safe(result.get("note")),
         "unsupported": (None if result.get("unsupported") is None
                         else _detail_safe(result.get("unsupported"))[:80]),
+        # What actually happened, in order. The tab renders this instead of an
+        # alert box: these buttons signal real processes, so the operator sees
+        # the mechanism, not just the verdict.
+        "trace": _safe_trace(steps),
     })
 
 

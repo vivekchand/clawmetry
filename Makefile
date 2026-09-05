@@ -102,7 +102,7 @@ moat-check:
 moat-check-drive:
 	@python3 scripts/accuracy_harness/keystone_e2e.py
 
-lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count lint-ac-coverage
+lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count lint-ac-coverage lint-module-map
 
 # Issue #1267: every `local_store_via_daemon("X")` / `_ls_call("X")` call
 # in routes/ must reference a method that's in the daemon's allowlist
@@ -134,6 +134,12 @@ ac-baseline:
 
 lint-runtime-count:
 	@python3 scripts/sync_runtime_count.py --check
+
+# docs/MODULE_MAP.md is generated from the source tree. CLAUDE.md's route
+# table listed 17 of 70 route modules before this existed.
+# Fix drift with: python3 scripts/gen_module_map.py
+lint-module-map:
+	@python3 scripts/gen_module_map.py --check
 
 lint-py:
 	python3 -c "import ast; ast.parse(open('dashboard.py').read()); print('Python syntax OK')"
