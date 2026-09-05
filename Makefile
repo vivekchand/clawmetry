@@ -14,7 +14,7 @@ test-compat:
 # Claude Code hook lifecycle + personal-data redaction tier (WO-61).
 # Mirrored in .github/workflows/ci.yml (moat-tests job).
 test-hooks:
-	python3 -m pytest tests/test_hooks_claude_code.py tests/test_hook_lifecycle.py tests/test_redaction_pii.py -q
+	python3 -m pytest tests/test_hooks_claude_code.py tests/test_hook_ownership_quoted_launcher.py tests/test_hook_lifecycle.py tests/test_redaction_pii.py -q
 # WO-59 self-diagnostics: MCP report tool, corroboration, honesty rollup,
 # multi-runtime MCP installer. Mirrored in .github/workflows/ci.yml (moat-tests).
 test-selfdiag:
