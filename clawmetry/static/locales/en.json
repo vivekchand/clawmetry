@@ -1427,6 +1427,8 @@
   "signals.digest_offer": "Daily digest",
   "signals.digest_offer_sub": "Sessions, spend and tokens per runtime, every morning ({cron}). Runs without a model credential. Off until you switch it on.",
   "signals.digest_enable": "Switch on",
+  "signals.cloud_manage_local": "Manage on the local dashboard",
+  "signals.brief_delete_err": "Could not delete the brief.",
   "nav.section_monitoring": "Monitoring",
   "nav.models_tooltip": "Which models your agents used, and what each one cost",
   "trail.open": "Open trail",
