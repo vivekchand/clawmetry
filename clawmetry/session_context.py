@@ -16,6 +16,9 @@ Design:
   before it rests in DuckDB. The cap is on the stored copy only.
 - Never invent. A missing field produces no row; ``runtime_meta`` carries only
   what the event said.
+- Label the row with the runtime that produced it (``runtime_of_event``). The
+  stored ``agent_type`` is what the Inputs panel filters on, so a row labelled
+  ``openclaw`` on a Claude Code session reads to the user as "nothing captured".
 
 No runtime-specific code lives here: an adapter that wants its inputs
 recorded emits the event; this module does not know which runtime it is.
@@ -151,6 +154,46 @@ def find_payload(event: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def runtime_of_event(event: dict[str, Any]) -> str:
+    """Which runtime this ``context.compiled`` event belongs to.
+
+    The row this lands on is keyed by ``agent_type``, and the Inputs panel
+    asks for it by runtime (``/api/sessions/<id>/context?runtime=claude_code``),
+    so a wrong label here is indistinguishable from no data at all.
+
+    Three sources, in descending order of how directly they were stated:
+
+    1. ``event['agent_type']`` -- the OpenClaw trajectory reader sets it.
+    2. ``data['_runtime']`` -- the family ingest stamps the adapter's own
+       runtime here and sets no ``agent_type`` at all (every family event row
+       in ``sync.py`` omits the column, which is why these rows read
+       ``openclaw`` for Claude Code, Codex, Cursor... until 2026-09-04).
+    3. the session-id prefix (``claude_code:<uuid>``), resolved by the one
+       shared seam, ``waste_flags.runtime_from_session_id`` -- the same
+       fallback ``detectors._runtime_of`` and the sessions list use.
+
+    Never invents: with none of the three it returns ``openclaw``, the only
+    runtime a Free install has.
+    """
+    declared = str(event.get("agent_type") or "").strip()
+    if declared:
+        return declared
+    data = _as_dict(event.get("data"))
+    stamped = str(data.get("_runtime") or "").strip()
+    if stamped:
+        return stamped
+    sid = str(event.get("session_id") or "")
+    if ":" in sid:
+        try:
+            from clawmetry.waste_flags import runtime_from_session_id
+            rt = str(runtime_from_session_id(sid) or "").strip()
+        except Exception:
+            rt = ""
+        if rt:
+            return rt
+    return "openclaw"
+
+
 def rows_from_event(event: dict[str, Any]) -> list[dict[str, Any]]:
     """Turn one store-shaped ``context.compiled`` event into session_context
     rows. Returns ``[]`` for anything that is not the event or carries none
@@ -168,7 +211,7 @@ def _rows_from_event(event: dict[str, Any]) -> list[dict[str, Any]]:
     if payload is None:
         return []
     outer = _as_dict(event.get("data"))
-    agent_type = str(event.get("agent_type") or "openclaw")
+    agent_type = runtime_of_event(event)
     session_id = str(event.get("session_id") or "")
     if not session_id:
         return []

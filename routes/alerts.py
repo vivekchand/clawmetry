@@ -405,6 +405,17 @@ UNSUPPORTED_ALERT_TYPES = frozenset({
 # greps for drift.
 BUILTIN_MONITORS = [
     {
+        # Guard detector incidents delivered to a human (clawmetry/
+        # incident_alerts.py). Free on every plan for in-app + Telegram, the
+        # same pair the budget monitor has always used; Slack/Discord/webhook
+        # ride the alert_webhooks entitlement. The daemon fires it, so this
+        # row is what lets the Alerts tab explain a banner nobody configured.
+        "alert_type": "agent_attention",
+        "label": "Agent needs attention",
+        "watches": "Stuck, rate limited, crashed, or waiting on you (Guard detectors)",
+        "source": "daemon",
+    },
+    {
         "alert_type": "heartbeat_silent",
         "label": "Agent went quiet",
         "watches": "No heartbeat for 1.5x the expected interval",
@@ -545,6 +556,32 @@ def api_alerts_builtin_update(alert_type):
 # and installs any missing rules via the standard POST path.
 
 DEFAULT_ALERT_RULES = [
+    # Silent failure -> human. The rule form of the always-on
+    # ``agent_attention`` built-in monitor above. On a Free install the
+    # built-in monitor already delivers (banner + Telegram) with no rule at
+    # all, because custom alert RULES are a paid feature
+    # (entitlements.PRO_ONLY_FEATURES: custom_alerts); this seed exists so a
+    # licensed node can scope it per runtime, change the window, or add a
+    # webhook. Not pro_only: the template is free to read and the daemon's
+    # entitlement check decides whether rules evaluate.
+    {
+        "id":           "agent_attention_default",
+        "type":         "agent_attention",
+        "threshold":    1,
+        "window_minutes": 30,
+        "min_severity": "warning",
+        "channels":     ["banner", "telegram"],
+        "cooldown_min": 30,
+        "enabled":      True,
+        "pro_only":     False,
+        "label":        "Agent needs attention",
+        "description": (
+            "Fires when a Guard detector finds an agent that is stuck, "
+            "rate limited by its provider, crashed and restarted, or waiting "
+            "on a person. In-app banner and Telegram are free; this rule "
+            "lets you scope it per runtime or add a webhook."
+        ),
+    },
     {
         "id":           "unproductive_burn_default",
         "type":         "unproductive_burn",

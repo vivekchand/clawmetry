@@ -13957,6 +13957,7 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/dives.js', v=version) }}" defer></script>
+<script src="{{ url_for('static', filename='js/trail.js', v=version) }}" defer></script>
 <!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
      transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
      See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly.
@@ -14105,13 +14106,22 @@ DASHBOARD_HTML = r"""
          UNCHANGED; only icons, ordering and section labels moved. The
          Approvals/Alerts/Notifications adjacency (founder request
          2026-07-29) is preserved inside Govern. #}
-      <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
+      <div class="left-nav-item active" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.session_replay">Sessions</span>
+      </div>
+
+      {# Session-first IA (Trail, 2026-09): the product opens on the decision
+         trail. Sessions is the landing item; the KPI board (Home) and the
+         other raw-signal views sit under a "Monitoring" label. data-tab ids
+         are unchanged; only order, labels and grouping moved. #}
+      <div class="left-nav-section-label" data-i18n="nav.section_monitoring">Monitoring</div>
+      <div class="left-nav-item" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.home">Home</span>
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
 
-      <div class="left-nav-section-label" data-i18n="nav.section_observe">Observe</div>
       <div class="left-nav-item" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
@@ -14120,16 +14130,21 @@ DASHBOARD_HTML = r"""
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.brain">Activity</span>
       </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Dig into sessions across channels (Telegram, Signal, WhatsApp, &hellip;)">
-        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-        <span class="left-nav-label"><span data-i18n="nav.session_replay">Sessions</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
-      </div>
 
-      <div class="left-nav-section-label" data-i18n="nav.section_analyze">Analyze</div>
       <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
       </div>
+      <div class="left-nav-item" data-tab="models" onclick="switchTab('models')" data-i18n-title="nav.models_tooltip" title="Which models your agents used, and what each one cost">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M9 2v2M15 20v2M9 20v2M2 15h2M2 9h2M20 15h2M20 9h2"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.models">Models</span>
+      </div>
+      <div class="left-nav-item" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="How full each agent's memory window gets, and when it had to forget">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M12 7v5l3 3"/><path d="M17 3l4 4-4 4"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.context_usage">Context usage</span>
+      </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_analyze">Analyze</div>
       <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
@@ -14180,9 +14195,6 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
           <span class="left-nav-label" data-i18n="nav.flow">Flow</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
-          <span class="left-nav-label" data-i18n="nav.models">Models</span>
-        </div>
         {# "LLM Context" merged into Context usage (2026-08-01): the old tab
            mixed hardcoded token estimates with a node-wide gauge. Context
            usage (context-economics) shows the same story from real per-turn
@@ -14204,9 +14216,6 @@ DASHBOARD_HTML = r"""
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
           <span class="left-nav-label" data-i18n="nav.tools">Tools</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
-          <span class="left-nav-label" data-i18n="nav.context_usage">Context usage</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What a harness is, part by part, and where to watch each part live">
           <span class="left-nav-label" data-i18n="nav.harness">Harness</span>
@@ -14296,6 +14305,9 @@ DASHBOARD_HTML = r"""
 
 <!-- TRANSCRIPTS -->
 {% include 'tabs/transcripts.html' %}
+
+<!-- TRAIL: one session as What it was asked / What it did / How it ended (session-first IA) -->
+{% include 'tabs/trail.html' %}
 
 
 <!-- UPGRADE IMPACT -->

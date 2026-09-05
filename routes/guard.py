@@ -470,6 +470,54 @@ def api_guard_control():
     })
 
 
+@bp_guard.route("/api/guard/nondeterminism", methods=["GET"])
+def api_guard_nondeterminism():
+    """Is non-determinism being measured on this node, and for how many
+    sessions? Free on every plan: knowing whether a number exists is not a
+    paid feature (the run-by-run compare view is, ``per_run_compare``).
+
+    ``enabled`` is read from the SAME env flag the daemon's scheduler
+    checks (``sync._regression_replay_enabled``), so the tab can never say
+    "measuring" while the daemon is not. Replay re-runs the user's agent for
+    real money, which is why it is opt-in and why this endpoint spells that
+    out in ``note``.
+    """
+    try:
+        from clawmetry import sync as _sync
+        enabled = bool(_sync._regression_replay_enabled())
+        daily = int(os.environ.get(_sync.REPLAY_DAILY_BUDGET_ENV)
+                    or _sync.REPLAY_DEFAULT_DAILY_BUDGET)
+        runs = int(os.environ.get(_sync.REPLAY_RUNS_PER_SESSION_ENV)
+                   or _sync.REPLAY_DEFAULT_RUNS_PER_SESSION)
+        flag = _sync.REPLAY_ENABLE_ENV
+    except Exception:
+        enabled, daily, runs, flag = False, 5, 3, "CLAWMETRY_REGRESSION_REPLAY"
+    rows = _ls_call("query_session_replay_stats", limit=200) or []
+    measured = [r for r in rows if isinstance(r, dict) and r.get("runs")]
+    pcts = [r.get("agreement_pct") for r in measured
+            if isinstance(r.get("agreement_pct"), (int, float))]
+    mean = round(sum(pcts) / len(pcts), 1) if pcts else None
+    if enabled:
+        note = (f"Measuring: failed sessions are replayed {runs} times "
+                f"(up to {daily} replays a day) to see how often the agent "
+                f"gives the same outcome. Each replay runs your agent and "
+                f"costs money.")
+    else:
+        note = (f"Not measured. Set {flag}=1 on this node to replay failed "
+                f"sessions and measure how often the agent agrees with "
+                f"itself. It re-runs your agent, so it costs money; it never "
+                f"runs without that flag.")
+    return jsonify({
+        "enabled": enabled,
+        "daily_budget": daily,
+        "runs_per_session": runs,
+        "measured_sessions": len(measured),
+        "mean_agreement_pct": mean,
+        "recent": measured[:20],
+        "note": note,
+    })
+
+
 @bp_guard.route("/api/guard/policies", methods=["GET", "POST"])
 def api_guard_policies():
     """List Guard policies, or create/update one.

@@ -4529,7 +4529,54 @@ def _try_local_store_transcripts(runtime: str = ""):
         transcripts.sort(key=lambda t: t.get("modified") or 0, reverse=True)
     _fill_family_titles(transcripts)
     _fill_attention(transcripts)
+    _fill_outcomes(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}
+
+
+def _fill_outcomes(transcripts):
+    """Stamp the verdict onto each list row: ``outcome`` (one of the six
+    ``clawmetry.outcome_classifier`` labels), ``outcome_confidence``,
+    ``cost_usd`` and ``ended_at``. Powers the verdict badge on the Sessions
+    list and the "How it ended" card on the Trail page.
+
+    Reads ``query_outcomes`` through the daemon (the same rows the Overview
+    outcome tile uses; the store classifies still-unlabeled sessions inline
+    and persists the label). Best-effort: a row without a stamp simply
+    renders no badge, the honest quiet default. Never fails the request.
+    """
+    try:
+        # The list shows the most recent rows only, so a short window and a
+        # small cap keep this read cheap; the store caches it between calls.
+        since = datetime.fromtimestamp(time.time() - 14 * 86400, tz=timezone.utc)
+        rows = _ls_call(
+            "query_outcomes",
+            since=since.strftime("%Y-%m-%dT%H:%M:%S"),
+            limit=300,
+        ) or []
+    except Exception:
+        return
+    by_id = {}
+    for r in rows:
+        sid = str(r.get("session_id") or "")
+        if sid:
+            by_id[sid] = r
+            # Family runtimes prefix the id (claude_code:<uuid>); the
+            # transcripts list may carry the bare form.
+            if ":" in sid:
+                by_id.setdefault(sid.split(":", 1)[1], r)
+    if not by_id:
+        return
+    for t in transcripts:
+        r = by_id.get(str(t.get("id") or ""))
+        if not r:
+            continue
+        if r.get("outcome"):
+            t["outcome"] = r.get("outcome")
+            t["outcome_confidence"] = r.get("outcome_confidence")
+        if r.get("cost_usd") is not None:
+            t["cost_usd"] = r.get("cost_usd")
+        if r.get("ended_at"):
+            t["ended_at"] = r.get("ended_at")
 
 
 def _fill_attention(transcripts):
