@@ -10,13 +10,20 @@ stream — NOT an expensive judge. Each detector is pure (no I/O, no store, no
 clock dependence beyond what the caller passes), operates on the last ``W``
 events, never crashes on malformed events, and returns a structured incident.
 
-Eight detectors in two families. TRAJECTORY (is it stuck?) reads the shape of
-the tool stream and lives here. BEHAVIOUR (is it doing something it does not
-normally do?) reads what the calls DID and lives in ``detector_behaviour``:
+Eleven detectors in three families. TRAJECTORY (is it stuck?) reads the shape
+of the tool stream and lives here. BEHAVIOUR (is it doing something it does
+not normally do?) reads what the calls DID and lives in ``detector_behaviour``:
 ``file_blast_radius``, ``credential_access``, ``network_egress``,
 ``privilege_change``. Those read tool ARGUMENTS rather than syscalls, and every
-incident says so. Thresholds are resolved in ``detector_calibration``; what a
-finding costs is computed in ``detector_money``.
+incident says so. SILENT FAILURE (it stopped, and nobody was told) lives here
+too, defined and registered in ``_ALL_DETECTORS`` below: ``rate_limited``
+(HTTP 429/529 or rate-limit / overloaded / quota text on tool results and API
+error events), ``blocked_on_user`` (a pending approval for the session, or an
+unanswered question / permission request with the session idle past a
+threshold), ``crashed`` (>= 2 session (re)starts inside a short window,
+matching the outcome classifier's ``crash-loop`` tag). Thresholds are resolved
+in ``detector_calibration``; what a finding costs is computed in
+``detector_money``.
 
 The four trajectory detectors:
 
@@ -101,6 +108,10 @@ DETECTOR_KINDS = (
     "credential_access",
     "network_egress",
     "privilege_change",
+    # Silent failure: it stopped, and nobody was told.
+    "rate_limited",
+    "blocked_on_user",
+    "crashed",
 )
 
 
@@ -792,6 +803,352 @@ def action_discrepancy(events: Iterable[dict], session_id: str,
 
 
 # ── Orchestration ────────────────────────────────────────────────────────────
+
+# ── Silent-failure detectors ─────────────────────────────────────────────────
+# The three ways an agent stops without telling anyone: the provider refused
+# it (rate limited), it is waiting on a human who does not know (blocked on
+# user), or it died and came back (crashed). None of these are stuck loops, so
+# the trajectory detectors above stay quiet on all three. Runtime-neutral:
+# they read the store's event stream and the facts the daemon already has,
+# never a runtime-specific hook.
+
+_RATE_LIMIT_MARKERS = (
+    "rate limit", "rate_limit", "ratelimit", "too many requests",
+    "overloaded", "overloaded_error", "quota exceeded", "quota_exceeded",
+    "insufficient_quota", "resource_exhausted", "resource has been exhausted",
+    "429",
+)
+_RATE_LIMIT_STATUSES = frozenset({429, 529})
+_API_ERROR_TYPES = frozenset({
+    "error", "api.error", "api_error", "model.error", "model_error",
+    "llm.error", "llm_error", "request.error", "request_failed",
+    "provider.error", "agent.error", "session.error",
+})
+_BLOCKED_EVENT_TYPES = frozenset({
+    "approval.requested", "approval_requested", "approval.pending",
+    "permission.request", "permission_request", "permissionrequest",
+    "tool.blocked_on_user", "blocked_on_user", "hitl.pending",
+    "ask_user", "askuserquestion", "ask_user_question", "user_input_requested",
+    "elicitation", "notification",
+})
+_BLOCKED_TOOL_NAMES = frozenset({
+    "askuserquestion", "ask_user_question", "ask_user", "request_permission",
+    "elicit", "elicitation",
+})
+_RESTART_TYPES = frozenset({"session.started", "session.restarted",
+                            "session.reset"})
+
+
+def _parse_ts(value: Any) -> Optional[float]:
+    """Epoch seconds for the store's ISO ``ts`` strings; None when unparsable."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) / (1000.0 if value > 1e11 else 1.0)
+    txt = str(value).strip()
+    if not txt:
+        return None
+    try:
+        from datetime import datetime, timezone
+        if txt.endswith("Z") or txt.endswith("z"):
+            txt = txt[:-1] + "+00:00"
+        dt = datetime.fromisoformat(txt)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def _status_code(data: dict) -> Optional[int]:
+    """An HTTP-ish status carried on the event, if any."""
+    for holder in (data, data.get("error") if isinstance(data.get("error"), dict) else {},
+                   data.get("response") if isinstance(data.get("response"), dict) else {}):
+        if not isinstance(holder, dict):
+            continue
+        for k in ("status", "status_code", "statusCode", "http_status", "code"):
+            v = holder.get(k)
+            if isinstance(v, bool):
+                continue
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                continue
+            if 100 <= n <= 599:
+                return n
+    return None
+
+
+def _chronological(events: Iterable[dict]) -> list[dict]:
+    evlist = [e for e in events if isinstance(e, dict)][:DETECT_EVENT_WINDOW]
+    return list(reversed(evlist))
+
+
+def _looks_rate_limited(data: dict, text: str) -> bool:
+    code = _status_code(data)
+    if code in _RATE_LIMIT_STATUSES:
+        return True
+    err = data.get("error")
+    if isinstance(err, dict):
+        etype = str(err.get("type") or err.get("code") or "").lower()
+        if any(m in etype for m in ("rate_limit", "overloaded", "quota",
+                                     "resource_exhausted")):
+            return True
+    t = (text or "").lower()
+    if not t:
+        return False
+    # "429" alone matches version strings and byte counts; require a word
+    # boundary-ish context so "b429" or "1429" do not count.
+    for m in _RATE_LIMIT_MARKERS:
+        if m == "429":
+            import re
+            if re.search(r"(?<![\w.])429(?![\w])", t):
+                return True
+            continue
+        if m in t:
+            return True
+    return False
+
+
+# ── Detector 9: rate_limited ─────────────────────────────────────────────────
+def rate_limited(events: Iterable[dict], session_id: str,
+                 runtime: Optional[str] = None, *,
+                 thresholds: Optional[dict] = None,
+                 steps: Optional[list] = None,
+                 facts: Optional[dict] = None) -> Optional[dict]:
+    """Flag when the provider or a tool refused the agent >= N times for
+    capacity reasons: HTTP 429/529, or result text saying rate limit,
+    overloaded, quota, too many requests. Reads tool results AND explicit
+    API-error events, because a model refusal is not a tool result. Pure,
+    bounded, never raises."""
+    try:
+        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        evlist = _chronological(events)
+        hits: list[int] = []
+        sample = ""
+        seen_idx: set = set()
+        # (a) tool results the normalizer already read.
+        for s in steps:
+            if s.get("kind") != "tool_result":
+                continue
+            i = s.get("i")
+            data = _coerce_dict((evlist[i] or {}).get("data")) if isinstance(i, int) and 0 <= i < len(evlist) else {}
+            if _looks_rate_limited(data, s.get("result_text") or ""):
+                hits.append(i)
+                seen_idx.add(i)
+                if not sample:
+                    sample = (s.get("result_text") or "")[:120]
+        # (b) explicit API / model error events (not tool results).
+        for i, ev in enumerate(evlist):
+            if i in seen_idx:
+                continue
+            et = str(ev.get("event_type") or "").strip().lower()
+            data = _coerce_dict(ev.get("data"))
+            is_err_type = et in _API_ERROR_TYPES or et.endswith(".error") or et.endswith("_error")
+            if not is_err_type and _status_code(data) not in _RATE_LIMIT_STATUSES:
+                continue
+            txt = _result_text(data)
+            if not txt and isinstance(data.get("error"), dict):
+                txt = str(data["error"].get("message") or "").lower()
+            if _looks_rate_limited(data, txt):
+                hits.append(i)
+                if not sample:
+                    sample = txt[:120]
+        need = int(th.get("rate_limit_min") or 2)
+        if len(hits) < need:
+            return None
+        hits.sort()
+        rt_label = runtime or "agent"
+        title = f"{rt_label} is being rate limited ({len(hits)} refusals)"
+        return _incident(
+            "rate_limited", session_id, runtime, "warning", title,
+            f"The model provider or a tool refused {len(hits)} requests for "
+            f"capacity reasons (429, overloaded, quota). The agent may be "
+            f"retrying quietly or has stopped making progress. Check the "
+            f"provider's status page and your plan limits. " + _stop_hint(),
+            {"refusals": len(hits), "threshold": need,
+             "threshold_source": th["sources"].get("rate_limit_min", "static"),
+             "observed": "HTTP 429/529 status or rate-limit text on tool "
+                         "results and API error events",
+             "sample": sample},
+            hits[0],
+        )
+    except Exception:
+        return None
+
+
+# ── Detector 10: blocked_on_user ─────────────────────────────────────────────
+def blocked_on_user(events: Iterable[dict], session_id: str,
+                    runtime: Optional[str] = None, *,
+                    thresholds: Optional[dict] = None,
+                    steps: Optional[list] = None,
+                    facts: Optional[dict] = None) -> Optional[dict]:
+    """Flag when the agent is waiting on a human who may not know.
+
+    Two honest sources, either is enough:
+      * ``facts["pending_approvals"]`` > 0: an approval for this session sits
+        in ClawMetry's approvals table (any runtime that routes approvals
+        through us, including OpenClaw's HITL and the Claude Code mirror);
+      * the LAST meaningful event is a question or permission request (an
+        AskUserQuestion-style tool call or a blocked/permission event type)
+        with no user reply after it, and the session has been idle for at
+        least ``blocked_wait_sec`` (``facts["idle_seconds"]``).
+
+    A prompt answered within two minutes is a conversation, not an incident,
+    so without an idle measurement this detector only fires on the approvals
+    table. Never guesses. Pure, never raises."""
+    try:
+        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        f = facts if isinstance(facts, dict) else {}
+        wait_need = int(th.get("blocked_wait_sec") or 120)
+        try:
+            pending = int(f.get("pending_approvals") or 0)
+        except (TypeError, ValueError):
+            pending = 0
+        try:
+            idle = float(f.get("idle_seconds") or 0.0)
+        except (TypeError, ValueError):
+            idle = 0.0
+        rt_label = runtime or "agent"
+
+        if pending > 0:
+            title = f"{rt_label} is waiting for your approval"
+            return _incident(
+                "blocked_on_user", session_id, runtime, "warning", title,
+                f"{pending} approval request(s) for this session are pending "
+                f"in the ClawMetry approvals queue. The agent cannot continue "
+                f"until someone answers. Open the Approvals tab to respond.",
+                {"pending_approvals": pending, "idle_seconds": int(idle),
+                 "threshold": 1, "threshold_source": "static",
+                 "observed": "pending rows in the approvals table for this session"},
+                None,
+            )
+
+        # Runtime event path: find the last question / permission request and
+        # make sure nothing from the user followed it.
+        evlist = _chronological(events)
+        ask_idx = None
+        ask_what = ""
+        for i, ev in enumerate(evlist):
+            et = str(ev.get("event_type") or "").strip().lower()
+            data = _coerce_dict(ev.get("data"))
+            if et in _USER_TYPES or _event_role(data) == "user":
+                ask_idx = None  # a human answered; nothing pending before here
+                continue
+            if et in _BLOCKED_EVENT_TYPES:
+                # Claude Code "notification" hooks carry many messages; only
+                # the ones that are a request for input count.
+                if et == "notification":
+                    ntype = str(data.get("notification_type")
+                                or data.get("type") or "").lower()
+                    msg = str(data.get("message") or "").lower()
+                    if not ("permission" in ntype or "idle" in ntype
+                            or "waiting for" in msg or "permission" in msg):
+                        continue
+                ask_idx, ask_what = i, et
+                continue
+            for c in _iter_tool_calls_from_data(et, data):
+                if str(c.get("tool") or "").strip().lower() in _BLOCKED_TOOL_NAMES:
+                    ask_idx, ask_what = i, str(c.get("tool") or "")
+        if ask_idx is None:
+            return None
+        # Anything after the ask that is a tool result or an assistant reply
+        # means the agent moved on (the question was answered out of band).
+        for s in steps:
+            if isinstance(s.get("i"), int) and s["i"] > ask_idx and s.get("kind") in ("tool_result", "text", "tool_call"):
+                if s.get("kind") == "tool_call" and str(s.get("tool") or "").lower() in _BLOCKED_TOOL_NAMES:
+                    continue
+                return None
+        if idle < wait_need:
+            return None
+        mins = int(idle // 60)
+        title = f"{rt_label} is waiting for you ({mins} min)"
+        return _incident(
+            "blocked_on_user", session_id, runtime, "warning", title,
+            f"The agent asked a question or requested permission "
+            f"({ask_what}) and has been waiting about {mins} minute(s) with "
+            f"no reply. Nothing will happen until someone answers it in the "
+            f"terminal or the runtime's UI.",
+            {"pending_approvals": 0, "idle_seconds": int(idle),
+             "threshold": wait_need,
+             "threshold_source": th["sources"].get("blocked_wait_sec", "static"),
+             "observed": f"last event is a {ask_what} request with no user reply after it",
+             "asked_via": ask_what},
+            ask_idx,
+        )
+    except Exception:
+        return None
+
+
+# ── Detector 11: crashed ─────────────────────────────────────────────────────
+def crashed(events: Iterable[dict], session_id: str,
+            runtime: Optional[str] = None, *,
+            thresholds: Optional[dict] = None,
+            steps: Optional[list] = None,
+            facts: Optional[dict] = None) -> Optional[dict]:
+    """Flag when a session (re)started >= N times inside a short window: the
+    process died and came back, or is crash-looping. Mirrors the outcome
+    classifier's ``crash-loop`` impact tag (two restarts) so the two views
+    agree. With unparsable timestamps the count over the event window is
+    used and the evidence says so. Pure, never raises."""
+    try:
+        runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
+        evlist = _chronological(events)
+        restarts: list[tuple[int, Optional[float]]] = []
+        for i, ev in enumerate(evlist):
+            et = str(ev.get("event_type") or "").strip().lower()
+            if et in _RESTART_TYPES:
+                restarts.append((i, _parse_ts(ev.get("ts"))))
+        need = int(th.get("crash_restarts") or 2)
+        window = int(th.get("crash_window_sec") or 900)
+        if len(restarts) < need:
+            return None
+        # Best run of >= need restarts inside ``window`` seconds. If any ts is
+        # missing we fall back to the raw count and say so.
+        timed = [(i, t) for i, t in restarts if t is not None]
+        basis = "timestamps"
+        first_idx = restarts[0][0]
+        count = 0
+        span = None
+        if len(timed) == len(restarts):
+            best = 0
+            for a in range(len(timed)):
+                b = a
+                while b + 1 < len(timed) and timed[b + 1][1] - timed[a][1] <= window:
+                    b += 1
+                run = b - a + 1
+                if run > best:
+                    best = run
+                    first_idx = timed[a][0]
+                    span = timed[b][1] - timed[a][1]
+            count = best
+            if count < need:
+                return None
+        else:
+            basis = "event_window"
+            count = len(restarts)
+        rt_label = runtime or "agent"
+        if span is not None:
+            when = f"in {max(1, int(round(span / 60.0)))} min"
+        else:
+            when = f"in the last {len(evlist)} events"
+        title = f"{rt_label} restarted {count} times {when}"
+        return _incident(
+            "crashed", session_id, runtime, "warning", title,
+            f"This session started over {count} times {when}. That usually "
+            f"means the agent process crashed and was relaunched, or is "
+            f"stuck in a restart loop. Check the runtime's own logs for the "
+            f"exit reason. " + _stop_hint(),
+            {"restarts": count, "threshold": need, "window_sec": window,
+             "threshold_source": th["sources"].get("crash_restarts", "static"),
+             "observed": f"session.started/restarted events counted by {basis}",
+             "span_sec": int(span) if span is not None else None},
+            first_idx,
+        )
+    except Exception:
+        return None
+
+
 _ALL_DETECTORS = (
     # Trajectory shape: is this agent stuck?
     stuck_loop,
@@ -803,6 +1160,10 @@ _ALL_DETECTORS = (
     credential_access,
     network_egress,
     privilege_change,
+    # Silent failure: it stopped, and nobody was told.
+    rate_limited,
+    blocked_on_user,
+    crashed,
 )
 
 def run_all(events: Iterable[dict], session_id: str,
