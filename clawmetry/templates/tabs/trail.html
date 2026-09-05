@@ -1,0 +1,105 @@
+{# TRAIL: one session, read top to bottom as a story a newcomer can follow.
+   Three sections, in the order the IBM "rogue agent" framing names them:
+     What it was asked  (INPUTS)    -> the request + what the agent knew
+     What it did        (DECISIONS) -> replay / trace / turn timing / replay tree
+     How it ended       (OUTCOME)   -> verdict, quality score, git, spend
+   The wrapper id MUST stay `page-trail` (template stem = tab id, #5476).
+   Renderers are REUSED, not copied: static/js/trail.js re-parents the
+   existing #transcript-viewer / #trace-detail / #ta-detail nodes into the
+   hosts below while this page is open and puts them back on leave, so the
+   transcript replay, span waterfall and turn waterfall are the very same
+   code paths the Sessions / Tracing / Turn anatomy tabs run. #}
+<div class="page" id="page-trail" data-trail-tab="1">
+  <div class="trail-topbar">
+    <button type="button" class="refresh-btn trail-back" onclick="trailBackToSessions()">← <span data-i18n="trail.back">All sessions</span></button>
+    <div class="trail-title-wrap">
+      <div class="trail-title" id="trail-title" data-i18n="trail.loading_title">Opening the trail…</div>
+      <div class="trail-subtitle" id="trail-subtitle"></div>
+    </div>
+    <div class="trail-actions">
+      <span id="trail-export-note" class="trail-muted" style="display:none;" data-i18n="trail.export_cloud_note">Export runs on the machine your agent runs on</span>
+      <button type="button" class="refresh-btn" id="trail-export-btn" onclick="trailExport()" data-i18n-title="trail.export_tooltip" title="Download this session as JSON, in a new tab">⇩ <span data-i18n="trail.export">Export</span></button>
+      <button type="button" class="refresh-btn" onclick="trailReload()" title="Reload this trail">↻</button>
+    </div>
+  </div>
+
+  <div class="trail-empty" id="trail-empty" style="display:none;">
+    <div class="trail-empty-title" data-i18n="trail.no_session_title">Pick a session to see its trail</div>
+    <div class="trail-muted" data-i18n="trail.no_session_body">A trail shows one session as a story: what it was asked, what it did, and how it ended.</div>
+    <button type="button" class="refresh-btn" onclick="trailBackToSessions()" data-i18n="trail.go_to_sessions">Go to sessions</button>
+  </div>
+
+  <div id="trail-body">
+    <!-- 1. INPUTS -->
+    <section class="trail-section" id="trail-inputs" aria-labelledby="trail-inputs-h">
+      <div class="trail-section-head">
+        <span class="trail-step">1</span>
+        <div>
+          <h2 class="trail-section-title" id="trail-inputs-h" data-i18n="trail.inputs_title">What it was asked</h2>
+          <div class="trail-muted" data-i18n="trail.inputs_sub">The request that started this session, and what the agent knew going in.</div>
+        </div>
+      </div>
+      <div class="trail-grid">
+        <div class="card trail-card" id="trail-request-card">
+          <div class="trail-card-label" data-i18n="trail.request">The request</div>
+          <div id="trail-request" class="trail-prose trail-muted" data-i18n="app.loading">Loading...</div>
+        </div>
+        <div class="card trail-card" id="trail-context-card">
+          <div class="trail-card-label" data-i18n="trail.context">What the agent knew</div>
+          <div id="trail-context" class="trail-muted" data-i18n="app.loading">Loading...</div>
+          <div id="trail-coverage" class="trail-coverage" style="display:none;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. DECISIONS -->
+    <section class="trail-section" id="trail-decisions" aria-labelledby="trail-decisions-h">
+      <div class="trail-section-head">
+        <span class="trail-step">2</span>
+        <div>
+          <h2 class="trail-section-title" id="trail-decisions-h" data-i18n="trail.decisions_title">What it did</h2>
+          <div class="trail-muted" data-i18n="trail.decisions_sub">Every step, in order. Replay the conversation, or open the timing and trace views.</div>
+        </div>
+      </div>
+      <div class="trail-subtabs" role="tablist">
+        <button type="button" class="trail-subtab active" data-view="replay" role="tab" aria-selected="true" onclick="trailShowView('replay')" data-i18n="trail.view_replay">Replay</button>
+        <button type="button" class="trail-subtab" data-view="trace" role="tab" aria-selected="false" onclick="trailShowView('trace')" data-i18n="trail.view_trace">Trace</button>
+        <button type="button" class="trail-subtab" data-view="turns" role="tab" aria-selected="false" onclick="trailShowView('turns')" data-i18n="trail.view_turns">Turn timing</button>
+        <button type="button" class="trail-subtab" data-view="tree" role="tab" aria-selected="false" onclick="trailShowView('tree')" data-i18n="trail.view_tree">Replay tree</button>
+      </div>
+      <div class="trail-view" id="trail-replay-host" data-view="replay"></div>
+      <div class="trail-view" id="trail-trace-host" data-view="trace" style="display:none;"></div>
+      <div class="trail-view" id="trail-turns-host" data-view="turns" style="display:none;"></div>
+      <div class="trail-view card trail-card" id="trail-tree-host" data-view="tree" style="display:none;"></div>
+    </section>
+
+    <!-- 3. OUTCOME -->
+    <section class="trail-section" id="trail-outcome" aria-labelledby="trail-outcome-h">
+      <div class="trail-section-head">
+        <span class="trail-step">3</span>
+        <div>
+          <h2 class="trail-section-title" id="trail-outcome-h" data-i18n="trail.outcome_title">How it ended</h2>
+          <div class="trail-muted" data-i18n="trail.outcome_sub">Did the result match the request, and what did it cost.</div>
+        </div>
+      </div>
+      <div class="trail-grid trail-grid-3">
+        <div class="card trail-card" id="trail-verdict-card">
+          <div class="trail-card-label" data-i18n="trail.verdict">Verdict</div>
+          <div id="trail-verdict" class="trail-muted" data-i18n="app.loading">Loading...</div>
+        </div>
+        <div class="card trail-card" id="trail-quality-card">
+          <div class="trail-card-label" data-i18n="trail.quality">Quality score</div>
+          <div id="trail-quality" class="trail-muted" data-i18n="app.loading">Loading...</div>
+        </div>
+        <div class="card trail-card" id="trail-spend-card">
+          <div class="trail-card-label" data-i18n="trail.spend">Spend and time</div>
+          <div id="trail-spend" class="trail-muted" data-i18n="app.loading">Loading...</div>
+        </div>
+      </div>
+      <div class="card trail-card" id="trail-git-card">
+        <div class="trail-card-label" data-i18n="trail.git">Code it produced</div>
+        <div id="trail-git" class="trail-muted" data-i18n="app.loading">Loading...</div>
+      </div>
+    </section>
+  </div>
+</div>

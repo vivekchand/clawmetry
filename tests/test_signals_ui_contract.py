@@ -157,6 +157,53 @@ def test_empty_states_read_differently(catalogue):
     assert "not exposed" in catalogue["signals.cov_none"]
 
 
+# ── hosted dashboard (CLOUD_MODE) ───────────────────────────────────────────
+
+def _fn(signals_js: str, name: str) -> str:
+    """Source of one top-level function in the Signals section."""
+    i = signals_js.index("function " + name + "(")
+    j = signals_js.find("\nfunction ", i + 1)
+    return signals_js[i:j if j > 0 else None]
+
+
+def test_cloud_mode_renders_the_write_controls_disabled_with_a_note(tab, signals_js, catalogue):
+    assert catalogue["signals.cloud_manage_local"] == "Manage on the local dashboard"
+    assert "window.CLOUD_MODE" in _fn(signals_js, "_sigCloudReadOnly")
+    # Resolve / Ignore on issues, and every brief button, carry the disabled
+    # attribute under CLOUD_MODE (one helper, so no button can be missed).
+    dis = _fn(signals_js, "_sigDisabledAttr")
+    assert "disabled" in dis and "_sigCloudNote()" in dis
+    issues = _fn(signals_js, "signalsRenderIssues")
+    assert issues.count("' + dis + '") == 2, "Resolve and Ignore must both take the disabled attr"
+    assert "_sigCloudNote()" in issues
+    briefs = _fn(signals_js, "signalsRenderBriefs")
+    assert briefs.count("' + dis + '") == 4, "Switch on/off, Run now, Delete and the digest Switch on"
+    assert "addBtn.disabled = cloud" in briefs
+    assert 'id="signals-briefs-add"' in tab
+    # The form never opens on the hosted dashboard.
+    assert "if (_sigCloudReadOnly()) show = false;" in _fn(signals_js, "signalsToggleBriefForm")
+
+
+@pytest.mark.parametrize("name", ["signalsEnableDigest", "signalsDeleteBrief", "signalsToggleBrief",
+                                  "signalsRunBrief", "signalsSetIssueStatus", "signalsSaveBrief"])
+def test_write_handlers_stop_in_cloud_mode_and_show_the_servers_reason(signals_js, name):
+    body = _fn(signals_js, name)
+    assert "_sigCloudReadOnly()" in body and "_sigCloudNote()" in body, name
+    # A declined answer (available:false / ok:false) surfaces its reason.
+    assert "_sigDeclined(j)" in body or "_sigBriefWriteDone(" in body, name
+    assert "_sigReasonOf(j" in body or "_sigBriefWriteDone(" in body, name
+    assert ".catch(function () {})" not in body, f"{name} swallows failures silently"
+
+
+def test_declined_helpers_read_reason_then_error(signals_js):
+    declined = _fn(signals_js, "_sigDeclined")
+    assert "j.available === false" in declined and "j.ok === false" in declined
+    reason = _fn(signals_js, "_sigReasonOf")
+    assert reason.index("j.reason") < reason.index("j.error")
+    # The briefs loader shows the reason of an available:false answer.
+    assert "d.available === false" in _fn(signals_js, "loadSignalsBriefs")
+
+
 # ── copy ────────────────────────────────────────────────────────────────────
 
 def _user_facing_strings(signals_js: str) -> list[str]:

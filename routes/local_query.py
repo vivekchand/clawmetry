@@ -385,6 +385,8 @@ def _dispatch(shape: str, args: dict) -> dict:
         body = _proxy_dispatch(shape, args)
         body["_via"] = "daemon_proxy"
         body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        if shape == "sessions":
+            _attach_nondeterminism(body)
         return body
     except Exception:
         pass
@@ -403,7 +405,66 @@ def _dispatch(shape: str, args: dict) -> dict:
     body["_shape"] = shape
     body["_via"] = "direct"
     body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    if shape == "sessions":
+        _attach_nondeterminism(body, store=store)
     return body
+
+
+# Replay agreement is written by an opt-in scheduler and changes at most a
+# few times an hour, so one cached read serves every sessions call in the
+# window instead of a second store hop per request (perf is a cost).
+_ND_CACHE: dict = {"ts": 0.0, "rows": {}}
+_ND_TTL_SEC = 60.0
+
+
+def _replay_stats_map(store=None) -> dict:
+    now = time.monotonic()
+    if (now - float(_ND_CACHE.get("ts") or 0)) < _ND_TTL_SEC:
+        return _ND_CACHE.get("rows") or {}
+    rows = None
+    try:
+        if store is not None:
+            rows = store.query_session_replay_stats(limit=2000)
+        else:
+            rows = local_store_via_daemon("query_session_replay_stats", limit=2000)
+            if rows is None:
+                rows = _store().query_session_replay_stats(limit=2000)
+    except Exception:
+        rows = None
+    out = {}
+    for r in rows or []:
+        if isinstance(r, dict) and r.get("session_id"):
+            out[str(r["session_id"])] = r
+    _ND_CACHE["ts"] = now
+    _ND_CACHE["rows"] = out
+    return out
+
+
+def _attach_nondeterminism(body: dict, store=None) -> None:
+    """Add ``nondeterminism`` to every session row: ``None`` when never
+    measured (the honest default), else ``{runs, agreement_pct}``. Free on
+    every plan; the run-by-run compare view stays behind ``per_run_compare``.
+    Never raises; a failure leaves the rows untouched except for the null."""
+    try:
+        rows = body.get("rows") if isinstance(body, dict) else None
+        if not isinstance(rows, list) or not rows:
+            return
+        stats = _replay_stats_map(store)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get("session_id") or row.get("sessionId") or row.get("id") or "")
+            st = stats.get(sid) if sid else None
+            if st and st.get("runs"):
+                row["nondeterminism"] = {
+                    "runs": int(st.get("runs") or 0),
+                    "agreement_pct": st.get("agreement_pct"),
+                    "measured_at": st.get("updated_at"),
+                }
+            else:
+                row.setdefault("nondeterminism", None)
+    except Exception:
+        return
 
 
 # ── HTTP routes ────────────────────────────────────────────────────────────
@@ -1074,6 +1135,26 @@ _DAEMON_METHODS = frozenset({
     "query_signal_coverage",
     "query_signal_sessions",
     "query_signal_rate_window",
+    # Signal shifts + briefs (WO-62, clawmetry/signal_shifts.py, briefs.py).
+    # Issues are written by the daemon tick and transitioned by the operator
+    # from the Signals tab; briefs are edited from the tab and run by the
+    # daemon scheduler. Same proxy for the same reason as above.
+    "query_signal_shift_inputs",
+    "query_signal_shift_breakdown",
+    "upsert_signal_issue",
+    "get_signal_issue",
+    "query_signal_issues",
+    "set_signal_issue_status",
+    "list_briefs",
+    "get_brief",
+    "upsert_brief",
+    "delete_brief",
+    "mark_brief_run",
+    "dives_table_columns",
+    # Non-determinism (replay agreement) + silent-failure delivery latch.
+    # Read by routes/guard.py and the sessions-shape enrichment below.
+    "query_session_replay_stats",
+    "query_incident_alerts",
     # ── Agent self-diagnostics (WO-59) ───────────────────────────────────
     # The MCP ``report_to_operator`` tool runs in the agent's own process
     # and writes through the daemon (which owns the writer lock); the
