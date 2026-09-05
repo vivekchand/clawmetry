@@ -8786,6 +8786,22 @@ def main() -> None:
         parser.parse_args()
         return  # argparse's -h action always exits; unreachable in practice
 
+    # Bare `clawmetry --help`/`-h` (no subcommand) needs the same guard
+    # (#5492): argv[1] is "--help" itself, not a member of _subcmds, so the
+    # check above never caught it and this process fell all the way through
+    # to `from dashboard import main as dashboard_main` just to print help
+    # text -- the exact import the guard above exists to avoid. This is what
+    # the Conformance Heartbeat's `clawmetry --help > /dev/null` step hit on
+    # py3.9/Linux while `<subcmd> --help` (already guarded) passed in the
+    # same run. `parser` has no subcommand chosen here, so parse_args() would
+    # error on an "unrecognized argument" instead of printing help (its own
+    # -h action is off, by design, so a real subcommand's `-h` in argv[2:]
+    # above is the one that fires) -- print_help() is what argparse uses
+    # internally for -h and works the same without an -h action registered.
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        parser.print_help()
+        sys.exit(0)
+
     # Tag this process as the dashboard BEFORE importing dashboard, so every
     # get_store() in dashboard.py (module-level + handlers) is barred from the
     # DuckDB writer — only the sync daemon writes. Set before the import or a
