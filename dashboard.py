@@ -14000,9 +14000,10 @@ DASHBOARD_HTML = r"""
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
   </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
-  {# Light/dark toggle restored (UI reskin 2026-09): initTheme() in app.js
-     fills the sun/moon icon and honours the saved openclaw-theme value. #}
-  <div class="theme-toggle" id="theme-toggle-btn" onclick="toggleTheme()" title="Toggle light / dark theme" style="cursor:pointer;display:flex;align-items:center;"></div>
+  {# Light/dark toggle REMOVED (header cleanup 2026-09): the light palette
+     never got the polish the dark one has, so the toggle only ever led
+     somewhere uglier. The dashboard is dark-only; <body data-theme="dark">
+     above is the whole story and app.js no longer ships initTheme(). #}
 
   <!-- Cloud sync toggle chip. Included in every ClawMetry plan (Self-Hosted
        through Enterprise), so it's a one-click UX toggle here rather than a
@@ -14023,11 +14024,11 @@ DASHBOARD_HTML = r"""
     </div>
     <div id="i18n-switcher-menu" role="menu" style="display:none;position:absolute;top:calc(100% + 6px);right:0;min-width:180px;max-height:360px;overflow-y:auto;background:var(--bg-card,#1c2333);border:1px solid var(--border-color,rgba(255,255,255,0.1));border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.35);z-index:200;padding:4px;"></div>
   </div>
-  <div class="zoom-controls">
-    <button class="zoom-btn" onclick="zoomOut()" data-i18n-title="topbar.zoom_out" title="Zoom out (Ctrl/Cmd + -)">−</button>
-    <span class="zoom-level" id="zoom-level" data-i18n-title="topbar.zoom_level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
-    <button class="zoom-btn" onclick="zoomIn()" data-i18n-title="topbar.zoom_in" title="Zoom in (Ctrl/Cmd + +)">+</button>
-  </div>
+  {# In-page zoom controls REMOVED (header cleanup 2026-09): the browser's
+     own zoom already does this, and applyZoom() used to put a
+     `transform: scale()` on #zoom-wrapper even at 100%, which made the
+     wrapper a containing block for every `position: fixed` descendant
+     (issue #1717). #}
   {% if legacy_nav %}
   <div class="nav-tabs">
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>

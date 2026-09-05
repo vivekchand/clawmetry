@@ -108,8 +108,20 @@ jobs:
       # of those drifted from the catalogue before this guard existed
       # (2026-08-15: catalogue 20, README 14, PyPI 12). setup.py derives the
       # PyPI summary; this keeps the rest honest.
-      - name: Runtime count matches the entitlement catalogue
+      # Also checks the chat-channel count against ALL_CHANNELS, which drifted
+      # the same way (2026-09-05: catalogue 23, CLAUDE.md/FLYWHEEL/AGENTS 21,
+      # PRD 22).
+      - name: Runtime and channel counts match the entitlement catalogue
         run: python3 scripts/sync_runtime_count.py --check
+
+      # docs/MODULE_MAP.md is generated from the source tree, because the
+      # hand-written inventories in CLAUDE.md and ARCHITECTURE.md drifted to
+      # the point of being misleading (2026-09-05: the route table listed 17
+      # of 70 modules and none of the 82 registered blueprints, so an agent
+      # went looking for features in dashboard.py that had moved out months
+      # earlier). Size bands are coarse so ordinary PRs do not trip this.
+      - name: Module map matches the source tree
+        run: python3 scripts/gen_module_map.py --check
 
       # Acceptance-criteria traceability (FLYWHEEL.md 1g). Drift Bot asks "does
       # this diff contradict a Blueprint?"; it is a changed-code check and has
@@ -145,6 +157,16 @@ jobs:
       # was itself dead, silently, for months.
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
+
+      # Named explicitly because this repo's CI runs FILE LISTS, not
+      # `pytest tests/`: a guard added without a line here runs in no job at
+      # all. Covers the half `gen_module_map.py --check` cannot: every
+      # blueprint dashboard.py registers is in the map, and CLAUDE.md /
+      # ARCHITECTURE.md name no module that has since moved or been deleted.
+      # Must sit AFTER "Install verification test deps" -- this job's
+      # interpreter has no pytest before that step.
+      - name: Architecture docs name modules that exist
+        run: python3 -m pytest tests/test_module_map_drift.py -q
 
       # The declared product surface must match reality: every cell names a
       # verifier that exists, and nothing claims to be "gated" while sitting
@@ -258,7 +280,7 @@ jobs:
       # have an en.json key. The Phase-A nav guard runs alongside because the
       # landing change re-ordered Tier-1.
       - name: Trail page + session-first nav
-        run: python3 -m pytest tests/test_trail_tab_template.py tests/test_beginner_nav_phase_a.py tests/test_transcript_layout_grid.py -q
+        run: python3 -m pytest tests/test_trail_tab_template.py tests/test_trail_context_panel.py tests/test_beginner_nav_phase_a.py tests/test_transcript_layout_grid.py -q
 
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) — the
@@ -440,6 +462,10 @@ jobs:
             tests/test_signal_shifts.py \
             tests/test_briefs.py \
             tests/test_guard_control_capability.py \
+            tests/test_guard_control_route.py \
+            tests/test_guard_control_transparency.py \
+            tests/test_guard_resume_hints.py \
+            tests/test_guard_resume_route.py \
             tests/test_guard_live_probe.py \
             tests/test_process_control.py \
             tests/test_process_control_windows.py \
