@@ -1025,6 +1025,18 @@ function _cmBannerDestination(alert) {
     if (sid) return { label: t('app.open_session', null, 'Open session →'), go: goSession(sid) };
   }
 
+  // Guard detector incidents delivered to a human (stuck / rate limited /
+  // crashed / waiting on you). The Guard tab lists the session with its
+  // Pause / Stop controls, which is the action the banner is asking for.
+  if (type === 'agent_attention') {
+    return {
+      label: t('app.open_guard', null, 'Open Guard →'),
+      go: goTab('guard', function () {
+        if (typeof loadGuardTab === 'function') loadGuardTab();
+      })
+    };
+  }
+
   // Security alarms. The rule_id here is the DETECTION rule (numbat's
   // rule_id, or a built-in signature id) — not a session — so we cannot jump
   // straight to a transcript. The findings log can: it lists this finding
@@ -2082,6 +2094,16 @@ function switchTab(name) {
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
+  // Trail page (session-first IA): one session as Inputs / Decisions / Outcome.
+  // It borrows the transcript / trace / turn renderers' DOM nodes while open
+  // (static/js/trail.js), so every other tab first hands them back. The
+  // Sessions nav item stays highlighted because a trail is a session opened.
+  if (name !== 'trail' && typeof _trailRestoreHosts === 'function') { try { _trailRestoreHosts(); } catch (e) {} }
+  if (name === 'trail') {
+    var _trailNav = document.querySelector('.left-nav-item[data-tab="transcripts"]');
+    if (_trailNav) _trailNav.classList.add('active');
+    if (typeof loadTrailTab === 'function') loadTrailTab();
+  }
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
   if (name === 'flow') initFlow();
@@ -10692,7 +10714,10 @@ var LOOP_KIND_LABEL = {
   file_blast_radius: 'Changed a lot of files at once',
   credential_access: 'Opened a password or key file',
   network_egress: 'Contacted somewhere new',
-  privilege_change: 'Asked for admin rights'
+  privilege_change: 'Asked for admin rights',
+  rate_limited: 'Being rate limited by its provider',
+  blocked_on_user: 'Waiting for you to answer',
+  crashed: 'Crashed and restarted'
 };
 
 // What ignoring this is estimated to cost. Blank when we do not know, because
@@ -19694,6 +19719,12 @@ async function loadTranscripts() {
       // an absent badge is the quiet default, not a "no" badge.
       html += _cmAttentionBadge(
         tx.attention, tx.attention_signal, tx.attention_tool);
+      // Verdict (outcome colour + judge score when known) and the one-click
+      // trail. Both come from static/js/trail.js; an absent verdict renders
+      // nothing rather than a "no data" chip on every row.
+      if (typeof _cmVerdictBadge === 'function') html += _cmVerdictBadge(tx);
+      var _attrSafe = function (s) { return escHtml(s).replace(/"/g, '&quot;'); };
+      html += '<button type="button" class="cm-open-trail" data-sid="' + _attrSafe(raw) + '" onclick="event.stopPropagation();openTrail(this.getAttribute(\'data-sid\'))" title="' + _attrSafe(t('trail.open_tooltip', null, 'What it was asked, what it did, how it ended')) + '">' + escHtml(t('trail.open', null, 'Open trail')) + ' &rarr;</button>';
       html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });
@@ -21433,8 +21464,12 @@ async function _loadReplayTree(sessionId) {
   if (!mount) {
     mount = document.createElement('div');
     mount.id = 'replay-tree-container';
+    // The Trail page re-parents #transcript-messages into its own card, so
+    // the anchor is not always a child of #transcript-viewer; inserting
+    // relative to the anchor's real parent avoids the NotFoundError seen on
+    // the hosted dashboard (0.12.811) when a trail opened the replay.
     var anchor = document.getElementById('transcript-messages');
-    if (anchor) viewer.insertBefore(mount, anchor);
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(mount, anchor);
     else viewer.appendChild(mount);
   } else {
     mount.innerHTML = '';
@@ -28720,6 +28755,27 @@ document.addEventListener('DOMContentLoaded', function() {
   try { _cmInitGlobalRuntimeSwitcher(); } catch (e) { /* non-fatal */ }
   try { _hideCloudIrrelevantNav(); } catch (e) { /* non-fatal */ }
   try { _applyTracingFlag(); } catch (e) { /* non-fatal */ }
+  // Session-first landing: the product opens on the decision trail (the
+  // Sessions list, each row one click from its Trail), not on a KPI board.
+  // Overview stays one click away under Monitoring. Deep links win:
+  //   #trail=<agent_type>:<session_id>  -> that session's Trail page
+  //   #session=<id>                     -> Sessions, replay opened by loadTranscripts()
+  try { _cmBootLanding(); } catch (e) { /* non-fatal */ }
+});
+
+function _cmBootLanding() {
+  var trailSid = (typeof _trailSessionFromHash === 'function') ? _trailSessionFromHash(window.location.hash) : null;
+  if (trailSid && typeof openTrail === 'function') { openTrail(trailSid); return; }
+  if (typeof switchTab === 'function') switchTab('transcripts');
+}
+
+// Hash router. Only `#trail=` is routed here: `#session=` is consumed by
+// loadTranscripts() and its setters already call switchTab('transcripts').
+window.addEventListener('hashchange', function () {
+  try {
+    var sid = (typeof _trailSessionFromHash === 'function') ? _trailSessionFromHash(window.location.hash) : null;
+    if (sid && typeof openTrail === 'function') openTrail(sid);
+  } catch (e) { /* non-fatal */ }
 });
 
 // The Tracing tab (Phoenix/Arize-style span waterfall + tree + agent graph) is
@@ -31112,7 +31168,11 @@ var GUARD_KIND_LABEL = {
   file_blast_radius: 'Wide or destructive file changes',
   credential_access: 'Read credentials',
   network_egress: 'Unusual network destination',
-  privilege_change: 'Privilege change'
+  privilege_change: 'Privilege change',
+  // Silent failure: it stopped, and nobody was told.
+  rate_limited: 'Rate limited by the provider',
+  blocked_on_user: 'Waiting on you',
+  crashed: 'Crashed and restarted'
 };
 
 // Money first: "$1.20 at risk" is the number that decides what to open next.
@@ -31148,7 +31208,37 @@ function loadGuardTab() {
   loadGuardSessions();
   loadGuardPolicies();
   loadGuardActions();
+  loadGuardNondeterminism();
   loadGuardSelfReports();
+}
+
+// Honest status line for the second "rogue agent" failure mode (same input,
+// different answer). Measurement is opt-in because it re-runs the user's
+// agent for real money, so the card must say "not measured" until it is.
+function loadGuardNondeterminism() {
+  var el = document.getElementById('guard-nondeterminism-body');
+  if (!el) return;
+  fetch('/api/guard/nondeterminism').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d) { el.textContent = ''; return; }
+    var html = '';
+    if (d.enabled) {
+      html += '<span class="badge badge-ok">Measuring</span> ';
+      if (d.measured_sessions) {
+        html += guardEsc(String(d.measured_sessions)) + ' session' + (d.measured_sessions === 1 ? '' : 's') +
+          ' replayed so far';
+        if (typeof d.mean_agreement_pct === 'number') {
+          html += ', agent agreed with itself ' + guardEsc(String(d.mean_agreement_pct)) + '% of the time';
+        }
+        html += '. ';
+      } else {
+        html += 'No failed session has been replayed yet. ';
+      }
+    } else {
+      html += '<span class="badge">Not measured</span> ';
+    }
+    html += '<span class="section-sub" style="margin:0">' + guardEsc(d.note || '') + '</span>';
+    el.innerHTML = html;
+  }).catch(function () { el.textContent = ''; });
 }
 
 // ── Agent self-reports (WO-59) ────────────────────────────────────────────
@@ -31506,6 +31596,9 @@ function guardShowPolicyForm() {
       '<option value="credential_access">Read credentials</option>' +
       '<option value="network_egress">Unusual network destination</option>' +
       '<option value="privilege_change">Privilege change</option>' +
+      '<option value="rate_limited">Rate limited by the provider</option>' +
+      '<option value="blocked_on_user">Waiting on you</option>' +
+      '<option value="crashed">Crashed and restarted</option>' +
     '</select></div>' +
     '<div class="form-row"><label>At least this severe</label><select id="gp-severity">' +
       '<option value="info">info</option>' +
@@ -31719,6 +31812,8 @@ function signalsSetWindow(w) {
 
 function loadSignalsTab() {
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  loadSignalsIssues(rt);
+  loadSignalsBriefs();
   var url = '/api/signals?window=' + encodeURIComponent(_sigState.window) +
     (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
   fetch(url).then(function (r) { return r.json(); }).then(function (d) {
@@ -31924,4 +32019,331 @@ function signalsRenderCoverage(d, rt) {
   });
   html += '</div>';
   el.innerHTML = html;
+}
+
+// ── Signal shifts: open issues (WO-62) ─────────────────────────────────────
+// One issue per (signal, runtime) whose last 24h left the band learned from
+// its own 28 days. Plain words, Resolve and Ignore, never the matched text.
+// The card is hidden when no issue exists; the honest "why nothing" lives
+// in the headline card's sub line.
+function _sigPostJson(url, body) {
+  return fetch(url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  }).then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); });
+}
+
+// Hosted dashboard: the tab reads the snapshot (signalIssues, briefs) and
+// every write stays on the local dashboard. Controls render disabled with
+// the note below instead of posting to an endpoint that is not there.
+function _sigCloudReadOnly() {
+  return !!window.CLOUD_MODE;
+}
+function _sigCloudNote() {
+  return _sigT('signals.cloud_manage_local', null, 'Manage on the local dashboard');
+}
+// A server answer that declines (available:false or ok:false) carries its
+// own plain-words reason; show that, never a silent no-op.
+function _sigDeclined(j) {
+  return !j || j.available === false || j.ok === false;
+}
+function _sigReasonOf(j, fallback) {
+  if (j && typeof j.reason === 'string' && j.reason) return j.reason;
+  if (j && typeof j.error === 'string' && j.error) return j.error;
+  return fallback;
+}
+function _sigDisabledAttr() {
+  return _sigCloudReadOnly() ? ' disabled title="' + sigEsc(_sigCloudNote()) + '"' : '';
+}
+
+function loadSignalsIssues(rt) {
+  rt = rt || ((typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all');
+  var url = '/api/signals/issues?status=open' +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    signalsRenderIssues(d || {}, rt);
+  }).catch(function () { signalsRenderIssues({ issues: [], store: 'unavailable' }, rt); });
+}
+
+function signalsIssueBreakdownLine(issue) {
+  var bd = (issue && issue.breakdown) || {};
+  var parts = [];
+  ['model', 'runtime_version', 'tool', 'cwd'].forEach(function (dim) {
+    var list = bd[dim] || [];
+    if (!list.length || list[0].value === 'unknown' || !(list[0].share > 0)) return;
+    var word = { model: _sigT('signals.bd_model', null, 'model'),
+      runtime_version: _sigT('signals.bd_version', null, 'version'),
+      tool: _sigT('signals.bd_tool', null, 'tool'),
+      cwd: _sigT('signals.bd_repo', null, 'repository') }[dim];
+    parts.push(word + ' ' + list[0].value + ' ' + Math.round(list[0].share * 100) + '%');
+  });
+  return parts.length ? _sigT('signals.bd_explains', { parts: parts.join(' · ') }, 'Explains the move: {parts}') : '';
+}
+
+function signalsRenderIssues(d, rt) {
+  var card = document.getElementById('signals-issues-card');
+  var body = document.getElementById('signals-issues-body');
+  var note = document.getElementById('signals-issues-note');
+  var sub = document.getElementById('signals-headline-sub');
+  if (!card || !body) return;
+  var items = (d && d.issues) || [];
+  _sigState.issues = items;
+  if (!items.length) {
+    card.style.display = 'none';
+    body.innerHTML = '';
+    if (sub && d && d.store !== 'unavailable' && d.min_samples) {
+      var ms = d.min_samples;
+      sub.textContent = _sigT('signals.issues_none', { short: ms.short, history: ms.history },
+        'No signal has left its normal band. An issue needs at least {short} turns in the last day and {history} in the month before, per runtime.');
+    }
+    return;
+  }
+  card.style.display = '';
+  if (note) {
+    note.textContent = _sigT('signals.issues_count', { n: items.length }, '{n} open') +
+      (_sigCloudReadOnly() ? ' · ' + _sigCloudNote() : '');
+  }
+  var dis = _sigDisabledAttr();
+  var html = '';
+  items.forEach(function (it) {
+    var sample = _sigT('signals.issue_sample', { during: it.n_during || 0, before: it.n_before || 0 },
+      '{during} turns in the last day, {before} in the month before');
+    var reopened = (it.reopen_count > 0) ? ' <span class="sig-issue-tag">' +
+      sigEsc(_sigT('signals.issue_reopened', { n: it.reopen_count }, 'reopened {n}x')) + '</span>' : '';
+    var bdLine = signalsIssueBreakdownLine(it);
+    html += '<div class="sig-issue" data-issue="' + sigEsc(it.id) + '">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(it.headline || '') + reopened + '</div>' +
+        '<div class="sig-hint">' + sigEsc(sample) + (bdLine ? ' · ' + sigEsc(bdLine) : '') + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsOpenSessions(\'' + sigEsc(it.signal) + '\')">' +
+          sigEsc(_sigT('signals.issue_sessions', null, 'Sessions')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsSetIssueStatus(\'' + sigEsc(it.id) + '\', \'resolved\')">' +
+          sigEsc(_sigT('signals.issue_resolve', null, 'Resolve')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsSetIssueStatus(\'' + sigEsc(it.id) + '\', \'ignored\')">' +
+          sigEsc(_sigT('signals.issue_ignore', null, 'Ignore')) + '</button>' +
+      '</div></div>';
+  });
+  body.innerHTML = html;
+}
+
+function signalsSetIssueStatus(id, status) {
+  var note = document.getElementById('signals-issues-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  _sigPostJson('/api/signals/issues/' + encodeURIComponent(id) + '/status', { status: status })
+    .then(function (j) {
+      if (_sigDeclined(j)) {
+        if (note) note.textContent = _sigReasonOf(j, _sigT('signals.issue_err', null, 'Could not update the issue.'));
+        return;
+      }
+      loadSignalsIssues();
+    }).catch(function () {
+      if (note) note.textContent = _sigT('signals.issue_err', null, 'Could not update the issue.');
+    });
+}
+
+// ── Briefs (WO-62) ─────────────────────────────────────────────────────────
+var _sigBriefs = { list: [], channels: [], offered: null, max: 10 };
+
+function loadSignalsBriefs() {
+  fetch('/api/briefs').then(function (r) { return r.json(); }).then(function (d) {
+    if (d && d.available === false) {
+      signalsRenderBriefs({ briefs: [], store: 'unavailable', reason: _sigReasonOf(d, '') });
+      return;
+    }
+    _sigBriefs.list = (d && d.briefs) || [];
+    _sigBriefs.channels = (d && d.channels) || ['dashboard', 'webhook', 'slack', 'discord', 'telegram'];
+    _sigBriefs.offered = (d && d.offered) || null;
+    _sigBriefs.max = (d && d.max) || 10;
+    signalsRenderBriefs(d || {});
+  }).catch(function () { signalsRenderBriefs({ briefs: [], store: 'unavailable' }); });
+}
+
+function signalsBriefStatusWords(b) {
+  if (!b.last_run_at) return _sigT('signals.brief_never_ran', null, 'Has not run yet');
+  var when = new Date(b.last_run_at).toLocaleString();
+  if (b.last_status === 'ok') return _sigT('signals.brief_last_ok', { when: when }, 'Last run {when}: posted');
+  return _sigT('signals.brief_last_failed', { when: when, err: b.last_error || '' }, 'Last run {when}: failed. {err}');
+}
+
+function signalsRenderBriefs(d) {
+  var el = document.getElementById('signals-briefs-body');
+  var note = document.getElementById('signals-briefs-note');
+  var sel = document.getElementById('signals-brief-channel');
+  if (!el) return;
+  if (sel && !sel.options.length) {
+    _sigBriefs.channels.forEach(function (c) {
+      var o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
+    });
+  }
+  var list = _sigBriefs.list;
+  var cloud = _sigCloudReadOnly();
+  if (note) {
+    note.textContent = _sigT('signals.briefs_count', { n: list.length, max: _sigBriefs.max }, '{n} of {max}') +
+      (cloud ? ' · ' + _sigCloudNote() : '');
+  }
+  var addBtn = document.getElementById('signals-briefs-add');
+  if (addBtn) {
+    addBtn.disabled = cloud;
+    addBtn.title = cloud ? _sigCloudNote() : '';
+  }
+  if (cloud) signalsToggleBriefForm(false);
+  var dis = _sigDisabledAttr();
+  var html = '';
+  if (d && d.store === 'unavailable') {
+    html += '<div class="sig-empty">' + sigEsc((d && d.reason) ||
+      _sigT('signals.no_daemon_short', null, 'No daemon connected.')) + '</div>';
+  } else if (!list.length) {
+    html += '<div class="sig-empty">' + sigEsc(_sigT('signals.briefs_none', null, 'No briefs yet. Nothing is scheduled and nothing will be posted.')) + '</div>';
+  }
+  list.forEach(function (b) {
+    html += '<div class="sig-brief' + (b.enabled ? '' : ' sig-brief-off') + '">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(b.title) +
+          (b.builtin ? ' <span class="sig-issue-tag">' + sigEsc(_sigT('signals.brief_builtin', null, 'built in')) + '</span>' : '') +
+          (b.enabled ? '' : ' <span class="sig-issue-tag">' + sigEsc(_sigT('signals.brief_off', null, 'off')) + '</span>') + '</div>' +
+        '<div class="sig-hint">' + sigEsc(b.question) + '</div>' +
+        '<div class="sig-hint">' + sigEsc(_sigT('signals.brief_meta', { cron: b.cron_expr, channel: b.channel_ref || 'dashboard' }, 'Schedule {cron} · channel {channel}')) +
+          ' · ' + sigEsc(signalsBriefStatusWords(b)) + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsToggleBrief(\'' + sigEsc(b.id) + '\', ' + (b.enabled ? 'false' : 'true') + ')">' +
+          sigEsc(b.enabled ? _sigT('signals.brief_disable', null, 'Switch off') : _sigT('signals.brief_enable', null, 'Switch on')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsRunBrief(\'' + sigEsc(b.id) + '\')">' +
+          sigEsc(_sigT('signals.brief_run', null, 'Run now')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsDeleteBrief(\'' + sigEsc(b.id) + '\')">' +
+          sigEsc(_sigT('signals.brief_delete', null, 'Delete')) + '</button>' +
+      '</div></div>';
+  });
+  if (_sigBriefs.offered) {
+    var o = _sigBriefs.offered;
+    html += '<div class="sig-brief sig-brief-offer">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(_sigT('signals.digest_offer', null, 'Daily digest')) + '</div>' +
+        '<div class="sig-hint">' + sigEsc(_sigT('signals.digest_offer_sub', { cron: o.cron_expr },
+          'Sessions, spend and tokens per runtime, every morning ({cron}). Runs without a model credential. Off until you switch it on.')) + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsEnableDigest()">' +
+          sigEsc(_sigT('signals.digest_enable', null, 'Switch on')) + '</button>' +
+      '</div></div>';
+  }
+  el.innerHTML = html;
+}
+
+function signalsToggleBriefForm(show) {
+  var f = document.getElementById('signals-brief-form');
+  if (!f) return;
+  if (_sigCloudReadOnly()) show = false;
+  if (show === undefined) show = f.style.display === 'none';
+  f.style.display = show ? '' : 'none';
+}
+
+function signalsSaveBrief(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  var msg = document.getElementById('signals-brief-form-msg');
+  var body = {
+    title: (document.getElementById('signals-brief-title') || {}).value || '',
+    question: (document.getElementById('signals-brief-question') || {}).value || '',
+    cron_expr: (document.getElementById('signals-brief-cron') || {}).value || '',
+    channel_ref: (document.getElementById('signals-brief-channel') || {}).value || 'dashboard',
+    enabled: true
+  };
+  if (_sigCloudReadOnly()) {
+    if (msg) msg.textContent = _sigCloudNote();
+    return false;
+  }
+  _sigPostJson('/api/briefs', body).then(function (j) {
+    if (_sigDeclined(j)) {
+      if (msg) msg.textContent = _sigReasonOf(j, _sigT('signals.brief_err', null, 'Could not save the brief.'));
+      return;
+    }
+    if (msg) msg.textContent = '';
+    signalsToggleBriefForm(false);
+    loadSignalsBriefs();
+  }).catch(function () {
+    if (msg) msg.textContent = _sigT('signals.brief_err', null, 'Could not save the brief.');
+  });
+  return false;
+}
+
+// Shared tail for the brief writes: a declined answer puts the server's
+// reason in the card note; a refused fetch says so; success reloads.
+function _sigBriefWriteDone(p, fallback) {
+  var note = document.getElementById('signals-briefs-note');
+  return p.then(function (j) {
+    if (_sigDeclined(j)) {
+      if (note) note.textContent = _sigReasonOf(j, fallback);
+      return;
+    }
+    loadSignalsBriefs();
+  }).catch(function () {
+    if (note) note.textContent = fallback;
+  });
+}
+
+function signalsEnableDigest() {
+  var note = document.getElementById('signals-briefs-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  var o = _sigBriefs.offered || { id: 'builtin_daily_digest' };
+  _sigBriefWriteDone(
+    _sigPostJson('/api/briefs', { id: o.id, enabled: true, channel_ref: o.channel_ref || 'dashboard' }),
+    _sigT('signals.brief_err', null, 'Could not save the brief.'));
+}
+
+function signalsToggleBrief(id, enabled) {
+  var note = document.getElementById('signals-briefs-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  var b = null;
+  _sigBriefs.list.forEach(function (x) { if (x.id === id) b = x; });
+  if (!b) return;
+  _sigBriefWriteDone(
+    _sigPostJson('/api/briefs', { id: b.id, title: b.title, question: b.question, cron_expr: b.cron_expr,
+      tz: b.tz || '', channel_ref: b.channel_ref || 'dashboard', enabled: !!enabled }),
+    _sigT('signals.brief_err', null, 'Could not save the brief.'));
+}
+
+function signalsRunBrief(id) {
+  var note = document.getElementById('signals-briefs-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  if (note) note.textContent = _sigT('signals.brief_running', null, 'Running...');
+  _sigPostJson('/api/briefs/' + encodeURIComponent(id) + '/run', {}).then(function (j) {
+    if (_sigDeclined(j) && !(j && j.result)) {
+      if (note) note.textContent = _sigReasonOf(j, _sigT('signals.brief_err', null, 'Could not save the brief.'));
+      return;
+    }
+    loadSignalsBriefs();
+    if (note && j && j.result) {
+      note.textContent = j.ok
+        ? _sigT('signals.brief_ran_ok', null, 'Posted.')
+        : _sigT('signals.brief_ran_failed', { err: j.result.error || '' }, 'Failed: {err}');
+    }
+  }).catch(function () {
+    if (note) note.textContent = _sigT('signals.brief_err', null, 'Could not save the brief.');
+  });
+}
+
+function signalsDeleteBrief(id) {
+  var note = document.getElementById('signals-briefs-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  _sigBriefWriteDone(
+    fetch('/api/briefs/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); }),
+    _sigT('signals.brief_delete_err', null, 'Could not delete the brief.'));
 }

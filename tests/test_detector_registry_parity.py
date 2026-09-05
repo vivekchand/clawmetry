@@ -30,7 +30,7 @@ if _REPO_ROOT not in sys.path:
 
 from clawmetry import detectors  # noqa: E402
 
-# The eight the product promises. Written out rather than derived, because a
+# The eleven the product promises. Written out rather than derived, because a
 # guard that derives BOTH sides of its own comparison cannot catch a deletion.
 EXPECTED_KINDS = {
     "stuck_loop",
@@ -41,6 +41,10 @@ EXPECTED_KINDS = {
     "credential_access",
     "network_egress",
     "privilege_change",
+    # Silent failure: it stopped, and nobody was told.
+    "rate_limited",
+    "blocked_on_user",
+    "crashed",
 }
 
 

@@ -143,6 +143,7 @@ CANONICAL_TABS = [
     "agents",            # agents.html: multi-agent orchestration view
     "evals",             # evals.html: LLM-judge scores + evaluator library
     "bench",             # bench.html: Harness Engineering (cross-runtime bench)
+    "trail",             # trail.html: one session as Inputs / Decisions / Outcome
 ]
 
 # Overlay element IDs that signal the auth overlay is blocking the UI.

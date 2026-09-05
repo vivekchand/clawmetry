@@ -283,6 +283,70 @@ _INSIGHT_TEMPLATES: list[tuple[str, str, str, str]] = [
         """,
         "Rank channels by inbound volume; call out any new provider not seen before.",
     ),
+    # ── Improve loop: outcome + eval-score aware templates ──────────────────
+    # The digest used to read cost and volume only; the outcome classifier
+    # and the LLM judge wrote to ``sessions`` and nothing ever read them
+    # back. These three close that loop in plain words a newcomer can act on.
+    (
+        "top_failure_reasons",
+        "Why sessions failed this week",
+        """
+        SELECT CASE WHEN position(':' IN session_id) > 0
+                    THEN split_part(session_id, ':', 1)
+                    ELSE 'openclaw' END AS runtime,
+               outcome,
+               COUNT(*) AS sessions,
+               ROUND(COALESCE(SUM(cost_usd), 0), 2) AS cost
+        FROM sessions
+        WHERE last_active_at >= $since
+          AND outcome IS NOT NULL
+          AND outcome NOT IN ('success', 'ongoing', 'unknown', '')
+        GROUP BY runtime, outcome
+        ORDER BY sessions DESC, cost DESC
+        LIMIT 10
+        """,
+        "For each runtime, name the failure label and how many sessions it "
+        "explains, in plain words (failed = it ended badly, tool_call_stuck = "
+        "it got stuck on a step, cognitive_loop = it went in circles, "
+        "escalated = it needed a person). Say what to try first.",
+    ),
+    (
+        "intent_unmet",
+        "Where the agent missed what you asked",
+        """
+        SELECT session_id,
+               ROUND(eval_score, 1) AS score,
+               eval_reason AS why,
+               COALESCE(title, '') AS asked
+        FROM sessions
+        WHERE eval_scored_at >= $since_ms
+          AND eval_score IS NOT NULL
+          AND eval_score <= 2
+          AND eval_reason IS NOT NULL
+        ORDER BY eval_score ASC, eval_scored_at DESC
+        LIMIT 8
+        """,
+        "These sessions scored 2 or lower out of 5. Summarise the common "
+        "reasons the judge gave, then one concrete fix per reason (a clearer "
+        "prompt, a missing tool, a smaller task). Truncate session_id to 8 chars.",
+    ),
+    (
+        "eval_score_trend",
+        "Answer quality, week by week",
+        """
+        SELECT strftime(date_trunc('week', to_timestamp(eval_scored_at / 1000)), '%Y-%m-%d') AS week,
+               ROUND(AVG(eval_score), 2) AS mean_score,
+               COUNT(*) AS scored_sessions
+        FROM sessions
+        WHERE eval_scored_at >= $trend_since_ms
+          AND eval_score IS NOT NULL
+        GROUP BY week
+        ORDER BY week ASC
+        """,
+        "Weekly mean of the 0 to 5 judge score over the last 8 weeks. Say "
+        "whether quality is rising, flat, or falling and by how much; note "
+        "weeks with very few scored sessions as low-confidence.",
+    ),
     (
         "trend_summary",
         "The week in 30 seconds",
@@ -318,6 +382,8 @@ def _validate_templates_once() -> None:
                .replace("$prior_window_start", "'2025-12-01T00:00:00Z'")
                .replace("$now_ts", "'2026-01-08T00:00:00Z'")
                .replace("$since_str", "'2026-01-01T00:00:00Z'")
+               .replace("$trend_since_ms", "1700000000000")
+               .replace("$since_ms", "1700000000000")
         )
         ok, reason = validate_sql(sanitized)
         if not ok:
@@ -430,6 +496,10 @@ def _bind_params(now: datetime.datetime) -> dict:
         # ``approvals`` and ``alert_rules`` store created_at as a string
         # (varchar), no Z suffix — keep an alt-format binding for them.
         "since_str": week_ago.strftime("%Y-%m-%d %H:%M:%S"),
+        # ``sessions.eval_scored_at`` is BIGINT epoch milliseconds.
+        "since_ms": int(week_ago.replace(tzinfo=datetime.timezone.utc).timestamp() * 1000),
+        "trend_since_ms": int((now - datetime.timedelta(weeks=8)).replace(
+            tzinfo=datetime.timezone.utc).timestamp() * 1000),
     }
 
 
