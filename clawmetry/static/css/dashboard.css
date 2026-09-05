@@ -3539,6 +3539,20 @@ body.has-profile-menu #logout-btn { display: none !important; }
 #page-signals .sig-chip-state { font-size: 11px; color: var(--text-muted); }
 #page-signals .sig-chip-none .sig-chip-state { color: var(--text-warning); }
 #page-signals .sig-chip-active { border-color: var(--bg-accent); }
+#page-signals .sig-issues-card { border-left: 3px solid var(--text-warning); }
+#page-signals .sig-issue, #page-signals .sig-brief { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-secondary); }
+#page-signals .sig-issue:last-child, #page-signals .sig-brief:last-child { border-bottom: none; }
+#page-signals .sig-issue-main { flex: 1; min-width: 0; }
+#page-signals .sig-issue-head { font-size: 14px; font-weight: 600; color: var(--text-primary); line-height: 1.4; }
+#page-signals .sig-issue-actions { display: flex; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+#page-signals .sig-issue-tag { display: inline-block; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); border: 1px solid var(--border-secondary); border-radius: 5px; padding: 1px 6px; margin-left: 6px; vertical-align: middle; }
+#page-signals .sig-brief-off .sig-issue-head { color: var(--text-secondary); }
+#page-signals .sig-brief-offer { background: var(--bg-primary); border: 1px dashed var(--border-primary); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+#page-signals .sig-brief-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-secondary); }
+#page-signals .sig-brief-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
+#page-signals .sig-brief-form input, #page-signals .sig-brief-form select { font: inherit; font-size: 13px; padding: 6px 9px; border-radius: 7px; border: 1px solid var(--border-primary); background: var(--bg-primary); color: var(--text-primary); }
+#page-signals .sig-brief-form-actions { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; }
+@media (max-width: 720px) { #page-signals .sig-brief-form { grid-template-columns: 1fr; } #page-signals .sig-issue, #page-signals .sig-brief { flex-direction: column; } }
 /* ── Trail page (#page-trail): one session as Inputs / Decisions / Outcome ──
    Scoped under #page-trail. The replay / trace / turn renderers are borrowed
    DOM nodes (static/js/trail.js) and keep their own global styles. */

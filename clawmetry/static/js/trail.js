@@ -370,8 +370,24 @@
   // What the agent knew: system prompt / tools / MCP / model. Served by
   // /api/sessions/<id>/context once that stream lands; until then, and on
   // the hosted dashboard, it 404s and we say so.
+  // On the hosted dashboard the cloud bundle installs
+  // window._cmCloudSessionContext(sid) (cm-cloud-session-context), which
+  // slices the E2E-encrypted snapshot's sessionContext bucket; the transcript
+  // panel's _fetchSessionContext (app.js) already prefers it, so reuse that
+  // path here and only fall back to the honest empty state when it is absent.
+  async function fetchContext(sid) {
+    if (window.CLOUD_MODE) {
+      if (typeof window._cmCloudSessionContext !== 'function') return NOT_ON_CLOUD;
+      try {
+        var c = await window._cmCloudSessionContext(sid);
+        if (c && !c.error) return { ok: true, status: 200, data: c };
+      } catch (e) { /* fall through to the honest state */ }
+      return NOT_ON_CLOUD;
+    }
+    return jget('/api/sessions/' + encodeURIComponent(sid) + '/context');
+  }
   async function renderContext(sid, rt, seq) {
-    var r = await jgetLocal('/api/sessions/' + encodeURIComponent(sid) + '/context');
+    var r = await fetchContext(sid);
     if (seq !== state.seq) return;
     var d = r.ok ? (r.data || {}) : null;
     var items = [];

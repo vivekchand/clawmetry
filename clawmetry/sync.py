@@ -14302,16 +14302,19 @@ def _family_ingest_rev() -> str:
     means an upgrade re-ingests every session once instead of trusting a
     mark written by older extraction code. "" when pro is absent.
 
-    The ``/cwd1`` salt is OSS-side: 2026-08-19 the family upsert started
+    The ``/ctx1`` salt is OSS-side: 2026-08-19 the family upsert started
     persisting ``cwd``/``git_branch`` (kill/pause pid resolution reads them),
-    and only a rev change makes existing sessions re-ingest to backfill the
-    column. Bump the salt when the OSS extraction changes without a pro
-    release.
+    and 2026-09-04 the ``context.compiled`` event each adapter prepends
+    started landing under its own runtime (Inputs & context). Only a rev
+    change makes an already-ingested session re-read its transcript, so
+    without a bump the "What the agent was given" panel stays empty for every
+    session that had already been seen. Bump the salt when the OSS extraction
+    changes without a pro release.
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/cwd1"
+        return _ilm.version("clawmetry-pro") + "/ctx1"
     except Exception:
         return ""
 
@@ -22530,6 +22533,33 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_sig:
         log.debug("snapshot: signals slice failed: %s", _e_sig)
 
+    # Signal shifts (WO-62): open issues + the last 20 resolved, each with
+    # its plain-words headline, so the hosted Signals tab shows the same
+    # "Open issues" block. No session ids, no text. Never breaks the snapshot.
+    _signal_issues_slice: dict = {}
+    try:
+        from clawmetry import signal_shifts as _shifts_snap
+        from clawmetry import local_store as _ls_issues
+        _iss_store = _ls_issues.get_store()
+        if _iss_store is not None:
+            _signal_issues_slice = _shifts_snap.build_snapshot_slice(_iss_store)
+    except Exception as _e_iss:
+        log.debug("snapshot: signalIssues slice failed: %s", _e_iss)
+
+    # Briefs (WO-62): the list the hosted Signals tab shows, in the shape
+    # GET /api/briefs serves (capped at 50; title and question are the only
+    # free text). Read-only on the cloud: saving, running and deleting a
+    # brief stay on the local dashboard. Never breaks the snapshot.
+    _briefs_slice: dict = {}
+    try:
+        from clawmetry import briefs as _briefs_snap
+        from clawmetry import local_store as _ls_briefs_snap
+        _br_store = _ls_briefs_snap.get_store()
+        if _br_store is not None:
+            _briefs_slice = _briefs_snap.build_snapshot_slice(_br_store)
+    except Exception as _e_br:
+        log.debug("snapshot: briefs slice failed: %s", _e_br)
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -22564,6 +22594,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # for ?runtime= and falls back to the node-wide slice).
         "signals": _signals_slice,
         "signalsByRuntime": _signals_by_rt,
+        # WO-62 Signal shifts: issues opened when a rate left its band.
+        "signalIssues": _signal_issues_slice,
+        # WO-62 Briefs: saved questions with a schedule and a channel, read-only
+        # on the cloud (manage them on the local dashboard).
+        "briefs": _briefs_slice,
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),
@@ -23988,6 +24023,15 @@ def run_daemon() -> None:
     last_stuck_eval = 0.0
     last_detect_eval = 0.0
     last_signals_eval = 0.0
+    # Briefs (WO-62): scheduled Dives questions posted to a channel. One
+    # daemon thread, idempotent start, CLAWMETRY_BRIEFS=0 keeps it off.
+    try:
+        from clawmetry import briefs as _briefs_mod
+        from clawmetry import local_store as _ls_briefs
+        if _briefs_mod.start_scheduler(_ls_briefs.get_store, state=state):
+            log.info("briefs: scheduler started")
+    except Exception as _be:
+        log.debug("briefs: scheduler not started: %s", _be)
     last_git_scan = 0.0
     last_replay_tick = 0.0
     last_trail_backfill = 0.0
@@ -24354,6 +24398,11 @@ def run_daemon() -> None:
                         n_sig = _bsig.run_tick(store_for_sig, state)
                         if n_sig:
                             log.info(f"signals: {n_sig} match(es) recorded")
+                        # Signal shifts (WO-62): did any (signal, runtime)
+                        # rate leave its learned band? Opens / reopens an
+                        # issue row and hands it to the local alert path.
+                        # Same opt-out, same cadence, never raises.
+                        _signal_shift_pass(store_for_sig, config, state)
                     except Exception as _sge:
                         log.warning(f"signals: tick errored: {_sge}")
                     last_signals_eval = now_sig
@@ -26017,6 +26066,57 @@ def _post_local_alert_webhook(url: str, payload: dict) -> bool:
     except Exception as e:
         log.warning("alerts(local): webhook POST failed: %s", e)
         return False
+
+
+def _deliver_signal_shift(match: dict, config: dict) -> bool:
+    """Deliver one ``signal_shift`` match through the SAME local path user
+    rules use: banner row in the fleet DB (with the rule's cooldown) and the
+    generic webhook when the entitlement allows it. Never raises."""
+    ok = False
+    try:
+        ok = _persist_local_alert_banner(match)
+    except Exception as e:
+        log.debug("signal shifts: banner persist failed: %s", e)
+    try:
+        from clawmetry import entitlements as _entitlements
+        if _entitlements.get_entitlement().allows_feature("alert_webhooks"):
+            url = _local_alerts_webhook_url()
+            if url and ok:
+                rule = match.get("rule") or {}
+                payload = {
+                    "rule_id":       rule.get("id"),
+                    "rule_name":     rule.get("name") or "",
+                    "node_id":       (config or {}).get("node_id") or "",
+                    "event_id":      (match.get("event") or {}).get("id"),
+                    "event_summary": (match.get("summary") or "")[:500],
+                    "evaluated_at":  _iso_now(),
+                    "metadata":      match.get("metadata") or {},
+                    "source":        "clawmetry-local",
+                }
+                _post_local_alert_webhook(url, payload)
+    except Exception as e:
+        log.debug("signal shifts: webhook skipped: %s", e)
+    log.info("signal shifts: %s", (match.get("summary") or "")[:200])
+    return ok
+
+
+def _signal_shift_pass(store, config: dict, state: dict) -> dict:
+    """Run ``signal_shifts.run_shift_tick`` once. Kept as its own function
+    so the daemon loop stays one line and tests can call it. Never raises."""
+    try:
+        from clawmetry import signal_shifts as _shifts
+        stats = _shifts.run_shift_tick(
+            store, node_id=str((config or {}).get("node_id") or ""),
+            deliver=lambda m: _deliver_signal_shift(m, config))
+        if stats.get("opened") or stats.get("reopened"):
+            log.info("signal shifts: opened=%s reopened=%s (checked %s pairs)",
+                     stats.get("opened"), stats.get("reopened"), stats.get("checked"))
+        if isinstance(state, dict):
+            state["signal_shifts_last"] = {"ts": time.time(), **stats}
+        return stats
+    except Exception as e:
+        log.warning("signal shifts: pass failed: %s", e)
+        return {}
 
 
 def _alerts_loop_signals_slice(store, rules, alert_evaluator):
