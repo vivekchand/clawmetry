@@ -1,0 +1,29 @@
+name: Fix CHANGELOG merge conflict
+on:
+  push:
+    branches: ['release/hook-collision']
+    paths: ['.github/workflows/fix-changelog.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 20
+      - name: Merge CHANGELOG
+        run: |
+          git fetch origin main --depth=1
+          python3 .github/scripts/fix_changelog.py
+      - name: Commit and cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-changelog.yml
+          git rm .github/scripts/fix_changelog.py
+          git add CHANGELOG.md
+          git diff --cached --stat
+          git commit -m $'fix: resolve CHANGELOG.md merge conflict with main\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01K1RkJbErrt5UaL1zjXgA6a'
+          git push
