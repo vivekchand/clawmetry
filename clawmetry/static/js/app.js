@@ -2069,7 +2069,17 @@ function switchTab(name) {
       if (btn) btn.setAttribute('aria-expanded', 'true');
     }
   });
-  if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  // Fallback for tabs with no nav item of their own: highlight whatever the
+  // user clicked. `event.target` is only a real element when a click brought
+  // us here - on a boot-time deep link (#trail=...) window.event is the
+  // DOMContentLoaded event, whose target is `document` and has no classList.
+  // The resulting TypeError threw out of switchTab BEFORE the per-tab loader
+  // dispatch below, so a reloaded/bookmarked trail link sat on its static
+  // "Opening the trail..." skeleton forever (founder report 2026-09-05).
+  if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active')
+      && typeof event !== 'undefined' && event && event.target && event.target.classList) {
+    event.target.classList.add('active');
+  }
   // Auto-close mobile drawer when a nav item is picked.
   var leftNav = document.getElementById('left-nav');
   if (leftNav && leftNav.classList.contains('open')) leftNav.classList.remove('open');
@@ -21487,6 +21497,15 @@ async function _loadReplayTree(sessionId) {
   if (!mount) {
     mount = document.createElement('div');
     mount.id = 'replay-tree-container';
+    // Span the full row of .transcript-layout's grid. That parent is a
+    // two-column grid (messages | sticky turn TOC); as a plain auto-placed
+    // sibling this mount takes the wide first column and pushes
+    // #transcript-messages into the narrow 240px TOC column - the replay
+    // then renders as a squeezed, overflowing strip on the right with the
+    // whole left half blank (founder report 2026-09-05, same trap as
+    // #replay-load-earlier). The CSS rule on .transcript-layout children
+    // covers this too; the inline style keeps the node correct on its own.
+    mount.style.gridColumn = '1 / -1';
     // The Trail page re-parents #transcript-messages into its own card, so
     // the anchor is not always a child of #transcript-viewer; inserting
     // relative to the anchor's real parent avoids the NotFoundError seen on
@@ -31446,6 +31465,12 @@ function loadGuardSessions() {
           guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') +
           (inc.count ? ' &middot; ' + inc.count : '') + '</span>'
         : '<span class="pill pill-ok">Running</span>';
+      // Listed from the live process probe, so it can be stopped now, but the
+      // sync daemon has not read its transcript yet. Say that rather than let
+      // the blank cost and missing detector status read as "nothing to see".
+      if (!inc && s.pending_ingest) {
+        statusCell += ' <span class="muted" title="This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.">&middot; just started</span>';
+      }
       // The estimate says what it is: a burn-rate figure and a
       // window-fraction figure are not the same kind of number, and the
       // tooltip is where that distinction lives instead of being hidden.
@@ -31501,7 +31526,9 @@ function loadGuardSessions() {
         '<td>' + guardEsc(s.runtime) + '</td>' +
         '<td>' + statusCell + '</td>' +
         '<td>' + riskCell + '</td>' +
-        '<td>$' + (Number(s.cost_usd) || 0).toFixed(2) + '</td>' +
+        '<td>' + (s.pending_ingest
+          ? '<span class="muted" title="Not measured yet - the sync daemon has not read this session\'s transcript.">&mdash;</span>'
+          : '$' + (Number(s.cost_usd) || 0).toFixed(2)) + '</td>' +
         '<td>' + guardEsc(guardAgo(s.last_active_at)) + '</td>' +
         '<td>' + control + '</td></tr>';
     });

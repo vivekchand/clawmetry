@@ -61,6 +61,7 @@ test-moat:
 	    tests/test_signal_shifts.py \
 	    tests/test_briefs.py \
 	    tests/test_guard_control_capability.py \
+	    tests/test_guard_live_probe.py \
 	    tests/test_process_control.py \
 	    tests/test_process_control_windows.py \
 	    tests/test_needs_you_matches_the_hero.py \

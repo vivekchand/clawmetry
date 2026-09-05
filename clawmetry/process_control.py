@@ -1637,8 +1637,9 @@ def _claude_sessions_dir() -> str:
 
 
 def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
-    """Build ``sessionId -> {pid, cwd, procStart, started_at, status, version}`` from the
-    per-pid json files claude_code writes (``<sessions_dir>/<pid>.json``).
+    """Build ``sessionId -> {pid, cwd, procStart, started_at, status, version,
+    name, updated_at}`` from the per-pid json files claude_code writes
+    (``<sessions_dir>/<pid>.json``).
 
     ``procStart`` is the process start time (used by the pid-reuse guard);
     ``started_at`` is when claude_code wrote the session record, which is later
@@ -1646,6 +1647,10 @@ def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
 
     This is the primary, richest mapping. Never raises; a missing dir / unreadable
     or malformed file is skipped with a debug log.
+
+    ``name`` and ``updated_at`` are carried for :func:`live_sessions`, which
+    lists a running session before the store has ingested a single line of its
+    transcript and would otherwise have nothing but a uuid to show for it.
     """
     import json
 
@@ -1706,6 +1711,11 @@ def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
         start: Any = rec.get("procStart")
         if not isinstance(start, str) or not start.strip():
             start = None
+        # `updatedAt` is claude_code's own liveness stamp. It moves every time
+        # the session changes state, which is what the Guard list wants for
+        # "last active" on a session the store has not ingested yet. Like
+        # `startedAt` it is stored raw here; `live_sessions` normalizes.
+        updated: Any = rec.get("updatedAt")
         out[str(sid)] = {
             "pid": pid,
             "cwd": rec.get("cwd"),
@@ -1715,8 +1725,75 @@ def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
             "started_at": rec.get("startedAt"),
             "status": rec.get("status"),
             "version": rec.get("version"),
+            "name": rec.get("name"),
+            "updated_at": updated,
         }
     _CLAUDE_MAP_CACHE.update({"key": key, "at": now, "map": dict(out)})
+    return out
+
+
+# Runtimes that publish an ENUMERABLE per-pid record, so this node can list
+# what is running without walking the process table. Everything else can be
+# *checked* by cwd+argv but not *listed*, which is a different question.
+LIVE_PROBE_RUNTIMES = frozenset({"claude_code"})
+
+
+def live_sessions() -> List[Dict[str, Any]]:
+    """Every session this node can see as a RUNNING PROCESS, right now.
+
+    The store is not the authority on liveness, and Guard treating it as one is
+    why a session can be minutes old before its Kill button exists. ``sync``
+    ingests transcripts on a cycle that measures 60-80s on a busy node and
+    stalls for several minutes behind a deep ``runtime_backfill``; a session
+    born inside that window is invisible to the one surface whose entire job is
+    to stop something that is running *right now*. The runtimes that record
+    their own pid answer the question directly, in single-digit milliseconds,
+    off a memoized directory scan.
+
+    Only runtimes in :data:`LIVE_PROBE_RUNTIMES` are listed. Runtimes resolved
+    by cwd+argv can be checked but not enumerated without a full process walk,
+    so they are deliberately absent rather than half-reported — a probe that
+    silently covered one runtime while implying it covered all of them would be
+    worse than one that states its coverage.
+
+    Returns one dict per live session: ``{runtime, session_id (NATIVE, no
+    ``<runtime>:`` head), pid, cwd, status, title, started_at, updated_at}``.
+    Never raises; an unreadable map yields ``[]``.
+    """
+    def _epoch_secs(value):
+        """claude_code writes these as epoch MILLISECONDS; the map stores them
+        raw so the pid-reuse guard's own fields stay untouched (#5543). Convert
+        here, at the one place that publishes them as timestamps."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if value <= 0:
+            return None
+        return value / 1000.0 if value > 1e12 else float(value)
+
+    out: List[Dict[str, Any]] = []
+    try:
+        m = claude_code_session_map()
+    except Exception:  # noqa: BLE001 — a probe must never break its caller
+        return out
+    for sid, rec in m.items():
+        try:
+            pid = int(rec.get("pid") or 0)
+        except (TypeError, ValueError):
+            continue
+        # A stale <pid>.json outlives the process it describes; listing a dead
+        # session would put a Kill button on nothing.
+        if pid <= 0 or not is_alive(pid):
+            continue
+        out.append({
+            "runtime": "claude_code",
+            "session_id": str(sid),
+            "pid": pid,
+            "cwd": rec.get("cwd") or "",
+            "status": str(rec.get("status") or "") or "running",
+            "title": str(rec.get("name") or ""),
+            "started_at": _epoch_secs(rec.get("started_at")),
+            "updated_at": _epoch_secs(rec.get("updated_at")),
+        })
     return out
 
 
