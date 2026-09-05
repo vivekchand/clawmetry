@@ -108,8 +108,28 @@ jobs:
       # of those drifted from the catalogue before this guard existed
       # (2026-08-15: catalogue 20, README 14, PyPI 12). setup.py derives the
       # PyPI summary; this keeps the rest honest.
-      - name: Runtime count matches the entitlement catalogue
+      # Also checks the chat-channel count against ALL_CHANNELS, which drifted
+      # the same way (2026-09-05: catalogue 23, CLAUDE.md/FLYWHEEL/AGENTS 21,
+      # PRD 22).
+      - name: Runtime and channel counts match the entitlement catalogue
         run: python3 scripts/sync_runtime_count.py --check
+
+      # docs/MODULE_MAP.md is generated from the source tree, because the
+      # hand-written inventories in CLAUDE.md and ARCHITECTURE.md drifted to
+      # the point of being misleading (2026-09-05: the route table listed 17
+      # of 70 modules and none of the 82 registered blueprints, so an agent
+      # went looking for features in dashboard.py that had moved out months
+      # earlier). Size bands are coarse so ordinary PRs do not trip this.
+      - name: Module map matches the source tree
+        run: python3 scripts/gen_module_map.py --check
+
+      # Named explicitly because this repo's CI runs FILE LISTS, not
+      # `pytest tests/`: a guard added without a line here runs in no job at
+      # all. Covers the half the --check above cannot: every blueprint
+      # dashboard.py registers is in the map, and CLAUDE.md / ARCHITECTURE.md
+      # name no module that has since moved or been deleted.
+      - name: Architecture docs name modules that exist
+        run: python3 -m pytest tests/test_module_map_drift.py -q
 
       # Acceptance-criteria traceability (FLYWHEEL.md 1g). Drift Bot asks "does
       # this diff contradict a Blueprint?"; it is a changed-code check and has
