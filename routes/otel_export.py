@@ -119,6 +119,7 @@ _OUTCOME_SEVERITY: dict[str, tuple[int, str]] = {
     "cognitive_loop": (17, "ERROR"),
     "tool_call_stuck": (17, "ERROR"),
     "ongoing": (5, "DEBUG"),
+    "waiting": (5, "DEBUG"),
 }
 
 

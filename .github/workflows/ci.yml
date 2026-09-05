@@ -404,6 +404,10 @@ jobs:
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
             tests/test_cohort_compare.py \
+            tests/test_outcome_classifier.py \
+            tests/test_session_live_state.py \
+            tests/test_outcome_trend.py \
+            tests/test_otel_export_sessions_shape.py \
             tests/test_query_contract_drift.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \

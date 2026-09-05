@@ -300,7 +300,7 @@ _INSIGHT_TEMPLATES: list[tuple[str, str, str, str]] = [
         FROM sessions
         WHERE last_active_at >= $since
           AND outcome IS NOT NULL
-          AND outcome NOT IN ('success', 'ongoing', 'unknown', '')
+          AND outcome NOT IN ('success', 'ongoing', 'waiting', 'unknown', '')
         GROUP BY runtime, outcome
         ORDER BY sessions DESC, cost DESC
         LIMIT 10

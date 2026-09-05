@@ -5269,7 +5269,16 @@ class LocalStore(TrailStoreMixin):
                 [session_id],
             )
             appr_rows = [{"id": a[0], "status": a[1]} for a in approvals]
-            outcome, conf = classify_session(evs, meta, approvals=appr_rows)
+            # Ask the process, not the transcript, whether this is running.
+            # ``ongoing``/``waiting`` are the only labels whose truth decays,
+            # and inferring them from "an event landed recently" is what let a
+            # dead session read "Still running" for nine hours (#5563).
+            # ``None`` means this node cannot tell for this runtime, and the
+            # classifier keeps its time heuristic — it must never be confused
+            # with "dead".
+            live = _probe_session_live(session_id, agent_type)
+            outcome, conf = classify_session(evs, meta, approvals=appr_rows,
+                                             live=live)
         except Exception:
             return (None, None)
         now_ms = int(time.time() * 1000)
@@ -19113,12 +19122,55 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
 _CLASSIFIER_FIX_EPOCH_MS = 1_786_838_400_000  # 2026-08-15T00:00:00Z
 _STALE_OUTCOMES = ("cognitive_loop", "tool_call_stuck", "stuck", "looping")
 
+# ``ongoing`` and ``waiting`` describe a PROCESS, so they expire on their own.
+# Every other label describes a transcript and reads the same tomorrow. Ten
+# seconds is short enough that the badge tracks the agent and long enough that
+# a burst of readers does not re-scan the same session once per request.
+_LIVE_LABEL_TTL_MS = 10_000
+_DECAYING_OUTCOMES = ("ongoing", "waiting")
+
+
+def _probe_session_live(session_id: str, agent_type: str = "openclaw"):
+    """This session's live process state, or ``None`` if unknowable here.
+
+    Thin, never-raising wrapper over ``process_control.session_live_state`` so
+    the store keeps working on an install where ``process_control`` is absent
+    or the probe throws — an unlabelled session is a smaller failure than a
+    store that cannot answer a query.
+    """
+    try:
+        from clawmetry import process_control as _pc
+        return _pc.session_live_state(agent_type, session_id)
+    except Exception:  # noqa: BLE001 — a probe must never break a read
+        return None
+
 
 def _is_stale_classification(row: dict[str, Any]) -> bool:
-    """True for a failure label written by the pre-fix classifier."""
-    if (row.get("outcome") or "") not in _STALE_OUTCOMES:
-        return False
+    """True when this row's stored label must be re-resolved before it is read.
+
+    Two independent reasons:
+
+    * The label is one of ``_DECAYING_OUTCOMES``. ``ongoing`` and ``waiting``
+      are claims about a running process; the moment it exits they are false,
+      and nothing writes to a finished session's transcript to trigger a
+      re-stamp. Before this, ``reclassify_session_outcome`` fired only on a
+      ``session.ended`` event — which the family runtimes never emit — so the
+      first label a Claude Code session ever got was also its last. Measured
+      on one node: 43 rows read "Still running", 3 of them were.
+    * The label is a failure written by the pre-2026-08-15 classifier, whose
+      failure branch fired on text similarity alone.
+    """
+    outcome = row.get("outcome") or ""
     ts = row.get("outcome_classified_at")
+    if outcome in _DECAYING_OUTCOMES:
+        if ts is None:
+            return True
+        try:
+            return (int(time.time() * 1000) - int(ts)) > _LIVE_LABEL_TTL_MS
+        except (TypeError, ValueError):
+            return True
+    if outcome not in _STALE_OUTCOMES:
+        return False
     if ts is None:
         return True
     try:

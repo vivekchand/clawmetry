@@ -2564,7 +2564,8 @@ async function loadOutcomeTile() {
     parts.push(pct + '% success');
     if (d.escalated > 0) parts.push(d.escalated + ' needed human');
     if (d.failed > 0) parts.push(d.failed + ' failed');
-    if (d.ongoing > 0) parts.push(d.ongoing + ' running');
+    if (d.ongoing > 0) parts.push(d.ongoing + ' working');
+    if (d.waiting > 0) parts.push(d.waiting + ' waiting on you');
     summaryEl.innerHTML = parts.map(function(p, i){
       // First chip = primary, success% gets the colored chip.
       var color = '';
@@ -3986,7 +3987,8 @@ function _cmOutcomeChip(outcome) {
   var map = {
     success:         { label: 'Succeeded',  color: 'var(--ok, #22c55e)' },
     escalated:       { label: 'Escalated',  color: 'var(--warn, #eab308)' },
-    ongoing:         { label: 'Ongoing',    color: 'var(--text-muted)' },
+    ongoing:         { label: 'Working',    color: '#3b82f6' },
+    waiting:         { label: 'Waiting on you', color: '#8b5cf6' },
     failed:          { label: 'Failed',     color: 'var(--err, #ef4444)' },
     tool_call_stuck: { label: 'Tool stuck', color: 'var(--err, #ef4444)' },
     cognitive_loop:  { label: 'Stuck in a loop', color: 'var(--err, #ef4444)' },

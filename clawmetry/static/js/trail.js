@@ -89,7 +89,7 @@
     return rt;
   }
 
-  // ── Outcome vocabulary (the six labels in clawmetry/outcome_classifier.py)
+  // ── Outcome vocabulary (the labels in clawmetry/outcome_classifier.py)
   // Colour + a plain-English sentence for each. Anything else is "unknown".
   var OUTCOMES = {
     success:         { color: '#22c55e', name: 'Finished',       key: 'success',         fb: 'It finished the task and stopped cleanly.' },
@@ -97,7 +97,13 @@
     escalated:       { color: '#f59e0b', name: 'Asked for help', key: 'escalated',       fb: 'It stopped to ask a person before going on.' },
     cognitive_loop:  { color: '#f97316', name: 'Went in circles', key: 'cognitive_loop', fb: 'It kept repeating itself without making progress.' },
     tool_call_stuck: { color: '#f97316', name: 'Got stuck',      key: 'tool_call_stuck', fb: 'A tool it called never came back.' },
-    ongoing:         { color: '#3b82f6', name: 'Still running',  key: 'ongoing',         fb: 'It is still working, or ended only moments ago.' }
+    // "Still running" and "Waiting on you" are the two labels that
+    // describe a live process rather than a finished transcript. Each is
+    // asserted from a probe of the actual pid, so neither may be softened
+    // into "or maybe it just ended" — that hedge is what let a session read
+    // "Still running" nine hours after its terminal closed.
+    ongoing:         { color: '#3b82f6', name: 'Still running',  key: 'ongoing',         fb: 'It is working right now.' },
+    waiting:         { color: '#8b5cf6', name: 'Waiting on you', key: 'waiting',         fb: 'It is open and idle at its prompt, waiting for you to say something.' }
   };
   function outcomeMeta(label) {
     var k = String(label || '').toLowerCase();
@@ -490,7 +496,7 @@
       '<div class="trail-prose">' + esc(m.explain) + '</div>' + legend());
   }
 
-  // Plain-English key to all six labels, collapsed by default.
+  // Plain-English key to every label, collapsed by default.
   function legend() {
     var rows = Object.keys(OUTCOMES).map(function (k) {
       var m = outcomeMeta(k);
