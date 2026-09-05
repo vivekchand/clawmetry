@@ -1681,18 +1681,34 @@ def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
             pid = int(pid)
         except (TypeError, ValueError):
             continue
-        # Prefer startedAt (an epoch, timezone-unambiguous) over procStart (a
-        # ctime string claude_code renders in UTC, which cannot be compared
-        # textually against local-time `ps -o lstart=` output on non-UTC hosts).
-        start: Any = rec.get("startedAt")
-        if isinstance(start, bool) or not isinstance(start, (int, float)) or start <= 0:
+        # `procStart` is the PROCESS's start time; `startedAt` is when
+        # claude_code wrote this session record, which is later by however long
+        # startup took (7s on the machine where this was found). The pid-reuse
+        # guard compares its recorded value against the live start time, so
+        # feeding it `startedAt` compares two different quantities and refuses
+        # EVERY pause/stop/kill with `start_mismatch` — the guard was doing its
+        # job on a number that was never the process start.
+        #
+        # This code preferred `startedAt` because `procStart` is a ctime string
+        # claude_code renders in UTC, which does not compare textually against
+        # local-time `ps -o lstart=` output. That comparison problem is real and
+        # already solved: `_start_tokens_equivalent` normalizes both to an
+        # instant and returns "verified_tz_normalized". Timezone ambiguity was
+        # the lesser risk; measuring the wrong event was the fatal one.
+        #
+        # With no usable `procStart`, record NOTHING rather than fall back to
+        # `startedAt`: `verify_pid(pid, None)` degrades to an honest liveness
+        # check, whereas a value guaranteed to mismatch refuses every action.
+        start: Any = rec.get("procStart")
+        if not isinstance(start, str) or not start.strip():
             start = None
-        elif start > 1e12:  # epoch in milliseconds
-            start = start / 1000.0
         out[str(sid)] = {
             "pid": pid,
             "cwd": rec.get("cwd"),
-            "procStart": start if start is not None else rec.get("procStart"),
+            "procStart": start,
+            # Kept for callers that want to know when the SESSION began; it is
+            # deliberately not the pid-reuse guard's input.
+            "started_at": rec.get("startedAt"),
             "status": rec.get("status"),
             "version": rec.get("version"),
         }
