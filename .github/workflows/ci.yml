@@ -453,6 +453,11 @@ jobs:
             tests/test_session_intent.py \
             tests/test_session_git_outcomes_route.py \
             tests/test_self_diagnostics.py \
+            tests/test_needs_you_matches_the_hero.py \
+            tests/test_live_session_truth.py \
+            tests/test_live_sessions_all_runtimes.py \
+            tests/test_needs_you_ui_contract.py \
+            tests/test_overview_claims_are_evidenced.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
