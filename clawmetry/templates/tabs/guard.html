@@ -40,6 +40,18 @@
 
   <div class="card">
     <div class="card-head">
+      <h3 data-i18n="guard.nondeterminism">Does it give the same answer twice?</h3>
+    </div>
+    <p class="section-sub" data-i18n="guard.nondeterminism_sub">
+      An agent can go wrong by answering the same request differently each time. ClawMetry can
+      measure this by replaying failed sessions, but only when you turn it on: each replay runs
+      your agent and costs money.
+    </p>
+    <div id="guard-nondeterminism-body" class="section-sub" style="margin:0"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
       <h3 data-i18n="guard.decisions">Recent decisions</h3>
     </div>
     <div id="guard-actions-body">
