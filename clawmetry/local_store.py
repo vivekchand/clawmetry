@@ -43,6 +43,7 @@ import inspect
 import json
 import logging
 import os
+import subprocess
 import sys
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
 from clawmetry import event_shape as _event_shape  # v15 typed event columns
@@ -150,6 +151,10 @@ try:
     AUTO_COMPACT_BACKUP_KEEP_DAYS = float(os.environ.get("CLAWMETRY_AUTO_COMPACT_BACKUP_KEEP_DAYS", "7"))
 except ValueError:
     AUTO_COMPACT_BACKUP_KEEP_DAYS = 7.0
+try:
+    AUTO_COMPACT_TIMEOUT_S = float(os.environ.get("CLAWMETRY_AUTO_COMPACT_TIMEOUT_S", "900"))
+except ValueError:
+    AUTO_COMPACT_TIMEOUT_S = 900.0
 # Last compaction outcome for this process (surfaced by ``health()``).
 _LAST_COMPACTION: dict[str, Any] = {}
 
@@ -338,13 +343,85 @@ def compact_store_file(db_path: Path, *, force: bool = False) -> dict[str, Any]:
         _LAST_COMPACTION["at"] = int(time.time() * 1000)
 
 
+_COMPACT_CHILD_CODE = (
+    "import json, sys\n"
+    "from pathlib import Path\n"
+    "from clawmetry import local_store as ls\n"
+    "print(json.dumps(ls.compact_store_file(Path(sys.argv[1]))))\n"
+)
+
+
+def _restore_after_failed_compaction(db_path: Path) -> str | None:
+    """Put the store back after a helper process died mid-compaction. The
+    swap is old -> ``.pre-compact`` then ``.compacting`` -> store, both atomic
+    renames, so the only bad state a crash can leave is "store missing,
+    backup present": move the backup back. A leftover ``.compacting`` file
+    is never a valid store and is removed. Returns a note for the log."""
+    tmp = db_path.with_name(db_path.name + ".compacting")
+    bak = _compaction_backup_path(db_path)
+    note = None
+    if not db_path.exists() and bak.exists():
+        os.replace(bak, db_path)
+        note = "restored the previous store file from the backup"
+    for leftover in (tmp, tmp.with_suffix(tmp.suffix + ".wal")):
+        try:
+            leftover.unlink()
+        except OSError:
+            pass
+    return note
+
+
+def compact_store_file_in_child(db_path: Path) -> dict[str, Any]:
+    """Run :func:`compact_store_file` in a helper process and report its
+    result. The rewrite is native DuckDB work (checkpoint, copy, verify) on a
+    file the daemon is about to trust for its whole life; a crash inside the
+    engine there would otherwise take the daemon down at startup, and under
+    launchd or systemd that is a restart loop. In a child, a crash or a hang
+    costs one log line, the store stays as it was, and the daemon boots."""
+    out: dict[str, Any] = {"ran": False, "path": str(db_path)}
+    env = dict(os.environ)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", _COMPACT_CHILD_CODE, str(db_path)],
+            capture_output=True, text=True, timeout=AUTO_COMPACT_TIMEOUT_S, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        note = _restore_after_failed_compaction(db_path)
+        out["reason"] = f"helper timed out after {AUTO_COMPACT_TIMEOUT_S:.0f}s"
+        log.error("local store: compaction helper timed out; %s", note or "store untouched")
+        return out
+    except Exception as exc:
+        out["reason"] = f"helper could not start: {str(exc)[:160]}"
+        log.exception("local store: compaction helper could not start")
+        return out
+    if proc.returncode != 0:
+        note = _restore_after_failed_compaction(db_path)
+        tail = (proc.stderr or "").strip().splitlines()[-3:]
+        out["reason"] = f"helper exited {proc.returncode}"
+        log.error(
+            "local store: compaction helper exited %s (%s); %s",
+            proc.returncode, " | ".join(tail)[:300], note or "store untouched",
+        )
+        return out
+    line = (proc.stdout or "").strip().splitlines()
+    try:
+        out = json.loads(line[-1]) if line else out
+    except ValueError:
+        out["reason"] = "helper produced no result"
+    return out
+
+
 def _maybe_compact_on_startup() -> None:
-    """Writer-startup hook: prune an old backup, then compact if warranted."""
+    """Writer-startup hook: prune an old backup, then compact (in a helper
+    process) if warranted. Records the outcome for ``health()``."""
     if not AUTO_COMPACT_ENABLED:
         return
     try:
         _prune_compaction_backup(DB_PATH)
-        compact_store_file(DB_PATH)
+        out = compact_store_file_in_child(DB_PATH)
+        _LAST_COMPACTION.clear()
+        _LAST_COMPACTION.update(out)
+        _LAST_COMPACTION.setdefault("at", int(time.time() * 1000))
     except Exception:
         log.exception("local store: startup compaction check failed (continuing)")
 
@@ -2302,6 +2379,73 @@ def _apply_migrations(conn) -> None:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
     if "policy_actions" in existing_tables:
         _migrate_policy_actions_ladder(conn)
+    if "session_context" in existing_tables:
+        _migrate_session_context_runtime(conn)
+
+
+def _migrate_session_context_runtime(conn) -> None:
+    """Relabel Inputs & context rows stored under the wrong runtime.
+
+    Until 2026-09-04 ``session_context.agent_type`` came from the event's
+    ``agent_type`` column, which the family ingest never sets — so every
+    Claude Code / Codex / Cursor / … row landed as ``openclaw`` while its
+    ``session_id`` said otherwise. ``/api/sessions/<id>/context?runtime=X``
+    filters on that column, so the "What the agent was given" panel read
+    "Nothing captured for this session yet" on sessions whose inputs were
+    sitting in the table the whole time.
+
+    The prefix is the authority here (see
+    ``waste_flags.runtime_from_session_id``): a family session id is
+    ``<runtime>:<id>``, and OpenClaw's own ids carry no prefix, so this
+    cannot touch a correctly-labelled OpenClaw row. Rows whose corrected
+    label would collide with a row already written under the new code are
+    dropped rather than merged — they are the same facts, and the survivor
+    is the one the current ingest wrote.
+
+    The same pass heals ``turns`` counts the old ingest inflated. ``turns``
+    used to advance on every re-ingest, and the family ingest re-reads a whole
+    session each time it grows, so a row whose ``first_ts`` equals its
+    ``last_ts`` and yet claims several turns was counted, not observed: the
+    fact never recurred at a later timestamp. Those go back to 1, the only
+    number the stored evidence supports. A genuine recurrence has a later
+    ``last_ts`` and is left alone.
+
+    Idempotent: a second run finds nothing left to move. Failure is
+    contained by the caller, which logs and continues.
+    """
+    conn.execute("""
+        UPDATE session_context SET turns = 1
+        WHERE turns > 1 AND last_ts = first_ts
+    """)
+    mislabelled = conn.execute("""
+        SELECT COUNT(*) FROM session_context
+        WHERE agent_type = 'openclaw'
+          AND session_id LIKE '%:%'
+          AND split_part(session_id, ':', 1) <> ''
+    """).fetchone()
+    if not mislabelled or not mislabelled[0]:
+        return
+    # Drop the stale copy wherever the correctly-labelled row already exists,
+    # so the UPDATE below can never violate the primary key.
+    conn.execute("""
+        DELETE FROM session_context AS old
+        WHERE old.agent_type = 'openclaw'
+          AND old.session_id LIKE '%:%'
+          AND EXISTS (
+              SELECT 1 FROM session_context AS cur
+              WHERE cur.agent_type = split_part(old.session_id, ':', 1)
+                AND cur.session_id = old.session_id
+                AND cur.kind = old.kind
+                AND cur.sha256 = old.sha256
+          )
+    """)
+    conn.execute("""
+        UPDATE session_context
+        SET agent_type = split_part(session_id, ':', 1)
+        WHERE agent_type = 'openclaw'
+          AND session_id LIKE '%:%'
+          AND split_part(session_id, ':', 1) <> ''
+    """)
 
 
 def _migrate_policy_actions_ladder(conn) -> None:
@@ -14024,7 +14168,15 @@ class LocalStore(TrailStoreMixin):
         Keyed on (agent_type, session_id, kind, sha256). A row whose sha is
         already present bumps ``turns`` and ``last_ts`` and keeps the first
         stored content: the same system prompt on turn 40 is one fact seen 40
-        times, not 40 rows. Returns the number of rows written."""
+        times, not 40 rows. Returns the number of rows written.
+
+        ``turns`` only advances on a STRICTLY LATER ``last_ts``. The family
+        ingest re-reads a session's whole event list every time the session
+        grows, so an unconditional bump counted re-ingests, not turns: a
+        Claude Code session whose single context event was read four times
+        claimed "seen on 4 turns" when the runtime emitted it once. Replaying
+        the same timestamp is the same occurrence; only a new one is a new
+        turn."""
         if self._read_only:
             raise RuntimeError("local_store: ingest_session_context() on read-only store")
         n = 0
@@ -14050,7 +14202,9 @@ class LocalStore(TrailStoreMixin):
                         content, summary, first_ts, last_ts, turns, source, created_at
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     ON CONFLICT (agent_type, session_id, kind, sha256) DO UPDATE SET
-                        turns    = session_context.turns + 1,
+                        turns    = session_context.turns + CASE
+                                        WHEN excluded.last_ts > session_context.last_ts
+                                        THEN 1 ELSE 0 END,
                         last_ts  = CASE WHEN excluded.last_ts > session_context.last_ts
                                         THEN excluded.last_ts ELSE session_context.last_ts END,
                         first_ts = CASE WHEN excluded.first_ts < session_context.first_ts
