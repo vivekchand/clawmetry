@@ -22,6 +22,17 @@
     </div>
   </div>
 
+  <!-- WO-62 Signal shifts: one issue per (signal, runtime) whose 24h rate
+       left the band learned from its own 28 days. Shown only when one exists;
+       the empty state lives in the headline card below. -->
+  <div class="sig-card sig-issues-card" id="signals-issues-card" style="display:none;">
+    <div class="sig-card-head">
+      <h3 data-i18n="signals.issues_title">Open issues</h3>
+      <span class="sig-muted" id="signals-issues-note"></span>
+    </div>
+    <div id="signals-issues-body"></div>
+  </div>
+
   <div class="sig-card sig-headline-card">
     <div class="sig-headline" id="signals-headline" data-i18n="signals.loading">Loading signals...</div>
     <div class="sig-headline-sub" id="signals-headline-sub"></div>
@@ -54,5 +65,34 @@
     <div id="signals-coverage-body">
       <div class="sig-empty" data-i18n="signals.loading">Loading signals...</div>
     </div>
+  </div>
+
+  <!-- WO-62 Briefs: a saved question, a schedule and a channel. The daemon
+       runs it and posts the narrated answer (or the failure) with a link back. -->
+  <div class="sig-card" id="signals-briefs-card">
+    <div class="sig-card-head">
+      <h3 data-i18n="signals.briefs_title">Briefs</h3>
+      <span class="sig-muted" id="signals-briefs-note"></span>
+      <button class="sig-btn sig-btn-sm" id="signals-briefs-add" onclick="signalsToggleBriefForm()" data-i18n="signals.briefs_add">Add a brief</button>
+    </div>
+    <p class="sig-sub" data-i18n="signals.briefs_note">Save a question with a schedule and a channel. The answer arrives as a message, so you read it instead of asking it. Briefs are off until you switch one on.</p>
+    <div id="signals-briefs-body">
+      <div class="sig-empty" data-i18n="signals.loading">Loading signals...</div>
+    </div>
+    <form class="sig-brief-form" id="signals-brief-form" style="display:none;" onsubmit="return signalsSaveBrief(event)">
+      <label><span data-i18n="signals.brief_title">Title</span>
+        <input type="text" id="signals-brief-title" maxlength="200" required placeholder="What got more expensive this week"></label>
+      <label><span data-i18n="signals.brief_question">Question</span>
+        <input type="text" id="signals-brief-question" maxlength="2000" required placeholder="What got more expensive this week and why?"></label>
+      <label><span data-i18n="signals.brief_schedule">Schedule (cron, five fields)</span>
+        <input type="text" id="signals-brief-cron" maxlength="64" required value="0 9 * * 1" placeholder="0 9 * * 1"></label>
+      <label><span data-i18n="signals.brief_channel">Channel</span>
+        <select id="signals-brief-channel"></select></label>
+      <div class="sig-brief-form-actions">
+        <button type="submit" class="sig-btn" data-i18n="signals.brief_save">Save brief</button>
+        <button type="button" class="sig-btn sig-btn-sm" onclick="signalsToggleBriefForm(false)" data-i18n="signals.close">Close</button>
+        <span class="sig-muted" id="signals-brief-form-msg"></span>
+      </div>
+    </form>
   </div>
 </div>
