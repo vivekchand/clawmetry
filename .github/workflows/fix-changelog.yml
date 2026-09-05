@@ -1,4 +1,5 @@
 name: Fix CHANGELOG merge conflict
+# run-id: diag-1
 on:
   push:
     branches: ['release/hook-collision']
