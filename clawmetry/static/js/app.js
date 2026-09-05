@@ -3608,107 +3608,11 @@ async function loadSkillFile(skillName, filePath) {
   }
 }
 
-var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
-var _moonSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-
-function toggleTheme() {
-  const body = document.body;
-  const toggle = document.getElementById('theme-toggle-btn');
-  const isLight = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') !== 'dark';
-  
-  if (isLight) {
-    body.setAttribute('data-theme', 'dark');
-    toggle.innerHTML = _sunSVG;
-    toggle.title = 'Switch to light theme';
-    localStorage.setItem('openclaw-theme', 'dark');
-  } else {
-    body.removeAttribute('data-theme');
-    toggle.innerHTML = _moonSVG;
-    toggle.title = 'Switch to dark theme';
-    localStorage.setItem('openclaw-theme', 'light');
-  }
-}
-
-function initTheme() {
-  // Dark is the default, but a saved light preference is honoured again
-  // now that the light palette is first-class (UI reskin, 2026-09).
-  let savedTheme = 'dark';
-  try { savedTheme = localStorage.getItem('openclaw-theme') || 'dark'; } catch (e) {}
-  const body = document.body;
-  const toggle = document.getElementById('theme-toggle-btn');
-  
-  if (savedTheme === 'dark') {
-    body.setAttribute('data-theme', 'dark');
-    if (toggle) { toggle.innerHTML = _sunSVG; toggle.title = 'Switch to light theme'; }
-  } else {
-    body.removeAttribute('data-theme');
-    if (toggle) { toggle.innerHTML = _moonSVG; toggle.title = 'Switch to dark theme'; }
-  }
-}
-
-// === Zoom Controls ===
-let currentZoom = 1.0;
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 2.0;
-const ZOOM_STEP = 0.1;
-
-function initZoom() {
-  const savedZoom = localStorage.getItem('openclaw-zoom');
-  if (savedZoom) {
-    currentZoom = parseFloat(savedZoom);
-  }
-  applyZoom();
-}
-
-function applyZoom() {
-  const wrapper = document.getElementById('zoom-wrapper');
-  const levelDisplay = document.getElementById('zoom-level');
-  
-  if (wrapper) {
-    wrapper.style.transform = `scale(${currentZoom})`;
-  }
-  if (levelDisplay) {
-    levelDisplay.textContent = Math.round(currentZoom * 100) + '%';
-  }
-  
-  // Save to localStorage
-  localStorage.setItem('openclaw-zoom', currentZoom.toString());
-}
-
-function zoomIn() {
-  if (currentZoom < MAX_ZOOM) {
-    currentZoom = Math.min(MAX_ZOOM, currentZoom + ZOOM_STEP);
-    applyZoom();
-  }
-}
-
-function zoomOut() {
-  if (currentZoom > MIN_ZOOM) {
-    currentZoom = Math.max(MIN_ZOOM, currentZoom - ZOOM_STEP);
-    applyZoom();
-  }
-}
-
-function resetZoom() {
-  currentZoom = 1.0;
-  applyZoom();
-}
-
-// Keyboard shortcuts for zoom
-document.addEventListener('keydown', function(e) {
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-    if (e.key === '=' || e.key === '+') {
-      e.preventDefault();
-      zoomIn();
-    } else if (e.key === '-') {
-      e.preventDefault();
-      zoomOut();
-    } else if (e.key === '0') {
-      e.preventDefault();
-      resetZoom();
-    }
-  }
-});
+// Theme toggle and in-page zoom controls were removed in the 2026-09 header
+// cleanup. The dashboard is dark-only (<body data-theme="dark"> in the
+// template), and page zoom is the browser's job -- applyZoom() used to set a
+// `transform: scale()` on #zoom-wrapper even at 100%, which turned the wrapper
+// into a containing block for every `position: fixed` descendant (issue #1717).
 
 function timeAgo(ms) {
   if (!ms) return 'never';
@@ -28784,8 +28688,6 @@ function _hideCloudIrrelevantNav() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  initTheme();
-  initZoom();
   // Overview is the default tab
   initOverviewFlow();
   initOverviewCompClickHandlers();
