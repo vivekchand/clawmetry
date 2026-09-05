@@ -414,6 +414,7 @@ jobs:
             tests/test_ingest_upsert_dedupe.py \
             tests/test_store_range_indexes_dropped.py \
             tests/test_store_startup_compaction.py \
+            tests/test_store_phase_context_dedupe.py \
             tests/test_launchd_dashboard_runs_waitress.py \
             tests/test_scan_read_cache.py \
             tests/test_cache_push_gating.py \
