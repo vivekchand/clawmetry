@@ -126,6 +126,7 @@ def _guarded(action_name: str, runtime: str, session_id: str, cwd: str,
     res = fn(pid)
     res.setdefault("session_id", session_id)
     res["guard"] = reason
+    res["resolved_pid"] = pid
     res["resolved_cwd"] = info.get("cwd")
     return res
 
@@ -1529,7 +1530,8 @@ def graceful_kill(pid: int, runtime: str = "",
     if not _CONTROLLABLE_PLATFORM:
         return _result(False, "graceful_kill", pid, runtime, "unsupported_platform")
     if not is_alive(pid):
-        return _result(True, "graceful_kill", pid, runtime, "already_dead")
+        return _result(True, "graceful_kill", pid, runtime, "already_dead",
+                       mechanism="none", tree=[], escalated=False)
     if _IS_WINDOWS:
         return _win_graceful_kill(pid, runtime, grace_secs)
 
@@ -1546,23 +1548,31 @@ def graceful_kill(pid: int, runtime: str = "",
 
     if not is_alive(pid):
         # Parent gone. Reap any descendant that lingered (best-effort SIGKILL).
+        reaped = []
         for p in tree:
             if p != pid and is_alive(p):
                 _signal_pid(p, signal.SIGKILL)
-        return _result(True, "graceful_kill", pid, runtime, "terminated")
+                reaped.append(p)
+        return _result(True, "graceful_kill", pid, runtime, "terminated",
+                       mechanism="posix_sigterm", tree=tree, escalated=False,
+                       sigkilled=reaped)
 
     # Still alive after grace — hard kill the whole tree, leaves first.
     killed_any = False
+    sigkilled = []
     for p in tree:  # process_set is children-first already
         if is_alive(p):
-            killed_any = _signal_pid(p, signal.SIGKILL) or killed_any
+            if _signal_pid(p, signal.SIGKILL):
+                sigkilled.append(p)
+                killed_any = True
     # brief bounded confirm
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and is_alive(pid):
         time.sleep(0.1)
     detail = "killed" if not is_alive(pid) else "kill_signaled_still_present"
     return _result(not is_alive(pid) or killed_any, "graceful_kill", pid,
-                   runtime, detail)
+                   runtime, detail, mechanism="posix_sigterm_then_sigkill",
+                   tree=tree, escalated=True, sigkilled=sigkilled)
 
 
 def pause(pid: int, runtime: str = "") -> Dict[str, Any]:
@@ -2247,6 +2257,181 @@ def native_session_id(runtime: str, session_id: str) -> str:
     if rt and sid.lower().startswith(rt + ":"):
         return sid[len(rt) + 1:]
     return sid
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Preflight — what a button press would actually do, before it does it
+#
+# Pause / Stop / Kill send real signals to a real process tree, and Kill is
+# irreversible. An operator is entitled to see the target and the plan BEFORE
+# committing, not a one-line "Kill this agent?" and a shrug afterwards. This
+# function performs the read-only half of ``_guarded`` — resolve, verify, walk
+# the tree — and sends nothing.
+# ──────────────────────────────────────────────────────────────────────────
+
+# What each action does, in the order it does it. These strings are the plan the
+# UI shows; they must stay in step with the helper named beside them, which is
+# why they live next to the code rather than in the template.
+_ACTION_PLANS = {
+    "pause": ("pause", False,
+              "SIGSTOP every process group owned exclusively by this session's "
+              "tree, then SIGSTOP any remaining process individually. The agent "
+              "freezes mid-work and holds that state until Resume."),
+    "resume": ("resume", False,
+               "SIGCONT the same set in reverse order (parent group first), so "
+               "the agent continues from exactly where Pause froze it."),
+    "stop": ("stop_turn", False,
+             "SIGINT the main pid only: the same thing as pressing Ctrl-C in that "
+             "terminal. Cancels the current turn; the process stays up. "
+             "Child tool shells are deliberately not signalled."),
+    "kill": ("graceful_kill", True,
+             "SIGTERM the main pid, wait up to {grace:.0f}s for it to exit, then "
+             "SIGKILL every process in the tree if it is still alive. The "
+             "session ends and cannot be un-killed."),
+}
+
+
+def _plan_steps(action: str, pid: int, tree: List[int],
+                grace_secs: float = _DEFAULT_GRACE_SECS) -> List[str]:
+    """The ordered signal steps for ``action``, named with the real pids.
+
+    Windows sends different primitives for the same four buttons, and one of
+    them (stop) cannot be aimed at a single pid at all — so the plan says so
+    rather than describing POSIX behaviour the operator will not get.
+    """
+    others = [p for p in tree if p != pid]
+    if _IS_WINDOWS:
+        if action == "pause":
+            return [f"NtSuspendProcess on pid {pid}"] + \
+                   [f"NtSuspendProcess on child pid {p}" for p in others]
+        if action == "resume":
+            return [f"NtResumeProcess on pid {pid}"] + \
+                   [f"NtResumeProcess on child pid {p}" for p in others]
+        if action == "stop":
+            return ["Send a console Ctrl-C from a detached helper. Windows "
+                    "cannot aim Ctrl-C at one pid: it reaches every process "
+                    f"sharing pid {pid}'s console."]
+        return [f"taskkill /T /PID {pid} (posts a close to the tree)",
+                f"TerminateProcess on any of the {len(tree)} processes that survive"]
+    if action == "pause":
+        return [f"SIGSTOP the process groups owned by this tree ({len(tree)} "
+                f"process{'es' if len(tree) != 1 else ''}, main pid {pid})",
+                "SIGSTOP individually any process in a group shared with "
+                "something outside this session"]
+    if action == "resume":
+        return [f"SIGCONT the same {len(tree)} process"
+                f"{'es' if len(tree) != 1 else ''}, parent group first"]
+    if action == "stop":
+        return [f"SIGINT pid {pid} only"] + (
+            [f"Leave the {len(others)} child process"
+             f"{'es' if len(others) != 1 else ''} running"] if others else [])
+    return [f"SIGTERM pid {pid}",
+            f"Wait up to {grace_secs:.0f}s for it to exit",
+            f"If it is still alive, SIGKILL all {len(tree)} process"
+            f"{'es' if len(tree) != 1 else ''} in the tree, children first"]
+
+
+def control_preflight(runtime: str, session_id: str = "", cwd: str = "",
+                      action: str = "kill") -> Dict[str, Any]:
+    """What pressing this button would do. Sends nothing; never raises.
+
+    Returns ``{ok, action, pid, cwd, command, tree, plan, steps, guard,
+    reversible, blocked_reason}``. ``ok`` is False when the action would be
+    refused, and ``blocked_reason`` then says why — the same verdict the
+    actuator would reach, computed without touching the process.
+    """
+    act = (action or "").strip().lower()
+    rt = (runtime or "").strip().lower()
+    helper, destructive, plan = _ACTION_PLANS.get(
+        act, ("", False, "Unknown action."))
+    out: Dict[str, Any] = {
+        "ok": False, "action": act, "runtime": rt,
+        "session_id": session_id, "helper": helper,
+        "plan": plan.format(grace=_DEFAULT_GRACE_SECS),
+        "destructive": destructive, "reversible": act == "pause",
+        "pid": None, "cwd": "", "command": "", "tree": [], "processes": [],
+        "steps": [], "guard": "", "blocked_reason": "",
+    }
+    if not helper:
+        out["blocked_reason"] = "unknown action"
+        return out
+
+    # OpenClaw does not go through the signal helpers at all: stop/kill are a
+    # gateway task cancel and pause is an advisory flag file. Saying "SIGTERM
+    # pid N" here would describe a mechanism that is never used.
+    if rt == "openclaw":
+        cap = openclaw_pause_capability()
+        if act in ("pause", "resume"):
+            out.update({
+                "ok": bool(cap["effective"]),
+                "mechanism": cap["mechanism"],
+                "plan": cap["detail"],
+                "steps": ["Write the HITL pause flag file for this session "
+                          "(clawmetry home, hitl/pause_ plus the session id)",
+                          "The enforcement proxy reads that file and refuses "
+                          "further LLM calls for this session"],
+                "blocked_reason": "" if cap["effective"] else cap["detail"],
+            })
+            return out
+        out.update({
+            "ok": True, "mechanism": "openclaw_gateway_task_cancel",
+            "plan": "Ask the OpenClaw gateway to cancel this session's task. "
+                    "No signal is sent to any process.",
+            "steps": ["Write the HITL pause flag for this session",
+                      "Send a task-cancel RPC to the OpenClaw gateway"],
+        })
+        return out
+
+    support = runtime_control_support(rt, session_id, cwd)
+    if act not in (support.get("actions") or []):
+        out["blocked_reason"] = (support.get("reason")
+                                 or f"{act} is not available for {rt}")
+        out["state"] = support.get("state", "unknown")
+        return out
+
+    info = resolve_session(rt, session_id, cwd)
+    if not info.get("ok"):
+        out["blocked_reason"] = str(info.get("reason") or "unresolved")
+        out["state"] = support.get("state", "unknown")
+        return out
+
+    pid = int(info.get("pid") or 0)
+    ok, reason = verify_pid(pid, info.get("recorded_start"))
+    out["guard"] = reason
+    out["pid"] = pid
+    out["cwd"] = str(info.get("cwd") or cwd or "")
+    if not ok:
+        # The pid-reuse guard would refuse. Say so BEFORE the operator commits,
+        # instead of after: this is the check that stops a recycled pid from
+        # being killed in place of the agent that used to own it.
+        out["blocked_reason"] = f"pid_guard_refused:{reason}"
+        return out
+
+    try:
+        argv = _proc_cmdline(pid)
+    except Exception:  # noqa: BLE001
+        argv = []
+    out["command"] = " ".join(argv)[:300]
+
+    try:
+        tree = process_set(pid)
+    except Exception:  # noqa: BLE001 — the plan is still worth showing
+        tree = [pid]
+    out["tree"] = tree
+    # A short description per process so "kills 7 processes" is inspectable
+    # rather than a number to be taken on faith. Bounded: a runaway tree must
+    # not turn a confirmation dialog into a process listing.
+    procs = []
+    for p in tree[:25]:
+        try:
+            cmd = " ".join(_proc_cmdline(p))[:160]
+        except Exception:  # noqa: BLE001
+            cmd = ""
+        procs.append({"pid": p, "command": cmd, "main": p == pid})
+    out["processes"] = procs
+    out["steps"] = _plan_steps(act, pid, tree)
+    out["ok"] = True
+    return out
 
 
 def resolve_session(runtime: str, session_id: str = "",

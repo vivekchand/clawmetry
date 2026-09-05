@@ -31630,22 +31630,198 @@ function guardSetBadge(n) {
   else { b.style.display = 'none'; }
 }
 
+var GUARD_VERB = { kill: 'Kill', stop: 'Stop', pause: 'Pause', resume: 'Resume' };
+
+// The session the open modal is about. Held here rather than on the confirm
+// button so a re-render of the table underneath cannot change what a click on
+// "Kill" is about to signal.
+var _guardPending = null;
+
+// Pause / Stop / Kill signal real processes and Kill cannot be undone. Asking
+// "Kill this agent?" and then reporting one word made the most dangerous
+// control in the product the least legible one, so the flow is now:
+//   1. ask the server what this would do  (/api/guard/control/preflight)
+//   2. show the operator the target, the process tree and the signal plan
+//   3. on confirm, run it and render the step-by-step record it returns
+// Nothing is sent to any process until step 3.
 function guardControl(sessionId, runtime, cwd, action) {
-  var verb = action === 'kill' ? 'Kill' : (action === 'stop' ? 'Stop' : 'Pause');
-  if (action !== 'pause' &&
-      !confirm(verb + ' this agent?\n\n' + sessionId + '\n\nThis signals the real process.')) {
+  _guardPending = { session_id: sessionId, runtime: runtime, cwd: cwd, action: action };
+  var verb = GUARD_VERB[action] || action;
+  guardControlOpen(verb + ' this agent?',
+    '<div class="empty-state">Checking what this would do...</div>', '');
+  fetch('/api/guard/control/preflight', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_guardPending)
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    guardRenderPreflight(d || {}, verb);
+  }).catch(function () {
+    // A preflight that cannot run must not block the control: say the preview
+    // is unavailable and let the operator decide with what they do know.
+    guardControlOpen(verb + ' this agent?',
+      '<p class="guard-modal-warn">The preview could not be loaded, so what ' +
+      'follows is unverified. ' + guardEsc(verb) + ' signals the real process.</p>' +
+      guardIdBlock(_guardPending),
+      verb + ' anyway');
+  });
+}
+
+function guardIdBlock(p) {
+  return '<dl class="guard-facts">' +
+    '<dt>Session</dt><dd><code>' + guardEsc(p.session_id) + '</code></dd>' +
+    '<dt>Runtime</dt><dd>' + guardEsc(p.runtime || 'unknown') + '</dd>' +
+    '</dl>';
+}
+
+// What the server says this button would do. Every number here is measured on
+// this node right now — the pid tree in particular, because "Kill" ending nine
+// processes instead of one is exactly the surprise this dialog exists to remove.
+function guardRenderPreflight(d, verb) {
+  var p = _guardPending || {};
+  var html = guardIdBlock(p);
+
+  if (d.blocked_reason) {
+    html += '<p class="guard-modal-warn">This action would be refused: ' +
+      guardEsc(d.blocked_reason) + '</p>';
+    guardControlOpen(verb + ' this agent?', html, '');
     return;
   }
+
+  html += '<dl class="guard-facts">';
+  if (d.pid) html += '<dt>Process</dt><dd><code>pid ' + guardEsc(d.pid) + '</code>' +
+    (d.command ? ' <span class="muted">' + guardEsc(d.command) + '</span>' : '') + '</dd>';
+  if (d.cwd) html += '<dt>Working dir</dt><dd><code>' + guardEsc(d.cwd) + '</code></dd>';
+  if (d.guard) html += '<dt>Pid-reuse guard</dt><dd>' + guardEsc(d.guard) +
+    ' <span class="muted">(confirms this pid is still the same process, not a recycled one)</span></dd>';
+  html += '</dl>';
+
+  if (d.plan) html += '<p class="guard-modal-plan">' + guardEsc(d.plan) + '</p>';
+
+  if (d.steps && d.steps.length) {
+    html += '<h4>What will happen, in order</h4><ol class="guard-steps">';
+    d.steps.forEach(function (s) { html += '<li>' + guardEsc(s) + '</li>'; });
+    html += '</ol>';
+  }
+
+  if (d.processes && d.processes.length) {
+    html += '<h4>' + guardEsc(d.tree_size || d.processes.length) +
+      ' process' + ((d.tree_size || d.processes.length) === 1 ? '' : 'es') +
+      ' in this session\u2019s tree</h4><ul class="guard-tree">';
+    d.processes.forEach(function (pr) {
+      html += '<li><code>' + guardEsc(pr.pid) + '</code> ' +
+        (pr.main ? '<span class="pill">main</span> ' : '') +
+        '<span class="muted">' + guardEsc(pr.command || 'unknown command') +
+        '</span></li>';
+    });
+    if (d.tree_size > d.processes.length) {
+      html += '<li class="muted">and ' + guardEsc(d.tree_size - d.processes.length) +
+        ' more</li>';
+    }
+    html += '</ul>';
+  }
+
+  if (d.destructive) {
+    html += '<p class="guard-modal-warn">This cannot be undone. The session ends.</p>';
+  } else if (d.reversible) {
+    html += '<p class="muted">Reversible: Resume continues the agent from here.</p>';
+  }
+  guardControlOpen(verb + ' this agent?', html, verb);
+}
+
+// Run it, then show what the server actually did rather than an alert box.
+function guardControlRun() {
+  var p = _guardPending;
+  if (!p) return;
+  var verb = GUARD_VERB[p.action] || p.action;
+  var go = document.getElementById('guard-control-go');
+  if (go) { go.disabled = true; go.textContent = verb + 'ing...'; }
   fetch('/api/guard/control', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, runtime: runtime, cwd: cwd, action: action })
+    body: JSON.stringify(p)
   }).then(function (r) { return r.json(); }).then(function (d) {
-    if (!d || !d.ok) {
-      alert(verb + ' did not succeed: ' + ((d && d.detail) || 'unknown reason'));
-    }
+    guardRenderOutcome(d || {}, verb);
     loadGuardSessions();
-  }).catch(function () { alert(verb + ' request failed.'); });
+  }).catch(function () {
+    guardRenderOutcome({ ok: false, detail: 'the request did not reach the server' }, verb);
+  });
+}
+
+function guardRenderOutcome(d, verb) {
+  var html = '<p class="' + (d.ok ? 'guard-modal-ok' : 'guard-modal-warn') + '">' +
+    guardEsc(verb) + (d.ok ? ' completed.' : ' did not succeed.') +
+    (d.detail ? ' <span class="muted">' + guardEsc(d.detail) + '</span>' : '') +
+    '</p>';
+  // An advisory result is the one an operator most needs spelled out: the
+  // request succeeded and the agent is still running.
+  if (d.advisory_only) {
+    html += '<p class="guard-modal-warn">Advisory only \u2014 nothing on this ' +
+      'node enforces it, so the agent keeps running.' +
+      (d.note ? ' ' + guardEsc(d.note) : '') + '</p>';
+  }
+  if (d.trace && d.trace.length) {
+    html += '<h4>What was done</h4><ol class="guard-steps guard-trace">';
+    d.trace.forEach(function (s) {
+      html += '<li class="' + (s.ok ? 'ok' : 'bad') + '">' +
+        '<span class="guard-trace-mark">' + (s.ok ? '\u2713' : '\u2717') + '</span> ' +
+        guardEsc(s.step) +
+        (s.detail ? ' <span class="muted">' + guardEsc(s.detail) + '</span>' : '') +
+        '</li>';
+    });
+    html += '</ol>';
+  } else {
+    html += '<p class="muted">The server returned no step record for this action.</p>';
+  }
+  if (d.mechanism) {
+    html += '<p class="muted">Mechanism: <code>' + guardEsc(d.mechanism) + '</code></p>';
+  }
+  guardControlOpen(verb + (d.ok ? ' \u2014 done' : ' \u2014 failed'), html, '');
+}
+
+// Open (or re-render) the modal. An empty `confirmLabel` means "nothing left to
+// confirm": the footer collapses to a single Close, which is the state both the
+// outcome and a blocked preflight land in.
+function guardControlOpen(title, bodyHtml, confirmLabel) {
+  var modal = document.getElementById('guard-control-modal');
+  if (!modal) return;
+  var h = document.getElementById('guard-control-title');
+  var body = document.getElementById('guard-control-body');
+  var go = document.getElementById('guard-control-go');
+  var cancel = document.getElementById('guard-control-cancel');
+  if (h) h.textContent = title;
+  if (body) body.innerHTML = bodyHtml;
+  if (go) {
+    go.disabled = false;
+    go.hidden = !confirmLabel;
+    go.textContent = confirmLabel || '';
+    go.onclick = confirmLabel ? guardControlRun : null;
+    // Kill reads as destructive before it is pressed, here as in the table.
+    var act = (_guardPending || {}).action;
+    go.className = 'btn btn-sm ' + (act === 'kill' ? 'btn-danger' : 'btn-primary');
+  }
+  if (cancel) cancel.textContent = confirmLabel ? 'Cancel' : 'Close';
+  if (!modal.open) {
+    // showModal() puts it in the top layer (see the note in guard.html) and
+    // brings Esc + focus trapping. `cancel` fires on Esc; clear the pending
+    // session there too so a dismissed dialog leaves nothing armed.
+    if (typeof modal.showModal === 'function') {
+      modal.addEventListener('cancel', function () { _guardPending = null; },
+                             { once: true });
+      modal.showModal();
+    } else {
+      modal.setAttribute('open', '');  // very old browser: inline, still legible
+    }
+  }
+  if (go && confirmLabel) go.focus();
+}
+
+function guardControlClose() {
+  var modal = document.getElementById('guard-control-modal');
+  if (modal) {
+    if (typeof modal.close === 'function' && modal.open) modal.close();
+    else modal.removeAttribute('open');
+  }
+  _guardPending = null;
 }
 
 function loadGuardPolicies() {
