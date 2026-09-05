@@ -4,6 +4,10 @@
 - **Why:** 0.12.811 shipped the store compaction (#5503) running inside the daemon process at startup. A torn copy of a live store segfaulted Python inside DuckDB's CHECKPOINT during release verification; a daemon never sees a torn file at its own start, but a native crash in that path would restart-loop the daemon with no traceback. #5519 moves the rewrite into a helper process with a timeout and rolls back a half-finished swap. Every node auto-updates, so this should reach them before the next restart cycle.
 - **What:** this release carries #5519. Daemon-side change; the cloud pin follows automatically.
 - **Verified:** #5519's tests ran green in CI before merge (real helper path, simulated crash mid-swap, simulated timeout).
+### Fixed: the Trail on the hosted dashboard reads inputs from the snapshot and no longer throws when the replay tree mounts (#5513, #5522) (2026-09-05)
+- **Why:** walking the 0.12.811 Trail release on app.clawmetry.com showed two gaps. The "What the agent knew" card skipped its fetch on the hosted dashboard even though the cloud bundle now installs the session-context hook (clawmetry-cloud #2278), and opening a session logged `NotFoundError: insertBefore` from the replay-tree loader because the Trail page re-parents the transcript messages into its own card.
+- **What:** the Trail inputs card asks `window._cmCloudSessionContext` when it is present and keeps the honest empty state only when it is absent; the replay tree mounts relative to the transcript anchor's real parent, which is the same node on the classic transcript view and the trail card on the Trail page.
+- **Verified:** the Node syntax check on trail.js and app.js, `tests/test_trail_tab_template.py`, and the exception reproduced on the hosted dashboard at 0.12.811 from both the Trail and the classic transcript view before the fix.
 
 ### Release: the Raindrop gap closure, for every runtime (2026-09-05)
 
