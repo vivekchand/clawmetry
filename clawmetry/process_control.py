@@ -1637,8 +1637,12 @@ def _claude_sessions_dir() -> str:
 
 
 def claude_code_session_map() -> Dict[str, Dict[str, Any]]:
-    """Build ``sessionId -> {pid, cwd, procStart, status, version}`` from the
+    """Build ``sessionId -> {pid, cwd, procStart, started_at, status, version}`` from the
     per-pid json files claude_code writes (``<sessions_dir>/<pid>.json``).
+
+    ``procStart`` is the process start time (used by the pid-reuse guard);
+    ``started_at`` is when claude_code wrote the session record, which is later
+    by however long startup took and must not be used for pid-reuse comparison.
 
     This is the primary, richest mapping. Never raises; a missing dir / unreadable
     or malformed file is skipped with a debug log.
