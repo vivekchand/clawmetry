@@ -1849,6 +1849,106 @@ def live_sessions() -> List[Dict[str, Any]]:
     return out
 
 
+# What a live process is actually doing, as the runtime itself reports it.
+# ``busy`` covers "the model is generating" AND "a tool call is in flight";
+# ``idle`` is the state people read as "it stopped" — the prompt is open and
+# the agent is waiting on a person. Distinguishing them is the whole point:
+# an agent that is up but waiting is not an agent that is working, and one
+# label for both is what made a dashboard say "Still running" about a
+# terminal nobody had touched in nine hours.
+LIVE_BUSY = "busy"
+LIVE_IDLE = "idle"
+LIVE_DEAD = "dead"
+
+# claude_code's own ``status`` field -> our three states. ``shell`` means a
+# Bash tool call is running, which is work, not waiting.
+_CLAUDE_STATUS_LIVE = {
+    "busy": LIVE_BUSY,
+    "shell": LIVE_BUSY,
+    "tool": LIVE_BUSY,
+    "idle": LIVE_IDLE,
+}
+
+
+def session_live_state(runtime: str, session_id: str) -> Optional[str]:
+    """Is this session's process alive, and is it working? Right now.
+
+    Returns :data:`LIVE_BUSY`, :data:`LIVE_IDLE`, :data:`LIVE_DEAD`, or
+    ``None`` when this node cannot tell.
+
+    ``None`` is a first-class answer and must stay distinguishable from
+    ``LIVE_DEAD``: only runtimes in :data:`LIVE_PROBE_RUNTIMES` publish a
+    per-pid record, so for everything else the honest reply is "unknown" and
+    the caller falls back to its time-based heuristic. Reporting ``dead``
+    for a runtime we simply cannot see would retire live sessions.
+
+    Sub-agent rows (``<parent>::agent-<id>``) also answer ``None``: a
+    sub-agent has no pid of its own, so the parent's liveness says nothing
+    about whether the child finished.
+
+    Accepts either a store id (``claude_code:<uuid>``) or a native one.
+    Never raises — a probe that throws is worse than a probe that shrugs.
+    """
+    try:
+        rt = (runtime or "").strip().lower()
+        sid = str(session_id or "")
+        if not sid:
+            return None
+        # The store prefixes family ids with their runtime; the per-pid maps
+        # are keyed on the bare id. Passing the prefixed form through is how
+        # Guard's controls came to be inert on every family runtime (#5551).
+        #
+        # The id's own prefix WINS over the caller's ``runtime`` argument. The
+        # sessions table stamps ``agent_type`` "openclaw" on rows whose id is
+        # ``claude_code:<uuid>`` (family ingest sets no agent_type), so trusting
+        # the argument would make every one of those unprobeable.
+        head = sid.split(":", 1)[0].lower() if ":" in sid else ""
+        if head in LIVE_PROBE_RUNTIMES:
+            rt = head
+            sid = sid[len(head) + 1:]
+        elif rt and sid.lower().startswith(rt + ":"):
+            sid = sid[len(rt) + 1:]
+        if "::agent-" in sid:
+            return None
+        if rt not in LIVE_PROBE_RUNTIMES:
+            return None
+        # An ABSENT sessions directory is "this node cannot see", not "nothing
+        # is running". The two look identical downstream — ``claude_code_session_map``
+        # returns ``{}`` for both — and conflating them marks every live agent
+        # finished wherever the directory is not there to read: a container with
+        # no ``~/.claude`` mount, the hosted dashboard, a daemon running as
+        # another user. Found by pointing this at an empty HOME and watching
+        # five busy sessions report "Finished".
+        if not os.path.isdir(_claude_sessions_dir()):
+            return None
+        rec = claude_code_session_map().get(sid)
+        if not rec:
+            # No per-pid record: claude_code removes the file when the process
+            # exits, so absence here is a positive statement, not missing data.
+            #
+            # Verified 2026-09-05 on a node with 28 interactive sessions and
+            # then 10: the directory was 1:1 with the live pids both times, no
+            # orphan file and no unrecorded process. A HEADLESS run (claude -p)
+            # was watched appearing and disappearing from it too, which is the
+            # case that would otherwise report a working agent as dead.
+            return LIVE_DEAD
+        try:
+            pid = int(rec.get("pid") or 0)
+        except (TypeError, ValueError):
+            return LIVE_DEAD
+        if pid <= 0 or not is_alive(pid):
+            return LIVE_DEAD  # stale <pid>.json outliving its process
+        status = str(rec.get("status") or "").strip().lower()
+        # An unrecognised status still means the process is up. Default to
+        # ``busy`` rather than ``idle``: calling a working agent idle is the
+        # error that loses someone money.
+        return _CLAUDE_STATUS_LIVE.get(status, LIVE_BUSY)
+    except Exception:  # noqa: BLE001 — never break a caller over a probe
+        log.debug("process_control: session_live_state failed for %r",
+                  session_id, exc_info=True)
+        return None
+
+
 def resolve_claude_code(session_id: str) -> Dict[str, Any]:
     """Resolve a claude_code session_id to its target process descriptor.
 
