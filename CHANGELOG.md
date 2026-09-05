@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Release: the Sessions replay gets its column back (carries #5537) (2026-09-05)
+- **Why:** #5537 is on main but not in a published wheel, and nodes auto-update, so publishing is what makes the fix real on the machines showing the broken screen. Until a node takes this wheel, opening a session still renders the whole conversation as a narrow strip pinned to the right edge with the left half of the page blank, and a reloaded or shared `#trail=` link still sits forever on "Opening the trail..." with every card stuck on "Loading...".
+- **What:** this release carries #5537. Frontend only (`static/css/dashboard.css`, `static/js/app.js`), so the cloud pin follows.
+- **Verified:** #5537 shipped 7 guards in `tests/test_transcript_layout_grid.py`, 3 of them proven red against the unfixed tree (the CSS rule, the replay-tree inline style, the classList check), wired into the existing Trail page CI step. Re-ran all 7 against merged main: green. The 97 guards in `tests/test_needs_you_matches_the_hero.py` also pass against the merged `app.js`, so the two changes that touched that file do not conflict. Post-release check on a node that takes the wheel: the served `static/css/dashboard.css` contains the `.transcript-layout > *:not(#transcript-messages):not(.transcript-toc)` rule, and `#transcript-messages` measures the wide column rather than 240px.
+
 ### Release: the Overview stops contradicting itself (carries #5553) (2026-09-05)
 - **Why:** #5553 is on main but not in a published wheel, and nodes auto-update, so publishing is what makes the fix real on the machines showing the contradiction. The founder's node renders "No agents running" above a hero naming three working Claude Code sessions until it takes this wheel.
 - **What:** this release carries #5553. Dashboard-side (`routes/attention.py`, `routes/sessions.py`, `static/js/app.js`), so the cloud pin follows.
