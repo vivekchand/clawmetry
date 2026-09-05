@@ -119,7 +119,7 @@ ClawMetry is open-core. There are **four repos**, each with a clear remit; agent
 
 | Repo | Visibility | Holds |
 |---|---|---|
-| **clawmetry** (this repo) | **Public OSS** | The FREE runtime adapters (OpenClaw, NemoClaw, **Goose**) + NeMo governance + 23 chat-channel adapters + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + **hook points / stubs** for every gated feature. |
+| **clawmetry** (this repo) | **Public OSS** | The FREE runtime adapters (OpenClaw, NemoClaw, **Goose**) + NeMo governance + 24 chat-channel adapters + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + **hook points / stubs** for every gated feature. |
 | **clawmetry-pro** | **Private** (not on public PyPI; served only to activated installs by the license server) | The gated runtime adapters (Claude Code, Codex, Cursor, Aider, opencode, Qwen Code, Hermes, PicoClaw, NanoClaw, …) and the Pro paid CLI / analytical features. Plugs into OSS via the `clawmetry.extensions` entry point. |
 | **clawmetry-cloud** | Private | Cloud SaaS server + license server (`/api/license/*`) + Stripe + admin + heartbeat-relay + the closed-wheel hosting (`wheels/` baked into the Cloud Run image). Business + revenue + funnel docs (private). |
 | **clawmetry-landing** | Private repo, public site `clawmetry.com` | Marketing + pricing page + public Buy buttons + installer script. Storefront only; no gated code. |

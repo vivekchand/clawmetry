@@ -126,7 +126,7 @@ CLI auto-detects NemoClaw sandboxes during `connect` and registers a separate da
 
 ### 4.4 Channel adapters
 
-ClawMetry observes (and in most cases sends to) **23 chat channels** through `routes/channels.py`. Each adapter is a Flask blueprint that:
+ClawMetry observes (and in most cases sends to) **24 chat channels** through `routes/channels.py`. Each adapter is a Flask blueprint that:
 - Parses inbound messages from the channel into Brain events
 - Optionally implements an outbound `send` (for replying through the agent)
 
