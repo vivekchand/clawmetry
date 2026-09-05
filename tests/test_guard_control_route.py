@@ -50,9 +50,14 @@ def store(monkeypatch):
 def actuator(monkeypatch):
     calls = []
 
-    def fake(runtime, session_id, cwd, action):
+    def fake(runtime, session_id, cwd, action, trace=None):
         calls.append({"runtime": runtime, "session_id": session_id,
                       "cwd": cwd, "action": action})
+        # The real actuator appends its steps to the caller's list as it goes,
+        # so the route still holds a partial record when a step fails.
+        if trace is not None:
+            trace.append({"step": "Send the signal", "ok": True,
+                          "detail": "signalled"})
         return {"ok": True, "detail": "signalled"}
 
     monkeypatch.setattr(ga, "guard_actuate", fake)
