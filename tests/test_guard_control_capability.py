@@ -143,13 +143,45 @@ def test_cursor_editor_session_is_refused_with_a_readable_reason(monkeypatch):
     assert "_no_per_session_signal" not in sup["reason"]
 
 
-def test_every_supported_runtime_is_controllable():
+def test_every_supported_runtime_is_controllable(monkeypatch):
     """The list widened upstream (copilot, qwen_code, kimi, pi, grok,
-    deepseek_harness); the capability answer must track it, not a stale copy."""
+    deepseek_harness); the capability answer must track it, not a stale copy.
+
+    The resolver is stubbed because claude_code is now answered per session
+    (as cursor already was): this test is about runtime COVERAGE, not about
+    whether one synthetic session id happens to sit in the local session map.
+    """
+    monkeypatch.setattr(pc, "resolve_session",
+                        lambda rt, sid="", cwd="": {"ok": True, "pid": 500,
+                                                    "runtime": rt})
+    monkeypatch.setattr(pc, "is_alive", lambda p: True)
     for rt in pc.SUPPORTED_RUNTIMES:
         sup = pc.runtime_control_support(rt, "s", "/tmp")
         assert sup["controllable"] is True, rt
         assert "kill" in sup["actions"], rt
+
+
+def test_claude_code_session_with_no_live_process_is_refused(monkeypatch):
+    """A claude_code session the map cannot resolve comes back disabled with a
+    reason, not as four buttons whose only outcome is an alert box."""
+    monkeypatch.setattr(
+        pc, "resolve_session",
+        lambda rt, sid="", cwd="": {"ok": False,
+                                    "reason": "session_not_in_claude_map"})
+    sup = pc.runtime_control_support("claude_code", "gone-sess")
+    assert sup["controllable"] is False and sup["actions"] == []
+    assert "no running process" in sup["reason"]
+    # The operator gets a sentence, not the raw resolver enum.
+    assert "session_not_in_claude_map" not in sup["reason"]
+
+
+def test_claude_code_capability_refuses_a_dead_pid(monkeypatch):
+    monkeypatch.setattr(pc, "resolve_session",
+                        lambda rt, sid="", cwd="": {"ok": True, "pid": 4242})
+    monkeypatch.setattr(pc, "is_alive", lambda p: False)
+    sup = pc.runtime_control_support("claude_code", "stale-sess")
+    assert sup["controllable"] is False and sup["actions"] == []
+    assert "4242" in sup["reason"]
 
 
 def test_unknown_runtime_is_refused():
@@ -170,6 +202,10 @@ def test_windows_node_is_controllable(monkeypatch):
     """The gap: every Guard button was inert on Windows."""
     monkeypatch.setattr(pc, "_POSIX", False)
     monkeypatch.setattr(pc, "_IS_WINDOWS", True)
+    monkeypatch.setattr(pc, "resolve_session",
+                        lambda rt, sid="", cwd="": {"ok": True, "pid": 500,
+                                                    "runtime": rt})
+    monkeypatch.setattr(pc, "is_alive", lambda p: True)
     sup = pc.runtime_control_support("claude_code", "s")
     assert sup["controllable"] is True
     assert sup["platform"]["mechanism"] == "win32_native"
@@ -184,3 +220,47 @@ def test_capability_never_raises(monkeypatch):
     from routes.guard import _runtime_supports_signals
     sup = _runtime_supports_signals("cursor", "s", "/tmp")
     assert sup["controllable"] is False and sup["actions"] == []
+
+
+# ── the store's namespaced session id must reach the resolvers as a native id ─
+def test_store_prefixed_session_id_resolves(monkeypatch):
+    """BURN 2026-09-05: the Guard tab posted ``claude_code:<uuid>`` (the store's
+    namespaced id) and every Pause/Stop/Kill answered
+    ``session_not_in_claude_map``, because the map is keyed on the bare uuid
+    Claude Code writes. The kill switch was inert on every family runtime."""
+    monkeypatch.setattr(
+        pc, "claude_code_session_map",
+        lambda: {"native-uuid": {"pid": 4242, "cwd": "/repo",
+                                 "procStart": None, "status": "busy"}})
+    info = pc.resolve_session("claude_code", "claude_code:native-uuid")
+    assert info["ok"] is True and info["pid"] == 4242
+    # A bare id keeps working — OpenClaw ids were never namespaced.
+    assert pc.resolve_session("claude_code", "native-uuid")["ok"] is True
+
+
+def test_native_session_id_only_strips_its_own_runtime_head():
+    assert pc.native_session_id("claude_code", "claude_code:u") == "u"
+    assert pc.native_session_id("CLAUDE_CODE", "claude_code:u") == "u"
+    # Not this runtime's prefix: left alone, so nothing is silently truncated.
+    assert pc.native_session_id("codex", "claude_code:u") == "claude_code:u"
+    # Only the FIRST head goes; a native id may legitimately contain a colon.
+    assert pc.native_session_id("codex", "codex:a:b") == "a:b"
+    assert pc.native_session_id("openclaw", "bare-uuid") == "bare-uuid"
+    assert pc.native_session_id("", "bare-uuid") == "bare-uuid"
+
+
+def test_claude_session_map_memo_invalidates_when_a_session_appears(tmp_path,
+                                                                    monkeypatch):
+    """The memo exists so a 50-row Guard list does not re-scan the directory 50
+    times; it must not hide a session that just started."""
+    import json
+
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    pc._CLAUDE_MAP_CACHE.update({"key": None, "at": 0.0, "map": {}})
+
+    assert pc.claude_code_session_map() == {}
+    (sessions / "77.json").write_text(json.dumps(
+        {"pid": 77, "sessionId": "fresh", "cwd": "/repo"}))
+    assert "fresh" in pc.claude_code_session_map()
