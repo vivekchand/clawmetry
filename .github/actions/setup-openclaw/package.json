@@ -1,0 +1,10 @@
+{
+  "name": "clawmetry-setup-openclaw",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned OpenClaw CLI for the setup-openclaw composite action. CI-only: nothing here ships in the clawmetry wheel or is imported by the dashboard.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "openclaw": "2026.9.2"
+  }
+}

@@ -51,7 +51,6 @@ jobs:
         id: openclaw
         uses: ./.github/actions/setup-openclaw
         with:
-          version: latest
           gateway-token: ci-openclaw-token
 
       - name: Start gateway in background

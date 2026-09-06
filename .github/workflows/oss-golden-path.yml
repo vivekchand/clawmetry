@@ -87,7 +87,6 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/setup-openclaw
         with:
-          version: latest
           gateway-token: ci-golden-token
 
       # Guarantee the token is in GITHUB_ENV even when Setup OpenClaw

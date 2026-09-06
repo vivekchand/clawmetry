@@ -109,6 +109,22 @@ updates:
     cooldown:
       default-days: 7
 
+  # npm — the OpenClaw CLI the setup-openclaw composite action installs. It is
+  # the other half of that pin: the lockfile makes the install reproducible and
+  # integrity-checked, and this entry is what keeps it moving. Without it, every
+  # E2E and screenshot job would sit on one OpenClaw release indefinitely, which
+  # is a worse place to be than the moving dist-tag it replaced.
+  - package-ecosystem: "npm"
+    directory: "/.github/actions/setup-openclaw"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+
   # npm — the ClawHub/OpenClaw plugin, which is published to npm
   # (openclaw.release.publishToNpm). No lockfile, so Dependabot updates the
   # manifest ranges.
