@@ -1,4 +1,5 @@
-// onboarding.js — first-run onboarding gate (hard gate, no skip).
+// onboarding.js — first-run onboarding gate (hard gate; the only way
+// past it without an account is the free-runtimes escape, _startFreeOnly).
 //
 // Shows templates/partials/onboarding-modal.html when
 // GET /api/onboarding/state says {required:true}. The gate itself is just
@@ -59,6 +60,36 @@
       }
     }).catch(function () {
       if (onFail) onFail('Network error. Try again.');
+    });
+  }
+
+  // ── Free-runtimes escape ─────────────────────────────────────────────
+  // The two cards above both demand an identity before the dashboard opens,
+  // and prod says that is where the installs go: 798 first launches to 38
+  // completed choices in the 30 days to 2026-09-06. OpenClaw, NVIDIA
+  // NemoClaw and Goose are FREE_RUNTIMES, free forever with no account, so
+  // for someone who only runs those the gate was asking for a signup that
+  // buys them nothing. This posts to a dedicated endpoint (not /complete,
+  // which deliberately refuses to record selfhost_free) that flips free-only
+  // mode on and writes the nocloud marker before recording the choice.
+  function _startFreeOnly() {
+    var b = $('obg-free-btn');
+    _err('obg-free-err', '');
+    if (b) { b.disabled = true; }
+    fetch('/api/onboarding/free-only', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (d && d.ok) {
+        _hide();
+        location.reload();
+        return;
+      }
+      if (b) { b.disabled = false; }
+      _err('obg-free-err', (d && d.error) || 'Could not save your choice. Try again.');
+    }).catch(function () {
+      if (b) { b.disabled = false; }
+      _err('obg-free-err', 'Network error. Try again.');
     });
   }
 
@@ -499,6 +530,8 @@
         if (m) m.addEventListener('click', _startManaged);
         var s = $('obg-selfhost-btn');
         if (s) s.addEventListener('click', window.openSelfhostModal);
+        var f = $('obg-free-btn');
+        if (f) f.addEventListener('click', _startFreeOnly);
         _fillDetection();
         _show();
       })
