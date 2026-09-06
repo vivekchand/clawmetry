@@ -24,6 +24,8 @@ on:
       - ".github/workflows/pr-screenshots.yml"
       - ".github/scripts/visual-diff.mjs"
       - ".github/scripts/post-visual-diff.mjs"
+      - ".github/scripts/package.json"
+      - ".github/scripts/package-lock.json"
 
 permissions:
   contents: read
@@ -109,15 +111,23 @@ jobs:
           pip install duckdb requests
 
       # -- 5. Node deps (Playwright + pixelmatch + pngjs) ----------------------
+      # `npm ci` against the committed .github/scripts/package-lock.json, not a
+      # bare `npm install`. The versions were already pinned, but without a lock
+      # every TRANSITIVE dependency still re-resolved on each run and no tarball
+      # was checked against an integrity hash -- and this job holds
+      # `contents: write` and `pull-requests: write`, so anything that resolves
+      # here runs with those. The lock records the whole tree and npm verifies
+      # every sha512 before it unpacks.
+      #
+      # node_modules must land in the same directory as the scripts that import
+      # it: `visual-diff.mjs` imports `playwright`/`pixelmatch`/`pngjs` as bare
+      # specifiers, which Node resolves by walking up from the importing file.
+      # head/.github/scripts/node_modules is the first directory it checks.
       - name: Install Node deps
-        working-directory: head
+        working-directory: head/.github/scripts
         run: |
-          npm init -y >/dev/null
-          npm install --no-audit --no-fund --silent \
-            playwright@1.49.0 \
-            pixelmatch@5.3.0 \
-            pngjs@7.0.0
-          npx --yes playwright install --with-deps chromium
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
 
       # -- 5b. Install OpenClaw + export gateway token -------------------------
       # continue-on-error: true so a transient npm registry miss does not
