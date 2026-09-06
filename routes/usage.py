@@ -1,35 +1,36 @@
-routes/usage.py — Usage / analytics / anomaly / attribution endpoints.
+"""
+routes/usage.py  -  Usage / analytics / anomaly / attribution endpoints.
 
 Extracted from dashboard.py as Phase 5.3 of the incremental modularisation.
 Owns the 12 routes registered on bp_usage:
 
-  GET  /api/usage                         — headline token/cost tracker
-  GET  /api/usage/anomalies               — cost anomaly summary
-  GET  /api/anomalies                     — rolling-baseline detector output
-  POST /api/anomalies/<id>/ack            — acknowledge an anomaly
-  GET  /api/usage/by-plugin               — plugin token/cost breakdown
-  GET  /api/usage/by-plugin/trend         — plugin breakdown over time
-  GET  /api/usage/by-model                — per-model cost/token breakdown with cost-per-call
-  GET  /api/sessions/clusters             — behavioural session clustering
-  GET  /api/usage/cost-comparison         — alt-model savings estimate
-  GET  /api/usage/export                  — CSV export of usage
-  GET  /api/model-attribution             — per-model turn/session split
-  GET  /api/skill-attribution             — per-skill cost attribution
-  GET  /api/usage/by-team                 — per-agent / per-team cost attribution
-  GET  /api/usage/team-mappings           — list runtime→team label mappings
-  POST /api/usage/team-mappings           — create/update a mapping
-  DELETE /api/usage/team-mappings/<k>/<v> — delete a mapping
-  GET  /api/token-velocity                — runaway-loop detection
-  GET  /api/usage/cache-trends            — prompt-cache hit-rate analytics
-  GET  /api/skills/fidelity              — dead-skill detector + body/linked-file stats
-  GET  /api/efficiency                    — efficiency grade + measured savings
-  GET  /api/usage/outcomes                — cost per merged change, rework rate,
+  GET  /api/usage                          -  headline token/cost tracker
+  GET  /api/usage/anomalies                -  cost anomaly summary
+  GET  /api/anomalies                      -  rolling-baseline detector output
+  POST /api/anomalies/<id>/ack             -  acknowledge an anomaly
+  GET  /api/usage/by-plugin                -  plugin token/cost breakdown
+  GET  /api/usage/by-plugin/trend          -  plugin breakdown over time
+  GET  /api/usage/by-model                 -  per-model cost/token breakdown with cost-per-call
+  GET  /api/sessions/clusters              -  behavioural session clustering
+  GET  /api/usage/cost-comparison          -  alt-model savings estimate
+  GET  /api/usage/export                   -  CSV export of usage
+  GET  /api/model-attribution              -  per-model turn/session split
+  GET  /api/skill-attribution              -  per-skill cost attribution
+  GET  /api/usage/by-team                  -  per-agent / per-team cost attribution
+  GET  /api/usage/team-mappings            -  list runtime→team label mappings
+  POST /api/usage/team-mappings            -  create/update a mapping
+  DELETE /api/usage/team-mappings/<k>/<v>  -  delete a mapping
+  GET  /api/token-velocity                 -  runaway-loop detection
+  GET  /api/usage/cache-trends             -  prompt-cache hit-rate analytics
+  GET  /api/skills/fidelity               -  dead-skill detector + body/linked-file stats
+  GET  /api/efficiency                     -  efficiency grade + measured savings
+  GET  /api/usage/outcomes                 -  cost per merged change, rework rate,
                                             abandoned spend (REQ-OBS-CEA-022)
 
 Module-level helpers (``_usage_cache``, ``_compute_transcript_analytics``,
 ``_detect_and_store_anomalies``, ``_get_anomaly_db``, ``SESSIONS_DIR`` etc.)
 stay in ``dashboard.py`` and are reached via late ``import dashboard as _d``.
-Pure mechanical move — zero behaviour change.
+Pure mechanical move  -  zero behaviour change.
 """
 
 from __future__ import annotations
@@ -96,7 +97,7 @@ _CLUSTER_CACHE_TTL_SECONDS = 120
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Epic #964 — DuckDB local-store fast paths for the Usage tab.
+# Epic #964  -  DuckDB local-store fast paths for the Usage tab.
 #
 # Each helper below is the FIRST path tried by its sibling Flask route when
 # CLAWMETRY_LOCAL_STORE_READ=1. They return ``None`` on any failure (import
@@ -106,11 +107,11 @@ _CLUSTER_CACHE_TTL_SECONDS = 120
 # tests) can verify which path served the request.
 #
 # Source data:
-#   * events table — one row per tool call / message / spend event, written
+#   * events table  -  one row per tool call / message / spend event, written
 #     by sync.py + the daemon. Columns: id, agent_type, node_id, agent_id,
 #     session_id, event_type, ts (ISO), data (JSON BLOB), cost_usd,
 #     token_count, model.
-#   * daily_aggregates / sessions tables — pre-rolled summaries, populated
+#   * daily_aggregates / sessions tables  -  pre-rolled summaries, populated
 #     in parallel for cheap queries.
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -122,7 +123,7 @@ class _DaemonProxyStore:
     don't each need their own daemon-proxy plumbing.
 
     Issue #1291 cliff #3: a writable ``get_store()`` collided with the
-    sync daemon's exclusive DuckDB lock — the entire usage module was
+    sync daemon's exclusive DuckDB lock  -  the entire usage module was
     silently falling through to the legacy sqlite scanners (the 6.6s p95
     the latency probe surfaced for ``usage.api_anomalies``).
     """
@@ -165,7 +166,7 @@ def _ls_iso_day(ts_str):
 
     This used to be ``ts_str[:10]``, which is the timestamp's day in whatever
     timezone the runtime wrote. Every caller compares the result against a day
-    axis built from ``date.today()`` — a LOCAL axis — so a runtime stamping
+    axis built from ``date.today()``  -  a LOCAL axis  -  so a runtime stamping
     UTC dropped a user's evening activity into a bucket the axis did not
     contain, and the row silently vanished from the chart. Same clock on both
     sides now (ADR-046, clawmetry/cost_windows).
@@ -251,7 +252,7 @@ def _scan_events_slim(**kwargs):
     ~38 MB per scan across the daemon RPC (see ``LocalStore.query_events_slim``).
     It is a newer shape than the daemon allowlist of any previous release,
     and the dashboard and the sync daemon are separate processes that restart
-    independently — so during an upgrade there is a real window where an
+    independently  -  so during an upgrade there is a real window where an
     upgraded dashboard asks a not-yet-restarted daemon for it. The proxy
     answers 400, the caller gets ``None``, and these roll-ups would render
     that as a confident EMPTY Cost tab.
@@ -276,7 +277,7 @@ def _runtime_coverage(runtime, *, has_data):
     the user's spend. ``clawmetry.runtime_records`` knows which is which;
     this attaches the answer so the UI can say so.
 
-    Returns ``None`` for an unscoped (node-wide) request — a node mixes
+    Returns ``None`` for an unscoped (node-wide) request  -  a node mixes
     runtimes, so there is no single honest verdict to attach.
     """
     rt = (runtime or "").strip().lower()
@@ -415,7 +416,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     ``cache_creation_input_tokens``) so the Tokens tab actually shows
     the breakdown on real OpenClaw installs.
     """
-    # Pull pre-rolled day buckets first — these are the "blessed" data
+    # Pull pre-rolled day buckets first  -  these are the "blessed" data
     # the daemon writes once per ingest. Falls back to live event scan
     # when aggregates are empty (e.g. fresh install, only events seeded).
     # Optional ``runtime`` filter is threaded into query_aggregates +
@@ -457,7 +458,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     daily_cache_read = {r["day"]: int(r.get("cache_read_tokens") or 0) for r in splits_rows}
     daily_cache_write = {r["day"]: int(r.get("cache_write_tokens") or 0) for r in splits_rows}
     # Also fill in cost from splits_rows when query_aggregates' cost_usd
-    # column was empty for that day (real-data common case — sync.py
+    # column was empty for that day (real-data common case  -  sync.py
     # only stamps cost_usd when ``usage.cost.total`` is present at
     # ingest time, which Anthropic-SDK echo events omit).
     for r in splits_rows:
@@ -542,13 +543,13 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     # usage tab can show "X substitutions saved $Y this month."
     routing_data = _ls_call("query_routing_savings") or {}
 
-    # Issue #5289: Fish Audio TTS cost attribution — per-provider rollup.
+    # Issue #5289: Fish Audio TTS cost attribution  -  per-provider rollup.
     # TTS costs ARE included in the daily cost totals (query_aggregates sums
     # all event_type values), but they're invisible in modelBreakdown because
     # that section is token-based only. Surface them as a dedicated ttsBreakdown.
     tts_breakdown = _ls_call("query_tts_provider_rollup", runtime=runtime) or []
 
-    import dashboard as _d  # late import — same pattern as other paths
+    import dashboard as _d  # late import  -  same pattern as other paths
 
     return _stamp_usage({
         "source": "local_store",
@@ -590,7 +591,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
 
 
 def _ls_top_sessions_by_cost(limit=20, runtime=None):
-    """Issue #68 — top-N sessions by total cost. Sources rows from the
+    """Issue #68  -  top-N sessions by total cost. Sources rows from the
     DuckDB ``events`` table aggregated per session, joined back to a
     sample event for the model column. Returns ``[]`` on any failure so
     the caller can drop the key silently.
@@ -746,7 +747,7 @@ def _try_local_store_anomalies():
     if anomalies is None:
         return None
     # Match the legacy response shape (anomaly id + ack + severity), even
-    # though we can't persist acks in the local store yet — those need the
+    # though we can't persist acks in the local store yet  -  those need the
     # ~/.openclaw/clawmetry.db that the legacy detector owns.
     out = []
     for i, a in enumerate(anomalies):
@@ -906,7 +907,7 @@ def _try_local_store_cost_comparison():
     and making the "savings vs alternative" dollar amounts look twice as
     big as truth. We now skip the slimmer ``model.completed`` row when an
     ``assistant``/``message`` sibling exists for the same
-    (session_id, ts ±1 s) bucket — matches the dedup approach in
+    (session_id, ts ±1 s) bucket  -  matches the dedup approach in
     ``query_daily_usage_splits``. Non-billable-turn rows (tool_call etc.)
     keep their tokens since they don't have a sibling.
     """
@@ -1008,12 +1009,12 @@ def _try_local_store_usage_forecast():
     Source preference (matters because of the dedupe-pattern footgun
     documented in ``feedback_usage_dedupe_pattern.md``):
 
-      1. ``query_aggregates`` — SQL-side dedupe over the FULL events
+      1. ``query_aggregates``  -  SQL-side dedupe over the FULL events
          table (every event row that carries ``cost_usd``, billable-turn
          and non-message rows alike). Safer for cost projection because
          the daemon stamps ``cost_usd`` on rows the splits walker skips
          (e.g. tool retries, fallback turns).
-      2. ``query_daily_usage_splits`` — only walks
+      2. ``query_daily_usage_splits``  -  only walks
          ``_BILLABLE_TURN_EVENT_TYPES``. Used as a fallback so a fresh
          install (aggregates empty, only events seeded) still produces
          a forecast.
@@ -1021,7 +1022,7 @@ def _try_local_store_usage_forecast():
     Returns ``None`` when no store is reachable so the route can fall
     back to the JSONL legacy projection. Returns
     ``{available: False, _source: 'local_store'}`` when the store IS
-    reachable but holds zero usage rows — the forecast is genuinely
+    reachable but holds zero usage rows  -  the forecast is genuinely
     unavailable, the UI handles this and renders the empty-state copy.
     """
     import calendar
@@ -1031,7 +1032,7 @@ def _try_local_store_usage_forecast():
     if store is None:
         return None
 
-    # Pull aggregates first — they cover every cost-bearing row, deduped
+    # Pull aggregates first  -  they cover every cost-bearing row, deduped
     # at SQL level (see ``feedback_usage_dedupe_pattern.md`` for why
     # walking only billable turns silently drops ~30% of cost).
     daily_costs: dict[str, float] = {}
@@ -1074,7 +1075,7 @@ def _try_local_store_usage_forecast():
 
     # If the store is reachable but holds zero usage rows AND we have no
     # spend this month, surface ``available: False`` with the _source
-    # tag — the UI renders the empty-state copy and the audit can still
+    # tag  -  the UI renders the empty-state copy and the audit can still
     # see the canary.
     if not daily_costs and cost_this_month == 0 and daily_rate == 0:
         return {"available": False, "reason": "no_data", "_source": "local_store"}
@@ -1167,7 +1168,7 @@ def _runtime_of(sid):
 def _try_local_store_model_attribution(runtime=None):
     """Fast path for /api/model-attribution. Per-model assistant turn count,
     session count, provider tag, and share %. Switches list is best-effort
-    — derived from per-session model variation. When ``runtime`` is set (a
+     -  derived from per-session model variation. When ``runtime`` is set (a
     session-id prefix like ``qwen_code``), only that runtime's events count, so
     the Models tab scopes to the runtime switcher selection."""
     store = _ls_get_store()
@@ -1182,7 +1183,7 @@ def _try_local_store_model_attribution(runtime=None):
     if runtime and runtime != "all":
         evs = [e for e in evs if _runtime_of(e.get("session_id")) == runtime]
         if not evs:
-            # Honest empty — the runtime exists in the switcher but has no
+            # Honest empty  -  the runtime exists in the switcher but has no
             # model-bearing turns; don't fall back to the merged view.
             return {"models": [], "switches": [], "total_turns": 0,
                     "primary_model": "", "runtime": runtime, "_source": "local_store"}
@@ -1457,21 +1458,21 @@ def _try_local_store_skills_fidelity(max_sessions=200):
     Replaces the 200-file × all-lines JSONL walker in
     ``api_skills_fidelity`` with a single DuckDB read using the canonical
     ``query_recent_read_tool_calls`` method (already shipped + allowlisted
-    for the daemon proxy — issue #1364). One row per Read-tool invocation
+    for the daemon proxy  -  issue #1364). One row per Read-tool invocation
     in the last 7 days; we bucket them per-skill in-process.
 
     Status rules match the legacy endpoint contract:
-      * dead   — installed but body fetch count == 0
-      * orphan — body-fetched in sessions but skill dir not on disk
-      * stuck  — body fetched but skill has linked files and none were read
-      * active — otherwise
+      * dead    -  installed but body fetch count == 0
+      * orphan  -  body-fetched in sessions but skill dir not on disk
+      * stuck   -  body fetched but skill has linked files and none were read
+      * active  -  otherwise
 
     Returns ``None`` (defer to JSONL walker) when:
       * the local store isn't reachable
       * the canonical method returns ``None`` (daemon down + direct open
         failed)
       * NO skills are installed on disk AND zero rows came back (nothing
-        meaningful to report — let the legacy path serve the empty shape)
+        meaningful to report  -  let the legacy path serve the empty shape)
 
     Audit imperfection note (issue #1565 audit): the audit hinted this
     surface was an "extension of skill-attribution". In practice the
@@ -1617,7 +1618,7 @@ def _try_local_store_skills_fidelity(max_sessions=200):
         'orphan_count': orphan_count,
         'total_installed': len(installed_skills),
         'note': (
-            'Dead: installed but body never fetched — remove to save header tokens. '
+            'Dead: installed but body never fetched  -  remove to save header tokens. '
             'Stuck: body fetched but linked files unread despite existing. '
             'Orphan: body-fetched in sessions but not installed (skill removed?).'
         ),
@@ -1626,7 +1627,7 @@ def _try_local_store_skills_fidelity(max_sessions=200):
 
 
 def _apply_oss_24h_cap(result):
-    """Issue #1448 surface 2 — clamp /api/usage history to the last 24h for
+    """Issue #1448 surface 2  -  clamp /api/usage history to the last 24h for
     OSS / Cloud-Free callers. Cloud-Pro users (gated by
     ``dashboard._is_pro_user``) get the full 14-day chart.
 
@@ -1689,21 +1690,21 @@ def _try_local_store_token_velocity():
     """Fast path for /api/token-velocity (issue #1565, Tier-1).
 
     Reads the last ~5 min of events from DuckDB and computes:
-      * ``velocity_2min`` — total tokens billed across the trailing 2-min
+      * ``velocity_2min``  -  total tokens billed across the trailing 2-min
         window (deduped via ``build_sibling_bucket_max`` so v3 sibling
-        pairs aren't counted twice — same risk as
+        pairs aren't counted twice  -  same risk as
         ``feedback_usage_dedupe_pattern.md``).
-      * ``flagged_sessions`` — per-session 2-min token burn + tool-chain
+      * ``flagged_sessions``  -  per-session 2-min token burn + tool-chain
         length. A session is flagged when ``tokens_2min >= WARN_TOKENS``
         OR ``tool_chain_len >= CRIT_TOOLS``.
-      * ``cost_per_min`` — projected USD/min from the 2-min total.
+      * ``cost_per_min``  -  projected USD/min from the 2-min total.
 
     Tool-chain length: count the longest consecutive run of tool-call /
     assistant events within the last 2 min per session, broken by a
     user-prompt row (matches the legacy JSONL heuristic).
 
     Returns ``None`` when the store isn't reachable OR when zero events
-    are present in the trailing 5-min window — the legacy JSONL walker
+    are present in the trailing 5-min window  -  the legacy JSONL walker
     is cheap on a quiet system (mtime filter skips every file with no
     recent writes) so we don't try to short-circuit it with a zero shell.
     """
@@ -1741,7 +1742,7 @@ def _try_local_store_token_velocity():
 
     rows.sort(key=_ts_sec)
 
-    # Dedupe sibling pairs (assistant + model.completed) — same pattern
+    # Dedupe sibling pairs (assistant + model.completed)  -  same pattern
     # as _try_local_store_usage to avoid double-counting v3 tokens.
     bucket_max = build_sibling_bucket_max(rows)
 
@@ -1771,7 +1772,7 @@ def _try_local_store_token_velocity():
         elif et in _CHAIN_TYPES:
             data = r.get("data") if isinstance(r.get("data"), dict) else {}
             role = data.get("role") if isinstance(data, dict) else None
-            if et == "message" and role == "user":  # v3-shape-gate: allow (reason: defensive — _CHAIN_TYPES already covers both v3 + legacy names; this is the legacy-shape-specific role check)
+            if et == "message" and role == "user":  # v3-shape-gate: allow (reason: defensive  -  _CHAIN_TYPES already covers both v3 + legacy names; this is the legacy-shape-specific role check)
                 slot["consecutive"] = 0
             else:
                 slot["consecutive"] += 1
@@ -1840,7 +1841,7 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
     ``session_id``.
 
     Dedupe via ``build_sibling_bucket_max`` (same approach as
-    ``_try_local_store_token_velocity``) — exactly the bug family
+    ``_try_local_store_token_velocity``)  -  exactly the bug family
     ``feedback_usage_dedupe_pattern.md`` warns about. Returns ``None``
     on store-unreachable or zero matching rows so the JSONL walker
     fires (rather than claiming ``_source: 'local_store'`` falsely on
@@ -1852,7 +1853,7 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
 
     # 14-day window matches the headline ``/api/usage`` chart. The legacy
     # walker has no window cap, but on a busy box it scans 50 mtime-sorted
-    # files anyway — 14d covers every billable turn the cost dashboard
+    # files anyway  -  14d covers every billable turn the cost dashboard
     # actually charts.
     cutoff_ts = time.time() - 14 * 86400
     since_iso = datetime.utcfromtimestamp(cutoff_ts).strftime(
@@ -1898,7 +1899,7 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
         "total_cost": 0.0,
     }
 
-    # Lazy import — only this fast path needs the v3 split extractor.
+    # Lazy import  -  only this fast path needs the v3 split extractor.
     try:
         from clawmetry.local_store import (
             _extract_usage_splits, _extract_usage_cost,
@@ -1933,7 +1934,7 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
         # blob splits are empty (e.g. slim ``model.completed`` rows that
         # survived the sibling dedupe because no rich envelope existed).
         # We attribute the whole row to ``input_tokens`` in that case so
-        # the totals don't drop the row — see Eng G's PR #1571 lesson:
+        # the totals don't drop the row  -  see Eng G's PR #1571 lesson:
         # *don't blindly replace an aggregate with a deduped subset*.
         if total_tok == 0:
             col_tok = int(r.get("token_count") or 0)
@@ -2039,7 +2040,7 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
         totals[k] = round(totals[k], 6)
 
     # Sort by timestamp descending and apply limit. ISO-8601 sorts
-    # lexically when zones match — which they always do here since the
+    # lexically when zones match  -  which they always do here since the
     # daemon writes UTC.
     messages.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
     messages = messages[:limit]
@@ -2072,7 +2073,7 @@ def api_usage():
     # path; the legacy OTLP/cache fallback ignores it.
     _rt = (request.args.get("runtime") or "").strip() or None
 
-    # Epic #964 — local-store fast path. Opt-in via CLAWMETRY_LOCAL_STORE_READ=1;
+    # Epic #964  -  local-store fast path. Opt-in via CLAWMETRY_LOCAL_STORE_READ=1;
     # falls through to OTLP/transcript scan when the store is empty / disabled.
     if is_local_store_read_enabled():
         fast = _try_local_store_usage(runtime=_rt)
@@ -2159,7 +2160,7 @@ def api_usage():
         today_cost, week_cost, month_cost, trend_data, month_tok, billing_summary
     )
 
-    # Issue #68 — top-N sessions by cost for the per-session breakdown
+    # Issue #68  -  top-N sessions by cost for the per-session breakdown
     # table on the Tokens/Usage tab. We hand back the 20 most expensive
     # sessions sorted desc so the UI can rank "who burned the budget"
     # without re-aggregating.
@@ -2221,7 +2222,7 @@ def api_usage_anomalies():
     """Return session cost anomalies vs rolling 7-day baseline."""
     import dashboard as _d
 
-    # Epic #964 — local-store fast path.
+    # Epic #964  -  local-store fast path.
     if is_local_store_read_enabled():
         fast = _try_local_store_usage_anomalies()
         if fast is not None:
@@ -2264,7 +2265,7 @@ def api_anomalies():
     """
     import dashboard as _d
 
-    # Epic #964 — local-store fast path.
+    # Epic #964  -  local-store fast path.
     if is_local_store_read_enabled():
         fast = _try_local_store_anomalies()
         if fast is not None:
@@ -2328,7 +2329,7 @@ def api_usage_by_plugin():
         threshold_pct_arg = 50.0
     _rt = (request.args.get("runtime") or "").strip() or None
 
-    # Epic #964 — local-store fast path.
+    # Epic #964  -  local-store fast path.
     if is_local_store_read_enabled():
         fast = _try_local_store_usage_by_plugin(threshold_pct_arg, runtime=_rt)
         if fast is not None:
@@ -2400,7 +2401,7 @@ def api_usage_by_plugin_trend():
         days_back = 14
     days_back = min(max(days_back, 1), 90)
 
-    # Epic #964 — local-store fast path.
+    # Epic #964  -  local-store fast path.
     if is_local_store_read_enabled():
         fast = _try_local_store_usage_by_plugin_trend(days_back)
         if fast is not None:
@@ -2545,7 +2546,7 @@ _CLUSTER_TURN_EVENT_TYPES = frozenset({
     # v3 daemon-normalised shape (see reference_openclaw_v3_event_types.md).
     "prompt.submitted",   # user turn
     "assistant",          # assistant turn (rich envelope)
-    "model.completed",    # assistant turn (slim sibling — deduped before counting)
+    "model.completed",    # assistant turn (slim sibling  -  deduped before counting)
 })
 
 
@@ -2621,8 +2622,8 @@ def _try_local_store_sessions_clusters(days: int):
             if "subagent" in blob or "spawned" in blob:
                 has_subagent = True
             # v3-silent-zero fix (issue #1588). Previously this counter
-            # filtered on ``etype == 'message'`` only — the pre-v3
-            # synthetic shape — so every real OpenClaw v3 install reported
+            # filtered on ``etype == 'message'`` only  -  the pre-v3
+            # synthetic shape  -  so every real OpenClaw v3 install reported
             # ``turn_count == 0`` regardless of how many turns occurred,
             # which silently mis-classified clusters as 'no-turn' shells.
             # Count BOTH user-turn (``prompt.submitted`` / pre-v3 'user')
@@ -2945,7 +2946,7 @@ def api_usage_cost_comparison():
     """Return cost comparison: actual spend vs alternatives (GH#554)."""
     import dashboard as _d
 
-    # Epic #964 — local-store fast path.
+    # Epic #964  -  local-store fast path.
     if is_local_store_read_enabled():
         fast = _try_local_store_cost_comparison()
         if fast is not None:
@@ -2985,7 +2986,7 @@ def api_usage_forecast():
     # Local store unavailable (no daemon, tests with the flag off): fall
     # back to a minimal "no data" response so the route never 500s. The
     # forecast card is a derived view of the existing /api/usage
-    # aggregate — when DuckDB is unreachable, every other Usage-tab
+    # aggregate  -  when DuckDB is unreachable, every other Usage-tab
     # surface degrades the same way (anomalies, by-plugin, attribution),
     # so a JSONL re-implementation here would be pure duplication.
     return jsonify({"available": False, "reason": "no_data"})
@@ -2996,7 +2997,7 @@ def _try_local_store_usage_export(window_days: int = 30):
 
     Tier-1 Bypass-FS surface (refs #1565 EOD canon). The legacy export
     handler re-walks every JSONL file in the sessions directory on every
-    request — fine for empty installs but multi-second on a busy
+    request  -  fine for empty installs but multi-second on a busy
     workspace, and it returns 0 for the daily totals on real v3
     OpenClaw installs (events stamp tokens in ``data.message.usage``
     rather than the top-level legacy keys the walker probes).
@@ -3043,7 +3044,7 @@ def api_usage_export():
     import dashboard as _d
 
     try:
-        # Get usage data — DuckDB fast path first.
+        # Get usage data  -  DuckDB fast path first.
         data = None
         if is_local_store_read_enabled():
             try:
@@ -3201,7 +3202,7 @@ def api_runtime_summary():
     keyed by session-id prefix, so the Overview headline can scope to the
     runtime switcher. Mirrors the daemon ``runtimeSummary`` snapshot slice; the
     cloud serves that slice via an interceptor instead of this route. Reads the
-    local store (fast path); never 500s — empty store yields ``{}``."""
+    local store (fast path); never 500s  -  empty store yields ``{}``."""
     store = _ls_get_store() if is_local_store_read_enabled() else None
     out = {}
     if store is not None:
@@ -3263,7 +3264,7 @@ def api_model_attribution():
     import dashboard as _d
     runtime = (request.args.get('runtime') or '').strip() or None
 
-    # Epic #964 — local-store fast path.
+    # Epic #964  -  local-store fast path.
     if is_local_store_read_enabled():
         fast = _try_local_store_model_attribution(runtime=runtime)
         if fast is not None:
@@ -3421,7 +3422,7 @@ def api_skill_attribution():
     import dashboard as _d
     import re as _re
 
-    # Epic #964 — local-store fast path.
+    # Epic #964  -  local-store fast path.
     if is_local_store_read_enabled():
         fast = _try_local_store_skill_attribution()
         if fast is not None:
@@ -3565,7 +3566,7 @@ def api_usage_by_team():
     Falls back to raw runtime names when no mapping exists.
 
     Query params:
-      window  — int, number of days to look back (default 7)
+      window   -  int, number of days to look back (default 7)
 
     Returns:
       {
@@ -3629,7 +3630,7 @@ def api_usage_team_mappings_delete(key_type: str, key_value: str):
 
 @bp_usage.route('/api/token-velocity')
 def api_token_velocity():
-    """Sliding 2-min token velocity endpoint — detects runaway agent loops (GH #313).
+    """Sliding 2-min token velocity endpoint  -  detects runaway agent loops (GH #313).
 
     Returns:
       {
@@ -3873,12 +3874,12 @@ def _try_local_store_cache_trends(days: int):
     legacy path emits. Backed by ``LocalStore.query_cache_metrics`` which
     runs one SQL pass and applies the same v3 sibling-pair dedupe
     (``assistant`` + ``model.completed`` 100-300 ms apart) as
-    ``query_daily_usage_splits`` — without dedupe the cache-hit ratio
+    ``query_daily_usage_splits``  -  without dedupe the cache-hit ratio
     silently lies by 2×.
 
     Returns ``None`` to defer to the legacy walker when the store is
     unreachable. Returns the full envelope (with ``_source: 'local_store'``
-    canary) when the store IS reachable, even if no events match — that
+    canary) when the store IS reachable, even if no events match  -  that
     keeps the audit grep at ``reference_duckdb_coverage_audit.md`` from
     re-categorising the surface as ``JSONL_FALLBACK_ONLY``.
     """
@@ -3947,13 +3948,13 @@ def _cache_recommendations(totals, by_model):
     if hit < 30.0:
         tips.append(
             f"Cache hit ratio is low ({hit}%). Stabilise your system prompt and "
-            "front-load static context — Anthropic charges ~10% for cache reads vs. "
+            "front-load static context  -  Anthropic charges ~10% for cache reads vs. "
             "fresh input."
         )
     elif hit < 60.0:
         tips.append(
             f"Cache hit ratio is moderate ({hit}%). Look for prompt suffixes that "
-            "rotate per turn (timestamps, RNG nonces) — they invalidate the cache "
+            "rotate per turn (timestamps, RNG nonces)  -  they invalidate the cache "
             "block above them."
         )
     else:
@@ -3966,7 +3967,7 @@ def _cache_recommendations(totals, by_model):
     cr = totals.get("cache_read_tokens", 0)
     if cw and cr and cw > cr:
         tips.append(
-            "Cache writes outweigh reads — sessions are short-lived or your prompt "
+            "Cache writes outweigh reads  -  sessions are short-lived or your prompt "
             "block is changing often. A longer-lived session prefix would amortise "
             "the write cost."
         )
@@ -3990,7 +3991,7 @@ def api_usage_cache_trends():
     """Daily + per-model prompt-cache hit ratio and estimated savings (GH #851).
 
     Query params:
-      days  — window size in days (default 14, max 90)
+      days   -  window size in days (default 14, max 90)
 
     Returns:
       {
@@ -4011,7 +4012,7 @@ def api_usage_cache_trends():
         days = 14
 
     # Tier-1 DuckDB fast path (issue #1778 audit #1). Same dedupe shape as
-    # ``_try_local_store_usage_forecast`` — one SQL pass + sibling-pair
+    # ``_try_local_store_usage_forecast``  -  one SQL pass + sibling-pair
     # collapse, vs. the JSONL walker below which re-parses every session
     # file on every call. Returns ``None`` to defer when the store is
     # unreachable.
@@ -4042,7 +4043,7 @@ def api_usage_cache_trends():
             except OSError:
                 continue
             # Skip files whose mtime is older than the window AND whose name
-            # doesn't include a reset suffix — saves IO on stale archives.
+            # doesn't include a reset suffix  -  saves IO on stale archives.
             if fallback_dt.timestamp() < cutoff_ts and ".jsonl.reset." not in fname:
                 continue
             last_seen_model = ""
@@ -4170,14 +4171,14 @@ def api_usage_cache_risk():
 
     For every session where `cacheExpiryCount > 0` or `cacheWriteCostUsd > 0`,
     aggregate:
-      - total_expiry_count   — sum of idle gaps that crossed the 5-min TTL
-      - total_write_cost_usd — total $ paid to rebuild the prompt cache
-      - total_saved_usd      — $ actually saved via cache reads in those sessions
-      - affected_sessions    — count of sessions that tripped at least one expiry
-      - max_idle_gap_sec     — worst single idle gap across all affected sessions
+      - total_expiry_count    -  sum of idle gaps that crossed the 5-min TTL
+      - total_write_cost_usd  -  total $ paid to rebuild the prompt cache
+      - total_saved_usd       -  $ actually saved via cache reads in those sessions
+      - affected_sessions     -  count of sessions that tripped at least one expiry
+      - max_idle_gap_sec      -  worst single idle gap across all affected sessions
 
     Data comes entirely from metadata already stored in DuckDB by the sync
-    daemon — no JSONL scanning, no proxy required.
+    daemon  -  no JSONL scanning, no proxy required.
     """
     try:
         from routes.sessions import _try_local_store_cost_breakdown
@@ -4226,13 +4227,13 @@ def api_skills_fidelity():
     Compares skills installed in workspace/skills/ against SKILL.md body-fetches
     seen in recent session JSONL files and classifies each skill as:
 
-      dead   — installed (header always in system context) but body never fetched
-      stuck  — body fetched but linked files in the skill dir never accessed
-      active — body fetched (and either no linked files, or at least one accessed)
-      orphan — body-fetched in sessions but not installed (untracked / removed)
+      dead    -  installed (header always in system context) but body never fetched
+      stuck   -  body fetched but linked files in the skill dir never accessed
+      active  -  body fetched (and either no linked files, or at least one accessed)
+      orphan  -  body-fetched in sessions but not installed (untracked / removed)
 
     Query params:
-      sessions  — number of recent session files to scan (default 200, max 500)
+      sessions   -  number of recent session files to scan (default 200, max 500)
 
     Returns:
       {
@@ -4267,7 +4268,7 @@ def api_skills_fidelity():
     )
     sessions_dir = _d._get_sessions_dir()
 
-    # 1. List installed skills — each subdir containing SKILL.md is one skill
+    # 1. List installed skills  -  each subdir containing SKILL.md is one skill
     skills_dir = os.path.join(workspace, "skills")
     installed_skills: set = set()
     skill_has_linked: dict = {}  # name -> bool (has non-SKILL.md, non-hidden files)
@@ -4386,7 +4387,7 @@ def api_skills_fidelity():
         'orphan_count': orphan_count,
         'total_installed': len(installed_skills),
         'note': (
-            'Dead: installed but body never fetched — remove to save header tokens. '
+            'Dead: installed but body never fetched  -  remove to save header tokens. '
             'Stuck: body fetched but linked files unread despite existing. '
             'Orphan: body-fetched in sessions but not installed (skill removed?).'
         ),
@@ -4413,7 +4414,7 @@ def api_token_attribution():
     # defer to the JSONL walker when the store is unreachable or empty.
     # NOTE: the legacy walker only handles the pre-v3 synthetic
     # ``type=='message'`` shape, so on real v3 installs the fast path is
-    # the ONLY surface that returns rows — see audit-imperfection note
+    # the ONLY surface that returns rows  -  see audit-imperfection note
     # in the helper docstring.
     if is_local_store_read_enabled():
         fast = _try_local_store_token_attribution(
@@ -4571,7 +4572,7 @@ def api_token_attribution():
 def api_nemo_cap_status():
     """Return the current daily NeMo ingest cap snapshot.
 
-    Cheap, side-effect-free read. Never raises out — on any failure we
+    Cheap, side-effect-free read. Never raises out  -  on any failure we
     fall back to a "no cap hit, no Pro" payload so the banner stays
     hidden rather than spuriously showing up.
     """
@@ -4595,7 +4596,7 @@ def api_nemo_cap_status():
 # tools by potential savings from routing to a cheaper model tier.
 # Pure read-path: no writes, no LLM calls, no new dependencies.
 
-# Tools whose outputs are deterministic / structural — cheaper models
+# Tools whose outputs are deterministic / structural  -  cheaper models
 # produce equivalent results and can safely replace heavier ones.
 _SPEND_OPT_TOOL_DOWNGRADE: dict = {
     "bash":               "haiku",
@@ -4757,12 +4758,12 @@ def api_efficiency():
     Node-wide grade/score/metrics + ranked savings actions computed by
     ``clawmetry.efficiency.build_efficiency_slice`` over the trailing-window
     ``rollup_model_daily`` aggregates (``query_efficiency_rollup``, read via
-    the daemon proxy — the daemon owns the DuckDB writer lock).
+    the daemon proxy  -  the daemon owns the DuckDB writer lock).
 
     ``?runtime=<id>`` returns ONLY that runtime's slice (server-side honesty:
     an absent runtime gets an honest ``insufficient_data`` shape, never a
     node-wide number relabelled). ``?days=`` clamps to 7..90 (default 30).
-    Never 500s — any failure yields the honest empty shape.
+    Never 500s  -  any failure yields the honest empty shape.
     """
     try:
         days = int(request.args.get("days") or 30)
@@ -4821,7 +4822,7 @@ def api_efficiency():
 
 
 # ---------------------------------------------------------------------------
-# Efficiency companion endpoints — Cache-Hit Rate + Routing Advisor.
+# Efficiency companion endpoints  -  Cache-Hit Rate + Routing Advisor.
 # Public API surface (v1 consumers, mobile). The dashboard tab derives both
 # card contents client-side from the shared /api/efficiency cache so they
 # work on cloud through the existing cm-cloud-efficiency interceptor without
@@ -4934,11 +4935,11 @@ def api_efficiency_routing_advisor():
     """Model-routing recommendations + already-realised routing savings.
 
     Two numbers side by side from the same DuckDB store:
-      * ``potential`` — build_efficiency_slice's ``model_downgrade`` actions
+      * ``potential``  -  build_efficiency_slice's ``model_downgrade`` actions
         (safe same-provider swaps only; the resolver in
         ``providers_pricing.downgrade_model_name`` is guarded) reshaped as a
         per-model advisor list.
-      * ``realised`` — the aggregate over ``auto_downgraded`` events that
+      * ``realised``  -  the aggregate over ``auto_downgraded`` events that
         actually ran (``query_routing_savings``).
     Node total + ``byRuntime`` map. Never 500s.
     """
@@ -4990,7 +4991,7 @@ def api_efficiency_routing_advisor():
 
 
 # ---------------------------------------------------------------------------
-# Issue #2837 sub-task #1 — Compression Potential card
+# Issue #2837 sub-task #1  -  Compression Potential card
 # ---------------------------------------------------------------------------
 
 def _agg_compression(rows):
@@ -5058,7 +5059,7 @@ def api_usage_compression():
 #
 # The join itself lives in ``clawmetry/local_store.py:query_git_outcomes`` and
 # the repository reading in ``clawmetry/git_outcomes.py``. This handler does
-# window resolution and shape, and nothing else — a handler that re-derived
+# window resolution and shape, and nothing else  -  a handler that re-derived
 # the join would be a second definition of the same numbers.
 
 #: The only windows this surface accepts. ADR-046 gave the product ONE
