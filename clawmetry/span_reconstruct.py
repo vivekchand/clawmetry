@@ -54,9 +54,10 @@ they're the edges the feature exists for.
 """
 from __future__ import annotations
 
-import hashlib
 import time
 from typing import Any
+
+from clawmetry import nonsecret_hash as _nsh
 
 __all__ = [
     "build_family_spans",
@@ -79,7 +80,7 @@ _SPAWN_TOOL_NAMES = ("task",)
 
 def _sha1_hex(*parts: Any) -> str:
     joined = "|".join("" if p is None else str(p) for p in parts)
-    return hashlib.sha1(joined.encode("utf-8", "replace")).hexdigest()
+    return _nsh.sha1(joined.encode("utf-8", "replace")).hexdigest()
 
 
 def _span_id(*parts: Any) -> str:

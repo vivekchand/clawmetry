@@ -11497,14 +11497,51 @@ async function saveRetentionSetting(usePlanDefault) {
   }
 }
 
+// Hosted dashboard: show only the parts of this tab that have real data.
+//
+// The cloud container has no ~/.openclaw config and no local DuckDB, so the
+// posture scan, the live signature scan, the policy/PII scan, the credential
+// scan and the recorded-findings feed have nothing to read. What a trial user
+// saw instead was a full Security page made of dashes, 0/0/0/0 tiles under a
+// heading promising threat detection, severity filters that filtered nothing,
+// and two panels stuck on "Scanning..." forever. That reads as broken
+// software, and the reading is fair: a control that claims a capability it
+// does not have costs more trust than the capability would have earned.
+// So on cloud those panels are removed outright, and #security-cloud-note
+// says in one line where those scans actually run. What survives is what the
+// snapshot really carries: the tamper-evident log, the plan's retention, and
+// governance activity when there is any (loadSecurityAudit hides its own
+// panel when there is none).
+var _CM_SECURITY_CLOUD_HIDDEN = [
+  'security-scan-btn',
+  'security-posture-panel',
+  'security-threat-heading',
+  'security-allclear',
+  'security-summary',
+  'security-filter-pills',
+  'security-threat-panel',
+  'security-findings-panel',
+  'policy-events-panel',
+  'credential-scan-panel',
+  'security-catalog-panel'
+];
+
+function _cmSecurityCloudTrim() {
+  if (!window.CLOUD_MODE) return;
+  _CM_SECURITY_CLOUD_HIDDEN.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  var note = document.getElementById('security-cloud-note');
+  if (note) note.style.display = '';
+}
+
 async function loadSecurityPosture() {
   if (window.CLOUD_MODE) {
-    // Trial-bug fix #23: posture scans the local OpenClaw config (no DuckDB in
-    // cloud) so it errored on the hosted dashboard. Show an honest state.
-    var _pb = document.getElementById('posture-score-badge');
-    if (_pb) _pb.textContent = '--';
-    var _pl = document.getElementById('posture-score-label');
-    if (_pl) _pl.textContent = t('app.local_dashboard_only', null, 'Local dashboard only');
+    // Posture scans the machine's agent config, which the cloud container does
+    // not have. It used to paint '--' + "Local dashboard only" into the panel,
+    // which is an empty score card claiming a scan happened. The panel goes.
+    _cmSecurityCloudTrim();
     return;
   }
   try {
@@ -11596,17 +11633,12 @@ async function loadSecurityPosture() {
 
 async function loadSecurityPage(silent) {
   if (window.CLOUD_MODE) {
-    // Trial-bug fix #24: threat scanning runs on the local node (no DuckDB in
-    // cloud); the early-return left "Scanning..." spinning forever. Render an
-    // honest state instead.
-    var _tl = document.getElementById('security-threat-list');
-    if (_tl) _tl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('app.security_threats_local_only', null, 'Threat detection runs on your local node. Open the local dashboard to scan for misconfigurations.') + '</div>';
-    // Integrity + audit DO ship in the snapshot; a cm-cloud interceptor will
-    // serve them. Until then these render an honest "local node" state rather
-    // than a silent blank (and become live once the interceptor lands).
+    // Threat/policy/credential scans read this machine's event history, which
+    // the cloud container does not have. Their panels go; integrity and the
+    // audit log DO ship in the snapshot (cm-cloud-security), so those load.
+    _cmSecurityCloudTrim();
     loadSecurityIntegrity();
     loadSecurityAudit();
-    loadSecurityFindings();
     return;
   }
   // The durable findings feed is loaded FIRST so the tiles and the all-clear
@@ -11777,14 +11809,12 @@ async function loadSecurityFindings() {
   var listEl = document.getElementById('security-findings-list');
   var countEl = document.getElementById('security-findings-count');
   if (!listEl) return;
-  // Cloud parity (FLYWHEEL gate 1): security_events is not in the snapshot,
-  // so the hosted dashboard has nothing to read. Say that plainly instead of
-  // leaving "Loading findings..." spinning forever, which is how a trial user
-  // learns to distrust the product.
+  // Cloud parity: security_events is not in the snapshot, so the hosted
+  // dashboard has nothing to read. An empty findings panel is a panel that
+  // says "we record findings" while showing none, so it is removed there
+  // rather than filled with an apology.
   if (window.CLOUD_MODE) {
-    listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
-      + t('security.findings_local_only', null, 'Findings are recorded on the machine your agent runs on. Open the dashboard there to read them.')
-      + '</div>';
+    _cmSecurityCloudTrim();
     if (countEl) countEl.textContent = '';
     return null;
   }
@@ -11926,7 +11956,11 @@ async function loadSecurityAudit() {
     if (countEl) countEl.textContent = rows.length ? (rows.length + (rows.length === 1 ? ' event' : ' events')) : '';
     if (!rows.length) {
       if (window.CLOUD_MODE) {
-        listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + t('app.audit_local_only', null, 'Governance activity is recorded on your local node. Open the local dashboard to review it.') + '</div>';
+        // The snapshot's auditLog slice is real, so "no rows" here means there
+        // has been no governance activity to record -- nothing to show, and no
+        // reason to keep an empty box on the page.
+        var _ap = document.getElementById('security-audit-panel');
+        if (_ap) _ap.style.display = 'none';
       } else {
         listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;" data-i18n="security.audit_empty">' + t('security.audit_empty', null, 'No recorded activity yet. Approval decisions, budget changes, and pauses appear here.') + '</div>';
       }
@@ -11973,8 +12007,16 @@ async function loadSecurityAudit() {
       html += escHtml(when) + '</div>';
       html += '</div></div>';
     });
+    var _ap2 = document.getElementById('security-audit-panel');
+    if (_ap2) _ap2.style.display = '';
     listEl.innerHTML = html;
   } catch (e) {
+    if (window.CLOUD_MODE) {
+      // Same reasoning as the empty case: no feed, no box.
+      var _ap3 = document.getElementById('security-audit-panel');
+      if (_ap3) _ap3.style.display = 'none';
+      return;
+    }
     listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">' + t('app.audit_unavailable', null, 'Activity feed unavailable.') + '</div>';
   }
 }

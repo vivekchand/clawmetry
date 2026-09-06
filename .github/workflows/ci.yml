@@ -172,6 +172,14 @@ jobs:
       - name: Architecture docs name modules that exist
         run: python3 -m pytest tests/test_module_map_drift.py -q
 
+      # Non-security digests (dedup ids, trace ids, change-detection hashes)
+      # must go through clawmetry.nonsecret_hash. A bare hashlib.md5/sha1
+      # raises ValueError -- not a weak digest, an exception -- on a host whose
+      # crypto provider allows only approved algorithms, which turns an ingest
+      # pass into a crash. Named explicitly because this job runs FILE LISTS.
+      - name: Non-security digests declare themselves
+        run: python3 -m pytest tests/test_nonsecret_hash.py -q
+
       # The declared product surface must match reality: every cell names a
       # verifier that exists, and nothing claims to be "gated" while sitting
       # behind a path-filtered workflow that stays silent on most PRs.
@@ -286,6 +294,14 @@ jobs:
       - name: Trail page + session-first nav
         run: python3 -m pytest tests/test_trail_tab_template.py tests/test_trail_context_panel.py tests/test_beginner_nav_phase_a.py tests/test_transcript_layout_grid.py -q
 
+      # Memory & Skills catalog + its sync path. Both files existed and were
+      # green locally while running in NO job — and the catalog is exactly
+      # where a wrong root means a runtime's Memory tab is empty for every
+      # user (2026-09-06: Codex, whose memory is only per-repo AGENTS.md,
+      # synced nothing because the daemon's launchd workspace is "/").
+      - name: Runtime memory catalog
+        run: python3 -m pytest tests/test_runtime_memory_catalog.py -q
+
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) — the
       # 2026-08-29 Windows "PyPI install failed" brick. Runs here because
@@ -311,6 +327,16 @@ jobs:
       # here because this job runs FILE LISTS.
       - name: Approval card legibility + preset risk floor
         run: python3 -m pytest tests/test_approval_card_legibility.py -q
+
+      # The hosted Security tab must show only the panels the snapshot can
+      # fill. Every scan on it (posture, signatures, policy, credentials,
+      # findings) reads the machine's own config and event history, which the
+      # cloud container does not have -- so on cloud they rendered dashes,
+      # 0/0/0/0 tiles and permanent "Scanning..." spinners. Silent by
+      # construction: nothing errors, the page just looks vibe-coded. Named
+      # here because this job runs FILE LISTS.
+      - name: Hosted Security tab shows only what it can fill
+        run: python3 -m pytest tests/test_security_tab_cloud_honesty.py -q
 
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
@@ -443,6 +469,7 @@ jobs:
             tests/test_session_context_ingest.py \
             tests/test_session_context_route.py \
             tests/test_tracing_reasoning_spans.py \
+            tests/test_obs_gap_openclaw_response_steered_5578.py \
             tests/test_trail_coverage_route.py \
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
@@ -506,6 +533,7 @@ jobs:
             tests/test_live_sessions_all_runtimes.py \
             tests/test_needs_you_ui_contract.py \
             tests/test_overview_claims_are_evidenced.py \
+            tests/test_obs_gap_nemoclaw_vllm_5579.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
