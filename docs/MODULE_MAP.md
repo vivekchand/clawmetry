@@ -46,7 +46,6 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/delegated.py` | small | `bp_delegated` | `/api/cursor`, `/api/delegated-usage` | Connect a Cursor account from the dashboard, and read delegated usage. |
 | `routes/device.py` | medium | `bp_device` | `/api/device`, `/device-preview` | Device snapshot — a compact, screen-sized JSON for hardware companions. |
 | `routes/dives.py` | medium | `bp_dives` | `/api/dives` | ClawMetry Dives: NL-to-SQL-to-chart over the local DuckDB store. |
-| `routes/entitlement.py` | huge | `bp_entitlement` | `/api/entitlement`, `/api/features`, `/api/license`, `/api/paywall`, `/api/runtimes`, `/api/tiers` | ``bp_entitlement``. |
 | `routes/evals.py` | medium | `bp_evals` | `/api/evals`, `/api/evaluators` | Eval (LLM-as-judge) endpoints. |
 | `routes/extensions.py` | small | `bp_extensions` | `/api/extensions` | diagnostic introspection for the entry-point plugin loader. |
 | `routes/fleet_history.py` | medium | `bp_fleet` | `/api/nodes`, `/fleet` | Multi-node fleet endpoints. |
