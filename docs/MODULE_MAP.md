@@ -94,7 +94,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/trial.py` | medium | `bp_trial` | `/api/trial` | Local free-trial activation. |
 | `routes/turn_anatomy.py` | medium | `bp_turn_anatomy` | `/api/turn-anatomy` | per-turn anatomy waterfall (PRD P0-3). |
 | `routes/update_check.py` | large | `bp_update_check` | `/api/update-check` | Auto-update checker with changelog notification. |
-| `routes/usage.py` | huge | `bp_usage` | `/api/activity-today`, `/api/anomalies`, `/api/efficiency`, `/api/forward-progress`, `/api/model-attribution`, `/api/nemo-cap-status`, `/api/runtime-summary`, `/api/sessions`, `/api/skill-attribution`, `/api/skills`, `/api/token-attribution`, `/api/token-velocity`, `/api/usage` | Usage / analytics / anomaly / attribution endpoints. |
+| `routes/usage.py` | huge | `bp_usage` | `/api/activity-today`, `/api/anomalies`, `/api/efficiency`, `/api/forward-progress`, `/api/model-attribution`, `/api/nemo-cap-status`, `/api/runtime-summary`, `/api/sessions`, `/api/skill-attribution`, `/api/skills`, `/api/token-attribution`, `/api/token-velocity`, `/api/usage` | routes/usage.py  -  Usage / analytics / anomaly / attribution endpoints. |
 | `routes/workspaces.py` | small | `bp_workspaces` | `/api/workspaces` | Multi-profile OpenClaw workspace discovery + switcher. |
 
 ## Shared helpers (`helpers/`)
