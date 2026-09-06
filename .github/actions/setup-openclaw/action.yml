@@ -28,8 +28,11 @@ description: "Install the pinned OpenClaw (Node CLI) and expose it on PATH for d
 #   fix. Moving off it is real work, not a version bump — see the note on the
 #   Dependabot entry in .github/dependabot.yml.
 #
-# The mirror of this action in vivekchand/clawmetry-cloud carries the same
-# pin (cloud #2300); the two copies are kept in step by hand.
+# The mirror of this action in vivekchand/clawmetry-cloud (cloud #2300) pins
+# 2026.9.2, deliberately not the same version. Cloud has no live-OpenClaw
+# transcript E2E, so the JSONL/SQLite boundary described above does not reach
+# it. The two copies share a mechanism, not a version; keep them in step on the
+# mechanism and let each pin what its own suites are green against.
 
 inputs:
   gateway-token:
