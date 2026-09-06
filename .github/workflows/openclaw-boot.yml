@@ -73,18 +73,41 @@ jobs:
         run: |
           set -e
           ok=0
-          # /v1/models is the documented OpenAI-compatible probe surface
-          # served on the gateway port (see docs/gateway/index.md). It
-          # returns JSON once the runtime is fully up.
+          # /health is the Gateway's dedicated liveness probe: unauthenticated,
+          # no session created, no LLM call, answering {"ok":true,"status":"live"}
+          # (openclaw docs/gateway/health.md, "Uptime monitoring" — it names this
+          # endpoint as the one to use and /v1/chat/completions as the one not to).
+          #
+          # This used to probe /v1/models. That is part of the OpenAI-compatible
+          # HTTP API, which is opt-in — it only exists once
+          # gateway.http.endpoints.chatCompletions.enabled is set
+          # (docs/gateway/openai-http-api.md). A bare --allow-unconfigured runner
+          # has no such config, so the path 404s however healthy the Gateway is.
+          #
+          # The status code alone is not enough to conclude anything here: the
+          # Gateway serves its Control UI SPA as a catch-all, so an unknown path
+          # answers 200 with HTML. Matching the documented JSON body is what keeps
+          # this gate from passing on a Gateway that is merely serving the SPA.
+          # Stronger surfaces exist if this should ever assert more than liveness:
+          # /startupz ("startup complete, not draining") and /readyz (deep channel
+          # readiness), both 503 until they are satisfied.
           for i in $(seq 1 60); do
             code=$(curl -s -o /tmp/openclaw-logs/probe.json \
               -w "%{http_code}" \
               -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
-              "http://127.0.0.1:18789/v1/models" || echo 000)
+              "http://127.0.0.1:18789/health" || echo 000)
             case "$code" in
-              2*|401|403)
-                # 401/403 still proves the HTTP server is up and the auth
-                # layer is reachable; that is all this smoke gate needs.
+              2*)
+                if grep -q '"status":[[:space:]]*"live"' /tmp/openclaw-logs/probe.json; then
+                  echo "gateway live ($code after ${i}s): $(cat /tmp/openclaw-logs/probe.json)"
+                  ok=1
+                  break
+                fi
+                ;;
+              401|403)
+                # Proves the HTTP server is up and the auth layer is reachable.
+                # /health is unauthenticated today, so this is only reachable if
+                # a future version puts the probe behind auth; still a live server.
                 echo "gateway responding ($code after ${i}s)"
                 ok=1
                 break
