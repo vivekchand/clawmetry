@@ -256,6 +256,7 @@ ALL_CHANNELS: tuple[str, ...] = (
     "nextcloudtalk",
     "clickclack",
     "buzz",
+    "fishaudio",
 )
 
 # Display labels for every known chat-channel adapter. Fallback for an
@@ -284,6 +285,7 @@ CHANNEL_LABELS = {
     "nextcloudtalk": "Nextcloud Talk",
     "clickclack": "ClickClack",
     "buzz": "Buzz",
+    "fishaudio": "Fish Audio",
 }
 
 _TIER_ORDER = (
@@ -19395,7 +19397,7 @@ def channel_catalog() -> list[dict]:
     channel axis. One row per id in :data:`ALL_CHANNELS`, sorted
     alphabetically so a pricing UI can render a stable table across
     releases. Every row is unlocked -- there is no paid-channel tier --
-    which lets a pricing page render "all 23 chat channels included in
+    which lets a pricing page render "all 24 chat channels included in
     every plan" off a single call instead of hard-coding the adapter list
     client-side.
 

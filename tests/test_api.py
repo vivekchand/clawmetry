@@ -109,7 +109,9 @@ class TestHealth:
 
 class TestSystemHealth:
     def test_status(self, api, base_url):
-        r = get(api, base_url, "/api/system-health")
+        # Use a longer timeout: this endpoint does real OS-level disk/memory/GPU
+        # checks that can be slow on Windows CI runners.
+        r = api.get(f"{base_url}/api/system-health", timeout=30)
         assert_ok(r)
 
     def test_response_is_dict(self, api, base_url):
@@ -1137,4 +1139,3 @@ class TestAlertRulesTokenSpike:
         assert r.status_code == 400, (
             f"Expected 400 for invalid rule type, got {r.status_code}: {r.text[:200]}"
         )
-

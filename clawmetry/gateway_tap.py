@@ -83,6 +83,11 @@ log = logging.getLogger("clawmetry-sync")  # share the daemon logger sink
 # We kept it as a list (rather than dropping to a single subscribe call)
 # so a future per-channel subscribe API can plug in without touching
 # the call sites in sync.py.
+#
+# Gateway tap identifiers are compound words without hyphens (matching
+# the convention used throughout this file). ``_CHANNEL_DIRS`` in
+# sync.py is the authoritative source of filesystem directory names and
+# may differ (e.g. ``fish-audio`` on disk vs ``fishaudio`` here).
 CHANNEL_NAMES: tuple[str, ...] = (
     "telegram",
     "signal",
@@ -106,6 +111,8 @@ CHANNEL_NAMES: tuple[str, ...] = (
     "synologychat",
     "nextcloudtalk",
     "clickclack",
+    "buzz",
+    "fishaudio",
 )
 
 

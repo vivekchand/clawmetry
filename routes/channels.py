@@ -2837,3 +2837,16 @@ def api_channel_buzz():
         if fast is not None:
             return jsonify(fast)
     return _d._generic_channel_data("buzz")
+
+
+@bp_channels.route("/api/channel/fishaudio")
+def api_channel_fishaudio():
+    """Issue #5045 — ingest Fish Audio voice/telephony channel transcripts."""
+    import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "fishaudio", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
+    return _d._generic_channel_data("fishaudio")
