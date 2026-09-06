@@ -408,10 +408,13 @@ def _try_local_store_cron_health_summary():
             "silent": total_silent,
             "disabled": sum(1 for j in summary if j["health"] == "disabled"),
             "warning": sum(1 for j in summary if j["health"] == "warning"),
+            "quarantined": 0,
         },
         "hasAnomalies": has_anomalies,
         "hasErrors": has_errors,
         "hasSilent": has_silent,
+        "quarantinedCrons": [],
+        "hasQuarantined": False,
         "_source": "local_store",
     }
 
@@ -1086,6 +1089,9 @@ def api_cron_health_summary():
     jobs = gw_data.get("jobs", []) or _d._get_crons()
     if not isinstance(jobs, list):
         jobs = []
+    quarantined_rows = gw_data.get("quarantined", [])
+    if not isinstance(quarantined_rows, list):
+        quarantined_rows = []
 
     now_ms = int(datetime.now().timestamp() * 1000)
     summary = []
@@ -1216,10 +1222,13 @@ def api_cron_health_summary():
                 "silent": total_silent,
                 "disabled": sum(1 for j in summary if j["health"] == "disabled"),
                 "warning": sum(1 for j in summary if j["health"] == "warning"),
+                "quarantined": len(quarantined_rows),
             },
             "hasAnomalies": has_anomalies,
             "hasErrors": has_errors,
             "hasSilent": has_silent,
+            "quarantinedCrons": quarantined_rows,
+            "hasQuarantined": bool(quarantined_rows),
         }
     )
 
@@ -1544,6 +1553,8 @@ def api_cron_health():
         "crons": crons_out,
         "totals": raw.get("totals", {}),
         "has_anomalies": bool(raw.get("hasAnomalies", False)),
+        "has_quarantined": bool(raw.get("hasQuarantined", False)),
+        "quarantined_crons": raw.get("quarantinedCrons", []),
     }
     # Propagate fast-path tag so callers can assert which source served the data.
     if raw.get("_source"):
