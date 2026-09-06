@@ -60,8 +60,23 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+      # Installed from a committed lockfile rather than the registry's moving
+      # `latest`. This job holds `issues: write` and the CLAUDE_CODE_OAUTH_TOKEN
+      # secret, so whatever this step installs runs with both — and
+      # `npm install -g @anthropic-ai/claude-code` took whatever the tag pointed
+      # at the moment the job ran, which is the window a compromised release is
+      # published into.
+      #
+      # `npm ci` installs exactly the tree recorded in
+      # .github/claude-cli/package-lock.json and verifies every tarball against
+      # the integrity hash stored beside it. A bare `@version` pin does neither:
+      # it re-resolves transitive deps on each run and checks nothing. The npm
+      # entry in .github/dependabot.yml is what keeps the lock from going stale.
+      - name: Install Claude Code CLI (from lockfile)
+        working-directory: .github/claude-cli
+        run: |
+          npm ci --no-audit --no-fund --silent
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Token visibility (presence only)
         run: |
