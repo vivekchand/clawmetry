@@ -320,6 +320,16 @@ jobs:
       - name: Approval card legibility + preset risk floor
         run: python3 -m pytest tests/test_approval_card_legibility.py -q
 
+      # The hosted Security tab must show only the panels the snapshot can
+      # fill. Every scan on it (posture, signatures, policy, credentials,
+      # findings) reads the machine's own config and event history, which the
+      # cloud container does not have -- so on cloud they rendered dashes,
+      # 0/0/0/0 tiles and permanent "Scanning..." spinners. Silent by
+      # construction: nothing errors, the page just looks vibe-coded. Named
+      # here because this job runs FILE LISTS.
+      - name: Hosted Security tab shows only what it can fill
+        run: python3 -m pytest tests/test_security_tab_cloud_honesty.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
