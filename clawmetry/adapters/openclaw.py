@@ -3986,6 +3986,46 @@ class OpenClawAdapter(AgentAdapter):
                     "attributes": wc_attrs,
                 })
 
+            elif t == "response_steered":
+                # OpenClaw CHANGELOG 2026.9.2 (#138046, #138434): when a
+                # response is steered mid-flight over a cached WebSocket during
+                # async tool execution, the harness writes a response_steered
+                # event. Without this branch the span builder silently drops it,
+                # leaving a gap in the Timeline/Brain stream (#5578).
+                _sc = (
+                    obj.get("steeringCount")
+                    or obj.get("steering_count")
+                    or obj.get("count")
+                )
+                _tid = (
+                    obj.get("asyncToolId")
+                    or obj.get("async_tool_id")
+                    or obj.get("toolCallId")
+                    or obj.get("tool_call_id")
+                )
+                _cid = obj.get("continuationId") or obj.get("continuation_id")
+                steer_attrs: dict = {"event.kind": "response_steered"}
+                if _sc is not None:
+                    try:
+                        steer_attrs["steering.count"] = int(_sc)
+                    except (TypeError, ValueError):
+                        pass
+                if isinstance(_tid, str) and _tid.strip():
+                    steer_attrs["steering.async_tool_id"] = _tid.strip()
+                if isinstance(_cid, str) and _cid.strip():
+                    steer_attrs["steering.continuation_id"] = _cid.strip()
+                spans.append({
+                    "span_id": _sid("response_steered", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "response.steered",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": agent_type,
+                    "attributes": steer_attrs,
+                })
+
         return spans
 
     def reconstruct_spans(self, jsonl_path: str) -> list:
