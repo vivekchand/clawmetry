@@ -149,7 +149,11 @@ jobs:
       # running the guards there means they are exercised on the interpreter
       # 0.12.753 broke on.
       - name: Install verification test deps
-        run: pip install pytest pyyaml requests
+        # flask: the guards in this job that exercise a Blueprint through a
+        # Flask test client (paywall funnel telemetry + the gate's free
+        # escape) cannot even be COLLECTED without it, and a collection
+        # error fails the whole step, not just that file.
+        run: pip install pytest pyyaml requests flask
 
       # A malformed workflow fails at STARTUP, before any step runs, and shows
       # up named after its own file path. c6-schedule-heal.yml carried two such
@@ -290,6 +294,14 @@ jobs:
       # the JS-unit files above).
       - name: Desktop bootstrap resilience
         run: python3 -m pytest tests/test_desktop_bootstrap_resilience.py -q
+
+      # The conversion funnel's two blind spots, both silent by construction:
+      # the onboarding gate's free-runtimes escape (markup + handler +
+      # endpoint must agree or it is a dead link) and the paywall beacons
+      # that reach the cloud only while app.js keeps posting the exact event
+      # names the forwarder maps. Both regress with nothing turning red.
+      - name: Paywall funnel telemetry + gate free escape
+        run: python3 -m pytest tests/test_paywall_funnel_telemetry.py -q
 
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
@@ -1100,11 +1112,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Setup OpenClaw
-        # Composite action from PR #1545 — installs `openclaw` via
-        # `npm install -g`, caches per-runner, exposes on PATH.
+        # Composite action from PR #1545 — installs `openclaw` with `npm ci`
+        # from its own committed lockfile and exposes it on PATH. The version
+        # is pinned there and moved by Dependabot, not passed from here.
         uses: ./.github/actions/setup-openclaw
         with:
-          version: latest
           gateway-token: moat-live-e2e-token
       - name: Install Python deps
         run: pip install flask pytest waitress duckdb cryptography requests
