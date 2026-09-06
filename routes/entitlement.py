@@ -23598,7 +23598,52 @@ def api_paywall_event():
         _pe.record_event(body)
     except Exception as exc:
         logger.debug("api_paywall_event: store swallowed error: %s", exc)
+    _ping_paywall_lifecycle(body)
     return "", 204
+
+
+# The overlay's two beacons, mapped to the lifecycle event names the cloud
+# funnel understands. Anything else stays local-only.
+_PAYWALL_LIFECYCLE_EVENTS = {
+    "hard_block_view": "paywall_view",
+    "hard_block_checkout_click": "paywall_checkout_click",
+}
+
+
+def _ping_paywall_lifecycle(body: dict) -> None:
+    """Mirror the two paywall beacons into the anonymous lifecycle ping.
+
+    Why: until now ``POST /api/paywall/event`` wrote ONLY to an in-process
+    rolling store on the user's own machine, so the highest-intent surface we
+    ship had no telemetry anywhere we can read. Checked on 2026-09-06:
+    ``hard_block_view`` and ``hard_block_checkout_click`` had zero rows in
+    cloud analytics, ever, which is why "do people see the paywall and
+    decline, or never reach it?" could not be answered, and why a pricing
+    change would have been made blind.
+
+    Rides ``clawmetry.telemetry`` rather than a new channel so it inherits
+    the existing privacy contract unchanged: an anonymous install id, no
+    account, no email, no hostname, no runtime data, and every opt-out
+    (``CLAWMETRY_NO_TELEMETRY``, ``DO_NOT_TRACK``, ``~/.clawmetry/notelemetry``)
+    already honoured. ``ping_once`` dedups on disk, so an overlay that
+    re-renders on every background poll still sends one row per install.
+
+    Never raises: a telemetry failure must not change the 204 the beacon
+    already returns.
+    """
+    try:
+        event = _PAYWALL_LIFECYCLE_EVENTS.get(str((body or {}).get("event", "")))
+        if not event:
+            return
+        from clawmetry import telemetry as _telemetry
+
+        try:
+            from dashboard import __version__ as _ver
+        except Exception:
+            _ver = "unknown"
+        _telemetry.ping_once(event, _ver)
+    except Exception as exc:
+        logger.debug("api_paywall_event: lifecycle ping skipped: %s", exc)
 
 
 @bp_entitlement.route("/api/paywall/events/summary")

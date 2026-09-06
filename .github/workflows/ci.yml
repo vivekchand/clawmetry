@@ -291,6 +291,14 @@ jobs:
       - name: Desktop bootstrap resilience
         run: python3 -m pytest tests/test_desktop_bootstrap_resilience.py -q
 
+      # The conversion funnel's two blind spots, both silent by construction:
+      # the onboarding gate's free-runtimes escape (markup + handler +
+      # endpoint must agree or it is a dead link) and the paywall beacons
+      # that reach the cloud only while app.js keeps posting the exact event
+      # names the forwarder maps. Both regress with nothing turning red.
+      - name: Paywall funnel telemetry + gate free escape
+        run: python3 -m pytest tests/test_paywall_funnel_telemetry.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
