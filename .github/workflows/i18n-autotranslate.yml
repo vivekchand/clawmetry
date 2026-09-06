@@ -44,8 +44,9 @@ jobs:
           # so it never reads this one. The script below only runs
           # `git show <ref>:<path>`, a local object read needing no credential.
           # Left persisted, a `contents: write` token would instead sit
-          # readable in .git/config for the whole job, which installs a global
-          # npm package and runs the Claude Code CLI over repository content.
+          # readable in .git/config for the whole job, which installs a
+          # third-party npm tree and runs the Claude Code CLI over repository
+          # content.
           persist-credentials: false
 
       - name: Guard - require Claude Code token
@@ -60,9 +61,32 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Claude Code CLI
+      # The pinned CLI declares `engines: node >=22`, and this job previously
+      # relied on whatever Node the runner image happened to ship. Pinning the
+      # toolchain here keeps `npm ci` reproducible rather than image-dependent.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: env.SKIP != '1'
-        run: npm install -g @anthropic-ai/claude-code
+        with:
+          node-version: "22"
+
+      # Installed from a committed lockfile rather than the registry's moving
+      # `latest`. This job holds `contents: write`, `pull-requests: write` and
+      # the CLAUDE_CODE_OAUTH_TOKEN secret, so what this step installs runs with
+      # both — and `npm install -g @anthropic-ai/claude-code` took whatever the
+      # tag pointed at the moment the job ran, which is the window a compromised
+      # release is published into.
+      #
+      # `npm ci` installs exactly the tree recorded in
+      # .github/claude-cli/package-lock.json and verifies every tarball against
+      # the integrity hash stored beside it. A bare `@version` pin does neither:
+      # it re-resolves transitive deps on each run and checks nothing. The npm
+      # entry in .github/dependabot.yml is what keeps the lock from going stale.
+      - name: Install Claude Code CLI (from lockfile)
+        if: env.SKIP != '1'
+        working-directory: .github/claude-cli
+        run: |
+          npm ci --no-audit --no-fund --silent
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Translate deltas (via Claude Code CLI, no API key)
         if: env.SKIP != '1'
