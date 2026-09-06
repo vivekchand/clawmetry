@@ -382,8 +382,8 @@ def _pretooluse_impl(runtime: str):
             "id": uuid.uuid4().hex,
             "requestor_session_id": f"{runtime}:{session_id}" if session_id
                                     else None,
-            "action": f"{tool_name}: "
-                      f"{ap._extract_command(tool_name, tool_input)[:140]}",
+            "action": ap.action_label(
+                tool_name, ap._extract_command(tool_name, tool_input)[:140]),
             "args": {"source": "pretooluse-hook", "runtime": runtime,
                      "tool_input": tool_input},
             "status": "simulated",
@@ -433,7 +433,7 @@ def _pretooluse_impl(runtime: str):
         "id": approval_id,
         "requestor_session_id": f"{runtime}:{session_id}" if session_id
                                 else None,
-        "action": f"{tool_name}: {cmd_preview}",
+        "action": ap.action_label(tool_name, cmd_preview),
         # Meta rides in the args blob so resume requests are stateless:
         # the row itself knows its policy window and timeout action.
         "args": {
@@ -930,7 +930,7 @@ def api_hook_claude_code_permissionrequest():
         "id": approval_id,
         "requestor_session_id": f"claude_code:{session_id}" if session_id
                                 else None,
-        "action": f"{tool_name}: {cmd_preview}",
+        "action": ap.action_label(tool_name, cmd_preview),
         "args": {
             "_cm_risk": mirror_risk,
             "source": "permissionrequest-hook",

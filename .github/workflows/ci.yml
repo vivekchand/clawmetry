@@ -303,6 +303,15 @@ jobs:
       - name: Paywall funnel telemetry + gate free escape
         run: python3 -m pytest tests/test_paywall_funnel_telemetry.py -q
 
+      # An approval card must say WHAT ran, WHERE and under WHICH rule. All
+      # three defects behind the 2026-09-06 "58 approvals I cannot read"
+      # report are silent: an empty arg object stringified to "{}", a queue
+      # row carried no runtime/policy/cwd, and the risk_high preset lost its
+      # min_risk in cloud storage and started pausing every tool call. Named
+      # here because this job runs FILE LISTS.
+      - name: Approval card legibility + preset risk floor
+        run: python3 -m pytest tests/test_approval_card_legibility.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
