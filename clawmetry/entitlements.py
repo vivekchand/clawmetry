@@ -31259,3 +31259,179 @@ def tiers_for_node_count_at_batch(
             "entitlements: tiers_for_node_count_at_batch failed: %s", exc
         )
         return None
+
+
+def has_capacity_batch(
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict:
+    """Per-axis boolean grants for every supplied capacity axis in one pass.
+
+    Boolean-gate twin of :func:`tiers_for_capacity_batch` on the three
+    capacity axes. Closes the capacity-axis symmetry gap in the ``has_*``
+    family: :func:`has_batch` collapses to the two grant axes (features +
+    runtimes) and does not accept capacity args at all -- so a caller that
+    wants a live "does this install admit N channels / K retention days /
+    M nodes?" answer for a ``(channels, retention_days, nodes)`` bundle
+    had to fan out three ``has_channel_count`` / ``has_retention_window``
+    / ``has_node_count`` calls. This helper delivers the same per-axis
+    boolean those three singulars return, on all three axes, in one call.
+
+    Envelope shape mirrors :func:`tiers_for_capacity_batch` on the three
+    capacity axes exactly (same per-axis ``None`` "not supplied"
+    sentinel, same never-raise contract)::
+
+        {
+          "channels":       <bool> | None,
+          "retention_days": <bool> | None,
+          "nodes":          <bool> | None,
+        }
+
+    Each boolean matches the singular ``has_<axis>`` helper byte-for-byte
+    (delegates directly to :func:`has_channel_count` /
+    :func:`has_retention_window` / :func:`has_node_count`) so grace
+    semantics carry through unchanged: while ``ent.grace`` is ``True``
+    (the current rollout state) every axis returns ``True`` for every
+    finite request, same as the scalars.
+
+    Critically, ``retention_days=None`` here means *unset* -- NOT
+    *unlimited* (matches :func:`tiers_for_capacity_batch` on the same
+    axis). Asking the "does this install admit unlimited retention?"
+    question is the singular :func:`has_retention_window` call's job --
+    it would delegate to the resolved entitlement here otherwise and a
+    caller supplying every other axis but leaving retention off would
+    get a mis-routed live-grant answer instead of an omitted axis.
+
+    Only an explicit ``None`` on an axis short-circuits that axis to
+    ``None`` in the envelope (the "not supplied" sentinel). A non-int
+    value is NOT converted to ``None`` here -- it delegates to the
+    axis's singular helper, which returns ``False`` on non-int input
+    by design (strict callsite-typo posture -- see
+    :func:`has_channel_count` / :func:`has_retention_window` /
+    :func:`has_node_count` docstrings). The HTTP endpoints normalise
+    blank / non-int query args to ``None`` via ``_parse_capacity_arg``
+    in ``routes/entitlement.py`` before calling this helper, so at the
+    HTTP layer a blank / non-int query arg does surface as an omitted
+    axis; in-process callers wanting the same "``None`` on bad input"
+    short-circuit should pre-normalise the same way.
+
+    Never raises: any resolver blowup collapses the whole envelope to
+    all-``None`` so a caller can bind this into a boolean AND-chain
+    without a try/except.
+    """
+    try:
+        return {
+            "channels": (
+                has_channel_count(channels)
+                if channels is not None
+                else None
+            ),
+            "retention_days": (
+                # `is not None` guard: `None` here means UNSET;
+                # `has_retention_window(None)` means UNLIMITED. Do not
+                # collapse the two -- see the "unset vs unlimited" para
+                # in this helper's docstring.
+                has_retention_window(retention_days)
+                if retention_days is not None
+                else None
+            ),
+            "nodes": (
+                has_node_count(nodes)
+                if nodes is not None
+                else None
+            ),
+        }
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_capacity_batch failed: %s", exc
+        )
+        return {
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
+
+
+def has_capacity_batch_at(
+    perspective_tier: str,
+    *,
+    channels: int | None = None,
+    retention_days: int | None = None,
+    nodes: int | None = None,
+) -> dict | None:
+    """Hypothetical-perspective sibling of :func:`has_capacity_batch`:
+    per-axis boolean grants for every supplied capacity axis, scoped by a
+    caller-supplied ``perspective_tier``.
+
+    Fills the last ``_at`` slot in the ``has_*`` capacity family alongside
+    :func:`has_channel_count_at` / :func:`has_retention_window_at` /
+    :func:`has_node_count_at` on the three per-axis grants and
+    :func:`tiers_for_capacity_batch_at` on the ladder side. A pricing-
+    matrix walkthrough can bind ONE URL per row across the whole batch
+    ``_at`` family instead of fanning out three per-axis ``_at`` calls.
+
+    Perspective is validated against :data:`_TIER_ORDER` (including
+    :data:`TIER_TRIAL`). Unlike :func:`tiers_for_capacity_batch_at` (which
+    walks the static per-tier caps and produces perspective-independent
+    rows), the boolean answer here IS perspective-shaped -- the whole point
+    of the ``_at`` slot is to answer "would THIS tier admit ``N``?" per
+    pricing-matrix cell. Delegates per axis to :func:`has_channel_count_at`
+    / :func:`has_retention_window_at` / :func:`has_node_count_at`.
+
+    Envelope shape mirrors :func:`has_capacity_batch` exactly (per-axis
+    ``None`` "not supplied" sentinel), so a caller can rebind between the
+    live and hypothetical URLs without reshaping. Returns ``None`` for
+    empty / unknown ``perspective_tier`` (caller renders "unknown tier"
+    / 404) rather than the all-``None`` envelope, matching every other
+    ``_at`` helper's fail-shape.
+
+    ``retention_days=None`` means *unset* -- NOT *unlimited* (matches
+    :func:`has_capacity_batch` on the same axis). Grace-independence
+    inherits from the underlying ``_at`` scalars: the answer depends
+    only on the static per-tier cap, not on ``ent.grace`` /
+    :func:`is_enforced` / the resolved entitlement. That means
+    ``has_capacity_batch_at("oss", channels=100)["channels"]`` returns
+    ``False`` even in grace -- the whole point of a what-if scalar.
+
+    Never raises: any resolver / lookup failure logs a warning and
+    returns the all-``None`` envelope so the pricing UI keeps rendering.
+    """
+    try:
+        p = (perspective_tier or "").strip().lower()
+    except (AttributeError, TypeError):
+        return None
+    if not p or p not in _TIER_ORDER:
+        return None
+    try:
+        return {
+            "channels": (
+                has_channel_count_at(p, channels)
+                if channels is not None
+                else None
+            ),
+            "retention_days": (
+                # `is not None` guard: `None` here means UNSET;
+                # `has_retention_window_at(p, None)` means UNLIMITED.
+                # Do not collapse -- see the "unset vs unlimited" para
+                # in this helper's docstring.
+                has_retention_window_at(p, retention_days)
+                if retention_days is not None
+                else None
+            ),
+            "nodes": (
+                has_node_count_at(p, nodes)
+                if nodes is not None
+                else None
+            ),
+        }
+    except Exception as exc:
+        logger.warning(
+            "entitlements: has_capacity_batch_at failed: %s", exc
+        )
+        return {
+            "channels": None,
+            "retention_days": None,
+            "nodes": None,
+        }
