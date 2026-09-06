@@ -139,3 +139,20 @@ updates:
       - "dependencies"
     cooldown:
       default-days: 7
+
+  # npm — the PR visual-diff bot's Playwright/pixelmatch/pngjs
+  # (.github/scripts/, driven by pr-screenshots.yml). The other half of that
+  # pin: the lockfile makes the install reproducible and integrity-checked,
+  # and this entry is what keeps it moving. Without it the bot would sit on
+  # one Playwright forever, which is the frozen end of the same problem the
+  # unpinned install was at the other end of.
+  - package-ecosystem: "npm"
+    directory: "/.github/scripts"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
