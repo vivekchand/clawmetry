@@ -149,7 +149,11 @@ jobs:
       # running the guards there means they are exercised on the interpreter
       # 0.12.753 broke on.
       - name: Install verification test deps
-        run: pip install pytest pyyaml requests
+        # flask: the guards in this job that exercise a Blueprint through a
+        # Flask test client (paywall funnel telemetry + the gate's free
+        # escape) cannot even be COLLECTED without it, and a collection
+        # error fails the whole step, not just that file.
+        run: pip install pytest pyyaml requests flask
 
       # A malformed workflow fails at STARTUP, before any step runs, and shows
       # up named after its own file path. c6-schedule-heal.yml carried two such

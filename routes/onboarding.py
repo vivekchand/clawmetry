@@ -490,6 +490,15 @@ def api_onboarding_free_only():
     (``trial_enforcement.set_free_only_mode``): free runtimes keep working,
     paid ones stay locked until the user upgrades. Reversible from Settings
     and by ``POST /api/trial/exit-free``.
+
+    NOT the deferred gate. "Look First, Choose Later" (REQ-OGV-DG-*) is a
+    different, still-unbuilt design in which free runtimes render with **no
+    choice on record** and the gate is deferred to a later trigger (a locked
+    card click, a paid feature, 3 loads or 24h). This endpoint leaves the
+    hard gate exactly as it is, answered immediately and recorded
+    immediately, and only makes one of its answers free of a signup. Whoever
+    builds the deferred gate should treat this as an existing answer to
+    carry over, not as a partial implementation of that requirement.
     """
     try:
         from clawmetry import trial_enforcement as _te
