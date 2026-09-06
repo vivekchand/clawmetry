@@ -331,6 +331,75 @@ def test_project_roots_expand_over_claude_registry(fake_home, tmp_path):
     assert any(p == str(repo / "AGENTS.md") for p in codex_mem)
 
 
+def test_project_roots_expand_when_workspace_is_filesystem_root(
+        fake_home, tmp_path, monkeypatch):
+    """The sync daemon runs under launchd with cwd="/".
+
+    Burned 2026-09-06: with a workspace of "/", the containment test
+    ``root.startswith(ws + os.sep)`` compared against "//" and matched
+    nothing, so no project-scoped root was ever cloned. Codex keeps memory
+    only in per-repo AGENTS.md, so its Memory tab was empty on cloud (the
+    daemon's ingest) while the local dashboard (a real workspace) showed the
+    files — the exact "no memory files synced for codex" report.
+    """
+    home, _ = fake_home
+    repo = tmp_path / "rootws_repo"
+    _write(repo, "AGENTS.md")
+    (home / ".claude.json").write_text(json.dumps(
+        {"projects": {str(repo): {}}}))
+    import clawmetry.runtime_memory as rm_mod
+    monkeypatch.setattr(rm_mod, "_workspace_root", lambda: os.sep)
+    rm = _import_rm()
+    codex_mem = _files(rm, "codex", "memory")
+    assert any(p == str(repo / "AGENTS.md") for p in codex_mem), codex_mem
+
+
+def test_is_within_handles_the_filesystem_root(fake_home):
+    rm = _import_rm()
+    assert rm._is_within("/AGENTS.md", "/")
+    assert rm._is_within("/", "/")
+    assert rm._is_within("/a/b/AGENTS.md", "/a/b")
+    assert not rm._is_within("/ab/AGENTS.md", "/a")
+    assert not rm._is_within("/a/AGENTS.md", "/b")
+
+
+def test_workspace_root_never_returns_the_filesystem_root(
+        fake_home, monkeypatch):
+    """A workspace of "/" is never a real answer — prefer HOME."""
+    home, _ = fake_home
+    import clawmetry.runtime_memory as rm_mod
+    monkeypatch.undo()  # drop the fixture's _workspace_root patch
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("OPENCLAW_HOME", str(home / ".openclaw"))
+    monkeypatch.setattr(rm_mod.os, "getcwd", lambda: os.sep)
+    assert rm_mod._workspace_root() != os.sep
+
+
+def test_codex_project_dirs_come_from_its_own_rollouts(fake_home, tmp_path):
+    """A Codex-only laptop has no ~/.claude.json to borrow repos from.
+
+    Codex's rollout files open with a ``session_meta`` line carrying the cwd
+    of the run — its own registry of "repos I worked in" — and that is where
+    its AGENTS.md memory lives.
+    """
+    home, _ = fake_home
+    repo = tmp_path / "codexrepo"
+    _write(repo, "AGENTS.md")
+    roll = (home / ".codex" / "sessions" / "2026" / "09" / "06"
+            / "rollout-2026-09-06T11-58-22-abc.jsonl")
+    roll.parent.mkdir(parents=True, exist_ok=True)
+    roll.write_text(json.dumps({
+        "type": "session_meta",
+        "payload": {"session_id": "abc", "cwd": str(repo)},
+    }) + "\n")
+    assert not (home / ".claude.json").exists()
+    rm = _import_rm()
+    rm._CODEX_CWD_CACHE.clear()
+    assert str(repo) in rm._codex_project_dirs()
+    codex_mem = _files(rm, "codex", "memory")
+    assert any(p == str(repo / "AGENTS.md") for p in codex_mem), codex_mem
+
+
 def test_registry_repo_without_runtime_files_stays_quiet(fake_home, tmp_path):
     home, _ = fake_home
     repo = tmp_path / "plainrepo"

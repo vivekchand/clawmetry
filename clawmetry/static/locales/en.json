@@ -1140,6 +1140,7 @@
   "security.audit_empty": "No recorded activity yet. Approval decisions, budget changes, and pauses appear here.",
   "security.audit_sub": "(approvals, budgets, pauses)",
   "security.audit_title": "Recent activity",
+  "security.cloud_note": "Config posture checks and threat scans run on the machine your agent runs on: they read files and activity that stay on it. Open ClawMetry there (localhost:8900 \u2192 Security) to run them.",
   "security.clean_sessions": "Clean Sessions",
   "security.critical": "Critical",
   "security.failed": "Failed",
