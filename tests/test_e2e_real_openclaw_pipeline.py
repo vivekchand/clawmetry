@@ -32,7 +32,7 @@ like tests/test_event_metrics_extraction.py):
   * any tool_call events round-trip their tool name + args dict.
 
 Model selection (no raw API key needed locally): if ANTHROPIC_API_KEY is set
-(CI) the turn uses anthropic/claude-3-5-haiku-20241022; else if the `claude`
+(CI) the turn uses anthropic/claude-haiku-4-5; else if the `claude`
 CLI is logged in (dev box) it uses claude-cli/<model> via the subscription
 ($0 metered); else the module skips. Either path writes the same canonical
 JSONL the daemon ingests.
@@ -73,9 +73,14 @@ def _pick_model():
 
     CI sets ANTHROPIC_API_KEY (the embedded anthropic provider). A dev box
     usually has no key but a logged-in `claude` CLI — OpenClaw's claude-cli
-    provider drives it via the Claude subscription (no key, $0 metered)."""
+    provider drives it via the Claude subscription (no key, $0 metered).
+
+    The Anthropic id is undated on purpose: the dated id this used to name
+    (anthropic/claude-3-5-haiku-20241022) was dropped from OpenClaw's model
+    catalogue, and a pinned snapshot that goes away fails the turn outright.
+    """
     if os.environ.get("ANTHROPIC_API_KEY"):
-        return "anthropic/claude-3-5-haiku-20241022"
+        return "anthropic/claude-haiku-4-5"
     if shutil.which("claude"):
         return "claude-cli/sonnet"
     return None

@@ -286,7 +286,13 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
             # assistant rows with provider/model populated), which Haiku writes
             # identically to Opus. The anthropic/ prefix drives harness
             # selection (see note above); the specific model is free to be cheap.
-            "--model", "anthropic/claude-3-5-haiku-20241022",
+            #
+            # Undated on purpose. This was pinned to
+            # anthropic/claude-3-5-haiku-20241022 until OpenClaw's catalogue
+            # dropped it and every run here died on "Unknown model". The bare
+            # id stays valid as dated snapshots come and go, and the assertions
+            # are about JSONL shape, not about which snapshot answered.
+            "--model", "anthropic/claude-haiku-4-5",
             "--json", "--timeout", "30",
         ],
         env=env, capture_output=True, text=True, timeout=60,
