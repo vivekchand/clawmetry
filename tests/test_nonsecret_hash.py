@@ -16,6 +16,7 @@ Two things are being pinned here:
    in-repo ratchet so it cannot come back between audit runs.
 """
 
+import ast
 import hashlib
 import io
 import os
@@ -65,6 +66,49 @@ def test_declares_not_for_security_where_the_runtime_accepts_it():
     ).read()
     assert "hashlib.md5(data, usedforsecurity=False)" in src
     assert "hashlib.sha1(data, usedforsecurity=False)" in src
+
+
+def test_every_hashlib_call_here_carries_its_scanner_annotation():
+    """The four excused calls stay excused, and a fifth cannot sneak in.
+
+    Both scanners read source, so their annotations live on the call line and
+    are silently lost by a reformat or a copy-paste. Losing the CodeQL one
+    puts four high-severity alerts back on a public repository's security
+    tab; losing the bandit one re-raises B324. Neither failure shows up in a
+    test run, so this is the test run.
+    """
+    path = os.path.join(REPO, "clawmetry", "nonsecret_hash.py")
+    src = io.open(path, encoding="utf-8").read()
+    lines = src.splitlines()
+
+    # Parsed, not grepped: the module docstring quotes `hashlib.md5(...)`
+    # while explaining itself, and prose must not count as a call site.
+    calls = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if (isinstance(fn, ast.Attribute) and fn.attr in ("md5", "sha1")
+                and isinstance(fn.value, ast.Name) and fn.value.id == "hashlib"):
+            calls.append((node.lineno, lines[node.lineno - 1]))
+    calls.sort()
+
+    assert len(calls) == 4, (
+        "expected exactly the two md5 and two sha1 constructor calls, got:\n  "
+        + "\n  ".join("%d: %s" % (n, ln.strip()) for n, ln in calls)
+    )
+
+    for n, ln in calls:
+        assert "codeql[py/weak-sensitive-data-hashing]" in ln, (
+            "nonsecret_hash.py:%d builds a weak digest with no CodeQL "
+            "suppression -- read the docstring before adding one:\n  %s"
+            % (n, ln.strip())
+        )
+        if "usedforsecurity" not in ln:
+            assert "nosec B324" in ln, (
+                "nonsecret_hash.py:%d omits usedforsecurity= and so needs "
+                "bandit's B324 marker too:\n  %s" % (n, ln.strip())
+            )
 
 
 def test_helper_is_importable_on_py38_syntax():

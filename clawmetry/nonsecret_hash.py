@@ -31,6 +31,29 @@ Do **not** use them for anything an attacker is trying to forge: passwords,
 signatures, tokens, or integrity checks over untrusted content. Those want
 SHA-256 (or the ``cryptography`` package, which the cloud-sync path already
 depends on), not a documented-as-non-security MD5.
+
+Why the two scanners are told to stand down *here* and nowhere else
+------------------------------------------------------------------
+
+Collecting the calls into this module is what makes the risk acceptance
+reviewable: there are exactly four ``hashlib`` constructor calls in the
+package now, all of them on this page, instead of fifteen scattered ones.
+That same collection is why both scanners fire here.
+
+* **bandit B324** flags a weak digest built without ``usedforsecurity``.
+  Only the two 3.8 fallbacks qualify, and they carry ``# nosec B324``.
+* **CodeQL ``py/weak-sensitive-data-hashing``** flags all four, because it
+  tracks the *caller's* value into the sink: a ``session_id``, ``job_id`` or
+  ``trace_id`` reaching a weak digest reads as sensitive data being hashed.
+  Unlike bandit, it does not treat ``usedforsecurity=False`` as an answer,
+  so the declaration alone does not clear it. The values concerned are
+  identifiers ClawMetry itself minted and already stores in plaintext beside
+  the digest -- the digest is a shorter name for a row, not a way of
+  protecting it -- so there is nothing here for a collision or a preimage to
+  win. That is a judgement about *these* four lines; it is not a licence to
+  add a fifth. ``tests/test_nonsecret_hash.py`` holds both halves: the
+  ratchet that keeps new call sites out, and a check that these annotations
+  stay attached to the calls they excuse.
 """
 
 import hashlib
@@ -49,9 +72,9 @@ def md5(data=b""):
     ``.update()`` on the returned object.
     """
     if _ACCEPTS_USEDFORSECURITY:
-        return hashlib.md5(data, usedforsecurity=False)
-    # nosec B324 - py3.8 has no usedforsecurity kwarg; see module docstring.
-    return hashlib.md5(data)  # nosec B324
+        return hashlib.md5(data, usedforsecurity=False)  # codeql[py/weak-sensitive-data-hashing]
+    # py3.8 has no usedforsecurity kwarg; see module docstring.
+    return hashlib.md5(data)  # codeql[py/weak-sensitive-data-hashing]  # nosec B324
 
 
 def sha1(data=b""):
@@ -60,6 +83,6 @@ def sha1(data=b""):
     Signature matches ``hashlib.sha1``.
     """
     if _ACCEPTS_USEDFORSECURITY:
-        return hashlib.sha1(data, usedforsecurity=False)
-    # nosec B324 - py3.8 has no usedforsecurity kwarg; see module docstring.
-    return hashlib.sha1(data)  # nosec B324
+        return hashlib.sha1(data, usedforsecurity=False)  # codeql[py/weak-sensitive-data-hashing]
+    # py3.8 has no usedforsecurity kwarg; see module docstring.
+    return hashlib.sha1(data)  # codeql[py/weak-sensitive-data-hashing]  # nosec B324
