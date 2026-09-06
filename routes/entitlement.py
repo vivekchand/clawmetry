@@ -23613,6 +23613,9 @@ _PAYWALL_LIFECYCLE_EVENTS = {
 def _ping_paywall_lifecycle(body: dict) -> None:
     """Mirror the two paywall beacons into the anonymous lifecycle ping.
 
+    Spec: REQ "Free Answer at the Gate, and a Visible Paywall"
+    (cd0b3dc3-ca5c-49ad-a4c0-dec01f122d12), AC-FREE-002.
+
     Why: until now ``POST /api/paywall/event`` wrote ONLY to an in-process
     rolling store on the user's own machine, so the highest-intent surface we
     ship had no telemetry anywhere we can read. Checked on 2026-09-06:

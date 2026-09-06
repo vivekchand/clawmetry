@@ -198,6 +198,10 @@ blocked by this scaffold.
 
 ## Paywall funnel telemetry
 
+> Spec: REQ "Free Answer at the Gate, and a Visible Paywall"
+> (`cd0b3dc3-ca5c-49ad-a4c0-dec01f122d12`), AC-FREE-002 and AC-FREE-001.
+
+
 The hard-block overlay posts two beacons to `POST /api/paywall/event`:
 
 | Beacon (app.js) | Forwarded as | Meaning |

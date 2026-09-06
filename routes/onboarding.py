@@ -469,6 +469,9 @@ def api_onboarding_complete():
 def api_onboarding_free_only():
     """Record the gate's free-runtimes escape: no account, no cloud, no trial.
 
+    Spec: REQ "Free Answer at the Gate, and a Visible Paywall"
+    (cd0b3dc3-ca5c-49ad-a4c0-dec01f122d12), AC-FREE-001.
+
     Why this exists: both cards on the gate demand an identity before the
     dashboard opens, and the funnel says that is where the installs go. In
     the 30 days to 2026-09-06 prod saw 798 first launches and 38 completed
