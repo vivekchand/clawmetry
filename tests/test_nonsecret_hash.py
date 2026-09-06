@@ -68,14 +68,19 @@ def test_declares_not_for_security_where_the_runtime_accepts_it():
     assert "hashlib.sha1(data, usedforsecurity=False)" in src
 
 
-def test_every_hashlib_call_here_carries_its_scanner_annotation():
-    """The four excused calls stay excused, and a fifth cannot sneak in.
+def test_the_weak_digest_calls_stay_contained_and_marked():
+    """Exactly four ``hashlib`` calls live here, and the 3.8 pair keeps B324.
 
-    Both scanners read source, so their annotations live on the call line and
-    are silently lost by a reformat or a copy-paste. Losing the CodeQL one
-    puts four high-severity alerts back on a public repository's security
-    tab; losing the bandit one re-raises B324. Neither failure shows up in a
-    test run, so this is the test run.
+    The bandit marker lives on the call line and is silently lost by a
+    reformat or a copy-paste, which re-raises B324 without failing any test
+    run -- so this is the test run.
+
+    There is deliberately no CodeQL annotation to assert. An
+    ``# codeql[py/weak-sensitive-data-hashing]`` comment was tried on all
+    four calls and measured: CodeQL re-ran and reported the same four
+    alerts, renumbered 977-980 -> 981-984. Default setup does not honour
+    inline suppression, so such a comment is decoration that reads like a
+    fix. This asserts it does not come back.
     """
     path = os.path.join(REPO, "clawmetry", "nonsecret_hash.py")
     src = io.open(path, encoding="utf-8").read()
@@ -99,9 +104,11 @@ def test_every_hashlib_call_here_carries_its_scanner_annotation():
     )
 
     for n, ln in calls:
-        assert "codeql[py/weak-sensitive-data-hashing]" in ln, (
-            "nonsecret_hash.py:%d builds a weak digest with no CodeQL "
-            "suppression -- read the docstring before adding one:\n  %s"
+        assert "codeql[" not in ln, (
+            "nonsecret_hash.py:%d carries an inline CodeQL suppression. "
+            "Default setup does not honour those -- it was measured on this "
+            "very file -- so the comment silences nothing and reads like a "
+            "fix. Dismiss the alert in the Security tab instead:\n  %s"
             % (n, ln.strip())
         )
         if "usedforsecurity" not in ln:
