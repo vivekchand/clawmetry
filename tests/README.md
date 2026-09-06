@@ -22,7 +22,6 @@ in one step via the composite action in `.github/actions/setup-openclaw`:
 ```yaml
 - uses: ./.github/actions/setup-openclaw
   with:
-    version: latest           # or a pinned npm dist-tag/version
     gateway-token: ci-token   # exported as OPENCLAW_GATEWAY_TOKEN
 ```
 
@@ -32,9 +31,19 @@ After this step:
 - `OPENCLAW_GATEWAY_TOKEN` is exported for the rest of the job. Boot the
   gateway yourself with `openclaw gateway --port 18789 --verbose &` if
   the test needs it.
-- The global install is cached per-runner; cache key is
-  `openclaw-<os>-<version>-v1`, effective TTL is 7 days (GitHub's
-  default cache eviction policy).
+
+There is no `version` input. The installed version is pinned in
+`.github/actions/setup-openclaw/package-lock.json` and installed with
+`npm ci`, so every run gets the recorded tree with each tarball checked
+against its integrity hash; Dependabot moves the pin. Passing `version:`
+now fails the step rather than being quietly ignored.
+
+The per-runner `actions/cache` step this action used to carry is gone.
+It keyed on `openclaw-<os>-<version>-v1`, and since every caller passed
+the literal `latest`, the key never varied and never invalidated — jobs
+restored one build indefinitely and skipped the install, so CI tested a
+frozen version while appearing to track the dist-tag. The lockfile makes
+the install reproducible without a cache; `npm ci` takes a few seconds.
 
 The `openclaw-boot.yml` workflow is the canonical smoke gate that
 proves the action works end to end (install + boot + HTTP probe +
