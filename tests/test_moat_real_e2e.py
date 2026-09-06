@@ -164,19 +164,44 @@ def _start_gateway(home: str, port: int, token: str) -> subprocess.Popen:
 
 
 def _wait_for_gateway(port: int, token: str, timeout: int) -> None:
+    """Poll /health until the Gateway reports itself live.
+
+    Same probe the CI smoke gate uses (.github/workflows/openclaw-boot.yml).
+
+    This polled /v1/models until it stopped working. That path belongs to
+    OpenClaw's OpenAI-compatible HTTP API, which is opt-in — it is served only
+    once ``gateway.http.endpoints.chatCompletions.enabled`` is set. These
+    fixtures boot with ``--allow-unconfigured`` and no config, so it answers
+    404 however healthy the Gateway is. ``/health`` is the documented liveness
+    probe: unauthenticated, no session, no LLM call, ``{"ok":true,"status":"live"}``.
+
+    The body is checked, not just the status code. The Gateway serves its
+    Control UI as a catch-all, so an unknown path answers 200 with HTML — a
+    status-only check would report a healthy gateway for a path that does not
+    exist, which is how the previous probe stayed plausible while being wrong.
+    """
     deadline = time.monotonic() + timeout
     last = "no attempts"
     while time.monotonic() < deadline:
         try:
             req = urllib.request.Request(
-                f"http://127.0.0.1:{port}/v1/models",
+                f"http://127.0.0.1:{port}/health",
                 headers={"Authorization": f"Bearer {token}"},
             )
             with urllib.request.urlopen(req, timeout=2) as r:
-                if 200 <= r.status < 500:
-                    return
+                body = r.read(4096).decode("utf-8", "replace")
+                if 200 <= r.status < 300:
+                    try:
+                        if json.loads(body).get("status") == "live":
+                            return
+                    except ValueError:
+                        pass
+                last = f"HTTP {r.status} body={body[:80]!r}"
         except urllib.error.HTTPError as e:
-            if e.code in (200, 401, 403):
+            # Proves the HTTP server is up and the auth layer is reachable.
+            # /health is unauthenticated today; this covers a future release
+            # that puts the probe behind auth.
+            if e.code in (401, 403):
                 return
             last = f"HTTP {e.code}"
         except Exception as e:
