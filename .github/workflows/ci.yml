@@ -172,6 +172,14 @@ jobs:
       - name: Architecture docs name modules that exist
         run: python3 -m pytest tests/test_module_map_drift.py -q
 
+      # Non-security digests (dedup ids, trace ids, change-detection hashes)
+      # must go through clawmetry.nonsecret_hash. A bare hashlib.md5/sha1
+      # raises ValueError -- not a weak digest, an exception -- on a host whose
+      # crypto provider allows only approved algorithms, which turns an ingest
+      # pass into a crash. Named explicitly because this job runs FILE LISTS.
+      - name: Non-security digests declare themselves
+        run: python3 -m pytest tests/test_nonsecret_hash.py -q
+
       # The declared product surface must match reality: every cell names a
       # verifier that exists, and nothing claims to be "gated" while sitting
       # behind a path-filtered workflow that stays silent on most PRs.

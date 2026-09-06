@@ -37,12 +37,13 @@ would surface as "no opinion" anyway), an unentitled node gets an explicit
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
 import time
 import uuid
+
+from clawmetry import nonsecret_hash as _nsh
 
 from flask import Blueprint, jsonify, request
 
@@ -141,7 +142,7 @@ def _ls_read(method_name: str, **kwargs):
 
 
 def _input_hash(tool_input: dict) -> str:
-    return hashlib.md5(
+    return _nsh.md5(
         json.dumps(tool_input, sort_keys=True, default=str).encode()
     ).hexdigest()
 
