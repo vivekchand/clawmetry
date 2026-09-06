@@ -971,6 +971,11 @@ _DDL = [
         agent_key   VARCHAR PRIMARY KEY,
         owner       VARCHAR,
         notes       VARCHAR,
+        -- Who PAYS, as opposed to who owns. Two questions an enterprise asks
+        -- separately, and before this they shared one free-text field, so
+        -- naming a person meant giving up the team rollup. Nullable: a label
+        -- may set either, both, or neither.
+        team        VARCHAR,
         updated_at  VARCHAR
     )
     """,
@@ -2271,6 +2276,10 @@ _MIGRATIONS_V2 = [
     ("sessions", "eval_judge_model",  "VARCHAR"),
     ("sessions", "eval_scored_at",    "BIGINT"),
     ("sessions", "eval_rubric",       "VARCHAR"),
+    # Team as a field distinct from owner (REQ-OBS-004). The key stays a
+    # free-form VARCHAR, so agent-level, machine-level and runtime-level
+    # labels keep coexisting without a second table.
+    ("agent_meta", "team", "VARCHAR"),
     # Content-grounded faithfulness evaluator (compute in clawmetry-pro).
     # Idempotent column-adds so existing stores pick up the column without a
     # fresh DB. The DDL above carries the same columns for fresh stores.
@@ -5795,6 +5804,7 @@ class LocalStore(TrailStoreMixin):
         agent_key: str,
         owner: str | None = None,
         notes: str | None = None,
+        team: str | None = None,
     ) -> None:
         """Upsert one Agent-Inventory label row (owner / notes) for a runtime.
 
@@ -5813,27 +5823,29 @@ class LocalStore(TrailStoreMixin):
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         with self._write_lock:
             self._conn.execute("""
-                INSERT INTO agent_meta (agent_key, owner, notes, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO agent_meta (agent_key, owner, notes, team, updated_at)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (agent_key) DO UPDATE SET
                     owner      = COALESCE(excluded.owner, agent_meta.owner),
                     notes      = COALESCE(excluded.notes, agent_meta.notes),
+                    team       = COALESCE(excluded.team,  agent_meta.team),
                     updated_at = excluded.updated_at
             """, [
                 agent_key,
                 owner,
                 notes,
+                team,
                 now_iso,
             ])
 
     def query_agent_meta(self) -> dict[str, dict[str, Any]]:
-        """Return ``{agent_key: {owner, notes, updated_at}}`` for every labeled
+        """Return ``{agent_key: {owner, notes, team, updated_at}}`` for every labeled
         runtime. Read-only. Goes through ``self._fetch`` (which already takes
         the write lock for read+write serialization), so callers MUST NOT wrap
         this in an outer ``with self._write_lock`` (regular Lock, would deadlock
         per memory ``feedback_local_store_fetch_takes_writelock``)."""
         sql = """
-            SELECT agent_key, owner, notes, updated_at
+            SELECT agent_key, owner, notes, team, updated_at
             FROM agent_meta
             ORDER BY agent_key ASC
         """
@@ -5845,9 +5857,28 @@ class LocalStore(TrailStoreMixin):
             out[str(key)] = {
                 "owner": r[1],
                 "notes": r[2],
-                "updated_at": r[3],
+                "team": r[3],
+                "updated_at": r[4],
             }
         return out
+
+    # A label can be attached to a whole MACHINE, not just to one agent or one
+    # runtime. Same free-form key space as the principal ids and runtime names
+    # that already live in agent_meta, namespaced so the three cannot collide:
+    # principal ids start "ap_", runtime names are bare words, machine scopes
+    # are "node:<node_id>".
+    #
+    # Why a machine rung at all: on a real install every principal tends to be
+    # (machine, runtime, "main"), so "everything on this build box belongs to
+    # Platform" is the sentence an administrator actually wants, and without it
+    # they must label each runtime on each box by hand. That is the labelling
+    # that does not get done, which is why ownership stays empty.
+    _NODE_SCOPE_PREFIX = "node:"
+
+    @staticmethod
+    def node_scope_key(node_id: str) -> str:
+        """agent_meta key for a machine-wide label."""
+        return LocalStore._NODE_SCOPE_PREFIX + str(node_id or "").strip()
 
     # Stable prefix for a derived agent principal id. Short, greppable, and
     # obviously not a session id when it shows up in an audit row.
@@ -5907,12 +5938,17 @@ class LocalStore(TrailStoreMixin):
         Each row::
 
             {principal_id, node_id, runtime, agent_id, sessions, first_seen,
-             last_seen, total_tokens, cost_usd, owner, notes, owner_source}
+             last_seen, total_tokens, cost_usd, owner, notes, owner_source,
+             team, team_source}
 
-        ``owner_source`` is ``"agent"`` when this principal has its own label,
-        ``"runtime"`` when it inherits the runtime's, and ``""`` when nobody
-        has claimed it -- so the UI can show inherited ownership honestly
+        ``owner_source`` / ``team_source`` name the rung each value came from
+        -- ``"agent"`` for this principal's own label, ``"node"`` for a
+        machine-wide one, ``"runtime"`` for its runtime's, and ``""`` when
+        nobody has claimed it. The UI shows inherited ownership honestly
         instead of implying someone named this agent specifically.
+
+        Owner and team resolve INDEPENDENTLY up that ladder (REQ-OBS-004): a
+        machine can belong to a team while a person owns one agent on it.
 
         Never raises: any failure yields ``[]``.
         """
@@ -5976,14 +6012,30 @@ class LocalStore(TrailStoreMixin):
                 continue
 
             pid = self.principal_id(r_node, rt, r_agent)
-            own = meta.get(pid) or {}
-            source = "agent" if own else ""
-            if not own:
-                # Fall back to the runtime-level label the Agent Inventory
-                # already writes, so an agent inherits its runtime's owner
-                # rather than rendering as unowned.
-                own = meta.get(rt) or {}
-                source = "runtime" if own else ""
+            # Owner and team resolve INDEPENDENTLY up the same ladder, most
+            # specific rung first. They are different questions -- a machine
+            # can belong to a team while a person owns one agent on it -- so
+            # binding them to one rung would make the pair unexpressible.
+            #
+            # Each answer reports the rung it came from, so an inherited value
+            # is never shown as one somebody chose for this agent. That honesty
+            # existed for the single runtime rung; a deeper ladder makes it
+            # matter more, not less.
+            ladder = (
+                ("agent", meta.get(pid) or {}),
+                ("node", meta.get(self.node_scope_key(r_node)) or {}),
+                ("runtime", meta.get(rt) or {}),
+            )
+            owner_val, owner_src = "", ""
+            team_val, team_src = "", ""
+            notes_val = ""
+            for rung, label in ladder:
+                if not owner_val and label.get("owner"):
+                    owner_val, owner_src = label["owner"], rung
+                if not team_val and label.get("team"):
+                    team_val, team_src = label["team"], rung
+                if not notes_val and label.get("notes"):
+                    notes_val = label["notes"]
 
             out.append({
                 "principal_id": pid,
@@ -5995,9 +6047,11 @@ class LocalStore(TrailStoreMixin):
                 "last_seen": last_seen,
                 "total_tokens": int(tokens or 0),
                 "cost_usd": float(cost or 0.0),
-                "owner": own.get("owner") or "",
-                "notes": own.get("notes") or "",
-                "owner_source": source,
+                "owner": owner_val or "",
+                "notes": notes_val or "",
+                "owner_source": owner_src,
+                "team": team_val or "",
+                "team_source": team_src,
             })
 
         out.sort(key=lambda d: (d.get("last_seen") or "", d["sessions"]), reverse=True)
