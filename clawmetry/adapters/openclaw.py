@@ -774,6 +774,33 @@ def _gateway_log_events_probe(count: int = 50) -> tuple:
         return [], False
 
 
+def _gateway_migration_warning(events: list) -> Optional[str]:
+    """Return the first migration-warning message from gateway log events, or None.
+
+    OpenClaw 2026.9.1+ stays running when a migration warning is detected
+    instead of refusing to start, but enters a degraded state.  The warning
+    appears as a ``warn``/``warning``-level log entry whose ``msg`` contains
+    the word ``migration``.  Callers surface ``gatewayDegraded`` so the UI
+    can distinguish "up" from "up but degraded".
+
+    Accepts the already-fetched events list (no extra I/O).  Returns None
+    when no migration warning is present.  Never raises (#5547).
+    """
+    try:
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            level = str(evt.get("level", "")).lower()
+            if level not in ("warn", "warning"):
+                continue
+            msg = str(evt.get("msg", ""))
+            if "migration" in msg.lower():
+                return msg
+        return None
+    except Exception:
+        return None
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -2558,6 +2585,14 @@ class OpenClawAdapter(AgentAdapter):
             if _gw_events:
                 meta["gatewayLogEvents"] = _gw_events
             meta["gatewayLogSourceAvailable"] = _gw_available
+            # Migration-warning degraded-start state (#5547): OpenClaw 2026.9.1+
+            # keeps the gateway running when a migration warning fires but enters a
+            # partial/degraded boot state distinct from full healthy or full down.
+            # Scan the already-fetched events so there is no extra I/O.
+            _mig_warn = _gateway_migration_warning(_gw_events)
+            if _mig_warn is not None:
+                meta["gatewayDegraded"] = True
+                meta["gatewayMigrationWarning"] = _mig_warn
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by

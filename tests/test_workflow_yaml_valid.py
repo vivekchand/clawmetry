@@ -335,3 +335,70 @@ def test_every_job_declares_runs_on(path: str) -> None:
         assert "runs-on" in job, (
             f"{os.path.basename(path)}: job {job_id!r} has no 'runs-on'."
         )
+
+
+def _run_steps():
+    """(workflow, job_id, job, script) for every step with a `run:` block."""
+    out = []
+    for path in _workflow_files():
+        doc = _load_or_skip(path)
+        for job_id, job in (doc.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                if isinstance(step, dict) and isinstance(step.get("run"), str):
+                    out.append((os.path.basename(path), job_id, job, step["run"]))
+    return out
+
+
+@pytest.mark.parametrize(
+    "entry", _run_steps(), ids=lambda e: f"{e[0]}::{e[1]}"
+)
+def test_drift_bot_is_read_from_the_commit_status_api(entry) -> None:
+    """drift-bot is a commit status, so /check-runs can never see it.
+
+    The 8090-software-factory App posts ``drift-bot`` as a COMMIT STATUS, not
+    as an Actions check run. ``scripts/e2e_gate.py`` grew
+    ``list_commit_statuses()`` for exactly this reason, and says so.
+
+    queue-priority.yml's ``requeue`` job did not: it asked
+    ``/commits/<sha>/check-runs?check_name=drift-bot``, which returns an empty
+    list for every commit. The verdict defaulted to "missing", so the
+    green-drift guard rejected every PR -- including PRs whose drift-bot
+    status was in fact green -- and the job re-ran nothing for as long as it
+    existed. Every run its sibling ``clear-queue`` cancelled stayed cancelled.
+
+    Auto-discovered over every run block, so any future consumer that reaches
+    for the wrong surface is caught here rather than by silence.
+    """
+    workflow, job_id, _job, script = entry
+    assert "check_name=drift-bot" not in script, (
+        f"{workflow} job {job_id!r} reads drift-bot from the check-runs API, "
+        "where it never appears (it is a commit status). Query "
+        "/commits/<sha>/status and filter on .context == \"drift-bot\"."
+    )
+
+
+@pytest.mark.parametrize(
+    "entry", _run_steps(), ids=lambda e: f"{e[0]}::{e[1]}"
+)
+def test_commit_status_readers_declare_statuses_read(entry) -> None:
+    """Reading commit statuses needs `statuses:`, which `checks:` does not grant.
+
+    The two surfaces are governed by different scopes. A job that switches
+    from check runs to commit statuses without moving its permission gets an
+    empty list from a token that simply cannot see them -- the same silent
+    "no verdict" this file's sibling test exists to prevent.
+    """
+    workflow, job_id, job, script = entry
+    if "/status" not in script.replace("/statuses", ""):
+        pytest.skip("does not read the commit-status API")
+    if "commits/" not in script:
+        pytest.skip("not a commit-status read")
+    perms = job.get("permissions")
+    if perms is None:
+        pytest.skip("job inherits workflow-level permissions")
+    assert isinstance(perms, dict) and perms.get("statuses") == "read", (
+        f"{workflow} job {job_id!r} reads /commits/<sha>/status but does not "
+        "declare `statuses: read`, so the token cannot see commit statuses."
+    )
