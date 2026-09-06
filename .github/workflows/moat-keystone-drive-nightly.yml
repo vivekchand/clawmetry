@@ -69,7 +69,6 @@ jobs:
         if: env.KEYSTONE_PRESENT == '1'
         uses: ./.github/actions/setup-openclaw
         with:
-          version: latest
           gateway-token: moat-keystone-drive-token
 
       - name: Install Python deps
