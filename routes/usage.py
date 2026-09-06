@@ -48,3 +48,5082 @@ from clawmetry.config import is_local_store_read_enabled
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_usage = Blueprint('usage', __name__)
+
+# In-memory mirror of ``_runtime_session_id_clause`` for paths that read raw
+# events (query_events doesn't take a runtime param). Same canonical prefix
+# list as the SQL filter, so client-side and server-side runtime scoping agree.
+# Duplicated rather than imported from clawmetry.local_store because that
+# module imports duckdb at top level and routes/usage.py must stay importable
+# in test environments where duckdb isn't installed. Keep in sync with
+# ``_NON_OPENCLAW_RUNTIME_PREFIXES`` in clawmetry/local_store.py and
+# ``_CM_RT_LABEL`` in clawmetry/static/js/app.js.
+_NON_OPENCLAW_RT_SET = frozenset((
+    "picoclaw", "nanoclaw", "hermes",
+    "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
+    "pi", "deepagents", "n8n", "antigravity", "copilot", "grok", "qm",
+    "deepseek_harness",
+    "exo",
+    "kimi",
+    "devin",
+    "gemini_cli",
+    "cline",
+    "openhands",
+    "openworker",
+    "grok_bot",
+    "lovable",
+    "replit",
+
+))
+
+def _event_runtime(ev) -> str:
+    sid = str((ev or {}).get("session_id") or "")
+    if ":" in sid:
+        p = sid.split(":", 1)[0].lower()
+        if p in _NON_OPENCLAW_RT_SET:
+            return p
+    return "openclaw"
+
+def _filter_evs_by_runtime(evs, runtime):
+    if not runtime or runtime == "all":
+        return evs
+    rt = runtime.lower()
+    if rt != "openclaw" and rt not in _NON_OPENCLAW_RT_SET:
+        return []  # unknown runtime → empty, matching the SQL clause behaviour
+    return [e for e in (evs or []) if _event_runtime(e) == rt]
+
+_CLUSTER_CACHE = {"ts": 0.0, "key": None, "data": None}
+_CLUSTER_CACHE_TTL_SECONDS = 120
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Epic #964 — DuckDB local-store fast paths for the Usage tab.
+#
+# Each helper below is the FIRST path tried by its sibling Flask route when
+# CLAWMETRY_LOCAL_STORE_READ=1. They return ``None`` on any failure (import
+# error, empty store, query crash, unknown shape) so the caller can fall
+# straight through to the legacy JSONL/gateway/OTLP path with no behaviour
+# change. Successful returns carry ``_source: "local_store"`` so callers (and
+# tests) can verify which path served the request.
+#
+# Source data:
+#   * events table — one row per tool call / message / spend event, written
+#     by sync.py + the daemon. Columns: id, agent_type, node_id, agent_id,
+#     session_id, event_type, ts (ISO), data (JSON BLOB), cost_usd,
+#     token_count, model.
+#   * daily_aggregates / sessions tables — pre-rolled summaries, populated
+#     in parallel for cheap queries.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class _DaemonProxyStore:
+    """Drop-in shim that mimics the LocalStore .query_* API by forwarding
+    each call through ``local_store_via_daemon``. Used so the 7 callers in
+    this module that do ``store = _ls_get_store(); store.query_X(...)``
+    don't each need their own daemon-proxy plumbing.
+
+    Issue #1291 cliff #3: a writable ``get_store()`` collided with the
+    sync daemon's exclusive DuckDB lock — the entire usage module was
+    silently falling through to the legacy sqlite scanners (the 6.6s p95
+    the latency probe surfaced for ``usage.api_anomalies``).
+    """
+    def __getattr__(self, method_name):
+        # Only proxy ``query_*`` methods (the read-side surface).
+        if not method_name.startswith("query_"):
+            raise AttributeError(method_name)
+        from routes.local_query import local_store_via_daemon
+
+        def _call(**kwargs):
+            return local_store_via_daemon(method_name, **kwargs)
+        return _call
+
+
+def _ls_get_store():
+    """Return a store-like object backed by the daemon HTTP proxy when
+    the daemon is reachable; fall back to a single-process direct open
+    for tests/dev mode where no daemon is running.
+
+    Returns ``None`` if neither path is available.
+    """
+    # Prefer the daemon proxy under standard installs (daemon owns the
+    # writer lock; direct opens fail with IOException).
+    try:
+        from routes.local_query import _cached_discovery
+        if _cached_discovery():
+            return _DaemonProxyStore()
+    except Exception:
+        pass
+    # Single-process fallback (tests / dev mode without a sync daemon).
+    try:
+        from clawmetry import local_store
+        return local_store.get_store(read_only=True)
+    except Exception:
+        return None
+
+
+def _ls_iso_day(ts_str):
+    """Node-local calendar day for an ISO timestamp. ``""`` when undecidable.
+
+    This used to be ``ts_str[:10]``, which is the timestamp's day in whatever
+    timezone the runtime wrote. Every caller compares the result against a day
+    axis built from ``date.today()`` — a LOCAL axis — so a runtime stamping
+    UTC dropped a user's evening activity into a bucket the axis did not
+    contain, and the row silently vanished from the chart. Same clock on both
+    sides now (ADR-046, clawmetry/cost_windows).
+    """
+    if not ts_str or not isinstance(ts_str, str) or len(ts_str) < 10:
+        return ""
+    try:
+        from clawmetry.cost_windows import local_day
+        return local_day(ts_str) or ""
+    except Exception:
+        return ts_str[:10]
+
+
+def _ls_event_plugin(ev):
+    """Best-effort plugin/tool name extractor from an events-row data blob.
+
+    Plugins are recorded under several historical keys depending on the
+    writer (gateway, claude-cli adapter, sync.py): ``plugin``, ``tool``,
+    ``tool_name``, ``name``. We try them in order and fall back to the
+    event_type itself.
+    """
+    data = ev.get("data") if isinstance(ev, dict) else None
+    if isinstance(data, dict):
+        for k in ("plugin", "tool", "tool_name", "name"):
+            v = data.get(k)
+            if v and isinstance(v, str):
+                return v
+    et = (ev.get("event_type") or "").strip()
+    return et or "unknown"
+
+
+def _ls_event_skill(ev):
+    """Pull a skill name out of an event's data blob, if any. Returns the
+    bare skill name (e.g. ``review``) or ``None`` when no skill is named."""
+    data = ev.get("data") if isinstance(ev, dict) else None
+    if not isinstance(data, dict):
+        return None
+    for k in ("skill", "skill_name"):
+        v = data.get(k)
+        if v and isinstance(v, str):
+            return v
+    # Detect SKILL.md path references in input/file_path/path keys.
+    for k in ("file_path", "path", "input"):
+        v = data.get(k)
+        if isinstance(v, str) and "SKILL.md" in v.upper():
+            # Pull the parent dir name as the skill identifier.
+            import re as _re
+            m = _re.search(r"[/\\]([^/\\]+)[/\\]SKILL\.md", v, _re.IGNORECASE)
+            if m:
+                return m.group(1)
+    return None
+
+
+def _ls_call(method_name, **kwargs):
+    """Cross-process LocalStore call with single-process fallback.
+
+    Issue #1088: every direct ``get_store().query_*`` call is dead code in
+    the standard install (daemon owns the writer lock, dashboard's open
+    raises ``IOException: Could not set lock``). This wrapper hits the
+    daemon's HTTP proxy first, then falls back to direct open for
+    single-process boots (tests + dev mode).
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method_name, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        return getattr(store, method_name)(**kwargs)
+    except Exception:
+        return None
+
+
+def _scan_events_slim(**kwargs):
+    """The Cost roll-ups' event scan: slim shape, full shape as the fallback.
+
+    ``query_events_slim`` is what keeps a Cost page load from marshalling
+    ~38 MB per scan across the daemon RPC (see ``LocalStore.query_events_slim``).
+    It is a newer shape than the daemon allowlist of any previous release,
+    and the dashboard and the sync daemon are separate processes that restart
+    independently — so during an upgrade there is a real window where an
+    upgraded dashboard asks a not-yet-restarted daemon for it. The proxy
+    answers 400, the caller gets ``None``, and these roll-ups would render
+    that as a confident EMPTY Cost tab.
+
+    Falling back to the full shape makes that skew cost bytes, not
+    correctness: the numbers are identical either way (the slim projection
+    only drops keys no roll-up reads), the page is merely heavier until the
+    daemon catches up.
+    """
+    rows = _ls_call("query_events_slim", **kwargs)
+    if rows is None:
+        rows = _ls_call("query_events", **kwargs)
+    return rows
+
+
+def _runtime_coverage(runtime, *, has_data):
+    """Coverage block for a runtime-scoped cost/usage payload.
+
+    A call-event-driven surface cannot tell "this runtime was idle" apart
+    from "this runtime never writes per-call cost", and both render as
+    $0.00. For a token-blind runtime that zero is a false statement about
+    the user's spend. ``clawmetry.runtime_records`` knows which is which;
+    this attaches the answer so the UI can say so.
+
+    Returns ``None`` for an unscoped (node-wide) request — a node mixes
+    runtimes, so there is no single honest verdict to attach.
+    """
+    rt = (runtime or "").strip().lower()
+    if not rt or rt == "all":
+        return None
+    try:
+        from clawmetry.runtime_records import coverage_payload
+        return coverage_payload(rt, has_data=bool(has_data))
+    except Exception:
+        return None
+
+
+# ── Provenance: how every figure on the Cost tab was obtained ────────────────
+#
+# The Cost tab is the surface a reader is most likely to quote at somebody
+# else, so it is the one that has to be able to show its working. See
+# ``clawmetry/provenance.py`` for the vocabulary; the short version is that a
+# figure is measured (read from a record), derived (an exact rule over
+# measured inputs), estimated (a model with an assumption in it), or unknown
+# (and then it is None, never 0.0).
+#
+# Cost is DERIVED, not measured, and saying so is the point of this work: a
+# runtime that reports its own dollar figure is rare, so almost every cost on
+# this tab is measured token counts priced against the provider's published
+# rate card. That is a good number and it is not a receipt.
+
+_COST_FORMULA = (
+    "the runtime's own cost when it reported one, otherwise measured input, "
+    "output and cache token counts priced against the provider's published "
+    "rate card"
+)
+_TOKEN_FORMULA = "sum of token counts on deduped call events in the window"
+
+# The windows are ``clawmetry.cost_windows``' calendar definitions, in the
+# node's local timezone. Naming them here means the tooltip and the SQL agree
+# by construction rather than by memory.
+_WINDOW_TEXT = {
+    "today": "today, the local calendar day",
+    "week": "this week, the local calendar week starting Monday",
+    "month": "this month, the local calendar month from the 1st",
+}
+
+
+def _usage_provenance(source: str, *, runtime=None, coverage=None):
+    """Provenance entries for an ``/api/usage`` payload.
+
+    ``source`` is the store the numbers were read out of, so a reader can
+    tell the DuckDB fast path from the transcript-scan fallback: they can
+    disagree, and when they do, which one you are looking at is the first
+    question worth asking.
+
+    ``coverage`` is ``_runtime_coverage``'s verdict, and it already knows the
+    thing that matters here: ``not_recorded`` means this runtime keeps no
+    per-call cost record and ``unverified`` means we have never confirmed
+    whether it does. Under either, a $0 is a statement about our coverage and
+    not about the user's spend, so the cost figures come back unknown instead
+    of as a confident zero.
+    """
+    scope = ("runtime %s" % runtime) if runtime else "every runtime on this node"
+    cov_status = str((coverage or {}).get("status") or "")
+    blind_reason = {
+        "not_recorded": ("this runtime keeps no per-call cost record, so a "
+                         "zero here would describe our coverage, not your "
+                         "spend"),
+        "unverified": ("we have not confirmed whether this runtime records "
+                       "per-call cost, so a zero here would be a claim we "
+                       "cannot back"),
+    }.get(cov_status)
+    entries = {}
+    for window in ("today", "week", "month"):
+        cost_key = window + "Cost"
+        if blind_reason:
+            entries[cost_key] = _prov.unknown(
+                blind_reason, source=source, window=_WINDOW_TEXT[window])
+        else:
+            entries[cost_key] = _prov.derived(
+                _COST_FORMULA, source, window=_WINDOW_TEXT[window],
+                inputs={"scope": scope})
+        entries[window] = _prov.measured(
+            _TOKEN_FORMULA, source, window=_WINDOW_TEXT[window],
+            inputs={"scope": scope})
+    entries["days[].cost"] = _prov.derived(
+        _COST_FORMULA, source, window="one local calendar day per bucket")
+    entries["sessions[].total_cost_usd"] = _prov.derived(
+        _COST_FORMULA, source, window="the whole session")
+    entries["sessionCosts"] = _prov.derived(
+        _COST_FORMULA, source, window="the whole session")
+    entries["billingCoverage.covered_usd"] = _prov.estimated(
+        "the API-equivalent cost of the models a detected subscription "
+        "covers, which assumes the detected plan is the one actually billed",
+        "clawmetry subscription detection")
+    entries["billingCoverage.out_of_pocket_usd"] = _prov.estimated(
+        "API-equivalent cost minus the covered share, on the same assumption",
+        "clawmetry subscription detection")
+    entries["covered_usd"] = entries["billingCoverage.covered_usd"]
+    entries["out_of_pocket_usd"] = entries["billingCoverage.out_of_pocket_usd"]
+    entries["cost_usd"] = _prov.derived(
+        _COST_FORMULA, source, window="the row's own window")
+    entries["total_cost_usd"] = entries["cost_usd"]
+    return entries
+
+
+def _stamp_usage(result, source, *, runtime=None):
+    """Attach the Cost tab's provenance to a built payload. Never raises."""
+    try:
+        entries = _usage_provenance(
+            source, runtime=runtime, coverage=result.get("coverage"))
+        if "routing_savings_usd" in result:
+            entries["routing_savings_usd"] = _prov.estimated(
+                "for each substitution the enforcement proxy made, the price "
+                "of the model that was asked for minus the price of the model "
+                "that ran, at the measured token count. It is a "
+                "counterfactual: nobody was billed the larger number",
+                "duckdb:events(auto_downgraded).estimated_saved_usd",
+                window="the last 30 days")
+            entries["saved_usd"] = entries["routing_savings_usd"]
+        _prov.stamp(result, entries)
+    except Exception:
+        pass
+    return result
+
+
+def _try_local_store_usage(runtime: Optional[str] = None):
+    """Fast path for /api/usage. Builds the daily token/cost chart by
+    aggregating ``daily_aggregates`` (with a ``query_events`` fallback if
+    the aggregates table is empty). Returns the same shape as the legacy
+    handler: days[], today/week/month, todayCost/weekCost/monthCost,
+    modelBreakdown, etc. Returns None to defer.
+
+    Issue #1394: the fast-path used to set every per-day input/output/
+    cache_read/cache_write split to 0 because ``query_aggregates`` only
+    returns the coarse SUM(token_count) column. We now also call
+    ``query_daily_usage_splits``, which walks each ``assistant`` /
+    ``model.completed`` event blob and pulls the v3 Anthropic-SDK
+    cache-token keys (``cache_read_input_tokens`` /
+    ``cache_creation_input_tokens``) so the Tokens tab actually shows
+    the breakdown on real OpenClaw installs.
+    """
+    # Pull pre-rolled day buckets first — these are the "blessed" data
+    # the daemon writes once per ingest. Falls back to live event scan
+    # when aggregates are empty (e.g. fresh install, only events seeded).
+    # Optional ``runtime`` filter is threaded into query_aggregates +
+    # query_daily_usage_splits so filtered totals reuse the same dedupe +
+    # cost math (sum over runtimes == unfiltered, by construction).
+    agg_rows = _ls_call("query_aggregates", runtime=runtime)
+    if agg_rows is None:
+        return None
+    daily_tokens = {}
+    daily_cost = {}
+    if agg_rows:
+        for r in agg_rows:
+            day = r.get("day") or ""
+            if not day:
+                continue
+            daily_tokens[day] = daily_tokens.get(day, 0) + int(r.get("token_count") or 0)
+            daily_cost[day] = daily_cost.get(day, 0.0) + float(r.get("cost_usd") or 0.0)
+    else:
+        evs = _scan_events_slim(limit=10000)
+        if not evs:
+            return None
+        # query_events has no SQL runtime filter; apply the same prefix logic
+        # in Python so the fallback path agrees with the aggregates path.
+        evs = _filter_evs_by_runtime(evs, runtime)
+        for ev in evs:
+            day = _ls_iso_day(ev.get("ts", ""))
+            if not day:
+                continue
+            daily_tokens[day] = daily_tokens.get(day, 0) + int(ev.get("token_count") or 0)
+            daily_cost[day] = daily_cost.get(day, 0.0) + float(ev.get("cost_usd") or 0.0)
+
+    # Issue #1394: per-day input/output/cache_read/cache_write split. We
+    # build this from the assistant-event blob walker so we don't have
+    # to wait for the daemon to backfill split columns. Empty list is
+    # fine (caller renders zeros for the missing days).
+    splits_rows = _ls_call("query_daily_usage_splits", runtime=runtime) or []
+    daily_input = {r["day"]: int(r.get("input_tokens") or 0) for r in splits_rows}
+    daily_output = {r["day"]: int(r.get("output_tokens") or 0) for r in splits_rows}
+    daily_cache_read = {r["day"]: int(r.get("cache_read_tokens") or 0) for r in splits_rows}
+    daily_cache_write = {r["day"]: int(r.get("cache_write_tokens") or 0) for r in splits_rows}
+    # Also fill in cost from splits_rows when query_aggregates' cost_usd
+    # column was empty for that day (real-data common case — sync.py
+    # only stamps cost_usd when ``usage.cost.total`` is present at
+    # ingest time, which Anthropic-SDK echo events omit).
+    for r in splits_rows:
+        d = r["day"]
+        cost_from_split = float(r.get("cost_usd") or 0.0)
+        if cost_from_split > 0 and daily_cost.get(d, 0.0) <= 0:
+            daily_cost[d] = cost_from_split
+
+    # Issue #1394 + MOAT regression 2026-05-16: raw ``token_count`` aggregate
+    # counts BOTH the ``assistant`` and the sibling ``model.completed`` event
+    # for each LLM turn (different writers race ~100-300ms apart) AND any
+    # non-billable-turn rows with a token_count column (tool_call rows in
+    # synthetic harnesses, retries, etc.). The splits walker dedupes the
+    # sibling pair but ignores non-message rows entirely, so blindly
+    # overwriting raw with deduped silently drops those tokens.
+    #
+    # Decision: if raw >= 2*deduped, the sibling-doubling bug dominates →
+    # subtract the doubled half and add any residual non-message tokens
+    # back on top. If raw < 2*deduped, no full sibling pair exists for that
+    # day (synthetic / partial install) → keep whichever is larger so we
+    # don't lose data either way.
+    for d in set(list(daily_input.keys()) + list(daily_output.keys())):
+        deduped_total = int(daily_input.get(d, 0)) + int(daily_output.get(d, 0))
+        if deduped_total <= 0:
+            continue
+        raw_total = int(daily_tokens.get(d, 0))
+        sibling_doubled = 2 * deduped_total
+        if raw_total >= sibling_doubled:
+            non_msg = raw_total - sibling_doubled
+            daily_tokens[d] = deduped_total + non_msg
+        else:
+            daily_tokens[d] = max(raw_total, deduped_total)
+
+    if (
+        not daily_tokens and not daily_cost
+        and not daily_input and not daily_output
+        and not daily_cache_read and not daily_cache_write
+    ):
+        return None
+
+    today = datetime.now()
+    days = []
+    for i in range(13, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        days.append({
+            "date": ds,
+            "tokens": int(daily_tokens.get(ds, 0)),
+            "cost": round(float(daily_cost.get(ds, 0.0)), 6),
+            "inputTokens": int(daily_input.get(ds, 0)),
+            "outputTokens": int(daily_output.get(ds, 0)),
+            "cacheReadTokens": int(daily_cache_read.get(ds, 0)),
+            "cacheWriteTokens": int(daily_cache_write.get(ds, 0)),
+        })
+
+    today_str = today.strftime("%Y-%m-%d")
+    week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    month_start = today.strftime("%Y-%m-01")
+
+    today_tok = int(daily_tokens.get(today_str, 0))
+    week_tok = int(sum(v for k, v in daily_tokens.items() if k >= week_start))
+    month_tok = int(sum(v for k, v in daily_tokens.items() if k >= month_start))
+    today_cost = float(daily_cost.get(today_str, 0.0))
+    week_cost = float(sum(v for k, v in daily_cost.items() if k >= week_start))
+    month_cost = float(sum(v for k, v in daily_cost.items() if k >= month_start))
+
+    # Per-model breakdown: scan recent events and group.
+    model_usage = {}
+    recent = _scan_events_slim(limit=5000) or []
+    recent = _filter_evs_by_runtime(recent, runtime)
+    for ev in recent:
+        m = ev.get("model") or "unknown"
+        model_usage[m] = model_usage.get(m, 0) + int(ev.get("token_count") or 0)
+    model_breakdown = [
+        {"model": k, "tokens": v}
+        for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
+        if v > 0
+    ]
+
+    # Issue #3438: routing savings attribution. Reads auto_downgraded events
+    # written by the proxy into DuckDB and surfaces per-pair savings so the
+    # usage tab can show "X substitutions saved $Y this month."
+    routing_data = _ls_call("query_routing_savings") or {}
+
+    # Issue #5289: Fish Audio TTS cost attribution — per-provider rollup.
+    # TTS costs ARE included in the daily cost totals (query_aggregates sums
+    # all event_type values), but they're invisible in modelBreakdown because
+    # that section is token-based only. Surface them as a dedicated ttsBreakdown.
+    tts_breakdown = _ls_call("query_tts_provider_rollup", runtime=runtime) or []
+
+    import dashboard as _d  # late import — same pattern as other paths
+
+    return _stamp_usage({
+        "source": "local_store",
+        "_source": "local_store",
+        "days": days,
+        "today": today_tok,
+        "week": week_tok,
+        "month": month_tok,
+        "todayCost": round(today_cost, 4),
+        "weekCost": round(week_cost, 4),
+        "monthCost": round(month_cost, 4),
+        "modelBreakdown": model_breakdown,
+        "ttsBreakdown": tts_breakdown,
+        "modelBilling": [],
+        "billingSummary": {},
+        # Fast-path has no per-model tokens; fall back to "detected sub
+        # covers everything" so the Cost tab still paints the coverage
+        # banner (matches the device UX).
+        "billingCoverage": _d._get_billing_coverage(
+            [], today_cost, week_cost, month_cost,
+            fallback_all_covered_when_no_models=True,
+        ),
+        "sessionCosts": {},
+        "sessions": _ls_top_sessions_by_cost(limit=20, runtime=runtime),
+        "anomalies": [],
+        "anomalySessionIds": [],
+        "trend": {},
+        "warnings": [],
+        "routing_savings_usd": round(float(routing_data.get("total_savings_usd") or 0.0), 6),
+        "routing_substitutions": routing_data.get("by_pair") or [],
+        # Runtime-scoped honesty: says whether a $0 here means "idle" or
+        # "this runtime keeps no cost record". None when unscoped.
+        "coverage": _runtime_coverage(
+            runtime,
+            has_data=bool(month_tok or month_cost or today_tok or today_cost),
+        ),
+    }, "DuckDB local store (daily_aggregates, rolled by the sync daemon)",
+        runtime=runtime)
+
+
+def _ls_top_sessions_by_cost(limit=20, runtime=None):
+    """Issue #68 — top-N sessions by total cost. Sources rows from the
+    DuckDB ``events`` table aggregated per session, joined back to a
+    sample event for the model column. Returns ``[]`` on any failure so
+    the caller can drop the key silently.
+
+    When ``runtime`` is set, scope to that runtime (session-id prefix) so the
+    Cost tab's "Top Sessions" honours the runtime switcher instead of leaking
+    node-wide rows under a specific runtime (per-runtime honesty gate)."""
+    try:
+        sessions = _ls_call("query_sessions", limit=500)
+    except Exception:
+        sessions = None
+    if not sessions:
+        return []
+    if runtime:
+        _rt = str(runtime).lower()
+        sessions = [s for s in sessions
+                    if _runtime_of(s.get("session_id") or "") == _rt]
+        if not sessions:
+            return []
+    # Sort by cost desc and take top-N before the model lookup so we
+    # avoid scanning events for hundreds of cheap sessions.
+    ranked = sorted(
+        sessions,
+        key=lambda s: float(s.get("cost_usd") or 0.0),
+        reverse=True,
+    )[: max(1, int(limit))]
+    out = []
+    for s in ranked:
+        sid = s.get("session_id") or ""
+        if not sid:
+            continue
+        # Pull the most recent event for this session to grab the model
+        # column. ``query_events`` returns rows newest-first.
+        model = ""
+        try:
+            evs = _ls_call("query_events", session_id=sid, limit=1) or []
+            if evs:
+                model = evs[0].get("model") or ""
+        except Exception:
+            model = ""
+        # Issue #1718: ``query_sessions`` now exposes a renderable
+        # ``message_count`` distinct from the raw ``event_count``. Prefer
+        # the new column so per-session "message_count" rendered in the
+        # cost page matches what the transcript detail modal will show
+        # (and what the transcripts list now reports). Fall back to the
+        # old raw count when an older daemon hasn't picked up the bump.
+        msg_count = s.get("message_count")
+        if msg_count is None:
+            msg_count = s.get("event_count") or 0
+        out.append({
+            "session_id":      sid,
+            "agent_id":        s.get("agent_id") or "",
+            "model":           model,
+            "total_tokens":    int(s.get("token_count") or 0),
+            "total_cost_usd":  round(float(s.get("cost_usd") or 0.0), 6),
+            "message_count":   int(msg_count or 0),
+            "started_at":      s.get("started_at") or "",
+        })
+    return out
+
+
+def _ls_compute_anomalies():
+    """Shared rolling-baseline anomaly detection over events. Used by both
+    /api/usage/anomalies and /api/anomalies. Buckets recent (24h) sessions
+    and flags any whose cost exceeds 2x the 7-day rolling session-cost
+    baseline. Returns ``(anomalies, baseline_avg)`` or ``(None, None)`` to
+    defer."""
+    store = _ls_get_store()
+    if store is None:
+        return None, None
+    try:
+        sessions = store.query_sessions(limit=500)
+    except Exception:
+        return None, None
+    if not sessions:
+        return None, None
+
+    # Convert ISO start timestamps to epoch.
+    def _to_epoch(s):
+        if not s:
+            return 0.0
+        try:
+            from datetime import datetime as _dt
+            return _dt.fromisoformat(str(s).replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    enriched = []
+    for s in sessions:
+        enriched.append({
+            "session_id": s.get("session_id"),
+            "cost_usd": float(s.get("cost_usd") or 0.0),
+            "start_ts": _to_epoch(s.get("started_at")),
+        })
+
+    now_ts = time.time()
+    day_ago = now_ts - 86400
+    week_ago = now_ts - 7 * 86400
+    anomalies = []
+
+    # Sort by start_ts ascending so the rolling-baseline window is well-defined.
+    enriched.sort(key=lambda r: r["start_ts"])
+    for i, sess in enumerate(enriched):
+        ts = sess["start_ts"]
+        if ts < day_ago:
+            continue
+        cost = sess["cost_usd"]
+        if cost <= 0:
+            continue
+        window_start = ts - (7 * 86400)
+        window_costs = [
+            p["cost_usd"] for p in enriched[:i]
+            if p["start_ts"] >= window_start and p["start_ts"] < ts and p["cost_usd"] > 0
+        ]
+        if not window_costs:
+            continue
+        avg = sum(window_costs) / float(len(window_costs))
+        if avg <= 0:
+            continue
+        if cost > (2.0 * avg):
+            anomalies.append({
+                "session_id": sess["session_id"],
+                "cost_usd": round(cost, 6),
+                "rolling_avg_usd": round(avg, 6),
+                "ratio": round(cost / avg, 3),
+                "timestamp": int(ts * 1000),
+            })
+
+    anomalies.sort(key=lambda a: a.get("ratio", 0), reverse=True)
+    baseline_costs = [s["cost_usd"] for s in enriched
+                      if s["start_ts"] >= week_ago and s["cost_usd"] > 0]
+    baseline_avg = (sum(baseline_costs) / float(len(baseline_costs))) if baseline_costs else 0.0
+    return anomalies, baseline_avg
+
+
+def _try_local_store_usage_anomalies():
+    """Fast path for /api/usage/anomalies."""
+    anomalies, baseline_avg = _ls_compute_anomalies()
+    if anomalies is None:
+        return None
+    return {
+        "anomalies": anomalies,
+        "baseline_7d_avg_usd": round(baseline_avg or 0.0, 6),
+        "threshold_multiplier": 2.0,
+        "_source": "local_store",
+    }
+
+
+def _try_local_store_anomalies():
+    """Fast path for /api/anomalies. The legacy handler stores acks in a
+    sqlite db so we mirror its empty/no-ack defaults."""
+    anomalies, baseline_avg = _ls_compute_anomalies()
+    if anomalies is None:
+        return None
+    # Match the legacy response shape (anomaly id + ack + severity), even
+    # though we can't persist acks in the local store yet — those need the
+    # ~/.openclaw/clawmetry.db that the legacy detector owns.
+    out = []
+    for i, a in enumerate(anomalies):
+        ratio = float(a.get("ratio") or 0)
+        sev = "critical" if ratio >= 4.0 else ("high" if ratio >= 3.0 else "medium")
+        out.append({
+            "id": i + 1,
+            "session_key": a.get("session_id"),
+            "metric": "cost_spike",
+            "value": a.get("cost_usd"),
+            "baseline": a.get("rolling_avg_usd"),
+            "ratio": ratio,
+            "severity": sev,
+            "detected_at": (a.get("timestamp") or 0) / 1000.0,
+            "acknowledged": False,
+        })
+    active = [a for a in out if not a.get("acknowledged")]
+    return {
+        "anomalies": out,
+        "active_count": len(active),
+        "has_active": bool(active),
+        "baselines": {"cost_7d_avg_usd": round(baseline_avg or 0.0, 6)},
+        "threshold_cost_multiplier": 2.0,
+        "threshold_token_multiplier": 2.0,
+        "threshold_error_multiplier": 3.0,
+        "_source": "local_store",
+    }
+
+
+def _try_local_store_usage_by_plugin(threshold_pct, runtime=None):
+    """Fast path for /api/usage/by-plugin. Groups events by plugin/tool
+    name, splits each event's tokens/cost across the plugins implicated.
+    Returns shape: {plugins: [...], warnings: [...]}."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = _scan_events_slim(limit=20000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    evs = _filter_evs_by_runtime(evs, runtime)
+    # Issue #1451: sibling-dedupe so v3 assistant + model.completed pairs
+    # don't double-count per-plugin tokens.
+    bucket_max = build_sibling_bucket_max(evs)
+    plugin_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
+    saw_any = False
+    for ev in evs:
+        plugin = _ls_event_plugin(ev)
+        if not plugin:
+            continue
+        if is_sibling_dup(ev, bucket_max):
+            continue
+        saw_any = True
+        plugin_stats[plugin]["tokens"] += float(ev.get("token_count") or 0)
+        plugin_stats[plugin]["cost"] += float(ev.get("cost_usd") or 0.0)
+        plugin_stats[plugin]["calls"] += 1
+    if not saw_any:
+        return None
+    total_tokens = sum(s["tokens"] for s in plugin_stats.values()) or 1.0
+    rows = []
+    warnings = []
+    for plugin, st in plugin_stats.items():
+        toks = st["tokens"]
+        cost = st["cost"]
+        calls = st["calls"]
+        pct = round((toks / total_tokens) * 100.0, 2)
+        rows.append({
+            "plugin": plugin,
+            "total_tokens": int(round(toks)),
+            "cost_usd": round(cost, 6),
+            "call_count": calls,
+            "pct_of_total": pct,
+            "trend": "flat",
+        })
+        if pct >= threshold_pct:
+            warnings.append({
+                "plugin": plugin,
+                "pct_of_total": pct,
+                "message": f"{plugin} accounts for {pct:.1f}% of total token usage "
+                           f"(threshold: {threshold_pct:.0f}%)",
+                "trend": "flat",
+            })
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return {"plugins": rows, "warnings": warnings, "_source": "local_store"}
+
+
+def _try_local_store_usage_by_plugin_trend(days_back):
+    """Fast path for /api/usage/by-plugin/trend. Builds a per-day plugin
+    breakdown from events. Same shape as the legacy handler:
+      {days: [...], plugins: {name: [{day, tokens, cost_usd, calls}, ...]}}.
+    """
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = _scan_events_slim(limit=20000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    from datetime import date as _date
+    today = _date.today()
+    day_list = [(today - timedelta(days=i)).strftime("%Y-%m-%d")
+                for i in range(days_back - 1, -1, -1)]
+    day_set = set(day_list)
+    # Issue #1451: sibling-dedupe so v3 assistant + model.completed pairs
+    # don't double-count per-plugin daily totals.
+    bucket_max = build_sibling_bucket_max(evs)
+    # plugin -> day -> stats
+    plugin_daily: dict = defaultdict(lambda: defaultdict(
+        lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0}
+    ))
+    saw_any = False
+    for ev in evs:
+        day = _ls_iso_day(ev.get("ts", ""))
+        if day not in day_set:
+            continue
+        plugin = _ls_event_plugin(ev)
+        if not plugin:
+            continue
+        if is_sibling_dup(ev, bucket_max):
+            continue
+        saw_any = True
+        bucket = plugin_daily[plugin][day]
+        bucket["tokens"] += float(ev.get("token_count") or 0)
+        bucket["cost"] += float(ev.get("cost_usd") or 0.0)
+        bucket["calls"] += 1
+    if not saw_any:
+        return None
+    result = {}
+    for p in sorted(plugin_daily.keys()):
+        series = []
+        for d in day_list:
+            day_data = plugin_daily[p].get(d, {"tokens": 0.0, "cost": 0.0, "calls": 0})
+            series.append({
+                "day": d,
+                "tokens": int(round(day_data["tokens"])),
+                "cost_usd": round(day_data["cost"], 6),
+                "calls": day_data["calls"],
+            })
+        result[p] = series
+    return {"days": day_list, "plugins": result, "_source": "local_store"}
+
+
+def _try_local_store_cost_comparison():
+    """Fast path for /api/usage/cost-comparison. Sums actual tokens/cost
+    over the past 30 days from the local store, then projects costs against
+    a fixed alternatives table. Mirrors ``dashboard._build_cost_comparison``
+    output shape exactly.
+
+    MOAT 2026-05-16: the old implementation blindly summed ``token_count``
+    across every event row. On real v3 installs the dual-writer pattern
+    (``assistant`` + sibling ``model.completed``) double-counts every
+    billable turn, inflating ``actual.tokens`` + ``actual.cost_usd`` ~2×
+    and making the "savings vs alternative" dollar amounts look twice as
+    big as truth. We now skip the slimmer ``model.completed`` row when an
+    ``assistant``/``message`` sibling exists for the same
+    (session_id, ts ±1 s) bucket — matches the dedup approach in
+    ``query_daily_usage_splits``. Non-billable-turn rows (tool_call etc.)
+    keep their tokens since they don't have a sibling.
+    """
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = _scan_events_slim(limit=50000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+
+    # Window: last 30 days.
+    cutoff = datetime.now() - timedelta(days=30)
+    cutoff_iso = cutoff.strftime("%Y-%m-%d")
+
+    # Sibling-dedup (issue #1451 / PR #1446): per (session_id, ts_sec, ±1 s)
+    # bucket, keep only the richest-envelope row. ``assistant``/``message``
+    # outrank ``model.completed`` for the same turn (writer race emits both
+    # ~100 ms apart). Helper in ``routes/_dedupe.py``.
+    in_window = [ev for ev in evs if (ev.get("ts", "") or "") >= cutoff_iso]
+    bucket_max = build_sibling_bucket_max(in_window)
+
+    actual_tokens = 0
+    actual_cost = 0.0
+    model_token_map: dict = {}
+    saw_any = False
+    for ev in in_window:
+        if is_sibling_dup(ev, bucket_max):
+            continue
+        saw_any = True
+        tok = int(ev.get("token_count") or 0)
+        actual_tokens += tok
+        actual_cost += float(ev.get("cost_usd") or 0.0)
+        m = ev.get("model") or ""
+        if m:
+            model_token_map[m] = model_token_map.get(m, 0) + tok
+    if not saw_any:
+        return None
+
+    actual_model = (max(model_token_map, key=lambda k: model_token_map[k])
+                    if model_token_map else "unknown")
+
+    ALTERNATIVES = [
+        ("gemini-2.0-flash",   0.10,  0.40,  "Gemini 2.0 Flash",     "Google"),
+        ("gemini-1.5-flash",   0.075, 0.30,  "Gemini 1.5 Flash",     "Google"),
+        ("gpt-4o-mini",        0.15,  0.60,  "GPT-4o Mini",          "OpenAI"),
+        ("claude-haiku-3.5",   0.80,  4.00,  "Claude Haiku 3.5",     "Anthropic"),
+        ("qwen-plus",          0.40,  1.20,  "Qwen Plus",            "Alibaba"),
+        ("claude-sonnet-3.5",  3.00, 15.00,  "Claude Sonnet 3.5",    "Anthropic"),
+        ("claude-opus-4",     15.00, 75.00,  "Claude Opus 4",        "Anthropic"),
+    ]
+    INPUT_RATIO = 0.60
+    OUTPUT_RATIO = 0.40
+    alternatives = []
+    for alt_id, in_price, out_price, display_name, provider in ALTERNATIVES:
+        if actual_tokens == 0:
+            alt_cost = 0.0
+        else:
+            alt_cost = (
+                actual_tokens * INPUT_RATIO * (in_price / 1_000_000)
+                + actual_tokens * OUTPUT_RATIO * (out_price / 1_000_000)
+            )
+        if actual_cost > 0:
+            savings_pct = round((actual_cost - alt_cost) / actual_cost * 100, 1)
+            savings_usd = round(actual_cost - alt_cost, 4)
+        else:
+            savings_pct = 0.0
+            savings_usd = 0.0
+        alternatives.append({
+            "model_id": alt_id,
+            "display_name": display_name,
+            "provider": provider,
+            "estimated_cost": round(alt_cost, 4),
+            "savings_usd": savings_usd,
+            "savings_pct": savings_pct,
+        })
+    alternatives.sort(key=lambda x: x["estimated_cost"])
+    return {
+        "actual": {
+            "model": actual_model,
+            "tokens": actual_tokens,
+            "cost_usd": round(actual_cost, 4),
+        },
+        "alternatives": alternatives,
+        "period": "30d",
+        "_source": "local_store",
+    }
+
+
+def _try_local_store_usage_forecast():
+    """Fast path for /api/usage/forecast (issue #1565, Tier-1).
+
+    Projects current spend trajectory to end-of-month:
+        daily_rate      = sum(cost_usd last 7 days) / 7
+        projected_month = cost_so_far_this_month + daily_rate * days_remaining
+
+    Source preference (matters because of the dedupe-pattern footgun
+    documented in ``feedback_usage_dedupe_pattern.md``):
+
+      1. ``query_aggregates`` — SQL-side dedupe over the FULL events
+         table (every event row that carries ``cost_usd``, billable-turn
+         and non-message rows alike). Safer for cost projection because
+         the daemon stamps ``cost_usd`` on rows the splits walker skips
+         (e.g. tool retries, fallback turns).
+      2. ``query_daily_usage_splits`` — only walks
+         ``_BILLABLE_TURN_EVENT_TYPES``. Used as a fallback so a fresh
+         install (aggregates empty, only events seeded) still produces
+         a forecast.
+
+    Returns ``None`` when no store is reachable so the route can fall
+    back to the JSONL legacy projection. Returns
+    ``{available: False, _source: 'local_store'}`` when the store IS
+    reachable but holds zero usage rows — the forecast is genuinely
+    unavailable, the UI handles this and renders the empty-state copy.
+    """
+    import calendar
+    from datetime import datetime, timedelta, timezone
+
+    store = _ls_get_store()
+    if store is None:
+        return None
+
+    # Pull aggregates first — they cover every cost-bearing row, deduped
+    # at SQL level (see ``feedback_usage_dedupe_pattern.md`` for why
+    # walking only billable turns silently drops ~30% of cost).
+    daily_costs: dict[str, float] = {}
+    try:
+        agg_rows = store.query_aggregates() or []
+    except Exception:
+        agg_rows = []
+    for r in agg_rows:
+        day = r.get("day", "")
+        if day:
+            daily_costs[day] = daily_costs.get(day, 0.0) + float(r.get("cost_usd") or 0)
+
+    # Fresh-install fallback: aggregates table empty → derive from
+    # the splits walker. Splits dedupe sibling pairs but skip non-message
+    # event types; for forecast we're OK with that because the alternative
+    # is no forecast at all on a fresh install.
+    if not daily_costs:
+        try:
+            split_rows = store.query_daily_usage_splits() or []
+        except Exception:
+            split_rows = []
+        for r in split_rows:
+            day = r.get("day", "")
+            if day:
+                daily_costs[day] = daily_costs.get(day, 0.0) + float(r.get("cost_usd") or 0)
+
+    today = datetime.now(timezone.utc).date()
+    window_days = 7
+    window: list[float] = []
+    for i in range(window_days):
+        d = (today - timedelta(days=i)).isoformat()
+        window.append(daily_costs.get(d, 0.0))
+
+    daily_rate = sum(window) / window_days
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    days_elapsed = today.day
+    days_remaining = days_in_month - days_elapsed
+    month_str = today.strftime("%Y-%m")
+    cost_this_month = sum(v for k, v in daily_costs.items() if k.startswith(month_str))
+
+    # If the store is reachable but holds zero usage rows AND we have no
+    # spend this month, surface ``available: False`` with the _source
+    # tag — the UI renders the empty-state copy and the audit can still
+    # see the canary.
+    if not daily_costs and cost_this_month == 0 and daily_rate == 0:
+        return {"available": False, "reason": "no_data", "_source": "local_store"}
+
+    projected_month = cost_this_month + daily_rate * days_remaining
+
+    try:
+        import dashboard as _d
+        budget_cfg = _d._get_budget_config()
+    except Exception:
+        budget_cfg = {}
+    monthly_budget = float(budget_cfg.get("monthly_limit") or 0)
+    monthly_cap = float(budget_cfg.get("monthly_cap_usd") or 0)
+    effective_budget = monthly_budget or monthly_cap or 0.0
+
+    budget_exceeded = bool(effective_budget > 0 and projected_month > effective_budget)
+    days_to_budget: float | None = None
+    if effective_budget > 0 and daily_rate > 0:
+        remaining_budget = effective_budget - cost_this_month
+        days_to_budget = max(0.0, remaining_budget / daily_rate)
+
+    # "Projected month-end $147.00" is the single most confident-looking
+    # number on the Cost tab and it is a forecast: it assumes the next N days
+    # look like the last 7. A quiet week or a holiday breaks it, which is
+    # exactly the case where somebody would quote it. Labelled as an estimate.
+    return _prov.stamp({
+        "available": True,
+        "daily_rate_usd": round(daily_rate, 4),
+        "cost_this_month_usd": round(cost_this_month, 4),
+        "projected_month_usd": round(projected_month, 4),
+        "days_remaining_in_month": days_remaining,
+        "monthly_budget_usd": effective_budget,
+        "budget_exceeded": budget_exceeded,
+        "days_to_budget": round(days_to_budget, 1) if days_to_budget is not None else None,
+        "window_days": window_days,
+        "daily_window": [round(c, 4) for c in reversed(window)],
+        "_source": "local_store",
+    }, {
+        "projected_month_usd": _prov.estimated(
+            "spend so far this month, plus the average of the last 7 days "
+            "times the days left. It assumes the rest of the month looks "
+            "like the last week",
+            "DuckDB daily rollups on this node",
+            window="the calendar month",
+            inputs={"spent_so_far_usd": round(cost_this_month, 4),
+                    "daily_rate_usd": round(daily_rate, 4),
+                    "days_remaining": days_remaining}),
+        "cost_this_month_usd": _prov.derived(
+            "sum of the priced cost of every call this month",
+            "DuckDB daily rollups on this node",
+            window="this month, the local calendar month from the 1st"),
+        "daily_rate_usd": _prov.derived(
+            "the priced cost of the last 7 days divided by 7",
+            "DuckDB daily rollups on this node",
+            window="the last 7 days"),
+        "monthly_budget_usd": _prov.measured(
+            "the monthly limit you set",
+            "clawmetry budget config"),
+    })
+
+
+# Known non-OpenClaw runtime prefixes (session-id prefix = runtime; agent_type
+# is always "openclaw"). Mirrors the frontend `_cmRuntimeOf` / `_CM_RT_LABEL`.
+_RUNTIME_PREFIXES = frozenset({
+    "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
+    "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
+    "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
+    "kimi",
+    "devin",
+    "gemini_cli",
+    "cline",
+    "openhands",
+    "openworker",
+    "grok_bot",
+    "lovable",
+    "replit",
+})
+
+
+def _runtime_of(sid):
+    sid = sid or ""
+    i = sid.find(":")
+    if i > 0:
+        p = sid[:i].lower()
+        if p in _RUNTIME_PREFIXES:
+            return p
+    return "openclaw"
+
+
+def _try_local_store_model_attribution(runtime=None):
+    """Fast path for /api/model-attribution. Per-model assistant turn count,
+    session count, provider tag, and share %. Switches list is best-effort
+    — derived from per-session model variation. When ``runtime`` is set (a
+    session-id prefix like ``qwen_code``), only that runtime's events count, so
+    the Models tab scopes to the runtime switcher selection."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = _scan_events_slim(limit=20000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    if runtime and runtime != "all":
+        evs = [e for e in evs if _runtime_of(e.get("session_id")) == runtime]
+        if not evs:
+            # Honest empty — the runtime exists in the switcher but has no
+            # model-bearing turns; don't fall back to the merged view.
+            return {"models": [], "switches": [], "total_turns": 0,
+                    "primary_model": "", "runtime": runtime, "_source": "local_store"}
+    try:
+        import dashboard as _d
+        provider_fn = getattr(_d, "_provider_from_model", None)
+    except Exception:
+        provider_fn = None
+
+    model_turns: dict = {}
+    sess_models: dict = defaultdict(list)
+    saw_any = False
+    # Iterate oldest-first within each session so we can track switches.
+    evs_sorted = sorted(evs, key=lambda e: (e.get("session_id") or "", e.get("ts") or ""))
+    for ev in evs_sorted:
+        m = (ev.get("model") or "").strip()
+        if not m:
+            continue
+        saw_any = True
+        # Each event is a turn for the purposes of attribution.
+        model_turns[m] = model_turns.get(m, 0) + 1
+        sid = ev.get("session_id") or ""
+        if sid:
+            if not sess_models[sid] or sess_models[sid][-1] != m:
+                sess_models[sid].append(m)
+    if not saw_any:
+        return None
+    model_sessions: dict = {}
+    switches = []
+    for sid, mlist in sess_models.items():
+        primary = mlist[0]
+        model_sessions[primary] = model_sessions.get(primary, 0) + 1
+        for prev, nxt in zip(mlist, mlist[1:]):
+            switches.append({"session": sid, "from_model": prev, "to_model": nxt})
+
+    total_turns = sum(model_turns.values())
+    sorted_models = sorted(model_turns.items(), key=lambda x: -x[1])
+    primary_model = sorted_models[0][0] if sorted_models else ""
+    models_out = []
+    for m, turns in sorted_models:
+        provider = ""
+        if provider_fn:
+            try:
+                provider = provider_fn(m) or ""
+            except Exception:
+                provider = ""
+        models_out.append({
+            "model": m,
+            "turns": turns,
+            "sessions": model_sessions.get(m, 0),
+            "provider": provider,
+            "share_pct": round(turns / total_turns * 100, 2) if total_turns else 0,
+        })
+    return {
+        "models": models_out,
+        "primary_model": primary_model,
+        "total_turns": total_turns,
+        "model_count": len(model_turns),
+        "switches": switches[:50],
+        "switch_count": len(switches),
+        "_source": "local_store",
+    }
+
+
+def _try_rollup_usage_by_model(runtime=None):
+    """P3 (query-spine #2989): read /api/usage/by-model from rollup_model_daily.
+
+    Reads the per-(day, model, runtime) materialized table written at ingest by
+    the daemon (P2, #2988) and sums across days to produce per-model totals.
+    Returns the same shape as _try_local_store_usage_by_model so the endpoint
+    needs no change.  Falls back to None when the rollup is empty (fresh install
+    before the first ingest cycle) so the caller can fall through to the legacy
+    event-scan path.
+    """
+    rows = _ls_call("query_rollup_model_daily", runtime=runtime or None)
+    if not rows:
+        return None
+
+    model_stats: dict = {}
+    for r in rows:
+        m = (r.get("model") or "").strip()
+        if not m:
+            continue
+        if m not in model_stats:
+            model_stats[m] = {"tokens_in": 0, "tokens_out": 0,
+                              "cost_usd": 0.0, "calls": 0}
+        model_stats[m]["tokens_in"] += int(r.get("tokens_in") or 0)
+        model_stats[m]["tokens_out"] += int(r.get("tokens_out") or 0)
+        model_stats[m]["cost_usd"] += float(r.get("cost_usd") or 0.0)
+        model_stats[m]["calls"] += int(r.get("calls") or 0)
+
+    if not model_stats:
+        return None
+
+    try:
+        import dashboard as _d
+        provider_fn = getattr(_d, "_provider_from_model", None)
+    except Exception:
+        provider_fn = None
+
+    total_cost = sum(s["cost_usd"] for s in model_stats.values()) or 1.0
+    result_rows = []
+    for m, st in model_stats.items():
+        calls = st["calls"]
+        cost = st["cost_usd"]
+        tokens = st["tokens_in"] + st["tokens_out"]
+        provider = ""
+        if provider_fn:
+            try:
+                provider = provider_fn(m) or ""
+            except Exception:
+                pass
+        result_rows.append({
+            "model": m,
+            "provider": provider,
+            "total_tokens": tokens,
+            "cost_usd": round(cost, 6),
+            "call_count": calls,
+            "cost_per_call": round(cost / calls, 8) if calls else 0.0,
+            "pct_of_total_cost": round(cost / total_cost * 100.0, 2),
+        })
+    result_rows.sort(key=lambda r: r["cost_usd"], reverse=True)
+    return {"models": result_rows, "_source": "rollup"}
+
+
+def _try_local_store_usage_by_model(runtime=None):
+    """Fast path for /api/usage/by-model (GH #588). Groups events by model
+    name, accumulates cost_usd and token_count with sibling-dedup, and
+    computes per-call averages. Returns shape: {models: [...], _source}."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = _scan_events_slim(limit=20000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+    if runtime and runtime != "all":
+        evs = _filter_evs_by_runtime(evs, runtime)
+    bucket_max = build_sibling_bucket_max(evs)
+    model_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
+    saw_any = False
+    for ev in evs:
+        m = (ev.get("model") or "").strip()
+        if not m:
+            continue
+        if is_sibling_dup(ev, bucket_max):
+            continue
+        saw_any = True
+        model_stats[m]["tokens"] += float(ev.get("token_count") or 0)
+        model_stats[m]["cost"] += float(ev.get("cost_usd") or 0.0)
+        model_stats[m]["calls"] += 1
+    if not saw_any:
+        return None
+
+    try:
+        import dashboard as _d
+        provider_fn = getattr(_d, "_provider_from_model", None)
+    except Exception:
+        provider_fn = None
+
+    total_cost = sum(s["cost"] for s in model_stats.values()) or 1.0
+    rows = []
+    for m, st in model_stats.items():
+        calls = st["calls"]
+        cost = st["cost"]
+        toks = st["tokens"]
+        provider = ""
+        if provider_fn:
+            try:
+                provider = provider_fn(m) or ""
+            except Exception:
+                pass
+        rows.append({
+            "model": m,
+            "provider": provider,
+            "total_tokens": int(round(toks)),
+            "cost_usd": round(cost, 6),
+            "call_count": calls,
+            "cost_per_call": round(cost / calls, 8) if calls else 0.0,
+            "pct_of_total_cost": round(cost / total_cost * 100.0, 2),
+        })
+    rows.sort(key=lambda r: r["cost_usd"], reverse=True)
+    return {"models": rows, "_source": "local_store"}
+
+
+def _try_local_store_skill_attribution():
+    """Fast path for /api/skill-attribution. Detects skill invocations from
+    events whose data blob mentions a skill (``skill`` key or ``SKILL.md``
+    path), then attributes per-session token cost to those skills with even
+    sharing when multiple skills appear in one session."""
+    store = _ls_get_store()
+    if store is None:
+        return None
+    try:
+        evs = _scan_events_slim(limit=50000)
+    except Exception:
+        return None
+    if not evs:
+        return None
+
+    # Group by session.
+    sess_skills: dict = defaultdict(set)
+    sess_cost: dict = defaultdict(float)
+    sess_last_ts: dict = {}
+    saw_any = False
+    for ev in evs:
+        sid = ev.get("session_id") or ""
+        if not sid:
+            continue
+        skill = _ls_event_skill(ev)
+        if skill:
+            sess_skills[sid].add(skill)
+            saw_any = True
+        sess_cost[sid] += float(ev.get("cost_usd") or 0.0)
+        ts = ev.get("ts") or ""
+        if ts and ts > (sess_last_ts.get(sid) or ""):
+            sess_last_ts[sid] = ts
+    if not saw_any:
+        return None
+
+    skill_stats: dict = defaultdict(lambda: {"invocations": 0, "total_cost": 0.0,
+                                              "last_used_ts": ""})
+    for sid, skills in sess_skills.items():
+        if not skills:
+            continue
+        share = sess_cost.get(sid, 0.0) / len(skills)
+        last_ts = sess_last_ts.get(sid, "")
+        for skill in skills:
+            st = skill_stats[skill]
+            st["invocations"] += 1
+            st["total_cost"] += share
+            if last_ts > st["last_used_ts"]:
+                st["last_used_ts"] = last_ts
+
+    skills_out = []
+    total_cost = 0.0
+    for name, st in sorted(skill_stats.items(), key=lambda x: -x[1]["total_cost"]):
+        inv = st["invocations"]
+        tc = round(float(st["total_cost"]), 6)
+        avg = round(tc / inv, 6) if inv else 0.0
+        last_used = st["last_used_ts"] or None
+        total_cost += tc
+        skills_out.append({
+            "name": name,
+            "invocations": inv,
+            "total_cost_usd": tc,
+            "avg_cost_usd": avg,
+            "last_used": last_used,
+            "clawhub_url": f"https://clawhub.dev/skills/{name}",
+        })
+
+    # Top 5 by cost in the past 7 days (use the session last-used ts as proxy).
+    week_cutoff_iso = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    top5_week = [s for s in skills_out
+                 if s["last_used"] and s["last_used"] >= week_cutoff_iso][:5]
+
+    return {
+        "skills": skills_out,
+        "top5_week": top5_week,
+        "total_cost": round(total_cost, 6),
+        "note": "Skills detected from events table in the local DuckDB store.",
+        "clawhub": {"enabled": False, "url": None},
+        "_source": "local_store",
+    }
+
+
+def _try_local_store_skills_fidelity(max_sessions=200):
+    """Fast path for /api/skills/fidelity (Tier-1 #6 from issue #1565).
+
+    Replaces the 200-file × all-lines JSONL walker in
+    ``api_skills_fidelity`` with a single DuckDB read using the canonical
+    ``query_recent_read_tool_calls`` method (already shipped + allowlisted
+    for the daemon proxy — issue #1364). One row per Read-tool invocation
+    in the last 7 days; we bucket them per-skill in-process.
+
+    Status rules match the legacy endpoint contract:
+      * dead   — installed but body fetch count == 0
+      * orphan — body-fetched in sessions but skill dir not on disk
+      * stuck  — body fetched but skill has linked files and none were read
+      * active — otherwise
+
+    Returns ``None`` (defer to JSONL walker) when:
+      * the local store isn't reachable
+      * the canonical method returns ``None`` (daemon down + direct open
+        failed)
+      * NO skills are installed on disk AND zero rows came back (nothing
+        meaningful to report — let the legacy path serve the empty shape)
+
+    Audit imperfection note (issue #1565 audit): the audit hinted this
+    surface was an "extension of skill-attribution". In practice the
+    canonical DuckDB source for body-fetch counts is
+    ``query_recent_read_tool_calls`` (already serving ``/api/skills``),
+    not the cost-aggregation walker in
+    ``_try_local_store_skill_attribution``. Reusing the established path
+    avoids divergence between the two fidelity surfaces.
+    """
+    import dashboard as _d
+    import re as _re
+
+    # 1. Pull the file-path rows the canonical helper provides. Returns
+    # None on store-not-reachable; an empty list is a valid "store is up
+    # but nothing in the 7d window" answer.
+    cutoff_ts = time.time() - 7 * 86400
+    since_iso = datetime.utcfromtimestamp(cutoff_ts).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    rows = _ls_call("query_recent_read_tool_calls", since=since_iso, limit=50_000)
+    if rows is None:
+        return None
+    if not isinstance(rows, list):
+        return None
+
+    # 2. List installed skills (header-always-loaded set). Same logic as
+    # the legacy walker so the dead/active classification matches.
+    workspace = (
+        _d.WORKSPACE
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or os.environ.get("OPENCLAW_HOME")
+        or os.path.expanduser("~/.openclaw/workspace")
+    )
+    skills_dir = os.path.join(workspace, "skills")
+    installed_skills: set = set()
+    skill_has_linked: dict = {}
+    if os.path.isdir(skills_dir):
+        try:
+            for entry in os.listdir(skills_dir):
+                entry_path = os.path.join(skills_dir, entry)
+                if not os.path.isdir(entry_path):
+                    continue
+                if not os.path.isfile(os.path.join(entry_path, "SKILL.md")):
+                    continue
+                installed_skills.add(entry)
+                try:
+                    linked = [
+                        f for f in os.listdir(entry_path)
+                        if f.upper() != "SKILL.MD"
+                        and not f.startswith('.')
+                        and os.path.isfile(os.path.join(entry_path, f))
+                    ]
+                except OSError:
+                    linked = []
+                skill_has_linked[entry] = bool(linked)
+        except OSError:
+            pass
+
+    # 3. Bucket the Read-tool rows per skill via the parent-dir-name in
+    # ``file_path``. Body fetch = path ends in /SKILL.md; linked fetch =
+    # path is under skills/<name>/<not-SKILL.md>. Matches the legacy
+    # regex pair (case-insensitive, slash-normalised so Windows paths
+    # still hit).
+    SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
+    SKILL_LINKED_RE = _re.compile(
+        r'skills[/\\]([^/\\]+)[/\\]([^/\\\'">\s]{1,80})', _re.IGNORECASE
+    )
+
+    body_fetches: dict = {}    # skill_name -> count
+    linked_fetches: dict = {}  # skill_name -> count
+    skill_sessions: dict = {}  # skill_name -> set of session_ids
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        fp = row.get("file_path") or ""
+        if not isinstance(fp, str) or not fp:
+            continue
+        sid = row.get("session_id") or ""
+        body_match = SKILL_MD_RE.search(fp)
+        if body_match:
+            sname = body_match.group(1)
+            if sname and sname.lower() not in ('skills', ''):
+                body_fetches[sname] = body_fetches.get(sname, 0) + 1
+                if sid:
+                    skill_sessions.setdefault(sname, set()).add(sid)
+        else:
+            # Linked-file path: skills/<name>/<file-not-SKILL.md>
+            linked_match = SKILL_LINKED_RE.search(fp)
+            if linked_match and linked_match.group(2).upper() != 'SKILL.MD':
+                sname = linked_match.group(1)
+                if sname:
+                    linked_fetches[sname] = linked_fetches.get(sname, 0) + 1
+
+    # If nothing on disk AND nothing in events, defer so the legacy path
+    # can serve the empty shape with its own no-data note.
+    if not installed_skills and not body_fetches and not linked_fetches:
+        return None
+
+    # 4. Build per-skill stats + classify. Same rules as the legacy
+    # handler so the response contract doesn't drift.
+    all_names = installed_skills | set(body_fetches) | set(linked_fetches)
+    skills_out = []
+    dead_count = stuck_count = active_count = orphan_count = 0
+    for name in sorted(all_names):
+        installed = name in installed_skills
+        bf = body_fetches.get(name, 0)
+        lf = linked_fetches.get(name, 0)
+        sess = len(skill_sessions.get(name, set()))
+        has_linked = skill_has_linked.get(name, False)
+
+        if installed and bf == 0:
+            status = 'dead'
+            dead_count += 1
+        elif not installed and bf > 0:
+            status = 'orphan'
+            orphan_count += 1
+        elif bf > 0 and has_linked and lf == 0:
+            status = 'stuck'
+            stuck_count += 1
+        else:
+            status = 'active'
+            active_count += 1
+
+        skills_out.append({
+            'name': name,
+            'installed': installed,
+            'body_fetches': bf,
+            'linked_file_fetches': lf,
+            'sessions_seen': sess,
+            'status': status,
+            'token_roi': round(bf / sess, 3) if sess > 0 else None,
+        })
+
+    _STATUS_ORDER = {'dead': 0, 'stuck': 1, 'orphan': 2, 'active': 3}
+    skills_out.sort(key=lambda s: (_STATUS_ORDER[s['status']], -s['body_fetches']))
+
+    return {
+        'skills': skills_out,
+        'dead_count': dead_count,
+        'stuck_count': stuck_count,
+        'active_count': active_count,
+        'orphan_count': orphan_count,
+        'total_installed': len(installed_skills),
+        'note': (
+            'Dead: installed but body never fetched — remove to save header tokens. '
+            'Stuck: body fetched but linked files unread despite existing. '
+            'Orphan: body-fetched in sessions but not installed (skill removed?).'
+        ),
+        '_source': 'local_store',
+    }
+
+
+def _apply_oss_24h_cap(result):
+    """Issue #1448 surface 2 — clamp /api/usage history to the last 24h for
+    OSS / Cloud-Free callers. Cloud-Pro users (gated by
+    ``dashboard._is_pro_user``) get the full 14-day chart.
+
+    Returns a (possibly copied) result dict that always carries
+    ``capped_at_24h`` so the UI can render the upsell row. Crucially this
+    runs AFTER ``_usage_cache`` / fast-path dedupe (see
+    ``feedback_usage_dedupe_pattern``) so cached aggregates are never
+    double-truncated; we shallow-copy + rewrite ``days`` so the long-lived
+    cache stays full-fidelity.
+    """
+    try:
+        import dashboard as _d
+        is_pro = bool(_d._is_pro_user())
+    except Exception:
+        is_pro = False
+    if is_pro:
+        result["capped_at_24h"] = False
+        return result
+    # Shallow-copy so we don't mutate the cached object; ``days`` is the
+    # only field we rewrite so a list slice is enough.
+    capped = dict(result)
+    days = list(capped.get("days") or [])
+    # 24h window = today's bucket + yesterday's bucket (covers any clock
+    # crossing midnight). Keep the trailing 2 entries and WITHHOLD the rest so
+    # the bar chart still renders 14 slots without leaking history.
+    #
+    # Withheld is not zero. These buckets used to be zeroed, which rendered as
+    # twelve days on which the user spent nothing: a plan boundary shown as a
+    # measurement. They now carry ``withheld: True`` and a null cost, and the
+    # chart paints them as held back rather than as $0.00 (the same rule
+    # ``provenance.stamp`` applies to a top-level unknown figure).
+    if days:
+        head = max(0, len(days) - 2)
+        for i in range(head):
+            d = dict(days[i])
+            d["tokens"] = 0
+            d["cost"] = None
+            d["withheld"] = True
+            d["inputTokens"] = 0
+            d["outputTokens"] = 0
+            d["cacheReadTokens"] = 0
+            d["cacheWriteTokens"] = 0
+            days[i] = d
+        capped["days"] = days
+        # Copy before editing: the un-capped payload is the long-lived cache
+        # entry, and a shared provenance dict would carry this note back into
+        # the Pro rendering of the same numbers.
+        prov = dict(capped.get(_prov.PROVENANCE_KEY) or {})
+        if "days[].cost" in prov:
+            entry = dict(prov["days[].cost"])
+            entry["note"] = ("buckets older than 24 hours are withheld on "
+                             "this plan and carry no value")
+            prov["days[].cost"] = entry
+            capped[_prov.PROVENANCE_KEY] = prov
+    capped["capped_at_24h"] = True
+    return capped
+
+
+def _try_local_store_token_velocity():
+    """Fast path for /api/token-velocity (issue #1565, Tier-1).
+
+    Reads the last ~5 min of events from DuckDB and computes:
+      * ``velocity_2min`` — total tokens billed across the trailing 2-min
+        window (deduped via ``build_sibling_bucket_max`` so v3 sibling
+        pairs aren't counted twice — same risk as
+        ``feedback_usage_dedupe_pattern.md``).
+      * ``flagged_sessions`` — per-session 2-min token burn + tool-chain
+        length. A session is flagged when ``tokens_2min >= WARN_TOKENS``
+        OR ``tool_chain_len >= CRIT_TOOLS``.
+      * ``cost_per_min`` — projected USD/min from the 2-min total.
+
+    Tool-chain length: count the longest consecutive run of tool-call /
+    assistant events within the last 2 min per session, broken by a
+    user-prompt row (matches the legacy JSONL heuristic).
+
+    Returns ``None`` when the store isn't reachable OR when zero events
+    are present in the trailing 5-min window — the legacy JSONL walker
+    is cheap on a quiet system (mtime filter skips every file with no
+    recent writes) so we don't try to short-circuit it with a zero shell.
+    """
+    from datetime import datetime, timezone
+
+    store = _ls_get_store()
+    if store is None:
+        return None
+
+    WARN_TOKENS = 8000
+    CRIT_TOKENS = 15000
+    CRIT_TOOLS = 20
+
+    now = time.time()
+    window_2min = now - 120
+    # Pull 5 min of context so the tool-chain walker has enough history
+    # for the consecutive-run heuristic without re-fetching.
+    since_iso = datetime.fromtimestamp(now - 300, tz=timezone.utc).isoformat()
+
+    try:
+        rows = store.query_events(since=since_iso, limit=5000) or []
+    except Exception:
+        return None
+
+    # Sort ascending by ts so the consecutive-tool walker sees rows in
+    # write order (query_events returns DESC). Stable on equal ts.
+    def _ts_sec(r):
+        ts = r.get("ts") or ""
+        if not isinstance(ts, str):
+            return 0.0
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    rows.sort(key=_ts_sec)
+
+    # Dedupe sibling pairs (assistant + model.completed) — same pattern
+    # as _try_local_store_usage to avoid double-counting v3 tokens.
+    bucket_max = build_sibling_bucket_max(rows)
+
+    # Event types that count as "tool / assistant" rows for the
+    # consecutive-chain heuristic. ``prompt.submitted`` / user rows reset
+    # the run. Tool-call alternates cover legacy + v3 daemon names.
+    _CHAIN_TYPES = frozenset({
+        "assistant", "model.completed", "tool.call", "tool_call",
+        "tool.result", "tool_use_result", "message",
+    })
+    _RESET_TYPES = frozenset({"prompt.submitted", "user"})
+
+    per_session: dict = {}
+    for r in rows:
+        sid = r.get("session_id") or ""
+        if not sid:
+            continue
+        et = (r.get("event_type") or "").strip()
+        ts = _ts_sec(r)
+        slot = per_session.setdefault(sid, {
+            "tokens_2min": 0, "consecutive": 0, "max_chain": 0,
+        })
+        # Chain bookkeeping always runs (over the full 5-min window so
+        # the run survives a tool burst that started >2 min ago).
+        if et in _RESET_TYPES:
+            slot["consecutive"] = 0
+        elif et in _CHAIN_TYPES:
+            data = r.get("data") if isinstance(r.get("data"), dict) else {}
+            role = data.get("role") if isinstance(data, dict) else None
+            if et == "message" and role == "user":  # v3-shape-gate: allow (reason: defensive — _CHAIN_TYPES already covers both v3 + legacy names; this is the legacy-shape-specific role check)
+                slot["consecutive"] = 0
+            else:
+                slot["consecutive"] += 1
+                if slot["consecutive"] > slot["max_chain"]:
+                    slot["max_chain"] = slot["consecutive"]
+        # Token accumulation only inside the 2-min window, deduped.
+        if ts >= window_2min and not is_sibling_dup(r, bucket_max):
+            tok = int(r.get("token_count") or 0)
+            if tok > 0:
+                slot["tokens_2min"] += tok
+
+    try:
+        import dashboard as _d
+        usd_per_token = _d._estimate_usd_per_token()
+    except Exception:
+        usd_per_token = 0.0
+
+    total_tokens_2min = 0
+    flagged: list = []
+    for sid, slot in per_session.items():
+        tokens_2min = int(slot["tokens_2min"])
+        max_chain = int(slot["max_chain"])
+        total_tokens_2min += tokens_2min
+        if tokens_2min >= WARN_TOKENS or max_chain >= CRIT_TOOLS:
+            sess_cpm = round(tokens_2min / 2 * usd_per_token, 5)
+            flagged.append({
+                "id":               sid,
+                "tokens_2min":      tokens_2min,
+                "tool_chain_len":   max_chain,
+                "cost_per_min":     sess_cpm,
+            })
+
+    if (total_tokens_2min >= CRIT_TOKENS
+            or any(s["tool_chain_len"] >= CRIT_TOOLS for s in flagged)):
+        level = "critical"
+    elif total_tokens_2min >= WARN_TOKENS:
+        level = "warning"
+    else:
+        level = "ok"
+
+    return {
+        "alert":            level != "ok",
+        "level":            level,
+        "velocity_2min":    total_tokens_2min,
+        "cost_per_min":     round(total_tokens_2min / 2 * usd_per_token, 5),
+        "flagged_sessions": flagged,
+        "_source":          "local_store",
+    }
+
+
+def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
+    """Fast path for /api/token-attribution (issue #1565 Tier-1 #7).
+
+    Audit imperfection (#1565) captured here as a silent user-visible
+    bug: the legacy JSONL walker (``api_token_attribution`` below)
+    filters on ``ev['type'] == 'message'``, which is the pre-v3
+    synthetic shape only. On real OpenClaw v3 installs the daemon-
+    normalised event types are ``assistant`` / ``model.completed`` (see
+    ``reference_openclaw_v3_event_types.md``), so the legacy handler
+    silently returns an empty ``messages`` array on every v3 install.
+    Same failure family as Eng G's PR #1571 (forecast) and Eng L's
+    cost-optimizer ring-reset.
+
+    Shape parity contract: ``messages[].{session_id, timestamp, model,
+    role, tokens{}, cost{}, cache_hit_ratio}`` plus ``totals{}`` and
+    ``session_id``.
+
+    Dedupe via ``build_sibling_bucket_max`` (same approach as
+    ``_try_local_store_token_velocity``) — exactly the bug family
+    ``feedback_usage_dedupe_pattern.md`` warns about. Returns ``None``
+    on store-unreachable or zero matching rows so the JSONL walker
+    fires (rather than claiming ``_source: 'local_store'`` falsely on
+    an empty answer).
+    """
+    store = _ls_get_store()
+    if store is None:
+        return None
+
+    # 14-day window matches the headline ``/api/usage`` chart. The legacy
+    # walker has no window cap, but on a busy box it scans 50 mtime-sorted
+    # files anyway — 14d covers every billable turn the cost dashboard
+    # actually charts.
+    cutoff_ts = time.time() - 14 * 86400
+    since_iso = datetime.utcfromtimestamp(cutoff_ts).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+    try:
+        if wanted_sid:
+            rows = store.query_events(
+                session_id=wanted_sid, since=since_iso, limit=10000,
+            ) or []
+        else:
+            rows = store.query_events(since=since_iso, limit=10000) or []
+    except Exception:
+        return None
+    if not rows:
+        return None
+
+    # Sibling-pair dedupe (issue #1460 family). assistant/message outrank
+    # model.completed; we drop only the slim sibling when a rich envelope
+    # exists in the same (sid, sec±1) bucket.
+    bucket_max = build_sibling_bucket_max(rows)
+
+    _ROLE_BY_EVENT = {
+        "assistant":        "assistant",
+        "message":          "assistant",  # legacy synthetic
+        "model.completed":  "assistant",
+        "prompt.submitted": "user",
+        "user":             "user",
+    }
+
+    messages = []
+    totals = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "total_tokens": 0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.0,
+    }
+
+    # Lazy import — only this fast path needs the v3 split extractor.
+    try:
+        from clawmetry.local_store import (
+            _extract_usage_splits, _extract_usage_cost,
+        )
+    except Exception:
+        return None
+
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        if is_sibling_dup(r, bucket_max):
+            continue
+        et = (r.get("event_type") or "").strip()
+        # Only attribute rows that actually carry usage. Tool calls /
+        # session.started / model.changed don't get a row in the legacy
+        # contract either.
+        if et not in _ROLE_BY_EVENT and et not in ("assistant", "message", "model.completed"):
+            continue
+
+        data = r.get("data") if isinstance(r.get("data"), dict) else {}
+        splits = _extract_usage_splits(data) if isinstance(data, dict) else {
+            "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0,
+        }
+        input_tok  = int(splits.get("input_tokens", 0) or 0)
+        output_tok = int(splits.get("output_tokens", 0) or 0)
+        cache_read = int(splits.get("cache_read_tokens", 0) or 0)
+        cache_write = int(splits.get("cache_write_tokens", 0) or 0)
+        total_tok = input_tok + output_tok + cache_read + cache_write
+
+        # Fall back to the daemon-stamped scalar column when the data
+        # blob splits are empty (e.g. slim ``model.completed`` rows that
+        # survived the sibling dedupe because no rich envelope existed).
+        # We attribute the whole row to ``input_tokens`` in that case so
+        # the totals don't drop the row — see Eng G's PR #1571 lesson:
+        # *don't blindly replace an aggregate with a deduped subset*.
+        if total_tok == 0:
+            col_tok = int(r.get("token_count") or 0)
+            if col_tok > 0:
+                input_tok = col_tok
+                total_tok = col_tok
+
+        if total_tok == 0:
+            continue
+
+        # Per-bucket cost split: prefer the v3 ``cost.{input,...}`` shape
+        # under data.message.usage when present, fall back to the
+        # daemon-stamped scalar for total.
+        in_cost = out_cost = cr_cost = cw_cost = 0.0
+        col_cost = 0.0
+        try:
+            col_cost = float(r.get("cost_usd") or 0.0)
+        except (TypeError, ValueError):
+            col_cost = 0.0
+        # Walk message.usage.cost for the per-bucket split (legacy shape).
+        msg_dict = data.get("message") if isinstance(data, dict) else None
+        if isinstance(msg_dict, dict):
+            u = msg_dict.get("usage") or {}
+            if isinstance(u, dict):
+                cost_obj = u.get("cost") or {}
+                if isinstance(cost_obj, dict):
+                    in_cost = float(cost_obj.get("input", 0) or 0)
+                    out_cost = float(cost_obj.get("output", 0) or 0)
+                    cr_cost = float(cost_obj.get("cacheRead", 0) or 0)
+                    cw_cost = float(cost_obj.get("cacheWrite", 0) or 0)
+        # Total: prefer scalar column (the daemon already wrote it from
+        # the cheapest source); fall back to extractor walk for legacy
+        # snapshots; finally sum the per-bucket splits.
+        total_cost = col_cost
+        if total_cost <= 0 and isinstance(data, dict):
+            total_cost = _extract_usage_cost(data)
+        if total_cost <= 0:
+            total_cost = in_cost + out_cost + cr_cost + cw_cost
+
+        # Model: prefer the column; data blob fallback covers older v3
+        # snapshots where the daemon didn't populate the scalar.
+        model = r.get("model") or ""
+        if not model and isinstance(data, dict):
+            if isinstance(msg_dict, dict):
+                model = msg_dict.get("model") or ""
+            if not model:
+                model = data.get("modelId") or data.get("model") or ""
+        model = model or "unknown"
+
+        # Role: prefer the explicit message.role (v3 assistants carry it
+        # in the Anthropic envelope), else infer from event_type.
+        role = "unknown"
+        if isinstance(msg_dict, dict):
+            r_role = msg_dict.get("role")
+            if isinstance(r_role, str) and r_role:
+                role = r_role
+        if role == "unknown":
+            role = _ROLE_BY_EVENT.get(et, "unknown")
+
+        sid = r.get("session_id") or ""
+        ts = r.get("ts") or ""
+        cache_hit_pct = (
+            round(cache_read / (input_tok + cache_read) * 100, 1)
+            if (input_tok + cache_read) > 0 else 0.0
+        )
+        messages.append({
+            "session_id": sid,
+            "timestamp": ts,
+            "model": model,
+            "role": role,
+            "tokens": {
+                "input": input_tok,
+                "output": output_tok,
+                "cache_read": cache_read,
+                "cache_write": cache_write,
+                "total": total_tok,
+            },
+            "cost": {
+                "input": round(in_cost, 8),
+                "output": round(out_cost, 8),
+                "cache_read": round(cr_cost, 8),
+                "cache_write": round(cw_cost, 8),
+                "total": round(total_cost, 8),
+            },
+            "cache_hit_ratio": cache_hit_pct,
+        })
+        totals["input_tokens"]       += input_tok
+        totals["output_tokens"]      += output_tok
+        totals["cache_read_tokens"]  += cache_read
+        totals["cache_write_tokens"] += cache_write
+        totals["total_tokens"]       += total_tok
+        totals["input_cost"]         += in_cost
+        totals["output_cost"]        += out_cost
+        totals["cache_read_cost"]    += cr_cost
+        totals["cache_write_cost"]   += cw_cost
+        totals["total_cost"]         += total_cost
+
+    if not messages:
+        return None
+
+    for k in ("input_cost", "output_cost", "cache_read_cost",
+              "cache_write_cost", "total_cost"):
+        totals[k] = round(totals[k], 6)
+
+    # Sort by timestamp descending and apply limit. ISO-8601 sorts
+    # lexically when zones match — which they always do here since the
+    # daemon writes UTC.
+    messages.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
+    messages = messages[:limit]
+
+    input_plus_cache = totals["input_tokens"] + totals["cache_read_tokens"]
+    totals["cache_hit_ratio_pct"] = (
+        round(totals["cache_read_tokens"] / input_plus_cache * 100, 1)
+        if input_plus_cache else 0.0
+    )
+
+    return {
+        "messages":   messages,
+        "totals":     totals,
+        "session_id": wanted_sid if wanted_sid else None,
+        "_source":    "local_store",
+    }
+
+
+@bp_usage.route("/api/usage")
+def api_usage():
+    """Token/cost tracking from transcript files - Enhanced OTLP workaround."""
+    import dashboard as _d
+    import time as _time
+
+    # Optional ?runtime=X scopes the Cost / Tokens tab to one agent runtime
+    # (Claude Code, Goose, PicoClaw, …). Mirrors the global runtime switcher;
+    # threaded into query_aggregates + query_daily_usage_splits so per-runtime
+    # totals reuse the same dedupe + cost math (sum across runtimes ==
+    # unfiltered, by construction). Only honoured on the local-store fast
+    # path; the legacy OTLP/cache fallback ignores it.
+    _rt = (request.args.get("runtime") or "").strip() or None
+
+    # Epic #964 — local-store fast path. Opt-in via CLAWMETRY_LOCAL_STORE_READ=1;
+    # falls through to OTLP/transcript scan when the store is empty / disabled.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_usage(runtime=_rt)
+        if fast is not None:
+            return jsonify(_apply_oss_24h_cap(fast))
+
+    now = _time.time()
+    if (
+        _d._usage_cache["data"] is not None
+        and (now - _d._usage_cache["ts"]) < _d._USAGE_CACHE_TTL
+    ):
+        return jsonify(_apply_oss_24h_cap(_d._usage_cache["data"]))
+
+    # Prefer OTLP data when available
+    if _d._has_otel_data():
+        result = _d._get_otel_usage_data()
+        _stamp_usage(result, "OpenTelemetry metrics received on /v1/metrics")
+        _d._usage_cache["data"] = result
+        _d._usage_cache["ts"] = now
+        try:
+            _d._ext_emit("usage.compiled", {"ok": True})
+        except Exception:
+            pass
+        return jsonify(_apply_oss_24h_cap(result))
+
+    analytics = _d._compute_transcript_analytics()
+    daily_tokens = analytics.get("daily_tokens", {})
+    daily_cost = analytics.get("daily_cost", {})
+    daily_input_tokens = analytics.get("daily_input_tokens", {})
+    daily_output_tokens = analytics.get("daily_output_tokens", {})
+    daily_cache_read_tokens = analytics.get("daily_cache_read_tokens", {})
+    daily_cache_write_tokens = analytics.get("daily_cache_write_tokens", {})
+    model_usage = analytics.get("model_usage", {})
+    session_summaries = analytics.get("sessions", [])
+    session_costs = {
+        s.get("session_id", ""): round(float(s.get("cost_usd", 0.0) or 0.0), 6)
+        for s in session_summaries
+    }
+    anomalies = _d._compute_session_cost_anomalies(session_summaries)
+
+    # Build response data with cache token breakdown
+    today = datetime.now()
+    days = []
+    for i in range(13, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        days.append(
+            {
+                "date": ds,
+                "tokens": daily_tokens.get(ds, 0),
+                "cost": daily_cost.get(ds, 0),
+                "inputTokens": daily_input_tokens.get(ds, 0),
+                "outputTokens": daily_output_tokens.get(ds, 0),
+                "cacheReadTokens": daily_cache_read_tokens.get(ds, 0),
+                "cacheWriteTokens": daily_cache_write_tokens.get(ds, 0),
+            }
+        )
+
+    # Calculate aggregations
+    today_str = today.strftime("%Y-%m-%d")
+    week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+    month_start = today.strftime("%Y-%m-01")
+
+    today_tok = daily_tokens.get(today_str, 0)
+    week_tok = sum(v for k, v in daily_tokens.items() if k >= week_start)
+    month_tok = sum(v for k, v in daily_tokens.items() if k >= month_start)
+
+    today_cost = daily_cost.get(today_str, 0)
+    week_cost = sum(v for k, v in daily_cost.items() if k >= week_start)
+    month_cost = sum(v for k, v in daily_cost.items() if k >= month_start)
+
+    # Trend analysis & predictions
+    trend_data = _d._analyze_usage_trends(daily_tokens)
+
+    # Model breakdown for display
+    model_breakdown = [
+        {"model": k, "tokens": v}
+        for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
+    ]
+    model_billing, billing_summary = _d._build_model_billing(model_usage)
+
+    # Cost warnings
+    warnings = _d._generate_cost_warnings(
+        today_cost, week_cost, month_cost, trend_data, month_tok, billing_summary
+    )
+
+    # Issue #68 — top-N sessions by cost for the per-session breakdown
+    # table on the Tokens/Usage tab. We hand back the 20 most expensive
+    # sessions sorted desc so the UI can rank "who burned the budget"
+    # without re-aggregating.
+    top_sessions = sorted(
+        session_summaries,
+        key=lambda s: float(s.get("cost_usd", 0.0) or 0.0),
+        reverse=True,
+    )[:20]
+    top_sessions_rows = [
+        {
+            "session_id":     s.get("session_id") or "",
+            "agent_id":       s.get("agent_id") or "",
+            "model":          s.get("model") or "",
+            "total_tokens":   int(s.get("tokens") or 0),
+            "total_cost_usd": round(float(s.get("cost_usd") or 0.0), 6),
+            "message_count":  int(s.get("message_count") or 0),
+            "started_at":     (
+                datetime.fromtimestamp(float(s.get("start_ts") or 0)).isoformat()
+                if s.get("start_ts") else ""
+            ),
+        }
+        for s in top_sessions
+        if float(s.get("cost_usd") or 0.0) > 0
+    ]
+
+    result = {
+        "source": "transcripts",
+        "days": days,
+        "today": today_tok,
+        "week": week_tok,
+        "month": month_tok,
+        "todayCost": round(today_cost, 4),
+        "weekCost": round(week_cost, 4),
+        "monthCost": round(month_cost, 4),
+        "modelBreakdown": model_breakdown,
+        "modelBilling": model_billing,
+        "billingSummary": billing_summary,
+        "billingCoverage": _d._get_billing_coverage(
+            model_billing, today_cost, week_cost, month_cost
+        ),
+        "sessionCosts": session_costs,
+        "sessions": top_sessions_rows,
+        "anomalies": anomalies,
+        "anomalySessionIds": [a.get("session_id") for a in anomalies],
+        "trend": trend_data,
+        "warnings": warnings,
+    }
+    _stamp_usage(result, "transcript scan (the local store was unavailable)")
+    import time as _time
+
+    _d._usage_cache["data"] = result
+    _d._usage_cache["ts"] = _time.time()
+    return jsonify(_apply_oss_24h_cap(result))
+
+
+@bp_usage.route("/api/usage/anomalies")
+@gate("anomaly_detection")
+def api_usage_anomalies():
+    """Return session cost anomalies vs rolling 7-day baseline."""
+    import dashboard as _d
+
+    # Epic #964 — local-store fast path.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_usage_anomalies()
+        if fast is not None:
+            return jsonify(fast)
+
+    analytics = _d._compute_transcript_analytics()
+    session_summaries = analytics.get("sessions", [])
+    anomalies = _d._compute_session_cost_anomalies(session_summaries)
+    baseline_costs = [
+        float(s.get("cost_usd", 0.0) or 0.0)
+        for s in session_summaries
+        if (time.time() - float(s.get("start_ts", 0) or 0)) <= (7 * 86400)
+        and float(s.get("cost_usd", 0.0) or 0.0) > 0
+    ]
+    baseline_avg = (
+        (sum(baseline_costs) / float(len(baseline_costs))) if baseline_costs else 0.0
+    )
+    return jsonify(
+        {
+            "anomalies": anomalies,
+            "baseline_7d_avg_usd": round(baseline_avg, 6),
+            "threshold_multiplier": 2.0,
+        }
+    )
+
+
+@bp_usage.route("/api/anomalies")
+@gate("anomaly_detection")
+def api_anomalies():
+    """Rolling-baseline anomaly detection endpoint.
+
+    Returns recent anomalies stored in ~/.openclaw/clawmetry.db with:
+    - severity: critical/high/medium
+    - metric: cost_spike / token_spike / error_rate_spike
+    - value: the observed value that triggered the anomaly
+    - baseline: the 7-day rolling average used as baseline
+    - ratio: value / baseline
+    - session_key: session ID (or '__error_rate__' for aggregate)
+    - detected_at: Unix timestamp of detection
+    """
+    import dashboard as _d
+
+    # Epic #964 — local-store fast path.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_anomalies()
+        if fast is not None:
+            return jsonify(fast)
+
+    now = time.time()
+    if (
+        _d._anomaly_detection_cache["data"] is not None
+        and (now - _d._anomaly_detection_cache["ts"]) < _d._ANOMALY_CACHE_TTL
+    ):
+        return jsonify(_d._anomaly_detection_cache["data"])
+
+    anomalies, baselines = _d._detect_and_store_anomalies()
+    active = [a for a in anomalies if not a.get("acknowledged")]
+    result = {
+        "anomalies": anomalies,
+        "active_count": len(active),
+        "has_active": bool(active),
+        "baselines": baselines,
+        "threshold_cost_multiplier": 2.0,
+        "threshold_token_multiplier": 2.0,
+        "threshold_error_multiplier": 3.0,
+    }
+    _d._anomaly_detection_cache["data"] = result
+    _d._anomaly_detection_cache["ts"] = now
+    return jsonify(result)
+
+
+@bp_usage.route("/api/anomalies/<int:anomaly_id>/ack", methods=["POST"])
+@gate("anomaly_detection")
+def api_anomaly_ack(anomaly_id):
+    """Acknowledge an anomaly so it no longer appears in the active banner."""
+    import dashboard as _d
+
+    try:
+        db = _d._get_anomaly_db()
+        with _d._anomaly_db_lock:
+            db.execute(
+                "UPDATE anomalies SET acknowledged = 1 WHERE id = ?", (anomaly_id,)
+            )
+            db.commit()
+        _d._anomaly_detection_cache["data"] = None  # invalidate cache
+        return jsonify({"ok": True, "id": anomaly_id})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@bp_usage.route("/api/usage/by-plugin")
+def api_usage_by_plugin():
+    """Return plugin/skill token and cost attribution from transcript tool calls.
+
+    Enhanced with trend direction (GH#201): compares recent 7-day vs prior 7-day
+    cost share to flag plugins getting more expensive. Also emits threshold warnings
+    when a plugin's cost share exceeds the configured limit (default 50%).
+    """
+    import dashboard as _d
+
+    try:
+        threshold_pct_arg = float(request.args.get("threshold", 50.0))
+    except (ValueError, TypeError):
+        threshold_pct_arg = 50.0
+    _rt = (request.args.get("runtime") or "").strip() or None
+
+    # Epic #964 — local-store fast path.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_usage_by_plugin(threshold_pct_arg, runtime=_rt)
+        if fast is not None:
+            return jsonify(fast)
+
+    analytics = _d._compute_transcript_analytics()
+    plugin_stats = analytics.get("plugin_stats", {})
+    plugin_daily_stats = analytics.get("plugin_daily_stats", {})
+    total_tokens = sum(
+        float(v.get("tokens", 0.0) or 0.0) for v in plugin_stats.values()
+    )
+    total_tokens = total_tokens if total_tokens > 0 else 1.0
+
+    try:
+        threshold_pct = float(request.args.get("threshold", 50.0))
+    except (ValueError, TypeError):
+        threshold_pct = 50.0
+
+    warnings = []
+    rows = []
+    for plugin, stats in plugin_stats.items():
+        toks = float(stats.get("tokens", 0.0) or 0.0)
+        cost = float(stats.get("cost", 0.0) or 0.0)
+        calls = int(stats.get("calls", 0) or 0)
+        pct = round((toks / total_tokens) * 100.0, 2)
+        trend = _d._compute_plugin_trend(plugin, plugin_daily_stats)
+        rows.append(
+            {
+                "plugin": plugin,
+                "total_tokens": int(round(toks)),
+                "cost_usd": round(cost, 6),
+                "call_count": calls,
+                "pct_of_total": pct,
+                "trend": trend,
+            }
+        )
+        if pct >= threshold_pct:
+            warnings.append(
+                {
+                    "plugin": plugin,
+                    "pct_of_total": pct,
+                    "message": f"{plugin} accounts for {pct:.1f}% of total token usage "
+                               f"(threshold: {threshold_pct:.0f}%)",
+                    "trend": trend,
+                }
+            )
+    rows.sort(key=lambda r: r["total_tokens"], reverse=True)
+    return jsonify({"plugins": rows, "warnings": warnings})
+
+
+@bp_usage.route("/api/usage/by-plugin/trend")
+def api_usage_by_plugin_trend():
+    """Return per-day plugin token and cost breakdown for trend analysis (GH#201).
+
+    Response shape:
+      {
+        "days": ["2026-03-20", ...],
+        "plugins": {
+          "exec": [{"day": "2026-03-20", "tokens": 120, "cost_usd": 0.001, "calls": 3}, ...],
+          ...
+        }
+      }
+    """
+    import dashboard as _d
+
+    try:
+        days_back = int(request.args.get("days", 14))
+    except (ValueError, TypeError):
+        days_back = 14
+    days_back = min(max(days_back, 1), 90)
+
+    # Epic #964 — local-store fast path.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_usage_by_plugin_trend(days_back)
+        if fast is not None:
+            return jsonify(fast)
+
+    analytics = _d._compute_transcript_analytics()
+    plugin_daily_stats = analytics.get("plugin_daily_stats", {})
+
+    from datetime import date, timedelta
+    today = date.today()
+    day_list = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days_back - 1, -1, -1)]
+
+    # Collect all plugin names that appear in the window
+    plugin_names: set = set()
+    for d in day_list:
+        plugin_names.update(plugin_daily_stats.get(d, {}).keys())
+
+    result: dict = {}
+    for p in sorted(plugin_names):
+        series = []
+        for d in day_list:
+            day_data = plugin_daily_stats.get(d, {}).get(p, {})
+            series.append(
+                {
+                    "day": d,
+                    "tokens": int(round(float(day_data.get("tokens", 0.0) or 0.0))),
+                    "cost_usd": round(float(day_data.get("cost", 0.0) or 0.0), 6),
+                    "calls": int(day_data.get("calls", 0) or 0),
+                }
+            )
+        result[p] = series
+
+    return jsonify({"days": day_list, "plugins": result})
+
+
+def _build_cluster_payload(session_profiles, *, days, now_ts):
+    """Aggregate per-session profiles into clusters keyed by
+    (tool_category, cost_tier, error_presence, model_family)."""
+    def _model_family(model_str):
+        m = (model_str or "").lower()
+        if "claude" in m:
+            return "claude"
+        if "gpt" in m or "openai" in m:
+            return "gpt"
+        if "gemini" in m or "google" in m:
+            return "gemini"
+        if "llama" in m or "mistral" in m or "groq" in m:
+            return "open-source"
+        return "other"
+
+    def _tool_category(tool_name):
+        t = (tool_name or "").lower()
+        if t in ("none", ""):
+            return "no-tools"
+        if t in ("exec", "bash", "shell", "run"):
+            return "code-execution"
+        if t in ("read", "write", "edit", "file_read", "file_write"):
+            return "file-ops"
+        if t in ("web_search", "web_fetch", "browser"):
+            return "web"
+        if t in ("message", "tts", "send_message"):
+            return "communication"
+        if t in ("sessions_spawn", "sessions_send", "subagents"):
+            return "orchestration"
+        if t in ("memory_search", "memory_get"):
+            return "memory"
+        return "other-tools"
+
+    clusters_map = defaultdict(
+        lambda: {
+            "sessions": [], "total_tokens": 0, "total_cost_usd": 0.0,
+            "error_count": 0, "tool_freq": defaultdict(int),
+        }
+    )
+    for sp in session_profiles:
+        mf = _model_family(sp["model"])
+        tc = _tool_category(sp["top_tool"])
+        has_errors = "errors" if sp["error_count"] > 0 else "clean"
+        cluster_key = f"{tc}|{sp['cost_tier']}|{has_errors}|{mf}"
+        c = clusters_map[cluster_key]
+        c["sessions"].append(sp["session_id"])
+        c["total_tokens"] += sp["tokens"]
+        c["total_cost_usd"] += sp["cost_usd"]
+        c["error_count"] += sp["error_count"]
+        for tool, cnt in sp["tool_counts"].items():
+            c["tool_freq"][tool] += cnt
+        if "tool_category" not in c:
+            c["tool_category"] = tc
+            c["cost_tier"] = sp["cost_tier"]
+            c["has_errors"] = has_errors == "errors"
+            c["model_family"] = mf
+
+    clusters_out = []
+    for key, c in clusters_map.items():
+        n = len(c["sessions"])
+        avg_cost = c["total_cost_usd"] / n if n > 0 else 0.0
+        top_tools_sorted = sorted(c["tool_freq"].items(), key=lambda x: x[1], reverse=True)[:5]
+        tc = c.get("tool_category", "other")
+        cost_tier = c.get("cost_tier", "cheap")
+        mf = c.get("model_family", "other")
+        has_err = c.get("has_errors", False)
+        label_parts = []
+        if tc == "code-execution": label_parts.append("Code execution")
+        elif tc == "file-ops":     label_parts.append("File operations")
+        elif tc == "web":          label_parts.append("Web browsing")
+        elif tc == "communication":label_parts.append("Messaging")
+        elif tc == "orchestration":label_parts.append("Agent orchestration")
+        elif tc == "memory":       label_parts.append("Memory access")
+        elif tc == "no-tools":     label_parts.append("Conversational")
+        else:                       label_parts.append("Mixed tools")
+        if cost_tier == "expensive": label_parts.append("high-cost")
+        elif cost_tier == "medium":  label_parts.append("medium-cost")
+        if has_err: label_parts.append("with errors")
+        if mf not in ("claude", "other"): label_parts.append(mf)
+        clusters_out.append({
+            "cluster_id": key,
+            "label": " ".join(label_parts),
+            "session_count": n,
+            "session_ids": c["sessions"][:10],
+            "total_tokens": c["total_tokens"],
+            "total_cost_usd": round(c["total_cost_usd"], 6),
+            "avg_cost_usd": round(avg_cost, 6),
+            "error_count": c["error_count"],
+            "tool_category": tc,
+            "cost_tier": cost_tier,
+            "has_errors": has_err,
+            "model_family": mf,
+            "top_tools": [{"tool": t, "count": cnt} for t, cnt in top_tools_sorted],
+        })
+    clusters_out.sort(key=lambda x: x["session_count"], reverse=True)
+    return {
+        "clusters": clusters_out,
+        "total_sessions": len(session_profiles),
+        "days": days,
+        "generated_at": int(now_ts * 1000),
+    }
+
+
+_CLUSTER_TURN_EVENT_TYPES = frozenset({
+    # Pre-v3 synthetic shape (still used in tests + on-disk JSONL).
+    "message", "user",
+    # v3 daemon-normalised shape (see reference_openclaw_v3_event_types.md).
+    "prompt.submitted",   # user turn
+    "assistant",          # assistant turn (rich envelope)
+    "model.completed",    # assistant turn (slim sibling — deduped before counting)
+})
+
+
+def _try_local_store_sessions_clusters(days: int):
+    """Fast path for /api/sessions/clusters. Reads sessions + events from
+    DuckDB and runs the same cluster aggregation as the legacy JSONL walker.
+
+    Issue #1088: routes through the daemon HTTP proxy via ``_ls_call``.
+    Returns ``None`` to defer to the JSONL fallback when DuckDB has no
+    sessions in the time window.
+    """
+    now_ts = time.time()
+    cutoff_ts = now_ts - (days * 86400)
+    cutoff_iso = datetime.utcfromtimestamp(cutoff_ts).isoformat()
+    sessions = _ls_call("query_sessions", since=cutoff_iso, limit=2000)
+    if not sessions:
+        return None
+    # One bulk events fetch; group by session_id (avoids N+1 daemon hops).
+    events = _scan_events_slim(since=cutoff_iso, limit=20000) or []
+    # Issue #1451: sibling-dedupe so the per-session token fallback below
+    # doesn't double-count assistant + model.completed pairs on v3 installs.
+    bucket_max = build_sibling_bucket_max(events)
+    by_session: dict = defaultdict(list)
+    for ev in events:
+        sid = ev.get("session_id")
+        if sid:
+            by_session[sid].append(ev)
+
+    import dashboard as _d
+    usd_per_tok = _d._estimate_usd_per_token()
+    session_profiles = []
+    for s in sessions:
+        sid = s.get("session_id")
+        if not sid:
+            continue
+        evs = by_session.get(sid, [])
+        tool_counts: dict = defaultdict(int)
+        error_count = 0
+        s_model = "unknown"
+        has_cron = False
+        has_subagent = False
+        turn_count = 0
+        # Issue #1451: ``query_sessions`` returns ``SUM(token_count)`` from
+        # the events table, which on real v3 installs double-counts the
+        # ``assistant`` + ``model.completed`` sibling pair for every billable
+        # turn. Compute s_tokens from the deduped event list instead so the
+        # cluster aggregator doesn't inflate per-session totals. Falls back
+        # to the (still-inflated) session-row sum only when no events were
+        # joined in for this session.
+        s_tokens = sum(
+            int(ev.get("token_count") or 0)
+            for ev in evs
+            if not is_sibling_dup(ev, bucket_max)
+        )
+        if s_tokens == 0:
+            s_tokens = int(s.get("token_count") or 0)
+        for ev in evs:
+            data = ev.get("data") if isinstance(ev.get("data"), dict) else {}
+            msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+            mdl = ev.get("model") or msg.get("model") or data.get("model")
+            if mdl:
+                s_model = mdl
+            for t in _d._extract_tool_plugins(data) or []:
+                tool_counts[t] += 1
+            etype = ev.get("event_type") or data.get("type") or ""
+            if etype in ("error", "tool_error"):
+                error_count += 1
+            if isinstance(data.get("error"), dict) and data["error"]:
+                error_count += 1
+            blob = json.dumps(data, default=str).lower()
+            if "cron" in blob or "scheduled" in blob:
+                has_cron = True
+            if "subagent" in blob or "spawned" in blob:
+                has_subagent = True
+            # v3-silent-zero fix (issue #1588). Previously this counter
+            # filtered on ``etype == 'message'`` only — the pre-v3
+            # synthetic shape — so every real OpenClaw v3 install reported
+            # ``turn_count == 0`` regardless of how many turns occurred,
+            # which silently mis-classified clusters as 'no-turn' shells.
+            # Count BOTH user-turn (``prompt.submitted`` / pre-v3 'user')
+            # AND assistant-turn (``assistant`` / ``model.completed`` /
+            # pre-v3 'message') event types so the metric reflects real
+            # conversation turns. ``is_sibling_dup`` already filtered the
+            # sibling pair above so we don't double-count assistant turns.
+            if etype in _CLUSTER_TURN_EVENT_TYPES and not is_sibling_dup(ev, bucket_max):
+                turn_count += 1
+        if s_tokens == 0 and not tool_counts:
+            continue
+        total_tools = sum(tool_counts.values())
+        top_tool = max(tool_counts, key=tool_counts.get) if tool_counts else "none"
+        cost = float(s.get("cost_usd") or 0.0)
+        if cost == 0.0 and s_tokens:
+            cost = round(s_tokens * usd_per_tok, 6)
+        if cost >= 0.10:
+            cost_tier = "expensive"
+        elif cost >= 0.02:
+            cost_tier = "medium"
+        else:
+            cost_tier = "cheap"
+        session_profiles.append({
+            "session_id": sid, "model": s_model, "top_tool": top_tool,
+            "tool_counts": dict(tool_counts), "total_tools": total_tools,
+            "error_count": error_count, "tokens": s_tokens, "cost_usd": cost,
+            "cost_tier": cost_tier, "has_cron": has_cron,
+            "has_subagent": has_subagent, "turn_count": turn_count,
+        })
+    if not session_profiles:
+        return None
+    payload = _build_cluster_payload(session_profiles, days=days, now_ts=now_ts)
+    payload["_source"] = "local_store"
+    return payload
+
+
+@bp_usage.route("/api/sessions/clusters")
+def api_sessions_clusters():
+    """Cluster sessions by behavior pattern (tool usage, cost profile, error type, model).
+
+    Implements trace clustering similar to PostHog's Clusters for LLM Analytics,
+    but with OpenClaw-native dimensions (tool names, skill invocations, cron sessions).
+    Closes vivekchand/clawmetry#406.
+    """
+    import dashboard as _d
+
+    _CLUSTER_ANALYTICS_TTL = 120  # seconds
+    now_ts = time.time()
+    try:
+        days_arg = int(request.args.get("days", 30))
+    except (ValueError, TypeError):
+        days_arg = 30
+    if is_local_store_read_enabled():
+        fast = _try_local_store_sessions_clusters(days_arg)
+        if fast is not None:
+            return jsonify(fast)
+
+    # Optional time window filter (days)
+    try:
+        days = int(request.args.get("days", 30))
+    except (ValueError, TypeError):
+        days = 30
+    cache_key = f"days:{days}"
+    cached = _CLUSTER_CACHE.get("data")
+    if cached is not None and _CLUSTER_CACHE.get("key") == cache_key and (now_ts - float(_CLUSTER_CACHE.get("ts") or 0)) < _CLUSTER_CACHE_TTL_SECONDS:
+        return jsonify(cached)
+    cutoff_ts = now_ts - (days * 86400)
+
+    sessions_dir = _d._get_sessions_dir()
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return jsonify(
+            {
+                "clusters": [],
+                "total_sessions": 0,
+                "days": days,
+                "generated_at": int(now_ts * 1000),
+            }
+        )
+
+    usd_per_tok = _d._estimate_usd_per_token()
+    session_profiles = []
+
+    for fname in os.listdir(sessions_dir):
+        if not fname.endswith(".jsonl"):
+            continue
+        if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
+            continue
+        fpath = os.path.join(sessions_dir, fname)
+        try:
+            fmtime = os.path.getmtime(fpath)
+            if fmtime < cutoff_ts:
+                continue
+
+            sid = fname.replace(".jsonl", "")
+            tool_counts = defaultdict(int)
+            error_count = 0
+            s_tokens = 0
+            s_model = "unknown"
+            has_cron = False
+            has_subagent = False
+            turn_count = 0
+            s_start = fmtime
+
+            with open(fpath, "r") as f:
+                for line in f:
+                    try:
+                        obj = json.loads(line.strip())
+                    except Exception:
+                        continue
+
+                    # Detect model
+                    message = (
+                        obj.get("message", {})
+                        if isinstance(obj.get("message"), dict)
+                        else {}
+                    )
+                    model = message.get("model") or obj.get("model")
+                    if model:
+                        s_model = model
+
+                    # Count tool calls
+                    tools = _d._extract_tool_plugins(obj)
+                    for t in tools:
+                        tool_counts[t] += 1
+
+                    # Count errors
+                    if obj.get("type") in ("error", "tool_error") or (
+                        isinstance(obj.get("error"), dict) and obj["error"]
+                    ):
+                        error_count += 1
+
+                    # Detect cron / subagent hints
+                    content_str = json.dumps(obj, default=str).lower()
+                    if "cron" in content_str or "scheduled" in content_str:
+                        has_cron = True
+                    if "subagent" in content_str or "spawned" in content_str:
+                        has_subagent = True
+
+                    # Usage metrics
+                    metrics = _d._extract_usage_metrics(obj)
+                    if metrics["tokens"] > 0:
+                        s_tokens += metrics["tokens"]
+                        turn_count += 1
+
+            if s_tokens == 0 and not tool_counts:
+                continue
+
+            total_tools = sum(tool_counts.values())
+            top_tool = max(tool_counts, key=tool_counts.get) if tool_counts else "none"
+            cost = round(s_tokens * usd_per_tok, 6)
+
+            # Determine cost tier
+            if cost >= 0.10:
+                cost_tier = "expensive"
+            elif cost >= 0.02:
+                cost_tier = "medium"
+            else:
+                cost_tier = "cheap"
+
+            session_profiles.append(
+                {
+                    "session_id": sid,
+                    "model": s_model,
+                    "top_tool": top_tool,
+                    "tool_counts": dict(tool_counts),
+                    "total_tools": total_tools,
+                    "error_count": error_count,
+                    "tokens": s_tokens,
+                    "cost_usd": cost,
+                    "cost_tier": cost_tier,
+                    "has_cron": has_cron,
+                    "has_subagent": has_subagent,
+                    "turn_count": turn_count,
+                    "fmtime": fmtime,
+                }
+            )
+        except Exception:
+            continue
+
+    # ── Clustering logic ────────────────────────────────────────────────────────
+    # Cluster key = (dominant_tool_category, cost_tier, error_presence, model_family)
+
+    def _model_family(model_str):
+        m = (model_str or "").lower()
+        if "claude" in m:
+            return "claude"
+        if "gpt" in m or "openai" in m:
+            return "gpt"
+        if "gemini" in m or "google" in m:
+            return "gemini"
+        if "llama" in m or "mistral" in m or "groq" in m:
+            return "open-source"
+        return "other"
+
+    def _tool_category(tool_name):
+        t = (tool_name or "").lower()
+        if t in ("none", ""):
+            return "no-tools"
+        if t in ("exec", "bash", "shell", "run"):
+            return "code-execution"
+        if t in ("read", "write", "edit", "file_read", "file_write"):
+            return "file-ops"
+        if t in ("web_search", "web_fetch", "browser"):
+            return "web"
+        if t in ("message", "tts", "send_message"):
+            return "communication"
+        if t in ("sessions_spawn", "sessions_send", "subagents"):
+            return "orchestration"
+        if t in ("memory_search", "memory_get"):
+            return "memory"
+        return "other-tools"
+
+    clusters_map = defaultdict(
+        lambda: {
+            "sessions": [],
+            "total_tokens": 0,
+            "total_cost_usd": 0.0,
+            "error_count": 0,
+            "tool_freq": defaultdict(int),
+        }
+    )
+
+    for sp in session_profiles:
+        mf = _model_family(sp["model"])
+        tc = _tool_category(sp["top_tool"])
+        has_errors = "errors" if sp["error_count"] > 0 else "clean"
+        cluster_key = f"{tc}|{sp['cost_tier']}|{has_errors}|{mf}"
+
+        c = clusters_map[cluster_key]
+        c["sessions"].append(sp["session_id"])
+        c["total_tokens"] += sp["tokens"]
+        c["total_cost_usd"] += sp["cost_usd"]
+        c["error_count"] += sp["error_count"]
+        for tool, cnt in sp["tool_counts"].items():
+            c["tool_freq"][tool] += cnt
+
+        # Tag attributes (set once)
+        if "tool_category" not in c:
+            c["tool_category"] = tc
+            c["cost_tier"] = sp["cost_tier"]
+            c["has_errors"] = has_errors == "errors"
+            c["model_family"] = mf
+
+    # ── Build response ──────────────────────────────────────────────────────────
+    clusters_out = []
+    for key, c in clusters_map.items():
+        n = len(c["sessions"])
+        avg_cost = c["total_cost_usd"] / n if n > 0 else 0.0
+        top_tools_sorted = sorted(
+            c["tool_freq"].items(), key=lambda x: x[1], reverse=True
+        )[:5]
+
+        # Auto-label cluster
+        tc = c.get("tool_category", "other")
+        cost_tier = c.get("cost_tier", "cheap")
+        mf = c.get("model_family", "other")
+        has_err = c.get("has_errors", False)
+        label_parts = []
+        if tc == "code-execution":
+            label_parts.append("Code execution")
+        elif tc == "file-ops":
+            label_parts.append("File operations")
+        elif tc == "web":
+            label_parts.append("Web browsing")
+        elif tc == "communication":
+            label_parts.append("Messaging")
+        elif tc == "orchestration":
+            label_parts.append("Agent orchestration")
+        elif tc == "memory":
+            label_parts.append("Memory access")
+        elif tc == "no-tools":
+            label_parts.append("Conversational")
+        else:
+            label_parts.append("Mixed tools")
+        if cost_tier == "expensive":
+            label_parts.append("high-cost")
+        elif cost_tier == "medium":
+            label_parts.append("medium-cost")
+        if has_err:
+            label_parts.append("with errors")
+        if mf not in ("claude", "other"):
+            label_parts.append(mf)
+
+        cluster_label = " ".join(label_parts)
+
+        clusters_out.append(
+            {
+                "cluster_id": key,
+                "label": cluster_label,
+                "session_count": n,
+                "session_ids": c["sessions"][:10],  # first 10 for drill-down
+                "total_tokens": c["total_tokens"],
+                "total_cost_usd": round(c["total_cost_usd"], 6),
+                "avg_cost_usd": round(avg_cost, 6),
+                "error_count": c["error_count"],
+                "tool_category": tc,
+                "cost_tier": cost_tier,
+                "has_errors": has_err,
+                "model_family": mf,
+                "top_tools": [{"tool": t, "count": cnt} for t, cnt in top_tools_sorted],
+            }
+        )
+
+    clusters_out.sort(key=lambda x: x["session_count"], reverse=True)
+
+    payload = {
+        "clusters": clusters_out,
+        "total_sessions": len(session_profiles),
+        "days": days,
+        "generated_at": int(now_ts * 1000),
+    }
+    _CLUSTER_CACHE["data"] = payload
+    _CLUSTER_CACHE["key"] = cache_key
+    _CLUSTER_CACHE["ts"] = time.time()
+    return jsonify(payload)
+
+
+@bp_usage.route("/api/usage/cost-comparison")
+def api_usage_cost_comparison():
+    """Return cost comparison: actual spend vs alternatives (GH#554)."""
+    import dashboard as _d
+
+    # Epic #964 — local-store fast path.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_cost_comparison()
+        if fast is not None:
+            return jsonify(fast)
+
+    try:
+        return jsonify(_d._build_cost_comparison())
+    except Exception as e:
+        return jsonify({"error": str(e), "alternatives": [], "actual": {}}), 500
+
+
+@bp_usage.route("/api/usage/forecast")
+def api_usage_forecast():
+    """7-day rolling spend rate projected to end-of-month (issue #1413).
+
+    Math: daily_rate = sum(cost_usd last 7 days) / 7
+          projected_month = cost_so_far + daily_rate * days_remaining
+          days_to_budget = (budget - cost_so_far) / daily_rate
+
+    Issue #1565 (Tier-1): now goes through
+    ``_try_local_store_usage_forecast`` under the standard
+    ``is_local_store_read_enabled()`` gate so the audit canary
+    (``_source: 'local_store'`` in the JSON body) shows up in browser
+    devtools the same way the rest of the Usage tab does.
+
+    Returns {available, daily_rate_usd, cost_this_month_usd,
+             projected_month_usd, days_remaining_in_month,
+             monthly_budget_usd, budget_exceeded, days_to_budget,
+             window_days, daily_window, _source}.
+    Returns {available: false} when no usage data is present.
+    """
+    if is_local_store_read_enabled():
+        fast = _try_local_store_usage_forecast()
+        if fast is not None:
+            return jsonify(fast)
+
+    # Local store unavailable (no daemon, tests with the flag off): fall
+    # back to a minimal "no data" response so the route never 500s. The
+    # forecast card is a derived view of the existing /api/usage
+    # aggregate — when DuckDB is unreachable, every other Usage-tab
+    # surface degrades the same way (anomalies, by-plugin, attribution),
+    # so a JSONL re-implementation here would be pure duplication.
+    return jsonify({"available": False, "reason": "no_data"})
+
+
+def _try_local_store_usage_export(window_days: int = 30):
+    """DuckDB fast path for /api/usage/export's daily token + cost rollup.
+
+    Tier-1 Bypass-FS surface (refs #1565 EOD canon). The legacy export
+    handler re-walks every JSONL file in the sessions directory on every
+    request — fine for empty installs but multi-second on a busy
+    workspace, and it returns 0 for the daily totals on real v3
+    OpenClaw installs (events stamp tokens in ``data.message.usage``
+    rather than the top-level legacy keys the walker probes).
+
+    ``query_aggregates`` returns per-day ``token_count`` + ``cost_usd``
+    deduped at SQL level (same dedup the sibling fast paths use), so we
+    project the last ``window_days`` days zero-filled the same way the
+    legacy code did, returning a list of ``{date, tokens, cost}`` rows
+    the CSV writer downstream consumes unchanged.
+
+    Returns ``None`` when DuckDB has zero rows so the caller defers to
+    the legacy JSONL walker (fresh install / dev mode keeps working).
+    """
+    agg_rows = _ls_call("query_aggregates") or []
+    if not agg_rows:
+        return None
+    by_day = {(r.get("day") or ""): r for r in agg_rows if r.get("day")}
+    today = datetime.now()
+    days = []
+    for i in range(window_days, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        row = by_day.get(ds, {})
+        days.append({
+            "date":   ds,
+            "tokens": int(row.get("token_count") or 0),
+            "cost":   round(float(row.get("cost_usd") or 0.0), 4),
+        })
+    return {"days": days, "_source": "local_store"}
+
+
+@bp_usage.route("/api/usage/export")
+def api_usage_export():
+    """Export usage data as CSV.
+
+    Tier-1 DuckDB fast path (refs #1565): the legacy JSONL walker
+    silently returned 0 tokens on real v3 OpenClaw installs (tokens
+    live in ``data.message.usage`` not the top-level keys the walker
+    probes). When ``CLAWMETRY_LOCAL_STORE_READ`` is on and DuckDB has
+    rows we project the per-day rollup via ``query_aggregates``; fall
+    back to the legacy paths otherwise (OTLP ring → JSONL walker) so
+    nothing regresses on a fresh install.
+    """
+    import dashboard as _d
+
+    try:
+        # Get usage data — DuckDB fast path first.
+        data = None
+        if is_local_store_read_enabled():
+            try:
+                data = _try_local_store_usage_export(window_days=30)
+            except Exception:
+                data = None
+        if data is not None:
+            pass  # fast path populated `data`
+        elif _d._has_otel_data():
+            data = _d._get_otel_usage_data()
+        else:
+            # Call the same logic as /api/usage but get full data
+            sessions_dir = _d.SESSIONS_DIR or os.path.expanduser(
+                "~/.openclaw/agents/main/sessions"
+            )
+            daily_tokens = {}
+
+            if os.path.isdir(sessions_dir):
+                for fname in os.listdir(sessions_dir):
+                    if not fname.endswith(".jsonl"):
+                        continue
+                    fpath = os.path.join(sessions_dir, fname)
+                    try:
+                        fmtime = datetime.fromtimestamp(os.path.getmtime(fpath))
+                        with open(fpath, "r") as f:
+                            for line in f:
+                                try:
+                                    obj = json.loads(line.strip())
+                                    tokens = 0
+                                    usage = (
+                                        obj.get("usage") or obj.get("tokens_used") or {}
+                                    )
+                                    if isinstance(usage, dict):
+                                        tokens = (
+                                            usage.get("total_tokens")
+                                            or usage.get("totalTokens")
+                                            or (
+                                                usage.get("input_tokens", 0)
+                                                + usage.get("output_tokens", 0)
+                                            )
+                                            or 0
+                                        )
+                                    elif isinstance(usage, (int, float)):
+                                        tokens = int(usage)
+                                    if not tokens:
+                                        content = obj.get("content", "")
+                                        if (
+                                            isinstance(content, str)
+                                            and len(content) > 0
+                                        ):
+                                            tokens = max(1, len(content) // 4)
+                                        elif isinstance(content, list):
+                                            total_len = sum(
+                                                len(str(c.get("text", "")))
+                                                for c in content
+                                                if isinstance(c, dict)
+                                            )
+                                            tokens = (
+                                                max(1, total_len // 4)
+                                                if total_len
+                                                else 0
+                                            )
+                                    ts = (
+                                        obj.get("timestamp")
+                                        or obj.get("time")
+                                        or obj.get("created_at")
+                                    )
+                                    if ts:
+                                        if isinstance(ts, (int, float)):
+                                            dt = datetime.fromtimestamp(
+                                                ts / 1000 if ts > 1e12 else ts
+                                            )
+                                        else:
+                                            try:
+                                                dt = datetime.fromisoformat(
+                                                    str(ts).replace("Z", "+00:00")
+                                                )
+                                            except Exception:
+                                                dt = fmtime
+                                    else:
+                                        dt = fmtime
+                                    day = dt.strftime("%Y-%m-%d")
+                                    if tokens > 0:
+                                        daily_tokens[day] = (
+                                            daily_tokens.get(day, 0) + tokens
+                                        )
+                                except (json.JSONDecodeError, ValueError):
+                                    pass
+                    except Exception:
+                        pass
+
+            today = datetime.now()
+            today_str = today.strftime("%Y-%m-%d")
+            week_start = (today - timedelta(days=today.weekday())).strftime("%Y-%m-%d")
+            month_start = today.strftime("%Y-%m-01")
+
+            # Build data structure similar to OTLP
+            days = []
+            for i in range(30, -1, -1):  # Last 30 days for export
+                d = today - timedelta(days=i)
+                ds = d.strftime("%Y-%m-%d")
+                tokens = daily_tokens.get(ds, 0)
+                cost = round(tokens * (30.0 / 1_000_000), 4)  # Default pricing
+                days.append({"date": ds, "tokens": tokens, "cost": cost})
+
+            data = {'days': days}
+
+        # Generate CSV content
+        csv_lines = ['Date,Tokens,Cost']
+        for day in data['days']:
+            csv_lines.append(f"{day['date']},{day['tokens']},{day.get('cost', 0):.4f}")
+
+        csv_content = '\n'.join(csv_lines)
+
+        response = make_response(csv_content)
+        response.headers['Content-Type'] = 'text/csv'
+        response.headers['Content-Disposition'] = f'attachment; filename=openclaw-usage-{datetime.now().strftime("%Y%m%d")}.csv'
+        return response
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+_ACTIVITY_TODAY_CACHE: dict = {}   # runtime-key -> {"ts": float, "data": dict}
+_ACTIVITY_TODAY_TTL = 30.0
+
+
+@bp_usage.route('/api/activity-today')
+def api_activity_today():
+    """Today's activity counters (tool calls / exec / browser / messages /
+    unique tools) for the Overview activity strip. ``?runtime=`` scopes to one
+    runtime (session_id prefix); omitted/"all" = node-wide. Mirrors the daemon
+    ``activityToday`` snapshot slice (cloud serves it via cm-cloud-activity).
+    DuckDB-backed via ``clawmetry.sync._collect_activity_counters_today``;
+    cached 30s per runtime; never 500s (empty dict on any error)."""
+    runtime = (request.args.get("runtime") or "all").lower()
+    rt_arg = None if runtime in ("", "all") else runtime
+    now = time.time()
+    c = _ACTIVITY_TODAY_CACHE.get(runtime)
+    if c is not None and c["data"] is not None and (now - c["ts"]) < _ACTIVITY_TODAY_TTL:
+        return jsonify(c["data"])
+    out = {}
+    try:
+        from clawmetry.sync import _collect_activity_counters_today
+        out = _collect_activity_counters_today(runtime=rt_arg) or {}
+    except Exception:
+        out = {}
+    _ACTIVITY_TODAY_CACHE[runtime] = {"data": out, "ts": now}
+    return jsonify(out)
+
+
+@bp_usage.route('/api/runtime-summary')
+def api_runtime_summary():
+    """Per-runtime rollup (tokens / cost / turns / sessions / primary model),
+    keyed by session-id prefix, so the Overview headline can scope to the
+    runtime switcher. Mirrors the daemon ``runtimeSummary`` snapshot slice; the
+    cloud serves that slice via an interceptor instead of this route. Reads the
+    local store (fast path); never 500s — empty store yields ``{}``."""
+    store = _ls_get_store() if is_local_store_read_enabled() else None
+    out = {}
+    if store is not None:
+        try:
+            evs = _scan_events_slim(limit=20000) or []
+            agg = {}
+            for ev in evs:
+                rt = _runtime_of(ev.get("session_id"))
+                a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
+                                        "models": {}, "sessions": set(),
+                                        "last_ms": 0})
+                sid = ev.get("session_id") or ""
+                if sid:
+                    a["sessions"].add(sid)
+                ts = str(ev.get("ts") or "")
+                if ts:
+                    try:
+                        _p = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        a["last_ms"] = max(a["last_ms"],
+                                           int(_p.timestamp() * 1000))
+                    except (ValueError, OSError, OverflowError):
+                        pass
+                try:
+                    a["tokens"] += int(ev.get("token_count") or 0)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    a["cost"] += float(ev.get("cost_usd") or 0.0)
+                except (TypeError, ValueError):
+                    pass
+                m = (ev.get("model") or "").strip()
+                if m:
+                    a["turns"] += 1
+                    a["models"][m] = a["models"].get(m, 0) + 1
+            for rt, a in agg.items():
+                sorted_models = sorted(a["models"].items(), key=lambda x: -x[1])
+                out[rt] = {
+                    "sessions": len(a["sessions"]),
+                    "turns": a["turns"],
+                    "tokens": a["tokens"],
+                    "cost_usd": round(a["cost"], 4),
+                    "primary_model": sorted_models[0][0] if sorted_models else "",
+                    "total_turns": sum(a["models"].values()),
+                    # Epoch-ms recency for the Overview hero alive-state (main
+                    # sessions don't appear in /api/subagents).
+                    "last_activity_ms": a["last_ms"],
+                }
+        except Exception:
+            out = {}
+    return jsonify({"runtimes": out, "_source": "local_store"})
+
+
+@bp_usage.route('/api/model-attribution')
+def api_model_attribution():
+    """Per-model turn/session breakdown and switch history (GH #300).
+
+    ``?runtime=<prefix>`` scopes the breakdown to one runtime (session-id
+    prefix) so the Models tab honours the runtime switcher."""
+    import dashboard as _d
+    runtime = (request.args.get('runtime') or '').strip() or None
+
+    # Epic #964 — local-store fast path.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_model_attribution(runtime=runtime)
+        if fast is not None:
+            return jsonify(fast)
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    model_turns = {}    # model -> assistant turn count
+    model_sessions = {} # model -> session count
+    switches = []       # list of {session, from_model, to_model}
+
+    if os.path.isdir(sessions_dir):
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl') or 'deleted' in fname:
+                continue
+            sid = fname.replace('.jsonl', '')
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                current_model = None
+                session_start_model = None
+                with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+                        t = obj.get('type', '')
+                        # Detect model changes
+                        if t == 'model_change':
+                            new_model = obj.get('modelId') or obj.get('model') or ''
+                            if new_model:
+                                if current_model and current_model != new_model:
+                                    switches.append({
+                                        'session': sid,
+                                        'from_model': current_model,
+                                        'to_model': new_model,
+                                    })
+                                current_model = new_model
+                                if session_start_model is None:
+                                    session_start_model = new_model
+                        elif t == 'custom':
+                            ct = obj.get('customType', '')
+                            if ct == 'model-snapshot':
+                                d = obj.get('data', {})
+                                m = d.get('modelId') or d.get('model') or ''
+                                if m and current_model is None:
+                                    current_model = m
+                                    session_start_model = m
+                        # Count assistant turns per model
+                        msg = obj.get('message', {})
+                        if isinstance(msg, dict) and msg.get('role') == 'assistant':
+                            m = msg.get('model') or obj.get('model') or current_model or 'unknown'
+                            if m:
+                                model_turns[m] = model_turns.get(m, 0) + 1
+                # Track which model a session primarily used (first detected)
+                primary = session_start_model or current_model
+                if primary:
+                    model_sessions[primary] = model_sessions.get(primary, 0) + 1
+            except Exception:
+                pass
+
+    total_turns = sum(model_turns.values())
+    # Build sorted model list
+    sorted_models = sorted(model_turns.items(), key=lambda x: -x[1])
+    primary_model = sorted_models[0][0] if sorted_models else ''
+
+    models_out = []
+    for m, turns in sorted_models:
+        models_out.append({
+            'model': m,
+            'turns': turns,
+            'sessions': model_sessions.get(m, 0),
+            'provider': _d._provider_from_model(m),
+            'share_pct': round(turns / total_turns * 100, 2) if total_turns else 0,
+        })
+
+    return jsonify({
+        'models': models_out,
+        'primary_model': primary_model,
+        'total_turns': total_turns,
+        'model_count': len(model_turns),
+        'switches': switches[:50],  # cap at 50 for response size
+        'switch_count': len(switches),
+    })
+
+
+@bp_usage.route('/api/usage/by-model')
+def api_usage_by_model():
+    """Per-model cost and token breakdown (GH #588).
+
+    Shows total cost, total tokens, call count, and average cost-per-call for
+    each model seen in the local DuckDB event store. Sorted by cost descending
+    so the most expensive model surfaces first. Use this to compare whether a
+    more expensive model is delivering proportionally more value.
+
+    Optional ``?runtime=<prefix>`` scopes to one runtime (e.g. ``claude_code``).
+
+    Response shape::
+
+      {
+        "models": [
+          {
+            "model": "claude-opus-4-8",
+            "provider": "Anthropic",
+            "total_tokens": 284000,
+            "cost_usd": 4.218,
+            "call_count": 42,
+            "cost_per_call": 0.10042857,
+            "pct_of_total_cost": 78.4
+          },
+          ...
+        ],
+        "_source": "local_store"
+      }
+    """
+    runtime = (request.args.get("runtime") or "").strip() or None
+    if is_local_store_read_enabled():
+        fast = _try_rollup_usage_by_model(runtime=runtime)
+        if fast is None:
+            fast = _try_local_store_usage_by_model(runtime=runtime)
+        if fast is not None:
+            return jsonify(fast)
+    # Cost data lives exclusively in DuckDB; return empty-but-valid fallback.
+    return jsonify({"models": [], "_source": "none"})
+
+
+@bp_usage.route('/api/skill-attribution')
+def api_skill_attribution():
+    """Per-skill cost attribution with ClawHub integration hooks (GH #308).
+
+    Detects skill invocations by scanning session transcripts for SKILL.md file
+    reads. Each time a SKILL.md is read, the session's token cost is attributed
+    to that skill (shared equally when multiple skills are read in one session).
+
+    Returns:
+        {
+          "skills": [
+            {
+              "name": str,
+              "invocations": int,
+              "total_cost_usd": float,
+              "avg_cost_usd": float,
+              "last_used": str | null,   # ISO timestamp
+              "clawhub_url": str,        # future ClawHub skill marketplace link
+            }
+          ],
+          "top5_week": [...],            # top 5 by total_cost_usd in last 7 days
+          "total_cost": float,
+          "note": str,
+          "clawhub": {"enabled": false, "url": null},
+        }
+    """
+    import dashboard as _d
+    import re as _re
+
+    # Epic #964 — local-store fast path.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_skill_attribution()
+        if fast is not None:
+            return jsonify(fast)
+
+    sessions_dir = _d._get_sessions_dir()
+    if not sessions_dir or not os.path.isdir(sessions_dir):
+        return jsonify({
+            "skills": [], "top5_week": [], "total_cost": 0.0,
+            "note": "No sessions directory found.",
+            "clawhub": {"enabled": False, "url": None},
+        })
+
+    SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
+    # Also match bare "SKILL.md" references with skill name in path context
+    SKILL_PATH_RE = _re.compile(r'skills[/\\]([^/\\]+)', _re.IGNORECASE)
+
+    skill_stats = {}   # name -> {invocations, total_cost, last_used_ts}
+    now_ts = time.time()
+    week_cutoff = now_ts - 7 * 86400
+    usd_per_token = _d._estimate_usd_per_token()
+
+    try:
+        for fname in os.listdir(sessions_dir):
+            if not fname.endswith('.jsonl'):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            session_skills = set()
+            session_tokens = 0
+            session_cost = 0.0
+            session_ts = os.path.getmtime(fpath)
+
+            try:
+                with open(fpath, 'r', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+
+                        # Detect SKILL.md file reads in tool calls / tool results
+                        raw = json.dumps(obj)
+                        for m in SKILL_MD_RE.finditer(raw):
+                            skill_name = m.group(1)
+                            if skill_name and skill_name.lower() != 'skills':
+                                session_skills.add(skill_name)
+                        # Fallback: skills/ path pattern
+                        if not session_skills:
+                            for m in SKILL_PATH_RE.finditer(raw):
+                                candidate = m.group(1)
+                                if candidate and 'SKILL' in raw[m.start():m.end()+30].upper():
+                                    session_skills.add(candidate)
+
+                        # Accumulate session tokens/cost
+                        usage = _d._extract_usage_metrics(obj)
+                        if usage['tokens'] > 0:
+                            session_tokens += usage['tokens']
+                            session_cost += usage['cost'] if usage['cost'] > 0 else (
+                                usage['tokens'] * usd_per_token
+                            )
+            except Exception:
+                continue
+
+            if not session_skills:
+                continue
+
+            share = session_cost / len(session_skills) if session_skills else 0.0
+            for skill in session_skills:
+                if skill not in skill_stats:
+                    skill_stats[skill] = {'invocations': 0, 'total_cost': 0.0, 'last_used_ts': 0.0}
+                skill_stats[skill]['invocations'] += 1
+                skill_stats[skill]['total_cost'] += share
+                if session_ts > skill_stats[skill]['last_used_ts']:
+                    skill_stats[skill]['last_used_ts'] = session_ts
+    except Exception:
+        pass
+
+    skills_out = []
+    total_cost = 0.0
+    for name, st in sorted(skill_stats.items(), key=lambda x: -x[1]['total_cost']):
+        inv = st['invocations']
+        tc = round(float(st['total_cost']), 6)
+        avg = round(tc / inv, 6) if inv else 0.0
+        lts = st['last_used_ts']
+        last_used = datetime.utcfromtimestamp(lts).strftime('%Y-%m-%dT%H:%M:%SZ') if lts else None
+        total_cost += tc
+        skills_out.append({
+            'name': name,
+            'invocations': inv,
+            'total_cost_usd': tc,
+            'avg_cost_usd': avg,
+            'last_used': last_used,
+            'clawhub_url': f'https://clawhub.dev/skills/{name}',
+        })
+
+    # top5 this week
+    top5_week = [
+        s for s in skills_out
+        if s['last_used'] and s['last_used'] >= datetime.utcfromtimestamp(week_cutoff).strftime('%Y-%m-%dT%H:%M:%SZ')
+    ][:5]
+
+    note = 'Skills detected from SKILL.md file reads in session transcripts.'
+
+    return jsonify({
+        'skills': skills_out,
+        'top5_week': top5_week,
+        'total_cost': round(total_cost, 6),
+        'note': note,
+        'clawhub': {'enabled': False, 'url': None},
+    })
+
+
+# ── Per-agent / per-team cost attribution (issue #3000) ──────────────────────
+
+def _ls_call_team(method: str, **kwargs):
+    """Thin wrapper: daemon HTTP proxy first, direct DuckDB fallback."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon(method, **kwargs)
+        if result is not None:
+            return result
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        return getattr(store, method)(**kwargs)
+    except Exception:
+        return None
+
+
+@bp_usage.route('/api/usage/by-team')
+def api_usage_by_team():
+    """Per-team / per-agent cost attribution over the rollup_session table.
+
+    Groups sessions by runtime, applying any user-defined team_mapping entries
+    (key_type='runtime') so 'claude_code' can be labelled 'Eng Team' etc.
+    Falls back to raw runtime names when no mapping exists.
+
+    Query params:
+      window  — int, number of days to look back (default 7)
+
+    Returns:
+      {
+        "teams": [{"label": str, "cost_usd": float, "tokens": int,
+                   "sessions": int, "runtimes": [str]}],
+        "window_days": int
+      }
+    """
+    try:
+        window_days = max(1, min(int(request.args.get('window', 7)), 365))
+    except (TypeError, ValueError):
+        window_days = 7
+
+    rows = _ls_call_team('query_usage_by_team', window_days=window_days)
+    if rows is None:
+        rows = []
+    return jsonify({'teams': rows, 'window_days': window_days})
+
+
+@bp_usage.route('/api/usage/team-mappings', methods=['GET'])
+def api_usage_team_mappings_list():
+    """List all team_mapping rows."""
+    rows = _ls_call_team('list_team_mappings')
+    return jsonify({'mappings': rows or []})
+
+
+@bp_usage.route('/api/usage/team-mappings', methods=['POST'])
+def api_usage_team_mappings_upsert():
+    """Create or update a team mapping.
+
+    Body: {"key_type": "runtime", "key_value": "claude_code", "team_label": "Eng Team"}
+    """
+    body = request.get_json(silent=True) or {}
+    key_type = str(body.get('key_type', '')).strip()
+    key_value = str(body.get('key_value', '')).strip()
+    team_label = str(body.get('team_label', '')).strip()
+    if not key_type or not key_value or not team_label:
+        return jsonify({'error': 'key_type, key_value, and team_label are required'}), 400
+    if key_type not in ('runtime', 'node'):
+        return jsonify({'error': "key_type must be 'runtime' or 'node'"}), 400
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        store.upsert_team_mapping(key_type, key_value, team_label)
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+    return jsonify({'ok': True})
+
+
+@bp_usage.route('/api/usage/team-mappings/<key_type>/<key_value>', methods=['DELETE'])
+def api_usage_team_mappings_delete(key_type: str, key_value: str):
+    """Delete a team mapping by key_type + key_value."""
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        deleted = store.delete_team_mapping(key_type, key_value)
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+    return jsonify({'ok': True, 'deleted': deleted})
+
+
+@bp_usage.route('/api/token-velocity')
+def api_token_velocity():
+    """Sliding 2-min token velocity endpoint — detects runaway agent loops (GH #313).
+
+    Returns:
+      {
+        alert: bool,
+        level: "ok" | "warning" | "critical",
+        velocity_2min: int,       # total tokens in last 2 minutes
+        cost_per_min: float,      # estimated USD/min burn rate
+        flagged_sessions: [       # sessions exceeding thresholds
+          {id, tokens_2min, tool_chain_len, cost_per_min}
+        ]
+      }
+
+    Thresholds:
+      warning:  velocity_2min >= 8000
+      critical: velocity_2min >= 15000 OR tool_chain_len >= 20
+
+    Issue #1565 (Tier-1): under ``is_local_store_read_enabled()`` the
+    handler now serves from the DuckDB ``events`` table via
+    ``_try_local_store_token_velocity`` (tagged ``_source: 'local_store'``
+    so the audit canary is discoverable). Falls back to the JSONL scan
+    below when the store is empty or unreachable.
+    """
+    import dashboard as _d
+
+    if is_local_store_read_enabled():
+        fast = _try_local_store_token_velocity()
+        if fast is not None:
+            return jsonify(fast)
+
+    WARN_TOKENS   = 8000
+    CRIT_TOKENS   = 15000
+    CRIT_TOOLS    = 20
+
+    now        = time.time()
+    window_2min = now - 120
+
+    sessions_dir = _d.SESSIONS_DIR or os.path.expanduser('~/.openclaw/agents/main/sessions')
+    total_tokens_2min = 0
+    flagged = []
+
+    try:
+        if os.path.isdir(sessions_dir):
+            candidates = sorted(
+                [f for f in os.listdir(sessions_dir)
+                 if f.endswith('.jsonl') and 'deleted' not in f],
+                key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+                reverse=True
+            )[:20]
+
+            for fname in candidates:
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if now - mtime > 300:          # skip inactive sessions > 5 min
+                        continue
+                    tokens_2min   = 0
+                    consecutive   = 0
+                    max_chain     = 0
+                    with open(fpath, 'r', errors='replace') as fh:
+                        lines = list(fh)
+                    for line in lines:
+                        try:
+                            obj = json.loads(line.strip())
+                        except Exception:
+                            continue
+                        ts = _d._json_ts_to_epoch(
+                            obj.get('timestamp') or obj.get('time') or obj.get('created_at')
+                        )
+                        msg     = obj.get('message', {}) if isinstance(obj.get('message'), dict) else {}
+                        role    = msg.get('role', '') or obj.get('role', '')
+                        content = msg.get('content', [])
+                        is_tool = False
+                        if isinstance(content, list):
+                            for blk in content:
+                                if isinstance(blk, dict) and blk.get('type') == 'tool_use':
+                                    is_tool = True
+                                    break
+                        if role == 'user' and not is_tool:
+                            consecutive = 0
+                        elif is_tool or role == 'assistant':
+                            consecutive += 1
+                            max_chain = max(max_chain, consecutive)
+                        if ts and ts >= window_2min:
+                            usage = msg.get('usage', {}) if isinstance(msg.get('usage'), dict) else {}
+                            tok = float(
+                                usage.get('total_tokens')
+                                or usage.get('totalTokens')
+                                or (usage.get('input_tokens', 0) + usage.get('output_tokens', 0))
+                                or 0
+                            )
+                            tokens_2min += int(tok)
+
+                    total_tokens_2min += tokens_2min
+                    usd_per_token = _d._estimate_usd_per_token()
+                    sess_tpm = _d._session_burn_stats(fname.replace('.jsonl', '')).get('tokensPerMin', 0)
+                    sess_cpm = round(sess_tpm * usd_per_token, 5)
+
+                    if tokens_2min >= WARN_TOKENS or max_chain >= CRIT_TOOLS:
+                        flagged.append({
+                            'id':           fname.replace('.jsonl', ''),
+                            'tokens_2min':  tokens_2min,
+                            'tool_chain_len': max_chain,
+                            'cost_per_min': sess_cpm,
+                        })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    if total_tokens_2min >= CRIT_TOKENS or any(s['tool_chain_len'] >= CRIT_TOOLS for s in flagged):
+        level = 'critical'
+    elif total_tokens_2min >= WARN_TOKENS:
+        level = 'warning'
+    else:
+        level = 'ok'
+
+    usd_per_token  = _d._estimate_usd_per_token()
+    cost_per_min   = round(total_tokens_2min / 2 * usd_per_token, 5)   # tokens/2min → per min
+
+    return jsonify({
+        'alert':            level != 'ok',
+        'level':            level,
+        'velocity_2min':    total_tokens_2min,
+        'cost_per_min':     cost_per_min,
+        'flagged_sessions': flagged,
+    })
+
+
+# ── Forward-progress signal (issue #1707) ──────────────────────────────
+# ratio = tokens per state delta (new tool, new file, new error type).
+# Higher = more "spinning" (burn without progress). Brain badge colours
+# stay aligned with the Pro alert default (>= 50k = red).
+_FWDPROG_GREEN_MAX  = 5_000
+_FWDPROG_YELLOW_MAX = 50_000
+
+
+def _fwdprog_badge(ratio: float) -> str:
+    if ratio < _FWDPROG_GREEN_MAX:  return "green"
+    if ratio < _FWDPROG_YELLOW_MAX: return "yellow"
+    return "red"
+
+
+@bp_usage.route("/api/forward-progress")
+def api_forward_progress():
+    """Per-session forward-progress signal (issue #1707). Args: ``since``,
+    ``until`` (ISO-8601), ``session_id``. Default window: last 10 min."""
+    since = request.args.get("since") or None
+    until = request.args.get("until") or None
+    session_id = request.args.get("session_id") or None
+    if not since:
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(minutes=10)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
+    kwargs = {"since": since, "until": until, "session_id": session_id}
+    rows = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_forward_progress", **kwargs)
+        if rows is None:
+            # Single-process fallback. Reuse writer if open to avoid
+            # DuckDB's "same file, different config" connection error;
+            # fall back to read_only only when no writer exists yet.
+            from clawmetry import local_store
+            try:
+                store = local_store.get_store()
+            except Exception:
+                store = local_store.get_store(read_only=True)
+            rows = store.query_forward_progress(**kwargs)
+    except Exception as e:
+        return jsonify({"rows": [], "_source": "error", "error": str(e)[:200]}), 200
+    enriched = []
+    for r in rows or []:
+        try:
+            r = dict(r)
+            r["badge"] = _fwdprog_badge(float(r.get("ratio", 0.0)))
+            enriched.append(r)
+        except Exception:
+            continue
+    return jsonify({"rows": enriched, "count": len(enriched),
+                    "since": since, "until": until, "_source": "local_store"})
+
+
+# ── Prompt-cache analytics (GH #851) ────────────────────────────────────
+
+
+def _empty_cache_bucket():
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "cache_read_cost": 0.0,
+        "cache_write_cost": 0.0,
+        "total_cost": 0.0,
+    }
+
+
+def _summarise_cache_bucket(label, b, key):
+    in_plus_cache = b["input_tokens"] + b["cache_read_tokens"]
+    cache_hit_pct = (
+        round(b["cache_read_tokens"] / in_plus_cache * 100, 1)
+        if in_plus_cache
+        else 0.0
+    )
+    # Anthropic prompt-cache reads cost ~10% of fresh input tokens, so the
+    # "saved" amount is the difference between what those tokens would have
+    # cost as fresh input vs. what they actually cost as cache reads.
+    est_fresh_input_cost = b["cache_read_cost"] * 10.0
+    est_savings = max(0.0, est_fresh_input_cost - b["cache_read_cost"])
+    est_savings_pct = (
+        round(est_savings / (b["input_cost"] + est_fresh_input_cost) * 100, 1)
+        if (b["input_cost"] + est_fresh_input_cost)
+        else 0.0
+    )
+    return {
+        key: label,
+        "input_tokens": b["input_tokens"],
+        "output_tokens": b["output_tokens"],
+        "cache_read_tokens": b["cache_read_tokens"],
+        "cache_write_tokens": b["cache_write_tokens"],
+        "input_cost_usd": round(b["input_cost"], 6),
+        "output_cost_usd": round(b["output_cost"], 6),
+        "cache_read_cost_usd": round(b["cache_read_cost"], 6),
+        "cache_write_cost_usd": round(b["cache_write_cost"], 6),
+        "total_cost_usd": round(b["total_cost"], 6),
+        "cache_hit_ratio_pct": cache_hit_pct,
+        "est_savings_usd": round(est_savings, 6),
+        "est_savings_pct": est_savings_pct,
+    }
+
+
+def _try_local_store_cache_trends(days: int):
+    """Fast path for /api/usage/cache-trends (issue #1778, Tier-1 #1).
+
+    Mirrors the JSONL walker shape exactly: ``{days, daily[], by_model[],
+    totals, recommendations}`` where every bucket carries the same
+    ``input_tokens / output_tokens / cache_read_tokens / cache_write_tokens
+    + per-component cost + cache_hit_ratio_pct + est_savings`` columns the
+    legacy path emits. Backed by ``LocalStore.query_cache_metrics`` which
+    runs one SQL pass and applies the same v3 sibling-pair dedupe
+    (``assistant`` + ``model.completed`` 100-300 ms apart) as
+    ``query_daily_usage_splits`` — without dedupe the cache-hit ratio
+    silently lies by 2×.
+
+    Returns ``None`` to defer to the legacy walker when the store is
+    unreachable. Returns the full envelope (with ``_source: 'local_store'``
+    canary) when the store IS reachable, even if no events match — that
+    keeps the audit grep at ``reference_duckdb_coverage_audit.md`` from
+    re-categorising the surface as ``JSONL_FALLBACK_ONLY``.
+    """
+    rows = _ls_call("query_cache_metrics", days=int(days))
+    if rows is None:
+        return None
+
+    daily: dict = {}
+    by_model: dict = {}
+    for r in rows:
+        d_key = r.get("day", "")
+        m_key = r.get("model", "unknown")
+        for bucket in (
+            daily.setdefault(d_key, _empty_cache_bucket()),
+            by_model.setdefault(m_key, _empty_cache_bucket()),
+        ):
+            bucket["input_tokens"]       += int(r.get("input_tokens") or 0)
+            bucket["output_tokens"]      += int(r.get("output_tokens") or 0)
+            bucket["cache_read_tokens"]  += int(r.get("cache_read_tokens") or 0)
+            bucket["cache_write_tokens"] += int(r.get("cache_write_tokens") or 0)
+            bucket["input_cost"]         += float(r.get("input_cost") or 0.0)
+            bucket["output_cost"]        += float(r.get("output_cost") or 0.0)
+            bucket["cache_read_cost"]    += float(r.get("cache_read_cost") or 0.0)
+            bucket["cache_write_cost"]   += float(r.get("cache_write_cost") or 0.0)
+            bucket["total_cost"]         += float(r.get("total_cost") or 0.0)
+
+    today = datetime.now()
+    daily_out = []
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        daily_out.append(
+            _summarise_cache_bucket(ds, daily.get(ds, _empty_cache_bucket()), key="date")
+        )
+
+    by_model_out = [
+        _summarise_cache_bucket(m, b, key="model")
+        for m, b in sorted(by_model.items(), key=lambda kv: -kv[1]["total_cost"])
+    ]
+
+    totals_bucket = _empty_cache_bucket()
+    for b in daily.values():
+        for k in totals_bucket:
+            totals_bucket[k] += b[k]
+    totals_out = _summarise_cache_bucket("totals", totals_bucket, key="label")
+
+    return {
+        "days": days,
+        "daily": daily_out,
+        "by_model": by_model_out,
+        "totals": totals_out,
+        "recommendations": _cache_recommendations(totals_out, by_model_out),
+        "_source": "local_store",
+    }
+
+
+def _cache_recommendations(totals, by_model):
+    tips = []
+    hit = totals.get("cache_hit_ratio_pct", 0.0)
+    if totals.get("input_tokens", 0) + totals.get("cache_read_tokens", 0) == 0:
+        tips.append(
+            "No cache-eligible traffic in window. Connect a recent agent run to see "
+            "cache analytics."
+        )
+        return tips
+    if hit < 30.0:
+        tips.append(
+            f"Cache hit ratio is low ({hit}%). Stabilise your system prompt and "
+            "front-load static context — Anthropic charges ~10% for cache reads vs. "
+            "fresh input."
+        )
+    elif hit < 60.0:
+        tips.append(
+            f"Cache hit ratio is moderate ({hit}%). Look for prompt suffixes that "
+            "rotate per turn (timestamps, RNG nonces) — they invalidate the cache "
+            "block above them."
+        )
+    else:
+        tips.append(
+            f"Cache hit ratio is healthy ({hit}%). Most repeat prompts are landing "
+            "in the cache."
+        )
+
+    cw = totals.get("cache_write_tokens", 0)
+    cr = totals.get("cache_read_tokens", 0)
+    if cw and cr and cw > cr:
+        tips.append(
+            "Cache writes outweigh reads — sessions are short-lived or your prompt "
+            "block is changing often. A longer-lived session prefix would amortise "
+            "the write cost."
+        )
+
+    poor_models = [
+        m for m in by_model
+        if (m.get("input_tokens", 0) + m.get("cache_read_tokens", 0)) >= 5000
+        and m.get("cache_hit_ratio_pct", 0.0) < 20.0
+    ]
+    if poor_models:
+        names = ", ".join(sorted({m["model"] for m in poor_models})[:3])
+        tips.append(
+            f"Models with notably low cache utilisation: {names}. Check whether "
+            "their system prompt is wrapped in a cache_control breakpoint."
+        )
+    return tips
+
+
+@bp_usage.route("/api/usage/cache-trends")
+def api_usage_cache_trends():
+    """Daily + per-model prompt-cache hit ratio and estimated savings (GH #851).
+
+    Query params:
+      days  — window size in days (default 14, max 90)
+
+    Returns:
+      {
+        days:    int,
+        daily:   [{date, input_tokens, output_tokens, cache_read_tokens,
+                    cache_write_tokens, *cost_usd, cache_hit_ratio_pct,
+                    est_savings_usd, est_savings_pct}],
+        by_model:[same shape, keyed by `model`],
+        totals:  same shape, keyed by `label`,
+        recommendations: [str],
+      }
+    """
+    import dashboard as _d
+
+    try:
+        days = max(1, min(int(request.args.get("days", "14")), 90))
+    except ValueError:
+        days = 14
+
+    # Tier-1 DuckDB fast path (issue #1778 audit #1). Same dedupe shape as
+    # ``_try_local_store_usage_forecast`` — one SQL pass + sibling-pair
+    # collapse, vs. the JSONL walker below which re-parses every session
+    # file on every call. Returns ``None`` to defer when the store is
+    # unreachable.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_cache_trends(days)
+        if fast is not None:
+            return jsonify(fast)
+
+    sessions_dir = _d._get_sessions_dir()
+    cutoff_ts = time.time() - (days * 86400)
+
+    daily: dict = {}
+    by_model: dict = {}
+
+    if os.path.isdir(sessions_dir):
+        for fname in os.listdir(sessions_dir):
+            if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
+                continue
+            if (
+                ".trajectory." in fname
+                or ".checkpoint." in fname
+                or ".deleted." in fname
+            ):
+                continue
+            fpath = os.path.join(sessions_dir, fname)
+            try:
+                fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
+            except OSError:
+                continue
+            # Skip files whose mtime is older than the window AND whose name
+            # doesn't include a reset suffix — saves IO on stale archives.
+            if fallback_dt.timestamp() < cutoff_ts and ".jsonl.reset." not in fname:
+                continue
+            last_seen_model = ""
+            try:
+                with open(fpath, "r", errors="replace") as fh:
+                    for raw in fh:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        try:
+                            ev = json.loads(raw)
+                        except Exception:
+                            continue
+                        t = ev.get("type", "")
+                        if t == "model_change":
+                            m = ev.get("modelId") or ev.get("model") or ""
+                            if m:
+                                last_seen_model = m
+                            continue
+                        msg = ev.get("message", {}) or {}
+                        if not isinstance(msg, dict):
+                            continue
+                        usage = msg.get("usage", {}) or {}
+                        if not isinstance(usage, dict) or not usage:
+                            continue
+                        msg_model = msg.get("model") or last_seen_model or "unknown"
+                        if msg_model:
+                            last_seen_model = msg_model
+
+                        ts = _d._parse_event_timestamp(
+                            ev.get("timestamp")
+                            or ev.get("time")
+                            or ev.get("created_at"),
+                            fallback_dt,
+                        )
+                        if not ts:
+                            ts = fallback_dt
+                        if ts.timestamp() < cutoff_ts:
+                            continue
+                        date_str = ts.strftime("%Y-%m-%d")
+
+                        in_toks = int(
+                            usage.get("input", usage.get("input_tokens", 0)) or 0
+                        )
+                        out_toks = int(
+                            usage.get("output", usage.get("output_tokens", 0)) or 0
+                        )
+                        cr_toks = int(
+                            usage.get(
+                                "cacheRead", usage.get("cache_read_tokens", 0)
+                            )
+                            or 0
+                        )
+                        cw_toks = int(
+                            usage.get(
+                                "cacheWrite", usage.get("cache_write_tokens", 0)
+                            )
+                            or 0
+                        )
+                        cost_obj = usage.get("cost", {}) or {}
+                        if not isinstance(cost_obj, dict):
+                            cost_obj = {}
+                        in_cost = float(cost_obj.get("input", 0) or 0)
+                        out_cost = float(cost_obj.get("output", 0) or 0)
+                        cr_cost = float(cost_obj.get("cacheRead", 0) or 0)
+                        cw_cost = float(cost_obj.get("cacheWrite", 0) or 0)
+                        total_cost = float(
+                            cost_obj.get(
+                                "total", in_cost + out_cost + cr_cost + cw_cost
+                            )
+                            or 0
+                        )
+
+                        for bucket in (
+                            daily.setdefault(date_str, _empty_cache_bucket()),
+                            by_model.setdefault(msg_model, _empty_cache_bucket()),
+                        ):
+                            bucket["input_tokens"] += in_toks
+                            bucket["output_tokens"] += out_toks
+                            bucket["cache_read_tokens"] += cr_toks
+                            bucket["cache_write_tokens"] += cw_toks
+                            bucket["input_cost"] += in_cost
+                            bucket["output_cost"] += out_cost
+                            bucket["cache_read_cost"] += cr_cost
+                            bucket["cache_write_cost"] += cw_cost
+                            bucket["total_cost"] += total_cost
+            except Exception:
+                continue
+
+    today = datetime.now()
+    daily_out = []
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        daily_out.append(
+            _summarise_cache_bucket(ds, daily.get(ds, _empty_cache_bucket()), key="date")
+        )
+
+    by_model_out = [
+        _summarise_cache_bucket(m, b, key="model")
+        for m, b in sorted(by_model.items(), key=lambda kv: -kv[1]["total_cost"])
+    ]
+
+    totals_bucket = _empty_cache_bucket()
+    for b in daily.values():
+        for k in totals_bucket:
+            totals_bucket[k] += b[k]
+    totals_out = _summarise_cache_bucket("totals", totals_bucket, key="label")
+
+    return jsonify({
+        "days": days,
+        "daily": daily_out,
+        "by_model": by_model_out,
+        "totals": totals_out,
+        "recommendations": _cache_recommendations(totals_out, by_model_out),
+    })
+
+
+# ── Cache Risk: per-session idle-gap re-write tax (issue #2839 Part 1) ──
+
+
+@bp_usage.route("/api/usage/cache-risk")
+def api_usage_cache_risk():
+    """Fleet roll-up of the prompt-cache re-read tax.
+
+    For every session where `cacheExpiryCount > 0` or `cacheWriteCostUsd > 0`,
+    aggregate:
+      - total_expiry_count   — sum of idle gaps that crossed the 5-min TTL
+      - total_write_cost_usd — total $ paid to rebuild the prompt cache
+      - total_saved_usd      — $ actually saved via cache reads in those sessions
+      - affected_sessions    — count of sessions that tripped at least one expiry
+      - max_idle_gap_sec     — worst single idle gap across all affected sessions
+
+    Data comes entirely from metadata already stored in DuckDB by the sync
+    daemon — no JSONL scanning, no proxy required.
+    """
+    try:
+        from routes.sessions import _try_local_store_cost_breakdown
+        cb = _try_local_store_cost_breakdown() or {}
+    except Exception:
+        cb = {}
+
+    sessions = cb.get("sessions") or []
+    total_expiries = 0
+    total_write_cost = 0.0
+    total_saved = 0.0
+    affected = 0
+    max_idle_gap = 0.0
+
+    for s in sessions:
+        expiries = int(s.get("cache_expiry_count") or 0)
+        wc = float(s.get("cache_write_cost_usd") or 0.0)
+        sv = float(s.get("cache_saved_usd") or 0.0)
+        gap = float(s.get("max_idle_gap_sec") or 0.0)
+        if expiries > 0 or wc > 0:
+            affected += 1
+            total_expiries += expiries
+            total_write_cost += wc
+            total_saved += sv
+            if gap > max_idle_gap:
+                max_idle_gap = gap
+
+    return jsonify({
+        "affected_sessions": affected,
+        "total_sessions": len(sessions),
+        "total_expiry_count": total_expiries,
+        "total_write_cost_usd": round(total_write_cost, 4),
+        "total_saved_usd": round(total_saved, 4),
+        "max_idle_gap_sec": round(max_idle_gap, 1),
+        "_source": "local_store" if cb.get("_source") else "none",
+    })
+
+
+# ── Skills fidelity telemetry (GH #687) ─────────────────────────────────
+
+
+@bp_usage.route('/api/skills/fidelity')
+def api_skills_fidelity():
+    """Skills fidelity telemetry: dead-skill detector + body/linked-file stats (GH #687).
+
+    Compares skills installed in workspace/skills/ against SKILL.md body-fetches
+    seen in recent session JSONL files and classifies each skill as:
+
+      dead   — installed (header always in system context) but body never fetched
+      stuck  — body fetched but linked files in the skill dir never accessed
+      active — body fetched (and either no linked files, or at least one accessed)
+      orphan — body-fetched in sessions but not installed (untracked / removed)
+
+    Query params:
+      sessions  — number of recent session files to scan (default 200, max 500)
+
+    Returns:
+      {
+        skills: [{name, installed, body_fetches, linked_file_fetches,
+                  sessions_seen, status, token_roi}],
+        dead_count, stuck_count, active_count, orphan_count,
+        total_installed, note
+      }
+    """
+    import dashboard as _d
+    import re as _re
+
+    try:
+        max_sessions = max(1, min(int(request.args.get("sessions", 200)), 500))
+    except (TypeError, ValueError):
+        max_sessions = 200
+
+    # Tier-1 DuckDB fast path (issue #1565 audit #6). Reuses the canonical
+    # ``query_recent_read_tool_calls`` source already serving /api/skills
+    # so both fidelity surfaces stay aligned; ``None`` falls through to
+    # the legacy JSONL walker below.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_skills_fidelity(max_sessions=max_sessions)
+        if fast is not None:
+            return jsonify(fast)
+
+    workspace = (
+        _d.WORKSPACE
+        or os.environ.get("OPENCLAW_WORKSPACE")
+        or os.environ.get("OPENCLAW_HOME")
+        or os.path.expanduser("~/.openclaw/workspace")
+    )
+    sessions_dir = _d._get_sessions_dir()
+
+    # 1. List installed skills — each subdir containing SKILL.md is one skill
+    skills_dir = os.path.join(workspace, "skills")
+    installed_skills: set = set()
+    skill_has_linked: dict = {}  # name -> bool (has non-SKILL.md, non-hidden files)
+    if os.path.isdir(skills_dir):
+        for entry in os.listdir(skills_dir):
+            entry_path = os.path.join(skills_dir, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            if not os.path.isfile(os.path.join(entry_path, "SKILL.md")):
+                continue
+            installed_skills.add(entry)
+            linked = [
+                f for f in os.listdir(entry_path)
+                if f.upper() != "SKILL.MD"
+                and not f.startswith('.')
+                and os.path.isfile(os.path.join(entry_path, f))
+            ]
+            skill_has_linked[entry] = bool(linked)
+
+    # 2. Scan recent session JSONLs for SKILL.md body-fetches and linked-file reads
+    SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
+    SKILL_LINKED_RE = _re.compile(
+        r'skills[/\\]([^/\\]+)[/\\]([^/\\\'">\s]{1,80})', _re.IGNORECASE
+    )
+
+    body_fetches: dict = {}    # skill_name -> count
+    linked_fetches: dict = {}  # skill_name -> count
+    skill_sessions: dict = {}  # skill_name -> set of session filenames
+
+    if sessions_dir and os.path.isdir(sessions_dir):
+        try:
+            all_files = [
+                f for f in os.listdir(sessions_dir)
+                if f.endswith('.jsonl')
+                and '.trajectory.' not in f
+                and '.checkpoint.' not in f
+            ]
+            all_files.sort(
+                key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+                reverse=True,
+            )
+            for fname in all_files[:max_sessions]:
+                fpath = os.path.join(sessions_dir, fname)
+                try:
+                    with open(fpath, 'r', errors='replace') as fh:
+                        for raw in fh:
+                            raw = raw.strip()
+                            if not raw:
+                                continue
+                            try:
+                                obj = json.loads(raw)
+                            except Exception:
+                                continue
+                            if obj.get('role') not in ('assistant', 'tool', 'user'):
+                                continue
+                            line_str = json.dumps(obj)
+                            for m in SKILL_MD_RE.finditer(line_str):
+                                sname = m.group(1)
+                                if sname.lower() in ('skills', ''):
+                                    continue
+                                body_fetches[sname] = body_fetches.get(sname, 0) + 1
+                                skill_sessions.setdefault(sname, set()).add(fname)
+                            for m in SKILL_LINKED_RE.finditer(line_str):
+                                sname = m.group(1)
+                                if m.group(2).upper() == 'SKILL.MD':
+                                    continue
+                                linked_fetches[sname] = linked_fetches.get(sname, 0) + 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # 3. Build per-skill stats and classify
+    all_names = installed_skills | set(body_fetches) | set(linked_fetches)
+    skills_out = []
+    dead_count = stuck_count = active_count = orphan_count = 0
+
+    for name in sorted(all_names):
+        installed = name in installed_skills
+        bf = body_fetches.get(name, 0)
+        lf = linked_fetches.get(name, 0)
+        sess = len(skill_sessions.get(name, set()))
+        has_linked = skill_has_linked.get(name, False)
+
+        if installed and bf == 0:
+            status = 'dead'
+            dead_count += 1
+        elif not installed and bf > 0:
+            status = 'orphan'
+            orphan_count += 1
+        elif bf > 0 and has_linked and lf == 0:
+            status = 'stuck'
+            stuck_count += 1
+        else:
+            status = 'active'
+            active_count += 1
+
+        skills_out.append({
+            'name': name,
+            'installed': installed,
+            'body_fetches': bf,
+            'linked_file_fetches': lf,
+            'sessions_seen': sess,
+            'status': status,
+            'token_roi': round(bf / sess, 3) if sess > 0 else None,
+        })
+
+    _STATUS_ORDER = {'dead': 0, 'stuck': 1, 'orphan': 2, 'active': 3}
+    skills_out.sort(key=lambda s: (_STATUS_ORDER[s['status']], -s['body_fetches']))
+
+    return jsonify({
+        'skills': skills_out,
+        'dead_count': dead_count,
+        'stuck_count': stuck_count,
+        'active_count': active_count,
+        'orphan_count': orphan_count,
+        'total_installed': len(installed_skills),
+        'note': (
+            'Dead: installed but body never fetched — remove to save header tokens. '
+            'Stuck: body fetched but linked files unread despite existing. '
+            'Orphan: body-fetched in sessions but not installed (skill removed?).'
+        ),
+    })
+
+
+@bp_usage.route('/api/token-attribution')
+def api_token_attribution():
+    """Per-message cost attribution with cache token breakdown.
+
+    Returns granular token/cost breakdown per message type (input, output, cache-read, cache-write)
+    for the specified session or across recent sessions.
+    """
+    import dashboard as _d
+
+    wanted_sid = request.args.get('session_id', '').strip()
+    try:
+        limit = max(1, min(int(request.args.get('limit', '100')), 1000))
+    except ValueError:
+        limit = 100
+
+    # Tier-1 DuckDB fast path (issue #1565 audit #7). Reads deduped v3
+    # events; tagged ``_source: 'local_store'``. Returns ``None`` to
+    # defer to the JSONL walker when the store is unreachable or empty.
+    # NOTE: the legacy walker only handles the pre-v3 synthetic
+    # ``type=='message'`` shape, so on real v3 installs the fast path is
+    # the ONLY surface that returns rows — see audit-imperfection note
+    # in the helper docstring.
+    if is_local_store_read_enabled():
+        fast = _try_local_store_token_attribution(
+            wanted_sid=wanted_sid, limit=limit,
+        )
+        if fast is not None:
+            return jsonify(fast)
+
+    sessions_dir = _d._get_sessions_dir()
+    if not os.path.isdir(sessions_dir):
+        return jsonify({"messages": [], "totals": {}, "note": "sessions dir not found"})
+
+    try:
+        all_files = [
+            f for f in os.listdir(sessions_dir)
+            if f.endswith('.jsonl') and '.deleted.' not in f and '.reset.' not in f
+        ]
+    except OSError:
+        all_files = []
+
+    if wanted_sid:
+        files = [f for f in all_files if f.startswith(wanted_sid)]
+    else:
+        files = sorted(
+            all_files,
+            key=lambda f: os.path.getmtime(os.path.join(sessions_dir, f)),
+            reverse=True
+        )[:50]
+
+    messages = []
+    totals = {
+        'input_tokens': 0,
+        'output_tokens': 0,
+        'cache_read_tokens': 0,
+        'cache_write_tokens': 0,
+        'total_tokens': 0,
+        'input_cost': 0.0,
+        'output_cost': 0.0,
+        'cache_read_cost': 0.0,
+        'cache_write_cost': 0.0,
+        'total_cost': 0.0,
+    }
+
+    for fname in files:
+        fpath = os.path.join(sessions_dir, fname)
+        sid = fname[:-6] if fname.endswith('.jsonl') else fname
+
+        try:
+            with open(fpath, 'r', errors='replace') as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        ev = json.loads(raw)
+                    except Exception:
+                        continue
+
+                    if ev.get('type') != 'message':
+                        continue
+
+                    msg = ev.get('message', {}) or {}
+                    if not isinstance(msg, dict):
+                        continue
+
+                    usage = msg.get('usage', {}) or {}
+                    if not isinstance(usage, dict) or not usage:
+                        continue
+
+                    # Get token breakdown
+                    input_tok = int(usage.get('input', usage.get('input_tokens', 0)) or 0)
+                    output_tok = int(usage.get('output', usage.get('output_tokens', 0)) or 0)
+                    cache_read = int(usage.get('cacheRead', usage.get('cache_read_tokens', 0)) or 0)
+                    cache_write = int(usage.get('cacheWrite', usage.get('cache_write_tokens', 0)) or 0)
+
+                    # Get cost breakdown
+                    cost_obj = usage.get('cost', {}) or {}
+                    if isinstance(cost_obj, dict):
+                        input_cost = float(cost_obj.get('input', 0) or 0)
+                        output_cost = float(cost_obj.get('output', 0) or 0)
+                        cache_read_cost = float(cost_obj.get('cacheRead', 0) or 0)
+                        cache_write_cost = float(cost_obj.get('cacheWrite', 0) or 0)
+                        total_cost = float(cost_obj.get('total', cost_obj.get('usd', 0)) or 0)
+                    else:
+                        input_cost = output_cost = cache_read_cost = cache_write_cost = total_cost = 0.0
+
+                    total_tok = input_tok + output_tok + cache_read + cache_write
+
+                    if total_tok == 0:
+                        continue
+
+                    msg_data = {
+                        'session_id': sid,
+                        'timestamp': ev.get('timestamp') or ev.get('time') or ev.get('created_at'),
+                        'model': msg.get('model', 'unknown'),
+                        'role': msg.get('role', 'unknown'),
+                        'tokens': {
+                            'input': input_tok,
+                            'output': output_tok,
+                            'cache_read': cache_read,
+                            'cache_write': cache_write,
+                            'total': total_tok,
+                        },
+                        'cost': {
+                            'input': round(input_cost, 8),
+                            'output': round(output_cost, 8),
+                            'cache_read': round(cache_read_cost, 8),
+                            'cache_write': round(cache_write_cost, 8),
+                            'total': round(total_cost, 8),
+                        },
+                        'cache_hit_ratio': round(cache_read / (input_tok + cache_read) * 100, 1) if (input_tok + cache_read) > 0 else 0.0,
+                    }
+
+                    messages.append(msg_data)
+
+                    # Update totals
+                    totals['input_tokens'] += input_tok
+                    totals['output_tokens'] += output_tok
+                    totals['cache_read_tokens'] += cache_read
+                    totals['cache_write_tokens'] += cache_write
+                    totals['total_tokens'] += total_tok
+                    totals['input_cost'] += input_cost
+                    totals['output_cost'] += output_cost
+                    totals['cache_read_cost'] += cache_read_cost
+                    totals['cache_write_cost'] += cache_write_cost
+                    totals['total_cost'] += total_cost
+        except Exception:
+            continue
+
+    # Round totals
+    for k in ['input_cost', 'output_cost', 'cache_read_cost', 'cache_write_cost', 'total_cost']:
+        totals[k] = round(totals[k], 6)
+
+    # Sort by timestamp descending and apply limit
+    messages.sort(key=lambda m: m.get('timestamp', ''), reverse=True)
+    messages = messages[:limit]
+
+    # Calculate cache hit ratio
+    input_plus_cache = totals['input_tokens'] + totals['cache_read_tokens']
+    totals['cache_hit_ratio_pct'] = round(totals['cache_read_tokens'] / input_plus_cache * 100, 1) if input_plus_cache else 0.0
+
+    return jsonify({
+        'messages': messages,
+        'totals': totals,
+        'session_id': wanted_sid if wanted_sid else None,    })
+
+
+# ── NeMo free-tier cap status (issue #1170) ────────────────────────────
+#
+# Powers the upsell banner that the Brain + Tokens tabs render once a
+# free-tier user trips the 1000-events/day NeMo ingest cap. Returns the
+# same shape ``clawmetry.adapters.nemo.get_nemo_cap_state`` produces so
+# the JS can pass through without any reshape.
+@bp_usage.route("/api/nemo-cap-status")
+def api_nemo_cap_status():
+    """Return the current daily NeMo ingest cap snapshot.
+
+    Cheap, side-effect-free read. Never raises out — on any failure we
+    fall back to a "no cap hit, no Pro" payload so the banner stays
+    hidden rather than spuriously showing up.
+    """
+    try:
+        from clawmetry.adapters.nemo import get_nemo_cap_state, NEMO_FREE_DAILY_CAP
+        return jsonify(get_nemo_cap_state())
+    except Exception:
+        return jsonify({
+            "cap": 1000,
+            "used": 0,
+            "dropped": 0,
+            "is_pro": False,
+            "cap_hit": False,
+            "date": "",
+        })
+
+
+# ── Spend Optimization Recommendations (issue #1415) ────────────────────────
+#
+# Reads spans for the last 30 days and applies a static heuristic to rank
+# tools by potential savings from routing to a cheaper model tier.
+# Pure read-path: no writes, no LLM calls, no new dependencies.
+
+# Tools whose outputs are deterministic / structural — cheaper models
+# produce equivalent results and can safely replace heavier ones.
+_SPEND_OPT_TOOL_DOWNGRADE: dict = {
+    "bash":               "haiku",
+    "read":               "haiku",
+    "ls":                 "haiku",
+    "list_files":         "haiku",
+    "ls_files":           "haiku",
+    "find_files":         "haiku",
+    "glob":               "haiku",
+    "search_files":       "haiku",
+    "computer":           "haiku",
+    "write":              "sonnet",
+    "edit":               "sonnet",
+    "str_replace_editor": "sonnet",
+    "create_file":        "sonnet",
+    "multiedit":          "sonnet",
+}
+
+# Relative input-token price ratios: haiku = 1.0 baseline.
+_SPEND_OPT_MODEL_RATIO: dict = {
+    "haiku":  1.0,
+    "sonnet": 12.0,
+    "opus":   60.0,
+}
+
+
+def _spend_opt_model_tier(model: str) -> str:
+    """Map a raw model string to haiku / sonnet / opus (or unknown)."""
+    m = (model or "").lower()
+    if "haiku" in m:
+        return "haiku"
+    if "sonnet" in m:
+        return "sonnet"
+    if "opus" in m:
+        return "opus"
+    return "unknown"
+
+
+def _try_local_store_spend_optimization():
+    """Fast-path: aggregate spans → ranked model-downgrade recommendations."""
+    import time as _time
+    from collections import defaultdict
+
+    since = _time.time() - 30 * 86400  # 30-day look-back (unix seconds)
+    spans = _ls_call("query_recent_spans", since=since, limit=5000)
+    if not spans:
+        return None
+
+    agg: dict = defaultdict(lambda: {"calls": 0, "cost_usd": 0.0})
+    for s in spans:
+        tool = (s.get("tool_name") or "").strip()
+        model = (s.get("model") or "").strip()
+        cost = s.get("cost_usd") or 0.0
+        if not tool or not model or cost <= 0:
+            continue
+        key = (tool, model)
+        agg[key]["calls"] += 1
+        agg[key]["cost_usd"] += cost
+
+    if not agg:
+        return None
+
+    recs: list = []
+    for (tool, model), stats in agg.items():
+        target_tier = _SPEND_OPT_TOOL_DOWNGRADE.get(tool)
+        if not target_tier:
+            continue
+        cur_tier = _spend_opt_model_tier(model)
+        if cur_tier == "unknown" or cur_tier == target_tier:
+            continue
+        cur_ratio = _SPEND_OPT_MODEL_RATIO.get(cur_tier, 1.0)
+        tgt_ratio = _SPEND_OPT_MODEL_RATIO.get(target_tier, 1.0)
+        if cur_ratio <= tgt_ratio:
+            continue  # already on a cheaper or equivalent tier
+        savings_frac = 1.0 - tgt_ratio / cur_ratio
+        projected_save = stats["cost_usd"] * savings_frac
+        if projected_save < 0.005:
+            continue  # skip sub-cent savings
+        recs.append({
+            "tool":                      tool,
+            "current_model":             model,
+            "suggested_model_tier":      target_tier,
+            "call_count":                stats["calls"],
+            "current_cost_usd_30d":      round(stats["cost_usd"], 4),
+            "projected_savings_usd_30d": round(projected_save, 4),
+            "savings_pct":               round(savings_frac * 100, 1),
+        })
+
+    recs.sort(key=lambda r: -r["projected_savings_usd_30d"])
+    recs = recs[:5]
+    total_save = sum(r["projected_savings_usd_30d"] for r in recs)
+    total_cost = sum(r["current_cost_usd_30d"] for r in recs)
+    # The loudest number on this card is a counterfactual: what the last 30
+    # days WOULD have cost on a cheaper tier. It rests on a static price-ratio
+    # table and on the assumption that the cheaper model does the same job.
+    # Both can be wrong, and the badge says so rather than letting a green
+    # 22px "Projected 30-day savings" read as money already in the bank.
+    saving_entry = _prov.estimated(
+        "the measured cost of these tool calls over the window, times the "
+        "published price gap between the model they ran on and the cheaper "
+        "tier suggested. It assumes the cheaper model would have produced an "
+        "equivalent result, which is the part that can be wrong",
+        "duckdb spans, priced with the static model-tier ratio table",
+        window="the last 30 days",
+        inputs={"tools_analysed": len(recs)})
+    return _prov.stamp({
+        "recommendations":               recs,
+        "total_projected_savings_usd_30d": round(total_save, 4),
+        "total_analyzed_cost_usd_30d":   round(total_cost, 4),
+        "window_days":                   30,
+        "_source":                       "local_store",
+    }, {
+        "total_projected_savings_usd_30d": saving_entry,
+        "recommendations[].projected_savings_usd_30d": saving_entry,
+        "total_analyzed_cost_usd_30d": _prov.derived(
+            "sum of the measured cost of the analysed tool calls",
+            "duckdb spans", window="the last 30 days"),
+        "recommendations[].current_cost_usd_30d": _prov.derived(
+            "sum of the measured cost of this tool's calls",
+            "duckdb spans", window="the last 30 days"),
+    })
+
+
+@bp_usage.route("/api/usage/optimization-recommendations")
+def api_usage_optimization_recommendations():
+    """Spend-optimization tile: per-tool model-downgrade suggestions.
+
+    Reads spans for the last 30 days (no writes, no LLM calls) and applies
+    a static heuristic to surface tools that can safely be routed to a
+    cheaper model tier with the projected monthly savings.  Issue #1415.
+    """
+    if is_local_store_read_enabled():
+        fast = _try_local_store_spend_optimization()
+        if fast is not None:
+            return jsonify(fast)
+    # Not "you could save $0.00". Nothing was analysed, so there is no
+    # number here at all, and stamp() nulls the ones that pretended there was.
+    return jsonify(_prov.stamp({
+        "recommendations":               [],
+        "total_projected_savings_usd_30d": 0,
+        "total_analyzed_cost_usd_30d":   0,
+        "window_days":                   30,
+        "note": "Enable clawmetry connect to see recommendations.",
+    }, {
+        "total_projected_savings_usd_30d": _prov.unknown(
+            "no spans were available to analyse, so there is nothing to "
+            "compare a cheaper tier against",
+            source="/api/usage/optimization-recommendations"),
+        "total_analyzed_cost_usd_30d": _prov.unknown(
+            "no spans were available to analyse",
+            source="/api/usage/optimization-recommendations"),
+    }))
+
+
+@bp_usage.route("/api/efficiency")
+def api_efficiency():
+    """Efficiency grade + measured savings (feat/efficiency-grade).
+
+    Node-wide grade/score/metrics + ranked savings actions computed by
+    ``clawmetry.efficiency.build_efficiency_slice`` over the trailing-window
+    ``rollup_model_daily`` aggregates (``query_efficiency_rollup``, read via
+    the daemon proxy — the daemon owns the DuckDB writer lock).
+
+    ``?runtime=<id>`` returns ONLY that runtime's slice (server-side honesty:
+    an absent runtime gets an honest ``insufficient_data`` shape, never a
+    node-wide number relabelled). ``?days=`` clamps to 7..90 (default 30).
+    Never 500s — any failure yields the honest empty shape.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(90, days))
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    try:
+        from clawmetry.efficiency import build_efficiency_slice
+        rows = _ls_call("query_efficiency_rollup", days=days) or []
+        out = build_efficiency_slice(rows, days=days)
+    except Exception:
+        out = {"schema": 1, "window_days": days, "grade": None, "score": None,
+               "insufficient_data": True, "metrics": {},
+               "cache_saved_monthly_usd": 0.0,
+               "projected_monthly_cost_usd": 0.0,
+               "actions": [], "byRuntime": {}}
+    # feat/spend-actions: fold in the spend-flow-derived savings ideas
+    # (thinking_trim) node-wide AND per-runtime, BEFORE the runtime branch
+    # below so a scoped request sees only its own runtime's actions. Uses
+    # the same cached 7d walk as the Cost-tab flow chart (no extra scan).
+    try:
+        from clawmetry.spend_flow import merge_spend_actions
+        _sf = _ls_call("query_spend_flow", days=7)
+        if isinstance(_sf, dict) and isinstance(_sf.get("result"), dict):
+            _sf = _sf["result"]
+        out = merge_spend_actions(out, _sf)
+    except Exception:
+        pass
+    if runtime and runtime != "all":
+        entry = (out.get("byRuntime") or {}).get(runtime)
+        if entry is None:
+            # Per-runtime honesty: no data for this runtime -> an honest
+            # empty/insufficient shape, NEVER the node-wide numbers.
+            try:
+                from clawmetry.efficiency import build_efficiency_slice
+                entry = build_efficiency_slice([], days=days)
+                entry.pop("byRuntime", None)
+            except Exception:
+                entry = {"schema": 1, "window_days": days, "grade": None,
+                         "score": None, "insufficient_data": True,
+                         "metrics": {}, "cache_saved_monthly_usd": 0.0,
+                         "projected_monthly_cost_usd": 0.0, "actions": []}
+        entry = dict(entry)
+        entry["runtime"] = runtime
+        # ``insufficient_data`` alone conflates two opposite messages: a
+        # runtime that was idle, and a runtime that never writes the
+        # per-call cost this grade is computed from. The second one can
+        # never produce a grade no matter how long the user waits, so
+        # "not enough data yet" is a lie that costs them a support ticket.
+        entry["coverage"] = _runtime_coverage(
+            runtime, has_data=not entry.get("insufficient_data")
+        )
+        return jsonify(entry)
+    return jsonify(out)
+
+
+# ---------------------------------------------------------------------------
+# Efficiency companion endpoints — Cache-Hit Rate + Routing Advisor.
+# Public API surface (v1 consumers, mobile). The dashboard tab derives both
+# card contents client-side from the shared /api/efficiency cache so they
+# work on cloud through the existing cm-cloud-efficiency interceptor without
+# needing per-endpoint interceptors. These handlers stay for external readers.
+# Both never 500 and reconcile with /api/efficiency by construction.
+# ---------------------------------------------------------------------------
+
+# "$ left on the table" is deliberately conservative: only a fraction of a
+# miss's input tokens is realistically cacheable, so the caller-visible number
+# is flagged as an estimate rather than a hard claim.
+_CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION = 0.5
+# Cache multiplier for Anthropic reads (mirror of providers_pricing._CACHE_READ_MULT;
+# inlined to avoid a routes<->core round-trip for one float).
+_CACHE_READ_MULT_FOR_ESTIMATE = 0.1
+
+
+def _cache_hit_shape(slice_dict, days):
+    """Reduce a build_efficiency_slice() scope to the Cache-Hit tile payload."""
+    metrics = (slice_dict or {}).get("metrics") or {}
+    tokens_in = int(metrics.get("tokens_in") or 0)
+    cache_read = int(metrics.get("cache_read") or 0)
+    denom = tokens_in + cache_read
+    hit_rate = round(cache_read / denom * 100.0, 2) if denom > 0 else None
+    saved_monthly = float((slice_dict or {}).get("cache_saved_monthly_usd") or 0.0)
+    window_cost = float(metrics.get("window_cost_usd") or 0.0)
+    projected = float((slice_dict or {}).get("projected_monthly_cost_usd") or 0.0)
+    left_on_table_monthly = 0.0
+    if hit_rate is not None and hit_rate < 100.0 and projected > 0 and tokens_in > 0:
+        cache_write = int(metrics.get("cache_write") or 0)
+        weight = (
+            tokens_in / (tokens_in + cache_read + cache_write)
+            if (tokens_in + cache_read + cache_write) > 0 else 0.0
+        )
+        monthly_input_cost = projected * weight
+        left_on_table_monthly = round(
+            monthly_input_cost
+            * _CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION
+            * (1.0 - _CACHE_READ_MULT_FOR_ESTIMATE),
+            4,
+        )
+    return {
+        "cache_hit_rate_pct":        hit_rate,
+        "tokens_in":                 tokens_in,
+        "cache_read":                cache_read,
+        "cache_saved_monthly_usd":   round(saved_monthly, 4),
+        "left_on_table_monthly_usd": left_on_table_monthly,
+        "left_on_table_estimate":    True,
+        "cacheable_fraction_used":   _CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION,
+        "window_cost_usd":           round(window_cost, 4),
+        "insufficient_data":         bool((slice_dict or {}).get("insufficient_data")),
+        "window_days":               days,
+    }
+
+
+@bp_usage.route("/api/efficiency/cache-hit-rate")
+def api_efficiency_cache_hit_rate():
+    """Prompt cache hit rate, $ saved, and conservative $ left on the table.
+
+    Reuses ``build_efficiency_slice`` so the node-wide number reconciles with
+    ``/api/efficiency`` by construction. Returns a node total plus a
+    ``byRuntime`` map. ``left_on_table_monthly_usd`` is flagged as an estimate
+    (underlying cacheable fraction exposed in the payload). Never 500s.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(90, days))
+    empty_scope = _cache_hit_shape({"insufficient_data": True}, days)
+    try:
+        from clawmetry.efficiency import build_efficiency_slice
+        rows = _ls_call("query_efficiency_rollup", days=days) or []
+        slice_all = build_efficiency_slice(rows, days=days)
+    except Exception:
+        return jsonify({"schema": 1, "window_days": days,
+                        "node": empty_scope, "byRuntime": {}})
+    node = _cache_hit_shape(slice_all, days)
+    by_rt = {}
+    for rt, entry in (slice_all.get("byRuntime") or {}).items():
+        by_rt[rt] = _cache_hit_shape(entry, days)
+    return jsonify({"schema": 1, "window_days": days,
+                    "node": node, "byRuntime": by_rt})
+
+
+def _extract_downgrade_suggestions(slice_dict):
+    """Pull the model_downgrade actions out of a scope, with target model + $."""
+    out = []
+    for a in ((slice_dict or {}).get("actions") or []):
+        if a.get("id") != "model_downgrade":
+            continue
+        data = a.get("data") or {}
+        savings = float(a.get("savings_monthly_usd") or 0.0)
+        if savings <= 0:
+            continue
+        out.append({
+            "current_model":                a.get("model") or "",
+            "suggested_model":              data.get("target_model") or "",
+            "calls":                        int(data.get("calls") or 0),
+            "avg_tokens_out":               float(data.get("avg_tokens_out") or 0.0),
+            "window_cost_usd":              float(data.get("window_cost_usd") or 0.0),
+            "target_window_cost_usd":       float(data.get("target_window_cost_usd") or 0.0),
+            "potential_savings_monthly_usd": round(savings, 4),
+        })
+    out.sort(key=lambda r: -r["potential_savings_monthly_usd"])
+    return out
+
+
+@bp_usage.route("/api/efficiency/routing-advisor")
+def api_efficiency_routing_advisor():
+    """Model-routing recommendations + already-realised routing savings.
+
+    Two numbers side by side from the same DuckDB store:
+      * ``potential`` — build_efficiency_slice's ``model_downgrade`` actions
+        (safe same-provider swaps only; the resolver in
+        ``providers_pricing.downgrade_model_name`` is guarded) reshaped as a
+        per-model advisor list.
+      * ``realised`` — the aggregate over ``auto_downgraded`` events that
+        actually ran (``query_routing_savings``).
+    Node total + ``byRuntime`` map. Never 500s.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(90, days))
+    empty = {"schema": 1, "window_days": days,
+             "node": {"suggestions": [], "potential_monthly_usd": 0.0,
+                      "realised": {"total_savings_usd": 0.0,
+                                   "total_substitutions": 0, "by_pair": []},
+                      "insufficient_data": True},
+             "byRuntime": {}}
+    try:
+        from clawmetry.efficiency import build_efficiency_slice
+        rows = _ls_call("query_efficiency_rollup", days=days) or []
+        slice_all = build_efficiency_slice(rows, days=days)
+    except Exception:
+        return jsonify(empty)
+    try:
+        realised = _ls_call("query_routing_savings", days=days) or {}
+    except Exception:
+        realised = {}
+    realised_shape = {
+        "total_savings_usd":   round(float(realised.get("total_savings_usd") or 0.0), 4),
+        "total_substitutions": int(realised.get("total_substitutions") or 0),
+        "by_pair":             realised.get("by_pair") or [],
+    }
+    node_sugg = _extract_downgrade_suggestions(slice_all)
+    node = {
+        "suggestions":           node_sugg,
+        "potential_monthly_usd": round(sum(s["potential_savings_monthly_usd"]
+                                           for s in node_sugg), 4),
+        "realised":              realised_shape,
+        "insufficient_data":     bool(slice_all.get("insufficient_data")),
+    }
+    by_rt = {}
+    for rt, entry in (slice_all.get("byRuntime") or {}).items():
+        sugg = _extract_downgrade_suggestions(entry)
+        by_rt[rt] = {
+            "suggestions":           sugg,
+            "potential_monthly_usd": round(sum(s["potential_savings_monthly_usd"]
+                                               for s in sugg), 4),
+            "insufficient_data":     bool(entry.get("insufficient_data")),
+        }
+    return jsonify({"schema": 1, "window_days": days,
+                    "node": node, "byRuntime": by_rt})
+
+
+# ---------------------------------------------------------------------------
+# Issue #2837 sub-task #1 — Compression Potential card
+# ---------------------------------------------------------------------------
+
+def _agg_compression(rows):
+    """Aggregate per-session compression-potential fields into fleet totals.
+
+    Thresholds mirror _derive_waste_summary: a session qualifies when
+    compression_potential_pct >= 50 AND compressible_tool_tokens >= 2000.
+    Returns {} when no sessions clear the thresholds (so callers can skip
+    rendering the card entirely).
+    """
+    if not rows:
+        return {}
+    compressible_sessions = 0
+    compressible_tokens = 0
+    recoverable_usd = 0.0
+    by_type = {}
+    for s in rows:
+        try:
+            pct = float(s.get("compression_potential_pct") or 0)
+            toks = int(s.get("compressible_tool_tokens") or 0)
+        except (TypeError, ValueError):
+            continue
+        if pct < 50 or toks < 2000:
+            continue
+        compressible_sessions += 1
+        compressible_tokens += toks
+        try:
+            recoverable_usd += float(s.get("compression_recoverable_usd") or 0)
+        except (TypeError, ValueError):
+            pass
+        ctype = s.get("dominant_compression_type") or "mixed"
+        by_type[ctype] = by_type.get(ctype, 0) + toks
+    if compressible_sessions == 0:
+        return {}
+    return {
+        "compressible_sessions": compressible_sessions,
+        "total_sessions": len(rows),
+        "compressible_tokens": compressible_tokens,
+        "recoverable_usd": round(recoverable_usd, 4),
+        "by_type": by_type,
+    }
+
+
+@bp_usage.route("/api/usage/compression")
+def api_usage_compression():
+    """Compression-potential roll-up for the Usage tab card (issue #2837).
+
+    Reads per-session compression fields written by the sync daemon and
+    returns fleet-level aggregates. Returns {} when no sessions clear the
+    thresholds so the JS can hide the card without any special-casing.
+    Never 500s.
+    """
+    try:
+        rows = _ls_call("query_sessions_table", limit=2000) or []
+        return jsonify(_agg_compression(rows))
+    except Exception:
+        return jsonify({})
+
+
+# ── Git outcome join (REQ-OBS-CEA-022) ─────────────────────────────────────
+#
+# Every other endpoint in this module measures an input. This one measures
+# whether the input produced anything: what shipped work cost, how much of it
+# was written twice, and how much money went to work that reached nothing.
+#
+# The join itself lives in ``clawmetry/local_store.py:query_git_outcomes`` and
+# the repository reading in ``clawmetry/git_outcomes.py``. This handler does
+# window resolution and shape, and nothing else — a handler that re-derived
+# the join would be a second definition of the same numbers.
+
+#: The only windows this surface accepts. ADR-046 gave the product ONE
+#: definition of today / this week / this month and it is not this module's
+#: place to invent a second: a rolling-7-day option here would report a
+#: different weekly figure from every other cost card on a Saturday, both
+#: "correct", and read to the user as the product being broken.
+_OUTCOME_WINDOWS = ("today", "week", "month")
+
+
+@bp_usage.route("/api/usage/outcomes")
+def api_usage_outcomes():
+    """Cost per merged change, rework rate and abandoned spend.
+
+    Query parameters: ``window`` (``today``/``week``/``month``, default
+    ``month``), ``repo`` (a repository root, default all), ``runtime``
+    (default all) and ``min_confidence`` (``high``/``medium``/``low``,
+    default ``medium``).
+
+    Never 500s, and never fabricates. A figure that cannot be derived comes
+    back with ``available: false`` and a reason; the coverage block says how
+    many sessions were considered and how many could not be attributed, so a
+    small answer is distinguishable from a wrong one.
+    """
+    window = (request.args.get("window") or "month").strip().lower()
+    if window not in _OUTCOME_WINDOWS:
+        return jsonify({
+            "error": "unknown window",
+            "allowed": list(_OUTCOME_WINDOWS),
+        }), 400
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    repo = (request.args.get("repo") or "").strip()
+    min_conf = (request.args.get("min_confidence") or "medium").strip().lower()
+    if min_conf not in ("high", "medium", "low"):
+        min_conf = "medium"
+
+    try:
+        from clawmetry.cost_windows import window_start_days
+        today, week, month = window_start_days()
+        since_day = {"today": today, "week": week, "month": month}[window]
+    except Exception:
+        since_day = ""
+
+    payload = _ls_call(
+        "query_git_outcomes",
+        since_day=since_day, repo=repo,
+        runtime=("" if runtime in ("", "all") else runtime),
+        min_confidence=min_conf,
+    )
+    if not isinstance(payload, dict):
+        # No store, no daemon, or the read failed. Reporting less beats
+        # reporting something untrue, and beats a 500 on a dashboard tab.
+        payload = {
+            "available": False,
+            "reason": "local_store_unavailable",
+            "repos": [], "metrics": {}, "coverage": {},
+        }
+    payload["window"] = window
+    payload["window_start"] = since_day
+    payload["runtime"] = runtime or "all"
+    payload["generated_at"] = int(time.time())
+    if not payload.get("available") and "enabled" not in payload:
+        try:
+            from clawmetry.git_outcomes import is_enabled as _git_enabled
+            payload["enabled"] = bool(_git_enabled())
+        except Exception:
+            payload["enabled"] = None
+    return jsonify(payload)
