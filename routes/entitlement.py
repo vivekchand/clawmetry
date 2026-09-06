@@ -23602,51 +23602,17 @@ def api_paywall_event():
     return "", 204
 
 
-# The overlay's two beacons, mapped to the lifecycle event names the cloud
-# funnel understands. Anything else stays local-only.
-_PAYWALL_LIFECYCLE_EVENTS = {
-    "hard_block_view": "paywall_view",
-    "hard_block_checkout_click": "paywall_checkout_click",
-}
-
-
-def _ping_paywall_lifecycle(body: dict) -> None:
-    """Mirror the two paywall beacons into the anonymous lifecycle ping.
-
-    Spec: REQ "Free Answer at the Gate, and a Visible Paywall"
-    (cd0b3dc3-ca5c-49ad-a4c0-dec01f122d12), AC-FREE-002.
-
-    Why: until now ``POST /api/paywall/event`` wrote ONLY to an in-process
-    rolling store on the user's own machine, so the highest-intent surface we
-    ship had no telemetry anywhere we can read. Checked on 2026-09-06:
-    ``hard_block_view`` and ``hard_block_checkout_click`` had zero rows in
-    cloud analytics, ever, which is why "do people see the paywall and
-    decline, or never reach it?" could not be answered, and why a pricing
-    change would have been made blind.
-
-    Rides ``clawmetry.telemetry`` rather than a new channel so it inherits
-    the existing privacy contract unchanged: an anonymous install id, no
-    account, no email, no hostname, no runtime data, and every opt-out
-    (``CLAWMETRY_NO_TELEMETRY``, ``DO_NOT_TRACK``, ``~/.clawmetry/notelemetry``)
-    already honoured. ``ping_once`` dedups on disk, so an overlay that
-    re-renders on every background poll still sends one row per install.
-
-    Never raises: a telemetry failure must not change the 204 the beacon
-    already returns.
-    """
-    try:
-        event = _PAYWALL_LIFECYCLE_EVENTS.get(str((body or {}).get("event", "")))
-        if not event:
-            return
-        from clawmetry import telemetry as _telemetry
-
-        try:
-            from dashboard import __version__ as _ver
-        except Exception:
-            _ver = "unknown"
-        _telemetry.ping_once(event, _ver)
-    except Exception as exc:
-        logger.debug("api_paywall_event: lifecycle ping skipped: %s", exc)
+# The forwarder that mirrors the overlay's two beacons into the anonymous
+# lifecycle ping lives in its own module (routes/paywall_lifecycle.py).
+# It is 60 lines of concern that three separate readers need to find, and
+# this file is ~47,700 lines: written inline here, every tool that samples
+# the head of a file reported the function as absent and this whole module
+# as missing from the repository. Re-exported under the original private
+# names so existing callers and tests keep working.
+from routes.paywall_lifecycle import (  # noqa: E402
+    PAYWALL_LIFECYCLE_EVENTS as _PAYWALL_LIFECYCLE_EVENTS,
+    ping_paywall_lifecycle as _ping_paywall_lifecycle,
+)
 
 
 @bp_entitlement.route("/api/paywall/events/summary")
