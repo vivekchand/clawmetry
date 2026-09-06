@@ -3691,6 +3691,38 @@ class OpenClawAdapter(AgentAdapter):
                     _slow = obj.get("slowReply") or obj.get("slow_reply")
                     if _slow:
                         llm_attrs["llm.slow_reply"] = True
+                # Reply lifecycle state from harness 2026.9.2 (#138071, #137606,
+                # #136236, #138519, #138565): a restart-recovered, queued, or delegated
+                # reply carries these fields so the Tracing tab can distinguish it from
+                # a normal reply. Keys accepted in both camelCase (harness native) and
+                # snake_case (normalised). Applied to every assistant span, not just the
+                # first -- a recovery or queue transition can happen mid-session.
+                _reply_queue_status = (
+                    obj.get("replyQueueStatus") or obj.get("reply_queue_status")
+                )
+                if isinstance(_reply_queue_status, str) and _reply_queue_status.strip():
+                    llm_attrs["reply.queue_status"] = _reply_queue_status.strip()
+                _recovery_marker = (
+                    obj.get("recoveryMarker") or obj.get("recovery_marker")
+                )
+                if isinstance(_recovery_marker, str) and _recovery_marker.strip():
+                    llm_attrs["reply.recovery_marker"] = _recovery_marker.strip()
+                elif _recovery_marker is not None and _recovery_marker is not False:
+                    llm_attrs["reply.recovery_marker"] = str(_recovery_marker)
+                _retry_attempt = obj.get("retryAttempt") or obj.get("retry_attempt")
+                if _retry_attempt is not None:
+                    try:
+                        llm_attrs["reply.retry_attempt"] = int(_retry_attempt)
+                    except (TypeError, ValueError):
+                        pass
+                _continuation_count = (
+                    obj.get("continuationCount") or obj.get("continuation_count")
+                )
+                if _continuation_count is not None:
+                    try:
+                        llm_attrs["reply.continuation_count"] = int(_continuation_count)
+                    except (TypeError, ValueError):
+                        pass
                 spans.append({
                     "span_id": llm_sid,
                     "trace_id": trace_id,
