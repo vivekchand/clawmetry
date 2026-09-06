@@ -398,6 +398,15 @@ def _resolve_lmstudio_base_url() -> str:
     return val or "http://localhost:1234/v1"
 
 
+def _resolve_vllm_base_url() -> str:
+    """Return the active vLLM server base URL from env var or the default.
+
+    VLLM_HOST overrides; falls back to vLLM's default port.
+    """
+    val = os.environ.get("VLLM_HOST", "").strip()
+    return val or "http://localhost:8000/v1"
+
+
 def _list_ollama_models(host: str) -> list:
     """Return available Ollama model names. Never raises; returns [] on failure.
 
@@ -1215,6 +1224,11 @@ def _sandbox_inference_configs() -> list:
                 provider_key = "lmstudio"
                 primary = f"lmstudio/{model}" if model else ""
                 base_url = _resolve_lmstudio_base_url()
+                compat = "openai"
+            elif provider in ("vllm", "vllm-server"):
+                provider_key = "vllm"
+                primary = f"vllm/{model}" if model else ""
+                base_url = _resolve_vllm_base_url()
                 compat = "openai"
             else:
                 provider_key = _MANAGED
