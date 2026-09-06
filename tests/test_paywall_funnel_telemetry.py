@@ -176,3 +176,29 @@ def test_forwarding_never_breaks_the_beacon(monkeypatch):
 
     monkeypatch.setattr(telemetry, "ping_once", _boom)
     ent._ping_paywall_lifecycle({"event": "hard_block_view"})  # must not raise
+
+
+def test_forwarder_lives_in_its_own_module_and_is_re_exported():
+    """The forwarder must stay findable, by tools as well as people.
+
+    Written inline in routes/entitlement.py (~47,700 lines) it was invisible
+    to every reader that samples the head of a file: Drift Bot reported the
+    function as undefined and the whole module as missing from the
+    repository. Keeping it in a small module of its own is what makes it
+    readable; keeping the re-export is what keeps existing callers working.
+    """
+    import routes.paywall_lifecycle as pl
+    import routes.entitlement as ent
+
+    assert pl.PAYWALL_LIFECYCLE_EVENTS == {
+        "hard_block_view": "paywall_view",
+        "hard_block_checkout_click": "paywall_checkout_click",
+    }
+    # Same objects, not copies: a future edit to one cannot silently leave
+    # the other behind.
+    assert ent._PAYWALL_LIFECYCLE_EVENTS is pl.PAYWALL_LIFECYCLE_EVENTS
+    assert ent._ping_paywall_lifecycle is pl.ping_paywall_lifecycle
+
+    src = open(os.path.join(_ROOT, "routes/paywall_lifecycle.py"), encoding="utf-8").read()
+    assert len(src.splitlines()) < 200, "keep this module small enough to be read whole"
+
