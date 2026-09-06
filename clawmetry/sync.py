@@ -31,6 +31,7 @@ from typing import Any
 
 # Leaf module (typing-only deps) — safe to import at package load, no cycle.
 from clawmetry import error_signal as _error_signal
+from clawmetry import nonsecret_hash as _nsh
 from clawmetry import session_titles as _session_titles
 from clawmetry.adapters import phase as _phase
 # The ONE actuator both the Guard tab and the policy pass call. A leaf
@@ -4836,7 +4837,6 @@ def _canonical_event_id(
     # to parentId, etc.) doesn't change the digest. The keys we keep are
     # everything except the small set of wrapper/cross-ref fields that
     # differ per-path.
-    import hashlib
     skip_keys = {
         "_claude_session_id",
         "_openclaw_session_id",
@@ -4855,7 +4855,7 @@ def _canonical_event_id(
         body = json.dumps(canonical, sort_keys=True, separators=(",", ":"), default=str)
     except Exception:
         body = repr(sorted(canonical.items()))
-    digest = hashlib.md5(body.encode("utf-8", errors="replace")).hexdigest()[:16]
+    digest = _nsh.md5(body.encode("utf-8", errors="replace")).hexdigest()[:16]
     ts = obj.get("timestamp") or obj.get("ts") or "?"
     evt_type = obj.get("type") or "unknown"
     return f"cc-derived:{session_id}:{ts}:{evt_type}:{digest}"
@@ -12268,13 +12268,12 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
             return 0
 
     try:
-        import hashlib
         if _sqlite_jobs is not None:
             jobs = _sqlite_jobs
             h, file_unchanged = "", False
         else:
             raw = open(cron_file, "rb").read()
-            h = hashlib.md5(raw).hexdigest()
+            h = _nsh.md5(raw).hexdigest()
             file_unchanged = h == last_hash
             data = json.loads(raw)
             jobs = data.get("jobs", []) if isinstance(data, dict) else data
@@ -12337,7 +12336,7 @@ def sync_crons(config: dict, state: dict, paths: dict) -> int:
 
             # Dedup: sha1 over the full event payload with sorted keys so the
             # hash is stable across poll iterations when nothing changed.
-            job_hash = hashlib.sha1(
+            job_hash = _nsh.sha1(
                 json.dumps(event_data, sort_keys=True).encode("utf-8")
             ).hexdigest()
             prev = job_dedup.get(job_id) or [None, 0.0]
@@ -13706,7 +13705,6 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
 
     # Check for changes via content hash; always send all file contents so the
     # Memory tab can display any file, not just files changed in the last cycle.
-    import hashlib
 
     changed_files = []
     all_file_contents = []
@@ -13714,7 +13712,7 @@ def sync_memory(config: dict, state: dict, paths: dict) -> int:
     for name, path in memory_files:
         try:
             content_bytes = open(path, "rb").read()
-            h = hashlib.md5(content_bytes).hexdigest()
+            h = _nsh.md5(content_bytes).hexdigest()
             text = content_bytes.decode("utf-8", errors="replace")
             file_list.append(
                 {
@@ -14212,8 +14210,7 @@ def sync_vm_usage_log(config: dict, state: dict, paths: dict) -> int:
                 continue
             sess = str(line.get("session") or "").strip() or "unknown"
             ns_sess = "%s:vmusage:%s" % (runtime, sess)
-            import hashlib
-            digest = hashlib.sha1(("%s:%s" % (
+            digest = _nsh.sha1(("%s:%s" % (
                 st.st_ino, raw.decode("utf-8", "replace"))).encode()
             ).hexdigest()[:24]
             ts_iso = (_epoch_to_iso(line.get("ts"))
