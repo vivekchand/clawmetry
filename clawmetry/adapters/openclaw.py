@@ -801,6 +801,50 @@ def _gateway_migration_warning(events: list) -> Optional[str]:
         return None
 
 
+def _gateway_oom_victim(events: list) -> dict:
+    """Return OOM-victim metadata when a local model server was killed under memory pressure.
+
+    OpenClaw 2026.9.1+ ("A Gateway that stays up") lowers the gateway's own OOM
+    score so the kernel preferentially kills local model server processes (e.g.
+    an Ollama-backed sandbox) rather than the gateway itself.  When that happens
+    the gateway logs a structured entry whose ``msg`` mentions ``"oom"`` or
+    ``"out of memory"``, or whose ``msg`` mentions ``"killed"`` alongside a
+    model-server keyword (``"model"``, ``"ollama"``, ``"sandbox"``, or
+    ``"server"``).
+
+    Accepts the already-fetched events list (no extra I/O).  Returns a dict with
+    ``oomVictimDetected=True``, ``oomVictimMsg``, and optionally ``oomVictimTs``
+    on the first matching entry; returns ``{}`` when no OOM event is found.
+    Never raises (closes #5548).
+    """
+    try:
+        if not events:
+            return {}
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            raw_msg = evt.get("msg", "")
+            msg = str(raw_msg).lower()
+            if not msg:
+                continue
+            is_oom = "oom" in msg or "out of memory" in msg
+            is_model_kill = "killed" in msg and any(
+                kw in msg for kw in ("model", "ollama", "sandbox", "server")
+            )
+            if is_oom or is_model_kill:
+                result: dict = {
+                    "oomVictimDetected": True,
+                    "oomVictimMsg": str(raw_msg),
+                }
+                ts = evt.get("ts")
+                if ts is not None:
+                    result["oomVictimTs"] = ts
+                return result
+        return {}
+    except Exception:
+        return {}
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -2593,6 +2637,14 @@ class OpenClawAdapter(AgentAdapter):
             if _mig_warn is not None:
                 meta["gatewayDegraded"] = True
                 meta["gatewayMigrationWarning"] = _mig_warn
+            # OOM-victim detection (#5548): OpenClaw 2026.9.1 lowers its own OOM
+            # score so the kernel preferentially kills local model servers (e.g.
+            # Ollama) under memory pressure.  Scan the already-fetched events so
+            # there is no extra I/O; surface oomVictimDetected so the dashboard
+            # can explain an otherwise-silent sandbox outage.
+            _oom = _gateway_oom_victim(_gw_events)
+            if _oom:
+                meta.update(_oom)
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by

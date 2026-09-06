@@ -196,6 +196,61 @@ blocked by this scaffold.
 2. **Regression sweep**: existing paying customer with valid signed
    license on disk sees NO block whether flag is on or off.
 
+## Paywall funnel telemetry
+
+> Spec: REQ "Free Answer at the Gate, and a Visible Paywall"
+> (`cd0b3dc3-ca5c-49ad-a4c0-dec01f122d12`), AC-FREE-002 and AC-FREE-001.
+
+
+The hard-block overlay posts two beacons to `POST /api/paywall/event`:
+
+| Beacon (app.js) | Forwarded as | Meaning |
+|---|---|---|
+| `hard_block_view` | `paywall_view` | the overlay was rendered to a user |
+| `hard_block_checkout_click` | `paywall_checkout_click` | that user clicked through to pay |
+
+Both were local-only until 0.12.821: `/api/paywall/event` wrote to an
+in-process rolling store (`clawmetry/_paywall_events.py`, read back by
+`/api/paywall/events/*`) and nothing left the machine. Cloud analytics
+therefore held zero rows for either beacon, ever, and the funnel could not
+separate "saw the paywall and declined" from "never reached it" — the one
+question a pricing decision actually turns on.
+
+`routes/entitlement.py::_ping_paywall_lifecycle` now mirrors exactly these
+two into `clawmetry/telemetry.py`, the same anonymous lifecycle channel as
+`install` / `update` / `onboarded` / `gate_shown`. That is deliberate: it
+inherits the existing privacy contract with no new surface. An anonymous
+install id, no account, no email, no hostname, no workspace path and no
+runtime data; every opt-out already honoured (`CLAWMETRY_NO_TELEMETRY`,
+`DO_NOT_TRACK`, `~/.clawmetry/notelemetry`). `ping_once` dedups on disk, so
+an overlay that re-renders on every background poll still sends one row per
+install. The cloud must allowlist both names in
+`routes/install.py::_ALLOWED_EVENTS` or they are dropped with no insert and
+no error.
+
+The mapping is a silent-failure point: rename a beacon in `app.js` and the
+telemetry stops with nothing turning red. `tests/test_paywall_funnel_telemetry.py`
+asserts the forwarder still covers every `hard_block_*` beacon `app.js` posts.
+
+## The gate's free-runtimes escape
+
+`POST /api/onboarding/free-only` records `selfhost_free`: the user keeps
+OpenClaw, NVIDIA NemoClaw and Goose (the `FREE_RUNTIMES`, free forever) and
+takes no account, no cloud and no trial. It flips free-only mode on
+(`trial_enforcement.set_free_only_mode`, the same marker the expired-trial
+paywall writes) and writes the nocloud marker **before** recording the
+choice, so the recorded state is backed by real local configuration. Undo
+from Settings or `POST /api/trial/exit-free`.
+
+This is **not** the deferred gate ("Look First, Choose Later", REQ-OGV-DG-*),
+which remains unbuilt and is a different design: there, free runtimes render
+with *no choice on record* and the gate is deferred to a later trigger. Here
+the gate is still hard and still answered immediately — the change is only
+that one of the answers no longer costs a signup. `selfhost_free` stays out
+of `onboarding_state.CHOICES`, so it is not postable through the generic
+`/api/onboarding/complete`; this dedicated endpoint is the only flow that
+may claim it.
+
 ## Related code
 
 | File | What lives there |
