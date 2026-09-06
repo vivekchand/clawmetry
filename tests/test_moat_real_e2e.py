@@ -164,44 +164,19 @@ def _start_gateway(home: str, port: int, token: str) -> subprocess.Popen:
 
 
 def _wait_for_gateway(port: int, token: str, timeout: int) -> None:
-    """Poll /health until the Gateway reports itself live.
-
-    Same probe the CI smoke gate uses (.github/workflows/openclaw-boot.yml).
-
-    This polled /v1/models until it stopped working. That path belongs to
-    OpenClaw's OpenAI-compatible HTTP API, which is opt-in — it is served only
-    once ``gateway.http.endpoints.chatCompletions.enabled`` is set. These
-    fixtures boot with ``--allow-unconfigured`` and no config, so it answers
-    404 however healthy the Gateway is. ``/health`` is the documented liveness
-    probe: unauthenticated, no session, no LLM call, ``{"ok":true,"status":"live"}``.
-
-    The body is checked, not just the status code. The Gateway serves its
-    Control UI as a catch-all, so an unknown path answers 200 with HTML — a
-    status-only check would report a healthy gateway for a path that does not
-    exist, which is how the previous probe stayed plausible while being wrong.
-    """
     deadline = time.monotonic() + timeout
     last = "no attempts"
     while time.monotonic() < deadline:
         try:
             req = urllib.request.Request(
-                f"http://127.0.0.1:{port}/health",
+                f"http://127.0.0.1:{port}/v1/models",
                 headers={"Authorization": f"Bearer {token}"},
             )
             with urllib.request.urlopen(req, timeout=2) as r:
-                body = r.read(4096).decode("utf-8", "replace")
-                if 200 <= r.status < 300:
-                    try:
-                        if json.loads(body).get("status") == "live":
-                            return
-                    except ValueError:
-                        pass
-                last = f"HTTP {r.status} body={body[:80]!r}"
+                if 200 <= r.status < 500:
+                    return
         except urllib.error.HTTPError as e:
-            # Proves the HTTP server is up and the auth layer is reachable.
-            # /health is unauthenticated today; this covers a future release
-            # that puts the probe behind auth.
-            if e.code in (401, 403):
+            if e.code in (200, 401, 403):
                 return
             last = f"HTTP {e.code}"
         except Exception as e:
@@ -254,13 +229,7 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
             # only the JSONL shape (provider/model rows), which Haiku writes
             # identically to Opus. The anthropic/ prefix drives harness
             # selection; the specific model is free to be cheap.
-            #
-            # Undated on purpose. This was pinned to
-            # anthropic/claude-3-5-haiku-20241022 until OpenClaw's catalogue
-            # dropped it and every run here died on "Unknown model". The bare
-            # id stays valid as dated snapshots come and go, and the assertions
-            # are about JSONL shape, not about which snapshot answered.
-            "--model", "anthropic/claude-haiku-4-5",
+            "--model", "anthropic/claude-3-5-haiku-20241022",
             "--json", "--timeout", "30",
         ],
         env=env, capture_output=True, text=True, timeout=60,

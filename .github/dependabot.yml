@@ -114,6 +114,17 @@ updates:
   # integrity-checked, and this entry is what keeps it moving. Without it, every
   # E2E and screenshot job would sit on one OpenClaw release indefinitely, which
   # is a worse place to be than the moving dist-tag it replaced.
+  #
+  # READ BEFORE MERGING A BUMP HERE. This is not a routine dependency. OpenClaw
+  # stopped writing per-session `<sid>.jsonl` transcripts somewhere after
+  # 2026.5.12: on 2026.9.2 there is no `agents/<id>/sessions/` directory at all,
+  # and the transcript lives in `agents/<id>/agent/openclaw-agent.sqlite`
+  # (tables `transcript_events`, `session_transcript_active_events`). The OSS
+  # daemon only globs `agents/main/sessions/*.jsonl`
+  # (clawmetry/sync.py), so a bump past that boundary takes the live E2E suites
+  # red and does not go green again by editing the tests. It needs a real
+  # OpenClaw SQLite reader in the daemon first. Expect the bump PR to fail; that
+  # failure is the signal, not a flake.
   - package-ecosystem: "npm"
     directory: "/.github/actions/setup-openclaw"
     schedule:

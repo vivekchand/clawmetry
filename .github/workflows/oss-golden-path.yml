@@ -102,23 +102,11 @@ jobs:
           nohup openclaw gateway --port 18789 --allow-unconfigured \
             > /tmp/openclaw-logs/gateway.log 2>&1 &
           echo "OPENCLAW_GATEWAY_PID=$!" >> "$GITHUB_ENV"
-          # /health is the Gateway's documented liveness probe. This polled
-          # /v1/models, which belongs to the opt-in OpenAI-compatible HTTP API
-          # and 404s on an --allow-unconfigured gateway — so the loop ran all
-          # 30 attempts on every run, waited the full 30s and then carried on
-          # regardless, because the step is continue-on-error. It reported
-          # nothing and cost half a minute. The body is matched, not just the
-          # status: the Gateway answers unknown paths with its Control UI SPA.
           for i in $(seq 1 30); do
-            body=$(curl -s -o /tmp/openclaw-logs/probe.json -w "%{http_code}" \
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer ci-golden-token" \
-              "http://127.0.0.1:18789/health" 2>/dev/null || echo "000")
-            case "$body" in
-              2*) if grep -q '"status":[[:space:]]*"live"' /tmp/openclaw-logs/probe.json; then
-                    echo "gateway up ($body after ${i}s)"; break
-                  fi ;;
-              401|403) echo "gateway up ($body after ${i}s)"; break ;;
-            esac
+              "http://127.0.0.1:18789/v1/models" 2>/dev/null || echo "000")
+            case "$code" in 2*|401|403) echo "gateway up ($code after ${i}s)"; break;; esac
             sleep 1
           done
 
