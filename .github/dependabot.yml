@@ -92,6 +92,23 @@ updates:
     cooldown:
       default-days: 7
 
+  # npm — the Claude Code CLI that CI workflows shell out to
+  # (harness-observability-audit, i18n-autotranslate, i18n-docs-autotranslate).
+  # Those jobs install it with `npm ci` from a committed lockfile, so without an
+  # updater here the pin would simply freeze. This is the same pin/updater
+  # pairing described above for the SHA pins: the lock makes an upgrade
+  # deliberate, this entry keeps it from going stale.
+  - package-ecosystem: "npm"
+    directory: "/.github/claude-cli"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+
   # npm — the ClawHub/OpenClaw plugin, which is published to npm
   # (openclaw.release.publishToNpm). No lockfile, so Dependabot updates the
   # manifest ranges.
