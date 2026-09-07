@@ -27,7 +27,21 @@ def test_cloud_model_reasoning_and_cache():
     )
     assert intel["tokenSplit"]["reasoning"] == 5000
     assert intel["reasoningCostUsd"] > 0  # reasoning billed at the output rate
+    assert intel["cacheHitPct"] == 80.0
+
+
+def test_anthropic_cache_reads_remain_additive():
+    intel = _session_cost_intel(
+        _FakeSession(input=100000, cache_read=80000, model="claude-opus-4-8")
+    )
     assert intel["cacheHitPct"] == round(80000 / 180000 * 100, 1)
+
+
+def test_openai_cache_hit_never_exceeds_one_hundred_percent():
+    intel = _session_cost_intel(
+        _FakeSession(input=100, cache_read=1000, model="gpt-5.4")
+    )
+    assert intel["cacheHitPct"] == 100.0
 
 
 def test_local_model_reasoning_is_real_zero():

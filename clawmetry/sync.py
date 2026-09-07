@@ -14590,9 +14590,18 @@ def _session_cost_intel(s) -> dict:
             "input": in_t, "output": out_t,
             "cacheRead": cr, "cacheWrite": cw, "reasoning": rt,
         }
-        # Cache-hit %: share of read context served from cache (cheaper).
-        if (in_t + cr) > 0:
-            out["cacheHitPct"] = round(cr / (in_t + cr) * 100, 1)
+        # OpenAI includes cached tokens in input_tokens; Anthropic and unknown
+        # providers report cache reads as an additional counter.
+        from clawmetry.providers_pricing import provider_for_model
+        cached = max(0, cr)
+        input_total = max(0, in_t)
+        denominator = (
+            input_total
+            if provider_for_model(model) == "openai"
+            else input_total + cached
+        )
+        if denominator > 0:
+            out["cacheHitPct"] = round(min(cached, denominator) / denominator * 100, 1)
         # Reasoning-tax $: reasoning tokens priced at the model's output rate.
         if model and rt > 0:
             try:
