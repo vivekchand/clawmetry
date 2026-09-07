@@ -16672,11 +16672,12 @@ _TRANSCRIPT_SNAP_CACHE_MAX = 128
 # dominates (1866 claude_code sessions vs 16 codex) every other runtime is
 # starved out of it and the cloud Sessions tab renders empty under a header
 # that counts them (#5643). These reserved slots guarantee every runtime with
-# activity reaches the cloud. Shorter than the global cap so ~15 runtimes cost
-# a few hundred KB, not megabytes: measured on a 16-runtime box, the reserved
-# slots cost +121 KB raw / +27 KB gzipped at cap 12 (vs +427 KB raw at cap
-# 24), and the replay pages the rest through ``_oldest_contiguous_ts``. Set
-# the count to 0 to restore the old global-only behaviour.
+# activity reaches the cloud, and are capped shorter than the global slots so
+# they cost a few hundred KB rather than megabytes: measured on a box carrying
+# every family adapter, +121 KB raw / +27 KB gzipped at cap 12, against
+# +427 KB raw at cap 24. The replay pages the rest through
+# ``_oldest_contiguous_ts``. Set the count to 0 to restore the old
+# global-only behaviour.
 def _snapshot_per_runtime_sessions() -> int:
     try:
         return max(0, int(os.environ.get(
