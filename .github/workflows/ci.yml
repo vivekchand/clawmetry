@@ -608,6 +608,7 @@ jobs:
             tests/test_needs_you_ui_contract.py \
             tests/test_overview_claims_are_evidenced.py \
             tests/test_obs_gap_nemoclaw_vllm_5579.py \
+            tests/test_obs_gap_openclaw_reply_recovery_5620.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
