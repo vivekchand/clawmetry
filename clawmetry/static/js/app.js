@@ -2134,7 +2134,6 @@ function switchTab(name) {
   if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
   if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
-  if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
@@ -12338,7 +12337,7 @@ var _CM_RT_NODEWIDE = {
   // tabs scope for real off the global switcher. Calling them node-wide was
   // what pushed a redundant per-tab runtime picker into the page.
   crons: 1, security: 1, selfevolve: 1,
-  policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
+  policy: 1, nemoclaw: 1, notifications: 1,
   clusters: 1, actions: 1,
   // logs + version-impact are NOT node-wide: logs stream a specific runtime's
   // log source (LOGS capability), version-impact correlates OpenClaw releases.
@@ -12406,7 +12405,7 @@ var _CM_RT_CAPS = {
 // Capability -> the sidebar tabs it enables. A tab shows iff the runtime
 // declares (at least) one capability that enables it.
 var _CM_CAP_TABS = {
-  SESSIONS:    ['overview','dives'],
+  SESSIONS:    ['overview'],
   // context-economics moved COST → EVENTS with the LLM Context merge: the
   // utilization gauge reads per-turn usage tokens (an EVENTS concern), so
   // no-cost runtimes (Cursor/PicoClaw/NanoClaw) keep a context surface.
@@ -12446,7 +12445,7 @@ var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','me
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
-  'context-economics','approvals','guard','signals','alerts','usage','dives','crons','memory',
+  'context-economics','approvals','guard','signals','alerts','usage','crons','memory',
   'notifications','security','policy','skills','selfevolve','subagents',
   'nemoclaw','logs','version-impact','agents'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
@@ -12499,10 +12498,10 @@ function _cmApplyRuntimeScopeNote(name) {
   // it the app's data), state plainly that this app is observed via OTLP traces
   // and its scoped views live where the data actually is (the Inventory roster
   // row + cost/tokens). The Inventory tab keeps its own roster note below.
-  // 'inventory' has its own roster note; 'dives' (transcripts) has its own
+  // 'inventory' has its own roster note; transcripts has its own
   // scoped empty-state ("no <app> sessions have a transcript yet"), so skip both
   // to avoid a conflicting double-note.
-  if (_cmIsOtlpRuntime(rt) && name !== 'inventory' && name !== 'dives') {
+  if (_cmIsOtlpRuntime(rt) && name !== 'inventory') {
     var _otl = _cmRuntimeLabel(rt);
     var _otmsg = '<strong>' + escHtml(_otl) + '</strong> is observed via OpenLLMetry / OTLP traces. '
       + 'This view shows <strong>all runtimes</strong>; its scoped tokens, cost and sessions are on the '
