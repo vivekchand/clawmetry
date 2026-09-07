@@ -175,6 +175,17 @@ jobs:
       - name: Architecture docs name modules that exist
         run: python3 -m pytest tests/test_module_map_drift.py -q
 
+      # Every `uses:` reference -- workflows AND the composite actions under
+      # .github/actions/, whose own `uses:` lines run with the calling job's
+      # token -- must stay pinned to a full commit SHA. A tag is mutable: its
+      # owner can repoint it at code that then runs with our credentials, and
+      # several of these workflows hold `contents: write` or publish to PyPI.
+      # scripts/check_action_refs.py makes the same check, but only in
+      # supply-chain.yml; this line is what applies the ratchet to every PR.
+      # Named explicitly because this job runs FILE LISTS.
+      - name: Action references stay pinned to a commit SHA
+        run: python3 -m pytest tests/test_action_refs_pinned.py -q
+
       # Non-security digests (dedup ids, trace ids, change-detection hashes)
       # must go through clawmetry.nonsecret_hash. A bare hashlib.md5/sha1
       # raises ValueError -- not a weak digest, an exception -- on a host whose
