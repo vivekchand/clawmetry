@@ -3856,11 +3856,14 @@ def _empty_cache_bucket():
     }
 
 
-def _summarise_cache_bucket(label, b, key):
-    in_plus_cache = b["input_tokens"] + b["cache_read_tokens"]
+def _summarise_cache_bucket(label, b, key, *, openai_schema=False):
+    # OpenAI inclusive schema: cache_read is already counted inside input_tokens,
+    # so the effective context denominator is input_tokens alone.
+    # Anthropic (and others) additive schema: cache_read is on top of input_tokens.
+    in_context = b["input_tokens"] if openai_schema else b["input_tokens"] + b["cache_read_tokens"]
     cache_hit_pct = (
-        round(b["cache_read_tokens"] / in_plus_cache * 100, 1)
-        if in_plus_cache
+        round(b["cache_read_tokens"] / in_context * 100, 1)
+        if in_context
         else 0.0
     )
     # Anthropic prompt-cache reads cost ~10% of fresh input tokens, so the
@@ -3913,6 +3916,11 @@ def _try_local_store_cache_trends(days: int):
     if rows is None:
         return None
 
+    try:
+        from clawmetry.providers_pricing import provider_for_model as _pfm_ct
+    except Exception:
+        _pfm_ct = None
+
     daily: dict = {}
     by_model: dict = {}
     for r in rows:
@@ -3942,7 +3950,10 @@ def _try_local_store_cache_trends(days: int):
         )
 
     by_model_out = [
-        _summarise_cache_bucket(m, b, key="model")
+        _summarise_cache_bucket(
+            m, b, key="model",
+            openai_schema=(_pfm_ct(m) == "openai" if _pfm_ct else False),
+        )
         for m, b in sorted(by_model.items(), key=lambda kv: -kv[1]["total_cost"])
     ]
 
