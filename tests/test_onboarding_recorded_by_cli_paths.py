@@ -124,13 +124,21 @@ def test_connect_records_both_hosting_modes():
 
 def test_onboard_records_at_every_terminal_branch():
     """Failed sign-in fallbacks deliberately record NOTHING (the gate is the
-    user's second chance); the three deliberate self-host endings do."""
+    user's second chance); the four deliberate self-host endings do: the
+    three pre-existing ones plus declining the sign-in after an
+    account-free device trial started (clawmetry/device_trial.py), which
+    is a self-host-without-account choice the user made out loud."""
     from clawmetry import cli
 
     src = inspect.getsource(cli._cmd_onboard)
-    assert src.count("_record_gate_choice(") == 3, (
-        "expected exactly the three explicit self-host/free endings to record"
+    assert src.count("_record_gate_choice(") == 4, (
+        "expected exactly the four explicit self-host/free endings to record"
     )
+    # The device-trial branch only records when the user DECLINES the sign-in;
+    # a completed or failed sign-in on that branch leaves the gate alone.
+    dt_tail = src.split("Sign in now so the trial follows your account", 1)[1]
+    assert "_record_gate_choice(\"selfhost_free\")" in dt_tail[:1800]
+    assert "No account connected; the device trial keeps running" in dt_tail[:1800]
     for marker in ("No account connected. Running local-only",
                    "No account connected. Running the free plan"):
         tail = src.split(marker, 1)[1][:400]

@@ -142,13 +142,24 @@
     // /api/trial/status shape (self-hosted + desktop).
     expired = !!raw.expired;
     days = (typeof raw.days_until_expiry === 'number') ? raw.days_until_expiry : null;
+    // The account-free device trial (clawmetry/device_trial.py). When it is
+    // what entitles this install and no account key is present, the pill's
+    // button asks for a sign-in instead of an upgrade: the trial is already
+    // running, identity is what keeps it after day 7.
+    var dt = raw.device_trial && typeof raw.device_trial === 'object' ? raw.device_trial : null;
     return {
       show: (tier === 'trial') || expired,
       expired: expired,
       days: days,
       hours: null,
       tier: tier,
+      deviceTrial: dt,
     };
+  }
+
+  function wantsSignin(st) {
+    return !!(st && !st.expired && st.deviceTrial && st.deviceTrial.active
+              && !st.deviceTrial.signed_in);
   }
 
   function isPaid(st) {
@@ -295,6 +306,14 @@
       '  border-radius:9px;border:1px solid #2a2f36;background:transparent;color:#e8eaed;',
       '  font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;}',
       '#' + MODAL_ID + ' .cm-up-activate:hover{border-color:#4a5058;}',
+      '#' + MODAL_ID + ' .cm-up-email,#' + MODAL_ID + ' .cm-up-code{width:100%;',
+      '  box-sizing:border-box;margin:0 0 10px;padding:10px 12px;border-radius:9px;',
+      '  border:1px solid #2a2f36;background:#12141a;color:#e8eaed;font-size:14px;',
+      '  font-family:inherit;}',
+      '#' + MODAL_ID + ' .cm-up-code{letter-spacing:5px;text-align:center;',
+      '  font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:16px;}',
+      '#' + MODAL_ID + ' .cm-up-email:focus-visible,#' + MODAL_ID + ' .cm-up-code:focus-visible{',
+      '  outline:2px solid #4ade80;outline-offset:1px;}',
       '@media (max-width:640px){#' + PILL_ID + '{font-size:11px;padding:5px 9px;}}',
     ].join('');
     document.head.appendChild(st);
@@ -326,22 +345,177 @@
     }
     injectStyles();
     var label = pillLabel(st);
-    var cta = st.expired
-      ? tr('trial.upgrade_now', null, 'Upgrade')
-      : tr('trial.upgrade', null, 'Upgrade');
+    var signin = wantsSignin(st);
+    var cta;
+    if (signin) {
+      cta = st.deviceTrial.signin_nudge
+        ? tr('trial.signin_keep', null, 'Sign in to keep it')
+        : tr('trial.signin', null, 'Sign in');
+    } else {
+      cta = st.expired
+        ? tr('trial.upgrade_now', null, 'Upgrade')
+        : tr('trial.upgrade', null, 'Upgrade');
+    }
+    var title = signin
+      ? tr('trial.pill_title_device', null,
+          'Your 7-day Pro trial is running on this machine, no account needed. Sign in to keep every runtime after it ends and to see this dashboard from your phone.')
+      : tr('trial.pill_title', null,
+          'Your ClawMetry Pro trial. Upgrade to keep every runtime, alert, and policy after it ends.');
     var paint = urgency(st) + '\u0000' + label + '\u0000' + cta;
     if (paint === _lastPaint && document.getElementById(BTN_ID)) return;
     _lastPaint = paint;
     host.innerHTML = ''
       + '<span id="' + PILL_ID + '" class="cm-' + urgency(st) + '" '
-      + 'title="' + esc(tr('trial.pill_title', null,
-          'Your ClawMetry Pro trial. Upgrade to keep every runtime, alert, and policy after it ends.')) + '">'
+      + 'title="' + esc(title) + '">'
       + '<span class="cm-tp-dot" aria-hidden="true"></span>' + esc(label)
       + '</span>'
       + '<button type="button" id="' + BTN_ID + '">' + esc(cta) + '</button>';
     host.className = 'cm-on';
     var btn = document.getElementById(BTN_ID);
-    if (btn) btn.addEventListener('click', function () { openModal('pill'); });
+    if (btn) {
+      btn.addEventListener('click', function () {
+        if (wantsSignin(_state)) openSigninModal('pill'); else openModal('pill');
+      });
+    }
+  }
+
+  // ── sign-in modal (device trial) ──────────────────────────────────────
+  // Email + one-time code, through the dashboard's own cloud-CTA rail
+  // (/api/cloud-cta/send-otp, /api/cloud-cta/verify-otp). The verify step
+  // persists the account key, mints-or-reuses the account's 7-day trial and
+  // follows the install's recorded managed/self-host intent, so signing in
+  // from a self-host device trial never turns cloud egress on by itself.
+  function buildSigninModal() {
+    var el = document.createElement('div');
+    el.id = MODAL_ID;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-labelledby', 'cm-up-title');
+    var st = _state || {};
+    var dt = st.deviceTrial || {};
+    var days = (typeof dt.days_left === 'number') ? dt.days_left : st.days;
+    var head = (typeof days === 'number' && days > 0)
+      ? tr('trial.signin_title_days', { days: days },
+          'Keep every runtime after your trial ends in ' + days + (days === 1 ? ' day' : ' days'))
+      : tr('trial.signin_title', null, 'Keep every runtime after your trial ends');
+    el.innerHTML = ''
+      + '<div class="cm-up-card">'
+      + '  <button type="button" class="cm-up-close" aria-label="'
+      +      esc(tr('trial.close', null, 'Close')) + '">&times;</button>'
+      + '  <div class="cm-up-eyebrow">' + esc(tr('trial.signin_eyebrow', null, 'Pro trial on this machine')) + '</div>'
+      + '  <h2 id="cm-up-title">' + esc(head) + '</h2>'
+      + '  <p class="cm-up-body">' + esc(tr('trial.signin_body', null,
+          'This trial started with no account so you could see your own agents first. '
+          + 'Sign in with your email and it follows your account: every runtime stays observed, '
+          + 'and you can open this dashboard from your phone. Your data stays where it is.')) + '</p>'
+      + '  <input type="email" class="cm-up-email" autocomplete="email" placeholder="'
+      +      esc(tr('trial.signin_email_ph', null, 'you@example.com')) + '">'
+      + '  <input type="text" class="cm-up-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" '
+      +      'placeholder="' + esc(tr('trial.signin_code_ph', null, '6-digit code')) + '" style="display:none">'
+      + '  <button type="button" class="cm-up-cta">' + esc(tr('trial.signin_send', null, 'Email me a code')) + '</button>'
+      + '  <div class="cm-up-status" aria-live="polite"></div>'
+      + '  <div class="cm-up-foot">' + esc(tr('trial.signin_foot', null,
+          'No card. The 7-day trial on this machine keeps running either way.')) + '</div>'
+      + '</div>';
+    return el;
+  }
+
+  function openSigninModal(source) {
+    injectStyles();
+    closeModal();
+    var el = buildSigninModal();
+    document.body.appendChild(el);
+    try { document.body.style.overflow = 'hidden'; } catch (e) { /* noop */ }
+    try {
+      fetch('/api/paywall/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'device_trial_signin_view',
+          source: source || 'pill',
+          days_left: _state && _state.deviceTrial && _state.deviceTrial.days_left,
+        }),
+      }).catch(function () {});
+    } catch (e) { /* noop */ }
+
+    el.querySelector('.cm-up-close').addEventListener('click', closeModal);
+    el.addEventListener('click', function (ev) { if (ev.target === el) closeModal(); });
+    el._cmEsc = function (ev) {
+      if (ev.key === 'Escape') { ev.preventDefault(); closeModal(); }
+    };
+    document.addEventListener('keydown', el._cmEsc, true);
+
+    var emailEl = el.querySelector('.cm-up-email');
+    var codeEl = el.querySelector('.cm-up-code');
+    var statusEl = el.querySelector('.cm-up-status');
+    var cta = el.querySelector('.cm-up-cta');
+    var step = 'email';
+    function say(msg, cls) {
+      statusEl.textContent = msg || '';
+      statusEl.className = 'cm-up-status' + (cls ? ' ' + cls : '');
+    }
+    function post(url, body) {
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(function (r) { return r.json().catch(function () { return {}; }); });
+    }
+    cta.addEventListener('click', function () {
+      var email = (emailEl.value || '').trim();
+      if (step === 'email') {
+        if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) {
+          say(tr('trial.signin_bad_email', null, 'Enter a valid email.'), 'err');
+          return;
+        }
+        cta.disabled = true;
+        say(tr('trial.signin_sending', null, 'Sending the code…'));
+        post('/api/cloud-cta/send-otp', { email: email }).then(function (d) {
+          cta.disabled = false;
+          if (!d || d.ok === false) {
+            say((d && d.error) || tr('trial.signin_send_failed', null, 'Could not send the code. Try again.'), 'err');
+            return;
+          }
+          emailEl.style.display = 'none';
+          codeEl.style.display = 'block';
+          codeEl.focus();
+          cta.textContent = tr('trial.signin', null, 'Sign in');
+          say(tr('trial.signin_code_sent', { email: email }, 'We emailed a 6-digit code to ' + email + '.'));
+          step = 'code';
+        }).catch(function () {
+          cta.disabled = false;
+          say(tr('trial.signin_network', null, 'Network error. Try again.'), 'err');
+        });
+        return;
+      }
+      var code = (codeEl.value || '').replace(/\s/g, '');
+      if (code.length !== 6) {
+        say(tr('trial.signin_bad_code', null, 'Enter the 6-digit code from your email.'), 'err');
+        return;
+      }
+      cta.disabled = true;
+      say(tr('trial.signin_verifying', null, 'Signing you in…'));
+      post('/api/cloud-cta/verify-otp', { email: email, code: code }).then(function (d) {
+        if (!d || !d.ok) {
+          cta.disabled = false;
+          say((d && d.error) || tr('trial.signin_failed', null, 'That code did not work. Try again.'), 'err');
+          return;
+        }
+        say(tr('trial.signin_done', null, 'Signed in. Your trial now follows your account.'), 'ok');
+        try {
+          fetch('/api/paywall/event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event: 'device_trial_signin_done', source: source || 'pill' }),
+          }).catch(function () {});
+        } catch (e) { /* noop */ }
+        setTimeout(function () { try { location.reload(); } catch (e) { /* noop */ } }, 1200);
+      }).catch(function () {
+        cta.disabled = false;
+        say(tr('trial.signin_network', null, 'Network error. Try again.'), 'err');
+      });
+    });
+    emailEl.focus();
   }
 
   // ── modal ─────────────────────────────────────────────────────────────

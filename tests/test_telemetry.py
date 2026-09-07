@@ -110,7 +110,14 @@ def test_payload_shape(telemetry):
     p = telemetry._build_payload("9.9.9")
     # Required fields
     assert set(p) == {"install_id", "event", "version", "os", "os_version",
-                      "python", "agent", "is_ci", "ci_provider"}
+                      "python", "agent", "is_ci", "ci_provider",
+                      "runtimes", "paid_runtimes", "signed_in"}
+    # Runtime ids only, never paths or counts; the account key never rides.
+    assert isinstance(p["runtimes"], list)
+    assert all(isinstance(r, str) and "/" not in r and "\\" not in r for r in p["runtimes"])
+    assert isinstance(p["paid_runtimes"], int)
+    assert isinstance(p["signed_in"], bool)
+    assert "cm_" not in json.dumps(p)
     assert p["event"] == "install"
     assert p["version"] == "9.9.9"
     assert p["os"]  # platform.system() always returns something

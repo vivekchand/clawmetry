@@ -20,6 +20,14 @@ versions are actually in the wild.
 | `python` | `3.11.15` | Python version support matrix |
 | `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | which agents we should integrate with next |
 | `is_ci` / `ci_provider` | `true` / `github_actions` | separate human installs from CI noise |
+| `runtimes` | `["openclaw", "claude_code", "cursor"]` | which agent runtimes have data on this machine: **ids only** from a presence probe (`clawmetry/runtime_probe.py`), no paths, no session contents, no counts |
+| `paid_runtimes` | `2` | how many of those are outside the free tier, so the install registry can answer "of the machines running Claude Code, how many ever sign in" |
+| `signed_in` | `false` | whether `clawmetry connect` has stored an account key on this machine (the key itself is never sent by this ping) |
+
+One more lifecycle event, `device_trial_started`, fires at most once per
+install when the daemon starts the account-free 7-day trial for a paid
+runtime it found (see `docs/ENTITLEMENTS.md`, "The device trial"). It
+carries the same fields plus the runtime ids the trial was started for.
 
 **What we do NOT send**: IP (cloud derives the country code server-side
 from the request, then discards the IP), hostname, username, workspace

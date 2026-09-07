@@ -274,6 +274,16 @@ jobs:
       - name: Trial pill + upgrade modal
         run: python3 -m pytest tests/test_trial_pill_wiring.py -q
 
+      # The account-free device trial (clawmetry/device_trial.py): a paid
+      # runtime on disk earns the 7-day trial on day 0, the sign-in is asked
+      # for on day 3. Every rule it enforces fails silently (a trial minted
+      # for an install that already has a plan, a retry storm at the license
+      # server, an onboarding choice recorded on the user's behalf), so each
+      # is pinned here, together with the install ping fields that measure
+      # the install -> sign-in step.
+      - name: Device trial + install ping fields
+        run: python3 -m pytest tests/test_device_trial.py tests/test_telemetry.py -q
+
       # Trail page + session-first landing: the live HTML must include
       # tabs/trail.html (Jinja render, not a template grep), the default
       # active page must be the Sessions list, and every Trail string must

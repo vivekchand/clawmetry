@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-226 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+227 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -147,6 +147,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/detector_surface.py` | medium | What a tool call actually touched, and what a finding may repeat back. |
 | `clawmetry/detectors.py` | large | research-backed, judge-free, CPU-cheap trajectory |
 | `clawmetry/deterministic_evaluators.py` | medium | cheap, code-based checks on sessions. |
+| `clawmetry/device_trial.py` | medium | the 7-day Pro trial that starts without an account. |
 | `clawmetry/distinfo_cleanup.py` | small | prune stale dist-info left by partial upgrades. |
 | `clawmetry/dives_prompt.py` | medium | prompt template + schema descriptor for Dives. |
 | `clawmetry/dives_sql_safety.py` | medium | SQL safety validator for ClawMetry Dives (AI SQL -> chart over local DuckDB). |

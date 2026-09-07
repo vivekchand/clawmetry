@@ -23385,6 +23385,33 @@ def run_daemon() -> None:
                 log.info("clawmetry-pro: %s", _pro_msg)
     except Exception as _pe:
         log.debug("pro auto-provision (daemon) skipped: %s", _pe)
+    # Account-free device trial (clawmetry/device_trial.py). A plain
+    # `pip install clawmetry && clawmetry` on a machine that runs Claude
+    # Code / Cursor / Codex never signs in on most installs, so the 7-day
+    # trial the sign-up mints never reaches it and the runtime the user
+    # came for is never observed. With no account and no key, ask the
+    # license server for a trial bound to this install and activate it
+    # here, so the paid adapters load on the first sync. Marker-guarded:
+    # one attempt per install, a daily retry on network error, and a no-op
+    # when any entitlement already exists. Never raises.
+    try:
+        if not config.get("api_key"):
+            from clawmetry.device_trial import maybe_start as _dt_start
+
+            _dt = _dt_start("daemon")
+            if _dt.get("status") == "started":
+                log.info(
+                    "device trial started for %s: paid runtimes enabled for 7 days",
+                    ", ".join(_dt.get("runtimes") or []) or "detected runtimes",
+                )
+                try:
+                    from clawmetry.extensions import load_plugins as _ext_reload_dt
+
+                    _ext_reload_dt()
+                except Exception:
+                    pass
+    except Exception as _dte:
+        log.debug("device trial (daemon start) skipped: %s", _dte)
     # One-step onboarding: if this node is on a placeholder account, watch for
     # it being claimed onto the user's real account and adopt it automatically
     # (no `clawmetry connect --key`). No-op for a real account.
@@ -23827,6 +23854,20 @@ def run_daemon() -> None:
                 try:
                     _ak = (load_config() or {}).get("api_key", "")
                     if not _ak:
+                        # A paid runtime installed AFTER the daemon started
+                        # (or a network error at boot) still earns the
+                        # account-free device trial on a later tick. The
+                        # marker makes every repeat call a cheap no-op.
+                        try:
+                            from clawmetry.device_trial import maybe_start as _dt_tick
+
+                            if _dt_tick("daemon").get("status") == "started":
+                                log.info("device trial started: paid runtimes enabled")
+                                from clawmetry.extensions import load_plugins as _lp_dt
+
+                                _lp_dt()
+                        except Exception as _dtt:
+                            log.debug("device trial tick skipped: %s", _dtt)
                         # SELF-HOSTED (signed license, no cm_ key). The cloud
                         # branch below never runs for these nodes, and the
                         # only other pro install path is a manual

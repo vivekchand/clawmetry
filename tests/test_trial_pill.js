@@ -786,6 +786,130 @@ check('a dead status endpoint leaves the header clean, not half-rendered', funct
   });
 });
 
+// ── the account-free device trial ───────────────────────────────────────────
+// clawmetry/device_trial.py starts the 7-day trial on a machine that runs a
+// paid runtime, with no account. From day 3 the pill's button asks for a
+// sign-in instead of an upgrade, and the button opens an email + code form
+// on the dashboard's own cloud-CTA rail rather than the Stripe chooser.
+
+function deviceTrialStatus(daysLeft, extra) {
+  const dt = Object.assign({ active: true, days_left: daysLeft, expires_at: 0,
+                             signed_in: false, signin_nudge: daysLeft <= 4,
+                             runtimes: ['claude_code'] }, extra || {});
+  return { tier: 'trial', days_until_expiry: daysLeft, expired: false, device_trial: dt };
+}
+
+check('device trial on day 3 asks to sign in, not to upgrade', function () {
+  const env = makeEnv({ fetch: function () { return deviceTrialStatus(4); } });
+  run(env);
+  return flush().then(function () {
+    includes(slotHtml(env), '4 days remaining', 'countdown missing');
+    includes(slotHtml(env), 'Sign in to keep it', 'the day-3 ask did not render');
+    assert(slotHtml(env).indexOf('>Upgrade<') === -1, 'still offered Upgrade on an account-free trial');
+  });
+});
+
+check('device trial before day 3 offers a quiet Sign in', function () {
+  const env = makeEnv({ fetch: function () { return deviceTrialStatus(6); } });
+  run(env);
+  return flush().then(function () {
+    includes(slotHtml(env), '>Sign in<', 'expected the quiet sign-in button');
+    assert(slotHtml(env).indexOf('keep it') === -1, 'nudged too early');
+  });
+});
+
+check('a signed-in device trial goes back to Upgrade', function () {
+  const env = makeEnv({ fetch: function () { return deviceTrialStatus(3, { signed_in: true, signin_nudge: false }); } });
+  run(env);
+  return flush().then(function () {
+    includes(slotHtml(env), 'Upgrade', 'signed-in install should see the upgrade button');
+    assert(slotHtml(env).indexOf('Sign in') === -1, 'asked a signed-in user to sign in');
+  });
+});
+
+check('the sign-in button opens the email form, not the Stripe chooser', function () {
+  const env = makeEnv({ fetch: function () { return deviceTrialStatus(3); } });
+  run(env);
+  return flush().then(function () {
+    const btn = env.document.getElementById('cm-trial-pill-btn');
+    assert(btn, 'no pill button');
+    btn.click();
+    const m = env.document.getElementById('cm-upgrade-modal');
+    assert(m, 'sign-in modal never mounted');
+    assert(m.querySelector('.cm-up-email'), 'no email field');
+    assert(!m.querySelector('.cm-up-tier'), 'rendered the plan chooser on a sign-in ask');
+    includes(m.innerHTML, 'Email me a code');
+    includes(m.innerHTML, '3 days', 'modal should name the days left');
+  });
+});
+
+check('sign-in posts to the cloud-CTA rail and reloads on success', function () {
+  const env = makeEnv({ fetch: function (url) {
+    if (url === '/api/cloud-cta/send-otp') return { ok: true };
+    if (url === '/api/cloud-cta/verify-otp') return { ok: true };
+    if (url === '/api/paywall/event') return { ok: true };
+    return deviceTrialStatus(3);
+  } });
+  run(env);
+  return flush().then(function () {
+    env.document.getElementById('cm-trial-pill-btn').click();
+    const m = env.document.getElementById('cm-upgrade-modal');
+    const email = m.querySelector('.cm-up-email');
+    email.value = 'dev@example.com';
+    m.querySelector('.cm-up-cta').click();
+    return flush().then(function () {
+      const sent = env.__fetches.filter(function (f) { return f.url === '/api/cloud-cta/send-otp'; });
+      eq(sent.length, 1, 'send-otp not called exactly once');
+      includes(sent[0].init.body, 'dev@example.com');
+      m.querySelector('.cm-up-code').value = '123456';
+      m.querySelector('.cm-up-cta').click();
+      return flush();
+    }).then(function () {
+      const verified = env.__fetches.filter(function (f) { return f.url === '/api/cloud-cta/verify-otp'; });
+      eq(verified.length, 1, 'verify-otp not called exactly once');
+      includes(verified[0].init.body, '123456');
+      assert(!opened(env, 'about:blank') && env.__opened.length === 0, 'sign-in must never open a tab');
+      const reload = env.__timers.filter(function (t) { return t.ms === 1200; });
+      assert(reload.length === 1, 'no reload scheduled after sign-in');
+      reload[0].fn();
+      assert(env.__reloaded, 'did not reload after sign-in');
+    });
+  });
+});
+
+check('a wrong code is reported and nothing reloads', function () {
+  const env = makeEnv({ fetch: function (url) {
+    if (url === '/api/cloud-cta/send-otp') return { ok: true };
+    if (url === '/api/cloud-cta/verify-otp') return { ok: false, error: 'Invalid code.' };
+    if (url === '/api/paywall/event') return { ok: true };
+    return deviceTrialStatus(2);
+  } });
+  run(env);
+  return flush().then(function () {
+    env.document.getElementById('cm-trial-pill-btn').click();
+    const m = env.document.getElementById('cm-upgrade-modal');
+    m.querySelector('.cm-up-email').value = 'dev@example.com';
+    m.querySelector('.cm-up-cta').click();
+    return flush().then(function () {
+      m.querySelector('.cm-up-code').value = '000000';
+      m.querySelector('.cm-up-cta').click();
+      return flush();
+    }).then(function () {
+      includes(m.querySelector('.cm-up-status').textContent, 'Invalid code.');
+      assert(!env.__reloaded, 'reloaded on a failed sign-in');
+    });
+  });
+});
+
+check('no device_trial block means the pill behaves exactly as before', function () {
+  const env = makeEnv({ fetch: function () { return { tier: 'trial', days_until_expiry: 3 }; } });
+  run(env);
+  return flush().then(function () {
+    includes(slotHtml(env), 'Upgrade');
+    assert(slotHtml(env).indexOf('Sign in') === -1);
+  });
+});
+
 Promise.all(pending).then(function () {
   if (failures) {
     console.log('\nFAIL: ' + failures + ' check(s) failed');

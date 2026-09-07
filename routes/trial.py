@@ -237,6 +237,16 @@ def _hb_snapshot() -> dict:
         payload["hard_block_enabled"] = bool(_te.hard_block_enabled())
         payload["warning_window_days"] = int(_te.warning_window_days())
         payload["free_only_mode"] = bool(_te.free_only_mode_enabled())
+        # The account-free device trial (clawmetry/device_trial.py): the pill
+        # turns "Upgrade" into "Sign in to keep it" from day 3 of a trial the
+        # product started without an account. Always present so a client
+        # can branch on it without a version check.
+        try:
+            from clawmetry import device_trial as _dtr
+
+            payload["device_trial"] = _dtr.status()
+        except Exception:
+            payload["device_trial"] = {"active": False}
         return payload
     except Exception as exc:
         _hb_log.warning("trial.status: resolver failed: %s", exc)
@@ -254,6 +264,7 @@ def _hb_snapshot() -> dict:
             "exit_free_endpoint": "/api/trial/exit-free",
             "free_only_mode": False,
             "free_runtimes": ["openclaw", "nemoclaw"],
+            "device_trial": {"active": False},
         }
 
 

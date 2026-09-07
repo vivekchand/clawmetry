@@ -185,6 +185,58 @@ The result is cached for `_CACHE_TTL_SECS` (60s). `POST
 
 ---
 
+## The device trial
+
+The 7-day full-Pro trial has been free and automatic since 2026-07-30, but
+it is minted for an **account** (`/api/license/trial/signup`), so it only
+reaches a machine after the user signs in. Most installs never do: in June
+2026 roughly nine in ten `pip install clawmetry` machines never became a
+sign-up, so on most machines running Claude Code, Cursor or Codex the
+runtime the user came for was never observed. The device trial moves the
+sign-in ask from day 0 to day 3, without changing what the trial is.
+
+`clawmetry/device_trial.py` runs on daemon start, on the pro-entitlement
+tick (every ~30 min) and from the `clawmetry onboard` self-host branch.
+When **all** of the following hold it asks the license server for a trial
+bound to this install and activates it exactly like a pasted key:
+
+1. `CLAWMETRY_DEVICE_TRIAL` is not `0` and `CLAWMETRY_OFFLINE` is not set.
+2. The install holds **no** entitlement: no license file (live or lapsed),
+   no cached cloud plan, no account key. A lapsed trial or subscription is
+   the account's own history and the device trial never bypasses it.
+3. At least one **paid** runtime is present on disk (`runtime_probe`).
+4. This install has not attempted a device trial before
+   (`~/.clawmetry/device_trial.json`). A network error is retried daily;
+   a server refusal or an expired trial is final.
+
+The request carries the anonymous `install_id` (the same one the install
+ping uses), the machine's `node_id` and the ids of the runtimes found. The
+server (`POST /api/license/trial/device`) mints one 7-day `tier="trial"`
+key per install and reissues that same key, with its original expiry, on
+every repeat; after expiry it answers `expired: true`. The key is written
+to `~/.clawmetry/license.key`, so from then on the resolution order above
+applies unchanged: source `license`, tier `trial`.
+
+What the device trial deliberately does **not** do:
+
+- It records no onboarding choice, so the first-run gate still asks the
+  user to pick managed or self-host.
+- It never replaces an existing key or plan, and `status()` reports it as
+  inactive the moment anything stronger resolves.
+- It does not extend past day 7 on its own. Signing in (`clawmetry
+  connect`, the pill's "Sign in to keep it", the paywall card) mints the
+  account's own trial through the existing path, which is what keeps every
+  runtime past the device trial; identity still unlocks the runtimes, it
+  is just asked for from inside a dashboard already showing the user's
+  own data.
+
+`/api/trial/status` carries a `device_trial` block (`active`,
+`days_left`, `expires_at`, `signed_in`, `signin_nudge`, `runtimes`) and
+`static/js/trial-pill.js` turns the pill's button into "Sign in to keep it"
+once `signin_nudge` is true (four days or fewer left, no account key).
+
+---
+
 ## GRACE vs ENFORCE
 
 Everything in the entitlement engine is currently wired but **inert**.

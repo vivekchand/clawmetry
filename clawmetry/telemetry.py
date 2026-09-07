@@ -156,6 +156,7 @@ def _build_payload(version: str, event: str = "install", extra: dict | None = No
     """Assemble the JSON body. Pure function — no I/O — so tests can
     stub the small helpers and assert the shape independently."""
     is_ci, ci_provider = _detect_ci()
+    runtimes = _probed_runtimes()
     payload = {
         "install_id":  _ensure_install_id() or "",
         "event":       event,
@@ -166,10 +167,49 @@ def _build_payload(version: str, event: str = "install", extra: dict | None = No
         "agent":       _detect_agent(),
         "is_ci":       is_ci,
         "ci_provider": ci_provider,
+        # Which runtimes have data on this machine (ids only, presence
+        # checks: no paths, no session contents, no counts) and whether an
+        # account key is present. Together these answer the one funnel
+        # question the install registry could not: of the installs where a
+        # PAID runtime was found, how many ever sign in. See
+        # docs/TELEMETRY.md.
+        "runtimes":      runtimes,
+        "paid_runtimes": _paid_runtime_count(runtimes),
+        "signed_in":     _signed_in(),
     }
     if extra:
         payload.update(extra)
     return payload
+
+
+def _probed_runtimes() -> list:
+    """Runtime ids present on this machine, catalogue order, capped at 40.
+    Presence probes only (``clawmetry.runtime_probe``); never raises."""
+    try:
+        from clawmetry.runtime_probe import probe_runtimes
+
+        return [p["id"] for p in probe_runtimes() if p.get("found")][:40]
+    except Exception:
+        return []
+
+
+def _paid_runtime_count(runtimes: list) -> int:
+    try:
+        from clawmetry.entitlements import FREE_RUNTIMES
+
+        return sum(1 for r in runtimes if r not in FREE_RUNTIMES)
+    except Exception:
+        return 0
+
+
+def _signed_in() -> bool:
+    """True when ``clawmetry connect`` has stored an account key. The key
+    itself never leaves the machine through this module."""
+    try:
+        cfg = _read_config()
+        return str(cfg.get("api_key") or "").startswith("cm_")
+    except Exception:
+        return False
 
 
 _SSL_CTX = None

@@ -4266,6 +4266,62 @@ def _cmd_onboard(args) -> None:
     # GitHub / email OTP) via connect's keep-local mode, which mints and
     # activates the 7-day trial license with the marker KEPT.
     _write_nocloud_marker()
+
+    # Device trial first (clawmetry/device_trial.py): a machine that already
+    # runs Claude Code / Cursor / Codex gets its 7-day Pro trial NOW, bound
+    # to this install, with no account. The sign-in question below then
+    # asks for identity as the way to KEEP the runtimes past day 7 rather
+    # than as the price of seeing them at all. No-op (and silent) when the
+    # install already holds a key or plan, when no paid runtime is present,
+    # when CLAWMETRY_DEVICE_TRIAL=0, or offline.
+    try:
+        from clawmetry import device_trial as _dtr
+
+        _dt_result = _dtr.maybe_start("onboard")
+    except Exception:
+        _dt_result = {}
+    _dt_lines = []
+    try:
+        _dt_lines = _dtr.onboarding_lines(_dt_result)
+    except Exception:
+        _dt_lines = []
+    if _dt_lines:
+        print(f"  {GREEN(BOLD(_dt_lines[0]))}")
+        for _line in _dt_lines[1:]:
+            print(f"  {DIM(_line)}")
+        print()
+    if (_dt_result or {}).get("status") == "started":
+        try:
+            _keep = (_input(
+                "  Sign in now so the trial follows your account after day 7 and\n"
+                "  shows on your phone? Your data still stays on this machine. [y/N]: "
+            ).strip().lower() or "n")
+        except (EOFError, KeyboardInterrupt):
+            _keep = "n"
+            print()
+        print()
+        if _keep in ("y", "yes"):
+            _fake_args = _ap.Namespace(
+                key=None, foreground=False, custom_node_id=None,
+                enc_key=None, key_only=False, no_daemon=False, keep_local=True,
+            )
+            _cmd_connect(_fake_args)
+            print()
+            if _config_api_key():
+                _post_onboard_offers(_input, BOLD, CYAN, DIM)
+                return
+            print(f"  {DIM('No account connected; the device trial keeps running. Sign in anytime:')} {CYAN('clawmetry connect')}")
+            print()
+        else:
+            # Self-host without an account IS the choice this path records;
+            # the trial-pill's day-3 ask covers the rest.
+            _record_gate_choice("selfhost_free")
+            print(f"  {DIM('Dashboard at http://localhost:8900. Sign in anytime:')} {CYAN('clawmetry connect')}")
+            print()
+        _post_onboard_offers(_input, BOLD, CYAN, DIM)
+        _finish_local()
+        return
+
     try:
         _has_key = (_input("  Do you already have a license key? [y/N]: ").strip().lower() or "n")
     except (EOFError, KeyboardInterrupt):
