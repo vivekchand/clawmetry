@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import sysconfig
 import threading
 from pathlib import Path
 
@@ -201,6 +202,89 @@ def test_pip_failures_classify_to_actionable_hints(snippet, expect):
 
 def test_unknown_pip_failure_still_points_at_the_log():
     assert "log" in dapp.RuntimeSupervisor._explain_pip_failure("???").lower()
+
+
+# Field failure #5628: a Windows machine on Python **3.11** was told
+# "Python too old ... install python.org Python 3.11+". Two defects made
+# that the only advice it could give:
+#   1. `_bootstrap_python`'s probe enforces the 3.9 floor, so pip is only
+#      ever reached on an interpreter that already passed it — "too old"
+#      is unreachable from bootstrap(), and blaming it is always wrong.
+#   2. pip words an index it could not READ exactly like an interpreter
+#      PyPI has no wheels for ("No matching distribution found"), and the
+#      no_distribution branch ran before the TLS/network ones, so a
+#      blocked proxy, a captive portal and an intercepted TLS handshake
+#      all landed on that same misleading hint.
+# The snippets below are pip's REAL output, captured by pointing pip at a
+# refused port, a 404 index and a self-signed index (pip 26.1.2).
+
+_REFUSED = (
+    "WARNING: Retrying (Retry(total=0)) after connection broken by "
+    "'NewConnectionError(\"HTTPConnection(host=\'127.0.0.1\', port=9): "
+    "Failed to establish a new connection: [Errno 61] Connection "
+    "refused\")': /simple/clawmetry/\n"
+    "ERROR: Could not find a version that satisfies the requirement "
+    "clawmetry (from versions: none)\n"
+    "ERROR: No matching distribution found for clawmetry"
+)
+_SELF_SIGNED = (
+    "WARNING: Retrying after connection broken by "
+    "'SSLError(SSLCertVerificationError(\'certificate is not "
+    "trusted\'))': /simple/clawmetry/\n"
+    "Could not fetch URL https://mirror.corp/simple/clawmetry/: There "
+    "was a problem confirming the ssl certificate - skipping\n"
+    "ERROR: Could not find a version that satisfies the requirement "
+    "clawmetry (from versions: none)\n"
+    "ERROR: No matching distribution found for clawmetry"
+)
+_EMPTY_MIRROR = (
+    "ERROR: Could not find a version that satisfies the requirement "
+    "clawmetry (from versions: none)\n"
+    "ERROR: No matching distribution found for clawmetry"
+)
+_NO_WHEEL = (
+    "ERROR: Could not find a version that satisfies the requirement "
+    "duckdb!=1.4.5,>=0.10 (from clawmetry) (from versions: 0.9.0, 0.10.0)\n"
+    "ERROR: No matching distribution found for duckdb!=1.4.5,>=0.10"
+)
+
+
+@pytest.mark.parametrize(
+    "snippet,code",
+    [
+        # "(from versions: none)" = the index yielded no candidates at
+        # all, so transport evidence in the same output IS the cause.
+        (_REFUSED, "network"),
+        (_SELF_SIGNED, "tls_intercepted"),
+        # No transport evidence: the index answered and carries nothing.
+        (_EMPTY_MIRROR, "no_distribution"),
+        # A real candidate list: the index answered fine and nothing in
+        # it fits this interpreter. This is the only true no_distribution.
+        (_NO_WHEEL, "no_distribution"),
+    ],
+)
+def test_unreadable_index_is_not_reported_as_no_distribution(snippet, code):
+    assert dapp.RuntimeSupervisor._classify_pip_failure(snippet) == code
+
+
+def test_no_hint_ever_blames_the_python_version_for_no_distribution():
+    """The 3.9 floor is enforced before pip runs, so a hint that tells the
+    user their Python is too old can only ever be wrong (#5628)."""
+    for code, hint in dapp._PIP_FAILURE_HINTS.items():
+        low = hint.lower()
+        assert "too old" not in low, (
+            f"{code} blames the interpreter's version, which "
+            "_bootstrap_python already proved is >= 3.9"
+        )
+
+
+def test_blocked_index_hint_talks_about_the_network_not_python():
+    hint = dapp.RuntimeSupervisor._explain_pip_failure(_REFUSED).lower()
+    assert "proxy" in hint or "connectivity" in hint
+    assert "python" not in hint, (
+        "a refused index is not the interpreter's fault; naming Python "
+        "here is what sent a 3.11 user to reinstall 3.11"
+    )
 
 
 # ── 4. logging must never kill the boot thread ───────────────────────────
@@ -378,6 +462,25 @@ def test_version_reader_tolerates_legacy_cache(tmp_path):
     cache.write_text('{"python": "/usr/bin/python3"}')
     assert dapp._bootstrap_python_version(cache) == ""
     assert dapp._bootstrap_python_version(None) == ""
+
+
+def test_probe_caches_interpreter_platform_tag(tmp_path):
+    """bootstrap.log must be able to say WHICH interpreter pip resolved
+    for. The version alone cannot: win32 has no duckdb wheel at any
+    Python version, so "3.11" was never enough to diagnose #5628."""
+    cache = tmp_path / "bootstrap-python.json"
+    assert dapp._bootstrap_python(cache)
+    tag = dapp._bootstrap_python_platform(cache)
+    assert tag and tag == sysconfig.get_platform()[:24]
+
+
+def test_platform_reader_tolerates_legacy_and_hostile_cache(tmp_path):
+    cache = tmp_path / "bootstrap-python.json"
+    cache.write_text('{"python": "/usr/bin/python3"}')
+    assert dapp._bootstrap_python_platform(cache) == ""
+    cache.write_text('{"platform": "win-amd64; rm -rf /"}')
+    assert dapp._bootstrap_python_platform(cache) == ""
+    assert dapp._bootstrap_python_platform(None) == ""
 
 
 # ── 7. an exe stub is not an install (package-corpse recovery) ───────────

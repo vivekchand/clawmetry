@@ -695,9 +695,17 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
     # along in the cache — the field-failure report wants to say WHICH
     # Python a bootstrap died on (the 2026-08-29 cffi failure was
     # invisible precisely because nothing recorded "3.14").
+    #
+    # Line 2 is `sysconfig.get_platform()` — the tag pip resolves wheels
+    # against ("win32", "win-amd64", "win-arm64"). It never leaves the
+    # machine; it goes in bootstrap.log, because "which interpreter did
+    # pip resolve for" is the first question every no-wheel report asks
+    # and the version alone cannot answer it (win32 has no duckdb wheel
+    # at any Python version).
     probe = (
-        "import sys, venv, ensurepip; "
+        "import sys, sysconfig, venv, ensurepip; "
         "print('%d.%d' % sys.version_info[:2]); "
+        "print(sysconfig.get_platform()); "
         "sys.exit(0 if sys.version_info >= (3, 9) else 3)"
     )
     for p in paths:
@@ -715,10 +723,13 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
             )
             if r.returncode == 0:
                 if cache_file is not None:
+                    out = (r.stdout or "").splitlines()
                     try:
                         cache_file.write_text(json.dumps({
                             "python": p,
-                            "version": (r.stdout or "").strip()[:8],
+                            "version": (out[0].strip() if out else "")[:8],
+                            "platform": (out[1].strip()
+                                         if len(out) > 1 else "")[:24],
                         }))
                     except OSError:
                         pass
@@ -736,6 +747,20 @@ def _bootstrap_python_version(cache_file: Optional[Path]) -> str:
     try:
         v = str(json.loads(cache_file.read_text()).get("version") or "")
         return v if re.fullmatch(r"\d+\.\d+", v) else ""
+    except Exception:
+        return ""
+
+
+def _bootstrap_python_platform(cache_file: Optional[Path]) -> str:
+    """`sysconfig.get_platform()` of the cached bootstrap interpreter
+    ("win-amd64", "win32", "macosx-14.0-arm64"), or "" when no probe has
+    succeeded or the cache predates the field. Bounded to the shape a
+    platform tag has; a log line is its only consumer."""
+    if cache_file is None:
+        return ""
+    try:
+        v = str(json.loads(cache_file.read_text()).get("platform") or "")
+        return v if re.fullmatch(r"[A-Za-z0-9_.\-]{1,24}", v) else ""
     except Exception:
         return ""
 
@@ -788,9 +813,16 @@ _PIP_FAILURE_HINTS = {
         "version — update ClawMetry (packaging fix), or install "
         "python.org Python 3.12/3.13 and relaunch."
     ),
+    # NOT "Python too old": _bootstrap_python's probe enforces the 3.9
+    # floor, so pip is only ever reached on an interpreter that already
+    # passed it. Field failure #5628 was a Python 3.11 machine being
+    # told to go and install Python 3.11+. What is left when the index
+    # answered but carried nothing usable: a private mirror that does
+    # not proxy PyPI, or an interpreter PyPI ships no wheels for.
     "no_distribution": (
-        "Python too old or PyPI unreachable — "
-        "install python.org Python 3.11+ and relaunch."
+        "The package index has no installable ClawMetry for this Python "
+        "— if pip points at a private mirror, allow pypi.org; otherwise "
+        "install 64-bit python.org Python 3.12/3.13 and relaunch."
     ),
     "tls_intercepted": (
         "A firewall or proxy is intercepting TLS to pypi.org — "
@@ -1071,17 +1103,33 @@ class RuntimeSupervisor:
         (AC-FFR-001) — a closed enum, never free text, because the code
         is the ONLY part of a failure that ever leaves the machine."""
         low = output.lower()
+        tls = "certificate" in low or "sslerror" in low or "ssl:" in low
+        network = ("timed out" in low or "connection" in low
+                   or "temporary failure" in low or "getaddrinfo" in low
+                   or "name or service not known" in low)
         if "no python at" in low or "did not find executable" in low:
             return "broken_runtime"
         if "microsoft visual c++" in low or "build wheel did not run successfully" in low:
             return "compiler_demand"
         if "no matching distribution" in low or "could not find a version" in low:
+            # pip reports an index it could not READ exactly the way it
+            # reports an interpreter PyPI has no wheels for, and this
+            # branch used to swallow both — so a blocked proxy or an
+            # intercepted TLS handshake surfaced as "Python too old"
+            # (field failure #5628). The tell is pip's own candidate
+            # list: "(from versions: none)" means the index yielded no
+            # candidates AT ALL, so paired with transport evidence the
+            # transport is the cause. A real version list means the
+            # index answered and nothing in it fits — no_distribution.
+            if "from versions: none" in low:
+                if tls:
+                    return "tls_intercepted"
+                if network:
+                    return "network"
             return "no_distribution"
-        if "certificate" in low or "sslerror" in low or "ssl:" in low:
+        if tls:
             return "tls_intercepted"
-        if ("timed out" in low or "connection" in low
-                or "temporary failure" in low or "getaddrinfo" in low
-                or "name or service not known" in low):
+        if network:
             return "network"
         if "permission" in low or "access is denied" in low or "winerror 5" in low:
             return "permissions"
@@ -1141,7 +1189,9 @@ class RuntimeSupervisor:
             self.failure_class = "no_python"
             return False
         self.bootstrap_python_version = _bootstrap_python_version(cache)
-        self._log(f"bootstrap python: {py}")
+        self._log(f"bootstrap python: {py} "
+                  f"({self.bootstrap_python_version or '?'} "
+                  f"{_bootstrap_python_platform(cache) or '?'})")
 
         # Health check, not existence check: we only get here with no
         # runnable clawmetry, so a venv that exists is a venv left over
