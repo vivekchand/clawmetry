@@ -263,6 +263,19 @@ def test_refusal_is_final(monkeypatch, home):
     assert home.dt.maybe_start("daemon") == {"status": "skipped", "reason": "refused"}
 
 
+def test_a_server_without_the_endpoint_is_retried_not_refused(monkeypatch, home):
+    """The OSS wheel can reach a machine before the cloud deploy that serves
+    the endpoint, and a self-hosted license server may never serve it. A
+    404 there must be a daily retry, never a permanent refusal."""
+    _paid_present(monkeypatch, home)
+    calls = _server(monkeypatch, home, response={}, http_status=404)
+    res = home.dt.maybe_start("daemon")
+    assert res["status"] == "error", res
+    assert home.dt.read_marker()["status"] == "error"
+    assert home.dt.maybe_start("daemon") == {"status": "skipped", "reason": "error_backoff"}
+    assert len(calls) == 1
+
+
 def test_network_error_backs_off_for_a_day(monkeypatch, home):
     _paid_present(monkeypatch, home)
     calls = _server(monkeypatch, home, raise_exc=OSError("dns"))

@@ -258,7 +258,12 @@ def _request_device_trial(install_id: str, node_id: str, runtimes: list) -> dict
             data = {}
         data = data if isinstance(data, dict) else {}
         data["_status"] = int(getattr(exc, "code", 0) or 0)
-        if 400 <= data["_status"] < 500 and data["_status"] != 429:
+        # A decision is final; anything that reads "not here yet" is retried
+        # daily. 404 / 405 / 501 mean a license server that predates this
+        # endpoint (the OSS wheel can ship ahead of the cloud deploy, and a
+        # self-hosted server may never grow it); marking those refused would
+        # lock every such install out of the trial for good.
+        if data["_status"] in (400, 403, 409, 410):
             data.setdefault("_refused", True)
         else:
             data["_error"] = f"HTTP {data['_status']}"
