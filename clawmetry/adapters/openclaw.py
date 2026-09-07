@@ -854,6 +854,55 @@ def _gateway_oom_victim(events: list) -> dict:
         return {}
 
 
+def _backup_outcome_events(events: list) -> dict:
+    """Return backup-outcome metadata when the gateway logs a backup event.
+
+    OpenClaw 2026.9.2+ ("Backups that preserve your data") improved the backup
+    pipeline to reject corrupt archive headers instead of silently accepting an
+    incomplete backup, and to preserve NUL-containing text in Git backups.
+    A corrupt-archive rejection is a data-loss-adjacent event: the backup did
+    not complete, but silently.  This scanner makes it visible in ClawMetry.
+
+    Scans the already-fetched events list (no extra I/O).  Matches entries
+    whose ``msg`` contains ``"backup"`` (the match trigger).  Within a matching
+    entry, the additional keywords ``"corrupt"``, ``"integrity"``,
+    ``"reject"``, and ``"invalid"`` determine whether to set
+    ``backupCorruptArchiveRejected=True``.  Returns a dict with
+    ``backupOutcomeDetected=True``, ``backupOutcomeMsg``, and optionally
+    ``backupOutcomeTs`` and ``backupCorruptArchiveRejected=True``.  Returns
+    ``{}`` when no backup event is found.  Never raises (closes #5618).
+    """
+    try:
+        if not events:
+            return {}
+        _BACKUP_KEYWORDS = ("backup",)
+        _CORRUPT_KEYWORDS = ("corrupt", "integrity", "reject", "invalid")
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            raw_msg = evt.get("msg", "")
+            msg = str(raw_msg).lower()
+            if not msg:
+                continue
+            is_backup = any(kw in msg for kw in _BACKUP_KEYWORDS)
+            if not is_backup:
+                continue
+            result: dict = {
+                "backupOutcomeDetected": True,
+                "backupOutcomeMsg": str(raw_msg),
+            }
+            ts = evt.get("ts")
+            if ts is not None:
+                result["backupOutcomeTs"] = ts
+            is_corrupt = any(kw in msg for kw in _CORRUPT_KEYWORDS)
+            if is_corrupt:
+                result["backupCorruptArchiveRejected"] = True
+            return result
+        return {}
+    except Exception:
+        return {}
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -2659,6 +2708,15 @@ class OpenClawAdapter(AgentAdapter):
             _oom = _gateway_oom_victim(_gw_events)
             if _oom:
                 meta.update(_oom)
+            # Backup-outcome detection (#5618): OpenClaw 2026.9.2 rejects corrupt
+            # archive headers instead of silently accepting an incomplete backup.
+            # A corrupt-archive rejection is data-loss-adjacent and was invisible
+            # to ClawMetry before this.  Scan the already-fetched events so there
+            # is no extra I/O; surface backupOutcomeDetected (and optionally
+            # backupCorruptArchiveRejected) so the dashboard can flag it.
+            _backup = _backup_outcome_events(_gw_events)
+            if _backup:
+                meta.update(_backup)
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by
