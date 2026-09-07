@@ -341,6 +341,14 @@ jobs:
       - name: Hosted Security tab shows only what it can fill
         run: python3 -m pytest tests/test_security_tab_cloud_honesty.py -q
 
+      # The Overview "Active Tasks" panel told four lies on one screen under
+      # ?runtime=codex: a hardcoded personal-project pill said OpenClaw, no
+      # runtime filter at all, a FAILED sub-agent drawn with a green tick, and
+      # an 18-day-old task labelled "Finished 1 min ago". Named here because
+      # this job runs FILE LISTS.
+      - name: Active Tasks panel tells the truth
+        run: python3 -m pytest tests/test_active_tasks_honesty.py tests/test_active_tasks_units.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
