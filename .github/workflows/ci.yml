@@ -493,6 +493,7 @@ jobs:
             tests/test_cache_push_gating.py \
             tests/test_usage_cache_trends_local_store.py \
             tests/test_transcript_local_store.py \
+            tests/test_snapshot_transcripts_runtime_fair.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \
             tests/test_family_runtime_ingest.py \

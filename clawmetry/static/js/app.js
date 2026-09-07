@@ -12499,7 +12499,7 @@ function _cmApplyRuntimeScopeNote(name) {
   // and its scoped views live where the data actually is (the Inventory roster
   // row + cost/tokens). The Inventory tab keeps its own roster note below.
   // 'inventory' has its own roster note; transcripts has its own
-  // scoped empty-state ("no <app> sessions have a transcript yet"), so skip both
+  // scoped empty-state (_cmRuntimeEmptyMsg), so skip both
   // to avoid a conflicting double-note.
   if (_cmIsOtlpRuntime(rt) && name !== 'inventory') {
     var _otl = _cmRuntimeLabel(rt);
@@ -19557,6 +19557,32 @@ function applyTranscriptCustomRange() {
   loadTranscripts();
 }
 
+// Empty state for "runtime picked, zero rows on this tab". The header's
+// session count and this list come from DIFFERENT places: the count is every
+// session ClawMetry knows about, the list needs a conversation it can actually
+// read. When the count says 15 and the list says nothing, "no sessions have a
+// transcript yet" reads as a lie, so say which of the two we mean (#5643).
+function _cmRuntimeEmptyMsg(rt) {
+  var label = _cmRuntimeLabel(rt);
+  var known = 0;
+  try { known = (_cmGlobalRtCounts && _cmGlobalRtCounts[rt]) || 0; } catch (e) { known = 0; }
+  var pickAll = t('transcripts.pick_all_runtimes', null,
+    'Pick All runtimes in the header to see every session.');
+  var body;
+  if (known > 0) {
+    body = t('transcripts.runtime_counted_but_empty', {count: known, label: label},
+      'This machine has {count} {label} sessions, but none of them have a readable conversation here yet. New ones show up a minute or two after they start.');
+    if (window.CLOUD_MODE) {
+      body += ' ' + t('transcripts.runtime_open_on_machine', {label: label},
+        'To read older {label} sessions, open ClawMetry on the machine itself.');
+    }
+  } else {
+    body = t('transcripts.runtime_none', {label: label},
+      'No {label} sessions have a conversation to show yet.');
+  }
+  return '<div style="padding:16px;color:#666;">' + escHtml(body) + ' ' + escHtml(pickAll) + '</div>';
+}
+
 async function loadTranscripts() {
   // Mount the Grafana-style date/time-range picker on first paint.
   // Idempotent — the helper no-ops when already attached.
@@ -19713,7 +19739,7 @@ async function loadTranscripts() {
     var emptyMsg = _txWinEmpty
       ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this window. Try a wider window — or note that only recently synced sessions are listed here.') + '</div>'
       : _rtNoTx
-      ? '<div style="padding:16px;color:#666;">No <strong>' + escHtml(_cmRuntimeLabel(_rtFilter)) + '</strong> sessions have a transcript yet. Pick <strong>All runtimes</strong> in the header to see every session.</div>'
+      ? _cmRuntimeEmptyMsg(_rtFilter)
       : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
       ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
       : '<div style="padding:16px;color:#666;">No transcript files found</div>';
