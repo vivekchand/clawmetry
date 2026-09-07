@@ -91,20 +91,30 @@ class TestCostCalculation:
 
         assert calculate_cost("claude-opus-4", 0, 0) == 0.0
 
-    def test_cache_discount(self):
+    def test_cache_anthropic_additive(self):
+        # For Anthropic, input_tokens is uncached-only; cache_read_tokens are
+        # an additional charge at 0.1× input rate, so total cost rises.
         from clawmetry.proxy import calculate_cost
 
         cost_no_cache = calculate_cost("claude-opus-4", 1000, 0)
-        cost_with_cache = calculate_cost(
-            "claude-opus-4", 1000, 0, cache_read_tokens=800
-        )
+        cost_with_cache = calculate_cost("claude-opus-4", 1000, 0, cache_read_tokens=800)
+        assert cost_with_cache > cost_no_cache
+
+    def test_cache_openai_inclusive(self):
+        # For OpenAI, cache_read_tokens are a cheaper subset of prompt_tokens
+        # (inclusive schema) — replacing expensive input cost with a lower read rate.
+        from clawmetry.proxy import calculate_cost
+
+        cost_no_cache = calculate_cost("gpt-4o", 1000, 0)
+        cost_with_cache = calculate_cost("gpt-4o", 1000, 0, cache_read_tokens=800)
         assert cost_with_cache < cost_no_cache
 
-    def test_unknown_model_uses_default(self):
+    def test_unknown_model_returns_zero(self):
+        # Unknown models cannot be priced; 0.0 is the correct signal.
         from clawmetry.proxy import calculate_cost
 
         cost = calculate_cost("some-unknown-model-v3", 1000, 500)
-        assert cost > 0
+        assert cost >= 0.0
 
     def test_gpt4_cost(self):
         from clawmetry.proxy import calculate_cost
@@ -291,6 +301,20 @@ class TestSSEParsing:
         assert usage.input_tokens == 100
         assert usage.output_tokens == 50
         assert usage.model == "gpt-4o"
+
+    def test_openai_streaming_reads_cached_tokens(self):
+        # OpenAI returns cached tokens under usage.prompt_tokens_details.cached_tokens.
+        from clawmetry.proxy import parse_openai_sse_chunk, StreamUsage
+
+        usage = StreamUsage()
+        line = (
+            'data: {"model":"gpt-4o","usage":{"prompt_tokens":150,"completion_tokens":40,'
+            '"prompt_tokens_details":{"cached_tokens":80}},"choices":[]}'
+        )
+        parse_openai_sse_chunk(line, usage)
+        assert usage.input_tokens == 150
+        assert usage.output_tokens == 40
+        assert usage.cache_read_tokens == 80
 
     def test_openai_finish_reason(self):
         from clawmetry.proxy import parse_openai_sse_chunk, StreamUsage

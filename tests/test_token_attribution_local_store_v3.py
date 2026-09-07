@@ -260,6 +260,50 @@ def test_session_id_filter_restricts_rows(app):
     assert msgs[0]["tokens"]["total"] == 1500
 
 
+def test_openai_inclusive_cache_no_double_count(app):
+    """OpenAI inclusive-cache schema: cache_read_tokens is a SUBSET of
+    input_tokens (total prompt tokens), not additional context.
+
+    Bug: before the provider-aware fix, total_tokens for a gpt-4o turn with
+    input=150 / cache_read=80 was computed as 150+40+80=270 instead of
+    150+40=190, and cache_hit_ratio_pct used 80/230 ≈ 34.8% instead of
+    80/150 ≈ 53.3%.
+    """
+    a, ls, usage_mod = app
+    store = ls.get_store()
+    sid = "sess-openai-cache"
+    now = time.time()
+
+    # OpenAI-style row: model=gpt-4o; input_tokens=150 (inclusive of 80 cached).
+    store.ingest(_assistant_row(
+        "e-oai", sid, _iso(now - 30),
+        input_t=150, output_t=40, cache_read=80, cache_write=0,
+        cost_total=0.001,
+        model="gpt-4o",
+    ))
+    _drain(store)
+
+    fast = usage_mod._try_local_store_token_attribution()
+    assert fast is not None
+    msgs = fast.get("messages") or []
+    assert len(msgs) == 1
+
+    row = msgs[0]
+    # total must NOT add cache_read again (inclusive schema)
+    assert row["tokens"]["total"] == 190, (
+        f"OpenAI inclusive double-count: expected 190, got {row['tokens']['total']}"
+    )
+    # cache_hit_ratio: 80 / 150 * 100 = 53.3 (numerator / inclusive input)
+    expected_hit = round(80 / 150 * 100, 1)
+    assert row["cache_hit_ratio"] == expected_hit, (
+        f"cache_hit_ratio wrong: expected {expected_hit}, got {row['cache_hit_ratio']}"
+    )
+
+    totals = fast.get("totals") or {}
+    assert totals["total_tokens"] == 190
+    assert totals["cache_hit_ratio_pct"] == expected_hit
+
+
 def test_slim_completed_without_sibling_still_surfaces(app):
     """A standalone ``model.completed`` row (no rich sibling within the
     ±1 s window) must still produce an attribution row via the scalar-
