@@ -63,13 +63,13 @@ by env so the daemon can tune them without a code change.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from typing import Any, Iterable, Optional
 
 # New in this change, each in its own module so the whole of the new capability
 # is readable in one place and this file keeps its shape.
+from clawmetry import nonsecret_hash as _nsh
 from clawmetry.detector_calibration import (  # noqa: F401
     BASELINE_CEIL_RATIO, BASELINE_FLOOR_RATIO, BASELINE_MIN_SESSIONS,
     BASELINE_SIGMA, BLAST_RADIUS_FILES, EGRESS_HOST_FANOUT, RUNTIME_PROFILES,
@@ -217,7 +217,7 @@ def _args_hash(args: Any) -> str:
             norm = str(args)
         except Exception:
             return ""
-    return hashlib.sha1(norm.encode("utf-8", "replace")).hexdigest()[:16]
+    return _nsh.sha1(norm.encode("utf-8", "replace")).hexdigest()[:16]
 
 
 def _iter_tool_calls_from_data(et: str, data: dict) -> list[dict]:

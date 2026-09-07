@@ -38,7 +38,6 @@ Module-level helpers (``_history_db``, ``AgentReliabilityScorer``,
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -50,6 +49,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
+from clawmetry import nonsecret_hash as _nsh
 
 bp_health = Blueprint('health', __name__)
 
@@ -2800,7 +2800,7 @@ def _detect_loops_in_sessions(sessions_dir, max_sessions=20, window=10, min_repe
                             continue
                         inp = blk.get("input") or {}
                         raw_args = json.dumps(inp, sort_keys=True, default=str)[:500]
-                        fp = hashlib.md5(raw_args.encode()).hexdigest()[:8]
+                        fp = _nsh.md5(raw_args.encode()).hexdigest()[:8]
                         tool_seq.append((name, fp, ts))
         except Exception:
             continue
@@ -2888,7 +2888,7 @@ def _try_local_store_loop_detection(window: int, min_repeats: int):
             raw_args = json.dumps(inp, sort_keys=True, default=str)[:500]
         except Exception:
             raw_args = str(inp)[:500]
-        fp = hashlib.md5(raw_args.encode()).hexdigest()[:8]
+        fp = _nsh.md5(raw_args.encode()).hexdigest()[:8]
         by_session.setdefault(sid, []).append((name, fp, r.get("ts") or ""))
 
     if not by_session:

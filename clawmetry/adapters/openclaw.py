@@ -398,6 +398,15 @@ def _resolve_lmstudio_base_url() -> str:
     return val or "http://localhost:1234/v1"
 
 
+def _resolve_vllm_base_url() -> str:
+    """Return the active vLLM server base URL from env var or the default.
+
+    VLLM_HOST overrides; falls back to vLLM's default port.
+    """
+    val = os.environ.get("VLLM_HOST", "").strip()
+    return val or "http://localhost:8000/v1"
+
+
 def _list_ollama_models(host: str) -> list:
     """Return available Ollama model names. Never raises; returns [] on failure.
 
@@ -1215,6 +1224,11 @@ def _sandbox_inference_configs() -> list:
                 provider_key = "lmstudio"
                 primary = f"lmstudio/{model}" if model else ""
                 base_url = _resolve_lmstudio_base_url()
+                compat = "openai"
+            elif provider in ("vllm", "vllm-server"):
+                provider_key = "vllm"
+                primary = f"vllm/{model}" if model else ""
+                base_url = _resolve_vllm_base_url()
                 compat = "openai"
             else:
                 provider_key = _MANAGED
@@ -3691,6 +3705,38 @@ class OpenClawAdapter(AgentAdapter):
                     _slow = obj.get("slowReply") or obj.get("slow_reply")
                     if _slow:
                         llm_attrs["llm.slow_reply"] = True
+                # Reply lifecycle state from harness 2026.9.2 (#138071, #137606,
+                # #136236, #138519, #138565): a restart-recovered, queued, or delegated
+                # reply carries these fields so the Tracing tab can distinguish it from
+                # a normal reply. Keys accepted in both camelCase (harness native) and
+                # snake_case (normalised). Applied to every assistant span, not just the
+                # first -- a recovery or queue transition can happen mid-session.
+                _reply_queue_status = (
+                    obj.get("replyQueueStatus") or obj.get("reply_queue_status")
+                )
+                if isinstance(_reply_queue_status, str) and _reply_queue_status.strip():
+                    llm_attrs["reply.queue_status"] = _reply_queue_status.strip()
+                _recovery_marker = (
+                    obj.get("recoveryMarker") or obj.get("recovery_marker")
+                )
+                if isinstance(_recovery_marker, str) and _recovery_marker.strip():
+                    llm_attrs["reply.recovery_marker"] = _recovery_marker.strip()
+                elif _recovery_marker is not None and _recovery_marker is not False:
+                    llm_attrs["reply.recovery_marker"] = str(_recovery_marker)
+                _retry_attempt = obj.get("retryAttempt") or obj.get("retry_attempt")
+                if _retry_attempt is not None:
+                    try:
+                        llm_attrs["reply.retry_attempt"] = int(_retry_attempt)
+                    except (TypeError, ValueError):
+                        pass
+                _continuation_count = (
+                    obj.get("continuationCount") or obj.get("continuation_count")
+                )
+                if _continuation_count is not None:
+                    try:
+                        llm_attrs["reply.continuation_count"] = int(_continuation_count)
+                    except (TypeError, ValueError):
+                        pass
                 spans.append({
                     "span_id": llm_sid,
                     "trace_id": trace_id,
@@ -3984,6 +4030,46 @@ class OpenClawAdapter(AgentAdapter):
                     "session_id": session_id,
                     "agent_type": agent_type,
                     "attributes": wc_attrs,
+                })
+
+            elif t == "response_steered":
+                # OpenClaw CHANGELOG 2026.9.2 (#138046, #138434): when a
+                # response is steered mid-flight over a cached WebSocket during
+                # async tool execution, the harness writes a response_steered
+                # event. Without this branch the span builder silently drops it,
+                # leaving a gap in the Timeline/Brain stream (#5578).
+                _sc = (
+                    obj.get("steeringCount")
+                    or obj.get("steering_count")
+                    or obj.get("count")
+                )
+                _tid = (
+                    obj.get("asyncToolId")
+                    or obj.get("async_tool_id")
+                    or obj.get("toolCallId")
+                    or obj.get("tool_call_id")
+                )
+                _cid = obj.get("continuationId") or obj.get("continuation_id")
+                steer_attrs: dict = {"event.kind": "response_steered"}
+                if _sc is not None:
+                    try:
+                        steer_attrs["steering.count"] = int(_sc)
+                    except (TypeError, ValueError):
+                        pass
+                if isinstance(_tid, str) and _tid.strip():
+                    steer_attrs["steering.async_tool_id"] = _tid.strip()
+                if isinstance(_cid, str) and _cid.strip():
+                    steer_attrs["steering.continuation_id"] = _cid.strip()
+                spans.append({
+                    "span_id": _sid("response_steered", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "response.steered",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": agent_type,
+                    "attributes": steer_attrs,
                 })
 
         return spans

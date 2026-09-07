@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-227 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+228 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -187,6 +187,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/mcp_server.py` | medium | ClawMetry MCP server — exposes local telemetry as MCP tools (stdio transport). |
 | `clawmetry/narrator.py` | small | LLM-narrated alert enrichment (issue #1412, Feature C). |
 | `clawmetry/net.py` | medium | clawmetry.net — outbound TLS + proxy bootstrap for enterprise networks. |
+| `clawmetry/nonsecret_hash.py` | small | MD5/SHA-1 digests that are *not* being used as a security primitive. |
 | `clawmetry/numbat_ingest.py` | medium | map Perplexity numbat NDJSON records into ClawMetry rows. |
 | `clawmetry/onboarding_state.py` | small | the ONE writer for the first-run gate's |
 | `clawmetry/org_key.py` | small | The organisation key: one secret, shared by the people in one organisation. |
