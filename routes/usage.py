@@ -1909,6 +1909,16 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
     except Exception:
         return None
 
+    try:
+        from clawmetry.providers_pricing import provider_for_model as _pfm
+    except Exception:
+        _pfm = None
+
+    # Tracks the true input-context denominator for cache_hit_ratio_pct.
+    # For Anthropic (additive schema) each row contributes input + cache_read;
+    # for OpenAI (inclusive schema) cache_read is already in input_tokens.
+    _real_input_context = 0
+
     for r in rows:
         if not isinstance(r, dict):
             continue
@@ -1930,7 +1940,16 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
         output_tok = int(splits.get("output_tokens", 0) or 0)
         cache_read = int(splits.get("cache_read_tokens", 0) or 0)
         cache_write = int(splits.get("cache_write_tokens", 0) or 0)
-        total_tok = input_tok + output_tok + cache_read + cache_write
+        _row_prov = _pfm(r.get("model") or "") if _pfm else ""
+        if _row_prov == "openai":
+            # OpenAI inclusive schema: cache_read_tokens are already counted in
+            # input_tokens (total prompt tokens), so adding them again inflates total.
+            total_tok = input_tok + output_tok + cache_write
+            _real_input_context += input_tok
+        else:
+            # Anthropic (and others) additive schema: cache_read is additional context.
+            total_tok = input_tok + output_tok + cache_read + cache_write
+            _real_input_context += input_tok + cache_read
 
         # Fall back to the daemon-stamped scalar column when the data
         # blob splits are empty (e.g. slim ``model.completed`` rows that
@@ -1998,10 +2017,13 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
 
         sid = r.get("session_id") or ""
         ts = r.get("ts") or ""
-        cache_hit_pct = (
-            round(cache_read / (input_tok + cache_read) * 100, 1)
-            if (input_tok + cache_read) > 0 else 0.0
-        )
+        if _row_prov == "openai":
+            cache_hit_pct = round(cache_read / input_tok * 100, 1) if input_tok > 0 else 0.0
+        else:
+            cache_hit_pct = (
+                round(cache_read / (input_tok + cache_read) * 100, 1)
+                if (input_tok + cache_read) > 0 else 0.0
+            )
         messages.append({
             "session_id": sid,
             "timestamp": ts,
@@ -2047,10 +2069,9 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
     messages.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
     messages = messages[:limit]
 
-    input_plus_cache = totals["input_tokens"] + totals["cache_read_tokens"]
     totals["cache_hit_ratio_pct"] = (
-        round(totals["cache_read_tokens"] / input_plus_cache * 100, 1)
-        if input_plus_cache else 0.0
+        round(totals["cache_read_tokens"] / _real_input_context * 100, 1)
+        if _real_input_context else 0.0
     )
 
     return {
