@@ -13955,7 +13955,6 @@ DASHBOARD_HTML = r"""
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
-<script src="{{ url_for('static', filename='js/dives.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/trail.js', v=version) }}" defer></script>
 <!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
      transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
@@ -14220,9 +14219,6 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What a harness is, part by part, and where to watch each part live">
           <span class="left-nav-label" data-i18n="nav.harness">Harness</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
-          <span class="left-nav-label" data-i18n="nav.ask">Ask</span>
-        </div>
       </div>
     </div>
 
@@ -14295,7 +14291,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/usage.html' %}
 
 <!-- DIVES (NL-to-SQL-to-chart over local DuckDB) -->
-{% include 'tabs/dives.html' %}
 
 <!-- CRONS -->
 {% include 'tabs/crons.html' %}

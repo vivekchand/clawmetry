@@ -126,7 +126,6 @@ CANONICAL_TABS = [
     # Tabs added after initial C5 coverage -- verified present in
     # clawmetry/templates/tabs/ or routes/ as of 2026-06-09.
     "channels",          # routes/channels.py: 21 chat-channel adapters
-    "dives",             # dives.html / dives.js: session deep-dive feature
     "harness",           # harness.html: harness observability
     "inventory",         # inventory.html: tool/resource inventory
     "nemoclaw",          # nemoclaw.html: NeMo Guardrails governance

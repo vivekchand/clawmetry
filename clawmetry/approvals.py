@@ -319,6 +319,27 @@ def _yaml_scalar(s: str):
     return s
 
 
+def action_label(tool_name: str, command: str) -> str:
+    """The one-line label an approval card leads with.
+
+    ``"<tool>: <command>"`` when we know the command, and a bare ``"<tool>"``
+    when we do not. The old unconditional join printed the empty preview
+    straight after the colon, so an operator read ``exec: {}`` -- a card that
+    names a tool and then shows punctuation where the command belongs. A
+    reader can tell "we did not record the command" from a bare tool name;
+    they cannot tell it from braces."""
+    tool = str(tool_name or "tool call").strip()
+    cmd = str(command or "").strip()
+    return f"{tool}: {cmd}" if cmd else tool
+
+
+# Minimum risk level implied by a shipped preset key, used to repair rows
+# whose ``min_risk`` did not survive a round trip through storage. Only
+# presets whose WHOLE definition is the risk gate belong here -- a preset
+# that matches on a command regex needs no entry.
+_PRESET_MIN_RISK: dict[str, str] = {"risk_high": "high"}
+
+
 def _compile_policy(p: dict) -> Optional[dict]:
     """Compile a single raw policy dict into a match-ready dict, or None."""
     match = p.get("match") or {}
@@ -334,6 +355,17 @@ def _compile_policy(p: dict) -> Optional[dict]:
     # rejected here so a typo ("hgih") can't silently disable the gate.
     min_risk = str(p.get("min_risk") or match.get("min_risk")
                    or "").strip().lower() or None
+    # Preset rows created through the cloud lost their min_risk on the way to
+    # the database (the cloud policies table had no such column until
+    # 2026-09-06), which turned the shipped "Require approval for high-risk
+    # actions" preset -- tool '', pattern '', min_risk 'high' -- into a rule
+    # with NO condition at all: it matched every tool call of every runtime
+    # and buried the operator in approvals for `git status`. A preset carries
+    # its own intent, so recover it from the key rather than trusting a row
+    # that lost a field. Explicit min_risk on the row always wins.
+    if min_risk is None:
+        min_risk = _PRESET_MIN_RISK.get(
+            str(p.get("preset_key") or "").strip().lower())
     if min_risk is not None:
         from clawmetry.tool_risk import RISK_RANK
         if min_risk not in RISK_RANK:
@@ -341,7 +373,7 @@ def _compile_policy(p: dict) -> Optional[dict]:
                         f"'{min_risk}' (want low/medium/high/critical)")
             return None
     try:
-        return {
+        compiled = {
             "name": p.get("name") or "(unnamed)",
             "tool": tool,
             # Optional per-runtime scoping ('' = applies to every runtime).
@@ -361,6 +393,19 @@ def _compile_policy(p: dict) -> Optional[dict]:
     except re.error as re_err:
         log.warning(f"policy '{p.get('name')}' has bad regex: {re_err}")
         return None
+    # A gating policy with no tool, no pattern and no risk floor has no
+    # condition: it pauses EVERY tool call on the node. That is a legal thing
+    # to ask for, but it is almost always a row that lost a field on the way
+    # here, so say so once, loudly, naming the policy -- an operator drowning
+    # in approvals should be able to find out why from the daemon log.
+    if compiled["action"] != "approve" and not (
+            compiled["tool"] or compiled["command_regex"]
+            or compiled["args_regex"] or compiled["min_risk"]):
+        log.warning("policy %r has no tool, no pattern and no min_risk: it "
+                    "will pause EVERY tool call on this node",
+                    compiled["name"])
+        compiled["matches_everything"] = True
+    return compiled
 
 
 # Fingerprint of the last policy set we announced, so a reload that changes
@@ -760,6 +805,42 @@ def _session_runtime(session_id: str) -> str:
         return "openclaw"
 
 
+# Working directory per session, memoised. An approval card that cannot say
+# WHERE the command would run is asking the operator to approve a `git push`
+# without telling them which checkout. Missing/unknown stays "" -- never a
+# guessed path.
+_session_cwd_cache: dict[str, str] = {}
+_SESSION_CWD_CACHE_MAX = 512
+
+
+def _session_cwd(session_id: str) -> str:
+    """Best-effort cwd for a session id, from the local store. Never raises."""
+    sid = session_id or ""
+    if not sid:
+        return ""
+    if sid in _session_cwd_cache:
+        return _session_cwd_cache[sid]
+    cwd = ""
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store(read_only=True)
+        # Family runtimes are stored under the prefixed id, OpenClaw under the
+        # bare one; try what we were handed, then the other half.
+        for cand in (sid, sid.split(":", 1)[1] if ":" in sid else None):
+            if not cand:
+                continue
+            row = store.get_session_location(cand)
+            if row and row.get("cwd"):
+                cwd = str(row["cwd"])
+                break
+    except Exception as e:
+        log.debug("approval cwd lookup failed for %s: %s", sid, e)
+    if len(_session_cwd_cache) >= _SESSION_CWD_CACHE_MAX:
+        _session_cwd_cache.clear()
+    _session_cwd_cache[sid] = cwd
+    return cwd
+
+
 _hooks_marker_cache: tuple = (0.0, frozenset())
 _HOOKS_MARKER_TTL_S = 10.0
 _HOOKS_MARKER_PATH = Path.home() / ".clawmetry" / "hooks_installed.json"
@@ -971,6 +1052,19 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
     args_with_risk = dict(args) if isinstance(args, dict) else {"value": args}
     args_with_risk["_cm_risk"] = {"level": risk["level"],
                                   "reasons": risk["reasons"]}
+    # Same namespaced-key trick for the WHO/WHERE/WHY of the request. Without
+    # it a queue row carried the tool and the command and nothing else, so the
+    # inbox could only print the tail of a session id -- an operator looking at
+    # twenty of them had no way to tell which agent, in which checkout, tripped
+    # which rule. Everything here is already known at this point; none of it
+    # costs a second lookup except cwd, which is memoised per session.
+    args_with_risk["_cm_ctx"] = {
+        "tool": tool_name,
+        "runtime": _session_runtime(session_id or ""),
+        "session_id": session_id or "",
+        "policy": policy.get("name"),
+        "cwd": _session_cwd(session_id or ""),
+    }
     log.info(f"[approval] policy='{policy['name']}' tool={tool_name} "
              f"risk={risk['level']} cmd={cmd_preview!r} session={session_id}")
 
@@ -988,7 +1082,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
                 "id": approval_id,
                 "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
                 "requestor_session_id": session_id,
-                "action": f"{tool_name}: {cmd_preview}",
+                "action": action_label(tool_name, cmd_preview),
                 "args": args_with_risk,
                 "status": "auto_approved",
                 "decision_reason": (f"always-allow rule '{policy['name']}' "
@@ -1026,7 +1120,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
                 "id": approval_id,
                 "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
                 "requestor_session_id": session_id,
-                "action": f"{tool_name}: {cmd_preview}",
+                "action": action_label(tool_name, cmd_preview),
                 "args": args_with_risk,
                 "status": "simulated",
                 "decision_reason": (f"monitor mode: policy '{policy['name']}' "
@@ -1071,7 +1165,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
                 "id": approval_id,
                 "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
                 "requestor_session_id": session_id,
-                "action": f"{tool_name}: {cmd_preview}",
+                "action": action_label(tool_name, cmd_preview),
                 "args": args_with_risk,
                 "status": "auto_approved",
                 "decision_reason": "approved earlier this session "
@@ -1119,7 +1213,7 @@ def process_tool_call(api_key: str, node_id: str, session_id: Optional[str],
             "id": approval_id,
             "owner_hash": _hl.sha256((api_key or "").encode()).hexdigest(),
             "requestor_session_id": session_id,
-            "action": f"{tool_name}: {cmd_preview}",
+            "action": action_label(tool_name, cmd_preview),
             "args": args_with_risk,
             "status": "pending",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
