@@ -108,6 +108,43 @@ PROVIDER_MAP: dict[str, dict] = {
     },
 }
 
+# OpenAI standard text-token rates, USD per million: input, output, cache read,
+# cache write. None means no published rate for that cache operation.
+# Verified 2026-09-07 against https://developers.openai.com/api/docs/models/<id>
+# and https://developers.openai.com/api/docs/guides/prompt-caching.
+# These are short-context estimates, not historical or service-tier invoices.
+# GPT-5.6 is the Sol alias; its promotional rates last at least to 2026-11-21.
+_OPENAI_PRICES = {
+    "gpt-4o": (2.50, 10.00, 1.25, None),
+    "gpt-4o-mini": (0.15, 0.60, 0.075, None),
+    "gpt-4.1": (2.00, 8.00, 0.50, None),
+    "gpt-4.1-mini": (0.40, 1.60, 0.10, None),
+    "gpt-4.1-nano": (0.10, 0.40, 0.025, None),
+    "gpt-5": (1.25, 10.00, 0.125, None),
+    "gpt-5-mini": (0.25, 2.00, 0.025, None),
+    "gpt-5-nano": (0.05, 0.40, 0.005, None),
+    "gpt-5.1": (1.25, 10.00, 0.125, None),
+    "gpt-5.2": (1.75, 14.00, 0.175, None),
+    "gpt-5.3-codex": (1.75, 14.00, 0.175, None),
+    "gpt-5.4": (2.50, 15.00, 0.25, None),
+    "gpt-5.4-mini": (0.75, 4.50, 0.075, None),
+    "gpt-5.4-nano": (0.20, 1.25, 0.02, None),
+    "gpt-5.4-pro": (30.00, 180.00, None, None),
+    "gpt-5.5": (5.00, 30.00, 0.50, None),
+    "gpt-5.6": (4.00, 20.00, 0.40, 5.00),
+    "gpt-5.6-sol": (4.00, 20.00, 0.40, 5.00),
+    "gpt-5.6-terra": (2.00, 12.00, 0.20, 2.50),
+    "gpt-5.6-luna": (0.20, 1.20, 0.02, 0.25),
+}
+
+
+def _openai_prices(model: str):
+    """Match a documented model or dated snapshot, never an invented variant."""
+    name = (model or "").lower().split("/", 1)[-1]
+    name = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", name)
+    return _OPENAI_PRICES.get(name)
+
+
 # Model-specific overrides (provider, model_prefix) -> (input_per_1m, output_per_1m)
 MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("anthropic", "claude-3-5-haiku"): (0.80, 4.00),
@@ -142,11 +179,6 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("openai", "o1-mini"): (3.00, 12.00),
     ("openai", "o1"): (15.00, 60.00),
     ("openai", "o3-mini"): (1.10, 4.40),
-    # GPT-5 family (gpt-5.4, gpt-5.6, …). Official prices not yet published —
-    # $10/$40 per 1M is a best-effort estimate; update once OpenAI confirms.
-    # gpt-5.6 entry beats the broad prefix via longest-prefix matching in _get_rates.
-    ("openai", "gpt-5"): (10.00, 40.00),
-    ("openai", "gpt-5.6"): (10.00, 40.00),
     ("gemini", "gemini-2.0-flash"): (0.10, 0.40),
     ("gemini", "gemini-1.5-pro"): (1.25, 5.00),
     ("gemini", "gemini-1.5-flash"): (0.075, 0.30),
@@ -241,6 +273,11 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
     # the lookup matches. Compare case-insensitively too (callers vary).
     if prov_lower == "google":
         prov_lower = "gemini"
+
+    if prov_lower == "openai":
+        prices = _openai_prices(model)
+        if prices is not None:
+            return prices[0], prices[1]
 
     if model:
         # Strip a leading provider namespace so OpenRouter ids
@@ -486,13 +523,14 @@ def estimate_event_cost_usd(
 
     Infers the provider from the model when not supplied — important because
     ``_get_rates`` needs the right provider (an empty provider falls through to
-    the conservative unknown default and mis-prices). Prices prompt-cache read
-    and write on top of input+output using Anthropic's documented multipliers
-    (only applied for the anthropic provider, where the split is well-defined).
+    the conservative unknown default and mis-prices). Anthropic cache counts
+    are additional to input_tokens. OpenAI cache counts are INCLUDED in total
+    input_tokens, so replace their ordinary input charge with the published
+    cache rate. Unknown OpenAI models retain the provider baseline estimate.
     Local / self-hosted models resolve to 0. Never raises.
     """
     try:
-        prov = provider or provider_for_model(model)
+        prov = (provider or provider_for_model(model)).lower()
         input_rate, output_rate = _get_rates(prov, model)
         if input_rate == 0 and output_rate == 0:
             return 0.0
@@ -503,6 +541,16 @@ def estimate_event_cost_usd(
         if prov == "anthropic":
             cost += (max(0, int(cache_read_tokens)) / 1_000_000) * input_rate * _CACHE_READ_MULT
             cost += (max(0, int(cache_write_tokens)) / 1_000_000) * input_rate * _CACHE_WRITE_MULT
+        elif prov == "openai":
+            prices = _openai_prices(model)
+            if prices is not None:
+                total_input = max(0, int(input_tokens))
+                cached = min(total_input, max(0, int(cache_read_tokens)))
+                written = min(total_input - cached, max(0, int(cache_write_tokens)))
+                if prices[2] is not None:
+                    cost += cached / 1_000_000 * (prices[2] - input_rate)
+                if prices[3] is not None:
+                    cost += written / 1_000_000 * (prices[3] - input_rate)
         return round(cost, 8)
     except Exception:
         return 0.0
