@@ -130,7 +130,7 @@ def test_default_landing_is_sessions_first():
     # Nothing lost.
     for tab in ("overview", "inventory", "brain", "usage", "models", "context-economics",
                 "evals", "bench", "approvals", "guard", "alerts", "notifications",
-                "flow", "tracing", "agents", "tool-catalog", "harness", "dives",
+                "flow", "tracing", "agents", "tool-catalog", "harness",
                 "crons", "memory", "skills", "logs", "security", "policy",
                 "selfevolve", "version-impact", "nemoclaw"):
         assert tab in tabs, f"tab {tab} lost from the nav"

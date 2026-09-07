@@ -41,7 +41,7 @@
     "openclaw": ">=2026.4.20"
   },
   "devDependencies": {
-    "typescript": "^5.4.0"
+    "typescript": "^7.0.2"
   },
   "openclaw": {
     "extensions": [
