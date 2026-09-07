@@ -47,6 +47,7 @@ import subprocess
 import sys
 from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843)
 from clawmetry import event_shape as _event_shape  # v15 typed event columns
+from clawmetry import nonsecret_hash as _nsh
 from clawmetry.trail_store import TrailStoreMixin  # intent / back-fill / git join
 import threading
 import time
@@ -13887,11 +13888,10 @@ class LocalStore(TrailStoreMixin):
         Idempotent on a stable id derived from provider+kind+ts so re-tailing
         the log (after a rotation/truncation rescan) never double-counts.
         """
-        import hashlib
         prov = (provider or "").lower().strip()
         if not prov or not kind or not ts_iso:
             return
-        ev_id = "connhealth-" + hashlib.sha1(
+        ev_id = "connhealth-" + _nsh.sha1(
             f"{prov}|{kind}|{ts_iso}|{(raw or '')[:80]}".encode("utf-8")
         ).hexdigest()[:24]
         payload = json.dumps({
@@ -13947,7 +13947,7 @@ class LocalStore(TrailStoreMixin):
         """
         if not event_type or not ts_iso:
             return
-        ev_id = "talk-" + hashlib.sha1(
+        ev_id = "talk-" + _nsh.sha1(
             f"{session_id or ''}|{event_type}|{ts_iso}|{(raw or '')[:80]}".encode("utf-8")
         ).hexdigest()[:24]
         payload = json.dumps({

@@ -3863,7 +3863,7 @@ def api_export_otlp():
     Compatible with Grafana Tempo, Jaeger, and any OTLP-capable backend.
     """
     import dashboard as _d
-    import hashlib
+    from clawmetry import nonsecret_hash as _nsh
 
     sessions_dir = _d._get_sessions_dir()
     index_path = os.path.join(sessions_dir, "sessions.json")
@@ -3889,7 +3889,7 @@ def api_export_otlp():
         is_subagent = ":subagent:" in key
         agent_type = "subagent" if is_subagent else "main"
         session_id = val.get("sessionId", key.split(":")[-1])
-        trace_id = hashlib.md5(session_id.encode()).hexdigest()
+        trace_id = _nsh.md5(session_id.encode()).hexdigest()
         span_id = trace_id[:16]
         total_tokens = int(val.get("totalTokens") or 0)
 
