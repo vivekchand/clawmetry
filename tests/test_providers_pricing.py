@@ -2,6 +2,7 @@
 cost source used across the app (cost-intel, out-loop attribution, budgets)."""
 import os
 import sys
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -68,10 +69,71 @@ def test_local_models_are_free():
     assert _get_rates("", "ollama/llama3.2") == (0.0, 0.0)
 
 
-def test_gpt5_6_priced_explicitly():
-    # GPT-5.x must not fall through to the gpt-4o baseline ($2.50/$10). #3502
-    assert _get_rates("openai", "gpt-5.6") == (10.00, 40.00)
-    assert _get_rates("openai", "gpt-5.4") == (10.00, 40.00)
-    assert _get_rates("openai", "gpt-5") == (10.00, 40.00)
-    # gpt-5.6 prefix wins over the broader gpt-5 prefix
-    assert _get_rates("openai", "gpt-5.6-turbo") == (10.00, 40.00)
+@pytest.mark.parametrize("model,rates", [
+    ("gpt-4.1", (2.0, 8.0)),
+    ("gpt-4.1-mini", (0.4, 1.6)),
+    ("gpt-4.1-nano", (0.1, 0.4)),
+    ("gpt-5", (1.25, 10.0)),
+    ("gpt-5-mini", (0.25, 2.0)),
+    ("gpt-5-nano", (0.05, 0.4)),
+    ("gpt-5.1", (1.25, 10.0)),
+    ("gpt-5.2", (1.75, 14.0)),
+    ("gpt-5.3-codex", (1.75, 14.0)),
+    ("gpt-5.4", (2.5, 15.0)),
+    ("gpt-5.4-mini", (0.75, 4.5)),
+    ("gpt-5.4-nano", (0.2, 1.25)),
+    ("gpt-5.4-pro", (30.0, 180.0)),
+    ("gpt-5.5", (5.0, 30.0)),
+    ("gpt-5.6", (4.0, 20.0)),
+    ("gpt-5.6-sol", (4.0, 20.0)),
+    ("gpt-5.6-terra", (2.0, 12.0)),
+    ("gpt-5.6-luna", (0.2, 1.2)),
+])
+def test_openai_standard_rates_match_published_model_pages(model, rates):
+    # https://developers.openai.com/api/docs/models/<model>, 2026-09-07.
+    assert _get_rates("openai", model) == rates
+    assert _get_rates("openai", "openai/" + model) == rates
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("gpt-4o", 1.375),
+    ("gpt-4o-mini", 0.0825),
+    ("gpt-4.1", 0.65),
+    ("gpt-5", 0.2375),
+    ("openai/gpt-5-2025-08-07", 0.2375),
+    ("gpt-5.6-sol", 0.76),
+])
+def test_openai_cache_reads_are_a_discounted_subset_of_input(model, expected):
+    # One million TOTAL input tokens, of which 900k were cache hits.
+    assert estimate_event_cost_usd(
+        model, input_tokens=1_000_000, cache_read_tokens=900_000,
+    ) == pytest.approx(expected)
+
+
+def test_openai_cache_writes_replace_ordinary_input_tokens():
+    # GPT-5.6: input $4, read $0.40, write $5, output $20 per million.
+    assert estimate_event_cost_usd(
+        "gpt-5.6", input_tokens=1000, output_tokens=100,
+        cache_read_tokens=600, cache_write_tokens=200,
+    ) == pytest.approx(0.00404)
+
+
+def test_openai_cache_counters_are_bounded_by_total_input():
+    assert estimate_event_cost_usd(
+        "gpt-4o", input_tokens=100, cache_read_tokens=1000,
+    ) == pytest.approx(0.000125)
+    assert estimate_event_cost_usd(
+        "gpt-4o", input_tokens=100, cache_read_tokens=-50,
+    ) == pytest.approx(0.00025)
+
+
+def test_openai_unknown_variants_do_not_inherit_a_published_cache_discount():
+    assert _get_rates("openai", "gpt-5.6-turbo") == (2.5, 10.0)
+    assert estimate_event_cost_usd(
+        "unknown-openai-model", input_tokens=100, cache_read_tokens=100,
+        provider="OPENAI",
+    ) == pytest.approx(0.00025)
+    # This model's published pricing has no cached-input rate.
+    assert estimate_event_cost_usd(
+        "gpt-5.4-pro", input_tokens=100, cache_read_tokens=100,
+    ) == pytest.approx(0.003)
