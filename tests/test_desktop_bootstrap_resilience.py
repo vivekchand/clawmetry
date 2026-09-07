@@ -504,13 +504,18 @@ def test_pinned_interpreter_is_not_the_latest_python():
     assert dapp.KNOWN_GOOD_PYTHON_WINGET_ID == f"Python.Python.{minor}"
     assert dapp.KNOWN_GOOD_PYTHON_DIRNAME == "Python" + minor.replace(".", "")
     # Nothing user-facing may send someone to fetch the newest Python.
+    # Keyed on what the sentence ASKS ("install ... python"), not on the
+    # download host: the rule is about the version a user ends up with,
+    # whatever page they get it from.
     for code, hint in dapp._PIP_FAILURE_HINTS.items():
         low = hint.lower()
         assert "latest python" not in low, code
-        if "python.org" in low:
+        if "install" in low and "python" in low:
             assert minor in hint, (
-                f"{code} points at python.org without naming the pinned "
-                f"{minor}, so a user may install a Python with no wheels"
+                f"{code} asks the user to install Python without naming "
+                f"the pinned {minor}; a range invites the newest "
+                f"interpreter, which is the one most likely to have no "
+                f"wheels"
             )
 
 
