@@ -2567,7 +2567,10 @@ def _try_local_store_sessions_clusters(days: int):
     if not sessions:
         return None
     # One bulk events fetch; group by session_id (avoids N+1 daemon hops).
-    events = _scan_events_slim(since=cutoff_iso, limit=20000) or []
+    # Must use the full event shape (not _scan_events_slim) because the cluster
+    # analysis reads data.tool_calls via _extract_tool_plugins — a key stripped
+    # by the slim projection — and blob-searches data for cron/subagent signals.
+    events = _ls_call("query_events", since=cutoff_iso, limit=20000) or []
     # Issue #1451: sibling-dedupe so the per-session token fallback below
     # doesn't double-count assistant + model.completed pairs on v3 installs.
     bucket_max = build_sibling_bucket_max(events)
