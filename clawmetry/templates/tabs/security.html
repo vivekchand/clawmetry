@@ -4,7 +4,7 @@
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🛡️ <span data-i18n="security.title">Security</span></span>
       <div style="display:flex;gap:8px;align-items:center;">
         <span id="security-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
-        <button class="refresh-btn" onclick="loadSecurityPage();loadSecurityPosture();">↻ <span data-i18n="security.scan">Scan</span></button>
+        <button class="refresh-btn" id="security-scan-btn" onclick="loadSecurityPage();loadSecurityPosture();">↻ <span data-i18n="security.scan">Scan</span></button>
       </div>
     </div>
     <!-- Security Posture Score -->
@@ -115,8 +115,17 @@
       </div>
       <div id="retention-status" style="font-size:11px;color:var(--text-muted);width:100%;"></div>
     </div>
+    <!-- Hosted dashboard only. The posture scan reads the machine's agent
+         config, and the threat/policy/credential scans read its local event
+         history - neither of which exists in the cloud container, so those
+         panels rendered dashes, 0/0/0/0 tiles and permanent "Scanning..."
+         spinners here. They are hidden on cloud (_cmSecurityCloudTrim) and
+         this line says where they really run. -->
+    <div id="security-cloud-note" style="display:none;padding:12px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;color:var(--text-secondary);font-size:12px;line-height:1.55;">
+      <span data-i18n="security.cloud_note">Config posture checks and threat scans run on the machine your agent runs on: they read files and activity that stay on it. Open ClawMetry there (localhost:8900 → Security) to run them.</span>
+    </div>
     <!-- Threat Detection -->
-    <div style="
+    <div id="security-threat-heading" style="
       font-size:13px;
       font-weight:700;
       color:var(--text-primary);
@@ -219,7 +228,7 @@
         font-weight:600;
         " data-i18n="security.low">Low</button>
     </div>
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+    <div id="security-threat-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
         <span style="font-size:11px;color:var(--text-muted);" data-i18n="security.threat_timeline">Threat timeline (newest first)</span>
         <span id="sec-total-label" style="font-size:11px;color:var(--text-muted);"></span>
@@ -282,7 +291,7 @@
         <div style="color:var(--text-muted);padding:12px;">Scanning session events for leaked API keys...</div>
       </div>
     </div>
-    <div style="
+    <div id="security-catalog-panel" style="
       margin-top:14px;
       background:var(--bg-secondary);
       border:1px solid var(--border);
