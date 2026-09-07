@@ -449,6 +449,27 @@ def test_bootstrap_records_failure_class_on_pip_failure(tmp_path, monkeypatch):
     assert sup.failure_class == "compiler_demand"
 
 
+def test_bootstrap_reports_a_blocked_index_as_network(tmp_path, monkeypatch):
+    """The class bootstrap() stamps is what the field report carries, so
+    the #5628 fix has to survive the whole wiring — not just the
+    classifier in isolation. A refused index must reach the report as
+    `network`, and the splash must not mention Python."""
+    sup = _sup(tmp_path)
+    py = dapp._bootstrap_python()
+    assert py
+    assert sup._create_venv(py)
+    seen = []
+    monkeypatch.setattr(sup, "on_status", seen.append)
+    monkeypatch.setattr(sup, "_pip_install_clawmetry", lambda: (1, _REFUSED))
+    assert sup.bootstrap() is False
+    assert sup.failure_class == "network"
+    shown = " ".join(seen).lower()
+    assert "install failed" in shown
+    assert "python 3.11+" not in shown, (
+        "the splash told a 3.11 machine to install 3.11+ (#5628)"
+    )
+
+
 def test_probe_caches_interpreter_version(tmp_path):
     cache = tmp_path / "bootstrap-python.json"
     py = dapp._bootstrap_python(cache)
