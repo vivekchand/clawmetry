@@ -691,13 +691,21 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
     # — a dead end this probe must reject up front. venv+ensurepip is
     # all the BASE interpreter needs (the venv seeds its own pip);
     # requiring `import pip` here rejected perfectly usable pythons.
-    # The probe also prints "major.minor" so the winner's version rides
-    # along in the cache — the field-failure report wants to say WHICH
-    # Python a bootstrap died on (the 2026-08-29 cffi failure was
-    # invisible precisely because nothing recorded "3.14").
+    # The probe also prints "major.minor bits" so the winner's version
+    # (and word size) rides along in the cache — the field-failure report
+    # wants to say WHICH Python a bootstrap died on (the 2026-08-29 cffi
+    # failure was invisible precisely because nothing recorded "3.14"),
+    # and a 32-bit interpreter is the one other thing this probe can
+    # cheaply rule in or out: PyPI stopped shipping win32 wheels for
+    # duckdb/cryptography years ago, so a 32-bit Python satisfies this
+    # version floor and still hits "no matching distribution" on every
+    # pip run — a failure the old hint blamed on Python being "too old",
+    # which cannot be true of an interpreter this same probe already
+    # accepted.
     probe = (
         "import sys, venv, ensurepip; "
-        "print('%d.%d' % sys.version_info[:2]); "
+        "print('%d.%d %d' % (sys.version_info[0], sys.version_info[1], "
+        "64 if sys.maxsize > 2**32 else 32)); "
         "sys.exit(0 if sys.version_info >= (3, 9) else 3)"
     )
     for p in paths:
@@ -716,10 +724,11 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
             if r.returncode == 0:
                 if cache_file is not None:
                     try:
-                        cache_file.write_text(json.dumps({
-                            "python": p,
-                            "version": (r.stdout or "").strip()[:8],
-                        }))
+                        parts = (r.stdout or "").strip().split()
+                        payload = {"python": p, "version": parts[0][:8] if parts else ""}
+                        if len(parts) > 1 and parts[1] in ("32", "64"):
+                            payload["bits"] = int(parts[1])
+                        cache_file.write_text(json.dumps(payload))
                     except OSError:
                         pass
                 return p
@@ -738,6 +747,19 @@ def _bootstrap_python_version(cache_file: Optional[Path]) -> str:
         return v if re.fullmatch(r"\d+\.\d+", v) else ""
     except Exception:
         return ""
+
+
+def _bootstrap_python_bits(cache_file: Optional[Path]) -> int:
+    """32 or 64, the word size of the cached bootstrap interpreter, or 0
+    when unknown (no probe has succeeded yet, or the cache predates the
+    bits field)."""
+    if cache_file is None:
+        return 0
+    try:
+        b = json.loads(cache_file.read_text()).get("bits")
+        return b if b in (32, 64) else 0
+    except Exception:
+        return 0
 
 
 def _winget_install_python(log: Callable[[str], None]) -> None:
@@ -789,8 +811,12 @@ _PIP_FAILURE_HINTS = {
         "python.org Python 3.12/3.13 and relaunch."
     ),
     "no_distribution": (
-        "Python too old or PyPI unreachable — "
-        "install python.org Python 3.11+ and relaunch."
+        "PyPI has no matching package build for this Python — "
+        "install 64-bit python.org Python 3.11+ and relaunch."
+    ),
+    "arch_32bit": (
+        "This Python is 32-bit, but ClawMetry's dependencies only ship "
+        "64-bit builds — install 64-bit python.org Python 3.11+ and relaunch."
     ),
     "tls_intercepted": (
         "A firewall or proxy is intercepting TLS to pypi.org — "
@@ -1105,6 +1131,7 @@ class RuntimeSupervisor:
         # valid and a stale value can never outlive the attempt.
         self.failure_class: Optional[str] = None
         self.bootstrap_python_version: str = ""
+        self.bootstrap_python_bits: int = 0
         if self._venv_clawmetry().exists():
             # The exe stub existing is NOT the package existing. A pip
             # upgrade that dies between uninstall and install (live field
@@ -1141,6 +1168,7 @@ class RuntimeSupervisor:
             self.failure_class = "no_python"
             return False
         self.bootstrap_python_version = _bootstrap_python_version(cache)
+        self.bootstrap_python_bits = _bootstrap_python_bits(cache)
         self._log(f"bootstrap python: {py}")
 
         # Health check, not existence check: we only get here with no
@@ -1166,6 +1194,7 @@ class RuntimeSupervisor:
                     self.failure_class = "venv_setup_failed"
                     return False
                 self.bootstrap_python_version = _bootstrap_python_version(cache)
+                self.bootstrap_python_bits = _bootstrap_python_bits(cache)
 
         self.on_status("Installing ClawMetry from PyPI")
         rc, out = self._pip_install_clawmetry()
@@ -1178,6 +1207,16 @@ class RuntimeSupervisor:
                 rc, out = self._pip_install_clawmetry()
         if rc != 0:
             self.failure_class = self._classify_pip_failure(out)
+            # A 32-bit interpreter satisfies the >=3.9 floor `_bootstrap_
+            # python` probes for and still hits "no matching distribution"
+            # on every run, because PyPI stopped shipping win32 wheels for
+            # duckdb/cryptography years ago. The generic hint blamed
+            # Python being "too old", which cannot be true of an
+            # interpreter this same probe already accepted (field failure
+            # 2026-09-07: no_distribution on a probed, floor-satisfying
+            # Windows py3.11).
+            if self.failure_class == "no_distribution" and self.bootstrap_python_bits == 32:
+                self.failure_class = "arch_32bit"
             hint = _PIP_FAILURE_HINTS[self.failure_class]
             self.on_status(f"Install failed: {hint} Log: {self.log_file}")
             return False

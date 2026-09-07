@@ -26,6 +26,7 @@ Properties under test:
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import threading
@@ -378,6 +379,75 @@ def test_version_reader_tolerates_legacy_cache(tmp_path):
     cache.write_text('{"python": "/usr/bin/python3"}')
     assert dapp._bootstrap_python_version(cache) == ""
     assert dapp._bootstrap_python_version(None) == ""
+
+
+# ── 6b. a 32-bit interpreter is not "Python too old" (#5628) ─────────────
+#
+# Field failure 2026-09-07: `no_distribution` on Windows py3.11. But
+# `_bootstrap_python` only ever returns an interpreter that already passed
+# its own `sys.version_info >= (3, 9)` probe, so "Python too old" cannot be
+# the real cause of a no_distribution failure reached through bootstrap() —
+# and telling a user who already has 3.11 to "install Python 3.11+" fixes
+# nothing. The actual, checkable cause PyPI hits this way is a 32-bit
+# interpreter: duckdb/cryptography stopped shipping win32 wheels years ago,
+# so a 32-bit Python satisfies the floor and still gets "no matching
+# distribution" on every relaunch.
+
+
+def test_bootstrap_python_bits_reads_the_probed_word_size(tmp_path):
+    cache = tmp_path / "bootstrap-python.json"
+    py = dapp._bootstrap_python(cache)
+    assert py
+    bits = dapp._bootstrap_python_bits(cache)
+    assert bits in (32, 64), f"probe must record a word size, got {bits!r}"
+
+
+def test_bootstrap_python_bits_tolerates_legacy_cache(tmp_path):
+    cache = tmp_path / "bootstrap-python.json"
+    cache.write_text('{"python": "/usr/bin/python3", "version": "3.11"}')
+    assert dapp._bootstrap_python_bits(cache) == 0
+    assert dapp._bootstrap_python_bits(None) == 0
+
+
+def test_no_distribution_on_a_32bit_interpreter_blames_the_architecture(
+        tmp_path, monkeypatch):
+    """Reproduction of #5628: a floor-satisfying but 32-bit interpreter
+    hits no_distribution, and the surfaced hint must say so instead of
+    claiming the already-adequate Python is too old."""
+    sup = _sup(tmp_path)
+    py = dapp._bootstrap_python()
+    assert py
+    assert sup._create_venv(py)
+    # Simulate the probe having found a 32-bit Python 3.11: this sandbox's
+    # own interpreter is 64-bit, so the fact is forged into the same cache
+    # file `bootstrap()` reads, rather than requiring an actual 32-bit
+    # install. `_bootstrap_python` short-circuits on a cached path that
+    # still exists on disk, so the forged version/bits survive untouched.
+    cache = sup.runtime / "bootstrap-python.json"
+    cache.write_text(json.dumps({"python": py, "version": "3.11", "bits": 32}))
+    monkeypatch.setattr(
+        sup, "_pip_install_clawmetry",
+        lambda: (1, "ERROR: No matching distribution found for duckdb"))
+    assert sup.bootstrap() is False
+    assert sup.failure_class == "arch_32bit"
+    status = sup.statuses[-1]
+    assert "32-bit" in status
+    assert "too old" not in status.lower()
+
+
+def test_no_distribution_on_a_64bit_interpreter_keeps_the_generic_hint(
+        tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    py = dapp._bootstrap_python()
+    assert py
+    assert sup._create_venv(py)
+    cache = sup.runtime / "bootstrap-python.json"
+    cache.write_text(json.dumps({"python": py, "version": "3.11", "bits": 64}))
+    monkeypatch.setattr(
+        sup, "_pip_install_clawmetry",
+        lambda: (1, "ERROR: No matching distribution found for clawmetry"))
+    assert sup.bootstrap() is False
+    assert sup.failure_class == "no_distribution"
 
 
 # ── 7. an exe stub is not an install (package-corpse recovery) ───────────
