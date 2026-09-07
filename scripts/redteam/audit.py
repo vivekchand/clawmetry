@@ -94,7 +94,11 @@ def _materialise(case: dict, root: str) -> str:
     for rel in ((case.get("workspace") or {}).get("executable") or []):
         dest = os.path.join(ws, rel)
         if os.path.exists(dest):
-            os.chmod(dest, 0o755)
+            # Owner-only (0o700), never 0o755. The bit that matters to a case is
+            # "is this executable at all"; group and other need nothing here, and
+            # a world-readable attack fixture in a shared temp dir is a small
+            # hole of exactly the kind this corpus exists to complain about.
+            os.chmod(dest, 0o700)
     os.makedirs(ws, exist_ok=True)
     return ws
 
