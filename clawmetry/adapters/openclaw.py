@@ -863,13 +863,14 @@ def _backup_outcome_events(events: list) -> dict:
     A corrupt-archive rejection is a data-loss-adjacent event: the backup did
     not complete, but silently.  This scanner makes it visible in ClawMetry.
 
-    Scans the already-fetched events list (no extra I/O).  Matches entries whose
-    ``msg`` contains any of: ``"backup"``, ``"corrupt"``, ``"archive"``,
-    ``"integrity"``.  Returns a dict with ``backupOutcomeDetected=True``,
-    ``backupOutcomeMsg``, and optionally ``backupOutcomeTs`` and
-    ``backupCorruptArchiveRejected=True`` (when a corrupt-archive keyword is
-    present).  Returns ``{}`` when no backup event is found.  Never raises
-    (closes #5618).
+    Scans the already-fetched events list (no extra I/O).  Matches entries
+    whose ``msg`` contains ``"backup"`` (the match trigger).  Within a matching
+    entry, the additional keywords ``"corrupt"``, ``"integrity"``,
+    ``"reject"``, and ``"invalid"`` determine whether to set
+    ``backupCorruptArchiveRejected=True``.  Returns a dict with
+    ``backupOutcomeDetected=True``, ``backupOutcomeMsg``, and optionally
+    ``backupOutcomeTs`` and ``backupCorruptArchiveRejected=True``.  Returns
+    ``{}`` when no backup event is found.  Never raises (closes #5618).
     """
     try:
         if not events:
