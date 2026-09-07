@@ -26,6 +26,7 @@ Properties under test:
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import sysconfig
@@ -468,6 +469,139 @@ def test_bootstrap_reports_a_blocked_index_as_network(tmp_path, monkeypatch):
     assert "python 3.11+" not in shown, (
         "the splash told a 3.11 machine to install 3.11+ (#5628)"
     )
+
+
+# ── 6b. provide an interpreter, do not ask for one ───────────────────────
+#
+# Python is a dependency the shell installs, not a prerequisite it asks
+# for — that is already how a machine with NO python is handled, and a
+# machine whose python has no usable wheels is the same problem one step
+# later. #5628 is what asking looks like from the user's side: a Python
+# 3.11 machine told to install Python 3.11+.
+#
+# The pinned interpreter is deliberately NOT the newest one. Wheel
+# coverage lags a Python release, so "install the latest Python" is the
+# failure mode, not the fix (2026-08-29: python.org 3.14 had no cffi
+# cp314 wheel, pip fell back to an sdist and demanded MSVC).
+
+_NO_WHEEL_FOR_INTERPRETER = (
+    "ERROR: Could not find a version that satisfies the requirement "
+    "duckdb!=1.4.5,>=0.10 (from clawmetry) (from versions: 0.9.0, 0.10.0)\n"
+    "ERROR: No matching distribution found for duckdb!=1.4.5,>=0.10"
+)
+
+
+def _windows(monkeypatch):
+    monkeypatch.setattr(dapp.platform, "system", lambda: "Windows")
+
+
+def test_pinned_interpreter_is_not_the_latest_python():
+    """A regression guard on the pin itself: the shell must name one
+    known-good minor, and the winget id and install dir must agree with
+    it or `_known_good_python()` cannot find what winget put down."""
+    minor = dapp.KNOWN_GOOD_PYTHON_MINOR
+    assert re.fullmatch(r"3\.\d+", minor)
+    assert dapp.KNOWN_GOOD_PYTHON_WINGET_ID == f"Python.Python.{minor}"
+    assert dapp.KNOWN_GOOD_PYTHON_DIRNAME == "Python" + minor.replace(".", "")
+    # Nothing user-facing may send someone to fetch the newest Python.
+    for code, hint in dapp._PIP_FAILURE_HINTS.items():
+        low = hint.lower()
+        assert "latest python" not in low, code
+        if "python.org" in low:
+            assert minor in hint, (
+                f"{code} points at python.org without naming the pinned "
+                f"{minor}, so a user may install a Python with no wheels"
+            )
+
+
+def test_no_wheel_failure_installs_a_supported_python_and_retries(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    _windows(monkeypatch)
+    sup.bootstrap_python_version = "3.14"
+    installed = []
+    monkeypatch.setattr(dapp, "_winget_install_python",
+                        lambda log: installed.append(True))
+    # winget "puts down" the pinned interpreter
+    good = "C:\\Users\\x\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+    monkeypatch.setattr(dapp, "_known_good_python",
+                        lambda: good if installed else None)
+    rebuilt = []
+    monkeypatch.setattr(sup, "_create_venv",
+                        lambda py: rebuilt.append(py) or True)
+    monkeypatch.setattr(sup, "_pip_install_clawmetry", lambda: (0, "ok"))
+
+    rc, out = sup._retry_on_known_good_python(1, _NO_WHEEL_FOR_INTERPRETER)
+    assert rc == 0, "a supported interpreter was available; pip must be retried"
+    assert installed, "the shell must install Python itself, not ask the user"
+    assert rebuilt == [good], (
+        "the retry must use the PINNED interpreter by path — re-probing "
+        "would hit the `py` launcher, which resolves to the newest "
+        "interpreter: the one that has no wheels"
+    )
+    assert sup.bootstrap_python_version == dapp.KNOWN_GOOD_PYTHON_MINOR
+
+
+@pytest.mark.parametrize("output", [
+    _REFUSED,                                    # network
+    _SELF_SIGNED,                                # tls_intercepted
+    "PermissionError: [WinError 5] Access is denied",
+])
+def test_no_python_is_installed_when_python_is_not_the_problem(
+        output, tmp_path, monkeypatch):
+    """A blocked proxy, an intercepted handshake and an AV-blocked folder
+    are not fixed by a new interpreter. Downloading ~30 MB of Python to
+    fail identically is the kind of thing that reads as broken software.
+    This is also why the #5628 classifier fix has to land first: before
+    it, a refused index WAS `no_distribution` and would have triggered
+    this install."""
+    sup = _sup(tmp_path)
+    _windows(monkeypatch)
+    monkeypatch.setattr(dapp, "_winget_install_python",
+                        lambda log: pytest.fail("installed Python for "
+                                                "a non-interpreter failure"))
+    monkeypatch.setattr(dapp, "_known_good_python",
+                        lambda: pytest.fail("probed for an interpreter"))
+    assert sup._retry_on_known_good_python(1, output) == (1, output)
+
+
+def test_no_retry_when_already_on_the_pinned_interpreter(tmp_path, monkeypatch):
+    """Nothing left to try, so do not download Python to reinstall the
+    interpreter we are already running on."""
+    sup = _sup(tmp_path)
+    _windows(monkeypatch)
+    sup.bootstrap_python_version = dapp.KNOWN_GOOD_PYTHON_MINOR
+    monkeypatch.setattr(dapp, "_winget_install_python",
+                        lambda log: pytest.fail("reinstalled the same Python"))
+    assert sup._retry_on_known_good_python(
+        1, _NO_WHEEL_FOR_INTERPRETER) == (1, _NO_WHEEL_FOR_INTERPRETER)
+
+
+def test_original_failure_survives_when_no_interpreter_can_be_provided(
+        tmp_path, monkeypatch):
+    """winget is missing or blocked (a locked-down machine): the user
+    must still get the accurate hint for the ORIGINAL failure, not a
+    silent success or a different error."""
+    sup = _sup(tmp_path)
+    _windows(monkeypatch)
+    monkeypatch.setattr(dapp, "_winget_install_python", lambda log: None)
+    monkeypatch.setattr(dapp, "_known_good_python", lambda: None)
+    monkeypatch.setattr(sup, "_pip_install_clawmetry",
+                        lambda: pytest.fail("retried with no interpreter"))
+    rc, out = sup._retry_on_known_good_python(1, _NO_WHEEL_FOR_INTERPRETER)
+    assert (rc, out) == (1, _NO_WHEEL_FOR_INTERPRETER)
+    assert sup._classify_pip_failure(out) == "no_distribution"
+
+
+def test_interpreter_retry_is_windows_only(tmp_path, monkeypatch):
+    """macOS ships /usr/bin/python3 and Linux has a package manager; the
+    shell does not install interpreters there, and `_known_good_python`
+    has no meaningful path to look in."""
+    sup = _sup(tmp_path)
+    monkeypatch.setattr(dapp.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(dapp, "_winget_install_python",
+                        lambda log: pytest.fail("ran winget off Windows"))
+    assert sup._retry_on_known_good_python(
+        1, _NO_WHEEL_FOR_INTERPRETER) == (1, _NO_WHEEL_FOR_INTERPRETER)
 
 
 def test_probe_caches_interpreter_version(tmp_path):
