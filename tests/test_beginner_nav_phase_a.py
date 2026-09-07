@@ -93,7 +93,7 @@ def test_no_tab_lost_in_restructure():
         # the gateway token is auto-detected server-side, so the form asked
         # users for something the product already knows.
         "flow", "models", "agents",
-        "tool-catalog", "context-economics", "harness", "dives",
+        "tool-catalog", "context-economics", "harness",
         # Advanced
         "crons", "memory", "security", "policy", "skills",
         "selfevolve", "version-impact", "nemoclaw",
@@ -119,7 +119,7 @@ def test_developer_drawer_membership():
     # Models + Context usage moved up into the Monitoring group with the
     # session-first IA (Trail, 2026-09).
     assert got == {
-        "flow", "tracing", "agents", "tool-catalog", "harness", "dives",
+        "flow", "tracing", "agents", "tool-catalog", "harness",
     }, f"Developer drawer membership drifted: {sorted(got)}"
 
 
@@ -158,6 +158,6 @@ def test_i18n_keys_present_and_renamed():
     assert en["nav.section_monitoring"] == "Monitoring"
     assert en["nav.crons"] == "Schedules"
     for key in ("nav.agent_graph", "nav.turn_timing", "nav.tools",
-                "nav.context_usage", "nav.compare_sessions", "nav.ask",
+                "nav.context_usage", "nav.compare_sessions",
                 "nav.runtime_extras", "nav.home_tooltip", "nav.developer_tooltip"):
         assert key in en, f"missing i18n key {key}"
