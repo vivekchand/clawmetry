@@ -903,6 +903,62 @@ def _backup_outcome_events(events: list) -> dict:
         return {}
 
 
+def _reply_recovery_events(events: list) -> dict:
+    """Return reply-recovery metadata when gateway logs show restart-triggered
+    reply recovery.
+
+    OpenClaw 2026.9.2+ ('Replies survive restarts') recovers active, queued,
+    and delegated replies after Gateway restarts, guards against one completed
+    reply discarding another's recovery marker, and preserves continuation
+    instructions through compaction and retry attempts.  Per-turn
+    ``recoveryMarker`` and ``retryAttempt`` fields are read from session
+    transcripts separately; this function surfaces the gateway-level restart
+    recovery signal for the dashboard meta view.
+
+    Scans the already-fetched gateway log events (no extra I/O). Returns a
+    dict with:
+    - ``replyRecoveryDetected`` (bool True) — at least one recovery event found
+    - ``replyRecoveryCount`` (int) — number of matching events in the log window
+    - ``lastReplyRecoveryTs`` (str, optional) — timestamp of the most recent event
+
+    Returns ``{}`` when no recovery events are found. Never raises (closes #5620).
+    """
+    _RECOVERY_KEYWORDS = (
+        "reply recovery",
+        "recovery marker",
+        "reply restored",
+        "reply resumed",
+        "recover reply",
+        "restart recover",
+        "reply requeued",
+        "reply recovered",
+    )
+    try:
+        if not events:
+            return {}
+        recovery_events = []
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            msg = str(evt.get("msg", "")).lower()
+            if not msg:
+                continue
+            if any(kw in msg for kw in _RECOVERY_KEYWORDS):
+                recovery_events.append(evt)
+        if not recovery_events:
+            return {}
+        result: dict = {
+            "replyRecoveryDetected": True,
+            "replyRecoveryCount": len(recovery_events),
+        }
+        last_ts = recovery_events[-1].get("ts")
+        if last_ts is not None:
+            result["lastReplyRecoveryTs"] = last_ts
+        return result
+    except Exception:
+        return {}
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -2717,6 +2773,12 @@ class OpenClawAdapter(AgentAdapter):
             _backup = _backup_outcome_events(_gw_events)
             if _backup:
                 meta.update(_backup)
+            # Reply-recovery event capture (#5620): OpenClaw 2026.9.2+ recovers
+            # active/queued/delegated replies after Gateway restarts. Scan the
+            # already-fetched events so there is no extra I/O.
+            _reply_rec = _reply_recovery_events(_gw_events)
+            if _reply_rec:
+                meta.update(_reply_rec)
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by
