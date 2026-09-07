@@ -162,6 +162,9 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
+      - name: Published provider pricing and cache accounting
+        run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
+
       # Named explicitly because this repo's CI runs FILE LISTS, not
       # `pytest tests/`: a guard added without a line here runs in no job at
       # all. Covers the half `gen_module_map.py --check` cannot: every
