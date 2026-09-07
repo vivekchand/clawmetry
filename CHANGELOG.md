@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Release: the home screen stops lying about whose task it is (carries #5645) (2026-09-08)
+- **Why:** #5645 is on main but not in a published wheel, and the cloud serves the pinned wheel's frontend, so publishing is what actually takes the four defects off app.clawmetry.com. Until the cloud takes this wheel, a trial user on Codex still opens Home and sees an OpenClaw pill on their own task, every other runtime's work counted in the Active Tasks header, a FAILED sub-agent wearing a green tick, and a task from 2026-08-20 labelled "Finished 1 min ago".
+- **What:** this release carries #5645. Frontend only (`clawmetry/static/js/app.js` + `templates/tabs/overview.html`), so the cloud pin follows and no daemon or snapshot change is required — the runtime scoping is client-side precisely because the cloud `cm-cloud-subagents` interceptor honours no `?runtime=` param.
+- **Verified:** 37 CI checks green on #5645 with `mergeStateStatus: CLEAN`, including E2E Gate, Live OpenClaw E2E, the browser subset and visual-diff. Post-merge, `main` carries `_ovBucketOf`/`_ovRuntimePill` and no live `detectProjectBadge` call site. Live verification on the hosted dashboard under `?runtime=codex` follows the cloud pin — this entry is not the proof.
+
 ### Release: every runtime reaches the hosted Sessions tab (carries #5643) (2026-09-08)
 - **Why:** #5643 is on main but not in a published wheel, and the daemon that builds the snapshot is the installed package, so publishing is what actually puts a quiet runtime's sessions on app.clawmetry.com. Until a node takes this wheel, its hosted Sessions tab still reads "No Codex sessions have a transcript yet" underneath a header counting fifteen of them, for every runtime that is not the busiest one on that machine.
 - **What:** this release carries #5643. The change is in the daemon (`clawmetry/sync.py`, `clawmetry/local_store.py`, `routes/local_query.py`) and the frontend (`static/js/app.js`, `static/locales/en.json`), so the cloud pin follows this version rather than serving the previous one.
