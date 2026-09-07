@@ -48,6 +48,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, make_response, render_template_string, request
 from clawmetry.config import is_local_store_read_enabled
+from clawmetry import nonsecret_hash as _nsh
 from clawmetry.otlp_json import OtlpProtobufUnavailable
 
 bp_version = Blueprint('version', __name__)
@@ -211,7 +212,7 @@ def _sessions_to_otlp_fallback(sessions: list, version: str) -> dict:
     spans = []
     for s in sessions:
         sid = s.get("session_id") or ""
-        trace_id = _pad_tid(hashlib.md5(sid.encode(), usedforsecurity=False).hexdigest())
+        trace_id = _pad_tid(_nsh.md5(sid.encode()).hexdigest())
         start_ns = _ts_to_ns(s.get("started_at") or s.get("last_active_at"))
         end_ns = _ts_to_ns(s.get("last_active_at") or s.get("ended_at"))
         if not end_ns or end_ns <= start_ns:
