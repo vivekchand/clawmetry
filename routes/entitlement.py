@@ -380,6 +380,10 @@ import os
 import time
 
 from flask import Blueprint, jsonify, request
+from routes.paywall_lifecycle import (
+    PAYWALL_LIFECYCLE_EVENTS as _PAYWALL_LIFECYCLE_EVENTS,  # noqa: F401
+    ping_paywall_lifecycle as _ping_paywall_lifecycle,
+)
 
 logger = logging.getLogger("clawmetry.routes.entitlement")
 
@@ -23602,17 +23606,6 @@ def api_paywall_event():
     return "", 204
 
 
-# The forwarder that mirrors the overlay's two beacons into the anonymous
-# lifecycle ping lives in its own module (routes/paywall_lifecycle.py).
-# It is 60 lines of concern that three separate readers need to find, and
-# this file is ~47,700 lines: written inline here, every tool that samples
-# the head of a file reported the function as absent and this whole module
-# as missing from the repository. Re-exported under the original private
-# names so existing callers and tests keep working.
-from routes.paywall_lifecycle import (  # noqa: E402
-    PAYWALL_LIFECYCLE_EVENTS as _PAYWALL_LIFECYCLE_EVENTS,
-    ping_paywall_lifecycle as _ping_paywall_lifecycle,
-)
 
 
 @bp_entitlement.route("/api/paywall/events/summary")
