@@ -215,3 +215,97 @@ def test_gitignored_settings_outranks_committed(tmp_path):
     both = repo_scan.scan_agent_hooks(str(tmp_path))
     sev = {f["evidence"]["file"]: f["severity"] for f in both}
     assert sev[".claude/settings.local.json"] == "critical"
+
+# ── linked worktrees: .git is a FILE, the config is elsewhere ────────────────
+def _git(*args, cwd):
+    import subprocess
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+
+def _real_worktree(tmp_path):
+    """A real `git worktree add`, not a hand-built fixture.
+
+    The layout git actually writes is the thing under test: an absolute
+    ``gitdir:`` in the ``.git`` file, a ``commondir`` of ``../..``, and the
+    config in the main checkout. A fixture written from memory would pass
+    against a resolver that only handles the layout the fixture author
+    imagined.
+    """
+    import shutil
+    if not shutil.which("git"):
+        pytest.skip("git not available")
+    main = tmp_path / "main"
+    main.mkdir()
+    _git("init", "-q", ".", cwd=main)
+    (main / "README.md").write_text("x\n", encoding="utf-8")
+    _git("add", "-A", cwd=main)
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i", cwd=main)
+    wt = tmp_path / "wt"
+    r = _git("worktree", "add", "-q", str(wt), "-b", "feature", cwd=main)
+    if not (wt / ".git").exists():
+        pytest.skip(f"git worktree unavailable: {r.stderr.strip()[:120]}")
+    return main, wt
+
+
+def test_a_linked_worktree_resolves_to_the_common_config(tmp_path):
+    """The gap CVE-2026-55607 is the vendor-confirmed version of: a scanner
+    that assumes ``.git`` is a directory reports a poisoned worktree CLEAN,
+    which is worse than reporting nothing."""
+    main, wt = _real_worktree(tmp_path)
+    assert (main / ".git" / "config").is_file()
+    with open(main / ".git" / "config", "a", encoding="utf-8") as f:
+        f.write('\n[core]\n\tfsmonitor = "/tmp/payload.sh"\n')
+
+    assert (wt / ".git").is_file(), "a linked worktree's .git must be a file"
+    findings = repo_scan.scan_workspace(str(wt))
+    assert [f["kind"] for f in findings] == ["repo_config_exec"]
+    assert findings[0]["severity"] == "critical"
+    # The label must point at the config that was actually read, or a reader
+    # goes looking for a .git/config that does not exist.
+    assert findings[0]["evidence"]["config"].endswith("main/.git/config")
+
+
+def test_a_clean_worktree_stays_quiet(tmp_path):
+    _main, wt = _real_worktree(tmp_path)
+    assert repo_scan.scan_workspace(str(wt)) == []
+
+
+def test_git_dirs_resolves_the_pair(tmp_path):
+    main, wt = _real_worktree(tmp_path)
+    git_dir, common = repo_scan._git_dirs(str(wt))
+    # git names the worktree admin dir after the worktree PATH ("wt"), not the
+    # branch ("feature") -- the kind of detail a hand-built fixture gets wrong.
+    assert git_dir.endswith(os.path.join(".git", "worktrees", "wt"))
+    assert os.path.realpath(common) == os.path.realpath(str(main / ".git"))
+    # An ordinary checkout answers with itself for both.
+    d, c = repo_scan._git_dirs(str(main))
+    assert d == c == os.path.join(str(main), ".git")
+
+
+def test_a_worktree_config_override_is_scanned(tmp_path):
+    """``config.worktree`` is honoured by git when extensions.worktreeConfig is
+    set, and is writable by whoever supplied the worktree."""
+    _main, wt = _real_worktree(tmp_path)
+    git_dir, _common = repo_scan._git_dirs(str(wt))
+    with open(os.path.join(git_dir, "config.worktree"), "w", encoding="utf-8") as f:
+        f.write('[core]\n\tfsmonitor = "/tmp/payload.sh"\n')
+    kinds = [f["kind"] for f in repo_scan.scan_workspace(str(wt))]
+    assert kinds == ["repo_config_exec"]
+
+
+@pytest.mark.parametrize("content", [
+    "gitdir: /nonexistent/path/nowhere",
+    "gitdir:",
+    "not a gitdir line at all",
+    "",
+    "\x00\xff binary junk",
+])
+def test_a_broken_dot_git_file_is_quiet_not_fatal(tmp_path, content):
+    """A scan must never raise, and must never guess. ``scan_workspace``
+    swallows exceptions per check, so a crash here would show up as a silent
+    all-clear rather than an error."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / ".git").write_text(content, encoding="utf-8")
+    assert repo_scan._git_dirs(str(ws)) == ("", "")
+    assert repo_scan.scan_git_config(str(ws)) == []

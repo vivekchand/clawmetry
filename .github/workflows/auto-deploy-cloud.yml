@@ -64,6 +64,14 @@ jobs:
 
       - name: Get OSS version
         id: oss_version
+        # `inputs.version` is bound here rather than expanded inside the script.
+        # A `${{ }}` expansion is pasted into the shell before it runs, so the
+        # value becomes part of the program text; an env var is data the shell
+        # only ever reads. This is the taint root for the whole job -- every
+        # later step reads `steps.oss_version.outputs.version`, which is this
+        # value -- so binding it here is what makes the bindings below hold.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         # Source of truth is the LATEST PUBLISHED PyPI version, not the
         # checkout's __version__: release-on-merge publishes the bump to
         # PyPI without committing it back to dashboard.py, so the file is
@@ -83,7 +91,7 @@ jobs:
           # the cloud stayed a release behind, which is the exact symptom the
           # dispatch was added to cure. The publisher knows its own version;
           # asking a lagging index to re-derive it is what created the race.
-          VERSION="${{ inputs.version }}"
+          VERSION="$INPUT_VERSION"
           if [ -n "$VERSION" ]; then
             echo "version=$VERSION" >> $GITHUB_OUTPUT
             echo "Pinning the version passed by the publisher: $VERSION"
@@ -105,8 +113,10 @@ jobs:
       # for it to be installable before opening/merging the pin PR (avoids a
       # spurious cloud-CI failure that would (correctly) block the auto-merge).
       - name: Wait for version on PyPI
+        env:
+          OSS_VERSION: ${{ steps.oss_version.outputs.version }}
         run: |
-          V="${{ steps.oss_version.outputs.version }}"
+          V="$OSS_VERSION"
           # Poll what PIP reads, not the JSON API. pypi.org/pypi/<v>/json goes
           # live minutes BEFORE the simple index that pip resolves against, so
           # this wait used to pass while `pip install clawmetry==$V` still
@@ -152,12 +162,20 @@ jobs:
       - name: Skip unless strictly newer than cloud's current pin
         env:
           GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
+          OSS_VERSION: ${{ steps.oss_version.outputs.version }}
         run: |
-          V="${{ steps.oss_version.outputs.version }}"
+          V="$OSS_VERSION"
           CURRENT=$(grep -oE 'clawmetry==[0-9.]+' clawmetry-cloud/Dockerfile | head -1 | cut -d= -f3)
           echo "target=$V cloud-main-pin=$CURRENT"
-          newer=$(python3 -c "
-          v=tuple(map(int,'$V'.split('.'))); c=tuple(map(int,'$CURRENT'.split('.')))
+          # Both versions reach Python through the environment, not by being
+          # pasted into the source text. `'$V'.split(...)` made the value part
+          # of the program: a version string carrying a quote ended the literal
+          # and the rest of it ran as Python. os.environ is a lookup, so the
+          # same string is only ever data. Comparison semantics are unchanged.
+          newer=$(V="$V" CURRENT="$CURRENT" python3 -c "
+          import os
+          v=tuple(map(int,os.environ['V'].split('.')))
+          c=tuple(map(int,os.environ['CURRENT'].split('.')))
           print('yes' if v>c else 'no')")
           if [ "$newer" != "yes" ]; then
             echo "Target $V is not newer than the current pin $CURRENT — refusing to pin downwards."
@@ -172,11 +190,13 @@ jobs:
 
       - name: Pin clawmetry version in cloud Dockerfile
         if: env.SKIP != '1'
+        env:
+          OSS_VERSION: ${{ steps.oss_version.outputs.version }}
         run: |
           cd clawmetry-cloud
-          sed -i "s/clawmetry==[0-9.]*/clawmetry==${{ steps.oss_version.outputs.version }}/" Dockerfile
-          grep -q "clawmetry==${{ steps.oss_version.outputs.version }}" Dockerfile || \
-            sed -i "s/clawmetry$/clawmetry==${{ steps.oss_version.outputs.version }}/" Dockerfile
+          sed -i "s/clawmetry==[0-9.]*/clawmetry==$OSS_VERSION/" Dockerfile
+          grep -q "clawmetry==$OSS_VERSION" Dockerfile || \
+            sed -i "s/clawmetry$/clawmetry==$OSS_VERSION/" Dockerfile
           echo "Dockerfile:"; grep clawmetry Dockerfile
 
       - name: Commit and open PR
@@ -185,11 +205,11 @@ jobs:
           cd clawmetry-cloud
           git config user.email "diya-bot@clawmetry.com"
           git config user.name "Diya (auto-deploy)"
-          BRANCH="auto/pin-clawmetry-${{ steps.oss_version.outputs.version }}"
+          BRANCH="auto/pin-clawmetry-$OSS_VERSION"
           git checkout -b "$BRANCH"
           git add Dockerfile
           git diff --staged --quiet && echo "No change needed" && exit 0
-          git commit -m "chore: auto-pin clawmetry==${{ steps.oss_version.outputs.version }} from OSS"
+          git commit -m "chore: auto-pin clawmetry==$OSS_VERSION from OSS"
           # Force-push: this automation-owned branch may already exist from a
           # prior run for the same version (re-fired release, retried merge).
           # A plain push is rejected ("fetch first") and the whole job goes red,
@@ -203,14 +223,15 @@ jobs:
           else
             gh pr create \
               --repo vivekchand/clawmetry-cloud \
-              --title "chore: auto-pin clawmetry==${{ steps.oss_version.outputs.version }}" \
-              --body "Automated version pin from OSS release ${{ steps.oss_version.outputs.version }}. Merge to deploy." \
+              --title "chore: auto-pin clawmetry==$OSS_VERSION" \
+              --body "Automated version pin from OSS release $OSS_VERSION. Merge to deploy." \
               --base main \
               --head "$BRANCH"
-            echo "✅ PR opened to pin clawmetry==${{ steps.oss_version.outputs.version }}"
+            echo "✅ PR opened to pin clawmetry==$OSS_VERSION"
           fi
         env:
           GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
+          OSS_VERSION: ${{ steps.oss_version.outputs.version }}
 
       # Auto-merge the pin PR once the cloud CI is green so each OSS release
       # deploys to the cloud hands-off. We poll the PR's checks and merge with
