@@ -355,7 +355,7 @@ def _live_only_rows(store_rows: list) -> list:
 _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 
 
-# The two kinds ``clawmetry.repo_scan`` emits. Imported from where they are
+# The kinds ``clawmetry.repo_scan`` emits. Imported from where they are
 # declared so this route cannot drift from the daemon; the literal fallback
 # exists because the Guard tab must render on a cloud instance where the
 # scanner module may be absent, and a missing import must not blank the tab.

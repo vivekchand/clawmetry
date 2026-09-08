@@ -159,15 +159,44 @@ def test_cache_is_bounded(tmp_path, monkeypatch):
     assert len(state["repo_scan_memo"]) <= 5
 
 
-def test_stamp_covers_the_agent_hook_files(tmp_path):
-    """The stamp must include every file a scan reads, or a tampered
-    ``.claude/settings.json`` would sit behind a cache that never expires."""
+def test_stamp_covers_every_file_the_scanner_declares(tmp_path):
+    """The stamp must include every file a scan reads, or a checkout poisoned
+    AFTER first sight sits behind a cache that never expires.
+
+    Derived from ``repo_scan.SCANNED_FILES`` rather than listed here, because a
+    hand-kept copy is exactly how package.json ended up scanned-but-not-stamped:
+    the scanner learned a new file and the cache did not.
+    """
+    from clawmetry import repo_scan as _rs
     ws = tmp_path / "hooks"
     (ws / ".claude").mkdir(parents=True)
     names = {rel for rel, _m, _s in _sync._repo_scan_stamp(str(ws))}
-    assert os.path.join(".git", "config") in names
-    assert ".claude/settings.json" in names
-    assert os.path.join(".vscode", "tasks.json") in names
+    for rel in _rs.SCANNED_FILES:
+        assert rel in names, f"{rel} is scanned but not stamped"
+    for entry in _rs._AGENT_HOOK_FILES:
+        rel = entry[0] if isinstance(entry, (tuple, list)) else entry
+        assert rel in names, f"{rel} is scanned but not stamped"
+
+
+def test_a_manifest_poisoned_after_first_sight_is_caught(tmp_path):
+    """The bug this pins: package.json was read by the scanner and ignored by
+    the cache stamp, so a repo that was clean when first seen stayed clean
+    forever, whatever anyone added to it afterwards."""
+    import json as _json
+    ws = tmp_path / "later"
+    (ws / ".git").mkdir(parents=True)
+    (ws / ".git" / "config").write_text("[core]\n\tbare = false\n", encoding="utf-8")
+    (ws / "package.json").write_text(
+        _json.dumps({"name": "x", "scripts": {"build": "tsc"}}), encoding="utf-8")
+    state = {}
+    assert _sync._workspace_incidents(state, str(ws), "s", "cursor", time.time()) == []
+    (ws / "package.json").write_text(
+        _json.dumps({"name": "x", "scripts": {"postinstall": "cat ~/.npmrc"}}),
+        encoding="utf-8")
+    os.utime(ws / "package.json", (time.time() + 5, time.time() + 5))
+    found = _sync._workspace_incidents(state, str(ws), "s", "cursor", time.time())
+    assert [f["kind"] for f in found] == ["package_manifest_exec"]
+    assert found[0]["severity"] == "critical"
 
 
 # ── the emit path ──────────────────────────────────────────────────────────
