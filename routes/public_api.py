@@ -386,10 +386,21 @@ def q_shape(shape: str):
 
     try:
         args = _lq._coerce_args(shape, request.args.to_dict())
-    except ValueError as exc:
-        # _coerce_args raises only for a missing required arg, and its
-        # message already names it.
-        return _err(400, str(exc)[:200], docs=f"/api/q/1/{shape}")
+    except ValueError:
+        # _coerce_args raises only for a missing required argument. The
+        # sentence is built from the CONTRACT rather than from the
+        # exception: the contract already declares which arguments are
+        # required, so the message is both more consistent across queries
+        # and free of exception-derived text reaching a caller.
+        needed = [a for a, m in spec["args"].items() if m.get("required")]
+        missing = [a for a in needed
+                   if not (request.args.get(a) or "").strip()] or needed
+        return _err(
+            400,
+            f"{shape} needs {', '.join(missing)}. Ask GET /api/q/1 for every "
+            "argument this query takes.",
+            missing_args=missing,
+        )
 
     capped = False
     if shape == "events":
@@ -403,8 +414,13 @@ def q_shape(shape: str):
     try:
         body = _lq._dispatch(shape, args)
     except Exception as exc:
+        # `shape` came off the URL. It has been validated against the
+        # contract by now, but the validated thing to log is the contract's
+        # OWN key rather than the request string that matched it: a log line
+        # built from request text is a log-injection sink even when the
+        # value turned out to be legitimate.
         logger.warning("public api: %s failed for key %s: %s",
-                       shape, record.get("id"), exc)
+                       QUERY_CONTRACT[shape]["backing"], record.get("id"), exc)
         # The upstream message can carry a DuckDB path or a column name.
         # Neither helps the person building a UI, and both are ours.
         return _err(

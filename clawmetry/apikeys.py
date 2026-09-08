@@ -82,12 +82,65 @@ MAX_KEYS = 50
 ORIGIN_NONE = "none"
 
 
+#: Why a create call was refused. Every message is a literal authored here,
+#: and a caller that has to put one in an HTTP response looks it up by code
+#: rather than reading it off the exception: text taken from an exception is
+#: exception-derived to a static analyser no matter who wrote it, and a
+#: const-indexed lookup is the thing that is provably not.
+REFUSAL_REASONS: dict = {
+    "unknown_scope": (
+        "That is not a scope. Choose from: " + ", ".join(SCOPES)
+    ),
+    "no_scope": (
+        "A key needs at least one scope. Choose from: " + ", ".join(SCOPES)
+    ),
+    "wildcard_origin": (
+        "A wildcard origin is not allowed. Any page in any tab could then "
+        "read this machine's telemetry. Name the site you are building, for "
+        "example https://my-app.vercel.app."
+    ),
+    "bad_origin": (
+        "That is not an origin. An origin is just a scheme, host and port, "
+        "with no path or query: https://my-app.vercel.app, or "
+        "http://localhost:3000."
+    ),
+    "no_name": (
+        "Give the key a name so you can tell it apart later, for example: "
+        "latency-workbench."
+    ),
+    "name_too_long": "Key names are limited to 64 characters.",
+    "at_capacity": (
+        f"This machine already has {MAX_KEYS} active keys, which is the "
+        "limit. Revoke one you no longer use: clawmetry key revoke <id>"
+    ),
+}
+
+
+def message_for(reason: str) -> str:
+    """The refusal sentence for ``reason``.
+
+    Looked up from the literal table above, never read off an exception, so
+    a caller can put the result in an HTTP response without carrying
+    exception-derived text into it.
+    """
+    return REFUSAL_REASONS.get(
+        str(reason), "That key could not be created."
+    )
+
+
 class ApiKeyError(Exception):
     """Raised for a caller mistake (bad scope, bad origin, cap reached).
 
     Carries a sentence meant for a person, not an error code -- these
-    surface directly in ``clawmetry key`` output and in the dashboard.
+    surface directly in ``clawmetry key`` output, where naming the exact
+    offending value is worth more than it costs. ``reason`` is the same
+    refusal as a stable code, for the HTTP callers that must not echo
+    exception text; see :data:`REFUSAL_REASONS`.
     """
+
+    def __init__(self, message: str, reason: str = ""):
+        super().__init__(message)
+        self.reason = reason
 
 
 # ── Store I/O ───────────────────────────────────────────────────────────
@@ -155,12 +208,14 @@ def normalise_scopes(scopes) -> list:
             continue
         if s not in SCOPES:
             raise ApiKeyError(
-                f"{s!r} is not a scope. Choose from: " + ", ".join(SCOPES)
+                f"{s!r} is not a scope. Choose from: " + ", ".join(SCOPES),
+                "unknown_scope",
             )
         out.add(s)
     if not out:
         raise ApiKeyError(
-            "A key needs at least one scope. Choose from: " + ", ".join(SCOPES)
+            "A key needs at least one scope. Choose from: " + ", ".join(SCOPES),
+            "no_scope",
         )
     # Keep the declared order (least revealing first) rather than
     # alphabetical, so a listing reads the way the docs do.
@@ -185,18 +240,21 @@ def normalise_origins(origins) -> list:
             raise ApiKeyError(
                 "A wildcard origin is not allowed. Any page in any tab could "
                 "then read this machine's telemetry. Name the site you are "
-                "building, for example https://my-app.vercel.app."
+                "building, for example https://my-app.vercel.app.",
+                "wildcard_origin",
             )
         parts = urlsplit(o)
         if parts.scheme not in ("http", "https"):
             raise ApiKeyError(
                 f"{o!r} is not an origin. An origin looks like "
-                "https://my-app.vercel.app or http://localhost:3000."
+                "https://my-app.vercel.app or http://localhost:3000.",
+                "bad_origin",
             )
         if not parts.netloc or parts.path or parts.query or parts.fragment:
             raise ApiKeyError(
                 f"{o!r} has a path or query. An origin is just the scheme, "
-                "host and port: " + f"{parts.scheme}://{parts.netloc}"
+                "host and port: " + f"{parts.scheme}://{parts.netloc}",
+                "bad_origin",
             )
         out.append(f"{parts.scheme}://{parts.netloc}".lower())
     # De-duplicate, keep first-seen order so the user's list reads back
@@ -225,10 +283,12 @@ def create(name: str, scopes, origins, *, note: str = "") -> tuple:
     if not label:
         raise ApiKeyError(
             "Give the key a name so you can tell it apart later, for "
-            "example: latency-workbench."
+            "example: latency-workbench.",
+            "no_name",
         )
     if len(label) > 64:
-        raise ApiKeyError("Key names are limited to 64 characters.")
+        raise ApiKeyError("Key names are limited to 64 characters.",
+                          "name_too_long")
     scope_list = normalise_scopes(scopes)
     origin_list = normalise_origins(origins)
 
@@ -237,7 +297,8 @@ def create(name: str, scopes, origins, *, note: str = "") -> tuple:
     if len(live) >= MAX_KEYS:
         raise ApiKeyError(
             f"This machine already has {MAX_KEYS} active keys, which is the "
-            "limit. Revoke one you no longer use: clawmetry key revoke <id>"
+            "limit. Revoke one you no longer use: clawmetry key revoke <id>",
+            "at_capacity",
         )
 
     key_id = secrets.token_hex(_ID_BYTES)

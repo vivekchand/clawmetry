@@ -152,9 +152,27 @@ function showSetup() {
 
 // A failure here is somebody mid-build wondering what they got wrong, so
 // each one says what happened and what to try, never a bare status code.
-function showProblem(title, bodyHtml) {
+//
+// `parts` is a list of strings and {code: "..."} objects, built into real
+// text nodes. Deliberately not innerHTML: some of what lands here is an
+// exception message from a failed fetch, i.e. text this page did not write,
+// and assembling markup out of that is how a diagnostic panel becomes an
+// injection point.
+function showProblem(title, parts) {
+  var body = $('problemBody');
   $('problemTitle').textContent = title;
-  $('problemBody').innerHTML = bodyHtml;
+  body.textContent = '';
+  (parts || []).forEach(function (part) {
+    if (part && part.code !== undefined) {
+      var c = document.createElement('code');
+      c.textContent = String(part.code);
+      body.appendChild(c);
+    } else if (part === '\n') {
+      body.appendChild(document.createElement('br'));
+    } else {
+      body.appendChild(document.createTextNode(String(part)));
+    }
+  });
   $('problem').hidden = false;
   $('setup').hidden = true;
 }
@@ -173,11 +191,13 @@ async function q(shape, params) {
     // browser deliberately will not tell the page which. Say both.
     throw {
       title: 'Could not reach ClawMetry',
-      body: 'Either nothing is listening at <code>' + esc(cfg.base) + '</code>, '
-          + 'or this page’s origin (<code>' + esc(location.origin) + '</code>) '
-          + 'is not on the key’s allowlist. Create a key naming this exact '
-          + 'origin:<br><code>clawmetry key create --name starter '
-          + '--scope read:metrics --origin ' + esc(location.origin) + '</code>'
+      parts: [
+        'Either nothing is listening at ', {code: cfg.base}, ', or this ',
+        'page’s origin (', {code: location.origin}, ') is not on the ',
+        'key’s allowlist. Create a key naming this exact origin:', '\n',
+        {code: 'clawmetry key create --name starter --scope read:metrics '
+               + '--origin ' + location.origin}
+      ]
     };
   }
   var body = await res.json().catch(function () { return {}; });
@@ -186,7 +206,7 @@ async function q(shape, params) {
       title: res.status === 401 ? 'That key was not accepted'
            : res.status === 403 ? 'That key cannot read this'
            : 'ClawMetry returned an error',
-      body: esc(body.error || 'No detail was given.')
+      parts: [String(body.error || 'No detail was given.')]
     };
   }
   return body;
@@ -283,8 +303,8 @@ async function refresh() {
     $('setup').hidden = true;
     $('dash').hidden = false;
   } catch (err) {
-    if (err && err.title) showProblem(err.title, err.body);
-    else showProblem('Something went wrong', esc(String(err)));
+    if (err && err.title) showProblem(err.title, err.parts);
+    else showProblem('Something went wrong', [String(err)]);
   }
 }
 
