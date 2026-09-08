@@ -59,15 +59,23 @@ pytestmark = pytest.mark.skipif(
 # --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
-def _wait_flush(store, t: float = 2.0) -> None:
-    """Block until the in-memory ring buffer drains to DuckDB."""
+def _wait_flush(store, t: float = 5.0) -> None:
+    """Block until the in-memory ring buffer drains to DuckDB.
+
+    KeyError means health() returned a proxy dict with no ring_depth key
+    (store is a _ProxyStore, not a real LocalStore) — exit immediately since
+    there's nothing to wait for.  Any other exception is a transient failure;
+    sleep and retry rather than bailing out early and racing the flush.
+    """
     deadline = time.monotonic() + t
     while time.monotonic() < deadline:
         try:
             if store.health()["ring_depth"] == 0:
                 return
+        except KeyError:
+            return  # _ProxyStore has no ring_depth — nothing to wait on
         except Exception:
-            return
+            pass  # transient; keep waiting
         time.sleep(0.02)
 
 
