@@ -34,6 +34,8 @@ Spec fields per method:
 * ``trust``   — "plaintext" or "e2e" (see above).
 * ``backing`` — the LocalStore method serving it (live) or the planned
                 rollup table / store method (planned).
+* ``scope``   — the read scope an API key must carry to dispatch this
+                method (see SCOPES below). Exactly one per method.
 * ``doc``     — one-line description.
 
 This module is intentionally dependency-free plain data so the doc
@@ -50,6 +52,46 @@ STATUS_PLANNED = "planned"
 
 TRUST_PLAINTEXT = "plaintext"
 TRUST_E2E = "e2e"
+
+# ── Read scopes: what an API key is allowed to ask for ──────────────────
+#
+# Every method declares exactly one scope. A key issued to a custom UI
+# (``clawmetry key create --scope read:metrics``) can dispatch only the
+# methods whose scope it carries, so the scope a user picks in the UI is
+# the same fact the server enforces -- there is no second list to drift.
+#
+# The split is by what a row REVEALS, not by which table it came from:
+#
+# * ``read:metrics``  counters and rollups. Exactly the ``plaintext``
+#                     trust class, and an invariant test pins that: a
+#                     plaintext method is always metrics-scoped, and a
+#                     metrics-scoped method is never ``e2e``. This is the
+#                     scope a cost dashboard or a status board needs, and
+#                     it can never return a prompt or a file path.
+# * ``read:sessions`` one row per session: title, model, status, totals.
+#                     Enough to build a session list or a search box.
+# * ``read:content``  the turns themselves -- prompts, replies, tool
+#                     calls, transcripts. The most sensitive scope, and
+#                     the one the CLI refuses to grant unless asked for
+#                     by name.
+# * ``read:traces``   OTel spans/traces and outbound non-LLM calls.
+SCOPE_METRICS = "read:metrics"
+SCOPE_SESSIONS = "read:sessions"
+SCOPE_CONTENT = "read:content"
+SCOPE_TRACES = "read:traces"
+
+#: Every scope a key may carry, in the order the UI should offer them
+#: (least revealing first).
+SCOPES: tuple = (SCOPE_METRICS, SCOPE_SESSIONS, SCOPE_TRACES, SCOPE_CONTENT)
+
+#: One line per scope, written for someone who has never read this file.
+#: The key-creation UI and ``clawmetry key create --help`` both render it.
+SCOPE_DOC: dict = {
+    SCOPE_METRICS: "Counts, tokens, cost and health. No prompts or replies.",
+    SCOPE_SESSIONS: "One row per session: title, model, status, totals.",
+    SCOPE_TRACES: "Spans, traces and outbound API calls.",
+    SCOPE_CONTENT: "The turns themselves: prompts, replies, tool calls.",
+}
 
 
 def _arg(required: bool = False, **extra) -> dict:
@@ -72,6 +114,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=200, lo=1, hi=5000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_CONTENT,
         "backing": "query_events",
         "doc": "Raw event rows (tool calls, messages, errors), newest first.",
     },
@@ -84,6 +127,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=100, lo=1, hi=2000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_SESSIONS,
         "backing": "query_sessions",
         "doc": "One row per session_id with start/end, event count, cost.",
     },
@@ -95,6 +139,7 @@ QUERY_CONTRACT: dict = {
             "until": _arg(),
         },
         "trust": TRUST_PLAINTEXT,
+        "scope": SCOPE_METRICS,
         "backing": "query_aggregates",
         "doc": "Per-day rollup of events/tokens/cost (aggregate counters only).",
     },
@@ -102,6 +147,7 @@ QUERY_CONTRACT: dict = {
         "status": STATUS_LIVE,
         "args": {},
         "trust": TRUST_PLAINTEXT,
+        "scope": SCOPE_METRICS,
         "backing": "health",
         "doc": "Store health snapshot (engine, size, ring depth, flush age).",
     },
@@ -112,6 +158,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=500, lo=1, hi=5000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_CONTENT,
         "backing": "query_events",
         "doc": "Alias of events scoped to one required session_id.",
     },
@@ -123,6 +170,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=150, lo=1, hi=250),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_CONTENT,
         "backing": "query_transcript_page",
         "doc": (
             "One older-history page of a session's events, newest-first. "
@@ -142,6 +190,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=200, lo=1, hi=2000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_TRACES,
         "backing": "query_spans",
         "doc": "OTel span rows with full filters (trace/session/agent/time).",
     },
@@ -155,6 +204,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=100, lo=1, hi=1000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_TRACES,
         "backing": "query_traces",
         "doc": "One row per trace_id with aggregate span stats.",
     },
@@ -167,6 +217,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=200, lo=1, hi=2000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_TRACES,
         "backing": "query_external_calls",
         "doc": "External (non-LLM) API calls captured by the interceptor.",
     },
@@ -181,6 +232,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=50, lo=1, hi=500),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_SESSIONS,
         "backing": "query_search",
         "doc": "Full-text search over session titles and eval reasons.",
     },
@@ -191,6 +243,7 @@ QUERY_CONTRACT: dict = {
         "status": STATUS_PLANNED,
         "args": {},
         "trust": TRUST_PLAINTEXT,
+        "scope": SCOPE_METRICS,
         "backing": "rollup_glance",
         "doc": ("Device-facing top-line counters (sessions, cost, alerts). "
                 "Non-goal: no per-model data in glance."),
@@ -205,6 +258,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=1000, lo=1, hi=10000),
         },
         "trust": TRUST_PLAINTEXT,
+        "scope": SCOPE_METRICS,
         "backing": "query_rollup_runtime_daily",
         "doc": "Per-runtime daily activity/cost rollup (claude_code, openclaw, ...).",
     },
@@ -219,6 +273,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=1000, lo=1, hi=10000),
         },
         "trust": TRUST_PLAINTEXT,
+        "scope": SCOPE_METRICS,
         "backing": "query_rollup_model_daily",
         "doc": "Per-model daily token/cost rollup across runtimes.",
     },
@@ -234,6 +289,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=200, lo=1, hi=2000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_SESSIONS,
         "backing": "query_rollup_sessions",
         "doc": "Per-session materialized summary (title, status, totals, stuck flag).",
     },
@@ -245,6 +301,7 @@ QUERY_CONTRACT: dict = {
             "until": _arg(),
         },
         "trust": TRUST_PLAINTEXT,
+        "scope": SCOPE_METRICS,
         "backing": "rollup_usage_daily",
         "doc": "Daily token/cost usage series (input/output/cache splits).",
     },
@@ -254,6 +311,7 @@ QUERY_CONTRACT: dict = {
             "session_id": _arg(required=True),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_SESSIONS,
         "backing": "query_sessions_table",
         "doc": "Single-session detail row (title, status, outcome, totals).",
     },
@@ -265,6 +323,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=200, lo=1, hi=2000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_CONTENT,
         "backing": "query_events",
         "doc": "Reasoning/tool event slice powering the Brain feed.",
     },
@@ -275,6 +334,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=100, lo=1, hi=1000),
         },
         "trust": TRUST_PLAINTEXT,
+        "scope": SCOPE_METRICS,
         "backing": "query_approvals",
         "doc": "Approval queue metadata (ids, states, timestamps; no content).",
     },
@@ -287,6 +347,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=500, lo=1, hi=2000),
         },
         "trust": TRUST_PLAINTEXT,
+        "scope": SCOPE_METRICS,
         "backing": "query_agent_graph",
         "doc": "Cross-session agent spawn graph: nodes (agent_type+id stats) + "
                "spawn edges. Optional runtime arg scopes to one runtime "
@@ -299,6 +360,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=2000, lo=1, hi=10000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_CONTENT,
         "backing": "query_replay_events",
         "doc": "Canonical replay-event rows for one session (#4813). Rows in "
                "kind-agnostic order; the /api/replay-tree endpoint groups "
@@ -312,6 +374,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=200, lo=1, hi=1000),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_CONTENT,
         "backing": "query_session_context",
         "doc": "Inputs & context rows for one session: system prompt, first "
                "user prompt, tool definitions, MCP servers, context files and "
@@ -326,6 +389,7 @@ QUERY_CONTRACT: dict = {
             "limit": _arg(default=10, lo=1, hi=50),
         },
         "trust": TRUST_E2E,
+        "scope": SCOPE_SESSIONS,
         "backing": "query_similar_sessions",
         "doc": "Runs shaped like this one (WO-60): nearest sessions by "
                "tool-call n-gram similarity inside a window, same runtime "
@@ -360,3 +424,31 @@ def methods_by_status(status: str) -> list:
 
 def methods_by_trust(trust: str) -> list:
     return sorted(n for n, s in QUERY_CONTRACT.items() if s["trust"] == trust)
+
+
+def methods_by_scope(scope: str) -> list:
+    """Live + planned method names carrying ``scope``."""
+    return sorted(n for n, sp in QUERY_CONTRACT.items() if sp["scope"] == scope)
+
+
+def live_methods_by_scope(scope: str) -> list:
+    """Method names carrying ``scope`` that are actually served today."""
+    return sorted(
+        n for n, sp in QUERY_CONTRACT.items()
+        if sp["scope"] == scope and sp["status"] == STATUS_LIVE
+    )
+
+
+def scope_for(method: str) -> str:
+    """The scope ``method`` requires. Raises KeyError for an unknown method,
+    which is the right answer: an undeclared method is not servable."""
+    return QUERY_CONTRACT[method]["scope"]
+
+
+def shapes_for_scopes(scopes) -> set:
+    """Every live shape reachable by a key holding ``scopes``."""
+    granted = set(scopes or ())
+    return {
+        n for n, sp in QUERY_CONTRACT.items()
+        if sp["status"] == STATUS_LIVE and sp["scope"] in granted
+    }

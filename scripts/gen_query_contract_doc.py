@@ -21,6 +21,8 @@ sys.path.insert(0, str(ROOT))
 from clawmetry.query_contract import (  # noqa: E402
     CONTRACT_VERSION,
     QUERY_CONTRACT,
+    SCOPE_DOC,
+    SCOPES,
     STATUS_LIVE,
 )
 
@@ -54,6 +56,19 @@ test enforces both directions).
   machine AES-256-GCM encrypted via the sync daemon snapshot path and
   must never appear on a plaintext push list.
 
+## Read scopes
+
+Every method declares one scope. An API key issued to a custom UI
+(`clawmetry key create --scope read:metrics`) may dispatch only the
+methods whose scope it carries, so what a user picks when they create a
+key is the same fact the server enforces.
+
+{{scope_table}}
+
+`read:metrics` is exactly the `plaintext` trust class: a metrics-scoped
+key can never return a prompt, a reply or a file path. That invariant is
+pinned by CI, not by convention.
+
 ## Non-goals
 
 * No per-model data in the device-facing `glance` method. Devices get
@@ -61,6 +76,21 @@ test enforces both directions).
 
 ## Methods
 """
+
+
+def _scope_table() -> str:
+    rows = ["| Scope | Grants | Methods |", "| - | - | - |"]
+    for scope in SCOPES:
+        served = sorted(
+            n for n, s in QUERY_CONTRACT.items()
+            if s["scope"] == scope and s["status"] == STATUS_LIVE
+        )
+        rows.append(
+            f"| `{scope}` | {SCOPE_DOC[scope]} | "
+            + ", ".join(f"`{n}`" for n in served)
+            + " |"
+        )
+    return "\n".join(rows)
 
 
 def _fmt_arg(name: str, spec: dict) -> str:
@@ -75,15 +105,15 @@ def _fmt_arg(name: str, spec: dict) -> str:
 
 
 def render() -> str:
-    lines = [_HEADER]
-    lines.append("| Method | Status | Trust | Backing | Args | Description |")
-    lines.append("| - | - | - | - | - | - |")
+    lines = [_HEADER.replace("{scope_table}", _scope_table())]
+    lines.append("| Method | Status | Trust | Scope | Backing | Args | Description |")
+    lines.append("| - | - | - | - | - | - | - |")
     for name in sorted(QUERY_CONTRACT, key=lambda n: (QUERY_CONTRACT[n]["status"] != STATUS_LIVE, n)):
         spec = QUERY_CONTRACT[name]
         args = ", ".join(_fmt_arg(a, s) for a, s in spec["args"].items()) or "(none)"
         lines.append(
             f"| `{name}` | {spec['status']} | {spec['trust']} | "
-            f"`{spec['backing']}` | {args} | {spec['doc']} |"
+            f"`{spec['scope']}` | `{spec['backing']}` | {args} | {spec['doc']} |"
         )
     lines.append("")
     live = [n for n, s in QUERY_CONTRACT.items() if s["status"] == STATUS_LIVE]

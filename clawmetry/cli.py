@@ -4715,6 +4715,180 @@ def _cmd_mcp(args) -> None:
     raise SystemExit(_mcp_cli(list(getattr(args, "mcp_args", None) or [])))
 
 
+
+def _cmd_key(args) -> None:
+    """`clawmetry key ...` -- scoped read keys for custom UIs.
+
+    The point of these keys is that someone can build their own view of
+    their own agents without forking the dashboard: create a key, say what
+    it may read and which site may read it, paste it into whatever they
+    are building. docs/BUILD_YOUR_OWN_UI.md is the long version.
+
+    Two things this command is deliberately strict about, because both
+    are how a local API gets robbed:
+
+    * A browser key must name its origin. There is no wildcard. Any page
+      in any tab can already send a request to localhost; the origin
+      allowlist is the whole reason it cannot read the answer.
+    * ``read:content`` (prompts, replies, tool calls) is never granted
+      unless it is asked for by name, and the created key says so out loud.
+    """
+    import json as _json
+    import time as _time
+
+    from clawmetry import apikeys as _ak
+    from clawmetry.query_contract import SCOPE_CONTENT, SCOPE_DOC, SCOPE_METRICS
+
+    action = getattr(args, "key_cmd", None) or "list"
+    as_json = bool(getattr(args, "as_json", False))
+
+    def _fmt_age(ts):
+        if not ts:
+            return "never"
+        delta = int(_time.time()) - int(ts)
+        if delta < 60:
+            return "just now"
+        for unit, secs in (("d", 86400), ("h", 3600), ("m", 60)):
+            if delta >= secs:
+                return f"{delta // secs}{unit} ago"
+        return "just now"
+
+    if action == "scopes":
+        rows = _ak.scope_catalogue()
+        if as_json:
+            print(_json.dumps({"scopes": rows}, indent=2))
+            return
+        print("Scopes, least revealing first.")
+        print("")
+        for row in rows:
+            flag = "   (sensitive)" if row["sensitive"] else ""
+            print(f"  {row['scope']}{flag}")
+            print(f"      {row['doc']}")
+            print(f"      queries: {', '.join(row['methods'])}")
+            print("")
+        print("Pick the narrowest scope that makes your UI work. A key that")
+        print("only needs a cost chart should be read:metrics, so it cannot")
+        print("return a prompt even if the page it lives in is compromised.")
+        return
+
+    if action == "list":
+        rows = _ak.list_keys(include_revoked=bool(getattr(args, "show_revoked", False)))
+        if as_json:
+            print(_json.dumps({"keys": rows, "summary": _ak.store_summary()}, indent=2))
+            return
+        if not rows:
+            print("No API keys on this machine.")
+            print("")
+            print("Create one to build your own UI on top of ClawMetry:")
+            print("")
+            print("    clawmetry key create --name my-ui \\")
+            print("        --scope read:metrics --origin http://localhost:3000")
+            print("")
+            print("See docs/BUILD_YOUR_OWN_UI.md for the walkthrough.")
+            return
+        print(f"{'ID':<10} {'NAME':<24} {'SCOPES':<34} {'LAST USED':<12} ORIGINS")
+        for r in rows:
+            origins = ", ".join(r.get("origins") or []) or "(not used from a browser)"
+            state = " [revoked]" if r.get("revoked_at") else ""
+            print(
+                f"{r['id']:<10} {r['name'][:23]:<24} "
+                f"{','.join(r.get('scopes') or [])[:33]:<34} "
+                f"{_fmt_age(r.get('last_used_at')):<12} {origins}{state}"
+            )
+        return
+
+    if action == "revoke":
+        key_id = getattr(args, "key_id", "") or ""
+        ok = _ak.revoke(key_id)
+        if as_json:
+            print(_json.dumps({"action": "revoke", "ok": ok, "id": key_id}, indent=2))
+            if not ok:
+                raise SystemExit(1)
+            return
+        if ok:
+            print(f"Key {key_id} revoked. The next request using it is refused.")
+            print("Anything you built on it needs a new key:  clawmetry key create ...")
+            return
+        print(f"No active key called {key_id!r} on this machine.")
+        print("List what is here with:  clawmetry key list")
+        raise SystemExit(1)
+
+    if action == "create":
+        scopes = list(getattr(args, "scope", None) or []) or [SCOPE_METRICS]
+        raw_origins = list(getattr(args, "origin", None) or [])
+        wants_no_origin = any(
+            str(o).strip().lower() == _ak.ORIGIN_NONE for o in raw_origins
+        )
+        if not raw_origins:
+            print("A key needs to know which site may use it from a browser.")
+            print("")
+            print("    --origin https://my-ui.vercel.app     a site you are building")
+            print("    --origin http://localhost:3000        your dev server")
+            print("    --origin none                         not used from a browser")
+            print("")
+            print("There is no wildcard. Any page in any tab can already send a")
+            print("request to this machine, and naming the origin is what stops")
+            print("it reading the answer.")
+            raise SystemExit(1)
+        try:
+            record, plaintext = _ak.create(
+                getattr(args, "name", ""),
+                scopes,
+                [] if wants_no_origin else raw_origins,
+                note=getattr(args, "note", ""),
+            )
+        except _ak.ApiKeyError as exc:
+            if as_json:
+                print(_json.dumps({"action": "create", "ok": False,
+                                   "error": str(exc)}, indent=2))
+            else:
+                print(str(exc))
+            raise SystemExit(1)
+
+        if as_json:
+            print(_json.dumps({"action": "create", "ok": True,
+                               "key": plaintext,
+                               "record": {k: v for k, v in record.items()
+                                          if k != "hash"}}, indent=2))
+            return
+
+        print("Key created. It is shown once and is not stored anywhere in")
+        print("readable form, so copy it now.")
+        print("")
+        print(f"    {plaintext}")
+        print("")
+        print(f"Name:    {record['name']}  (id {record['id']})")
+        print(f"Reads:   {', '.join(record['scopes'])}")
+        for s in record["scopes"]:
+            print(f"           {s}: {SCOPE_DOC[s]}")
+        if record["origins"]:
+            print(f"Origins: {', '.join(record['origins'])}")
+        else:
+            print("Origins: none. This key works from a script or a server, but a")
+            print("         browser page will not be allowed to read the reply.")
+        if SCOPE_CONTENT in record["scopes"]:
+            print("")
+            print("This key can read the turns themselves: prompts, replies and")
+            print("tool calls. Keep it server-side. Do not ship it in a page.")
+        print("")
+        print("Try it:")
+        print("")
+        print(f"    curl -H 'Authorization: Bearer {plaintext}' \\")
+        print("        http://localhost:8900/api/q/1")
+        print("")
+        print("Point a coding agent at the generated API guide:")
+        print("")
+        print(f"    curl -H 'Authorization: Bearer {plaintext}' \\")
+        print("        http://localhost:8900/api/q/1/llms.txt")
+        print("")
+        print("Walkthrough: docs/BUILD_YOUR_OWN_UI.md")
+        return
+
+    print("Usage: clawmetry key [create|list|revoke|scopes]")
+    print("Start with:  clawmetry key scopes")
+    raise SystemExit(1)
+
+
 def _cmd_reports(args) -> None:
     """Open the reports browser (refs #1005)."""
     import webbrowser
@@ -8254,6 +8428,74 @@ def main() -> None:
 
     # mcp — intercepted by the fast path at the top of main() (WO-59); the
     # parser entry exists so `clawmetry --help` discovery shows it.
+    # key — scoped read keys for custom UIs (docs/BUILD_YOUR_OWN_UI.md)
+    p_key = sub.add_parser(
+        "key",
+        help="API keys for custom UIs: create, list, revoke, scopes",
+    )
+    key_sub = p_key.add_subparsers(dest="key_cmd")
+
+    p_key_create = key_sub.add_parser(
+        "create", help="Mint a scoped read key. Shown once, never stored."
+    )
+    p_key_create.add_argument(
+        "--name", required=True, metavar="NAME",
+        help="What this key is for, e.g. latency-workbench. Shown in listings.",
+    )
+    p_key_create.add_argument(
+        "--scope", action="append", default=[], metavar="SCOPE",
+        help=(
+            "What the key may read. Repeatable. Run `clawmetry key scopes` "
+            "for the list. Defaults to read:metrics, the least revealing one."
+        ),
+    )
+    p_key_create.add_argument(
+        "--origin", action="append", default=[], metavar="URL",
+        help=(
+            "A site allowed to call this API from a browser, e.g. "
+            "https://my-ui.vercel.app. Repeatable, and required unless you "
+            "pass --origin none for a key used outside a browser. There is "
+            "no wildcard: any page in any tab can already reach localhost, "
+            "and the origin allowlist is what stops it reading the reply."
+        ),
+    )
+    p_key_create.add_argument(
+        "--note", default="", metavar="TEXT",
+        help="Optional reminder to your future self.",
+    )
+    p_key_create.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Emit the record plus the key as JSON (jq-friendly).",
+    )
+
+    p_key_list = key_sub.add_parser("list", help="Show this machine's keys")
+    p_key_list.add_argument(
+        "--all", action="store_true", dest="show_revoked",
+        help="Include revoked keys.",
+    )
+    p_key_list.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Emit JSON (jq-friendly).",
+    )
+
+    p_key_revoke = key_sub.add_parser(
+        "revoke", help="Stop a key working. Takes effect on the next request."
+    )
+    p_key_revoke.add_argument(
+        "key_id", metavar="ID",
+        help="The key id from `clawmetry key list` (the whole key also works).",
+    )
+    p_key_revoke.add_argument(
+        "--json", action="store_true", dest="as_json", help="Emit JSON.",
+    )
+
+    p_key_scopes = key_sub.add_parser(
+        "scopes", help="What each scope grants, and which queries it unlocks"
+    )
+    p_key_scopes.add_argument(
+        "--json", action="store_true", dest="as_json", help="Emit JSON.",
+    )
+
     p_mcp = sub.add_parser(
         "mcp",
         help="MCP server: `mcp` serves on stdio; `mcp install [--runtime <id>|all] "
@@ -8845,6 +9087,7 @@ def main() -> None:
         "secure",
         "reports",
         "eval",
+        "key",
         "mcp",
         "update",
         "uninstall",
@@ -8989,6 +9232,8 @@ def main() -> None:
             _cmd_eval(args)
         elif args.cmd == "mcp":
             _cmd_mcp(args)
+        elif args.cmd == "key":
+            _cmd_key(args)
         elif args.cmd == "update":
             _cmd_update(args)
         elif args.cmd == "uninstall":

@@ -70,6 +70,11 @@ def test_statuses_and_version():
     for name, spec in qc.QUERY_CONTRACT.items():
         assert spec["status"] in (qc.STATUS_LIVE, qc.STATUS_PLANNED), name
         assert spec["trust"] in (qc.TRUST_PLAINTEXT, qc.TRUST_E2E), name
+        # Every method declares the read scope an API key needs to reach
+        # it (routes/public_api.py). A method with no scope, or an unknown
+        # one, is unreachable by any key -- which is a silent way to ship
+        # a query nobody can call.
+        assert spec["scope"] in qc.SCOPES, name
         assert spec["backing"], name
         assert spec["doc"], name
         assert isinstance(spec["args"], dict), name

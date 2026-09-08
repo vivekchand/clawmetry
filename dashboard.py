@@ -137,6 +137,7 @@ from routes.assets import bp_assets
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
 from routes.local_query import bp_local_query
+from routes.public_api import bp_public_api
 from routes.update_check import bp_update_check, start_update_check_thread
 from routes.workspaces import bp_workspaces
 from routes.bootstrap import bp_bootstrap
@@ -7909,6 +7910,12 @@ def detect_config(args=None):
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_local_query)
+    # The keyed, cross-origin read API custom UIs are built on
+    # (docs/BUILD_YOUR_OWN_UI.md). Unlike every other blueprint here it
+    # does NOT trust loopback: it authenticates every request against a
+    # scoped key and echoes a CORS header only for an origin that key
+    # named. See routes/public_api.py for why that inversion matters.
+    app.register_blueprint(bp_public_api)
     # ClawMetry Enterprise self-hosted server mode: one process serves the
     # dashboard AND the ingest API the node daemons push to. Gated hard on
     # SELF_HOSTED=true — never registered for normal local/cloud installs.
@@ -9493,6 +9500,14 @@ def _check_auth():
         # else fall through to the standard token check below
     if request.path.startswith("/api/nodes"):
         return  # Fleet API uses its own X-Fleet-Key authentication
+    if request.path.startswith("/api/q/"):
+        # The public query API authenticates itself (routes/public_api.py):
+        # every request needs a scoped `cmk_` key and loopback earns
+        # nothing. Returning here means it is not ALSO gated on the
+        # gateway token, which is what lets a custom UI reach a ClawMetry
+        # that is not on the caller's own machine. It is a stricter gate
+        # than this one, not a hole in it.
+        return
     # OTLP ingestion (/v1/metrics|traces|logs) accepts UNTRUSTED data that lands
     # in cost/usage analytics, so it must not be open to the network. Gate it
     # like /api/*: loopback is trusted (zero-config local exporters keep working),

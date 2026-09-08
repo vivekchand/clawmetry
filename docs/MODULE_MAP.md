@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-230 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+231 modules, 82 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -57,7 +57,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/heartbeat.py` | medium | `bp_heartbeat` | `/api/heartbeat`, `/api/heartbeat-loops` | Heartbeat liveness panel API endpoint (#686). |
 | `routes/hitl.py` | medium | `bp_hitl` | `/api/hitl` | Human-in-the-loop (HITL) pause API. |
 | `routes/hooks.py` | large | `bp_hooks` | `/api/hooks`, `/api/lifecycle`, `/api/sessions` | local receiver for runtime pre-tool hooks. |
-| `routes/infra.py` | large | `bp_config`, `bp_logs`, `bp_memory`, `bp_security` | `/api/automation-analysis`, `/api/context-anatomy`, `/api/cost-optimization`, `/api/cost-optimizer`, `/api/file`, `/api/flow`, `/api/flow-events`, `/api/llmfit`, `/api/logs`, `/api/logs-stream`, `/api/memory`, `/api/memory-access`, `/api/memory-analytics`, `/api/memory-files`, `/api/memory-rag`, `/api/numbat`, `/api/security` | Infrastructure / security / config / logs endpoints. |
+| `routes/infra.py` | large | `bp_config`, `bp_logs`, `bp_memory`, `bp_security` | `/api/apikeys`, `/api/automation-analysis`, `/api/context-anatomy`, `/api/cost-optimization`, `/api/cost-optimizer`, `/api/file`, `/api/flow`, `/api/flow-events`, `/api/llmfit`, `/api/logs`, `/api/logs-stream`, `/api/memory`, `/api/memory-access`, `/api/memory-analytics`, `/api/memory-files`, `/api/memory-rag`, `/api/numbat`, `/api/security` | Infrastructure / security / config / logs endpoints. |
 | `routes/insights.py` | medium | `bp_insights` | `/api/insights`, `/insights` | Weekly Insights Digest endpoints. |
 | `routes/inventory.py` | medium | `bp_inventory` | `/api/inventory` | Agent Inventory tab API. |
 | `routes/local_query.py` | large | `bp_local_query` | `/__local_query__`, `/api/local` | coherent local query API over the DuckDB store. |
@@ -70,6 +70,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/paywall_lifecycle.py` | small |  |  | the paywall beacons that reach the funnel. |
 | `routes/plugins.py` | medium | `bp_plugins` | `/api/plugins` | Plugin registry: unified view of installed plugins (#692). |
 | `routes/policy.py` | medium | `bp_policy` | `/api/approvals`, `/api/approvals-audit`, `/api/policy`, `/api/tool-policy` | tool-policy + sandbox + exec-approval audit (PRD P1-1). |
+| `routes/public_api.py` | medium | `bp_public_api` | `/api/q` | the keyed, cross-origin read API custom UIs use. |
 | `routes/quality.py` | medium | `bp_quality` | `/api/quality` | the Quality tab endpoint. |
 | `routes/readiness.py` | small | `bp_readiness` | `/api/repo-readiness` | ``bp_readiness`` — repo AI-readiness. |
 | `routes/reasoning.py` | medium | `bp_reasoning` | `/api/reasoning` | Reasoning chain viewer endpoint. |
@@ -121,6 +122,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/_paywall.py` | medium | Shared 402 ``upgrade_required`` body builder for OSS stub blueprints. |
 | `clawmetry/_paywall_events.py` | large | In-process rolling store for ``POST /api/paywall/event`` client beacons. |
 | `clawmetry/alert_evaluator.py` | large | Local alert-rule evaluator — pure logic, no I/O (PRD #779 PR-D part 2). |
+| `clawmetry/apikeys.py` | medium | scoped, revocable read keys for custom UIs. |
 | `clawmetry/approval_events.py` | small | The public seam between approvals and whoever delivers them. |
 | `clawmetry/approvals.py` | large | cloud-mediated approval policy engine. |
 | `clawmetry/attention_hook.py` | small | the `clawmetry hook attention` client. |

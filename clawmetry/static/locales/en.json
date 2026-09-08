@@ -1143,7 +1143,7 @@
   "security.audit_empty": "No recorded activity yet. Approval decisions, budget changes, and pauses appear here.",
   "security.audit_sub": "(approvals, budgets, pauses)",
   "security.audit_title": "Recent activity",
-  "security.cloud_note": "Config posture checks and threat scans run on the machine your agent runs on: they read files and activity that stay on it. Open ClawMetry there (localhost:8900 \u2192 Security) to run them.",
+  "security.cloud_note": "Config posture checks and threat scans run on the machine your agent runs on: they read files and activity that stay on it. Open ClawMetry there (localhost:8900 → Security) to run them.",
   "security.clean_sessions": "Clean Sessions",
   "security.critical": "Critical",
   "security.failed": "Failed",
@@ -1537,5 +1537,17 @@
   "trail.commits": "Commits",
   "trail.prs": "Pull requests",
   "evals.locked": "Session scoring is a Pro feature.",
-  "trail.cov_unknown": "not declared yet"
+  "trail.cov_unknown": "not declared yet",
+  "security.apikeys_title": "Build your own view",
+  "security.apikeys_sub": "Give a page, a script or a coding agent read access to this machine's agent data, scoped to exactly what it needs. Nothing here can start, pause or stop an agent.",
+  "security.apikeys_new": "New key",
+  "security.apikeys_name_label": "What is it for?",
+  "security.apikeys_origin_label": "Which site will use it?",
+  "security.apikeys_no_browser": "This key is for a script or a server, not a web page",
+  "security.apikeys_scope_label": "What may it read?",
+  "security.apikeys_create": "Create key",
+  "security.apikeys_cancel": "Cancel",
+  "security.apikeys_reveal_title": "Copy this now. It is not shown again.",
+  "security.apikeys_copy": "Copy",
+  "security.apikeys_done": "Done"
 }
