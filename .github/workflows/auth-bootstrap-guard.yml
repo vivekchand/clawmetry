@@ -5,6 +5,10 @@ on:
     paths:
       - "clawmetry/static/js/*.js"
       - ".github/workflows/auth-bootstrap-guard.yml"
+      # The pinned Playwright this job's smoke test runs on. Without this
+      # path a Dependabot bump of that lockfile would change what the guard
+      # executes while never running the guard.
+      - ".github/ci-node/auth-bootstrap/**"
 
 concurrency:
   group: abg-${{ github.event.pull_request.number || github.ref }}
@@ -50,9 +54,23 @@ jobs:
             node -e "const fs=require('fs'); const s=fs.readFileSync(0,'utf8'); if (/location\\.reload\\s*\\(/.test(s) || /window\\.location\\.reload\\s*\\(/.test(s)) { console.error('auth bootstrap IIFE must not call location.reload()'); process.exit(1); }"
 
       - name: Install runtime deps
+        run: pip install flask requests waitress cryptography
+
+      # `npm install playwright` resolved the registry's moving `latest` on
+      # every run, with no lockfile and so no integrity check on any tarball
+      # in the tree. It also ran at the repository root, where package.json
+      # is the landing-deploy manifest, so the install rewrote a tracked file
+      # as a side effect of a smoke test.
+      #
+      # `npm ci` against the committed lockfile in .github/ci-node/auth-bootstrap
+      # installs exactly the recorded tree and checks every tarball against its
+      # sha512 hash. Same pin/updater pairing the other CI Node installs here
+      # use: the lockfile makes an upgrade deliberate, the Dependabot entry in
+      # .github/dependabot.yml keeps it from freezing.
+      - name: Install Node deps (npm ci from the pinned lockfile)
+        working-directory: .github/ci-node/auth-bootstrap
         run: |
-          pip install flask requests waitress cryptography
-          npm install playwright
+          npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium
 
       - name: Start dashboard
@@ -65,7 +83,12 @@ jobs:
           cat /tmp/clawmetry.log
           exit 1
 
+      # `require('playwright')` resolves from the step's working directory, and
+      # the install now lives beside its lockfile rather than at the repository
+      # root, so this step runs there. Nothing else in the script reads the
+      # working directory: it talks to the dashboard over 127.0.0.1:8900.
       - name: Smoke test zero-click bootstrap does not reload
+        working-directory: .github/ci-node/auth-bootstrap
         run: |
           node <<'NODE'
           const { chromium } = require('playwright');

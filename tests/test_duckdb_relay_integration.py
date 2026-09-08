@@ -394,22 +394,20 @@ def test_duckdb_read_only_handle_sees_committed_rows(pipeline):
 
 
 def test_duckdb_indexes_present(pipeline):
-    """Sanity-check that the indexes we expect to be hit on relay queries
-    actually exist on the table (idx_events_ts, idx_events_session,
-    idx_events_type_ts)."""
+    """The session-timeline index is the one secondary index on events; the
+    range indexes (#5500) are gone, their filters ride the zone maps."""
     ls = pipeline["ls"]
     store = ls.get_store()
     rows = store._fetch(
         "SELECT index_name FROM duckdb_indexes WHERE table_name = 'events'", []
     )
     names = {r[0] for r in rows}
-    # Each index_name is created by the DDL in local_store.py:153-157.
-    expected = {
-        "idx_events_ts", "idx_events_session", "idx_events_agent_ts",
-        "idx_events_type_ts", "idx_events_atype_ts",
+    assert "idx_events_session" in names, names
+    dropped = {
+        "idx_events_ts", "idx_events_agent_ts", "idx_events_type_ts",
+        "idx_events_atype_ts", "idx_events_session_ts_type", "idx_events_created_at",
     }
-    missing = expected - names
-    assert not missing, f"missing expected DuckDB indexes: {missing}"
+    assert not (dropped & names), f"range indexes should be gone: {dropped & names}"
 
 
 # ── 2. Relay shape: in-process dispatch (relay_dispatch) ───────────────────

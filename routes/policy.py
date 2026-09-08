@@ -68,11 +68,43 @@ def _arg_preview(args) -> str:
                 return str(v)[:160]
         try:
             import json as _json
-            slim = {k: v for k, v in args.items() if k != "_cm_risk"}
+            slim = {k: v for k, v in args.items()
+                    if k not in ("_cm_risk", "_cm_ctx")}
+            if not slim:
+                return ""
             return _json.dumps(slim, separators=(",", ":"))[:160]
         except Exception:
             return str(args)[:160]
     return str(args)[:160]
+
+
+def _row_context(r) -> dict:
+    """WHO / WHERE / WHY for one approval row, from the namespaced keys the
+    producers stamp into ``args``.
+
+    Both producers are covered: the watcher writes ``_cm_ctx``; the pre-tool
+    hook receiver has always written ``runtime`` / ``cwd`` / ``policy`` /
+    ``tool_name`` at the top of its args blob. Missing fields are omitted, not
+    guessed -- a card that cannot say where a command would run must say
+    nothing rather than imply the wrong directory.
+    """
+    args = r.get("args")
+    if not isinstance(args, dict):
+        return {}
+    ctx = args.get("_cm_ctx")
+    if not isinstance(ctx, dict):
+        ctx = {}
+    sid = str(r.get("requestor_session_id") or ctx.get("session_id") or "")
+    runtime = str(ctx.get("runtime") or args.get("runtime") or "")
+    if not runtime and ":" in sid:
+        runtime = sid.split(":", 1)[0].lower()
+    out = {
+        "tool":    str(ctx.get("tool") or args.get("tool_name") or ""),
+        "runtime": runtime,
+        "policy":  str(ctx.get("policy") or args.get("policy") or ""),
+        "cwd":     str(ctx.get("cwd") or args.get("cwd") or ""),
+    }
+    return {k: v for k, v in out.items() if v}
 
 
 def _row_risk(r) -> "dict | None":
@@ -244,6 +276,10 @@ def api_approvals_queue():
             "requestor_session_id": r.get("requestor_session_id"),
             "args_preview":         _arg_preview(r.get("args")),
             "risk":                 _row_risk(r),
+            # WHO / WHERE / WHY. Without these a queue row could only be
+            # printed as a tool name and the tail of a session id, which is
+            # not enough for anyone to decide with.
+            "context":              _row_context(r),
             # "policy" (a protection rule fired) vs "permission_prompt"
             # (the runtime itself stopped to ask) — the UI says which,
             # because they mean different things to the person deciding.
@@ -604,8 +640,13 @@ def _row_tool_and_args(row) -> "tuple[str, dict]":
         raw = args.get("tool_input")
         return (str(args.get("tool_name") or ""),
                 raw if isinstance(raw, dict) else {})
-    tool = str(row.get("action") or "").split(": ", 1)[0].strip()
-    raw = {k: v for k, v in args.items() if k != "_cm_risk"}
+    # ``_cm_ctx`` records the tool name outright; fall back to the action
+    # prefix for rows written before it existed.
+    ctx = args.get("_cm_ctx") if isinstance(args.get("_cm_ctx"), dict) else {}
+    tool = str(ctx.get("tool") or "").strip() or \
+        str(row.get("action") or "").split(": ", 1)[0].strip()
+    raw = {k: v for k, v in args.items()
+           if k not in ("_cm_risk", "_cm_ctx")}
     return tool, raw
 
 

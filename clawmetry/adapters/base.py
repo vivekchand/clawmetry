@@ -42,6 +42,16 @@ class Capability(str, Enum):
     LOGS = "logs"
     GATEWAY_RPC = "gateway_rpc"
     CHANNELS = "channels"
+    # Trail triad (decision-trail observability). REASONING: the adapter
+    # surfaces the model's thinking/reasoning content as ``thinking`` events
+    # (or ``thinking`` replay events). INPUTS: the adapter surfaces what the
+    # agent was given (system prompt, tool definitions, context files).
+    REASONING = "reasoning"
+    INPUTS = "inputs"
+
+
+# Allowed values for each pillar in :meth:`AgentAdapter.trail_coverage`.
+TRAIL_LEVELS: tuple[str, ...] = ("full", "partial", "none")
 
 
 @dataclass
@@ -388,6 +398,38 @@ class AgentAdapter(ABC):
     def capabilities(self) -> set[Capability]:
         """Return the set of :class:`Capability` flags this adapter exposes."""
         ...
+
+    def trail_coverage(self) -> dict:
+        """Declare what this adapter can capture for the decision trail.
+
+        Returns ``{"inputs": level, "reasoning": level, "note": str}`` where
+        each level is one of :data:`TRAIL_LEVELS`:
+
+        * ``full``    - every instance the runtime writes to disk is surfaced
+          (reasoning: each thinking block becomes a ``thinking`` event or
+          replay event; inputs: system prompt + tool definitions are stored).
+        * ``partial`` - the runtime exposes it but only sometimes, clipped,
+          or only under a configuration the adapter cannot see.
+        * ``none``    - the runtime's on-disk format does not carry it.
+
+        HONESTY RULE: the level describes what the RUNTIME FORMAT exposes and
+        what this adapter actually emits, never what a model is capable of.
+        ``note`` must name the concrete field that is (or is not) there, e.g.
+        "assistant message.content[] thinking blocks" or "SQLite messages
+        table stores role/content only". Declaring ``full`` or ``partial``
+        for reasoning requires :attr:`Capability.REASONING` in
+        :meth:`capabilities` and real emit code behind it; the conformance
+        tests grep for both. The UI renders "not exposed by <runtime>" next
+        to an empty slot when the level is ``none``, so an honest ``none``
+        beats an aspirational ``partial``.
+
+        The base default is ``none`` for both pillars with an empty note, so
+        an adapter that has not declared anything reads as "not exposed"
+        rather than inventing coverage. Callers that need to tell "declared
+        none" from "never declared" can compare ``type(adapter).trail_coverage``
+        against ``AgentAdapter.trail_coverage``.
+        """
+        return {"inputs": "none", "reasoning": "none", "note": ""}
 
     def running(self) -> bool:
         """Best-effort liveness check. Default: delegate to detect()."""

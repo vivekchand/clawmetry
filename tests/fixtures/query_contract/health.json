@@ -12,6 +12,7 @@
   "duckdb_oom_reopens": 0,
   "engine": "duckdb",
   "event_count": 4,
+  "last_compaction": "<volatile>",
   "last_flush_ago_s": "<volatile>",
   "newest_ts": "2026-01-02T10:00:03Z",
   "oldest_ts": "2026-01-02T10:00:00Z",
