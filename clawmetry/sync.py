@@ -21301,16 +21301,16 @@ def _emit_detector_incidents(store, state: dict) -> int:
         # .git/config, an autorun task, a tampered agent hook). Same incident
         # shape, same loop_signals row, same Guard tab.
         #
-        # Deliberately NOT added to all_incidents, which is what the policy
-        # pass reads: a policy with trigger_kind "" matches ANY kind, so
-        # feeding workspace findings in today would let an existing
-        # "pause anything critical" rule pause a session because of a property
-        # of its folder, with no way to express "except that". Teaching the
-        # policy engine and the Guard policy form these two kinds is its own
-        # change (clawmetry-pro#223); until then the operator is TOLD and
-        # nothing is signalled.
-        incidents = list(incidents) + _workspace_incidents(
+        # These DO reach the policy pass, but only a policy that NAMES the kind
+        # can act on them: policy_engine excludes WORKSPACE_KINDS from the
+        # catch-all `trigger_kind: ""` precisely so a standing "pause anything
+        # critical" rule, written about runaway agents, cannot start pausing
+        # sessions over a property of a checkout.
+        workspace = _workspace_incidents(
             state, facts.get("cwd") or "", sid, runtime or "unknown", now)
+        if workspace:
+            all_incidents.extend(workspace)
+        incidents = list(incidents) + workspace
         if not incidents:
             continue
 
