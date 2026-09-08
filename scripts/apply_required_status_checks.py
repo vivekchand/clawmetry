@@ -18,9 +18,11 @@ Token types
 GITHUB_TOKEN from Actions (prefix ghs_):
   Can read branch protection state but CANNOT write it. The script detects
   this automatically: it verifies current state (read-only, scoped to the
-  current repo only) and exits 1 if not configured (red badge = forcing
-  signal), exits 0 when already configured (self-heals to green on the
-  next push after admin action). Push-triggered runs use this path.
+  current repo only) and exits 0 regardless of configuration state -- push-
+  triggered runs are informational only (see #4553: exit(1) here turned main
+  red on every push, hiding real CI failures). The daily c6-health.yml and
+  2-hourly c6-schedule-heal.yml schedules carry the forcing-signal exit(1)
+  on their own step. Push-triggered runs use this path.
   Note: requesting administration:write in the workflow permissions block is
   invalid for GITHUB_TOKEN and causes 0-job workflow failures -- do not add it.
 
