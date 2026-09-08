@@ -128,7 +128,8 @@ def _try_local_store_alert_rules():
 
 
 def _mirror_rule_to_duckdb(rule_id, *, alert_type, threshold, runtime,
-                           channels, cooldown_min, enabled, name=""):
+                           channels, cooldown_min, enabled, name="",
+                           extra=None):
     """Mirror a locally-created alert rule into the DuckDB ``alert_rules``
     table so the sync daemon's evaluator can actually see it.
 
@@ -157,6 +158,18 @@ def _mirror_rule_to_duckdb(rule_id, *, alert_type, threshold, runtime,
             "cooldown_min":    cooldown_min,
         },
     }
+    # Type-specific fields (a signal_rate_above rule's signal / window /
+    # min_turns) live only in the mirror. On create the caller passes them;
+    # on a re-mirror (toggle, edit, repair) they come from the existing row.
+    if alert_type == "signal_rate_above":
+        carried = extra if isinstance(extra, dict) else {}
+        if not carried.get("signal"):
+            prev = _duckdb_rule_condition(rule_id)
+            carried = {k: prev.get(k) for k in _SIGNAL_RULE_EXTRA_KEYS
+                       if prev.get(k) is not None}
+        for k in _SIGNAL_RULE_EXTRA_KEYS:
+            if carried.get(k) is not None:
+                payload["condition_json"][k] = carried[k]
     if not _write_via_store("ingest_alert_rule", rule=payload):
         return False
     # Read back before claiming success. ``ingest_alert_rule`` returns None,
@@ -183,6 +196,39 @@ def _duckdb_rule_ids():
         return {str(r.get("id")) for r in (rows or [])}
     except Exception:
         return None
+
+
+def _duckdb_rule_condition(rule_id):
+    """The DuckDB mirror's ``condition_json`` for ``rule_id``, or ``{}``.
+
+    The fleet SQLite row has no column for rule-type-specific fields (the
+    behaviour signal a ``signal_rate_above`` rule watches, its window, its
+    minimum sample), so a re-mirror from that row would drop them. Reading
+    the current mirror lets a PUT carry them across."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_alert_rules", limit=500)
+        if rows is None:
+            from clawmetry import local_server as _ls_srv
+            if not _ls_srv.is_running():
+                return {}
+            from clawmetry import local_store as _ls_mod
+            rows = _ls_mod.get_store().query_alert_rules(limit=500)
+        for r in (rows or []):
+            if str(r.get("id")) != str(rule_id):
+                continue
+            cond = r.get("condition_json")
+            if isinstance(cond, str):
+                cond = json.loads(cond)
+            return cond if isinstance(cond, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+
+#: Rule-type-specific condition fields the SQLite row cannot hold; carried
+#: across re-mirrors from the existing DuckDB row.
+_SIGNAL_RULE_EXTRA_KEYS = ("signal", "window_minutes", "min_turns")
 
 
 def _rule_in_duckdb(rule_id):
@@ -308,6 +354,11 @@ _EVALUATOR_ONLY = frozenset({
     # runtime crossed a dollar threshold (clawmetry/alert_evaluator.py
     # _eval_dollars_per_done, quality-window fed).
     "dollars_per_done_above",
+    # Behaviour Signals (WO-58): a named signal's rate (frustration,
+    # refusals, ...) over a window crossed a threshold with a minimum sample
+    # (clawmetry/alert_evaluator.py _eval_signal_rate_above, fed by the
+    # daemon's signal_turns / signal_matches tables).
+    "signal_rate_above",
 })
 
 # Local ``type`` values with a real ``rtype ==`` branch in dashboard.py's
@@ -353,6 +404,17 @@ UNSUPPORTED_ALERT_TYPES = frozenset({
 # ``_fire_alert(alert_type=...)`` call sites — tests/test_builtin_monitors.py
 # greps for drift.
 BUILTIN_MONITORS = [
+    {
+        # Guard detector incidents delivered to a human (clawmetry/
+        # incident_alerts.py). Free on every plan for in-app + Telegram, the
+        # same pair the budget monitor has always used; Slack/Discord/webhook
+        # ride the alert_webhooks entitlement. The daemon fires it, so this
+        # row is what lets the Alerts tab explain a banner nobody configured.
+        "alert_type": "agent_attention",
+        "label": "Agent needs attention",
+        "watches": "Stuck, rate limited, crashed, or waiting on you (Guard detectors)",
+        "source": "daemon",
+    },
     {
         "alert_type": "heartbeat_silent",
         "label": "Agent went quiet",
@@ -494,6 +556,32 @@ def api_alerts_builtin_update(alert_type):
 # and installs any missing rules via the standard POST path.
 
 DEFAULT_ALERT_RULES = [
+    # Silent failure -> human. The rule form of the always-on
+    # ``agent_attention`` built-in monitor above. On a Free install the
+    # built-in monitor already delivers (banner + Telegram) with no rule at
+    # all, because custom alert RULES are a paid feature
+    # (entitlements.PRO_ONLY_FEATURES: custom_alerts); this seed exists so a
+    # licensed node can scope it per runtime, change the window, or add a
+    # webhook. Not pro_only: the template is free to read and the daemon's
+    # entitlement check decides whether rules evaluate.
+    {
+        "id":           "agent_attention_default",
+        "type":         "agent_attention",
+        "threshold":    1,
+        "window_minutes": 30,
+        "min_severity": "warning",
+        "channels":     ["banner", "telegram"],
+        "cooldown_min": 30,
+        "enabled":      True,
+        "pro_only":     False,
+        "label":        "Agent needs attention",
+        "description": (
+            "Fires when a Guard detector finds an agent that is stuck, "
+            "rate limited by its provider, crashed and restarted, or waiting "
+            "on a person. In-app banner and Telegram are free; this rule "
+            "lets you scope it per runtime or add a webhook."
+        ),
+    },
     {
         "id":           "unproductive_burn_default",
         "type":         "unproductive_burn",
@@ -1147,6 +1235,30 @@ def api_alert_rules():
             return jsonify({"error": "Invalid alert type"}), 400
         if not isinstance(threshold, (int, float)) or threshold <= 0:
             return jsonify({"error": "Threshold must be a positive number"}), 400
+        # A behaviour-signal rule must name a preset signal; the threshold
+        # is a rate (percent from the form, fraction accepted) so 100 is the
+        # ceiling. Window and minimum sample are optional with evaluator
+        # defaults (24h, 20 turns).
+        _signal_extra = None
+        if _cloud_type == "signal_rate_above":
+            try:
+                from clawmetry.behaviour_signals import SIGNALS as _SIG
+            except Exception:
+                _SIG = {}
+            _sig_name = str(data.get("signal") or "").strip()
+            if _sig_name not in _SIG:
+                return jsonify({"error": "Unknown signal", "signal": _sig_name,
+                                "allowed": sorted(_SIG)}), 400
+            if threshold > 100:
+                return jsonify({"error": "Threshold is a rate: 0 to 100 percent"}), 400
+            _signal_extra = {"signal": _sig_name}
+            for _k in ("window_minutes", "min_turns"):
+                _v = data.get(_k)
+                if _v is not None:
+                    try:
+                        _signal_extra[_k] = max(1, int(_v))
+                    except (TypeError, ValueError):
+                        pass
         import uuid
 
         rule_id = str(uuid.uuid4())[:8]
@@ -1182,6 +1294,7 @@ def api_alert_rules():
                 rule_id, alert_type=_cloud_type, threshold=threshold,
                 runtime=runtime, channels=channels, cooldown_min=cooldown,
                 enabled=enabled, name=data.get("name") or "",
+                extra=_signal_extra,
             )
         _audit("alert_rule.create", actor=_actor(), target=rule_id,
                result="created", source="dashboard",

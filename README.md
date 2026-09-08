@@ -58,7 +58,7 @@ Two questions worth answering before you trust any agent-comparison tool.
 A utilization percentage is only as honest as what it divides by. ClawMetry
 sizes the window per provider from [a table you can read and
 PR](clawmetry/context_windows.py), covering Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama and GLM. It does not measure all 26
+DeepSeek, Kimi, Qwen, Mistral, Llama and GLM. It does not measure all 30
 runtimes with one vendor's ruler. That matters: a 300K GPT-5 turn scored
 against Anthropic's 200K reads ">100%, blown" when it is really at 75% of
 GPT-5's 400K. The same ruler hides a genuinely overflowed 130K DeepSeek turn

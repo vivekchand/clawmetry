@@ -51,10 +51,16 @@ DISPATCH_ARGS = {
     "agent_graph": {},
     # #4813 session-replay: canonical replay-event rows for one session.
     "replay_events": {"session_id": "sess-a"},
+    # Inputs & context: system prompt / tools / setup rows for one session.
+    "session_context": {"session_id": "sess-a"},
+    # WO-60 similar runs: nearest sessions by tool-call shape for one session.
+    "similar_sessions": {"session_id": "sess-a"},
 }
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.
 _HEALTH_VOLATILE = {
+    # #5498 — startup compaction outcome: path, byte counts and a timestamp.
+    "last_compaction",
     "db_path", "size_bytes", "size_mb", "size_cap_bytes", "cap_exceeded",
     "auto_vacuum_enabled", "ring_depth", "ring_max", "ring_dropped_total",
     "schema_version", "last_flush_ago_s", "sync_dlq_depth",

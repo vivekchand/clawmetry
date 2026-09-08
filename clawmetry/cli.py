@@ -2720,6 +2720,24 @@ def _cmd_uninstall(args=None) -> None:
     except Exception as _e:
         print(f"  ⚠️  Could not drain runtime hooks: {_e}")
 
+    # 1b-ii. Drain the Claude Code PreToolUse gate + PermissionRequest
+    # mirror. These are installed by clawmetry/claude_code_gate.py, NOT by
+    # the clawmetry.hooks registry the step above drains, so an uninstall
+    # used to walk straight past them and leave settings.json naming a
+    # binary it was about to delete — a hook error on every tool call, with
+    # no ClawMetry left running that could ever clean it up. Same #4817
+    # rule as above: BEFORE the pip uninstall, while the module still
+    # imports.
+    try:
+        from clawmetry import claude_code_gate as _cc_gate
+        _gate_res = _cc_gate.uninstall_all_hooks()
+        if _gate_res.get("gate") or _gate_res.get("mirror"):
+            print("  ✅  Removed Claude Code gate hooks from settings.json")
+        for _err in _gate_res.get("errors") or []:
+            print(f"  ⚠️  Could not remove Claude Code hook ({_err})")
+    except Exception as _e:
+        print(f"  ⚠️  Could not remove Claude Code gate hooks: {_e}")
+
     # 1c. Drain numbat hooks (clawmetry secure). MUST run BEFORE the
     # ~/.clawmetry purge below: the drain shells out to the managed binary
     # in ~/.clawmetry/bin, and the hooks numbat registered in each agent's
@@ -4691,9 +4709,10 @@ def _format_uptime(seconds):
 
 
 def _cmd_mcp(args) -> None:
-    """Start the ClawMetry MCP server on stdio (refs #2859)."""
-    from clawmetry.mcp_server import run
-    run()
+    """`clawmetry mcp ...` (refs #2859, WO-59). Normally intercepted by the
+    fast path in main(); kept for callers that build a Namespace directly."""
+    from clawmetry.mcp_install import cli_main as _mcp_cli
+    raise SystemExit(_mcp_cli(list(getattr(args, "mcp_args", None) or [])))
 
 
 def _cmd_reports(args) -> None:
@@ -7070,6 +7089,58 @@ def _cmd_extensions(args) -> None:
         print("    (none)")
 
 
+def _cmd_scan_repo(args) -> None:
+    """Report configuration in a checkout that runs code when an agent opens it.
+
+    The GitSpawn class of bugs (Manifold Security, 2026-09-01) makes this a
+    pre-flight question rather than a monitoring one: a repository's own
+    ``.git/config`` can name a program in ``core.fsmonitor``, git runs it during
+    an ordinary background ``git status``, and the code executes outside the
+    agent's sandbox before any approval prompt. There is no session to observe,
+    because opening the folder was the exploit. So this command is meant to run
+    BEFORE you point an agent at code you did not write.
+
+    Read-only: it opens files and prints findings. It never edits a config,
+    never runs a command it finds, and never invokes git (asking git to read an
+    untrusted repository's config is part of how several of these bugs fire).
+
+    Exit codes: 0 clean, 1 findings, 2 the path is unreadable — so it can gate a
+    clone step in CI.
+    """
+    from clawmetry import repo_scan
+
+    path = os.path.abspath(os.path.expanduser(args.path or "."))
+    if not os.path.isdir(path):
+        print("Not a directory: %s" % path, file=sys.stderr)
+        raise SystemExit(2)
+
+    findings = repo_scan.scan_workspace(path)
+
+    if getattr(args, "as_json", False):
+        print(json.dumps({"path": path, "findings": findings}, indent=2))
+        raise SystemExit(1 if findings else 0)
+
+    if not findings:
+        print("clean  %s" % path)
+        print("No config in this checkout names a program to run.")
+        raise SystemExit(0)
+
+    word = "finding" if len(findings) == 1 else "findings"
+    print("%d %s  %s\n" % (len(findings), word, path))
+    for f in findings:
+        sev = str(f.get("severity", "warning")).upper()
+        print("  [%s] %s" % (sev, f.get("title", "")))
+        ev = f.get("evidence") or {}
+        for hit in (ev.get("hits") or []):
+            print("      %s = %s" % (hit.get("key"), hit.get("command")))
+        for cmd in (ev.get("commands") or []):
+            print("      %s" % cmd)
+        print("      %s\n" % f.get("detail", ""))
+    print("Do not open this directory with an agent until you have read the "
+          "entries above.")
+    raise SystemExit(1)
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity.
 
@@ -7657,6 +7728,12 @@ def main() -> None:
     # dashboard import. Stdlib-only; `stamp` always exits 0 (fail-open).
     if len(sys.argv) > 1 and sys.argv[1] == "trace":
         raise SystemExit(trace_main(sys.argv[2:]))
+    # FAST PATH — `clawmetry mcp [serve|install|uninstall|status]` (WO-59).
+    # `serve` is started by the agent host on every session and must not
+    # pay the dashboard import; the installer is stdlib-only as well.
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        from clawmetry.mcp_install import cli_main as _mcp_cli
+        raise SystemExit(_mcp_cli(sys.argv[2:]))
     # FAST PATH — `clawmetry instrument <runtime> …` (WO-57): writes the
     # runtime's own OpenTelemetry exporter settings so it reports to this
     # ClawMetry. Which runtimes: whatever profiles are registered (free ones
@@ -8169,11 +8246,15 @@ def main() -> None:
         ),
     )
 
-    # mcp — start MCP server on stdio (issue #2859)
-    sub.add_parser(
+    # mcp — intercepted by the fast path at the top of main() (WO-59); the
+    # parser entry exists so `clawmetry --help` discovery shows it.
+    p_mcp = sub.add_parser(
         "mcp",
-        help="Start ClawMetry MCP server (stdio) — lets agents query their own telemetry",
+        help="MCP server: `mcp` serves on stdio; `mcp install [--runtime <id>|all] "
+             "[--dry-run] [--write-guidance]` registers it with each runtime; "
+             "`mcp uninstall`; `mcp status`",
     )
+    p_mcp.add_argument("mcp_args", nargs="*")
 
     # uninstall — fully remove clawmetry
     p_uninstall = sub.add_parser(
@@ -8554,6 +8635,28 @@ def main() -> None:
     # diagnose — surface the entitlement resolver inputs so an operator
     # can answer "why did my install resolve to <tier>?" without reading
     # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
+    # scan-repo — read a checkout for executable content before an agent opens it
+    p_scan = sub.add_parser(
+        "scan-repo",
+        help=(
+            "Check a repository for config that runs code when an agent opens "
+            "it (GitSpawn-class: core.fsmonitor, hooksPath, filters, auto-run "
+            "tasks, foreign agent hooks)"
+        ),
+    )
+    p_scan.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repository to scan (default: current directory)",
+    )
+    p_scan.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit findings as JSON",
+    )
+
     p_diagnose = sub.add_parser(
         "diagnose",
         help=(
@@ -8700,8 +8803,10 @@ def main() -> None:
     # entry below exists only so `clawmetry --help`-style discovery shows it.
     p_hooks = sub.add_parser(
         "hooks",
-        help="Claude Code approval hooks: install | uninstall | status | "
-             "run {pretooluse|notification} (pre-execution gate + phone push)")
+        help="Claude Code hooks: install | uninstall | status | "
+             "run <event> (pre-execution gate, phone push, and the "
+             "lifecycle events: tool failures, subagents, denials, "
+             "compactions, session start, instructions loaded)")
     p_hooks.add_argument("hooks_cmd", nargs="*")
     # `instrument` is likewise intercepted by the fast path (WO-57).
     p_instr = sub.add_parser(
@@ -8751,6 +8856,7 @@ def main() -> None:
         "extensions",
         "diagnose",
         "doctor",
+        "scan-repo",
         "verify-integrity",
         "export",
         "compliance",
@@ -8772,6 +8878,22 @@ def main() -> None:
     ):
         parser.parse_args()
         return  # argparse's -h action always exits; unreachable in practice
+
+    # Bare `clawmetry --help`/`-h` (no subcommand) needs the same guard
+    # (#5492): argv[1] is "--help" itself, not a member of _subcmds, so the
+    # check above never caught it and this process fell all the way through
+    # to `from dashboard import main as dashboard_main` just to print help
+    # text -- the exact import the guard above exists to avoid. This is what
+    # the Conformance Heartbeat's `clawmetry --help > /dev/null` step hit on
+    # py3.9/Linux while `<subcmd> --help` (already guarded) passed in the
+    # same run. `parser` has no subcommand chosen here, so parse_args() would
+    # error on an "unrecognized argument" instead of printing help (its own
+    # -h action is off, by design, so a real subcommand's `-h` in argv[2:]
+    # above is the one that fires) -- print_help() is what argparse uses
+    # internally for -h and works the same without an -h action registered.
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        parser.print_help()
+        sys.exit(0)
 
     # Tag this process as the dashboard BEFORE importing dashboard, so every
     # get_store() in dashboard.py (module-level + handlers) is barred from the
@@ -8866,6 +8988,8 @@ def main() -> None:
         elif args.cmd == "doctor":
             from clawmetry.doctor import run_doctor
             sys.exit(run_doctor(host=getattr(args, "doctor_host", None)))
+        elif args.cmd == "scan-repo":
+            _cmd_scan_repo(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "export":

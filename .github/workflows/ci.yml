@@ -108,8 +108,20 @@ jobs:
       # of those drifted from the catalogue before this guard existed
       # (2026-08-15: catalogue 20, README 14, PyPI 12). setup.py derives the
       # PyPI summary; this keeps the rest honest.
-      - name: Runtime count matches the entitlement catalogue
+      # Also checks the chat-channel count against ALL_CHANNELS, which drifted
+      # the same way (2026-09-05: catalogue 23, CLAUDE.md/FLYWHEEL/AGENTS 21,
+      # PRD 22).
+      - name: Runtime and channel counts match the entitlement catalogue
         run: python3 scripts/sync_runtime_count.py --check
+
+      # docs/MODULE_MAP.md is generated from the source tree, because the
+      # hand-written inventories in CLAUDE.md and ARCHITECTURE.md drifted to
+      # the point of being misleading (2026-09-05: the route table listed 17
+      # of 70 modules and none of the 82 registered blueprints, so an agent
+      # went looking for features in dashboard.py that had moved out months
+      # earlier). Size bands are coarse so ordinary PRs do not trip this.
+      - name: Module map matches the source tree
+        run: python3 scripts/gen_module_map.py --check
 
       # Acceptance-criteria traceability (FLYWHEEL.md 1g). Drift Bot asks "does
       # this diff contradict a Blueprint?"; it is a changed-code check and has
@@ -137,7 +149,11 @@ jobs:
       # running the guards there means they are exercised on the interpreter
       # 0.12.753 broke on.
       - name: Install verification test deps
-        run: pip install pytest pyyaml requests
+        # flask: the guards in this job that exercise a Blueprint through a
+        # Flask test client (paywall funnel telemetry + the gate's free
+        # escape) cannot even be COLLECTED without it, and a collection
+        # error fails the whole step, not just that file.
+        run: pip install pytest pyyaml requests flask
 
       # A malformed workflow fails at STARTUP, before any step runs, and shows
       # up named after its own file path. c6-schedule-heal.yml carried two such
@@ -145,6 +161,38 @@ jobs:
       # was itself dead, silently, for months.
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
+
+      - name: Published provider pricing and cache accounting
+        run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
+
+      # Named explicitly because this repo's CI runs FILE LISTS, not
+      # `pytest tests/`: a guard added without a line here runs in no job at
+      # all. Covers the half `gen_module_map.py --check` cannot: every
+      # blueprint dashboard.py registers is in the map, and CLAUDE.md /
+      # ARCHITECTURE.md name no module that has since moved or been deleted.
+      # Must sit AFTER "Install verification test deps" -- this job's
+      # interpreter has no pytest before that step.
+      - name: Architecture docs name modules that exist
+        run: python3 -m pytest tests/test_module_map_drift.py -q
+
+      # Red-team corpus: every publicly disclosed agent attack we claim to
+      # catch, we still catch. Named explicitly because this job runs FILE
+      # LISTS -- a signature added without a line here is checked by nothing.
+      # Verified to go RED by removing core.fsmonitor from repo_scan._EXEC_KEYS.
+      # The corpus payloads are inert markers; the runner fails a case that
+      # actually executes one.
+      - name: Red-team detection corpus
+        run: |
+          python3 -m pytest tests/test_redteam_corpus.py -q
+          python3 scripts/redteam/audit.py
+
+      # Non-security digests (dedup ids, trace ids, change-detection hashes)
+      # must go through clawmetry.nonsecret_hash. A bare hashlib.md5/sha1
+      # raises ValueError -- not a weak digest, an exception -- on a host whose
+      # crypto provider allows only approved algorithms, which turns an ingest
+      # pass into a crash. Named explicitly because this job runs FILE LISTS.
+      - name: Non-security digests declare themselves
+        run: python3 -m pytest tests/test_nonsecret_hash.py -q
 
       # The declared product surface must match reality: every cell names a
       # verifier that exists, and nothing claims to be "gated" while sitting
@@ -252,6 +300,22 @@ jobs:
       - name: Trial pill + upgrade modal
         run: python3 -m pytest tests/test_trial_pill_wiring.py -q
 
+      # Trail page + session-first landing: the live HTML must include
+      # tabs/trail.html (Jinja render, not a template grep), the default
+      # active page must be the Sessions list, and every Trail string must
+      # have an en.json key. The Phase-A nav guard runs alongside because the
+      # landing change re-ordered Tier-1.
+      - name: Trail page + session-first nav
+        run: python3 -m pytest tests/test_trail_tab_template.py tests/test_trail_context_panel.py tests/test_beginner_nav_phase_a.py tests/test_transcript_layout_grid.py -q
+
+      # Memory & Skills catalog + its sync path. Both files existed and were
+      # green locally while running in NO job — and the catalog is exactly
+      # where a wrong root means a runtime's Memory tab is empty for every
+      # user (2026-09-06: Codex, whose memory is only per-repo AGENTS.md,
+      # synced nothing because the daemon's launchd workspace is "/").
+      - name: Runtime memory catalog
+        run: python3 -m pytest tests/test_runtime_memory_catalog.py -q
+
       # The desktop shell's first pip install must self-heal (broken-venv
       # rebuild, cold-cache retry, actionable failure hints) — the
       # 2026-08-29 Windows "PyPI install failed" brick. Runs here because
@@ -260,6 +324,88 @@ jobs:
       # the JS-unit files above).
       - name: Desktop bootstrap resilience
         run: python3 -m pytest tests/test_desktop_bootstrap_resilience.py -q
+
+      # The conversion funnel's two blind spots, both silent by construction:
+      # the onboarding gate's free-runtimes escape (markup + handler +
+      # endpoint must agree or it is a dead link) and the paywall beacons
+      # that reach the cloud only while app.js keeps posting the exact event
+      # names the forwarder maps. Both regress with nothing turning red.
+      - name: Paywall funnel telemetry + gate free escape
+        run: python3 -m pytest tests/test_paywall_funnel_telemetry.py -q
+
+      # An approval card must say WHAT ran, WHERE and under WHICH rule. All
+      # three defects behind the 2026-09-06 "58 approvals I cannot read"
+      # report are silent: an empty arg object stringified to "{}", a queue
+      # row carried no runtime/policy/cwd, and the risk_high preset lost its
+      # min_risk in cloud storage and started pausing every tool call. Named
+      # here because this job runs FILE LISTS.
+      - name: Approval card legibility + preset risk floor
+        run: python3 -m pytest tests/test_approval_card_legibility.py -q
+
+      # The hosted Security tab must show only the panels the snapshot can
+      # fill. Every scan on it (posture, signatures, policy, credentials,
+      # findings) reads the machine's own config and event history, which the
+      # cloud container does not have -- so on cloud they rendered dashes,
+      # 0/0/0/0 tiles and permanent "Scanning..." spinners. Silent by
+      # construction: nothing errors, the page just looks vibe-coded. Named
+      # here because this job runs FILE LISTS.
+      - name: Hosted Security tab shows only what it can fill
+        run: python3 -m pytest tests/test_security_tab_cloud_honesty.py -q
+
+      # The Overview "Active Tasks" panel told four lies on one screen under
+      # ?runtime=codex: a hardcoded personal-project pill said OpenClaw, no
+      # runtime filter at all, a FAILED sub-agent drawn with a green tick, and
+      # an 18-day-old task labelled "Finished 1 min ago". Named here because
+      # this job runs FILE LISTS.
+      - name: Active Tasks panel tells the truth
+        run: python3 -m pytest tests/test_active_tasks_honesty.py tests/test_active_tasks_units.py -q
+
+      # A [RELEASE] merge must pin the cloud to the version it just published.
+      # auto-deploy-cloud.yml's push trigger fires BEFORE the upload, reads
+      # PyPI's still-previous "latest", pins that, and nothing re-triggers it —
+      # so the release goes to PyPI and never deploys, silently, with every
+      # other artifact reporting success (measured on 0.12.829, 2026-09-08).
+      # test_release_canary_reachable.py is named here too: it guards the same
+      # "GITHUB_TOKEN activity does not cascade" rule and, until now, was
+      # referenced only in a comment and ran in NO job at all.
+      - name: A release actually reaches the cloud
+        run: python3 -m pytest tests/test_release_dispatches_cloud_deploy.py tests/test_release_canary_reachable.py -q
+
+      # `runtime` on a sub-agent record is the runtime's NAME. It used to hold
+      # a formatted duration, which made the generic client resolver read "12m"
+      # as a runtime name and file EVERY sub-agent under the openclaw default.
+      - name: A sub-agent's runtime field means a runtime
+        run: python3 -m pytest tests/test_subagent_runtime_field_means_runtime.py -q
+
+      # Home must not fetch data it renders into a hidden element. The
+      # "Worker Bees" mini-widget fetched /api/subagents on every Home render
+      # and wrote into three ids inside overview.html's display:none block —
+      # one wasted round trip per load, invisible in exactly the way that keeps
+      # such a fetch alive. FLYWHEEL: performance is a feature AND a cost.
+      - name: Home makes no invisible fetch
+        run: python3 -m pytest tests/test_overview_no_invisible_fetch.py -q
+
+      # A tab the runtime switcher toggles must be reachable by SOMEONE — a nav
+      # entry or an in-app switchTab() call. The Sub-Agents & Queue Lanes tab
+      # had neither: a template, three loaders, an agent stop control and a 5s
+      # poller shipped in every wheel with zero callers of
+      # switchTab('subagents') in OSS or cloud. Nothing could fail, because
+      # nobody could reach the thing that would fail.
+      - name: Every tab is reachable
+        run: python3 -m pytest tests/test_every_tab_is_reachable.py -q
+
+      # dashboard.py used to define DASHBOARD_HTML twice; the first 5,036 lines
+      # never rendered but still shipped, still answered greps, and needed a
+      # warning in four separate documents to stop people editing the dead copy.
+      - name: dashboard.py defines DASHBOARD_HTML once
+        run: python3 -m pytest tests/test_dashboard_html_defined_once.py -q
+
+      # The Anomaly Detection card read baselines the serving path never sent,
+      # so it showed "Collecting baseline data..." forever on a node with 162
+      # sessions of history. The guard is derived from app.js, so a baseline
+      # key added to the card later is covered without editing the test.
+      - name: Anomaly baselines reach the card
+        run: python3 -m pytest tests/test_anomaly_baselines_reach_the_card.py -q
 
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
@@ -376,18 +522,27 @@ jobs:
             tests/test_moat_regression_1129.py \
             tests/test_e2e_real_openclaw_pipeline.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
+            tests/test_query_events_keys_first.py \
+            tests/test_cost_scan_slim_events.py \
             tests/test_moat_cloud_roundtrip_e2e.py \
             tests/test_channel_event_chokepoint.py \
             tests/test_no_direct_get_store_in_routes.py \
             tests/test_moat_bug_class_v3_event_shape_gate.py \
             tests/test_runtime_count_copy_sync.py \
+            tests/test_tab_template_page_wrapper.py \
             tests/test_grok_bot_runtime_wiring.py \
             tests/test_lovable_runtime_wiring.py \
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
             tests/test_local_query_dispatch_edge_cases.py \
+            tests/test_session_context_ingest.py \
+            tests/test_session_context_route.py \
+            tests/test_tracing_reasoning_spans.py \
+            tests/test_obs_gap_openclaw_response_steered_5578.py \
+            tests/test_trail_coverage_route.py \
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
+            tests/test_cohort_compare.py \
             tests/test_query_contract_drift.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
@@ -395,16 +550,26 @@ jobs:
             tests/test_duckdb_cpu_cap.py \
             tests/test_heartbeat_rows_stay_small.py \
             tests/test_reads_never_take_the_write_lock.py \
+            tests/test_ingest_upsert_dedupe.py \
+            tests/test_store_range_indexes_dropped.py \
+            tests/test_store_startup_compaction.py \
+            tests/test_store_phase_context_dedupe.py \
             tests/test_launchd_dashboard_runs_waitress.py \
             tests/test_scan_read_cache.py \
             tests/test_cache_push_gating.py \
+            tests/test_usage_cache_trends_local_store.py \
             tests/test_transcript_local_store.py \
+            tests/test_snapshot_transcripts_runtime_fair.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \
             tests/test_family_runtime_ingest.py \
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
+            tests/test_repo_scan_daemon_wiring.py \
             tests/test_hooks_claude_code.py \
+            tests/test_hook_ownership_quoted_launcher.py \
+            tests/test_hook_lifecycle.py \
+            tests/test_redaction_pii.py \
             tests/test_goose_adapter.py \
             tests/test_goose_platform_paths.py \
             tests/test_license_sync_pro_from_config.py \
@@ -412,6 +577,35 @@ jobs:
             tests/test_wake_poll.py \
             tests/test_cli_unattended_update.py \
             tests/test_cli_help_no_dashboard_import.py \
+            tests/test_behaviour_signals.py \
+            tests/test_signals_ui_contract.py \
+            tests/test_signal_shifts.py \
+            tests/test_briefs.py \
+            tests/test_guard_control_capability.py \
+            tests/test_guard_control_route.py \
+            tests/test_guard_control_transparency.py \
+            tests/test_guard_resume_hints.py \
+            tests/test_guard_resume_route.py \
+            tests/test_guard_live_probe.py \
+            tests/test_process_control.py \
+            tests/test_process_control_windows.py \
+            tests/test_detector_incident_delivery.py \
+            tests/test_detectors_rate_limited_blocked_crashed.py \
+            tests/test_waste_flags_free_default.py \
+            tests/test_alert_rule_types_new.py \
+            tests/test_regression_replay_optin.py \
+            tests/test_insights_outcome_templates.py \
+            tests/test_event_shape.py \
+            tests/test_schema_v15_migration.py \
+            tests/test_session_intent.py \
+            tests/test_session_git_outcomes_route.py \
+            tests/test_self_diagnostics.py \
+            tests/test_needs_you_matches_the_hero.py \
+            tests/test_live_session_truth.py \
+            tests/test_live_sessions_all_runtimes.py \
+            tests/test_needs_you_ui_contract.py \
+            tests/test_overview_claims_are_evidenced.py \
+            tests/test_obs_gap_nemoclaw_vllm_5579.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
@@ -509,6 +703,52 @@ jobs:
         run: pip install flask waitress cryptography duckdb pytest requests psutil
       - name: Run compression/cache-safety eval suite
         run: python3 -m pytest tests/test_compression_safety_eval.py -q
+
+  # ── Red-team corpus (disclosed attacks we claim to catch) ────────────────────
+  # scripts/redteam/corpus/*.json holds one entry per publicly disclosed agent
+  # attack, each naming the detector that must fire and at what severity. The
+  # day GitSpawn stops being detected this job goes red, instead of a customer
+  # finding out. Proven to fail: dropping `core.fsmonitor` from
+  # `repo_scan._EXEC_KEYS` reds three cases (see the PR that added this job).
+  #
+  # Named explicitly because this repo's CI runs FILE LISTS: a test file nobody
+  # names runs in no job at all. That has bitten us before (five guard files in
+  # zero jobs), so if you add a red-team test file, add it here too.
+  #
+  # The audit re-runs the same corpus through scripts/redteam/audit.py to print
+  # the per-case verdicts into the job summary, and to hold the exit-code
+  # contract: 0 = clean, 1 = gaps (with --strict), 2 = a CONTROL failed or a
+  # payload executed. Exit 2 is not "gaps found" -- a control failure means the
+  # audit cannot vouch for any of its other verdicts that day.
+  redteam-corpus:
+    name: Red-team corpus (disclosed attacks)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install flask waitress cryptography duckdb pytest requests psutil
+      - name: Run red-team corpus regression suite
+        run: python3 -m pytest tests/test_redteam_corpus.py -v --tb=short
+      - name: Replay the corpus through the audit (exit-code contract)
+        run: |
+          set +e
+          python3 scripts/redteam/audit.py --strict --summary "$GITHUB_STEP_SUMMARY"
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "audit clean" ;;
+            2) echo "::error::Red-team audit CONTROL FAILURE (exit 2): a control case failed or a corpus payload executed. Every other verdict in this run is untrustworthy."; exit 1 ;;
+            1) echo "::error::Red-team audit found gaps (exit 1): a disclosed attack in the corpus is no longer detected."; exit 1 ;;
+            *) echo "::error::Red-team audit exited $code (unexpected)"; exit 1 ;;
+          esac
 
   # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────
   # The ONLY job that installs opentelemetry-proto. Without it every OTLP
@@ -1027,11 +1267,11 @@ jobs:
         with:
           python-version: "3.11"
       - name: Setup OpenClaw
-        # Composite action from PR #1545 — installs `openclaw` via
-        # `npm install -g`, caches per-runner, exposes on PATH.
+        # Composite action from PR #1545 — installs `openclaw` with `npm ci`
+        # from its own committed lockfile and exposes it on PATH. The version
+        # is pinned there and moved by Dependabot, not passed from here.
         uses: ./.github/actions/setup-openclaw
         with:
-          version: latest
           gateway-token: moat-live-e2e-token
       - name: Install Python deps
         run: pip install flask pytest waitress duckdb cryptography requests

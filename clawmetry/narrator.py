@@ -57,6 +57,13 @@ _PROMPTS: dict[str, str] = {
         "Based on the data below, write 1-3 sentences explaining the spike and suggest "
         "1-2 actionable next steps. Use concrete numbers. No preamble.\n\nData:\n{context}"
     ),
+    "brief": (
+        "You are a concise AI agent observability assistant writing a scheduled brief for an "
+        "operator who does not open dashboards. The data below is the answer to their saved "
+        "question. Write 2-4 plain sentences that answer the question with the concrete numbers "
+        "in the rows, name what moved most, and end with one thing worth a look. No preamble, "
+        "no bullet points, no dashes as punctuation.\n\nData:\n{context}"
+    ),
     "approval_timeout": (
         "You are a concise AI agent observability assistant. An approval request timed out.\n"
         "Based on the data below, write 1-3 sentences explaining what was waiting for approval "

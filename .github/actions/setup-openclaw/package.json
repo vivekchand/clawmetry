@@ -1,0 +1,46 @@
+{
+  "name": "clawmetry-setup-openclaw",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned OpenClaw CLI for the setup-openclaw composite action. CI-only: nothing here ships in the clawmetry wheel or is imported by the dashboard.",
+  "license": "UNLICENSED",
+  "//overrides": [
+    "The openclaw pin cannot move: see the note on this directory's Dependabot",
+    "entry in .github/dependabot.yml. 2026.5.12 is the last release that still",
+    "writes per-session agents/main/sessions/*.jsonl, which is the only shape",
+    "clawmetry/sync.py globs. So `npm audit fix` -- which resolves every finding",
+    "here by bumping openclaw to 2026.6.34 -- is not available to us.",
+    "",
+    "These overrides take the subset of that fix that does NOT require moving",
+    "openclaw: each is a patch/minor bump inside the major the tree already",
+    "resolves, so no consumer sees a new API surface. Keys are range-scoped",
+    "(name@major) deliberately -- a bare `undici` key would also rewrite the",
+    "undici@7.29.1 that @earendil-works/pi-ai resolves, which IS a major bump.",
+    "",
+    "  tar@7    7.5.15 / 7.5.13 -> 7.5.22  clears GHSA-23hp-3jrh-7fpw (critical),",
+    "                                      GHSA-8x88-c5mf-7j5w, GHSA-r292-9mhp-454m,",
+    "                                      GHSA-vmf3-w455-68vh, GHSA-w8wr-v893-vjvp,",
+    "                                      GHSA-gvwx-54wh-qm9j",
+    "  undici@8 8.2.0 -> 8.10.2            clears GHSA-vmh5-mc38-953g and the ten",
+    "                                      other 8.x advisories",
+    "  ws@8     8.20.0 -> 8.21.3           clears GHSA-96hv-2xvq-fx4p, GHSA-58qx-3vcg-4xpx",
+    "",
+    "What these deliberately do NOT cover, because no override can:",
+    "  extract-zip      GHSA-jmr9-qjv8-65gv has no fixed release; 2.0.1 is latest",
+    "                   and is itself in range.",
+    "  pdfjs-dist       fix is 6.2.108, a major bump from the 5.7.284 in tree.",
+    "  markdown-it      fix is 15.x, a major bump from 14.1.1.",
+    "  pi-coding-agent  fix is 0.79.0, which arrives with the openclaw bump.",
+    "  openclaw itself  its own advisories are fixed only by the version bump.",
+    "Those stay open against the pin, and close when the daemon can read the",
+    "OpenClaw SQLite transcript and the pin can finally move."
+  ],
+  "dependencies": {
+    "openclaw": "2026.5.12"
+  },
+  "overrides": {
+    "tar@7": "7.5.22",
+    "undici@8": "8.10.2",
+    "ws@8": "8.21.3"
+  }
+}

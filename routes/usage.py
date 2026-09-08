@@ -245,6 +245,29 @@ def _ls_call(method_name, **kwargs):
         return None
 
 
+def _scan_events_slim(**kwargs):
+    """The Cost roll-ups' event scan: slim shape, full shape as the fallback.
+
+    ``query_events_slim`` is what keeps a Cost page load from marshalling
+    ~38 MB per scan across the daemon RPC (see ``LocalStore.query_events_slim``).
+    It is a newer shape than the daemon allowlist of any previous release,
+    and the dashboard and the sync daemon are separate processes that restart
+    independently — so during an upgrade there is a real window where an
+    upgraded dashboard asks a not-yet-restarted daemon for it. The proxy
+    answers 400, the caller gets ``None``, and these roll-ups would render
+    that as a confident EMPTY Cost tab.
+
+    Falling back to the full shape makes that skew cost bytes, not
+    correctness: the numbers are identical either way (the slim projection
+    only drops keys no roll-up reads), the page is merely heavier until the
+    daemon catches up.
+    """
+    rows = _ls_call("query_events_slim", **kwargs)
+    if rows is None:
+        rows = _ls_call("query_events", **kwargs)
+    return rows
+
+
 def _runtime_coverage(runtime, *, has_data):
     """Coverage block for a runtime-scoped cost/usage payload.
 
@@ -412,7 +435,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
             daily_tokens[day] = daily_tokens.get(day, 0) + int(r.get("token_count") or 0)
             daily_cost[day] = daily_cost.get(day, 0.0) + float(r.get("cost_usd") or 0.0)
     else:
-        evs = _ls_call("query_events", limit=10000)
+        evs = _scan_events_slim(limit=10000)
         if not evs:
             return None
         # query_events has no SQL runtime filter; apply the same prefix logic
@@ -504,7 +527,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
 
     # Per-model breakdown: scan recent events and group.
     model_usage = {}
-    recent = _ls_call("query_events", limit=5000) or []
+    recent = _scan_events_slim(limit=5000) or []
     recent = _filter_evs_by_runtime(recent, runtime)
     for ev in recent:
         m = ev.get("model") or "unknown"
@@ -634,8 +657,10 @@ def _ls_compute_anomalies():
     """Shared rolling-baseline anomaly detection over events. Used by both
     /api/usage/anomalies and /api/anomalies. Buckets recent (24h) sessions
     and flags any whose cost exceeds 2x the 7-day rolling session-cost
-    baseline. Returns ``(anomalies, baseline_avg)`` or ``(None, None)`` to
-    defer."""
+    baseline. Returns ``(anomalies, baselines_dict)`` or ``(None, None)`` to
+    defer. The dict carries the same baseline keys the fallback emits, because
+    the Overview card reads those names and renders a permanent "Collecting
+    baseline data..." placeholder when they are missing."""
     store = _ls_get_store()
     if store is None:
         return None, None
@@ -661,6 +686,8 @@ def _ls_compute_anomalies():
         enriched.append({
             "session_id": s.get("session_id"),
             "cost_usd": float(s.get("cost_usd") or 0.0),
+            # Needed for the tokens baseline the Overview card renders.
+            "token_count": int(s.get("token_count") or 0),
             "start_ts": _to_epoch(s.get("started_at")),
         })
 
@@ -698,20 +725,55 @@ def _ls_compute_anomalies():
             })
 
     anomalies.sort(key=lambda a: a.get("ratio", 0), reverse=True)
-    baseline_costs = [s["cost_usd"] for s in enriched
-                      if s["start_ts"] >= week_ago and s["cost_usd"] > 0]
+
+    # The BASELINES the Overview "Anomaly Detection" card renders. This used to
+    # return the cost average alone, surfaced under the key ``cost_7d_avg_usd``
+    # — a name the frontend never reads. app.js checks ``baseline_cost_7d``,
+    # ``baseline_tokens_7d`` and ``baseline_sessions_per_day_7d``, so with this
+    # fast path serving (which it does whenever the local store is enabled)
+    # every one was undefined and the card fell through to its placeholder:
+    # "Collecting baseline data..." FOREVER, however much data the node had.
+    # Founder screenshot 2026-09-07 shows exactly that, beside an "all clear"
+    # badge.
+    #
+    # Same class as the false-empty-tab burn: a store fast path returning a
+    # NARROWER shape than the fallback it replaced. These are the fallback's own
+    # key names (dashboard.py::_detect_and_store_anomalies), computed for real
+    # from the same session rows.
+    week_sessions = [s for s in enriched if s["start_ts"] >= week_ago]
+    baseline_costs = [s["cost_usd"] for s in week_sessions if s["cost_usd"] > 0]
     baseline_avg = (sum(baseline_costs) / float(len(baseline_costs))) if baseline_costs else 0.0
-    return anomalies, baseline_avg
+    token_vals = [s["token_count"] for s in week_sessions if s["token_count"] > 0]
+    tokens_avg = (sum(token_vals) / float(len(token_vals))) if token_vals else 0.0
+    # Days actually covered, not a flat 7: on a node three days old, dividing by
+    # 7 would under-report sessions/day by more than half.
+    if week_sessions:
+        span_days = max(now_ts - min(s["start_ts"] for s in week_sessions), 86400.0) / 86400.0
+    else:
+        span_days = 1.0
+    baselines = {
+        "baseline_cost_7d": round(baseline_avg, 6),
+        "baseline_tokens_7d": round(tokens_avg, 2),
+        "baseline_sessions_per_day_7d": round(len(week_sessions) / span_days, 2),
+        "session_count_7d": len(week_sessions),
+        # Kept so anything written against the old fast-path key still works.
+        "cost_7d_avg_usd": round(baseline_avg, 6),
+        # NOT emitted: baseline_error_rate_7d / recent_error_rate_24h. The
+        # fallback derives those from stored error events, which this path does
+        # not read. Returning 0.0 would render as "0% errors" — a claim, not a
+        # gap. Absent is the honest answer until this path can measure it.
+    }
+    return anomalies, baselines
 
 
 def _try_local_store_usage_anomalies():
     """Fast path for /api/usage/anomalies."""
-    anomalies, baseline_avg = _ls_compute_anomalies()
+    anomalies, baselines = _ls_compute_anomalies()
     if anomalies is None:
         return None
     return {
         "anomalies": anomalies,
-        "baseline_7d_avg_usd": round(baseline_avg or 0.0, 6),
+        "baseline_7d_avg_usd": round((baselines or {}).get("baseline_cost_7d") or 0.0, 6),
         "threshold_multiplier": 2.0,
         "_source": "local_store",
     }
@@ -720,7 +782,7 @@ def _try_local_store_usage_anomalies():
 def _try_local_store_anomalies():
     """Fast path for /api/anomalies. The legacy handler stores acks in a
     sqlite db so we mirror its empty/no-ack defaults."""
-    anomalies, baseline_avg = _ls_compute_anomalies()
+    anomalies, baselines = _ls_compute_anomalies()
     if anomalies is None:
         return None
     # Match the legacy response shape (anomaly id + ack + severity), even
@@ -746,7 +808,7 @@ def _try_local_store_anomalies():
         "anomalies": out,
         "active_count": len(active),
         "has_active": bool(active),
-        "baselines": {"cost_7d_avg_usd": round(baseline_avg or 0.0, 6)},
+        "baselines": baselines or {},
         "threshold_cost_multiplier": 2.0,
         "threshold_token_multiplier": 2.0,
         "threshold_error_multiplier": 3.0,
@@ -762,7 +824,7 @@ def _try_local_store_usage_by_plugin(threshold_pct, runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -822,7 +884,7 @@ def _try_local_store_usage_by_plugin_trend(days_back):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -892,7 +954,7 @@ def _try_local_store_cost_comparison():
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=50000)
+        evs = _scan_events_slim(limit=50000)
     except Exception:
         return None
     if not evs:
@@ -1152,7 +1214,7 @@ def _try_local_store_model_attribution(runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -1294,7 +1356,7 @@ def _try_local_store_usage_by_model(runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -1357,7 +1419,7 @@ def _try_local_store_skill_attribution():
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=50000)
+        evs = _scan_events_slim(limit=50000)
     except Exception:
         return None
     if not evs:
@@ -1886,6 +1948,16 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
     except Exception:
         return None
 
+    try:
+        from clawmetry.providers_pricing import provider_for_model as _pfm
+    except Exception:
+        _pfm = None
+
+    # Tracks the true input-context denominator for cache_hit_ratio_pct.
+    # For Anthropic (additive schema) each row contributes input + cache_read;
+    # for OpenAI (inclusive schema) cache_read is already in input_tokens.
+    _real_input_context = 0
+
     for r in rows:
         if not isinstance(r, dict):
             continue
@@ -1907,7 +1979,16 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
         output_tok = int(splits.get("output_tokens", 0) or 0)
         cache_read = int(splits.get("cache_read_tokens", 0) or 0)
         cache_write = int(splits.get("cache_write_tokens", 0) or 0)
-        total_tok = input_tok + output_tok + cache_read + cache_write
+        _row_prov = _pfm(r.get("model") or "") if _pfm else ""
+        if _row_prov == "openai":
+            # OpenAI inclusive schema: cache_read_tokens are already counted in
+            # input_tokens (total prompt tokens), so adding them again inflates total.
+            total_tok = input_tok + output_tok + cache_write
+            _real_input_context += input_tok
+        else:
+            # Anthropic (and others) additive schema: cache_read is additional context.
+            total_tok = input_tok + output_tok + cache_read + cache_write
+            _real_input_context += input_tok + cache_read
 
         # Fall back to the daemon-stamped scalar column when the data
         # blob splits are empty (e.g. slim ``model.completed`` rows that
@@ -1975,10 +2056,13 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
 
         sid = r.get("session_id") or ""
         ts = r.get("ts") or ""
-        cache_hit_pct = (
-            round(cache_read / (input_tok + cache_read) * 100, 1)
-            if (input_tok + cache_read) > 0 else 0.0
-        )
+        if _row_prov == "openai":
+            cache_hit_pct = round(cache_read / input_tok * 100, 1) if input_tok > 0 else 0.0
+        else:
+            cache_hit_pct = (
+                round(cache_read / (input_tok + cache_read) * 100, 1)
+                if (input_tok + cache_read) > 0 else 0.0
+            )
         messages.append({
             "session_id": sid,
             "timestamp": ts,
@@ -2024,10 +2108,9 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
     messages.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
     messages = messages[:limit]
 
-    input_plus_cache = totals["input_tokens"] + totals["cache_read_tokens"]
     totals["cache_hit_ratio_pct"] = (
-        round(totals["cache_read_tokens"] / input_plus_cache * 100, 1)
-        if input_plus_cache else 0.0
+        round(totals["cache_read_tokens"] / _real_input_context * 100, 1)
+        if _real_input_context else 0.0
     )
 
     return {
@@ -2544,6 +2627,9 @@ def _try_local_store_sessions_clusters(days: int):
     if not sessions:
         return None
     # One bulk events fetch; group by session_id (avoids N+1 daemon hops).
+    # Must use the full event shape (not _scan_events_slim) because the cluster
+    # analysis reads data.tool_calls via _extract_tool_plugins — a key stripped
+    # by the slim projection — and blob-searches data for cron/subagent signals.
     events = _ls_call("query_events", since=cutoff_iso, limit=20000) or []
     # Issue #1451: sibling-dedupe so the per-session token fallback below
     # doesn't double-count assistant + model.completed pairs on v3 installs.
@@ -3186,7 +3272,7 @@ def api_runtime_summary():
     out = {}
     if store is not None:
         try:
-            evs = store.query_events(limit=20000) or []
+            evs = _scan_events_slim(limit=20000) or []
             agg = {}
             for ev in evs:
                 rt = _runtime_of(ev.get("session_id"))
@@ -3809,11 +3895,14 @@ def _empty_cache_bucket():
     }
 
 
-def _summarise_cache_bucket(label, b, key):
-    in_plus_cache = b["input_tokens"] + b["cache_read_tokens"]
+def _summarise_cache_bucket(label, b, key, *, openai_schema=False):
+    # OpenAI inclusive schema: cache_read is already counted inside input_tokens,
+    # so the effective context denominator is input_tokens alone.
+    # Anthropic (and others) additive schema: cache_read is on top of input_tokens.
+    in_context = b["input_tokens"] if openai_schema else b["input_tokens"] + b["cache_read_tokens"]
     cache_hit_pct = (
-        round(b["cache_read_tokens"] / in_plus_cache * 100, 1)
-        if in_plus_cache
+        round(b["cache_read_tokens"] / in_context * 100, 1)
+        if in_context
         else 0.0
     )
     # Anthropic prompt-cache reads cost ~10% of fresh input tokens, so the
@@ -3866,6 +3955,11 @@ def _try_local_store_cache_trends(days: int):
     if rows is None:
         return None
 
+    try:
+        from clawmetry.providers_pricing import provider_for_model as _pfm_ct
+    except Exception:
+        _pfm_ct = None
+
     daily: dict = {}
     by_model: dict = {}
     for r in rows:
@@ -3895,7 +3989,10 @@ def _try_local_store_cache_trends(days: int):
         )
 
     by_model_out = [
-        _summarise_cache_bucket(m, b, key="model")
+        _summarise_cache_bucket(
+            m, b, key="model",
+            openai_schema=(_pfm_ct(m) == "openai" if _pfm_ct else False),
+        )
         for m, b in sorted(by_model.items(), key=lambda kv: -kv[1]["total_cost"])
     ]
 

@@ -89,6 +89,19 @@ def _get(d: dict, *names, default=None):
     return default
 
 
+def _seq(v) -> list:
+    """Every repeated OTLP/JSON field, coerced to a list we can safely iterate.
+
+    The per-item ``isinstance(x, dict)`` guards below only help once iteration
+    has started. A body like ``{"resourceSpans": 3}`` is well-formed JSON, so it
+    reaches the decoder and ``for r in 3`` raises TypeError -- which is not the
+    ValueError this module documents, and not the 400 the OTLP receiver is
+    supposed to answer. A scalar (or null, or an object) where OTLP specifies an
+    array is simply a malformed batch: decode it as empty rather than crashing.
+    """
+    return v if isinstance(v, (list, tuple)) else []
+
+
 def _as_int(v, default: int = 0) -> int:
     """int64-safe coercion. OTLP/JSON ships these as strings."""
     if v is None:
@@ -196,12 +209,12 @@ def _plain_value(raw: Any) -> Any:
         return bool(_get(raw, "boolValue", "bool_value", default=False))
     arr = _get(raw, "arrayValue", "array_value")
     if isinstance(arr, dict):
-        return [_plain_value(v) for v in (arr.get("values") or [])]
+        return [_plain_value(v) for v in _seq(arr.get("values"))]
     kv = _get(raw, "kvlistValue", "kvlist_value")
     if isinstance(kv, dict):
         return {
             str(item.get("key", "")): _plain_value(item.get("value"))
-            for item in (kv.get("values") or [])
+            for item in _seq(kv.get("values"))
             if isinstance(item, dict)
         }
     return raw
@@ -217,7 +230,7 @@ class _KeyValue:
 
 def _attrs(raw_list) -> list:
     out = []
-    for item in raw_list or []:
+    for item in _seq(raw_list):
         if isinstance(item, dict) and item.get("key"):
             out.append(_KeyValue(item))
     return out
@@ -267,8 +280,8 @@ class _Span:
         self.end_time_unix_nano = _as_int(
             _get(raw, "endTimeUnixNano", "end_time_unix_nano"))
         self.attributes = _attrs(raw.get("attributes"))
-        self.events = [_SpanEvent(e) for e in (raw.get("events") or []) if isinstance(e, dict)]
-        self.links = [_SpanLink(ln) for ln in (raw.get("links") or []) if isinstance(ln, dict)]
+        self.events = [_SpanEvent(e) for e in _seq(raw.get("events")) if isinstance(e, dict)]
+        self.links = [_SpanLink(ln) for ln in _seq(raw.get("links")) if isinstance(ln, dict)]
         raw_status = raw.get("status")
         self._has_status = isinstance(raw_status, dict)
         self.status = _Status(raw_status if self._has_status else {})
@@ -309,14 +322,14 @@ class _ScopeSpans:
     __slots__ = ("spans",)
 
     def __init__(self, raw: dict):
-        self.spans = [_Span(s) for s in (raw.get("spans") or []) if isinstance(s, dict)]
+        self.spans = [_Span(s) for s in _seq(raw.get("spans")) if isinstance(s, dict)]
 
 
 class _ScopeLogs:
     __slots__ = ("log_records",)
 
     def __init__(self, raw: dict):
-        records = _get(raw, "logRecords", "log_records", default=[]) or []
+        records = _seq(_get(raw, "logRecords", "log_records"))
         self.log_records = [_LogRecord(r) for r in records if isinstance(r, dict)]
 
 
@@ -326,7 +339,7 @@ class _ResourceSpans:
     def __init__(self, raw: dict):
         res = raw.get("resource")
         self.resource = _Resource(res) if isinstance(res, dict) else None
-        scopes = _get(raw, "scopeSpans", "scope_spans", default=[]) or []
+        scopes = _seq(_get(raw, "scopeSpans", "scope_spans"))
         self.scope_spans = [_ScopeSpans(s) for s in scopes if isinstance(s, dict)]
 
 
@@ -336,7 +349,7 @@ class _ResourceLogs:
     def __init__(self, raw: dict):
         res = raw.get("resource")
         self.resource = _Resource(res) if isinstance(res, dict) else None
-        scopes = _get(raw, "scopeLogs", "scope_logs", default=[]) or []
+        scopes = _seq(_get(raw, "scopeLogs", "scope_logs"))
         self.scope_logs = [_ScopeLogs(s) for s in scopes if isinstance(s, dict)]
 
 
@@ -394,7 +407,7 @@ class _MetricData:
     __slots__ = ("data_points", "aggregation_temporality", "is_monotonic")
 
     def __init__(self, raw: dict):
-        pts = _get(raw, "dataPoints", "data_points", default=[]) or []
+        pts = _seq(_get(raw, "dataPoints", "data_points"))
         self.data_points = [_NumberDataPoint(x) for x in pts if isinstance(x, dict)]
         self.aggregation_temporality = _as_enum(
             _get(raw, "aggregationTemporality", "aggregation_temporality"),
@@ -438,7 +451,7 @@ class _ScopeMetrics:
     __slots__ = ("metrics",)
 
     def __init__(self, raw: dict):
-        self.metrics = [_Metric(m) for m in (raw.get("metrics") or []) if isinstance(m, dict)]
+        self.metrics = [_Metric(m) for m in _seq(raw.get("metrics")) if isinstance(m, dict)]
 
 
 class _ResourceMetrics:
@@ -447,7 +460,7 @@ class _ResourceMetrics:
     def __init__(self, raw: dict):
         res = raw.get("resource")
         self.resource = _Resource(res) if isinstance(res, dict) else None
-        scopes = _get(raw, "scopeMetrics", "scope_metrics", default=[]) or []
+        scopes = _seq(_get(raw, "scopeMetrics", "scope_metrics"))
         self.scope_metrics = [_ScopeMetrics(s) for s in scopes if isinstance(s, dict)]
 
 
@@ -455,7 +468,7 @@ class _MetricsRequest:
     __slots__ = ("resource_metrics",)
 
     def __init__(self, raw: dict):
-        items = _get(raw, "resourceMetrics", "resource_metrics", default=[]) or []
+        items = _seq(_get(raw, "resourceMetrics", "resource_metrics"))
         self.resource_metrics = [_ResourceMetrics(r) for r in items if isinstance(r, dict)]
 
 
@@ -463,7 +476,7 @@ class _TraceRequest:
     __slots__ = ("resource_spans",)
 
     def __init__(self, raw: dict):
-        items = _get(raw, "resourceSpans", "resource_spans", default=[]) or []
+        items = _seq(_get(raw, "resourceSpans", "resource_spans"))
         self.resource_spans = [_ResourceSpans(r) for r in items if isinstance(r, dict)]
 
 
@@ -471,14 +484,24 @@ class _LogsRequest:
     __slots__ = ("resource_logs",)
 
     def __init__(self, raw: dict):
-        items = _get(raw, "resourceLogs", "resource_logs", default=[]) or []
+        items = _seq(_get(raw, "resourceLogs", "resource_logs"))
         self.resource_logs = [_ResourceLogs(r) for r in items if isinstance(r, dict)]
 
 
 def _gunzip(data: bytes) -> bytes:
-    """Bounded gunzip. A 1 KB body must not inflate into an OOM."""
-    with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
-        out = gz.read(_MAX_DECOMPRESSED + 1)
+    """Bounded gunzip. A 1 KB body must not inflate into an OOM.
+
+    A body that claims ``Content-Encoding: gzip`` and is not gzip raises
+    ``BadGzipFile`` (an OSError), and a truncated one raises ``EOFError`` --
+    neither of which is the ValueError this module documents, so both are
+    translated here. Without that, "malformed request body" reached callers as
+    an error class they had no reason to catch.
+    """
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
+            out = gz.read(_MAX_DECOMPRESSED + 1)
+    except (OSError, EOFError) as e:
+        raise ValueError(f"malformed gzip body: {e}") from e
     if len(out) > _MAX_DECOMPRESSED:
         raise ValueError("OTLP/JSON payload exceeds decompression cap")
     return out
