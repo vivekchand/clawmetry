@@ -302,6 +302,32 @@ def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
     )
 
 
+def _apply_ingest_routing(resource_attrs, runtime=None, env=None):
+    """Stamp the pusher's declared runtime / environment onto a resource.
+
+    A pushed batch carries no filesystem layout to infer a runtime from,
+    so the pusher says which runtime it is in ``x-clawmetry-runtime`` and
+    which environment in ``x-clawmetry-env`` (clawmetry/ingest_auth.py).
+
+    Rather than thread two more arguments through every mapper, the
+    headers are written into the resource attributes the mappers already
+    read: ``service.name`` is what ``_otlp_service_name_to_agent_type``
+    resolves a runtime from, and ``deployment.environment`` is what the
+    session materialiser already groups on. So a header is exactly as
+    powerful as the equivalent exporter setting, and no downstream code
+    learns a second way to answer the same question.
+
+    The header wins over the resource attribute. Both are set by the same
+    operator; the header is the one they set per request, and the one the
+    setup prompt tells them to set.
+    """
+    if runtime:
+        resource_attrs["service.name"] = runtime
+    if env:
+        resource_attrs["deployment.environment"] = env
+    return resource_attrs
+
+
 def _otlp_service_name_to_agent_type(service_name):
     """Map an OTLP resource ``service.name`` onto a ClawMetry ``agent_type``.
 
@@ -5940,7 +5966,7 @@ def _profile_metric(prof, name, metric, resource_attrs, rows):
             continue
 
 
-def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
+def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None, runtime=None, env=None):
     """Decode OTLP metrics protobuf/JSON and store relevant data."""
     req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
     _prof_rows = []  # profile-owned ledger rows, one put_otlp_batch per POST
@@ -5950,6 +5976,7 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
         if resource_metrics.resource:
             for attr in resource_metrics.resource.attributes:
                 resource_attrs[attr.key] = _otel_attr_value(attr.value)
+        _apply_ingest_routing(resource_attrs, runtime, env)
 
         for scope_metrics in resource_metrics.scope_metrics:
             for metric in scope_metrics.metrics:
@@ -6558,7 +6585,7 @@ def _otel_to_row(span, resource_attrs):
     }
 
 
-def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
+def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runtime=None, env=None):
     """Decode OTLP traces protobuf and extract relevant span data.
 
     Two-path design (issue #1007): we still feed the in-memory metrics
@@ -6595,6 +6622,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
         if resource_spans.resource:
             for attr in resource_spans.resource.attributes:
                 resource_attrs[attr.key] = _otel_attr_value(attr.value)
+        _apply_ingest_routing(resource_attrs, runtime, env)
 
         for scope_spans in resource_spans.scope_spans:
             for span in scope_spans.spans:
@@ -7041,7 +7069,7 @@ def _delegated_record_otel(agent_id, tin, tout, cache_read, cache_write,
         return False
 
 
-def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
+def _process_otlp_logs(pb_data, content_encoding=None, content_type=None, runtime=None, env=None):
     """Decode OTLP logs protobuf and ingest agent EVENT records (#2596, WO-7).
 
     Claude Code and Codex export their per-turn event stream as OTel *logs* —
@@ -7102,6 +7130,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
         if resource_logs.resource:
             for attr in resource_logs.resource.attributes:
                 resource_attrs[attr.key] = _otel_attr_value(attr.value)
+        _apply_ingest_routing(resource_attrs, runtime, env)
 
         service_name = resource_attrs.get("service.name") or ""
         agent_type = (
@@ -9515,12 +9544,24 @@ def _check_auth():
         # that is not on the caller's own machine. It is a stricter gate
         # than this one, not a hole in it.
         return
+    is_otlp = request.path.startswith("/v1/")
+    if is_otlp:
+        from clawmetry import ingest_auth as _ia
+        if request.headers.get(_ia.HEADER_KEY):
+            # A request presenting an ingest key is checked by the ingest
+            # surface itself (clawmetry/ingest_auth.py), which verifies
+            # the key, requires the write:ingest scope, and answers
+            # 401/403 with a sentence. Stepping aside here is the same
+            # move the /api/q/ block above makes, and for the same
+            # reason: one gate on a path, not two. Presenting a header is
+            # not being let in -- a bad key is rejected there, or it is
+            # rejected nowhere.
+            return
     # OTLP ingestion (/v1/metrics|traces|logs) accepts UNTRUSTED data that lands
     # in cost/usage analytics, so it must not be open to the network. Gate it
     # like /api/*: loopback is trusted (zero-config local exporters keep working),
     # non-loopback requires the gateway token. Opt out for a trusted LAN with
     # CLAWMETRY_OTLP_ALLOW_UNAUTH=1.
-    is_otlp = request.path.startswith("/v1/")
     if not request.path.startswith("/api/") and not is_otlp:
         return  # HTML, static, etc. are fine
     if is_otlp and str(os.environ.get("CLAWMETRY_OTLP_ALLOW_UNAUTH", "")).strip().lower() in ("1", "true", "yes"):

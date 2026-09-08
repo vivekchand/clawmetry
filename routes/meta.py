@@ -1261,17 +1261,41 @@ def index():
 
 
 def _otlp_receive(signal, process):
-    """Shared OTLP/HTTP receive path. ``process`` is the dashboard mapper."""
+    """Shared OTLP/HTTP receive path. ``process`` is the dashboard mapper.
+
+    Three ways in, all of them ending here:
+
+    * loopback, with nothing at all -- the zero-config local exporter;
+    * the OpenClaw gateway token, for a LAN exporter;
+    * an ingest key (``clawmetry key create --scope write:ingest``), for
+      an agent that is not on this machine at all: CI, a container, a
+      serverless function, a teammate's laptop.
+
+    The key path is the one ``clawmetry/ingest_auth.py`` owns. It is the
+    ONLY gate on a keyed request -- ``dashboard.py::_check_auth`` steps
+    aside for one -- so a bad key has to be refused here.
+    """
     import dashboard as _d
+    from clawmetry import ingest_auth as _ia
+
     if _d._budget_paused:
         return jsonify(
             {"error": "Budget limit exceeded - intake paused", "paused": True}
         ), 429
+
+    body = request.get_data()
+    ctx, err = _ia.prologue(request.headers, body)
+    if err:
+        payload, status = err
+        return jsonify(payload), status
+
     try:
         process(
-            request.get_data(),
+            body,
             content_encoding=request.headers.get("Content-Encoding"),
             content_type=request.headers.get("Content-Type"),
+            runtime=ctx["runtime"],
+            env=ctx["env"],
         )
         return "{}", 200, {"Content-Type": "application/json"}
     except OtlpProtobufUnavailable as e:
@@ -1291,7 +1315,16 @@ def _otlp_receive(signal, process):
             )
         except Exception:
             pass
-        return jsonify({"error": str(e)}), 400
+        return jsonify({
+            "error": "bad_request",
+            "message": (
+                f"That body did not decode as OTLP {signal}. Send OTLP "
+                "protobuf (Content-Type: application/x-protobuf) or "
+                "OTLP/JSON (application/json); gzip is accepted with "
+                "Content-Encoding: gzip."
+            ),
+            "detail": str(e),
+        }), 400
 
 
 @bp_otel.route("/v1/metrics", methods=["POST"])

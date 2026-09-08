@@ -11543,9 +11543,18 @@ function _cmRenderApiKeyScopeChoices() {
     var warn = s.sensitive
       ? '<div style="font-size:10px;color:#fbbf24;margin-top:2px;">Keep this one server-side. Do not ship it in a page.</div>'
       : '';
+    // A write scope pushes data in and reads nothing back, so it cannot
+    // be combined with a read scope on one key. Saying that next to the
+    // box is better than letting someone tick both and meet an error.
+    if (s.kind === 'write') {
+      warn = '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">'
+        + 'On its own key. Used by a server, a container or a CI job &mdash; never by a web page.</div>';
+    }
     return '<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 9px;'
       + 'border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);cursor:pointer;">'
       + '<input type="checkbox" class="apikey-scope-box" value="' + escapeHtmlSafe(s.scope) + '"'
+      +   ' data-kind="' + escapeHtmlSafe(s.kind || 'read') + '"'
+      +   ' onchange="onApiKeyScopeToggle(this)"'
       +   (i === 0 ? ' checked' : '') + ' style="margin-top:2px;" />'
       + '<span style="flex:1;min-width:0;">'
       +   '<span style="font-size:12px;color:var(--text-primary);font-weight:600;">' + escapeHtmlSafe(s.scope) + '</span>'
@@ -11553,6 +11562,25 @@ function _cmRenderApiKeyScopeChoices() {
       +   warn
       + '</span></label>';
   }).join('');
+}
+
+function onApiKeyScopeToggle(box) {
+  // Read and write are separate keys. Ticking one kind clears the other
+  // rather than letting the form assemble a combination the server will
+  // refuse -- an error you could have prevented is a worse error.
+  if (!box || !box.checked) return;
+  var kind = box.getAttribute('data-kind') || 'read';
+  Array.prototype.slice.call(document.querySelectorAll('.apikey-scope-box'))
+    .forEach(function(other) {
+      if (other !== box && (other.getAttribute('data-kind') || 'read') !== kind) {
+        other.checked = false;
+      }
+    });
+  var nobrowser = _cmApiKeysEl('apikey-nobrowser');
+  if (kind === 'write' && nobrowser && !nobrowser.checked) {
+    nobrowser.checked = true;
+    onApiKeyBrowserToggle();
+  }
 }
 
 function toggleApiKeyForm(show) {

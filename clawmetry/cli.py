@@ -4743,7 +4743,8 @@ def _cmd_key(args) -> None:
     import time as _time
 
     from clawmetry import apikeys as _ak
-    from clawmetry.query_contract import SCOPE_CONTENT, SCOPE_DOC, SCOPE_METRICS
+    from clawmetry.apikeys import SCOPE_DOC, SCOPE_INGEST
+    from clawmetry.query_contract import SCOPE_CONTENT, SCOPE_METRICS
 
     action = getattr(args, "key_cmd", None) or "list"
     as_json = bool(getattr(args, "as_json", False))
@@ -4770,7 +4771,10 @@ def _cmd_key(args) -> None:
             flag = "   (sensitive)" if row["sensitive"] else ""
             print(f"  {row['scope']}{flag}")
             print(f"      {row['doc']}")
-            print(f"      queries: {', '.join(row['methods'])}")
+            if row["kind"] == "write":
+                print("      queries: none. This scope only pushes data in.")
+            else:
+                print(f"      queries: {', '.join(row['methods'])}")
             print("")
         print("Pick the narrowest scope that makes your UI work. A key that")
         print("only needs a cost chart should be read:metrics, so it cannot")
@@ -4825,6 +4829,11 @@ def _cmd_key(args) -> None:
         wants_no_origin = any(
             str(o).strip().lower() == _ak.ORIGIN_NONE for o in raw_origins
         )
+        if SCOPE_INGEST in scopes and not raw_origins:
+            # An ingest key is server-to-server by definition, so asking
+            # which website may use it is a question with no answer.
+            wants_no_origin = True
+            raw_origins = [_ak.ORIGIN_NONE]
         if not raw_origins:
             print("A key needs to know which site may use it from a browser.")
             print("")
@@ -4864,6 +4873,27 @@ def _cmd_key(args) -> None:
         print(f"    {plaintext}")  # lgtm[py/clear-text-logging-sensitive-data]
         print("")
         print(f"Name:    {record['name']}  (id {record['id']})")
+        if SCOPE_INGEST in record["scopes"]:
+            print(f"Grants:  {', '.join(record['scopes'])}")
+            print(f"           {SCOPE_INGEST}: {SCOPE_DOC[SCOPE_INGEST]}")
+            print("Origins: none. Ingest is server-to-server; this key is never")
+            print("         given a CORS header, so a web page cannot use it.")
+            print("")
+            print("Push a span from anywhere that can reach this machine:")
+            print("")
+            print("    curl -X POST http://localhost:8900/v1/traces \\")
+            print(f"        -H 'x-clawmetry-key: {plaintext}' \\")
+            print("        -H 'x-clawmetry-runtime: my-engine' \\")
+            print("        -H 'x-clawmetry-env: production' \\")
+            print("        -H 'Content-Type: application/json' \\")
+            print("        --data-binary @spans.json")
+            print("")
+            print("OTLP protobuf and OTLP/JSON are both accepted, gzip too.")
+            print("The runtime and env headers are optional; without them the")
+            print("runtime is taken from the resource's service.name.")
+            print("")
+            print("Reference: docs/CUSTOM_RUNTIME_INGEST.md")
+            return
         print(f"Reads:   {', '.join(record['scopes'])}")
         for s in record["scopes"]:
             print(f"           {s}: {SCOPE_DOC[s]}")

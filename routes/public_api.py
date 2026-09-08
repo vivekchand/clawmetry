@@ -143,6 +143,20 @@ def _authenticate():
             "this machine knows with: clawmetry key list",
             docs="/api/q/1/llms.txt",
         )
+    if not apikeys.granted_shapes(record):
+        # A write-only key (write:ingest) is a valid key, so `verify`
+        # accepts it -- but it holds no read scope, which makes it not a
+        # key for THIS API. Handing it the index instead would answer a
+        # question it never gets to follow up on, and would print its own
+        # scopes back to a caller who cannot read anything else.
+        return None, _err(
+            403,
+            "That key can push telemetry in, but it cannot read anything "
+            "back. Read and write are separate keys on purpose. Create a "
+            "read key with: clawmetry key create --name my-ui --scope "
+            "read:metrics --origin https://example.com",
+            docs="/api/q/1/llms.txt",
+        )
     if _rate_limited(str(record.get("id"))):
         return None, _err(
             429,
