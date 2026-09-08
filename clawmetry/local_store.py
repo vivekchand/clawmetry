@@ -13112,7 +13112,7 @@ class LocalStore(TrailStoreMixin):
                 "sender_name", "body", "ts", "direction", "session_key",
                 "raw_blob"]
         out: list[dict[str, Any]] = []
-        for r in self._fetch(sql, params):
+        for r in (self._fetch(sql, params) or []):
             d = dict(zip(cols, r))
             raw = d.get("raw_blob")
             if raw is not None:
