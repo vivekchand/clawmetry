@@ -20,7 +20,9 @@ A policy row (see ``local_store.session_policy``)::
       "enabled":        bool,
       "scope_runtime":  str,   # "" = every runtime
       "scope_agent_id": str,   # "" = every agent
-      "trigger_kind":   str,   # "" = any detector kind
+      "trigger_kind":   str,   # "" = any detector kind. A WORKSPACE kind
+                               # (repo_scan.WORKSPACE_KINDS) must be named
+                               # explicitly; see "Workspace findings" below.
       "min_severity":   "info" | "warning",
       "min_repeat":     int,   # incident count must be >= this
       "min_duration_s": int,   # session bad for at least this long
@@ -65,6 +67,15 @@ which is why every existing policy keeps behaving identically.
 All thresholds are AND-ed. An unset threshold (0) never blocks a match, so a
 policy with everything zeroed fires on the first matching incident.
 
+**Workspace findings must be named.** ``repo_scan`` emits two kinds
+(``repo_config_exec``, ``agent_config_tamper``) that describe the FOLDER an
+agent was pointed at, not the agent's behaviour, and both are ``critical`` by
+construction. An empty ``trigger_kind`` therefore does NOT match them: a
+standing "pause anything critical" rule, written about runaway agents, would
+otherwise start pausing sessions because of a property of a checkout, with no
+way to write "except that". A policy that wants to act on a poisoned repo says
+so by name, which is also what makes that intent visible in the policy list.
+
 A decision::
 
     {
@@ -97,6 +108,14 @@ flag and the one-shot latch):
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
+
+# The one list of workspace kinds, declared where they are produced. Imported
+# defensively: this module is pure and must still evaluate policies on an
+# install where repo_scan is unavailable.
+try:  # pragma: no cover - trivial fallback
+    from clawmetry.repo_scan import WORKSPACE_KINDS
+except Exception:  # noqa: BLE001
+    WORKSPACE_KINDS = ("repo_config_exec", "agent_config_tamper")
 
 # Action ladder, weakest first. Order IS the escalation order and the
 # strongest-wins comparison; do not reorder without updating the UI copy.
@@ -284,7 +303,13 @@ def _match(policy: Dict[str, Any], incident: Dict[str, Any],
 
     kind = str(incident.get("kind") or "").strip()
     want_kind = str(policy.get("trigger_kind") or "").strip()
-    if want_kind and want_kind != kind:
+    if want_kind:
+        if want_kind != kind:
+            return None
+    elif kind in WORKSPACE_KINDS:
+        # "any signal" means any signal about the AGENT. A workspace finding is
+        # a property of the folder and is always critical, so folding it into
+        # the catch-all would silently repurpose every existing rule.
         return None
 
     if not _scope_matches(policy.get("scope_runtime"), incident.get("runtime")):
