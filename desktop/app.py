@@ -417,6 +417,44 @@ def _desktop_version() -> str:
         return "dev"
 
 
+def _version_tuple(v: str) -> Optional[tuple]:
+    """A comparable tuple for a dotted numeric version, or None when the
+    string is not one ("dev", "installed", a pre-release suffix). One
+    parser, because the floor check and the dist-info picker have to
+    order versions the same way to agree about what "older" means."""
+    parts = (v or "").strip().split(".")
+    if not parts or not all(x.isdigit() for x in parts):
+        return None
+    return tuple(int(x) for x in parts)
+
+
+# The lowest clawmetry the shell will accept from pip, handed to pip as
+# `clawmetry>=<floor>`.
+#
+# Without a floor, `pip install --upgrade clawmetry` does not fail when a
+# dependency has no wheel for the interpreter — it backtracks *clawmetry
+# itself* until the graph resolves, and installs whatever ancient release
+# predates that dependency. Measured against live PyPI on py3.11 with the
+# `--only-binary=:all:` this shell uses on Windows (issue #5639): a win32
+# interpreter resolves clawmetry 0.12.163, from before duckdb was a
+# dependency at all, and a win-arm64 one resolves 0.12.793. Nothing
+# errors, the entry point exists, the splash clears, and the user runs a
+# 664-release-old ClawMetry against a current cloud — a failure no field
+# report can see, because from here the install succeeded.
+#
+# The bundle's own stamped version is the floor: this shell was BUILT at
+# that release, so PyPI demonstrably has it. A developer checkout carries
+# no stamp ("dev") and gets no floor, which is the old behaviour.
+def _pip_version_floor() -> str:
+    v = _desktop_version()
+    return v if _version_tuple(v) else ""
+
+
+def _pip_requirement() -> str:
+    floor = _pip_version_floor()
+    return f"clawmetry>={floor}" if floor else "clawmetry"
+
+
 def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip() not in ("", "0", "false", "False")
 
@@ -653,6 +691,25 @@ def bootstrap_failure_ping(
     return True
 
 
+# The one probe every candidate interpreter must pass, shared by
+# `_bootstrap_python` (which reads both printed lines) and
+# `_known_good_python` (which only needs the exit status) so the 3.9
+# floor cannot drift between them.
+#
+# 3.9 is clawmetry's tested floor. venv+ensurepip is all the BASE
+# interpreter needs — the venv seeds its own pip — and requiring
+# `import pip` here rejected perfectly usable pythons. The Windows Store
+# execution-alias stub fails the import and is skipped.
+#
+# Line 1 is "major.minor", line 2 `sysconfig.get_platform()`.
+_PYTHON_PROBE = (
+    "import sys, sysconfig, venv, ensurepip; "
+    "print('%d.%d' % sys.version_info[:2]); "
+    "print(sysconfig.get_platform()); "
+    "sys.exit(0 if sys.version_info >= (3, 9) else 3)"
+)
+
+
 def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
     """A real Python interpreter the shell can use to create a venv.
     PyInstaller's bundled interpreter can't (its `sys.executable` is
@@ -686,20 +743,17 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
         paths += [
             str(p) for p in sorted(local.glob("Python3*/python.exe"), reverse=True)
         ]
-    # 3.9 is clawmetry's tested floor: an older interpreter creates the
-    # venv fine and then pip fails with "No matching distribution found"
-    # — a dead end this probe must reject up front. venv+ensurepip is
-    # all the BASE interpreter needs (the venv seeds its own pip);
-    # requiring `import pip` here rejected perfectly usable pythons.
-    # The probe also prints "major.minor" so the winner's version rides
-    # along in the cache — the field-failure report wants to say WHICH
-    # Python a bootstrap died on (the 2026-08-29 cffi failure was
-    # invisible precisely because nothing recorded "3.14").
-    probe = (
-        "import sys, venv, ensurepip; "
-        "print('%d.%d' % sys.version_info[:2]); "
-        "sys.exit(0 if sys.version_info >= (3, 9) else 3)"
-    )
+    # An interpreter below the floor creates the venv fine and then pip
+    # fails with "No matching distribution found" — a dead end the probe
+    # rejects up front. The probe's printed version rides along in the
+    # cache because the field-failure report wants to say WHICH Python a
+    # bootstrap died on (the 2026-08-29 cffi failure was invisible
+    # precisely because nothing recorded "3.14"), and its platform tag
+    # goes in bootstrap.log because "which interpreter did pip resolve
+    # wheels for" is the first question every no-wheel report asks and
+    # the version alone cannot answer it (win32 has no duckdb wheel at
+    # any Python version).
+    probe = _PYTHON_PROBE
     for p in paths:
         if not p:
             continue
@@ -715,10 +769,13 @@ def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
             )
             if r.returncode == 0:
                 if cache_file is not None:
+                    out = (r.stdout or "").splitlines()
                     try:
                         cache_file.write_text(json.dumps({
                             "python": p,
-                            "version": (r.stdout or "").strip()[:8],
+                            "version": (out[0].strip() if out else "")[:8],
+                            "platform": (out[1].strip()
+                                         if len(out) > 1 else "")[:24],
                         }))
                     except OSError:
                         pass
@@ -738,6 +795,64 @@ def _bootstrap_python_version(cache_file: Optional[Path]) -> str:
         return v if re.fullmatch(r"\d+\.\d+", v) else ""
     except Exception:
         return ""
+
+
+def _bootstrap_python_platform(cache_file: Optional[Path]) -> str:
+    """`sysconfig.get_platform()` of the cached bootstrap interpreter
+    ("win-amd64", "win32", "macosx-14.0-arm64"), or "" when no probe has
+    succeeded or the cache predates the field. Bounded to the shape a
+    platform tag has; a log line is its only consumer."""
+    if cache_file is None:
+        return ""
+    try:
+        v = str(json.loads(cache_file.read_text()).get("platform") or "")
+        return v if re.fullmatch(r"[A-Za-z0-9_.\-]{1,24}", v) else ""
+    except Exception:
+        return ""
+
+
+# The interpreter the shell installs when it has to provide one, pinned
+# in ONE place because the winget id and the install directory have to
+# agree for `_known_good_python()` to find what `_winget_install_python`
+# put down.
+#
+# Deliberately NOT "the latest Python". Wheel coverage lags a Python
+# release by months, and the newest interpreter is the one most likely
+# to have none: the 2026-08-29 field failure was a python.org 3.14
+# machine where cffi shipped no cp314 wheel, so pip fell back to an sdist
+# and demanded MSVC. "Latest" is the failure mode; "known-good" is the
+# fix. Move this pin forward when wheels for a newer minor are the norm.
+KNOWN_GOOD_PYTHON_MINOR = "3.12"
+KNOWN_GOOD_PYTHON_WINGET_ID = "Python.Python.3.12"
+KNOWN_GOOD_PYTHON_DIRNAME = "Python312"
+
+
+def _known_good_python() -> Optional[str]:
+    """The pinned per-user python.org interpreter, if it is on disk and
+    passes the usual probe — the exact path `_winget_install_python`
+    installs to.
+
+    Addressed by path, NOT by re-probing: `_bootstrap_python()` tries
+    `py` first, and the `py` launcher resolves to the NEWEST installed
+    interpreter, which in the case this exists to fix is precisely the
+    one that has no wheels. A re-probe would hand back the broken
+    interpreter and the retry would fail identically."""
+    if platform.system() != "Windows":
+        return None
+    exe = (Path(os.environ.get("LOCALAPPDATA", ""))
+           / "Programs" / "Python" / KNOWN_GOOD_PYTHON_DIRNAME / "python.exe")
+    if not exe.exists():
+        return None
+    try:
+        r = subprocess.run(
+            [str(exe), "-c", _PYTHON_PROBE],
+            capture_output=True, text=True, timeout=20,
+            env=_child_env(), stdin=subprocess.DEVNULL,
+            **_win_subprocess_kwargs(),
+        )
+        return str(exe) if r.returncode == 0 else None
+    except Exception:
+        return None
 
 
 def _winget_install_python(log: Callable[[str], None]) -> None:
@@ -765,7 +880,7 @@ def _winget_install_python(log: Callable[[str], None]) -> None:
         return
     try:
         r = subprocess.run(
-            [winget, "install", "-e", "--id", "Python.Python.3.12",
+            [winget, "install", "-e", "--id", KNOWN_GOOD_PYTHON_WINGET_ID,
              "--scope", "user", "--silent", "--disable-interactivity",
              "--accept-package-agreements", "--accept-source-agreements"],
             capture_output=True, text=True, timeout=600,
@@ -783,14 +898,26 @@ _PIP_FAILURE_HINTS = {
     "broken_runtime": (
         "The runtime environment was broken — relaunch the app to rebuild it."
     ),
+    # Shown only after `_retry_on_known_good_python` has already tried to
+    # provide a supported interpreter on Windows, so this is the
+    # last-resort ask, not the first response. Names the pinned minor
+    # rather than a range: "install the latest Python" is what CAUSED the
+    # 2026-08-29 cffi/3.14 failure.
     "compiler_demand": (
         "A dependency has no prebuilt package for this Python "
         "version — update ClawMetry (packaging fix), or install "
-        "python.org Python 3.12/3.13 and relaunch."
+        f"python.org Python {KNOWN_GOOD_PYTHON_MINOR} and relaunch."
     ),
+    # NOT "Python too old": _bootstrap_python's probe enforces the 3.9
+    # floor, so pip is only ever reached on an interpreter that already
+    # passed it. Field failure #5628 was a Python 3.11 machine being
+    # told to go and install Python 3.11+. What is left when the index
+    # answered but carried nothing usable: a private mirror that does
+    # not proxy PyPI, or an interpreter PyPI ships no wheels for.
     "no_distribution": (
-        "Python too old or PyPI unreachable — "
-        "install python.org Python 3.11+ and relaunch."
+        "The package index has no installable ClawMetry for this Python "
+        "— if pip points at a private mirror, allow pypi.org; otherwise "
+        f"install python.org Python {KNOWN_GOOD_PYTHON_MINOR} and relaunch."
     ),
     "tls_intercepted": (
         "A firewall or proxy is intercepting TLS to pypi.org — "
@@ -821,6 +948,9 @@ class RuntimeSupervisor:
         self.runtime = _runtime_dir()
         self.venv = self.runtime / "venv"
         self.stamp_file = self.runtime / "last-upgrade.json"
+        # Which stranded version the old-version heal has already been
+        # attempted for (see _is_stranded_on_an_old_version).
+        self.heal_file = self.runtime / "version-heal.json"
         self.log_file = self.runtime / "bootstrap.log"
         # {"app_pid": ..., "daemon_pid": ..., "port": ...} of the live
         # instance — the single-instance guard and orphan cleanup key.
@@ -889,6 +1019,46 @@ class RuntimeSupervisor:
         except OSError:
             pass
 
+    def _is_stranded_on_an_old_version(self, installed: str) -> bool:
+        """Whether the venv's clawmetry is OLDER than the shell that is
+        booting it — and worth one reinstall attempt to heal.
+
+        The floor above stops pip creating this state; this is what
+        rescues the machines already in it. A silent backtrack leaves a
+        COMPLETE, importable install, so the warm-launch short-circuit
+        accepted it and booted an ancient ClawMetry on every relaunch
+        forever — the same shape as the package-corpse bug, one step
+        removed (#5639).
+
+        Latched on disk, and deliberately: the heal reruns pip on the
+        boot path, and on Windows a floored failure now provisions an
+        interpreter, so a check that fired every launch would mean a pip
+        run (and possibly a winget install) on every launch of a machine
+        it cannot fix. One attempt per stranded version, then the launch
+        is allowed to proceed on the old install — a ClawMetry that is
+        behind still beats a shell that will not open."""
+        floor = _version_tuple(_pip_version_floor())
+        have = _version_tuple(installed)
+        if not floor or not have or have >= floor:
+            return False
+        try:
+            tried = json.loads(self.heal_file.read_text()).get("from", "")
+        except Exception:
+            tried = ""
+        if tried == installed:
+            self._log(f"clawmetry {installed} is older than this shell "
+                      f"({_pip_version_floor()}) and the reinstall already "
+                      f"ran for it — continuing on the old version")
+            return False
+        try:
+            self.heal_file.write_text(json.dumps({"from": installed}))
+        except OSError:
+            pass
+        self._log(f"clawmetry {installed} is older than this shell "
+                  f"({_pip_version_floor()}) — pip resolved a backtracked "
+                  f"release (see #5639); reinstalling with a version floor")
+        return True
+
     def _get_installed_version(self) -> Optional[str]:
         """Version of clawmetry installed in the runtime venv, read
         straight from the dist-info directory name — no interpreter
@@ -909,10 +1079,7 @@ class RuntimeSupervisor:
 
         def _ver_key(d: Path):
             v = d.name[len("clawmetry-"):-len(".dist-info")]
-            try:
-                return tuple(int(x) for x in v.split("."))
-            except ValueError:
-                return (-1,)
+            return _version_tuple(v) or (-1,)
 
         try:
             infos = [
@@ -1037,8 +1204,12 @@ class RuntimeSupervisor:
         except subprocess.TimeoutExpired:
             self._log("pip self-upgrade timed out; continuing with bundled pip")
         base = [vpy, "-m", "pip", "install", "--upgrade", *self._PIP_FLAGS]
-        attempts = [base + ["clawmetry"],
-                    base + ["--no-cache-dir", "clawmetry"]]
+        # Floored, never bare: a bare `clawmetry` lets pip satisfy the
+        # requirement by backtracking to a release old enough to predate
+        # the dependency that has no wheel here (#5639).
+        req = _pip_requirement()
+        attempts = [base + [req],
+                    base + ["--no-cache-dir", req]]
         rc, out = 1, ""
         for i, argv in enumerate(attempts):
             try:
@@ -1071,21 +1242,109 @@ class RuntimeSupervisor:
         (AC-FFR-001) — a closed enum, never free text, because the code
         is the ONLY part of a failure that ever leaves the machine."""
         low = output.lower()
+        tls = "certificate" in low or "sslerror" in low or "ssl:" in low
+        network = ("timed out" in low or "connection" in low
+                   or "temporary failure" in low or "getaddrinfo" in low
+                   or "name or service not known" in low)
         if "no python at" in low or "did not find executable" in low:
             return "broken_runtime"
         if "microsoft visual c++" in low or "build wheel did not run successfully" in low:
             return "compiler_demand"
         if "no matching distribution" in low or "could not find a version" in low:
+            # pip reports an index it could not READ exactly the way it
+            # reports an interpreter PyPI has no wheels for, and this
+            # branch used to swallow both — so a blocked proxy or an
+            # intercepted TLS handshake surfaced as "Python too old"
+            # (field failure #5628). The tell is pip's own candidate
+            # list: "(from versions: none)" means the index yielded no
+            # candidates AT ALL, so paired with transport evidence the
+            # transport is the cause. A real version list means the
+            # index answered and nothing in it fits — no_distribution.
+            if "from versions: none" in low:
+                if tls:
+                    return "tls_intercepted"
+                if network:
+                    return "network"
             return "no_distribution"
-        if "certificate" in low or "sslerror" in low or "ssl:" in low:
+        if tls:
             return "tls_intercepted"
-        if ("timed out" in low or "connection" in low
-                or "temporary failure" in low or "getaddrinfo" in low
-                or "name or service not known" in low):
+        if network:
             return "network"
         if "permission" in low or "access is denied" in low or "winerror 5" in low:
             return "permissions"
         return "pip_unknown"
+
+    # Failure families where a DIFFERENT interpreter is the remedy, so
+    # installing one can actually help. Both mean "PyPI has no artifact
+    # this interpreter can use": no wheel for its tag or Python minor
+    # (`no_distribution`), or a wheel-less dependency falling back to an
+    # sdist that demands MSVC (`compiler_demand`). Every other class is
+    # about the network, the index, the filesystem or the venv, where a
+    # new Python changes nothing — installing one there would be a
+    # gratuitous ~30 MB download that still ends in the same failure.
+    _INTERPRETER_REMEDIABLE = ("no_distribution", "compiler_demand")
+
+    def _retry_on_known_good_python(self, rc: int, out: str) -> "tuple[int, str]":
+        """Windows: when pip failed because PyPI has nothing this
+        interpreter can install, provide an interpreter that does rather
+        than telling the user to go and get one.
+
+        Python is a dependency the shell installs, not a prerequisite it
+        asks for — that is already how a machine with NO python is
+        handled, and a machine whose python has no wheels is the same
+        problem one step later. Field failure #5628 is what asking looks
+        like from the user's side: a Python 3.11 machine was told to
+        install Python 3.11+.
+
+        At most one attempt per bootstrap, and none at all when the
+        current interpreter IS the pinned one (nothing left to try) or
+        when the failure is about the network/index/filesystem, where a
+        new interpreter cannot help. Returns pip's (rc, output) —
+        unchanged when no retry was made, so the caller classifies the
+        ORIGINAL failure and the user still gets the accurate hint."""
+        if platform.system() != "Windows":
+            return rc, out
+        if self._classify_pip_failure(out) not in self._INTERPRETER_REMEDIABLE:
+            return rc, out
+        # getattr: bootstrap() assigns this (and the failure class) on
+        # entry rather than in __init__, so that tests can build a
+        # supervisor via __new__ — this method must not be the one place
+        # that assumes the attribute already exists.
+        if getattr(self, "bootstrap_python_version", "") == KNOWN_GOOD_PYTHON_MINOR:
+            self._log(f"pip failed on the pinned "
+                      f"{KNOWN_GOOD_PYTHON_MINOR} interpreter; no other "
+                      f"interpreter left to try")
+            return rc, out
+
+        self._log(f"pip found no installable artifact for this interpreter; "
+                  f"installing Python {KNOWN_GOOD_PYTHON_MINOR} and retrying")
+        good = _known_good_python()
+        if not good:
+            self.on_status(
+                f"Installing Python {KNOWN_GOOD_PYTHON_MINOR} runtime (one-time)"
+            )
+            _winget_install_python(self._log)
+            good = _known_good_python()
+        if not good:
+            self._log(f"could not provide a Python {KNOWN_GOOD_PYTHON_MINOR} "
+                      f"interpreter; keeping the original pip failure")
+            return rc, out
+
+        self.on_status("Retrying with a supported Python runtime")
+        self._log(f"rebuilding venv on {good}")
+        if not self._create_venv(good):
+            self._log("venv rebuild on the pinned interpreter failed; "
+                      "keeping the original pip failure")
+            return rc, out
+        rc2, out2 = self._pip_install_clawmetry()
+        self._log(f"retry on Python {KNOWN_GOOD_PYTHON_MINOR} rc={rc2}")
+        if rc2 == 0:
+            self.bootstrap_python_version = KNOWN_GOOD_PYTHON_MINOR
+            return rc2, out2
+        # Report what the SUPPORTED interpreter said: the first failure
+        # is now explained (that Python had no artifact), and this one is
+        # the real remaining problem.
+        return rc2, out2
 
     def bootstrap(self) -> bool:
         """Create the venv if missing; pip-install clawmetry if missing.
@@ -1116,11 +1375,14 @@ class RuntimeSupervisor:
             # COMPLETE install (dist-info with RECORD — a directory glob,
             # so the healthy warm launch stays spawn-free and fast) and
             # fall through to the normal install path when it is absent.
-            if self._get_installed_version() is not None:
-                return True
-            self._log("entry point exists but no complete clawmetry "
-                      "dist-info — package corpse from a half-failed "
-                      "in-place update; reinstalling")
+            installed = self._get_installed_version()
+            if installed is not None:
+                if not self._is_stranded_on_an_old_version(installed):
+                    return True
+            else:
+                self._log("entry point exists but no complete clawmetry "
+                          "dist-info — package corpse from a half-failed "
+                          "in-place update; reinstalling")
 
         cache = self.runtime / "bootstrap-python.json"
         py = _bootstrap_python(cache)
@@ -1135,13 +1397,16 @@ class RuntimeSupervisor:
         if not py:
             self.on_status(
                 "Python 3 not found and automatic install failed. "
-                "Install python.org 3.11+ then relaunch."
+                f"Install python.org {KNOWN_GOOD_PYTHON_MINOR} "
+                "then relaunch."
             )
             self._log("no usable python3 (need 3.9+ with venv+ensurepip)")
             self.failure_class = "no_python"
             return False
         self.bootstrap_python_version = _bootstrap_python_version(cache)
-        self._log(f"bootstrap python: {py}")
+        self._log(f"bootstrap python: {py} "
+                  f"({self.bootstrap_python_version or '?'} "
+                  f"{_bootstrap_python_platform(cache) or '?'})")
 
         # Health check, not existence check: we only get here with no
         # runnable clawmetry, so a venv that exists is a venv left over
@@ -1176,6 +1441,8 @@ class RuntimeSupervisor:
             self.on_status("Rebuilding runtime environment")
             if self._create_venv(py):
                 rc, out = self._pip_install_clawmetry()
+        if rc != 0:
+            rc, out = self._retry_on_known_good_python(rc, out)
         if rc != 0:
             self.failure_class = self._classify_pip_failure(out)
             hint = _PIP_FAILURE_HINTS[self.failure_class]
