@@ -193,6 +193,13 @@ def _finding(kind: str, severity: str, title: str, detail: str,
         "detail": detail,
         "evidence": evidence,
         "first_bad_step": None,
+        # A workspace finding is a property of the FOLDER, not a stretch of
+        # expensive tokens, so there is no spend to attach. 0.0 with basis
+        # "unknown" is the shape CLAUDE.md requires where no cost is known:
+        # never a fabricated figure, because sorting a queue by an invented
+        # dollar number is worse than not sorting it at all.
+        "spend_at_risk_usd": 0.0,
+        "spend_basis": "unknown",
     }
 
 
