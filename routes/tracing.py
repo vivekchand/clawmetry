@@ -9,7 +9,17 @@ timeline (waterfall) by their ``ts``. Sub-agent events
 
 Events-first by design: this reads the OpenClaw events ClawMetry already
 ingests, so it works without any OTLP exporter. OTel spans (the /v1/traces
-``spans`` table) are merged in when present.
+``spans`` table) are a SECOND source, not a merge: a trace id that has no
+events is served from the spans table (``_span_traces`` /
+``_build_spans_from_store``), and a trace that has events is built from the
+events alone. Spans an OTLP exporter pushed for the SAME session are not
+folded into the events-derived tree.
+
+Reasoning is first-class: every thinking block / ``thinking`` event becomes a
+``reasoning`` span ("think"), and the ``execute_tool`` spans it drove nest
+under it (see ``_build_spans``). When the raw events carry no thinking, the
+``replay_events`` table (kind ``thinking``, written by adapters'
+``iter_replay_events``) is read as a fallback.
 
 Endpoints (bp_tracing):
   GET /api/traces            — list of traces (sessions) with summary
@@ -23,6 +33,7 @@ import json
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request
+from clawmetry import event_shape as _event_shape
 
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 
@@ -219,6 +230,45 @@ def _walk_tool_results(node):
     elif isinstance(node, list):
         for item in node:
             yield from _walk_tool_results(item)
+
+
+def _thinking_texts(d):
+    """Reasoning text carried on one event's data, across every shape we ingest.
+
+    * OpenClaw / Anthropic content lists: ``message.content[]`` (or
+      ``content[]``) blocks of ``type: "thinking"`` (text under ``thinking``)
+      or ``type: "reasoning"`` (text under ``text``). ``redacted_thinking``
+      carries ciphertext only and is skipped.
+    * Family adapters that ride reasoning on the assistant message instead of
+      a separate event: ``extra.thinking`` / ``thinking`` string.
+    Returns a list of non-empty strings in on-disk order.
+    """
+    out = []
+    if not isinstance(d, dict):
+        return out
+    msg = d.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if content is None:
+        content = d.get("content")
+    if isinstance(content, list):
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            bt = b.get("type")
+            if bt == "thinking":
+                txt = b.get("thinking") if isinstance(b.get("thinking"), str) else b.get("text")
+            elif bt == "reasoning":
+                txt = b.get("text") if isinstance(b.get("text"), str) else b.get("reasoning")
+            else:
+                continue
+            if isinstance(txt, str) and txt.strip():
+                out.append(txt)
+    extra = d.get("extra") if isinstance(d.get("extra"), dict) else {}
+    for src in (extra, d):
+        t = src.get("thinking")
+        if isinstance(t, str) and t.strip() and t not in out:
+            out.append(t)
+    return out
 
 
 def _tool_label(name):
@@ -601,6 +651,16 @@ def _build_spans(rows):
     under its own ``invoke_agent`` span. Cost/tokens/duration roll up
     child→parent (``rolled_*`` fields on parents).
 
+    Reasoning is its own span kind (``reasoning``, name ``think``, detail =
+    the thinking text). A thinking block inside an assistant message nests
+    under that message's ``chat`` span; a standalone ``thinking`` event (the
+    family adapters emit one before the message/tool_call it produced) sits
+    beside the chat span under the agent root. Either way the reasoning span
+    becomes the parent of every ``execute_tool`` span that follows it within
+    the same assistant turn (the reasoning-to-tool causal link); a turn with
+    no reasoning nests its tools under the chat span as before. The scope of
+    "same turn" ends at the next user prompt or the next reasoning span.
+
     Each span: {span_id, parent_span_id, name, kind, event_type, start_ms,
     duration_ms, model, tokens, cost, status, is_subagent, detail, tool,
     rolled_tokens?, rolled_cost?}. Returns (spans_list, root_ids).
@@ -646,6 +706,9 @@ def _build_spans(rows):
     main_root = _mk("agent-main", None, "invoke_agent main", "agent", t0, t1)
     sub_root = None
     tool_spans = {}  # tool_use_id -> execute_tool span (closed on its result)
+    # Most recent reasoning span per lane (main / sub-agent); tools nest under
+    # it until the next user prompt or the next reasoning span replaces it.
+    last_reasoning = {False: None, True: None}
 
     for i, e in enumerate(evs):
         d = e.get("data") if isinstance(e.get("data"), dict) else {}
@@ -661,28 +724,13 @@ def _build_spans(rows):
         # which meant Claude Code events (`data.content` directly, no
         # `message` wrapper) ended up with empty `detail` and the MLflow-
         # style Chat tab had nothing to render.
-        text = ""
-        msg = d.get("message")
-        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-            text = msg["content"]
-        elif isinstance(msg, dict) and isinstance(msg.get("content"), list):
-            # Anthropic SDK content list: [{type:'text',text:'…'}, …]
-            parts = [b.get("text", "") for b in msg["content"] if isinstance(b, dict)]
-            text = "\n".join(p for p in parts if p)
-        elif isinstance(d.get("finalPromptText"), str):
-            text = d["finalPromptText"]
-        elif isinstance(d.get("promptText"), str):
-            text = d["promptText"]
-        elif isinstance(d.get("content"), str):
-            # Claude Code shape: `data.content` is the message body directly
-            # (no `message` wrapper). Without this the user prompt is empty
-            # and falls through to a generic `message` span instead of a
-            # `prompt` span.
-            text = d["content"]
-        elif isinstance(d.get("content"), list):
-            parts = [b.get("text", "") for b in d["content"] if isinstance(b, dict)]
-            text = "\n".join(p for p in parts if p)
-        elif isinstance(d.get("text"), str):
+        # ONE normaliser for every shape (clawmetry.event_shape): the
+        # OpenClaw v3 ``finalPromptText`` / ``completionText`` keys, the
+        # Anthropic ``message.content`` block list, and the family-adapter
+        # ``data.content`` body all resolve to the same ``text``.
+        shape = _event_shape.classify(et, d)
+        text = shape["text"]
+        if not text and isinstance(d.get("text"), str):
             text = d["text"]
 
         if is_sub and sub_root is None:
@@ -734,17 +782,38 @@ def _build_spans(rows):
                 # generic event-span for this row (its content is on the tool).
                 continue
 
+        if low == "thinking":
+            # Standalone reasoning event (family adapters: claude_code, codex,
+            # kimi, ...; replay_events kind=thinking via the fallback below).
+            # event_shape keeps reasoning in ``thinking`` (never ``text``),
+            # so read that first; ``text`` covers the bare ``data.text`` shape.
+            think_text = shape["thinking"] or text or ""
+            if not think_text.strip():
+                continue
+            rs = _mk(eid, agent_parent, "think", "reasoning", start, nxt,
+                     is_sub=is_sub, detail=think_text, event_type=et)
+            last_reasoning[is_sub] = rs
+            continue
+
         if is_assistant:
             chat = _mk(eid, agent_parent,
                        ("chat " + (e.get("model") or "")).strip() or "chat",
                        "llm", start, nxt, is_sub=is_sub, model=e.get("model") or "",
                        tokens=e.get("token_count"), cost=_event_cost(e),
-                       status="error" if (d.get("isError") or d.get("is_error")) else "ok",
+                       status="error" if (d.get("isError") or d.get("is_error")
+                                          or shape["is_error"]) else "ok",
                        detail=text, event_type=et)
+            # Thinking blocks carried INSIDE the assistant message (OpenClaw,
+            # Anthropic-shaped transcripts, extra.thinking) nest under it.
+            for k, think_text in enumerate(_thinking_texts(d)):
+                rs = _mk(f"{eid}-think-{k}", chat["span_id"], "think", "reasoning",
+                         start, nxt, is_sub=is_sub, detail=think_text, event_type=et)
+                last_reasoning[is_sub] = rs
+            tool_parent = (last_reasoning[is_sub] or chat)["span_id"]
             for j, tu in enumerate(_walk_tool_uses(d)):
                 tuid = tu.get("id") or f"{eid}-tu-{j}"
                 tname = _tool_label(tu.get("name"))
-                ts = _mk(tuid, chat["span_id"], "execute_tool " + tname, "tool",
+                ts = _mk(tuid, tool_parent, "execute_tool " + tname, "tool",
                          start, nxt, is_sub=is_sub, tool=tname,
                          detail=_short_input(tu.get("input")), event_type=et)
                 if (tu.get("name") or "") in _NEMOCLAW_CATALOG_TOOLS:
@@ -756,6 +825,7 @@ def _build_spans(rows):
             continue
 
         if is_user and text.strip():
+            last_reasoning[is_sub] = None  # a new prompt closes the reasoning scope
             _mk(eid, agent_parent, "prompt", "prompt", start, nxt, is_sub=is_sub,
                 detail=text, event_type=et)
             continue
@@ -824,6 +894,62 @@ def _build_agent_graph(spans):
     return {"nodes": nodes, "edges": edges}
 
 
+def _replay_thinking_rows(session_id, limit=4000):
+    """``replay_events`` rows of kind ``thinking`` for a session, reshaped as
+    event-like dicts ``_build_spans`` understands (``event_type: thinking``,
+    ``data.content`` = the text). Adapters that implement
+    ``iter_replay_events`` may write reasoning there without emitting a
+    ``thinking`` event, so this is the fallback when the raw events carry
+    none. Empty list on any failure or when the store is unreadable."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon(
+            "query_replay_events", session_id=session_id, limit=limit) or []
+    except Exception:
+        rows = []
+    out = []
+    for r in rows:
+        if not isinstance(r, dict) or (r.get("kind") or "") != "thinking":
+            continue
+        payload = r.get("payload") if isinstance(r.get("payload"), dict) else {}
+        text = ""
+        for key in ("text", "thinking", "content", "summary"):
+            v = payload.get(key)
+            if isinstance(v, str) and v.strip():
+                text = v
+                break
+        if not text and isinstance(r.get("payload"), str):
+            text = r["payload"]
+        if not text.strip():
+            continue
+        out.append({
+            "id": f"replay-{r.get('span_id') or len(out)}",
+            "event_type": "thinking",
+            "ts": r.get("ts"),
+            "data": {"role": "assistant", "content": text, "_replay": True},
+        })
+    return out
+
+
+def _reasoning_summary(session_id, spans):
+    """What the UI needs to render the reasoning lane honestly: how many
+    reasoning spans exist, and (when there are none) whether the runtime's
+    adapter says reasoning is exposed at all. ``coverage`` is one of
+    full / partial / none / unknown, ``note`` is the adapter's own sentence."""
+    runtime = _session_runtime(session_id)
+    try:
+        from routes.trail import coverage_for_runtime
+        cov = coverage_for_runtime(runtime)
+    except Exception:
+        cov = {"inputs": "unknown", "reasoning": "unknown", "note": ""}
+    return {
+        "runtime": runtime,
+        "span_count": sum(1 for s in spans if s.get("kind") == "reasoning"),
+        "coverage": cov.get("reasoning", "unknown"),
+        "note": cov.get("note", ""),
+    }
+
+
 @bp_tracing.route("/api/trace/<session_id>")
 def api_trace(session_id):
     """One trace: ordered spans (for the waterfall + tree) + agent graph.
@@ -840,6 +966,13 @@ def api_trace(session_id):
     rows = _events_for(session_id=session_id, limit=14000)
     if rows:
         spans, roots = _build_spans(rows)
+        if not any(s.get("kind") == "reasoning" for s in spans):
+            # No thinking in the raw events: an adapter may have written its
+            # reasoning to replay_events instead. Rebuild with those merged in
+            # so the causal link still forms.
+            replay = _replay_thinking_rows(session_id)
+            if replay:
+                spans, roots = _build_spans(list(rows) + replay)
         summary = _summarize_trace(session_id, rows)
         return jsonify({
             "available": True,
@@ -848,6 +981,7 @@ def api_trace(session_id):
             "spans": spans,
             "root_span_ids": roots,
             "agent_graph": _build_agent_graph(spans),
+            "reasoning": _reasoning_summary(session_id, spans),
             "source": "events",
         })
 

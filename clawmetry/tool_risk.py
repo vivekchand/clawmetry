@@ -102,7 +102,15 @@ def extract_command(tool_name: str, args: Any) -> str:
                 return " ".join(str(x) for x in v)
             except Exception:
                 continue
-    # Fallback: stringify args
+    # Nothing recognised. An EMPTY arg object has no command to show, and
+    # stringifying it produced the literal "{}" that reached operators as
+    # ``exec: {}`` in the approval inbox -- a card that names a tool and then
+    # shows braces where the command should be. Say nothing instead; callers
+    # render "command not recorded" rather than punctuation.
+    if not args:
+        return ""
+    # Non-empty args we do not have a key for still carry information (a
+    # web query, a patch body), so stringify those.
     try:
         return json.dumps(args)[:500]
     except Exception:

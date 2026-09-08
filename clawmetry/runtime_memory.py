@@ -52,6 +52,7 @@ import glob as _glob
 import json
 import os
 import re as _re
+import time as _time
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
@@ -119,6 +120,15 @@ def _workspace_root() -> str:
 
     Uses the dashboard's resolved WORKSPACE when the module is imported in
     the Flask process, else the CWD. Never raises.
+
+    The CWD fallback has one trap worth naming: the sync daemon is started
+    by launchd/systemd, which sets ``cwd="/"``. A workspace of "/" makes
+    every project-scoped root a path no agent ever writes ("/AGENTS.md"),
+    and it used to make ``_expand_project_roots`` skip the runtime entirely
+    (burned 2026-09-06: Codex, whose memory is *only* per-repo AGENTS.md,
+    ingested zero memory files on cloud while the local dashboard — whose
+    workspace is a real dir — showed them). Fall back to the OpenClaw
+    workspace, then $HOME, before ever returning the filesystem root.
     """
     try:
         import dashboard as _d
@@ -127,7 +137,28 @@ def _workspace_root() -> str:
             return ws
     except Exception:
         pass
-    return os.getcwd()
+    try:
+        cwd = os.getcwd()
+    except OSError:          # cwd deleted out from under us
+        cwd = ""
+    if cwd and cwd != os.sep:
+        return cwd
+    oc_ws = os.path.join(_openclaw_home(), "workspace")
+    if os.path.isdir(oc_ws):
+        return oc_ws
+    return os.path.expanduser("~")
+
+
+def _is_within(path: str, base: str) -> bool:
+    """True when ``path`` is ``base`` or lives under it.
+
+    ``path.startswith(base + os.sep)`` is wrong for the filesystem root:
+    ``"/" + "/"`` is ``"//"``, which nothing starts with, so every path
+    tested against a root workspace answered False.
+    """
+    if path == base:
+        return True
+    return path.startswith(base.rstrip(os.sep) + os.sep)
 
 
 def _openclaw_home() -> str:
@@ -250,6 +281,56 @@ def _claude_registry_projects(limit: int = 8) -> list:
     return [p for p in cached if os.path.isdir(p)][:limit]
 
 
+# Codex keeps no project registry, but every rollout file opens with a
+# ``session_meta`` line carrying the cwd of the run — Codex's own answer to
+# "which repos did I work in". Scanning the newest N rollouts costs one
+# readline each, cached for a minute so a catalog build per request is free.
+_CODEX_CWD_CACHE: dict = {}
+_CODEX_CWD_TTL_SECS = 60.0
+_CODEX_ROLLOUT_SCAN = 40
+
+
+def _codex_project_dirs(limit: int = 6) -> list:
+    """Repos Codex actually ran in, newest first, from its own rollouts.
+
+    Codex stores memory *only* per repo (``AGENTS.md``), and a Codex-only
+    user has no ``~/.claude.json`` for the borrowed-registry path to read —
+    so without this their Memory tab is empty by construction. Mirrors the
+    adapter's discovery: ``$CODEX_HOME`` (default ``~/.codex``), both the
+    live ``sessions/`` and the ``archived_sessions/`` sibling. Never raises.
+    """
+    home = _env_root("CODEX_HOME", os.path.expanduser("~/.codex"))
+    cached = _CODEX_CWD_CACHE.get(home)
+    if cached and (_time.time() - cached[0]) < _CODEX_CWD_TTL_SECS:
+        return cached[1][:limit]
+    files: list = []
+    for sub in ("sessions", "archived_sessions"):
+        root = os.path.join(home, sub)
+        if not os.path.isdir(root):
+            continue
+        try:
+            # Rollout names embed an ISO timestamp under YYYY/MM/DD dirs, so
+            # a reverse lexicographic sort of the full path is newest-first.
+            files.extend(_glob.glob(
+                os.path.join(root, "**", "rollout-*.jsonl"), recursive=True))
+        except Exception:
+            continue
+    out: list = []
+    for f in sorted(files, reverse=True)[:_CODEX_ROLLOUT_SCAN]:
+        try:
+            with open(f, "r", encoding="utf-8", errors="replace") as fh:
+                meta = json.loads(fh.readline(65536) or "{}")
+        except Exception:
+            continue
+        cwd = (meta.get("payload") or {}).get("cwd") or meta.get("cwd")
+        if (isinstance(cwd, str) and os.path.isabs(cwd)
+                and cwd not in out and os.path.isdir(cwd)):
+            out.append(cwd)
+    _CODEX_CWD_CACHE.clear()
+    _CODEX_CWD_CACHE[home] = (_time.time(), out)
+    return out[:limit]
+
+
 def _candidate_project_dirs(ws: str, limit: int = 10) -> list:
     """Real project dirs to re-base project-scoped roots over.
 
@@ -276,6 +357,11 @@ def _candidate_project_dirs(ws: str, limit: int = 10) -> list:
     for p in (os.environ.get("AIDER_HISTORY_DIRS") or "").split(os.pathsep):
         if p.strip():
             add(os.path.expanduser(p.strip()))
+    # A runtime's own registry outranks a borrowed one: Codex's rollout cwds
+    # go in before Claude Code's project map, so a Codex-heavy laptop can
+    # never spend the whole `limit` on repos Codex has never opened.
+    for p in _codex_project_dirs():
+        add(p)
     for p in _claude_registry_projects():
         add(p)
     for p in _slug_project_dirs(os.path.expanduser("~/.qwen/projects")):
@@ -292,9 +378,9 @@ def _expand_project_roots(catalog: list, ws: str) -> list:
     exists — so runtimes the user never touched in a repo stay exactly as
     quiet as before, while real per-repo files finally surface.
     """
+    # No candidates still runs the dedup pass below — a duplicate root can
+    # come from the workspace spec alone, with no clone involved.
     candidates = _candidate_project_dirs(ws)
-    if not candidates:
-        return catalog
     ws_abs = os.path.abspath(ws)
     for entry in catalog:
         extra: list = []
@@ -302,7 +388,7 @@ def _expand_project_roots(catalog: list, ws: str) -> list:
             if spec.scope != "project":
                 continue
             root = os.path.abspath(spec.expanded_root())
-            if root != ws_abs and not root.startswith(ws_abs + os.sep):
+            if not _is_within(root, ws_abs):
                 continue
             rel = os.path.relpath(root, ws_abs)
             for cand in candidates:
@@ -317,6 +403,22 @@ def _expand_project_roots(catalog: list, ws: str) -> list:
                 ))
         if extra:
             entry.roots = tuple(entry.roots) + tuple(extra)
+        # One file, one row. A project spec can resolve to a path a global
+        # spec already covers (with the daemon's workspace at $HOME,
+        # "<ws>/.codex/config.toml" IS "~/.codex/config.toml"), and showing
+        # the same file twice under two labels reads as a bug to anyone
+        # opening the tab. Globs are part of the key: the same root scanned
+        # with different include patterns is two honest groups.
+        deduped: list = []
+        seen_roots: set = set()
+        for spec in entry.roots:
+            key = (spec.category, os.path.abspath(spec.expanded_root()),
+                   tuple(spec.include_globs or ()))
+            if key in seen_roots:
+                continue
+            seen_roots.add(key)
+            deduped.append(spec)
+        entry.roots = tuple(deduped)
     return catalog
 
 

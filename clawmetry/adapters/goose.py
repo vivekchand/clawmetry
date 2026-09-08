@@ -848,6 +848,26 @@ class GooseAdapter(AgentAdapter):
                         },
                     ))
 
+                elif btype == "thinking":
+                    # Goose ``MessageContent::Thinking`` serialises as
+                    # ``{"type": "thinking", "thinking": "...", "signature"}``
+                    # when the provider streams extended thinking;
+                    # ``redactedThinking`` carries ciphertext only and is
+                    # deliberately not surfaced as text.
+                    think = block.get("thinking")
+                    if isinstance(think, str) and think.strip():
+                        seq += 1
+                        events.append(Event(
+                            agent=_AGENT,
+                            session_id=session_id,
+                            id=f"{session_id}:{seq}",
+                            type="thinking",
+                            ts=ts,
+                            role="assistant",
+                            content=think,
+                        ))
+                        text_emitted = True
+
                 elif btype == "text":
                     txt = block.get("text")
                     if isinstance(txt, str) and txt:
@@ -867,7 +887,9 @@ class GooseAdapter(AgentAdapter):
             # If the row had blocks we did not recognise but does carry text,
             # fall back to a single message so nothing is silently dropped.
             if not text_emitted and not any(
-                b.get("type") in ("toolRequest", "toolResponse") for b in blocks
+                b.get("type") in ("toolRequest", "toolResponse", "thinking",
+                                  "redactedThinking")
+                for b in blocks
             ):
                 fallback = _text_of_blocks(blocks)
                 if fallback:
@@ -891,4 +913,20 @@ class GooseAdapter(AgentAdapter):
         # honest here — unlike PicoClaw/NanoClaw which carry no usage columns.
         # accumulated_cost (USD) is present for paid providers and NULL for
         # local Ollama; we surface tokens always and USD when on disk.
-        return {Capability.SESSIONS, Capability.EVENTS, Capability.COST}
+        return {Capability.SESSIONS, Capability.EVENTS, Capability.COST,
+                Capability.REASONING}
+
+    def trail_coverage(self) -> dict:
+        """Goose ``messages.content_json`` is a list of MessageContent blocks.
+        ``thinking`` blocks (``{"type": "thinking", "thinking": ...}``) appear
+        only when the provider streams extended thinking and the session's
+        ``model_config_json.reasoning`` asks for it; ``redactedThinking``
+        blocks carry no readable text. No system prompt or tool list is
+        stored in the SQLite session store."""
+        return {
+            "inputs": "none",
+            "reasoning": "partial",
+            "note": ("messages.content_json thinking blocks, written only when "
+                     "the provider streams extended thinking; redactedThinking "
+                     "is ciphertext; no system prompt or tool list on disk"),
+        }

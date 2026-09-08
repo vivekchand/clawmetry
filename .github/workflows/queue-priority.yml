@@ -9,8 +9,9 @@
 #      in-progress) runs on non-main refs so main's jobs take the runners next.
 #   2. requeue      — once main is quiet again (Auto-deploy Cloud completed, or
 #      the half-hourly sweep finds main idle), re-run the latest cancelled run
-#      of each workflow for every open PR whose drift-bot check is green.
-#      Red-drift PRs stay parked until their drift is fixed and re-reported.
+#      of each workflow for every open PR whose drift-bot commit status is
+#      green. Red-drift PRs stay parked until their drift is fixed and
+#      re-reported.
 #
 # No third-party actions on purpose: every step is `gh api` against
 # GITHUB_TOKEN, so there is nothing to SHA-pin and no checkout needed.
@@ -78,11 +79,15 @@ jobs:
     if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # actions: re-run parked runs; checks: read drift-bot's conclusion;
+    # actions: re-run parked runs; statuses: read drift-bot's commit status;
     # pull-requests: list the open PRs to consider.
+    #
+    # `statuses: read` rather than `checks: read`: drift-bot is a commit
+    # status, not a check run (see the step below), and the two surfaces are
+    # governed by different scopes. Nothing here reads /check-runs any more.
     permissions:
       actions: write
-      checks: read
+      statuses: read
       pull-requests: read
     steps:
       - name: Skip while main still has queued or running jobs
@@ -111,8 +116,25 @@ jobs:
           gh api "/repos/$REPO/pulls?state=open&per_page=100" --paginate \
             --jq '.[] | select(.head.repo.full_name == env.REPO) | "\(.number)\t\(.head.ref)\t\(.head.sha)"' |
           while IFS=$'\t' read -r pr branch sha; do
-            drift=$(gh api "/repos/$REPO/commits/$sha/check-runs?check_name=drift-bot&per_page=10" \
-                      --jq '[.check_runs[] | .conclusion] | first // "missing"')
+            # drift-bot is a COMMIT STATUS posted by the 8090-software-factory
+            # App, not an Actions check run. It never appears in /check-runs --
+            # scripts/e2e_gate.py grew list_commit_statuses() for exactly this
+            # reason. Reading the wrong surface returned "missing" for every
+            # PR, so the guard below rejected all of them and this job has
+            # re-run nothing since it landed: every run clear-queue cancelled
+            # stayed cancelled. /commits/<sha>/status already collapses to the
+            # latest status per context.
+            drift=$(gh api "/repos/$REPO/commits/$sha/status" \
+                      --jq '[.statuses[] | select(.context == "drift-bot") | .state]
+                            | first // "unreported"')
+            # Success-only, exactly as the Main-First Runner Queue Priority
+            # requirement states. "unreported" is its own case and is NOT
+            # treated as green here: the App only posts on PRs touching Python
+            # or product-record files, so a frontend-only Dependabot npm bump
+            # never receives a status and stays parked. Widening the condition
+            # to cover it is a change to the requirement, not to this file --
+            # see the PR discussion. Kept distinct from "missing" only so the
+            # log says which of the two happened.
             [ "$drift" = "success" ] || { echo "PR #$pr: drift=$drift, parked"; continue; }
             # Latest run per workflow on this head branch; re-run it only if it
             # ended cancelled (i.e. we parked it) and recently.

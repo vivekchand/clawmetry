@@ -24,7 +24,9 @@ or opts out ON PURPOSE, with a reason on the same line:
     No-PRD: revert of #1234
 
 Docs-only, test-only and CI-only changes skip the check entirely -- writing
-the record must not itself be gated on citing one.
+the record must not itself be gated on citing one. So do dependency
+manifests and lockfiles: a version bump is justified by the advisory, not by
+a requirement written first, and Dependabot cannot type an opt-out line.
 
 Deliberately NOT a taste check. It cannot tell a real requirement from a
 stub, and pretending otherwise would be theatre. What it does is make
@@ -60,6 +62,36 @@ EXEMPT_PREFIXES = (
 )
 EXEMPT_SUFFIXES = (".md", ".txt")
 
+#: Dependency manifests and lockfiles, matched on the FULL basename so that
+#: `mypackage.json` still needs a record.
+#:
+#: A version bump is a supply-chain change, not a product decision: what
+#: justifies it is the advisory or the upstream release, and there is no
+#: requirement to write first. The pip half of this was already true by
+#: accident -- `requirements*.txt` is exempt via EXEMPT_SUFFIXES above -- so
+#: pip Dependabot PRs have always merged while npm ones could not, and the
+#: asymmetry was extension trivia rather than anybody's decision.
+#:
+#: What that cost: every npm advisory fix on this repo sat behind a gate it
+#: had no way to satisfy. Dependabot does not write `No-PRD:` into a PR body
+#: and cannot be configured to, so #5241/#5244/#5376 and their siblings were
+#: unmergeable from the moment they opened -- one of them carrying a fix
+#: rated high severity. A gate that blocks the security updates it was never
+#: aimed at is a gate people route around.
+#:
+#: `package.json` is here alongside the lockfiles even though it also holds
+#: `scripts`. That is consistent rather than a hole: `scripts/` and
+#: `.github/` are already exempt, so build tooling sits outside this gate by
+#: design, and `package.json` is the npm face of the same thing. A change
+#: that IS a product decision still has `No-PRD:` to answer to.
+EXEMPT_BASENAMES = (
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+)
+
 
 def changed_files(base: str, head: str) -> list[str]:
     try:
@@ -77,6 +109,10 @@ def needs_record(paths: list[str]) -> list[str]:
     out = []
     for p in paths:
         if p.startswith(EXEMPT_PREFIXES) or p.endswith(EXEMPT_SUFFIXES):
+            continue
+        # Basename equality, not a suffix test: `frontend/package.json` is a
+        # manifest, `mypackage.json` is a data file somebody wrote.
+        if p.rsplit("/", 1)[-1] in EXEMPT_BASENAMES:
             continue
         out.append(p)
     return out

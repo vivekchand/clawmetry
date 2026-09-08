@@ -107,6 +107,53 @@ def test_a_mixed_pr_still_needs_a_record(monkeypatch):
     ) == 1
 
 
+# ── dependency bumps ────────────────────────────────────────────────────
+#
+# Dependabot cannot write "No-PRD:" into a PR body and cannot be configured
+# to. Before this exemption every npm advisory fix was unmergeable from the
+# moment it opened -- one of them rated high severity -- while the pip
+# equivalents sailed through on the .txt suffix alone.
+
+
+def test_the_npm_dependabot_shape_passes(monkeypatch):
+    """The exact file list of PR #5376, one of the bumps that was stuck."""
+    assert _verdict(
+        "", ["frontend/package-lock.json", "frontend/package.json"], monkeypatch
+    ) == 0
+
+
+@pytest.mark.parametrize("paths", [
+    ["package.json"],
+    ["package-lock.json"],
+    ["frontend/package.json"],
+    ["frontend/package-lock.json"],
+    ["clawhub-plugin/package.json"],
+    ["npm-shrinkwrap.json"],
+    ["yarn.lock"],
+    ["pnpm-lock.yaml"],
+    ["desktop/requirements-dev.txt"],  # the pip half, exempt all along
+])
+def test_dependency_files_skip_the_gate(paths, monkeypatch):
+    assert _verdict("", paths, monkeypatch) == 0
+
+
+@pytest.mark.parametrize("path", [
+    "clawmetry/mypackage.json",
+    "clawmetry/data/package.json.bak",
+    "routes/package_json.py",
+])
+def test_merely_looking_like_a_manifest_is_not_enough(path, monkeypatch):
+    """Matched on the whole basename. A suffix test would exempt these."""
+    assert _verdict("", [path], monkeypatch) == 1
+
+
+def test_a_dependency_bump_alongside_code_still_needs_a_record(monkeypatch):
+    """The exemption must not become a way to smuggle code in."""
+    assert _verdict(
+        "", ["frontend/package.json", "clawmetry/local_store.py"], monkeypatch
+    ) == 1
+
+
 # ── it has to run as a script, not just import ──────────────────────────
 
 def test_the_script_runs_and_exits_nonzero_for_real(tmp_path):

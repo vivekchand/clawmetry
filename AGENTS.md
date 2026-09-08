@@ -5,19 +5,19 @@
 > **Read [`FLYWHEEL.md`](./FLYWHEEL.md) first.** It is how you ship a change end to end in this repo (code → PR → green CI → `[RELEASE]` → PyPI → cloud → verified live) and the non-negotiable "done" bar. Then [`CLAUDE.md`](./CLAUDE.md) for the architecture deep-dive. This file is the short "what to do"; those two carry the detail.
 
 ## Quick context
-ClawMetry is an open-source, real-time observability dashboard for OpenClaw (and other) AI agents. `pip install clawmetry && clawmetry` — zero config, observation by default. It's a Flask app with an embedded, no-build vanilla-JS frontend; a sync daemon ingests filesystem/gateway/OTLP data into a local **DuckDB** store, and the app reads from DuckDB to serve the UI.
+ClawMetry is an open-source, real-time observability and governance layer for **30 AI agent runtimes** (OpenClaw, NemoClaw and Goose free in OSS; Claude Code, Codex, Cursor and 24 more with the Pro plugin). The catalogue is `entitlements.FREE_RUNTIMES | PAID_RUNTIMES`; never hardcode the list or the count. `pip install clawmetry && clawmetry` — zero config, observation by default. It's a Flask app with an embedded, no-build vanilla-JS frontend; a sync daemon ingests filesystem/gateway/OTLP data into a local **DuckDB** store, and the app reads from DuckDB to serve the UI.
 
 ## Where new code goes (open-core split)
 
 ClawMetry is open-core — there are **four repos**. Pick the right one *before* writing code; see `FLYWHEEL.md §1b` for the full decision tree.
 
-- **clawmetry** (this repo, public OSS) — OpenClaw runtime + NeMo governance + 21 chat channels + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + Enterprise feature **endpoints** (entitlement-gated; impl may defer to clawmetry-pro). Examples: `routes/otel_export.py`, `routes/audit.py`.
-- **clawmetry-pro** (private; not on public PyPI; shipped via the license-server wheel download) — the 10 gated runtime adapters (Claude Code, Codex, Cursor, …), Pro paid CLI capabilities, advanced-feature implementations. Plugs in via `clawmetry.extensions` entry point.
+- **clawmetry** (this repo, public OSS) — the FREE runtime adapters (OpenClaw, NemoClaw, Goose) + NeMo governance + 23 chat channels + entitlement gate (`clawmetry/entitlements.py`) + license client (`clawmetry/license.py`) + Enterprise feature **endpoints** (entitlement-gated; impl may defer to clawmetry-pro). Examples: `routes/otel_export.py`, `routes/audit.py`.
+- **clawmetry-pro** (private; not on public PyPI; shipped via the license-server wheel download) — the 27 gated runtime adapters (Claude Code, Codex, Cursor, …), Pro paid CLI capabilities, advanced-feature implementations. Plugs in via `clawmetry.extensions` entry point.
 - **clawmetry-cloud** (private) — cloud SaaS app + license server (`clawmetry-cloud/routes/license.py`) + Stripe + admin + closed-wheel hosting (`wheels/`).
 - **clawmetry-landing** (private, public site) — marketing + pricing page + Buy buttons. No gated code.
 
 Quick chooser:
-- New non-OpenClaw runtime adapter → **clawmetry-pro**.
+- New runtime adapter → **clawmetry-pro** if the runtime is a commercial vendor product, **this repo** (`clawmetry/adapters/`, `FREE_RUNTIMES`, `sync._FAMILY_ADAPTER_SPECS`) if it is open source. Either way it is inert until it is named in `sync._FAMILY_ADAPTER_SPECS`.
 - New Enterprise feature (OTel export, SSO, audit, RBAC) → **OSS** route, gated by `entitlements.allows_feature(...)`.
 - New billing/Stripe/license endpoint → **clawmetry-cloud**.
 - New pricing/copy/Buy → **clawmetry-landing**.
@@ -26,7 +26,7 @@ Quick chooser:
 - **Write the PRD in 8090 BEFORE you write code.** Software Factory is the product reviewer -- treat it as the PM on the work, not as a checkbox drift-bot enforces afterwards. Requirement (problem, who is hurt, non-goals, alternatives rejected, risk accepted) -> blueprint (components, contracts, ADRs) -> code, in that order. A PR that touches product code must link the record or say `No-PRD: <reason>`; CI checks that one of the two is there. Burned 2026-08-25: four changes built first and documented after produced accurate mechanism, zero product context, and three defects a reviewer would have caught -- including a one-click irreversible data delete with no confirmation. (FLYWHEEL.md section 0c.)
 - **DuckDB-first.** Every feature persists to and reads from the local DuckDB store (`clawmetry/local_store.py`; the daemon owns the writer lock). Reading raw JSONL / logs / `sessions.json` / process stats *inside a request handler* works locally but silently returns empty in cloud — that's a bug, not a shortcut. (FLYWHEEL.md §1.)
 - **Per-feature route modules.** New HTTP endpoints go in `routes/<feature>.py` on that feature's Blueprint, not in `dashboard.py`. The old "single file" rule is dead — it broke down at ~33K lines and caused constant PR conflicts. Shared helpers still in `dashboard.py` are reached via late `import dashboard as _d`.
-- **No build step, no npm.** The live frontend is `clawmetry/static/css|js/*` + `clawmetry/templates/tabs/*.html`, vanilla JS only. (`dashboard.py` defines `DASHBOARD_HTML` twice; the second wins and loads the static/template files — the inline `<style>`/HTML earlier is dead code.) No React/Vue/webpack/vite.
+- **No build step, no npm.** The live frontend is `clawmetry/static/css|js/*` + `clawmetry/templates/tabs/*.html`, vanilla JS only. (`dashboard.py` holds exactly one `DASHBOARD_HTML`, which only includes those files. The dead duplicate that used to sit above it was deleted 2026-09-08.) No React/Vue/webpack/vite.
 - **Minimal dependencies.** Flask + waitress + cryptography + duckdb. Don't add heavy libraries.
 - **Control plane that defaults to observation.** ClawMetry is NOT read-only: it already kills sessions on approval denial (`clawmetry/approvals.py`), signals whole descendant process trees (`clawmetry/process_control.py`), pauses via HITL → proxy `503` (`routes/hitl.py`), blocks and reroutes at the enforcement proxy (`clawmetry/proxy.py`), and does cron CRUD. Never reject a feature as "we're read-only". The live rule is **no surprise writes** — user-initiated or policy-declared, session-scoped, reversible, audited — plus **fail open on entitlement, closed on policy**: a licence error must never stop a customer's agent. (CLAUDE.md Conventions.)
 - **Auto-detect everything.** Users should never have to configure anything manually.

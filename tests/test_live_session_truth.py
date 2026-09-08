@@ -207,8 +207,20 @@ def test_js_treats_running_as_live():
     assert re.search(r"s === 'active' \|\| s === 'running'", js), (
         "the status helper stopped accepting 'running' — the API emits it"
     )
-    assert "if (_cmIsWorkingStatus(a.status)) running.push(a);" in js, (
-        "the hero busy gate went back to comparing the raw 'active' literal"
+    # The Overview task grouping and the card renderer both route through the
+    # shared classifier _ovBucketOf(), which asks _cmIsWorkingStatus(). Pin the
+    # invariant, not the call site: this used to assert one literal source line
+    # ("if (_cmIsWorkingStatus(a.status)) running.push(a);"), which broke the
+    # moment the duplicated status logic was collapsed into one function
+    # (2026-09-07). Behaviour is covered in tests/test_active_tasks_units.js.
+    assert "function _ovBucketOf" in js, (
+        "the shared task classifier is gone — the card renderer and the "
+        "grouping are deriving status independently again, which is how a "
+        "FAILED sub-agent got rendered with a green tick"
+    )
+    m = re.search(r"function _ovBucketOf\(agent\) \{[\s\S]*?\n\}", js)
+    assert m and "_cmIsWorkingStatus" in m.group(0), (
+        "the busy gate went back to comparing the raw 'active' literal"
     )
     assert not re.search(r"status === 'active' \? 'running'", js), (
         "_ovRenderCard is labelling running sub-agents 'complete' again"
@@ -228,10 +240,23 @@ def test_js_hero_reads_named_live_sessions():
 
 
 def test_js_names_the_waiting_group():
-    """A dot colour alone does not teach a first-timer what amber means."""
+    """A dot colour alone does not teach a first-timer what amber means.
+
+    The label must also HEDGE. This test used to require the literal
+    "Waiting on you</div>", which put it in direct conflict with
+    ``test_overview_claims_are_evidenced`` -- the rule that only the
+    needs-you strip may claim a session wants something, because only it has
+    evidence. Two guards asserting opposite things is how the claim came back
+    and sat under "Nothing needs you right now" (founder report 2026-09-05).
+    The boundary is still named; it is named after the silence it measures.
+    """
     js = open(APP_JS).read()
-    assert "cm-live-group" in js and "Waiting on you</div>" in js, (
+    assert "cm-live-group" in js and "Gone quiet</div>" in js, (
         "the working/waiting boundary lost its written label"
+    )
+    assert "Waiting on you</div>" not in js, (
+        "the group header claims intent again -- this bucket is an age "
+        "window (last output 2-10 minutes ago) with no evidence behind it"
     )
     css = open(os.path.join(REPO, "clawmetry", "static", "css",
                             "dashboard.css")).read()

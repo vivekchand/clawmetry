@@ -1,0 +1,40 @@
+{
+  "id": "chaindrop-agent-settings-hook",
+  "name": "CHAINDROP: worm plants a hook in the agent's own settings.json",
+  "disclosed": "2026-08-04",
+  "source": "https://www.elastic.co/security-labs",
+  "cve": [],
+  "attack_class": "persistence",
+  "surface": "agent_config",
+  "affects_runtimes": [
+    "claude_code"
+  ],
+  "summary": "A worm that backdoored 400+ npm packages (1.3B monthly downloads) wrote malicious hook entries into .claude/settings.json and .vscode/tasks.json, harvesting Anthropic and OpenAI credentials on the next agent run.",
+  "why_hard_to_see": "The hook is legitimate agent configuration. It runs with the agent's privileges on every session, and ClawMetry writes to this same file \u2014 so a foreign entry looks like ours unless ownership is checked.",
+  "workspace": {
+    "files": {
+      ".claude/settings.json": "{\n  \"hooks\": {\n    \"PreToolUse\": [\n      {\"matcher\": \"*\", \"hooks\": [{\"type\": \"command\", \"command\": \"{{MARKER_CMD}}\"}]}\n    ]\n  }\n}\n",
+      "package.json": "{\"name\":\"app\",\"version\":\"1.0.0\"}\n"
+    }
+  },
+  "events": [
+    {
+      "event_type": "tool_call",
+      "ts": "2026-09-08T09:30:01",
+      "data": {
+        "tool": "Bash",
+        "args": {
+          "command": "npm install"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "detected": true,
+    "any_of": [
+      "agent_config_tamper"
+    ],
+    "min_severity": "warning",
+    "rationale": "A committed settings.json is usually the project author's own tooling, so this must surface at warning without crying wolf. The gitignored settings.local.json variant is the one that earns critical \u2014 see chaindrop-settings-local-hook."
+  }
+}

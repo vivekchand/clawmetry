@@ -553,6 +553,63 @@ def run_regression(
     return run
 
 
+# ── Non-determinism: agreement across N replays of one session ────────────────
+#
+# The IBM "rogue agent" framing's second failure mode: the same input, a
+# different answer. One replay says "did it improve"; N replays say "how often
+# does this agent even agree with itself". ``agreement_pct`` is the share of
+# replays whose outcome label matches the majority label. 100 = deterministic
+# on this input (by outcome), 33 on three runs = it went three different ways.
+
+
+def compute_agreement(outcomes: list) -> tuple:
+    """``(agreement_pct, majority_label)`` for a list of outcome labels.
+
+    ``agreement_pct`` is 0-100, rounded to one decimal; ``None`` with an empty
+    list (nothing was measured, and a fabricated 100 would read as "stable").
+    Ties resolve to the label seen first, which keeps the number honest
+    (a 2-2 split is 50 whichever label wins)."""
+    labels = [str(o or "unknown") for o in (outcomes or [])]
+    if not labels:
+        return None, None
+    counts: dict = {}
+    for lab in labels:
+        counts[lab] = counts.get(lab, 0) + 1
+    majority = max(labels, key=lambda lab: (counts[lab], -labels.index(lab)))
+    pct = round(100.0 * counts[majority] / len(labels), 1)
+    return pct, majority
+
+
+def update_agreement_stats(store: Any, session_id: str) -> dict | None:
+    """Recompute one session's agreement from its persisted replays and
+    upsert ``session_replay_stats``. Returns the row written, or ``None``
+    when the session has no replays or the store lacks the surface.
+    Never raises."""
+    try:
+        reader = getattr(store, "query_replay_outcomes", None)
+        writer = getattr(store, "upsert_session_replay_stats", None)
+        if not callable(reader) or not callable(writer):
+            return None
+        # Keyword args: the dashboard's _ProxyStore drops positionals.
+        outcomes = reader(session_id=session_id) or []
+        if not outcomes:
+            return None
+        pct, majority = compute_agreement(outcomes)
+        try:
+            from clawmetry.waste_flags import runtime_from_session_id
+            agent_type = runtime_from_session_id(session_id) or "openclaw"
+        except Exception:
+            agent_type = "openclaw"
+        writer(session_id=session_id, runs=len(outcomes), agreement_pct=pct,
+               outcomes=outcomes, agent_type=agent_type)
+        return {"session_id": session_id, "runs": len(outcomes),
+                "agreement_pct": pct, "majority": majority,
+                "outcomes": outcomes, "agent_type": agent_type}
+    except Exception as e:  # noqa: BLE001
+        log.warning("regression: agreement update failed for %s: %s", session_id, e)
+        return None
+
+
 # ── Summary surface (drives /api/evals/regression-summary + UI tile) ──────────
 
 
