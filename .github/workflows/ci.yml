@@ -175,6 +175,17 @@ jobs:
       - name: Architecture docs name modules that exist
         run: python3 -m pytest tests/test_module_map_drift.py -q
 
+      # Red-team corpus: every publicly disclosed agent attack we claim to
+      # catch, we still catch. Named explicitly because this job runs FILE
+      # LISTS -- a signature added without a line here is checked by nothing.
+      # Verified to go RED by removing core.fsmonitor from repo_scan._EXEC_KEYS.
+      # The corpus payloads are inert markers; the runner fails a case that
+      # actually executes one.
+      - name: Red-team detection corpus
+        run: |
+          python3 -m pytest tests/test_redteam_corpus.py -q
+          python3 scripts/redteam/audit.py
+
       # Non-security digests (dedup ids, trace ids, change-detection hashes)
       # must go through clawmetry.nonsecret_hash. A bare hashlib.md5/sha1
       # raises ValueError -- not a weak digest, an exception -- on a host whose
@@ -341,6 +352,14 @@ jobs:
       - name: Hosted Security tab shows only what it can fill
         run: python3 -m pytest tests/test_security_tab_cloud_honesty.py -q
 
+      # The Overview "Active Tasks" panel told four lies on one screen under
+      # ?runtime=codex: a hardcoded personal-project pill said OpenClaw, no
+      # runtime filter at all, a FAILED sub-agent drawn with a green tick, and
+      # an 18-day-old task labelled "Finished 1 min ago". Named here because
+      # this job runs FILE LISTS.
+      - name: Active Tasks panel tells the truth
+        run: python3 -m pytest tests/test_active_tasks_honesty.py tests/test_active_tasks_units.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
@@ -493,6 +512,7 @@ jobs:
             tests/test_cache_push_gating.py \
             tests/test_usage_cache_trends_local_store.py \
             tests/test_transcript_local_store.py \
+            tests/test_snapshot_transcripts_runtime_fair.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \
             tests/test_family_runtime_ingest.py \

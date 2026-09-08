@@ -4465,6 +4465,16 @@ function _cmIsWorkingStatus(s) {
 function _cmIsLiveStatus(s) {
   return _cmIsWorkingStatus(s) || String(s == null ? '' : s).trim().toLowerCase() === 'idle';
 }
+// 'failed' is a first-class status the server emits: routes/sessions.py sets
+// _status_override='failed' for a spawn that errored. The Overview task panel
+// had no branch for it — buckets were active -> running, a narrow
+// stale+aborted+zero-token heuristic -> failed, and EVERYTHING ELSE -> done —
+// so a sub-agent whose own detail modal read FAILED rendered in the list as a
+// green tick under "Recently Completed" (founder report 2026-09-07).
+function _cmIsFailedStatus(s) {
+  s = String(s == null ? '' : s).trim().toLowerCase();
+  return s === 'failed' || s === 'error' || s === 'aborted';
+}
 
 // ── Live sessions ─────────────────────────────────────────────────────────
 // The hero used to answer "is my agent alive?" with one node-wide boolean, so
@@ -6869,7 +6879,6 @@ async function loadSubAgents() {
 }
 
 // === Active Tasks for Overview ===
-var _activeTasksTimer = null;
 function cleanTaskName(raw) {
   // Strip timestamp prefixes like "[Sun 2026-02-08 18:22 GMT+1] "
   var name = (raw || '').replace(/^\[.*?\]\s*/, '');
@@ -6878,147 +6887,6 @@ function cleanTaskName(raw) {
   if (dot > 10 && dot < 80) name = name.substring(0, dot + 1);
   if (name.length > 80) name = name.substring(0, 77) + '…';
   return name || 'Background task';
-}
-
-function detectProjectBadge(text) {
-  var projects = {
-    'mockround': { label: 'MockRound', color: '#7c3aed' },
-    'vedicvoice': { label: 'VedicVoice', color: '#d97706' },
-    'openclaw': { label: 'OpenClaw', color: '#2563eb' },
-    'dashboard': { label: 'Dashboard', color: '#0891b2' },
-    'shopify': { label: 'Shopify', color: '#16a34a' },
-    'sanskrit': { label: 'Sanskrit', color: '#ea580c' },
-    'telegram': { label: 'Telegram', color: '#0088cc' },
-    'discord': { label: 'Discord', color: '#5865f2' },
-  };
-  var lower = (text || '').toLowerCase();
-  for (var key in projects) {
-    if (lower.includes(key)) return projects[key];
-  }
-  return null;
-}
-
-function humanTime(runtimeMs) {
-  if (!runtimeMs || runtimeMs === Infinity) return '';
-  var sec = Math.floor(runtimeMs / 1000);
-  if (sec < 60) return 'Started ' + sec + 's ago';
-  var min = Math.floor(sec / 60);
-  if (min < 60) return 'Started ' + min + ' min ago';
-  var hr = Math.floor(min / 60);
-  if (hr < 24) return 'Started ' + hr + 'h ago';
-  return 'Started ' + Math.floor(hr / 24) + 'd ago';
-}
-
-function humanTimeDone(runtimeMs) {
-  if (!runtimeMs || runtimeMs === Infinity) return '';
-  var sec = Math.floor(runtimeMs / 1000);
-  if (sec < 60) return 'Finished ' + sec + 's ago';
-  var min = Math.floor(sec / 60);
-  if (min < 60) return 'Finished ' + min + ' min ago';
-  var hr = Math.floor(min / 60);
-  if (hr < 24) return 'Finished ' + hr + 'h ago';
-  return 'Finished ' + Math.floor(hr / 24) + 'd ago';
-}
-
-async function loadActiveTasks() {
-  try {
-    var grid = document.getElementById('overview-tasks-list') || document.getElementById('active-tasks-grid');
-    if (!grid) return;
-
-    // Fetch active sub-agents
-    var saData = await fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; });
-
-    // "Active Tasks" should mean ACTIVE. Previously we lingered failed
-    // and stale entries here for 24h, which meant a subagent that failed
-    // hours ago still appeared as if it were current. Tightened:
-    //   - active / idle: always show (subagent still alive)
-    //   - failed: only within the last 10 minutes, and only when there's
-    //     nothing live — so a just-failed spawn still surfaces briefly.
-    //   - stale / older failures: don't show. The subagent detail modal
-    //     and the Brain tab are the right surfaces for history.
-    var RECENT_MS = 10 * 60 * 1000;
-    var now = Date.now();
-    var all = (saData.subagents || []);
-    // Scope to the selected runtime (sub-agent sessionId prefix = runtime).
-    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
-    if (_atRt !== 'all') all = all.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
-    var live = all.filter(function(a) { return _cmIsLiveStatus(a.status); });
-    var recentFailed = all.filter(function(a) {
-      return a.status === 'failed' && (now - (a.updatedAt || 0)) < RECENT_MS;
-    });
-    var agents = live.length ? live : recentFailed.slice(0, 3);
-
-    if (agents.length === 0) {
-      grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
-        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
-        + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
-      var badge = document.getElementById('overview-tasks-count-badge');
-      if (badge) badge.textContent = '';
-      return;
-    }
-
-    var html = '';
-    var badge = document.getElementById('overview-tasks-count-badge');
-    if (badge) {
-      var liveCount = agents.filter(function(a) { return _cmIsLiveStatus(a.status); }).length;
-      badge.textContent = liveCount > 0 ? (liveCount + ' active') : (agents.length + ' recent');
-    }
-
-    // Per-status visual style
-    var STATUS_STYLE = {
-      active: {cls: 'running',  dot: '#22c55e', label: 'active'},
-      idle:   {cls: 'running',  dot: '#f59e0b', label: 'idle'},
-      stale:  {cls: '',         dot: '#6b7280', label: 'completed'},
-      failed: {cls: '',         dot: '#ef4444', label: 'failed'},
-    };
-
-    // Render sub-agents
-    agents.forEach(function(agent) {
-      var taskName = cleanTaskName(agent.displayName);
-      var badge2 = detectProjectBadge(agent.displayName);
-      var mins = Math.max(1, Math.floor((agent.runtimeMs || 0) / 60000));
-      var st = STATUS_STYLE[agent.status] || STATUS_STYLE.active;
-
-      html += '<div class="task-card ' + st.cls + '" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
-      if (_cmIsLiveStatus(agent.status)) {
-        html += '<div class="task-card-pulse active"></div>';
-      }
-      html += '<div class="task-card-header">';
-      html += '<div class="task-card-name"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + st.dot + ';margin-right:6px;vertical-align:middle;"></span>' + escHtml(taskName) + '</div>';
-      html += '<span class="task-card-badge ' + st.cls + '" style="font-size:10px;">' +
-              (agent.status === 'failed' ? '⚠️ ' + st.label :
-               agent.status === 'stale'  ? '🤖 ' + st.label :
-               '🤖 ' + mins + ' min') +
-              '</span>';
-      html += '</div>';
-      // Task summary line (shown for all statuses if present)
-      if (agent.task) {
-        var taskPreview = agent.task.length > 90 ? agent.task.substring(0, 87) + '…' : agent.task;
-        html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.4;">' + escHtml(taskPreview) + '</div>';
-      }
-      // The failed badge in the top-right already conveys status; the raw
-      // OpenClaw error string ("Validation failed for tool 'subagents':")
-      // was redundant on the card and too jargon-y. Full error is still
-      // surfaced in the modal when the user clicks through.
-      html += '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">';
-      if (badge2) {
-        html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge2.color + '22;color:' + badge2.color + ';border:1px solid ' + badge2.color + '44;">' + badge2.label + '</span>';
-      }
-      html += '<span style="font-size:11px;color:var(--text-muted);">' + escHtml(humanTime(agent.runtimeMs)) + '</span>';
-      html += '</div>';
-      html += '</div>';
-    });
-
-    grid.innerHTML = html;
-  } catch(e) {
-    // silently fail
-  }
-}
-// Auto-refresh active tasks every 30s
-function startActiveTasksRefresh() {
-  loadActiveTasks();
-  if (_activeTasksTimer) clearInterval(_activeTasksTimer);
-  _activeTasksTimer = visibilitySetInterval(loadActiveTasks, 30000);
 }
 
 async function loadToolActivity() {
@@ -12237,8 +12105,18 @@ function _cmRuntimeOf(o) {
   // Explicit agent_type / runtime field (OTLP apps + server-tagged rows). An
   // OTLP app's spans carry agent_type=<its key>; honor it directly so a
   // selected OTLP runtime matches its own data and nothing else.
-  var r = o && (o.runtime || o.agent_type || o.agentType);
-  if (r) {
+  //
+  // Try every candidate rather than short-circuiting on the first truthy one:
+  // `/api/subagents` records carry a field literally named `runtime` that holds
+  // a FORMATTED DURATION ("44s", "12m", "2h 5m"), not a runtime name — see
+  // routes/sessions.py::_try_local_store_subagents. Short-circuiting on it made
+  // this helper return the 'openclaw' default for EVERY sub-agent, which is how
+  // a Codex sub-agent got filed under OpenClaw. `runtime` is checked last, and
+  // only a value that is actually a known runtime key is ever accepted.
+  var cands = o ? [o.runtimeName, o.agent_type, o.agentType, o.runtime] : [];
+  for (var ci = 0; ci < cands.length; ci++) {
+    var r = cands[ci];
+    if (!r) continue;
     r = String(r).toLowerCase();
     if (_CM_RT_PREFIXES.hasOwnProperty(r) || _CM_OTLP_RT.hasOwnProperty(r)) return r;
   }
@@ -12499,7 +12377,7 @@ function _cmApplyRuntimeScopeNote(name) {
   // and its scoped views live where the data actually is (the Inventory roster
   // row + cost/tokens). The Inventory tab keeps its own roster note below.
   // 'inventory' has its own roster note; transcripts has its own
-  // scoped empty-state ("no <app> sessions have a transcript yet"), so skip both
+  // scoped empty-state (_cmRuntimeEmptyMsg), so skip both
   // to avoid a conflicting double-note.
   if (_cmIsOtlpRuntime(rt) && name !== 'inventory') {
     var _otl = _cmRuntimeLabel(rt);
@@ -19557,6 +19435,32 @@ function applyTranscriptCustomRange() {
   loadTranscripts();
 }
 
+// Empty state for "runtime picked, zero rows on this tab". The header's
+// session count and this list come from DIFFERENT places: the count is every
+// session ClawMetry knows about, the list needs a conversation it can actually
+// read. When the count says 15 and the list says nothing, "no sessions have a
+// transcript yet" reads as a lie, so say which of the two we mean (#5643).
+function _cmRuntimeEmptyMsg(rt) {
+  var label = _cmRuntimeLabel(rt);
+  var known = 0;
+  try { known = (_cmGlobalRtCounts && _cmGlobalRtCounts[rt]) || 0; } catch (e) { known = 0; }
+  var pickAll = t('transcripts.pick_all_runtimes', null,
+    'Pick All runtimes in the header to see every session.');
+  var body;
+  if (known > 0) {
+    body = t('transcripts.runtime_counted_but_empty', {count: known, label: label},
+      'This machine has {count} {label} sessions, but none of them have a readable conversation here yet. New ones show up a minute or two after they start.');
+    if (window.CLOUD_MODE) {
+      body += ' ' + t('transcripts.runtime_open_on_machine', {label: label},
+        'To read older {label} sessions, open ClawMetry on the machine itself.');
+    }
+  } else {
+    body = t('transcripts.runtime_none', {label: label},
+      'No {label} sessions have a conversation to show yet.');
+  }
+  return '<div style="padding:16px;color:#666;">' + escHtml(body) + ' ' + escHtml(pickAll) + '</div>';
+}
+
 async function loadTranscripts() {
   // Mount the Grafana-style date/time-range picker on first paint.
   // Idempotent — the helper no-ops when already attached.
@@ -19713,7 +19617,7 @@ async function loadTranscripts() {
     var emptyMsg = _txWinEmpty
       ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this window. Try a wider window — or note that only recently synced sessions are listed here.') + '</div>'
       : _rtNoTx
-      ? '<div style="padding:16px;color:#666;">No <strong>' + escHtml(_cmRuntimeLabel(_rtFilter)) + '</strong> sessions have a transcript yet. Pick <strong>All runtimes</strong> in the header to see every session.</div>'
+      ? _cmRuntimeEmptyMsg(_rtFilter)
       : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
       ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
       : '<div style="padding:16px;color:#666;">No transcript files found</div>';
@@ -25357,6 +25261,30 @@ function initOverviewFlow() {
 var _ovTasksTimer = null;
 window._ovExpandedSet = {};  // track which detail panels are open across refreshes
 
+// When did this task END? There is exactly one answer and it is allowed to be
+// "we don't know".
+//
+// `updatedAt` is a LAST-ACTIVITY stamp, and the ingest path in
+// routes/sessions.py falls back to `now` whenever a spawn's timestamp cannot be
+// parsed. Trusting it blindly meant a sub-agent spawned 2026-08-20 that never
+// ran (runtime 0s, no completion) was stamped with the current time, sailed
+// through the 1-hour "recent" window, and rendered as "Finished 1 min ago"
+// eighteen days later (founder report 2026-09-07). So `updatedAt` counts as an
+// end time only when the record shows the spawn actually ran and stopped.
+// Unknown end time returns 0: the caller shows no timestamp and the task is not
+// "recent". A blank beats an invented number.
+function _ovEndedMs(a) {
+  if (!a) return 0;
+  if (a.completionTs) { var ct = Date.parse(a.completionTs); if (!isNaN(ct)) return ct; }
+  var ran = (a.runtimeMs || 0) > 0 ||
+            (a.outputTokens || 0) > 0 || (a.tokensOut || 0) > 0 ||
+            !!a.completionStatus || !!a.completionResult;
+  if (!ran) return 0;
+  if (a.startedAt && a.runtimeMs) return a.startedAt + a.runtimeMs;
+  if (a.updatedAt) return a.updatedAt;
+  return 0;
+}
+
 function _ovTimeLabel(agent) {
   var ms = agent.runtimeMs || 0;
   var sec = Math.floor(ms / 1000);
@@ -25370,12 +25298,10 @@ function _ovTimeLabel(agent) {
   // "Finished N ago" is time since the spawn ENDED — not the run duration.
   // Using runtimeMs here made stale spawns whose runtime was frozen to 0
   // (the dead-subagent freeze) read "Finished 0s ago" even when they ended
-  // days ago. Prefer completionTs, then updatedAt (last activity), then
-  // startedAt+runtime; blank if the end time is genuinely unknown.
-  var endedMs = 0;
-  if (agent.completionTs) { var ct = Date.parse(agent.completionTs); if (!isNaN(ct)) endedMs = ct; }
-  if (!endedMs && agent.updatedAt) endedMs = agent.updatedAt;
-  if (!endedMs && agent.startedAt && ms) endedMs = agent.startedAt + ms;
+  // days ago. The derivation lives in _ovEndedMs() so this label and the
+  // panel's "recently finished" window can never disagree; blank when the end
+  // time is genuinely unknown.
+  var endedMs = _ovEndedMs(agent);
   if (!endedMs) return '';
   var ago = Math.max(0, Date.now() - endedMs);
   var asec = Math.floor(ago / 1000), amin = Math.floor(asec / 60), ahr = Math.floor(amin / 60);
@@ -25385,11 +25311,45 @@ function _ovTimeLabel(agent) {
   return 'Finished ' + Math.floor(ahr / 24) + 'd ago';
 }
 
+// The ONE place a task's bucket is decided. The card renderer and the grouping
+// logic each used to derive it independently, and they disagreed: the grouping
+// put a failed spawn in `done` while the card drew it with a ✅. One function,
+// one answer.
+function _ovBucketOf(agent) {
+  if (!agent) return 'complete';
+  if (_cmIsWorkingStatus(agent.status)) return 'running';
+  if (_cmIsFailedStatus(agent.status)) return 'failed';
+  // Legacy heuristic for spawns the server could not label outright: it died
+  // stale, mid-run, having produced nothing.
+  if (agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0) return 'failed';
+  return 'complete';
+}
+
+// Provenance pill: the runtime a task actually ran on, or nothing at all when
+// attribution is unknown. Rendered only in the unfiltered ("all runtimes")
+// view — under a runtime filter every card is that runtime and the pill is
+// noise.
+function _ovRuntimePill(agent) {
+  try {
+    if (_cmClientFilterRt(_cmRuntimeFilter()) !== 'all') return null;
+    var attributed = !!(agent && (agent.runtimeName || agent.agentType || agent.agent_type)) ||
+                     String((agent && (agent.sessionId || agent.key)) || '').indexOf(':') > 0;
+    if (!attributed) return null;   // never guess — no pill beats a wrong one
+    var rt = _cmRuntimeOf(agent);
+    if (!rt) return null;
+    return { label: _cmRuntimeLabel(rt), color: '#64748b' };
+  } catch (e) { return null; }
+}
+
 function _ovRenderCard(agent, idx) {
-  var isRealFailure = agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0;
-  var sc = _cmIsWorkingStatus(agent.status) ? 'running' : isRealFailure ? 'failed' : 'complete';
+  var sc = _ovBucketOf(agent);
   var taskName = cleanTaskName(agent.displayName);
-  var badge = detectProjectBadge(agent.displayName);
+  // Was detectProjectBadge() — a substring match of the task's prose against a
+  // hardcoded list of the developer's own project names, shipped to every
+  // customer. Any task whose prompt merely CONTAINED a runtime's name was
+  // stamped with that runtime's pill no matter which runtime actually ran it.
+  // Deleted; this reads real attribution or shows nothing.
+  var badge = _ovRuntimePill(agent);
   var timeLabel = _ovTimeLabel(agent);
   var detailId = 'ovd2-' + idx;
   var isOpen = !!(window._ovExpandedSet || {})[agent.sessionId];
@@ -25443,22 +25403,44 @@ async function loadOverviewTasks() {
     var el = document.getElementById('overview-tasks-list');
     var countBadge = document.getElementById('overview-tasks-count-badge');
     if (!el) return true;
-    var agents = data.subagents || [];
+    var allAgents = data.subagents || [];
+
+    // FLYWHEEL 0a.2 (per-runtime honesty, HARD GATE): a number shown while the
+    // runtime switcher is set to a specific runtime must scope to that runtime
+    // or carry a visible node-wide label. This panel did neither — it rendered
+    // every runtime's tasks under ?runtime=codex, so a Codex user saw OpenClaw
+    // work on their own home screen (founder report 2026-09-07). Filtering
+    // client-side scopes the hosted dashboard too: the cloud `cm-cloud-subagents`
+    // interceptor serves the whole snapshot slice and honours no ?runtime= param.
+    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
+    var agents = (_atRt === 'all') ? allAgents
+                                   : allAgents.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
+    var _hiddenOther = allAgents.length - agents.length;
+    // When the filter hides everything, say so in the runtime's own name rather
+    // than claiming the machine is idle — other runtimes may be flat out.
+    var _rtName = (_atRt === 'all') ? '' : _cmRuntimeLabel(_atRt);
+    function _emptyState() {
+      var head = _rtName ? ('No active tasks for ' + escHtml(_rtName)) : 'No active tasks';
+      var sub  = _hiddenOther > 0
+        ? (_hiddenOther + ' task' + (_hiddenOther === 1 ? '' : 's') + ' on other runtimes — switch runtime to see them.')
+        : 'The AI is idle.';
+      return '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
+        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
+        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">' + head + '</div>'
+        + '<div style="font-size:12px;">' + sub + '</div></div>';
+    }
 
     if (agents.length === 0) {
       if (countBadge) countBadge.textContent = '';
-      el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
-        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
-        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
-        + '<div style="font-size:12px;">The AI is idle.</div></div>';
+      el.innerHTML = _emptyState();
       return true;
     }
 
     var running = [], done = [], failed = [];
     agents.forEach(function(a) {
-      var isRealFailure = a.status === 'stale' && a.abortedLastRun && (a.outputTokens || 0) === 0;
-      if (_cmIsWorkingStatus(a.status)) running.push(a);
-      else if (isRealFailure) failed.push(a);
+      var b = _ovBucketOf(a);
+      if (b === 'running') running.push(a);
+      else if (b === 'failed') failed.push(a);
       else done.push(a);
     });
     // Alive-state for the Overview hero: working when something is actively
@@ -25475,13 +25457,6 @@ async function loadOverviewTasks() {
     // → startedAt+runtime); unknown end time → not recent.
     var RECENT_DONE_MS = 60 * 60 * 1000; // 1h
     var _nowMs = Date.now();
-    function _ovEndedMs(a) {
-      var e = 0;
-      if (a.completionTs) { var ct = Date.parse(a.completionTs); if (!isNaN(ct)) e = ct; }
-      if (!e && a.updatedAt) e = a.updatedAt;
-      if (!e && a.startedAt && a.runtimeMs) e = a.startedAt + a.runtimeMs;
-      return e;
-    }
     function _ovRecentlyFinished(a) {
       var e = _ovEndedMs(a);
       return e > 0 && (_nowMs - e) < RECENT_DONE_MS;
@@ -25494,10 +25469,7 @@ async function loadOverviewTasks() {
     var totalShown = running.length + done.length + failed.length;
     if (totalShown === 0) {
       if (countBadge) countBadge.textContent = '';
-      el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
-        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
-        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
-        + '<div style="font-size:12px;">The AI is idle.</div></div>';
+      el.innerHTML = _emptyState();
       return true;
     }
 

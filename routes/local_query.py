@@ -730,6 +730,10 @@ _DAEMON_METHODS = frozenset({
     # came back empty, and every roster row showed 0 conversations / $0 even
     # though the store had real sessions (live-hit 2026-07-29).
     "query_model_rollup",
+    # #5643: fair per-runtime session picks for the cloud snapshot's
+    # transcript slots. Also read by tests/diagnostics from the
+    # dashboard process, which has no writer lock.
+    "query_recent_sessions_by_runtime",
     "query_sessions",
     "query_sessions_table",
     "query_aggregates",
