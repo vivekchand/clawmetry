@@ -20514,18 +20514,19 @@ def _guard_enforcement_allowed() -> bool:
 # or where its workspace root is — and all three change what an incident MEANS.
 # The daemon already touches every candidate session on this tick, so gathering
 # them here is free, where a per-session store read would not be.
-def _session_cwd(session: dict) -> str:
-    """The directory a session ran in, or "" when the runtime never recorded one.
+def _session_row_cwd(session: dict) -> str:
+    """The directory a STORE ROW ran in, or "" when the runtime recorded none.
 
-    ``sessions.cwd`` is the COLUMN every cwd-aware consumer keys on
+    Distinct from :func:`_session_cwd`, which reads a raw adapter/gateway dict
+    by alias. This one reads a ``sessions`` table row: the ``cwd`` COLUMN first,
+    because that is what every cwd-aware consumer keys on
     (``query_repo_activity`` filters on it, ``process_control`` promotes it to
-    find a pid). Reading only ``metadata`` — which this helper replaced — meant
-    every runtime that fills the column and not the blob looked like it had no
-    workspace at all: on this machine that was cursor, goose, opencode, pi and
-    qwen_code, i.e. every session the column exists for.
+    find a pid), then the row's ``metadata`` blob through the SAME alias set,
+    so a runtime that only fills the blob is still found.
 
-    The metadata keys stay as the fallback: some adapters put it there and
-    nowhere else, and a runtime that records neither honestly has no cwd.
+    The two must not share a name. When they did, the later definition silently
+    replaced the earlier one for all three of its callers and the twelve-alias
+    lookup became a two-key one -- see ``test_no_shadowed_module_functions``.
     """
     if not isinstance(session, dict):
         return ""
@@ -20535,11 +20536,7 @@ def _session_cwd(session: dict) -> str:
     meta = session.get("metadata")
     if not isinstance(meta, dict):
         return ""
-    for key in ("cwd", "workspace", "project_dir", "working_dir", "path"):
-        val = meta.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-    return ""
+    return (_session_cwd(meta) or "").strip()
 
 
 # ── Workspace scan: the attack surface the tool stream cannot see ──────────
@@ -20677,7 +20674,7 @@ def _detector_session_facts(sessions: list, state: dict, now: float,
         sid = str(s.get("session_id") or "")
         if not sid:
             continue
-        cwd = _session_cwd(s)
+        cwd = _session_row_cwd(s)
         try:
             cost = float(s.get("cost_usd") or 0)
         except (TypeError, ValueError):
@@ -23135,10 +23132,6 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
 
 
 # ── Real-time log streaming ────────────────────────────────────────────────────
-
-
-def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
-    """Start a background thread that tails the local log file and POSTs lines to cloud in real-time."""
 
 
 def start_log_streamer(config: dict, paths: dict) -> threading.Thread:
