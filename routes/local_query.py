@@ -1176,6 +1176,10 @@ _DAEMON_METHODS = frozenset({
     "query_guard_incidents",
     "query_session_denials",
     "find_session_by_cwd",
+    # Issue #5680 — onboarding ingest-status strip. Polled every 2 s by
+    # GET /api/onboarding/ingest-status; must go through the daemon proxy so
+    # the dashboard process never opens the writer-locked DuckDB directly.
+    "query_ingest_status",
 })
 
 
