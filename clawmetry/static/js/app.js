@@ -2138,8 +2138,6 @@ function switchTab(name) {
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
-  if (name === 'subagents') { loadOrchestration(); loadRunLedger(); loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(function(){ loadOrchestration(); loadRunLedger(); loadSubagents(); }, 5000); }
-  if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'swimlane') { loadSwimlane(); if (!_swimlaneTimer) _swimlaneTimer = visibilitySetInterval(loadSwimlane, 3000); }
   if (name !== 'swimlane' && _swimlaneTimer) { clearInterval(_swimlaneTimer); _swimlaneTimer = null; }
 }
@@ -4465,6 +4463,16 @@ function _cmIsWorkingStatus(s) {
 function _cmIsLiveStatus(s) {
   return _cmIsWorkingStatus(s) || String(s == null ? '' : s).trim().toLowerCase() === 'idle';
 }
+// 'failed' is a first-class status the server emits: routes/sessions.py sets
+// _status_override='failed' for a spawn that errored. The Overview task panel
+// had no branch for it — buckets were active -> running, a narrow
+// stale+aborted+zero-token heuristic -> failed, and EVERYTHING ELSE -> done —
+// so a sub-agent whose own detail modal read FAILED rendered in the list as a
+// green tick under "Recently Completed" (founder report 2026-09-07).
+function _cmIsFailedStatus(s) {
+  s = String(s == null ? '' : s).trim().toLowerCase();
+  return s === 'failed' || s === 'error' || s === 'aborted';
+}
 
 // ── Live sessions ─────────────────────────────────────────────────────────
 // The hero used to answer "is my agent alive?" with one node-wide boolean, so
@@ -5114,8 +5122,14 @@ async function loadMiniWidgets(overview, usage) {
   }
   document.getElementById('model-breakdown').textContent = modelBreakdown;
   
-  // 🐝 Worker Bees (Sub-Agents)
-  loadSubAgents();
+  // The "Worker Bees (Sub-Agents)" mini-widget used to be fetched here, on
+  // every Home render. Its three targets — #subagents-count, #subagents-status,
+  // #subagents-preview — all live inside overview.html's `display:none`
+  // "elements referenced by existing JS" block, so the whole result was
+  // invisible: one extra /api/subagents round trip per Home load (a 500-record
+  // payload on a busy node) rendering into nothing. FLYWHEEL, "performance is a
+  // feature — and a cost": before adding any fetch, ask whether it needs to run
+  // on every tab. This one did not need to run at all.
 
   // Issue #1619 Phase 1 — eval score tile. Lazy, non-blocking; tile shows
   // a dash on miss so a slow daemon doesn't gate the overview render.
@@ -6805,71 +6819,7 @@ async function saveEvalRubric() {
   }
 }
 
-async function loadSubAgents() {
-  try {
-    var _saResp = await fetch('/api/subagents').then(async function(r) { return {s: r.status, b: await r.json()}; });
-    var data = _saResp.b || {};
-    // Issue #1804: show outage banner when ingest is offline (503 envelope).
-    if (_saResp.s === 503 && data && data.error === 'local_store ingest is offline') {
-      document.getElementById('subagents-status').textContent = t("app.ingest_offline", null, "Ingest offline");
-      var _saPrev = document.getElementById('subagents-preview');
-      if (_saPrev) _saPrev.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;font-size:12px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Sub-agent data unavailable; the local_store writer is not responding.</div>';
-      return;
-    }
-    var counts = data.counts;
-    var subagents = data.subagents;
-
-    // Update main counter
-    document.getElementById('subagents-count').textContent = counts.total;
-    
-    // Update status text
-    var statusText = '';
-    if (counts.active > 0) {
-      statusText = counts.active + ' active';
-      if (counts.idle > 0) statusText += ', ' + counts.idle + ' idle';
-      if (counts.stale > 0) statusText += ', ' + counts.stale + ' stale';
-    } else if (counts.total === 0) {
-      statusText = 'No sub-agents spawned';
-    } else {
-      statusText = 'All idle/stale';
-    }
-    document.getElementById('subagents-status').textContent = statusText;
-    
-    // Update preview with top sub-agents (human-readable)
-    var previewHtml = '';
-    if (subagents.length === 0) {
-      previewHtml = '<div style="font-size:11px;color:#666;">No active tasks</div>';
-    } else {
-      // Show active ones first
-      var activeFirst = subagents.filter(function(a){return _cmIsWorkingStatus(a.status);}).concat(subagents.filter(function(a){return !_cmIsWorkingStatus(a.status);}));
-      var topAgents = activeFirst.slice(0, 3);
-      topAgents.forEach(function(agent) {
-        var icon = _cmIsWorkingStatus(agent.status) ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
-        var name = cleanTaskName(agent.displayName);
-        if (name.length > 40) name = name.substring(0, 37) + '…';
-        previewHtml += '<div class="subagent-item">';
-        previewHtml += '<span style="font-size:10px;">' + icon + '</span>';
-        previewHtml += '<span class="subagent-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(name) + '</span>';
-        previewHtml += '<span class="subagent-runtime">' + agent.runtime + '</span>';
-        previewHtml += '</div>';
-      });
-      
-      if (subagents.length > 3) {
-        previewHtml += '<div style="font-size:9px;color:#555;margin-top:4px;">+' + (subagents.length - 3) + ' more</div>';
-      }
-    }
-    
-    document.getElementById('subagents-preview').innerHTML = previewHtml;
-    
-  } catch(e) {
-    document.getElementById('subagents-count').textContent = '?';
-    document.getElementById('subagents-status').textContent = t("app.error_loading_sub_agents", null, "Error loading sub-agents");
-    document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">' + t("app.failed_to_load_workforce", null, "Failed to load workforce") + '</div>';
-  }
-}
-
 // === Active Tasks for Overview ===
-var _activeTasksTimer = null;
 function cleanTaskName(raw) {
   // Strip timestamp prefixes like "[Sun 2026-02-08 18:22 GMT+1] "
   var name = (raw || '').replace(/^\[.*?\]\s*/, '');
@@ -6878,147 +6828,6 @@ function cleanTaskName(raw) {
   if (dot > 10 && dot < 80) name = name.substring(0, dot + 1);
   if (name.length > 80) name = name.substring(0, 77) + '…';
   return name || 'Background task';
-}
-
-function detectProjectBadge(text) {
-  var projects = {
-    'mockround': { label: 'MockRound', color: '#7c3aed' },
-    'vedicvoice': { label: 'VedicVoice', color: '#d97706' },
-    'openclaw': { label: 'OpenClaw', color: '#2563eb' },
-    'dashboard': { label: 'Dashboard', color: '#0891b2' },
-    'shopify': { label: 'Shopify', color: '#16a34a' },
-    'sanskrit': { label: 'Sanskrit', color: '#ea580c' },
-    'telegram': { label: 'Telegram', color: '#0088cc' },
-    'discord': { label: 'Discord', color: '#5865f2' },
-  };
-  var lower = (text || '').toLowerCase();
-  for (var key in projects) {
-    if (lower.includes(key)) return projects[key];
-  }
-  return null;
-}
-
-function humanTime(runtimeMs) {
-  if (!runtimeMs || runtimeMs === Infinity) return '';
-  var sec = Math.floor(runtimeMs / 1000);
-  if (sec < 60) return 'Started ' + sec + 's ago';
-  var min = Math.floor(sec / 60);
-  if (min < 60) return 'Started ' + min + ' min ago';
-  var hr = Math.floor(min / 60);
-  if (hr < 24) return 'Started ' + hr + 'h ago';
-  return 'Started ' + Math.floor(hr / 24) + 'd ago';
-}
-
-function humanTimeDone(runtimeMs) {
-  if (!runtimeMs || runtimeMs === Infinity) return '';
-  var sec = Math.floor(runtimeMs / 1000);
-  if (sec < 60) return 'Finished ' + sec + 's ago';
-  var min = Math.floor(sec / 60);
-  if (min < 60) return 'Finished ' + min + ' min ago';
-  var hr = Math.floor(min / 60);
-  if (hr < 24) return 'Finished ' + hr + 'h ago';
-  return 'Finished ' + Math.floor(hr / 24) + 'd ago';
-}
-
-async function loadActiveTasks() {
-  try {
-    var grid = document.getElementById('overview-tasks-list') || document.getElementById('active-tasks-grid');
-    if (!grid) return;
-
-    // Fetch active sub-agents
-    var saData = await fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; });
-
-    // "Active Tasks" should mean ACTIVE. Previously we lingered failed
-    // and stale entries here for 24h, which meant a subagent that failed
-    // hours ago still appeared as if it were current. Tightened:
-    //   - active / idle: always show (subagent still alive)
-    //   - failed: only within the last 10 minutes, and only when there's
-    //     nothing live — so a just-failed spawn still surfaces briefly.
-    //   - stale / older failures: don't show. The subagent detail modal
-    //     and the Brain tab are the right surfaces for history.
-    var RECENT_MS = 10 * 60 * 1000;
-    var now = Date.now();
-    var all = (saData.subagents || []);
-    // Scope to the selected runtime (sub-agent sessionId prefix = runtime).
-    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
-    if (_atRt !== 'all') all = all.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
-    var live = all.filter(function(a) { return _cmIsLiveStatus(a.status); });
-    var recentFailed = all.filter(function(a) {
-      return a.status === 'failed' && (now - (a.updatedAt || 0)) < RECENT_MS;
-    });
-    var agents = live.length ? live : recentFailed.slice(0, 3);
-
-    if (agents.length === 0) {
-      grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
-        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
-        + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
-      var badge = document.getElementById('overview-tasks-count-badge');
-      if (badge) badge.textContent = '';
-      return;
-    }
-
-    var html = '';
-    var badge = document.getElementById('overview-tasks-count-badge');
-    if (badge) {
-      var liveCount = agents.filter(function(a) { return _cmIsLiveStatus(a.status); }).length;
-      badge.textContent = liveCount > 0 ? (liveCount + ' active') : (agents.length + ' recent');
-    }
-
-    // Per-status visual style
-    var STATUS_STYLE = {
-      active: {cls: 'running',  dot: '#22c55e', label: 'active'},
-      idle:   {cls: 'running',  dot: '#f59e0b', label: 'idle'},
-      stale:  {cls: '',         dot: '#6b7280', label: 'completed'},
-      failed: {cls: '',         dot: '#ef4444', label: 'failed'},
-    };
-
-    // Render sub-agents
-    agents.forEach(function(agent) {
-      var taskName = cleanTaskName(agent.displayName);
-      var badge2 = detectProjectBadge(agent.displayName);
-      var mins = Math.max(1, Math.floor((agent.runtimeMs || 0) / 60000));
-      var st = STATUS_STYLE[agent.status] || STATUS_STYLE.active;
-
-      html += '<div class="task-card ' + st.cls + '" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
-      if (_cmIsLiveStatus(agent.status)) {
-        html += '<div class="task-card-pulse active"></div>';
-      }
-      html += '<div class="task-card-header">';
-      html += '<div class="task-card-name"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + st.dot + ';margin-right:6px;vertical-align:middle;"></span>' + escHtml(taskName) + '</div>';
-      html += '<span class="task-card-badge ' + st.cls + '" style="font-size:10px;">' +
-              (agent.status === 'failed' ? '⚠️ ' + st.label :
-               agent.status === 'stale'  ? '🤖 ' + st.label :
-               '🤖 ' + mins + ' min') +
-              '</span>';
-      html += '</div>';
-      // Task summary line (shown for all statuses if present)
-      if (agent.task) {
-        var taskPreview = agent.task.length > 90 ? agent.task.substring(0, 87) + '…' : agent.task;
-        html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.4;">' + escHtml(taskPreview) + '</div>';
-      }
-      // The failed badge in the top-right already conveys status; the raw
-      // OpenClaw error string ("Validation failed for tool 'subagents':")
-      // was redundant on the card and too jargon-y. Full error is still
-      // surfaced in the modal when the user clicks through.
-      html += '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">';
-      if (badge2) {
-        html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge2.color + '22;color:' + badge2.color + ';border:1px solid ' + badge2.color + '44;">' + badge2.label + '</span>';
-      }
-      html += '<span style="font-size:11px;color:var(--text-muted);">' + escHtml(humanTime(agent.runtimeMs)) + '</span>';
-      html += '</div>';
-      html += '</div>';
-    });
-
-    grid.innerHTML = html;
-  } catch(e) {
-    // silently fail
-  }
-}
-// Auto-refresh active tasks every 30s
-function startActiveTasksRefresh() {
-  loadActiveTasks();
-  if (_activeTasksTimer) clearInterval(_activeTasksTimer);
-  _activeTasksTimer = visibilitySetInterval(loadActiveTasks, 30000);
 }
 
 async function loadToolActivity() {
@@ -12237,8 +12046,18 @@ function _cmRuntimeOf(o) {
   // Explicit agent_type / runtime field (OTLP apps + server-tagged rows). An
   // OTLP app's spans carry agent_type=<its key>; honor it directly so a
   // selected OTLP runtime matches its own data and nothing else.
-  var r = o && (o.runtime || o.agent_type || o.agentType);
-  if (r) {
+  //
+  // Try every candidate rather than short-circuiting on the first truthy one:
+  // `/api/subagents` records carry a field literally named `runtime` that holds
+  // a FORMATTED DURATION ("44s", "12m", "2h 5m"), not a runtime name — see
+  // routes/sessions.py::_try_local_store_subagents. Short-circuiting on it made
+  // this helper return the 'openclaw' default for EVERY sub-agent, which is how
+  // a Codex sub-agent got filed under OpenClaw. `runtime` is checked last, and
+  // only a value that is actually a known runtime key is ever accepted.
+  var cands = o ? [o.runtimeName, o.agent_type, o.agentType, o.runtime] : [];
+  for (var ci = 0; ci < cands.length; ci++) {
+    var r = cands[ci];
+    if (!r) continue;
     r = String(r).toLowerCase();
     if (_CM_RT_PREFIXES.hasOwnProperty(r) || _CM_OTLP_RT.hasOwnProperty(r)) return r;
   }
@@ -12415,7 +12234,6 @@ var _CM_CAP_TABS = {
   // Nav uses data-tab="usage" for the Cost tab — 'cost' was a dead id that
   // left the tab visible for no-cost runtimes (Cursor/PicoClaw/NanoClaw).
   COST:        ['usage'],
-  SUBAGENTS:   ['subagents'],
   CRONS:       ['crons'],
   SKILLS:      ['skills'],
   MEMORY:      ['memory'],
@@ -12446,7 +12264,7 @@ var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','me
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
   'context-economics','approvals','guard','signals','alerts','usage','crons','memory',
-  'notifications','security','policy','skills','selfevolve','subagents',
+  'notifications','security','policy','skills','selfevolve',
   'nemoclaw','logs','version-impact','agents'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
 // EVENTS + COST tabs (Brain/Tracing/Models/Context/Turn-anatomy/Cost), plus the
@@ -12499,7 +12317,7 @@ function _cmApplyRuntimeScopeNote(name) {
   // and its scoped views live where the data actually is (the Inventory roster
   // row + cost/tokens). The Inventory tab keeps its own roster note below.
   // 'inventory' has its own roster note; transcripts has its own
-  // scoped empty-state ("no <app> sessions have a transcript yet"), so skip both
+  // scoped empty-state (_cmRuntimeEmptyMsg), so skip both
   // to avoid a conflicting double-note.
   if (_cmIsOtlpRuntime(rt) && name !== 'inventory') {
     var _otl = _cmRuntimeLabel(rt);
@@ -14064,7 +13882,9 @@ async function loadSessions() {
         html += '<details style="margin-bottom:4px;">';
         html += '<summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:4px 0;">';
         html += statusIcon + ' <strong>' + escHtml(sa.displayName) + '</strong>';
-        html += ' <span style="color:var(--text-muted);font-size:11px;">' + sa.runtime + '</span>';
+        // Elapsed time, so runtimeFormatted — `runtime` is the runtime's name
+        // now. Escaped; it was interpolated raw.
+        html += ' <span style="color:var(--text-muted);font-size:11px;">' + escHtml(sa.runtimeFormatted || '') + '</span>';
         html += '</summary>';
         html += '<div style="padding:6px 0 6px 20px;font-size:12px;color:var(--text-muted);">';
         if (sa.recentTools && sa.recentTools.length > 0) {
@@ -19557,6 +19377,32 @@ function applyTranscriptCustomRange() {
   loadTranscripts();
 }
 
+// Empty state for "runtime picked, zero rows on this tab". The header's
+// session count and this list come from DIFFERENT places: the count is every
+// session ClawMetry knows about, the list needs a conversation it can actually
+// read. When the count says 15 and the list says nothing, "no sessions have a
+// transcript yet" reads as a lie, so say which of the two we mean (#5643).
+function _cmRuntimeEmptyMsg(rt) {
+  var label = _cmRuntimeLabel(rt);
+  var known = 0;
+  try { known = (_cmGlobalRtCounts && _cmGlobalRtCounts[rt]) || 0; } catch (e) { known = 0; }
+  var pickAll = t('transcripts.pick_all_runtimes', null,
+    'Pick All runtimes in the header to see every session.');
+  var body;
+  if (known > 0) {
+    body = t('transcripts.runtime_counted_but_empty', {count: known, label: label},
+      'This machine has {count} {label} sessions, but none of them have a readable conversation here yet. New ones show up a minute or two after they start.');
+    if (window.CLOUD_MODE) {
+      body += ' ' + t('transcripts.runtime_open_on_machine', {label: label},
+        'To read older {label} sessions, open ClawMetry on the machine itself.');
+    }
+  } else {
+    body = t('transcripts.runtime_none', {label: label},
+      'No {label} sessions have a conversation to show yet.');
+  }
+  return '<div style="padding:16px;color:#666;">' + escHtml(body) + ' ' + escHtml(pickAll) + '</div>';
+}
+
 async function loadTranscripts() {
   // Mount the Grafana-style date/time-range picker on first paint.
   // Idempotent — the helper no-ops when already attached.
@@ -19713,7 +19559,7 @@ async function loadTranscripts() {
     var emptyMsg = _txWinEmpty
       ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this window. Try a wider window — or note that only recently synced sessions are listed here.') + '</div>'
       : _rtNoTx
-      ? '<div style="padding:16px;color:#666;">No <strong>' + escHtml(_cmRuntimeLabel(_rtFilter)) + '</strong> sessions have a transcript yet. Pick <strong>All runtimes</strong> in the header to see every session.</div>'
+      ? _cmRuntimeEmptyMsg(_rtFilter)
       : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
       ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
       : '<div style="padding:16px;color:#666;">No transcript files found</div>';
@@ -21728,320 +21574,7 @@ async function cmSyncInit() {
 setTimeout(function(){ try { cmSyncInit(); } catch (e) {} }, 800);
 
 // ── Sub-Agent Tree ────────────────────────────────────────────────────────
-var _subagentsTimer = null;
 var _subagentsExpanded = {};
-
-async function loadSubagents() {
-  var el = document.getElementById('subagents-list');
-  if (!el) return;
-  try {
-    var data = await fetch('/api/subagents').then(function(r) { return r.json(); });
-    var agents = data.subagents || [];
-    var counts = data.counts || {};
-    if (agents.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">' + t("app.no_sub_agents_found_sub_agents_appear_here_when_sp", null, "No sub-agents found. Sub-agents appear here when spawned by the main session.") + '</div>';
-      return;
-    }
-    var byId = {};
-    agents.forEach(function(a) { byId[a.sessionId] = a; });
-    var roots = [];
-    var childrenOf = {};
-    agents.forEach(function(a) {
-      var p = a.parent;
-      if (p && byId[p]) {
-        if (!childrenOf[p]) childrenOf[p] = [];
-        childrenOf[p].push(a);
-      } else {
-        roots.push(a);
-      }
-    });
-    function statusDot(status) {
-      // 'running' is the daemon's own word for the same state as 'active';
-      // without this normalise it fell through to the grey "stale" dot.
-      if (_cmIsWorkingStatus(status)) status = 'active';
-      var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280', failed: '#ef4444', paused: '#7c3aed' };
-      var glow = status === 'active' ? 'box-shadow:0 0 6px rgba(22,163,74,0.6);'
-               : status === 'failed' ? 'box-shadow:0 0 6px rgba(239,68,68,0.5);'
-               : status === 'paused' ? 'box-shadow:0 0 6px rgba(124,58,237,0.5);' : '';
-      return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (colors[status] || '#6b7280') + ';' + glow + 'flex-shrink:0;margin-right:4px;"></span>';
-    }
-    function renderAgent(a, depth) {
-      var sid = a.sessionId;
-      var hasChildren = !!(childrenOf[sid] && childrenOf[sid].length > 0);
-      var isExpanded = _subagentsExpanded[sid] !== false;
-      var indent = depth > 0 ? 'padding-left:' + (depth * 22 + 12) + 'px;' : 'padding-left:12px;';
-      var toggleBtn = hasChildren
-        ? '<button onclick="event.stopPropagation();_saToggle(' + attrJsStr(sid) + ')" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-muted);padding:0 4px 0 0;line-height:1;min-width:16px;">' + (isExpanded ? '▼' : '▶') + '</button>'
-        : '<span style="display:inline-block;min-width:16px;"></span>';
-      var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K' : a.totalTokens;
-      var depthBadge = a.depth > 0 ? '<span style="font-size:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;padding:1px 5px;color:var(--text-muted);margin-left:6px;">d' + a.depth + '</span>' : '';
-      // Click row → subagent detail modal (same call used by Active Tasks cards).
-      // Stop-propagation on the toggle button already handles tree expansion.
-      var name = (a.displayName || '').replace(/"/g,'&quot;').replace(/'/g,"\\'");
-      var sidEsc = (a.sessionId || '').replace(/'/g,"\\'");
-      var keyEsc = (a.key || a.sessionId || '').replace(/'/g,"\\'");
-      var clickAttr = ' onclick="openTaskModal(\'' + sidEsc + '\',\'' + name + '\',\'' + keyEsc + '\')"';
-      var cursor = 'cursor:pointer;';
-      var html = '<div' + clickAttr + ' style="display:flex;align-items:center;gap:6px;' + indent + 'padding-top:8px;padding-bottom:8px;padding-right:12px;border-bottom:1px solid var(--border-secondary);' + cursor + 'transition:background 0.1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
-      html += toggleBtn;
-      html += statusDot(a.status);
-      html += '<span style="font-weight:600;font-size:13px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>';
-      html += depthBadge;
-      if (a.status === 'failed') {
-        html += '<span style="font-size:10px;background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:4px;padding:1px 6px;margin-left:6px;font-weight:700;">FAILED</span>';
-      }
-      html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + escHtml(a.model || '') + '</span>';
-      html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + tokens + ' tok</span>';
-      html += '<span style="font-size:11px;color:var(--text-faint);white-space:nowrap;margin-left:8px;">' + escHtml(a.runtime || '') + '</span>';
-      if (a.status !== 'failed' && a.status !== 'stale' && a.status !== 'stopped') {
-        var keyBtn = (a.key || a.sessionId || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-        var isPaused = a.status === 'paused';
-        html += '<span onclick="event.stopPropagation();" style="margin-left:8px;display:inline-flex;gap:4px;flex-shrink:0;">';
-        if (isPaused) {
-          html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'resume\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid #16a34a;background:transparent;color:#16a34a;cursor:pointer;">Resume</button>';
-        } else {
-          html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'pause\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid var(--border-primary);background:transparent;color:var(--text-muted);cursor:pointer;">Pause</button>';
-        }
-        html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'stop\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid rgba(239,68,68,0.5);background:transparent;color:#ef4444;cursor:pointer;">Stop</button>';
-        html += '</span>';
-      }
-      html += '</div>';
-      if (hasChildren && isExpanded) {
-        childrenOf[sid].forEach(function(child) { html += renderAgent(child, depth + 1); });
-      }
-      return html;
-    }
-    var summaryHtml = '<div style="display:flex;gap:16px;padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:12px;flex-wrap:wrap;">';
-    summaryHtml += '<span style="color:var(--text-muted);"><strong style="color:var(--text-primary);">' + (counts.total || 0) + '</strong> total</span>';
-    if (counts.active) summaryHtml += '<span style="color:#16a34a;"><strong>' + counts.active + '</strong> active</span>';
-    if (counts.idle) summaryHtml += '<span style="color:#d97706;"><strong>' + counts.idle + '</strong> idle</span>';
-    if (counts.stale) summaryHtml += '<span style="color:var(--text-muted);"><strong>' + counts.stale + '</strong> stale</span>';
-    if (counts.failed) summaryHtml += '<span style="color:#ef4444;"><strong>' + counts.failed + '</strong> failed</span>';
-    summaryHtml += '</div>';
-    var treeHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">' + summaryHtml;
-    roots.forEach(function(a) { treeHtml += renderAgent(a, 0); });
-    treeHtml += '</div>';
-    el.innerHTML = treeHtml;
-  } catch(e) {
-    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_sub_agents", null, "Failed to load sub-agents") + ': ' + escHtml(String(e)) + '</div>';
-  }
-}
-
-function _saToggle(sid) {
-  _subagentsExpanded[sid] = (_subagentsExpanded[sid] === false) ? true : false;
-  loadSubagents();
-}
-
-async function loadOrchestration() {
-  var el = document.getElementById('orchestration-board');
-  if (!el) return;
-  try {
-    var data = await fetch('/api/orchestration').then(function(r) { return r.json(); });
-    var agents = data.agents || [];
-    var summary = data.summary || {};
-    if (agents.length === 0) { el.innerHTML = ''; return; }
-    var statusColors = {
-      active: '#16a34a', running: '#16a34a', idle: '#d97706',
-      stale: '#6b7280', failed: '#ef4444', paused: '#7c3aed', completed: '#3b82f6'
-    };
-    var html = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;margin-bottom:4px;">';
-    html += '<div style="display:flex;align-items:center;gap:16px;padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:12px;flex-wrap:wrap;">';
-    html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;">🤖 Orchestration</span>';
-    html += '<span style="color:var(--text-muted);"><strong style="color:var(--text-primary);">' + (summary.total || 0) + '</strong> agents</span>';
-    if (summary.active) html += '<span style="color:#16a34a;"><strong>' + summary.active + '</strong> active</span>';
-    if (summary.total_cost_usd) {
-      html += '<span style="color:var(--text-muted);">$<strong style="color:var(--text-primary);">' + summary.total_cost_usd.toFixed(4) + '</strong> total cost</span>';
-    }
-    html += '</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:10px;">';
-    agents.forEach(function(a) {
-      var color = statusColors[a.status] || '#6b7280';
-      var glow = (a.status === 'active' || a.status === 'running') ? 'box-shadow:0 0 0 1px ' + color + '40;' : '';
-      var costStr = (a.costUsd > 0) ? '$' + a.costUsd.toFixed(4) : '';
-      var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K tok' : (a.totalTokens > 0 ? a.totalTokens + ' tok' : '');
-      var depthBadge = (a.depth > 1) ? '<span style="font-size:9px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:3px;padding:0 4px;color:var(--text-muted);margin-left:4px;">d' + a.depth + '</span>' : '';
-      html += '<div style="flex:0 0 auto;min-width:155px;max-width:215px;border:1px solid var(--border-primary);border-radius:8px;padding:8px 10px;background:var(--bg-card);' + glow + '">';
-      html += '<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;">';
-      html += '<span style="width:8px;height:8px;border-radius:50%;background:' + color + ';display:inline-block;flex-shrink:0;"></span>';
-      html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>';
-      html += depthBadge;
-      html += '</div>';
-      if (a.model && a.model !== 'unknown') {
-        html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(a.model) + '</div>';
-      }
-      if (costStr || tokens) {
-        html += '<div style="display:flex;gap:8px;font-size:10px;color:var(--text-faint);">';
-        if (costStr) html += '<span style="color:#16a34a;">' + escHtml(costStr) + '</span>';
-        if (tokens) html += '<span>' + escHtml(tokens) + '</span>';
-        html += '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div></div>';
-    el.innerHTML = html;
-  } catch(e) {
-    var board = document.getElementById('orchestration-board');
-    if (board) board.innerHTML = '';
-  }
-}
-
-async function controlAgent(key, action) {
-  if (action === 'stop') {
-    if (!confirm('Stop agent ' + key + '? This will attempt to terminate it via the gateway and cannot be undone.')) return;
-  }
-  try {
-    var body = action === 'stop' ? {confirm: true} : {};
-    var r = await fetch('/api/agents/' + encodeURIComponent(key) + '/' + action, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-    var d = await r.json();
-    if (d.ok) {
-      loadSubagents();
-    } else {
-      alert('Agent ' + action + ' failed: ' + (d.error || 'unknown error'));
-    }
-  } catch(e) {
-    alert('Request failed: ' + e);
-  }
-}
-
-// OpenClaw queue-lane defaults (docs.openclaw.ai/concepts/queue): the
-// subagent lane caps at 8 and the main lane at 4 concurrent runs. cli/cron
-// have no fixed small cap, so we show live running count without a "/cap".
-var _RUN_LEDGER_LANE_CAPS = { subagent: 8, main: 4 };
-// Interactive state: which lane is filtered (null = all) and which run rows
-// are expanded into their detail drawer. Kept module-level so a 5s refresh
-// re-render preserves the user's drill-down.
-var _rlLaneFilter = null;
-var _rlExpanded = {};
-var _rlData = { lanes: [], runs: [] };
-
-// Live OpenClaw run-ledger view: queue-lane saturation bars + recent runs.
-// `runtime` IS the OpenClaw queue lane (cli / cron / subagent), so the lane
-// rollup doubles as the queue/concurrency monitor. Reads /api/run-ledger,
-// which the sync daemon mirrors from ~/.openclaw/tasks/runs.sqlite.
-// Interactive: click a lane to filter, click a run to expand its detail +
-// jump to the child session transcript.
-async function loadRunLedger() {
-  var el = document.getElementById('run-ledger-panel');
-  if (!el) return;
-  try {
-    var data = await fetch('/api/run-ledger?limit=120').then(function(r){ return r.json(); });
-    _rlData = { lanes: data.lanes || [], runs: data.runs || [] };
-    _rlRender();
-  } catch(e) {
-    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_run_ledger", null, "Failed to load run ledger") + ': '+escHtml(String(e))+'</div>';
-  }
-}
-
-function _rlSetLane(lane) {
-  _rlLaneFilter = (_rlLaneFilter === lane) ? null : lane;  // toggle
-  _rlRender();
-}
-function _rlToggleRun(tid) {
-  _rlExpanded[tid] = !_rlExpanded[tid];
-  _rlRender();
-}
-function _rlOpenSession(key) {
-  // Jump to the child session's transcript (same deep-link the tree uses).
-  try { if (typeof viewTranscript === 'function') { viewTranscript(key); return; } } catch(e) {}
-  try { window.location.hash = 'session=' + encodeURIComponent(key); } catch(e) {}
-}
-
-function _rlRender() {
-  var el = document.getElementById('run-ledger-panel');
-  if (!el) return;
-  var lanes = _rlData.lanes || [], runs = _rlData.runs || [];
-  if (lanes.length === 0 && runs.length === 0) {
-    el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_background_runs_yet_sub_agent_cron_and_cli_runs", null, "No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.") + '</div>';
-    return;
-  }
-  function laneColor(lane){ return ({subagent:'#8b5cf6',cron:'#0ea5e9',cli:'#16a34a'})[lane] || '#6b7280'; }
-  function jsq(s){ return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
-
-  // ── Lane bars (clickable filters) ──
-  var laneHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
-  laneHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Queue lanes</span>';
-  if (_rlLaneFilter) laneHtml += '<span style="font-size:11px;color:var(--text-muted);">· filtered to <strong style="color:'+laneColor(_rlLaneFilter)+'">'+escHtml(_rlLaneFilter)+'</strong> <a onclick="_rlSetLane(\''+jsq(_rlLaneFilter)+'\')" style="cursor:pointer;color:var(--accent,#3b82f6);">clear ✕</a></span>';
-  else laneHtml += '<span style="font-size:11px;color:var(--text-faint);">click a lane to filter</span>';
-  laneHtml += '</div>';
-  lanes.forEach(function(L){
-    var cap = _RUN_LEDGER_LANE_CAPS[L.lane];
-    var running = L.running||0, total = L.total||0, ok = L.succeeded||0, failed = L.failed||0, queued = L.queued||0;
-    var capLabel = cap ? (running + '/' + cap) : ('' + running);
-    var active = (_rlLaneFilter === L.lane);
-    function seg(n,color){ return total>0 ? '<span style="height:100%;width:'+(n/total*100)+'%;background:'+color+';display:inline-block;"></span>' : ''; }
-    laneHtml += '<div onclick="_rlSetLane(\''+jsq(L.lane)+'\')" title="Filter runs to the '+escHtml(L.lane)+' lane" style="margin-bottom:10px;cursor:pointer;border-radius:7px;padding:6px 8px;'+(active?'background:var(--bg-hover);outline:1px solid '+laneColor(L.lane)+';':'')+'transition:background .1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\''+(active?'var(--bg-hover)':'')+'\'">';
-    laneHtml += '<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;">';
-    laneHtml += '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+laneColor(L.lane)+';"></span>';
-    laneHtml += '<span style="font-weight:700;color:var(--text-primary);">'+escHtml(L.lane)+'</span>';
-    laneHtml += '<span style="font-size:11px;font-weight:600;color:'+(running>0?'#16a34a':'var(--text-muted)')+';">'+(running>0 ? ('● '+capLabel+' running') : 'idle')+'</span>';
-    laneHtml += '<span style="flex:1;"></span>';
-    laneHtml += '<span style="font-size:11px;color:var(--text-muted);">'+total+' runs · '+ok+'✓'+(failed?(' · '+failed+'✗'):'')+'</span>';
-    laneHtml += '</div>';
-    laneHtml += '<div style="display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--bg-secondary);">';
-    laneHtml += seg(ok,'#16a34a')+seg(running,'#3b82f6')+seg(queued,'#d97706')+seg(failed,'#ef4444');
-    laneHtml += '</div></div>';
-  });
-  laneHtml += '</div>';
-
-  function pill(status){
-    var m = {succeeded:['#16a34a','rgba(22,163,74,.12)'],success:['#16a34a','rgba(22,163,74,.12)'],running:['#3b82f6','rgba(59,130,246,.12)'],failed:['#ef4444','rgba(239,68,68,.12)'],timeout:['#ef4444','rgba(239,68,68,.12)']};
-    var c = m[status] || ['#6b7280','var(--bg-secondary)'];
-    return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(status||'?'))+'</span>';
-  }
-  function dur(s){ if(!s.started_at||!s.ended_at) return ''; var ms=s.ended_at-s.started_at; if(ms<0) return ''; if(ms<1000) return ms+'ms'; if(ms<60000) return (ms/1000).toFixed(1)+'s'; return Math.round(ms/60000)+'m'; }
-  function tsLabel(ms){ if(!ms) return '-'; try { return new Date(ms).toLocaleString(); } catch(e){ return String(ms); } }
-
-  // ── Recent runs (filtered + clickable to expand) ──
-  var shown = _rlLaneFilter ? runs.filter(function(r){ return r.runtime === _rlLaneFilter; }) : runs;
-  var runHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;margin-top:14px;overflow:hidden;">';
-  runHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Recent runs'+(_rlLaneFilter?(' · '+escHtml(_rlLaneFilter)):'')+' <span style="color:var(--text-faint);font-weight:500;">('+shown.length+')</span></div>';
-  if (shown.length === 0) {
-    runHtml += '<div style="padding:14px;color:var(--text-muted);font-size:12px;">No runs in this lane.</div>';
-  }
-  shown.slice(0,60).forEach(function(s){
-    var tid = s.task_id || s.run_id || '';
-    var open = !!_rlExpanded[tid];
-    runHtml += '<div onclick="_rlToggleRun(\''+jsq(tid)+'\')" style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;cursor:pointer;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
-    runHtml += '<span style="color:var(--text-faint);font-size:10px;width:10px;">'+(open?'▼':'▶')+'</span>';
-    runHtml += pill(s.status);
-    runHtml += '<span style="font-size:10px;color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;min-width:54px;text-align:center;">'+escHtml(s.runtime||'')+'</span>';
-    runHtml += '<span style="flex:1;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(s.label||'')+'">'+escHtml(s.label||'(untitled)')+'</span>';
-    var d = dur(s); if(d) runHtml += '<span style="color:var(--text-muted);white-space:nowrap;">'+d+'</span>';
-    runHtml += '</div>';
-    if (open) {
-      runHtml += '<div style="padding:10px 14px 12px 34px;background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);font-size:11px;color:var(--text-secondary);line-height:1.7;">';
-      function row(k,v){ return '<div><span style="color:var(--text-muted);display:inline-block;min-width:120px;">'+k+'</span>'+v+'</div>'; }
-      if (s.run_id) runHtml += row('run id', '<code style="color:var(--text-primary);">'+escHtml(s.run_id)+'</code>');
-      if (s.agent_id) runHtml += row('agent', escHtml(s.agent_id));
-      if (s.scope_kind || s.task_kind) runHtml += row('scope', escHtml((s.scope_kind||'')+(s.task_kind?(' · '+s.task_kind):'')));
-      if (s.delivery_status) runHtml += row('delivery', escHtml(s.delivery_status));
-      if (s.terminal_outcome) runHtml += row('outcome', escHtml(s.terminal_outcome));
-      runHtml += row('created', tsLabel(s.created_at));
-      if (s.ended_at) runHtml += row('ended', tsLabel(s.ended_at));
-      if (s.error) runHtml += '<div style="margin-top:4px;color:#ef4444;"><span style="color:var(--text-muted);display:inline-block;min-width:120px;">error</span>'+escHtml(String(s.error).slice(0,400))+'</div>';
-      if (s.child_session_key) {
-        runHtml += '<div style="margin-top:8px;"><button onclick="event.stopPropagation();_rlOpenSession(\''+jsq(s.child_session_key)+'\')" style="font-size:11px;font-weight:600;cursor:pointer;background:var(--accent,#3b82f6);color:#fff;border:none;border-radius:5px;padding:4px 10px;">Open session →</button> <span style="color:var(--text-faint);margin-left:6px;">'+escHtml(s.child_session_key)+'</span></div>';
-      }
-      runHtml += '</div>';
-    }
-  });
-  runHtml += '</div>';
-  el.innerHTML = laneHtml + runHtml;
-}
-
-// ── Tool catalog: provenance + p50/p95 latency (PRD P1-3) ───────────────────
-// Interactive catalog of every tool the agent invoked, grouped by provenance
-// (builtin / MCP / plugin) with call count + p50/p95 latency + error rate.
-// Rows are clickable → expand to the tool's recent individual calls (each
-// linking to its session transcript). Sortable + provenance-filterable.
-// Reads /api/tool-catalog (derived from DuckDB tool_call/tool_result pairs).
-var _toolCatalogData = null;       // last /api/tool-catalog payload
-var _tcExpanded = {};              // tool name -> bool (row expanded)
-var _tcCallsCache = {};            // tool name -> recent-calls payload
 
 function _tcProvBadge(prov, provider) {
   var map = {
@@ -25357,6 +24890,30 @@ function initOverviewFlow() {
 var _ovTasksTimer = null;
 window._ovExpandedSet = {};  // track which detail panels are open across refreshes
 
+// When did this task END? There is exactly one answer and it is allowed to be
+// "we don't know".
+//
+// `updatedAt` is a LAST-ACTIVITY stamp, and the ingest path in
+// routes/sessions.py falls back to `now` whenever a spawn's timestamp cannot be
+// parsed. Trusting it blindly meant a sub-agent spawned 2026-08-20 that never
+// ran (runtime 0s, no completion) was stamped with the current time, sailed
+// through the 1-hour "recent" window, and rendered as "Finished 1 min ago"
+// eighteen days later (founder report 2026-09-07). So `updatedAt` counts as an
+// end time only when the record shows the spawn actually ran and stopped.
+// Unknown end time returns 0: the caller shows no timestamp and the task is not
+// "recent". A blank beats an invented number.
+function _ovEndedMs(a) {
+  if (!a) return 0;
+  if (a.completionTs) { var ct = Date.parse(a.completionTs); if (!isNaN(ct)) return ct; }
+  var ran = (a.runtimeMs || 0) > 0 ||
+            (a.outputTokens || 0) > 0 || (a.tokensOut || 0) > 0 ||
+            !!a.completionStatus || !!a.completionResult;
+  if (!ran) return 0;
+  if (a.startedAt && a.runtimeMs) return a.startedAt + a.runtimeMs;
+  if (a.updatedAt) return a.updatedAt;
+  return 0;
+}
+
 function _ovTimeLabel(agent) {
   var ms = agent.runtimeMs || 0;
   var sec = Math.floor(ms / 1000);
@@ -25370,12 +24927,10 @@ function _ovTimeLabel(agent) {
   // "Finished N ago" is time since the spawn ENDED — not the run duration.
   // Using runtimeMs here made stale spawns whose runtime was frozen to 0
   // (the dead-subagent freeze) read "Finished 0s ago" even when they ended
-  // days ago. Prefer completionTs, then updatedAt (last activity), then
-  // startedAt+runtime; blank if the end time is genuinely unknown.
-  var endedMs = 0;
-  if (agent.completionTs) { var ct = Date.parse(agent.completionTs); if (!isNaN(ct)) endedMs = ct; }
-  if (!endedMs && agent.updatedAt) endedMs = agent.updatedAt;
-  if (!endedMs && agent.startedAt && ms) endedMs = agent.startedAt + ms;
+  // days ago. The derivation lives in _ovEndedMs() so this label and the
+  // panel's "recently finished" window can never disagree; blank when the end
+  // time is genuinely unknown.
+  var endedMs = _ovEndedMs(agent);
   if (!endedMs) return '';
   var ago = Math.max(0, Date.now() - endedMs);
   var asec = Math.floor(ago / 1000), amin = Math.floor(asec / 60), ahr = Math.floor(amin / 60);
@@ -25385,11 +24940,70 @@ function _ovTimeLabel(agent) {
   return 'Finished ' + Math.floor(ahr / 24) + 'd ago';
 }
 
+// The ONE place a task's bucket is decided. The card renderer and the grouping
+// logic each used to derive it independently, and they disagreed: the grouping
+// put a failed spawn in `done` while the card drew it with a ✅. One function,
+// one answer.
+function _ovBucketOf(agent) {
+  if (!agent) return 'complete';
+  if (_cmIsWorkingStatus(agent.status)) return 'running';
+  if (_cmIsFailedStatus(agent.status)) return 'failed';
+  // Legacy heuristic for spawns the server could not label outright: it died
+  // stale, mid-run, having produced nothing.
+  if (agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0) return 'failed';
+  return 'complete';
+}
+
+// "Recently Completed/Failed" must mean RECENT — bound by how long ago the task
+// FINISHED, not its run duration. A 5-minute task that ended six days ago used
+// to pass a `runtimeMs < 2h` check and make an idle node look busy.
+var OV_RECENT_DONE_MS = 60 * 60 * 1000; // 1h
+function _ovRecentlyFinished(a, nowMs) {
+  var e = _ovEndedMs(a);
+  return e > 0 && ((nowMs || Date.now()) - e) < OV_RECENT_DONE_MS;
+}
+
+// Split a list into the buckets this panel actually RENDERS. Running tasks
+// always show; finished ones only while they are still recent. Every count the
+// panel reports goes through here, so a number can never promise more than the
+// list will actually display.
+function _ovVisible(list, nowMs) {
+  var now = nowMs || Date.now();
+  var r = [], d = [], f = [];
+  (list || []).forEach(function(a) {
+    var b = _ovBucketOf(a);
+    if (b === 'running') r.push(a);
+    else if (b === 'failed') { if (_ovRecentlyFinished(a, now)) f.push(a); }
+    else if (_ovRecentlyFinished(a, now)) d.push(a);
+  });
+  return { running: r, done: d, failed: f, total: r.length + d.length + f.length };
+}
+
+// Provenance pill: the runtime a task actually ran on, or nothing at all when
+// attribution is unknown. Rendered only in the unfiltered ("all runtimes")
+// view — under a runtime filter every card is that runtime and the pill is
+// noise.
+function _ovRuntimePill(agent) {
+  try {
+    if (_cmClientFilterRt(_cmRuntimeFilter()) !== 'all') return null;
+    var attributed = !!(agent && (agent.runtimeName || agent.agentType || agent.agent_type)) ||
+                     String((agent && (agent.sessionId || agent.key)) || '').indexOf(':') > 0;
+    if (!attributed) return null;   // never guess — no pill beats a wrong one
+    var rt = _cmRuntimeOf(agent);
+    if (!rt) return null;
+    return { label: _cmRuntimeLabel(rt), color: '#64748b' };
+  } catch (e) { return null; }
+}
+
 function _ovRenderCard(agent, idx) {
-  var isRealFailure = agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0;
-  var sc = _cmIsWorkingStatus(agent.status) ? 'running' : isRealFailure ? 'failed' : 'complete';
+  var sc = _ovBucketOf(agent);
   var taskName = cleanTaskName(agent.displayName);
-  var badge = detectProjectBadge(agent.displayName);
+  // Was detectProjectBadge() — a substring match of the task's prose against a
+  // hardcoded list of the developer's own project names, shipped to every
+  // customer. Any task whose prompt merely CONTAINED a runtime's name was
+  // stamped with that runtime's pill no matter which runtime actually ran it.
+  // Deleted; this reads real attribution or shows nothing.
+  var badge = _ovRuntimePill(agent);
   var timeLabel = _ovTimeLabel(agent);
   var detailId = 'ovd2-' + idx;
   var isOpen = !!(window._ovExpandedSet || {})[agent.sessionId];
@@ -25443,61 +25057,62 @@ async function loadOverviewTasks() {
     var el = document.getElementById('overview-tasks-list');
     var countBadge = document.getElementById('overview-tasks-count-badge');
     if (!el) return true;
-    var agents = data.subagents || [];
+    var allAgents = data.subagents || [];
+
+    // FLYWHEEL 0a.2 (per-runtime honesty, HARD GATE): a number shown while the
+    // runtime switcher is set to a specific runtime must scope to that runtime
+    // or carry a visible node-wide label. This panel did neither — it rendered
+    // every runtime's tasks under ?runtime=codex, so a Codex user saw OpenClaw
+    // work on their own home screen (founder report 2026-09-07). Filtering
+    // client-side scopes the hosted dashboard too: the cloud `cm-cloud-subagents`
+    // interceptor serves the whole snapshot slice and honours no ?runtime= param.
+    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
+    var agents = (_atRt === 'all') ? allAgents
+                                   : allAgents.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
+
+    // The other-runtime count must be of tasks the user would ACTUALLY SEE after
+    // switching, not of every row the filter removed. Counting raw rows told a
+    // Codex user "489 tasks on other runtimes — switch runtime to see them" when
+    // switching showed nothing at all: all 489 had finished more than an hour
+    // earlier and are excluded by the same recency rule applied here. An empty
+    // state that sends someone somewhere empty is its own small lie.
+    var _hiddenOther = (_atRt === 'all')
+      ? 0
+      : _ovVisible(allAgents.filter(function(a) { return _cmRuntimeOf(a) !== _atRt; })).total;
+    // When the filter hides everything, say so in the runtime's own name rather
+    // than claiming the machine is idle — other runtimes may be flat out.
+    var _rtName = (_atRt === 'all') ? '' : _cmRuntimeLabel(_atRt);
+    function _emptyState() {
+      var head = _rtName ? ('No active tasks for ' + escHtml(_rtName)) : 'No active tasks';
+      var sub  = _hiddenOther > 0
+        ? (_hiddenOther + ' task' + (_hiddenOther === 1 ? '' : 's') + ' on other runtimes — switch runtime to see them.')
+        : 'The AI is idle.';
+      return '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
+        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
+        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">' + head + '</div>'
+        + '<div style="font-size:12px;">' + sub + '</div></div>';
+    }
 
     if (agents.length === 0) {
       if (countBadge) countBadge.textContent = '';
-      el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
-        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
-        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
-        + '<div style="font-size:12px;">The AI is idle.</div></div>';
+      el.innerHTML = _emptyState();
       return true;
     }
 
-    var running = [], done = [], failed = [];
-    agents.forEach(function(a) {
-      var isRealFailure = a.status === 'stale' && a.abortedLastRun && (a.outputTokens || 0) === 0;
-      if (_cmIsWorkingStatus(a.status)) running.push(a);
-      else if (isRealFailure) failed.push(a);
-      else done.push(a);
-    });
+    var _split = _ovVisible(agents);
+    var running = _split.running, done = _split.done, failed = _split.failed;
     // Alive-state for the Overview hero: working when something is actively
     // running, otherwise idle. Re-render the hero so it reflects the change.
     window._cmAgentBusy = running.length > 0;
     try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e_hero) {}
           try { if (typeof _renderWasteSummary === 'function') _renderWasteSummary(); } catch (_e) {}
           try { if (typeof _renderOutLoopSources === 'function') _renderOutLoopSources(); } catch (_e4) {}
-    // "Recently Completed/Failed" must mean RECENT — bound by how long ago the
-    // task FINISHED, not its run duration. The old `runtimeMs < 2h` check used
-    // duration, so a 5-minute task that finished 6 days ago still passed and
-    // showed as "recent" (an idle node looked busy). Derive the end time the
-    // same way _ovRenderCard's "Finished N ago" does (completionTs → updatedAt
-    // → startedAt+runtime); unknown end time → not recent.
-    var RECENT_DONE_MS = 60 * 60 * 1000; // 1h
-    var _nowMs = Date.now();
-    function _ovEndedMs(a) {
-      var e = 0;
-      if (a.completionTs) { var ct = Date.parse(a.completionTs); if (!isNaN(ct)) e = ct; }
-      if (!e && a.updatedAt) e = a.updatedAt;
-      if (!e && a.startedAt && a.runtimeMs) e = a.startedAt + a.runtimeMs;
-      return e;
-    }
-    function _ovRecentlyFinished(a) {
-      var e = _ovEndedMs(a);
-      return e > 0 && (_nowMs - e) < RECENT_DONE_MS;
-    }
-    done = done.filter(_ovRecentlyFinished);
-    failed = failed.filter(_ovRecentlyFinished);
-
     if (countBadge) countBadge.textContent = running.length > 0 ? '(' + running.length + ' running)' : '(' + (done.length + failed.length) + ' recent)';
 
     var totalShown = running.length + done.length + failed.length;
     if (totalShown === 0) {
       if (countBadge) countBadge.textContent = '';
-      el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
-        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
-        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
-        + '<div style="font-size:12px;">The AI is idle.</div></div>';
+      el.innerHTML = _emptyState();
       return true;
     }
 
@@ -27836,11 +27451,22 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     }
     var meta = [];
     if (startedAt) meta.push(['Started', startedAt]);
-    // Prefer the child's actual runtime (from OpenClaw completion event) over
-    // our "time since spawn" calculation — runtimeFormatted is e.g. "1s",
-    // match.runtime is e.g. "72h 49m" which is misleading for a 1-second run.
-    var rtDisplay = match.runtimeFormatted || match.runtime || '';
-    if (rtDisplay) meta.push(['Runtime', rtDisplay]);
+    // Prefer the child's actual elapsed time (from the OpenClaw completion
+    // event) over our "time since spawn" calculation: runtimeFormatted is e.g.
+    // "1s" where the spawn-derived figure can read "72h 49m" for a one-second
+    // run. No `|| match.runtime` fallback any more — that field is the
+    // runtime's NAME now, so it would print "codex" where a duration belongs.
+    //
+    // Labelled "Duration", not "Runtime". This row said Runtime and showed a
+    // duration, in a product where "runtime" means Codex / Claude Code /
+    // OpenClaw everywhere else — the same collision that made the Home task
+    // pill claim OpenClaw for a Codex task (2026-09-07).
+    var rtDisplay = match.runtimeFormatted || '';
+    if (rtDisplay) meta.push(['Duration', rtDisplay]);
+    // Now that `runtime` carries the name, show it — "which runtime ran this?"
+    // is the question that started this whole thread. Shown only when known.
+    var rtName = match.runtime || match.runtimeName || '';
+    if (rtName) meta.push(['Runtime', _cmRuntimeLabel(String(rtName).toLowerCase())]);
     if (match.model && match.model !== 'unknown') meta.push(['Model', match.model]);
     if (match.parent) meta.push(['Parent', match.parent]);
     if (match.runId) meta.push(['Run ID', match.runId]);
