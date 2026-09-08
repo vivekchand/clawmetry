@@ -32,18 +32,36 @@ That second surface is why `repo_scan` exists at all. It was written because thi
 
 ## Controls are load-bearing
 
-Three cases are marked `"control": true` and they are not padding.
+Four cases are marked `"control": true` and they are not padding.
 
 - Two **positives** (`control-credential-exfil`, `control-privilege-change`) must be caught by detectors
   that already ship. If one stops firing, the audit's verdict on everything else is worthless, so a
   control failure exits `2` and is reported separately from gaps.
-- One **negative** (`control-benign-repo`) carries a real git-lfs config and must produce silence.
-  `filter.lfs.clean` is a command-valued key in millions of legitimate repositories. A scanner that
-  cannot tell git-lfs from a payload gets muted within a week and then protects nobody.
+- Two **negatives** must produce silence. `control-benign-repo` carries a real git-lfs config:
+  `filter.lfs.clean` is a command-valued key in millions of legitimate repositories, and a scanner
+  that cannot tell git-lfs from a payload gets muted within a week and then protects nobody.
+  `control-ordinary-dev-session` is a working day in the tool stream (install, read `.env.example`,
+  run tests, push), and it sits beside the two supply-chain cases for the same reason.
 
 The false-positive half is not a formality. Measured across 50 real repositories on a working
 machine, the first version of `repo_scan` flagged **clawmetry itself** — `core.hooksPath` pointing at
 the default `.git/hooks`. The current version reports **0 critical, 3 warning** on the same 50.
+
+## What is deliberately NOT here
+
+A case is a signature for something we catch. Three disclosed attacks were measured against the
+detectors and are recorded as `sec-gap` issues on the private tracker instead, with the audit's own
+verdict pasted in, because a corpus entry that always fails is a red build nobody can act on:
+
+- **npm postinstall credential harvesting.** Measured verdict: `MISS — nothing fired at all`. The
+  agent's tool stream for the attack is byte-identical to the tool stream for an ordinary
+  `npm install`, so no tool-stream detector can separate them, ever. The visible half (the agent
+  itself reading the token file) is covered by `npm-postinstall-visible-harvest`.
+- **Cross-session coordination** (the Hugging Face evaluation swarm using a shared package cache as
+  a covert channel). Every detector we ship is per-session, and so is this runner: the case cannot
+  even be *written* here, which is a finding about the corpus as much as about the detectors.
+- **Credential scoping bypass** (session-scoped credentials outliving their session). Nothing in the
+  tool stream distinguishes a credential that should have expired from one that should not.
 
 ## Writing a case
 
