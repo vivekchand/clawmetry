@@ -42,8 +42,9 @@ from typing import Optional
 #: produced, and re-exported as ``detectors.WORKSPACE_KINDS`` so every surface
 #: that renders or matches an incident reads ONE list. ``DETECTOR_KINDS`` exists
 #: precisely so a new detector cannot be added without the surfaces noticing;
-#: these two kinds bypassed it once by living outside ``detectors``, and the
-#: Guard tab rendered them as "unknown".
+#: the first two kinds bypassed it once by living outside ``detectors``, and the
+#: Guard tab rendered them as "unknown". Adding the third was the mechanism
+#: working: the JS label guard refused to pass until both label maps knew it.
 WORKSPACE_KINDS = (
     "repo_config_exec",      # the checkout's own config names a program
     "agent_config_tamper",   # an agent hook config was changed under us
