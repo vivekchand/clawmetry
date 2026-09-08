@@ -1,6 +1,7 @@
 """Guards for the Agent Graph tab wiring (founder report 2026-07-02).
 
-The bug class: dashboard.py defines DASHBOARD_HTML twice and only the SECOND
+The bug class: a tab loader wired only where it never renders (dashboard.py
+once defined DASHBOARD_HTML twice; only the last assignment
 renders. #3315 added `if (name === 'agents') loadAgentGraph();` to the inline
 switchTab inside the DEAD first block, so the loader never fired and the tab
 sat on its static "Loading..." forever, on localhost and cloud alike.
@@ -51,7 +52,7 @@ def test_no_wiring_exists_only_in_dead_block():
     nav_tabs = set(re.findall(r'data-tab="([a-z-]+)"', nav))
     orphaned = (dead_wirings - live_wirings) & nav_tabs
     assert not orphaned, (
-        f"tab loader(s) wired ONLY in the dead first DASHBOARD_HTML: {sorted(orphaned)} - "
+        f"tab loader(s) with no live nav entry: {sorted(orphaned)} - "
         "move the wiring to static/js/app.js switchTab or the tab never loads"
     )
 
