@@ -1336,11 +1336,14 @@ class RuntimeSupervisor:
             self._log("venv rebuild on the pinned interpreter failed; "
                       "keeping the original pip failure")
             return rc, out
+        # Set before the retry, not after a success check: from here on
+        # every pip run — succeed or fail — is against this interpreter,
+        # and a failed retry is reported below using ITS output. Leaving
+        # this at the pre-retry value on failure blamed the wrong Python
+        # in the field-failure telemetry (#5711).
+        self.bootstrap_python_version = KNOWN_GOOD_PYTHON_MINOR
         rc2, out2 = self._pip_install_clawmetry()
         self._log(f"retry on Python {KNOWN_GOOD_PYTHON_MINOR} rc={rc2}")
-        if rc2 == 0:
-            self.bootstrap_python_version = KNOWN_GOOD_PYTHON_MINOR
-            return rc2, out2
         # Report what the SUPPORTED interpreter said: the first failure
         # is now explained (that Python had no artifact), and this one is
         # the real remaining problem.
