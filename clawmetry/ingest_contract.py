@@ -219,8 +219,15 @@ GENAI_READ = (
     ("gen_ai.provider.name", "Provider; gen_ai.system is read as the older name."),
     ("gen_ai.usage.input_tokens", "Input tokens."),
     ("gen_ai.usage.output_tokens", "Output tokens."),
-    ("gen_ai.usage.cache_read_input_tokens", "Prompt-cache reads."),
-    ("gen_ai.usage.cache_creation_input_tokens", "Prompt-cache writes."),
+    ("gen_ai.usage.cache_read.input_tokens",
+     "Prompt-cache reads, current convention (dot before the noun)."),
+    ("gen_ai.usage.cache_read_input_tokens",
+     "Prompt-cache reads, earlier spelling. Both are read; a span carrying "
+     "both is counted once."),
+    ("gen_ai.usage.cache_creation.input_tokens",
+     "Prompt-cache writes, current convention."),
+    ("gen_ai.usage.cache_creation_input_tokens",
+     "Prompt-cache writes, earlier spelling."),
     ("gen_ai.usage.cost_usd", "Cost, when the exporter states one. An "
                               "explicit cost always wins over a derived one."),
     ("gen_ai.tool.name", "Tool name on execute_tool spans."),
@@ -231,20 +238,6 @@ GENAI_READ = (
 )
 
 GENAI_NOT_READ = (
-    # These two are FIXED in #5685 / PR #5686, which is open against main
-    # while this branch is stacked elsewhere. Listing them here is the
-    # honest state of THIS tree, and the drift guard in the other
-    # direction (an unread attribute that turns out to be read) makes
-    # whichever PR merges second update this list -- which is the point of
-    # having both directions checked.
-    ("gen_ai.usage.cache_read.input_tokens",
-     "Prompt-cache reads under the CURRENT convention spelling (dot before "
-     "the noun). Only the underscore spelling is read here; the dotted one "
-     "lands with #5686, and until then an exporter that opted in to "
-     "gen_ai_latest_experimental has its cached tokens read as zero."),
-    ("gen_ai.usage.cache_creation.input_tokens",
-     "Prompt-cache writes under the current convention spelling. Same as "
-     "above; lands with #5686."),
     ("gen_ai.usage.reasoning.output_tokens",
      "Reasoning tokens. There is no column to put them in yet, so they are "
      "dropped rather than mis-filed into output tokens."),
