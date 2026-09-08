@@ -54,6 +54,7 @@ def _sup(tmp_path):
     sup.runtime = runtime
     sup.venv = runtime / "venv"
     sup.stamp_file = runtime / "last-upgrade.json"
+    sup.heal_file = runtime / "version-heal.json"
     sup.log_file = runtime / "bootstrap.log"
     sup.instance_file = runtime / "app-instance.json"
     sup._last_sync_start = 0.0
@@ -641,6 +642,139 @@ def test_platform_reader_tolerates_legacy_and_hostile_cache(tmp_path):
     cache.write_text('{"platform": "win-amd64; rm -rf /"}')
     assert dapp._bootstrap_python_platform(cache) == ""
     assert dapp._bootstrap_python_platform(None) == ""
+
+
+# ── 6c. a pip "success" that installed an ancient release (#5639) ────────
+#
+# Without a version floor, `pip install --upgrade clawmetry` does not
+# FAIL when a dependency has no wheel for the interpreter — it backtracks
+# clawmetry ITSELF until the graph resolves. Measured against live PyPI
+# on py3.11 with the --only-binary=:all: this shell uses on Windows:
+#
+#   win32     -> clawmetry 0.12.163   (from before duckdb was a dep)
+#   win_arm64 -> clawmetry 0.12.793
+#   win_amd64 -> clawmetry 0.12.827   (current)
+#
+# Nothing errors. The dist-info is complete, the entry point exists, the
+# splash clears, and the machine runs a 664-release-old ClawMetry — a
+# failure no field report can see, because from the shell's side the
+# install succeeded. Worse than the failure it replaced.
+
+
+def test_version_tuple_orders_releases_numerically():
+    """0.12.9 vs 0.12.10 is why this is not a string compare — and the
+    floor check and the dist-info picker must agree about "older"."""
+    assert dapp._version_tuple("0.12.9") < dapp._version_tuple("0.12.10")
+    assert dapp._version_tuple("0.12.163") < dapp._version_tuple("0.12.827")
+    assert dapp._version_tuple("dev") is None
+    assert dapp._version_tuple("") is None
+    assert dapp._version_tuple("1.0.0rc1") is None
+
+
+def test_pip_requirement_is_floored_at_the_bundle_version(monkeypatch):
+    """The bundle's own stamp is the floor: this shell was BUILT at that
+    release, so PyPI demonstrably has it. `>=` and not `==` on purpose —
+    pip may still backtrack for a legitimate reason (a propagation race
+    right after a release), just never past the shell's own age."""
+    monkeypatch.setattr(dapp, "_desktop_version", lambda: "0.12.826")
+    assert dapp._pip_requirement() == "clawmetry>=0.12.826"
+
+
+def test_pip_requirement_is_bare_for_an_unstamped_dev_build(monkeypatch):
+    monkeypatch.setattr(dapp, "_desktop_version", lambda: "dev")
+    assert dapp._pip_requirement() == "clawmetry"
+
+
+def test_pip_install_passes_the_floor_on_every_attempt(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    monkeypatch.setattr(dapp, "_desktop_version", lambda: "0.12.826")
+    seen = []
+
+    def fake(argv, timeout):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, 1, "", "boom")
+
+    monkeypatch.setattr(sup, "_run_child", fake)
+    sup._pip_install_clawmetry()
+    installs = [a for a in seen if "install" in a and "--upgrade" in a
+                and "pip" not in a[-1:]]
+    targets = [a[-1] for a in installs]
+    assert targets, "no pip install attempt was made"
+    assert all(t == "clawmetry>=0.12.826" for t in targets), (
+        f"a bare `clawmetry` lets pip backtrack past the floor: {targets}"
+    )
+
+
+def test_warm_launch_does_not_trust_an_install_older_than_the_shell(
+        tmp_path, monkeypatch):
+    """The heal for machines ALREADY stranded. A backtracked install is
+    COMPLETE, so the warm-launch short-circuit accepted it and booted an
+    ancient ClawMetry on every relaunch, permanently."""
+    sup = _sup(tmp_path)
+    exe = sup._venv_clawmetry()
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("stub")
+    monkeypatch.setattr(dapp, "_desktop_version", lambda: "0.12.826")
+    monkeypatch.setattr(sup, "_get_installed_version", lambda: "0.12.163")
+    # Falling through to the install path is the observable behaviour;
+    # with no usable python that path ends in no_python.
+    monkeypatch.setattr(dapp, "_bootstrap_python", lambda cache_file=None: None)
+    monkeypatch.setattr(dapp.platform, "system", lambda: "Linux")
+    assert sup.bootstrap() is False
+    assert sup.failure_class == "no_python"
+
+
+def test_warm_launch_still_trusts_a_current_install(tmp_path, monkeypatch):
+    sup = _sup(tmp_path)
+    exe = sup._venv_clawmetry()
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_text("stub")
+    monkeypatch.setattr(dapp, "_desktop_version", lambda: "0.12.826")
+    monkeypatch.setattr(sup, "_get_installed_version", lambda: "0.12.827")
+    monkeypatch.setattr(dapp, "_bootstrap_python", lambda cache_file=None: (
+        pytest.fail("healthy warm launch must not probe interpreters")))
+    assert sup.bootstrap() is True
+
+
+def test_old_version_heal_is_latched_to_one_attempt(tmp_path, monkeypatch):
+    """The heal reruns pip on the boot path, and on Windows a floored
+    failure now provisions an interpreter — so a check that fired every
+    launch would mean a pip run (and possibly a winget install) on every
+    launch of a machine it cannot fix. One attempt per stranded version,
+    then the launch proceeds: a ClawMetry that is behind still beats a
+    shell that will not open."""
+    sup = _sup(tmp_path)
+    monkeypatch.setattr(dapp, "_desktop_version", lambda: "0.12.826")
+    assert sup._is_stranded_on_an_old_version("0.12.163") is True
+    assert sup._is_stranded_on_an_old_version("0.12.163") is False, (
+        "the same stranded version must not re-trigger the heal"
+    )
+    # A DIFFERENT stranded version is a new situation and gets its turn.
+    assert sup._is_stranded_on_an_old_version("0.12.200") is True
+
+
+def test_unstamped_build_never_strands(tmp_path, monkeypatch):
+    """A developer checkout has no stamp, so there is no floor to compare
+    against — it must not start reinstalling on every launch."""
+    sup = _sup(tmp_path)
+    monkeypatch.setattr(dapp, "_desktop_version", lambda: "dev")
+    assert sup._is_stranded_on_an_old_version("0.12.163") is False
+
+
+@pytest.mark.parametrize("script", ["install.ps1", "install-clawmetry.ps1"])
+def test_windows_installers_verify_the_dependency_set(script):
+    """The CLI installers take the same `--only-binary=:all:` path and so
+    inherit the same silent backtrack. They have no bundle stamp to floor
+    against, so they check the result FUNCTIONALLY instead: a release old
+    enough to have been backtracked to does not carry today's dependency
+    set. Threshold-free, and it stays correct as that set changes."""
+    text = (REPO_ROOT / script).read_text(encoding="utf-8")
+    assert "import clawmetry, duckdb, cryptography" in text, (
+        f"{script} does not verify that the install it just made can "
+        f"actually import its dependencies (#5639)"
+    )
+    body = text.split("import clawmetry, duckdb, cryptography", 1)[1]
+    assert "exit 1" in body, f"{script} detects the bad install but continues"
 
 
 # ── 7. an exe stub is not an install (package-corpse recovery) ───────────

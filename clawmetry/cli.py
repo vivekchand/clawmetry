@@ -7089,6 +7089,58 @@ def _cmd_extensions(args) -> None:
         print("    (none)")
 
 
+def _cmd_scan_repo(args) -> None:
+    """Report configuration in a checkout that runs code when an agent opens it.
+
+    The GitSpawn class of bugs (Manifold Security, 2026-09-01) makes this a
+    pre-flight question rather than a monitoring one: a repository's own
+    ``.git/config`` can name a program in ``core.fsmonitor``, git runs it during
+    an ordinary background ``git status``, and the code executes outside the
+    agent's sandbox before any approval prompt. There is no session to observe,
+    because opening the folder was the exploit. So this command is meant to run
+    BEFORE you point an agent at code you did not write.
+
+    Read-only: it opens files and prints findings. It never edits a config,
+    never runs a command it finds, and never invokes git (asking git to read an
+    untrusted repository's config is part of how several of these bugs fire).
+
+    Exit codes: 0 clean, 1 findings, 2 the path is unreadable — so it can gate a
+    clone step in CI.
+    """
+    from clawmetry import repo_scan
+
+    path = os.path.abspath(os.path.expanduser(args.path or "."))
+    if not os.path.isdir(path):
+        print("Not a directory: %s" % path, file=sys.stderr)
+        raise SystemExit(2)
+
+    findings = repo_scan.scan_workspace(path)
+
+    if getattr(args, "as_json", False):
+        print(json.dumps({"path": path, "findings": findings}, indent=2))
+        raise SystemExit(1 if findings else 0)
+
+    if not findings:
+        print("clean  %s" % path)
+        print("No config in this checkout names a program to run.")
+        raise SystemExit(0)
+
+    word = "finding" if len(findings) == 1 else "findings"
+    print("%d %s  %s\n" % (len(findings), word, path))
+    for f in findings:
+        sev = str(f.get("severity", "warning")).upper()
+        print("  [%s] %s" % (sev, f.get("title", "")))
+        ev = f.get("evidence") or {}
+        for hit in (ev.get("hits") or []):
+            print("      %s = %s" % (hit.get("key"), hit.get("command")))
+        for cmd in (ev.get("commands") or []):
+            print("      %s" % cmd)
+        print("      %s\n" % f.get("detail", ""))
+    print("Do not open this directory with an agent until you have read the "
+          "entries above.")
+    raise SystemExit(1)
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity.
 
@@ -8583,6 +8635,28 @@ def main() -> None:
     # diagnose — surface the entitlement resolver inputs so an operator
     # can answer "why did my install resolve to <tier>?" without reading
     # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
+    # scan-repo — read a checkout for executable content before an agent opens it
+    p_scan = sub.add_parser(
+        "scan-repo",
+        help=(
+            "Check a repository for config that runs code when an agent opens "
+            "it (GitSpawn-class: core.fsmonitor, hooksPath, filters, auto-run "
+            "tasks, foreign agent hooks)"
+        ),
+    )
+    p_scan.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repository to scan (default: current directory)",
+    )
+    p_scan.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit findings as JSON",
+    )
+
     p_diagnose = sub.add_parser(
         "diagnose",
         help=(
@@ -8782,6 +8856,7 @@ def main() -> None:
         "extensions",
         "diagnose",
         "doctor",
+        "scan-repo",
         "verify-integrity",
         "export",
         "compliance",
@@ -8913,6 +8988,8 @@ def main() -> None:
         elif args.cmd == "doctor":
             from clawmetry.doctor import run_doctor
             sys.exit(run_doctor(host=getattr(args, "doctor_host", None)))
+        elif args.cmd == "scan-repo":
+            _cmd_scan_repo(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
         elif args.cmd == "export":
