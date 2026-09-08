@@ -400,6 +400,13 @@ jobs:
       - name: dashboard.py defines DASHBOARD_HTML once
         run: python3 -m pytest tests/test_dashboard_html_defined_once.py -q
 
+      # The Anomaly Detection card read baselines the serving path never sent,
+      # so it showed "Collecting baseline data..." forever on a node with 162
+      # sessions of history. The guard is derived from app.js, so a baseline
+      # key added to the card later is covered without editing the test.
+      - name: Anomaly baselines reach the card
+        run: python3 -m pytest tests/test_anomaly_baselines_reach_the_card.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
