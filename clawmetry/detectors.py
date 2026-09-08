@@ -86,6 +86,12 @@ from clawmetry.detector_money import (  # noqa: F401
 from clawmetry.detector_behaviour import (  # noqa: F401
     credential_access, file_blast_radius, network_egress, privilege_change,
 )
+# The workspace surface (``repo_scan``) emits incidents in this module's shape
+# but is not a detector: it reads the FOLDER, not the tool stream. Its kinds are
+# re-exported here so a consumer needs one import to know every kind the product
+# can show, and ``ALL_INCIDENT_KINDS`` is the list every renderer and policy form
+# derives from. Two lists that must agree are two lists that will drift.
+from clawmetry.repo_scan import WORKSPACE_KINDS  # noqa: F401
 
 # What this module detects, declared once and up front rather than derived at
 # the bottom of the file. Two reasons it is a literal:
@@ -113,6 +119,11 @@ DETECTOR_KINDS = (
     "blocked_on_user",
     "crashed",
 )
+
+#: Every incident kind the product can render or match, detector or workspace.
+#: Surfaces that render an incident (Guard tab labels, the policy form) and
+#: anything that validates a kind read THIS, never one of the halves.
+ALL_INCIDENT_KINDS = DETECTOR_KINDS + WORKSPACE_KINDS
 
 
 # ── Tunable thresholds (env-overridable) ─────────────────────────────────────

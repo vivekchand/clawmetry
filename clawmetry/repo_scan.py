@@ -38,6 +38,17 @@ import os
 import re
 from typing import Optional
 
+#: The incident kinds this module can emit. Declared here, where they are
+#: produced, and re-exported as ``detectors.WORKSPACE_KINDS`` so every surface
+#: that renders or matches an incident reads ONE list. ``DETECTOR_KINDS`` exists
+#: precisely so a new detector cannot be added without the surfaces noticing;
+#: these two kinds bypassed it once by living outside ``detectors``, and the
+#: Guard tab rendered them as "unknown".
+WORKSPACE_KINDS = (
+    "repo_config_exec",      # the checkout's own config names a program
+    "agent_config_tamper",   # an agent hook config was changed under us
+)
+
 # Git config keys whose VALUE is a program git will execute. Section+key, lowered.
 # Sourced from git-config(1); the wildcard forms cover per-name subsections.
 _EXEC_KEYS = (
@@ -115,6 +126,95 @@ _KNOWN_HOOK_MANAGERS = {".husky": "husky", ".lefthook": "lefthook",
 def _hook_manager_for(value: str) -> Optional[str]:
     first = str(value).strip().strip("./").split("/")[0]
     return _KNOWN_HOOK_MANAGERS.get("." + first.lstrip("."))
+
+
+def _config_label(workspace: str, path: str) -> str:
+    """A short, honest name for the config a finding came from.
+
+    ``.git/config`` for the ordinary layout. For a linked worktree the file is
+    outside the workspace, so the label keeps the last three components rather
+    than an absolute path: an incident travels to a UI and a device, and the
+    reader needs to know WHICH config without being handed the user's home
+    directory.
+    """
+    try:
+        ws = os.path.realpath(workspace)
+        real = os.path.realpath(path)
+        if real == os.path.join(ws, ".git", "config"):
+            return ".git/config"
+        if real.startswith(ws + os.sep):
+            return os.path.relpath(real, ws)
+        parts = real.split(os.sep)
+        return ".../" + "/".join(parts[-3:]) if len(parts) > 3 else real
+    except Exception:  # noqa: BLE001
+        return "git config"
+
+
+def _git_dirs(workspace: str) -> tuple:
+    """``(git_dir, common_dir)`` for ``workspace``, resolving a LINKED WORKTREE.
+
+    In a linked worktree ``.git`` is a **file** holding ``gitdir: /abs/path``,
+    and the config git actually reads lives in the *common* directory that
+    path points at, not at ``<workspace>/.git/config``. A scanner that assumes
+    a directory finds no config at all and reports the workspace clean, which
+    is worse than reporting nothing: it is a confident all-clear over a
+    repository git will happily execute ``core.fsmonitor`` from. Agents and CI
+    run inside worktrees routinely, and CVE-2026-55607 is the vendor-confirmed
+    version of exactly this confusion.
+
+    Returns ``("", "")`` when there is no git directory to read. Never raises.
+    """
+    try:
+        dot_git = os.path.join(workspace, ".git")
+        if os.path.isdir(dot_git):
+            return (dot_git, dot_git)
+        if not os.path.isfile(dot_git):
+            return ("", "")
+        with open(dot_git, encoding="utf-8", errors="replace") as f:
+            head = f.read(4096).strip()
+        if not head.lower().startswith("gitdir:"):
+            return ("", "")
+        target = head.split(":", 1)[1].strip()
+        if not target:
+            return ("", "")
+        if not os.path.isabs(target):
+            target = os.path.join(workspace, target)
+        git_dir = os.path.realpath(target)
+        if not os.path.isdir(git_dir):
+            return ("", "")
+        # ``commondir`` is written by git for a linked worktree and is usually
+        # the relative ``../..``. Absent (a plain gitdir redirect, a submodule)
+        # means the gitdir IS the common dir.
+        common = git_dir
+        cd_file = os.path.join(git_dir, "commondir")
+        if os.path.isfile(cd_file):
+            with open(cd_file, encoding="utf-8", errors="replace") as f:
+                rel = f.read(4096).strip()
+            if rel:
+                common = os.path.realpath(
+                    rel if os.path.isabs(rel) else os.path.join(git_dir, rel))
+        return (git_dir, common)
+    except Exception:  # noqa: BLE001 - a scan must never raise
+        return ("", "")
+
+
+def _git_config_paths(workspace: str) -> list:
+    """Every config file git reads for this checkout, nearest last.
+
+    ``<common>/config`` is the repository config. ``<gitdir>/config.worktree``
+    is the per-worktree override git honours when ``extensions.worktreeConfig``
+    is set, and it is writable by whoever supplied the worktree, so it is
+    scanned too rather than assumed absent.
+    """
+    git_dir, common = _git_dirs(workspace)
+    if not git_dir:
+        return []
+    out = []
+    for candidate in (os.path.join(common, "config"),
+                      os.path.join(git_dir, "config.worktree")):
+        if os.path.isfile(candidate) and candidate not in out:
+            out.append(candidate)
+    return out
 
 
 def _hookspath_is_repo_supplied(workspace: str, value: str) -> bool:
@@ -205,31 +305,40 @@ def _finding(kind: str, severity: str, title: str, detail: str,
 
 def scan_git_config(workspace: str, session_id: str = "",
                     runtime: str = "unknown") -> list:
-    """Flag command-valued keys in the repository's own ``.git/config``."""
-    path = os.path.join(workspace, ".git", "config")
-    if not os.path.isfile(path):
-        return []
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
-    except Exception:
+    """Flag command-valued keys in every config file git reads for this checkout.
+
+    Not just ``<workspace>/.git/config``: in a linked worktree ``.git`` is a
+    file and the config lives in the common dir it points at. See
+    ``_git_dirs``.
+    """
+    paths = _git_config_paths(workspace)
+    if not paths:
         return []
 
     hits = []
-    for full_key, value, lineno in _parse_git_config(text):
-        if not value or not _key_is_executable(full_key, value):
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except Exception:
             continue
-        if _is_known_good(value):
-            continue
-        manager = None
-        if full_key == "core.hookspath":
-            if not _hookspath_is_repo_supplied(workspace, value):
+        for full_key, value, lineno in _parse_git_config(text):
+            if not value or not _key_is_executable(full_key, value):
                 continue
-            manager = _hook_manager_for(value)
-        hits.append({"key": full_key, "command": _sketch(value),
-                     "line": lineno, "manager": manager})
+            if _is_known_good(value):
+                continue
+            manager = None
+            if full_key == "core.hookspath":
+                if not _hookspath_is_repo_supplied(workspace, value):
+                    continue
+                manager = _hook_manager_for(value)
+            hits.append({"key": full_key, "command": _sketch(value),
+                         "line": lineno, "manager": manager})
     if not hits:
         return []
+    # Where the finding was actually read from, so a reader of a worktree
+    # incident is not sent to a .git/config that does not exist.
+    config_label = _config_label(workspace, paths[0])
 
     keys = sorted({h["key"] for h in hits})
     head = keys[0]
@@ -249,7 +358,7 @@ def scan_git_config(workspace: str, session_id: str = "",
             "here can run code on your machine when an agent touches the repo. "
             "Expected for a project you trust; read the hook directory for one "
             "you do not.",
-            {"keys": keys, "hits": hits[:5], "config": ".git/config",
+            {"keys": keys, "hits": hits[:5], "config": config_label,
              "hook_manager": tool, "observed": "repository_config"},
             session_id, runtime)]
     return [_finding(
@@ -261,7 +370,7 @@ def scan_git_config(workspace: str, session_id: str = "",
         "with your privileges, outside the agent's sandbox, before any approval "
         "prompt. Inspect .git/config before letting an agent work here; to "
         "neutralise it for one command, run `git -c core.fsmonitor=false status`.",
-        {"keys": keys, "hits": hits[:5], "config": ".git/config",
+        {"keys": keys, "hits": hits[:5], "config": config_label,
          "observed": "repository_config"},
         session_id, runtime)]
 
