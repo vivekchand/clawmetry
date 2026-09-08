@@ -28,7 +28,6 @@ mechanical move — zero behaviour change.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import sqlite3
@@ -39,8 +38,6 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, Response, jsonify, request
 from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
-
-logger = logging.getLogger("clawmetry.routes.infra")
 
 bp_logs = Blueprint('logs', __name__)
 bp_memory = Blueprint('memory', __name__)
@@ -2939,104 +2936,3 @@ def api_security_retention_set():
     except Exception:
         state = _ret.resolve(store=_retention_store())
     return jsonify({"ok": True, **state})
-
-
-# ── API keys for custom UIs (docs/BUILD_YOUR_OWN_UI.md) ─────────────────
-#
-# These MINT and REVOKE credentials, so they live here -- behind the
-# dashboard's own gate -- and not in routes/public_api.py, which is the
-# cross-origin surface those credentials open. A page on someone else's
-# site can hold a read key; it must never be able to issue itself a
-# better one. dashboard.py's `_cross_origin_write_blocked` refuses a
-# cross-origin POST to these, and `_add_cors` in public_api.py is pinned
-# to /api/q/ so no CORS header ever reaches them.
-
-
-@bp_security.route("/api/apikeys", methods=["GET"])
-def api_keys_list():
-    """This machine's API keys, plus the scope catalogue the UI renders.
-
-    Secrets are never included -- only the SHA-256 is stored and even
-    that is stripped by ``apikeys.list_keys``.
-    """
-    from clawmetry import apikeys as _ak
-    try:
-        return jsonify({
-            "ok": True,
-            "keys": _ak.list_keys(include_revoked=True),
-            "scopes": _ak.scope_catalogue(),
-            "summary": _ak.store_summary(),
-        })
-    except Exception as exc:
-        logger.warning("apikeys list failed: %s", exc)
-        return jsonify({
-            "ok": False,
-            "keys": [],
-            "scopes": [],
-            "error": "ClawMetry could not read its key file. Check that "
-                     "~/.clawmetry is readable by you.",
-        }), 200
-
-
-@bp_security.route("/api/apikeys", methods=["POST"])
-def api_keys_create():
-    """Mint a key. The secret is in the response and nowhere else, ever."""
-    from clawmetry import apikeys as _ak
-    body = request.get_json(silent=True) or {}
-    origins = body.get("origins") or []
-    if isinstance(origins, str):
-        origins = [o.strip() for o in origins.replace(",", " ").split() if o.strip()]
-    scopes = body.get("scopes") or []
-    if isinstance(scopes, str):
-        scopes = [s.strip() for s in scopes.replace(",", " ").split() if s.strip()]
-    browser = bool(body.get("browser", True))
-    if browser and not origins:
-        return jsonify({
-            "ok": False,
-            "error": "Name the site that will use this key, for example "
-                     "http://localhost:3000. There is no wildcard: any page "
-                     "in any tab can already reach this machine, and the "
-                     "origin list is what stops it reading the answer.",
-        }), 400
-    try:
-        record, plaintext = _ak.create(
-            body.get("name") or "",
-            scopes,
-            [] if not browser else origins,
-            note=body.get("note") or "",
-        )
-    except _ak.ApiKeyError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
-    except Exception as exc:
-        logger.warning("apikeys create failed: %s", exc)
-        return jsonify({
-            "ok": False,
-            "error": "ClawMetry could not write its key file. Check that "
-                     "~/.clawmetry is writable by you.",
-        }), 500
-    return jsonify({
-        "ok": True,
-        "key": plaintext,
-        "record": {k: v for k, v in record.items() if k != "hash"},
-    })
-
-
-@bp_security.route("/api/apikeys/<key_id>", methods=["DELETE"])
-def api_keys_revoke(key_id: str):
-    """Revoke a key. Takes effect on that key's next request."""
-    from clawmetry import apikeys as _ak
-    try:
-        ok = _ak.revoke(key_id)
-    except Exception as exc:
-        logger.warning("apikeys revoke failed: %s", exc)
-        return jsonify({
-            "ok": False,
-            "error": "ClawMetry could not write its key file. Check that "
-                     "~/.clawmetry is writable by you.",
-        }), 500
-    if not ok:
-        return jsonify({
-            "ok": False,
-            "error": "There is no active key with that id on this machine.",
-        }), 404
-    return jsonify({"ok": True, "id": key_id})

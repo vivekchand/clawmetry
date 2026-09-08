@@ -46,6 +46,7 @@ All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, l
 | `routes/components.py` | `bp_components` — Flow-panel detail endpoints (tool / runtime / machine / gateway / brain) |
 | `routes/local_query.py` | `bp_local_query` — `/api/local/*` DuckDB read API + the daemon-proxy `_dispatch` (shape→store bridge shared by HTTP and the cloud relay) |
 | `routes/public_api.py` | `bp_public_api` — `/api/q/1/*`, the **keyed, cross-origin** read API custom UIs are built on (`docs/BUILD_YOUR_OWN_UI.md`). Same `_dispatch`, but it is the one surface that does not trust loopback: every request needs a scoped `cmk_` key, and CORS is echoed only for an origin that key named |
+| `routes/apikeys_admin.py` | `bp_apikeys_admin` — `/api/apikeys`, minting and revoking the keys `public_api` accepts. Kept apart from that surface on purpose: it sits behind the dashboard's own cross-origin write guard and never carries a CORS header, so a page holding a read key can neither list this node's keys nor issue itself a wider one |
 | `routes/guard.py` | `bp_guard` — live session control (Pause/Stop/Kill), Guard policy CRUD, policy decision log, learned baselines. Sessions ranked by **spend at risk**, not severity |
 | `routes/policy.py` | `bp_policy` — the *pre-tool* sandbox/permission surface (`/api/tool-policy`). Deliberately a different axis from `routes/guard.py`: different table, no shared state |
 | `routes/hooks.py` | `bp_hooks` — hook install / status / uninstall per runtime, and the gate's decision log |

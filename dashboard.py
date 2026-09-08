@@ -138,6 +138,7 @@ from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
 from routes.local_query import bp_local_query
 from routes.public_api import bp_public_api
+from routes.apikeys_admin import bp_apikeys_admin
 from routes.update_check import bp_update_check, start_update_check_thread
 from routes.workspaces import bp_workspaces
 from routes.bootstrap import bp_bootstrap
@@ -7916,6 +7917,11 @@ def detect_config(args=None):
     # scoped key and echoes a CORS header only for an origin that key
     # named. See routes/public_api.py for why that inversion matters.
     app.register_blueprint(bp_public_api)
+    # Creating and revoking the keys that surface uses. Deliberately a
+    # separate blueprint behind the dashboard's own gate: a page holding a
+    # read key must never be able to list this node's keys or mint a wider
+    # one. See routes/apikeys_admin.py.
+    app.register_blueprint(bp_apikeys_admin)
     # ClawMetry Enterprise self-hosted server mode: one process serves the
     # dashboard AND the ingest API the node daemons push to. Gated hard on
     # SELF_HOSTED=true — never registered for normal local/cloud installs.
