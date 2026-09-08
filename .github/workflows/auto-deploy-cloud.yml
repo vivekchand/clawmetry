@@ -13,8 +13,18 @@ on:
   # goes green; the `chore: bump to vX [skip ci]` commit that actually creates
   # the new version is skip-ci and can never re-trigger it. Net effect: the
   # cloud silently stays a version behind until someone dispatches this by hand
-  # (2026-08-22: 0.12.755 shipped and cloud sat on 0.12.754). Re-run once
-  # release-on-merge has finished so the pin sees the version it published.
+  # (2026-08-22: 0.12.755 shipped and cloud sat on 0.12.754).
+  #
+  # The workflow_run trigger below DOES NOT FIRE, and is kept only as
+  # belt-and-braces. It is the identical declaration release-canary.yml carried
+  # when it produced ZERO runs for 0.12.757: activity driven by GITHUB_TOKEN
+  # does not cascade into new workflow runs. Believing it worked is why the
+  # cloud still silently sat a release behind on 0.12.829 (2026-09-08) despite
+  # a guard that asserted this trigger existed.
+  #
+  # The path that ACTUALLY works is the explicit `gh workflow run` dispatch at
+  # the end of release-on-merge.yml, after the upload — the only moment when
+  # PyPI's "latest" is the release that just published.
   workflow_run:
     workflows: ["Auto-release on [RELEASE] merge"]
     types: [completed]
