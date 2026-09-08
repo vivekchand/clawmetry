@@ -1,0 +1,64 @@
+# Verify a PUBLISHED release on all three platforms.
+name: Verify published wheel
+
+# WHY THIS EXISTS, given ci.yml already has a "pip install" matrix:
+# that job runs `pip install flask .` -- it installs the branch SOURCE. It
+# proves the code in a PR is installable. It cannot say anything about the
+# artifact a user actually receives from PyPI, and every install claim in the
+# README and on the landing page is about that artifact.
+#
+# This workflow installs `clawmetry==<version>` FROM PyPI in a clean venv, from
+# a neutral working directory, and exercises the six things a first-time user
+# does: install, check the version, start it, look at a machine with no agent
+# data, run with the network blocked, uninstall.
+#
+# Manual by design (`workflow_dispatch`), because it is a release gate rather
+# than a per-commit check: pin one version, run it, record the result.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published version to verify (e.g. 0.12.843)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-wheel-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11"]
+        include:
+          # setup.py advertises python_requires=">=3.8" and the macOS desktop
+          # bundle ships a 3.9 venv, so the console script has to work there.
+          # A PEP 604 annotation at module scope has killed every subcommand on
+          # 3.9 before while 3.11 stayed green.
+          - os: ubuntu-latest
+            python-version: "3.9"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # The script creates its own venv in a temp dir and runs the dashboard
+      # from a neutral cwd. It must NOT be run with the checkout as the working
+      # directory of the child process -- dashboard.py here would shadow the
+      # installed wheel and the run would verify the wrong program. The script
+      # enforces that itself; this step only invokes it.
+      - name: Verify the published wheel
+        run: python scripts/verify_published_wheel.py --version "${{ github.event.inputs.version }}"
