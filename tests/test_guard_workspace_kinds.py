@@ -1,7 +1,7 @@
-"""Guard knows the two workspace kinds, and cannot silently act on them.
+"""Guard knows the workspace kinds, and cannot silently act on them.
 
-``repo_scan`` emits ``repo_config_exec`` and ``agent_config_tamper`` in the same
-shape as every detector incident. They bypassed ``DETECTOR_KINDS`` (which exists
+``repo_scan`` emits ``repo_config_exec``, ``agent_config_tamper`` and
+``package_manifest_exec`` in the same shape as every detector incident. They bypassed ``DETECTOR_KINDS`` (which exists
 so a new detector cannot be added without the surfaces that render it noticing)
 because they live outside ``detectors``, and every Guard surface rendered them
 as their raw id.
