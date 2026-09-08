@@ -25325,6 +25325,31 @@ function _ovBucketOf(agent) {
   return 'complete';
 }
 
+// "Recently Completed/Failed" must mean RECENT — bound by how long ago the task
+// FINISHED, not its run duration. A 5-minute task that ended six days ago used
+// to pass a `runtimeMs < 2h` check and make an idle node look busy.
+var OV_RECENT_DONE_MS = 60 * 60 * 1000; // 1h
+function _ovRecentlyFinished(a, nowMs) {
+  var e = _ovEndedMs(a);
+  return e > 0 && ((nowMs || Date.now()) - e) < OV_RECENT_DONE_MS;
+}
+
+// Split a list into the buckets this panel actually RENDERS. Running tasks
+// always show; finished ones only while they are still recent. Every count the
+// panel reports goes through here, so a number can never promise more than the
+// list will actually display.
+function _ovVisible(list, nowMs) {
+  var now = nowMs || Date.now();
+  var r = [], d = [], f = [];
+  (list || []).forEach(function(a) {
+    var b = _ovBucketOf(a);
+    if (b === 'running') r.push(a);
+    else if (b === 'failed') { if (_ovRecentlyFinished(a, now)) f.push(a); }
+    else if (_ovRecentlyFinished(a, now)) d.push(a);
+  });
+  return { running: r, done: d, failed: f, total: r.length + d.length + f.length };
+}
+
 // Provenance pill: the runtime a task actually ran on, or nothing at all when
 // attribution is unknown. Rendered only in the unfiltered ("all runtimes")
 // view — under a runtime filter every card is that runtime and the pill is
@@ -25415,7 +25440,16 @@ async function loadOverviewTasks() {
     var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
     var agents = (_atRt === 'all') ? allAgents
                                    : allAgents.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
-    var _hiddenOther = allAgents.length - agents.length;
+
+    // The other-runtime count must be of tasks the user would ACTUALLY SEE after
+    // switching, not of every row the filter removed. Counting raw rows told a
+    // Codex user "489 tasks on other runtimes — switch runtime to see them" when
+    // switching showed nothing at all: all 489 had finished more than an hour
+    // earlier and are excluded by the same recency rule applied here. An empty
+    // state that sends someone somewhere empty is its own small lie.
+    var _hiddenOther = (_atRt === 'all')
+      ? 0
+      : _ovVisible(allAgents.filter(function(a) { return _cmRuntimeOf(a) !== _atRt; })).total;
     // When the filter hides everything, say so in the runtime's own name rather
     // than claiming the machine is idle — other runtimes may be flat out.
     var _rtName = (_atRt === 'all') ? '' : _cmRuntimeLabel(_atRt);
@@ -25436,34 +25470,14 @@ async function loadOverviewTasks() {
       return true;
     }
 
-    var running = [], done = [], failed = [];
-    agents.forEach(function(a) {
-      var b = _ovBucketOf(a);
-      if (b === 'running') running.push(a);
-      else if (b === 'failed') failed.push(a);
-      else done.push(a);
-    });
+    var _split = _ovVisible(agents);
+    var running = _split.running, done = _split.done, failed = _split.failed;
     // Alive-state for the Overview hero: working when something is actively
     // running, otherwise idle. Re-render the hero so it reflects the change.
     window._cmAgentBusy = running.length > 0;
     try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e_hero) {}
           try { if (typeof _renderWasteSummary === 'function') _renderWasteSummary(); } catch (_e) {}
           try { if (typeof _renderOutLoopSources === 'function') _renderOutLoopSources(); } catch (_e4) {}
-    // "Recently Completed/Failed" must mean RECENT — bound by how long ago the
-    // task FINISHED, not its run duration. The old `runtimeMs < 2h` check used
-    // duration, so a 5-minute task that finished 6 days ago still passed and
-    // showed as "recent" (an idle node looked busy). Derive the end time the
-    // same way _ovRenderCard's "Finished N ago" does (completionTs → updatedAt
-    // → startedAt+runtime); unknown end time → not recent.
-    var RECENT_DONE_MS = 60 * 60 * 1000; // 1h
-    var _nowMs = Date.now();
-    function _ovRecentlyFinished(a) {
-      var e = _ovEndedMs(a);
-      return e > 0 && (_nowMs - e) < RECENT_DONE_MS;
-    }
-    done = done.filter(_ovRecentlyFinished);
-    failed = failed.filter(_ovRecentlyFinished);
-
     if (countBadge) countBadge.textContent = running.length > 0 ? '(' + running.length + ' running)' : '(' + (done.length + failed.length) + ' recent)';
 
     var totalShown = running.length + done.length + failed.length;

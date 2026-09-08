@@ -175,6 +175,17 @@ jobs:
       - name: Architecture docs name modules that exist
         run: python3 -m pytest tests/test_module_map_drift.py -q
 
+      # Red-team corpus: every publicly disclosed agent attack we claim to
+      # catch, we still catch. Named explicitly because this job runs FILE
+      # LISTS -- a signature added without a line here is checked by nothing.
+      # Verified to go RED by removing core.fsmonitor from repo_scan._EXEC_KEYS.
+      # The corpus payloads are inert markers; the runner fails a case that
+      # actually executes one.
+      - name: Red-team detection corpus
+        run: |
+          python3 -m pytest tests/test_redteam_corpus.py -q
+          python3 scripts/redteam/audit.py
+
       # Non-security digests (dedup ids, trace ids, change-detection hashes)
       # must go through clawmetry.nonsecret_hash. A bare hashlib.md5/sha1
       # raises ValueError -- not a weak digest, an exception -- on a host whose

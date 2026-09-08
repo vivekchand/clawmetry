@@ -212,6 +212,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/relay.py` | small | DEPRECATED stub. |
 | `clawmetry/replay_schema.py` | small | Canonical replay-event schema. |
 | `clawmetry/repo_readiness.py` | medium | how legible is this repo to an agent? |
+| `clawmetry/repo_scan.py` | medium | Workspace scanner: executable content shipped inside a checkout. |
 | `clawmetry/resume_hints.py` | medium | How a human restarts a session ClawMetry can no longer control. |
 | `clawmetry/retention.py` | small | How long this node keeps event data — one answer, with its reason. |
 | `clawmetry/risk.py` | medium | Hallucination Risk Indicator (issue #567). |
