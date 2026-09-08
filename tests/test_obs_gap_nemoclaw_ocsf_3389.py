@@ -16,11 +16,15 @@ from unittest.mock import MagicMock, patch, call
 
 class TestOpenshellSandboxLogsTail(unittest.TestCase):
     def test_tail_includes_tail_and_source_all_flags(self):
-        """Spawned command must include --tail and --source all."""
-        captured = {}
+        """First spawned command must include --tail and --source all.
+
+        The function may spawn a second proc for the gateway log on non-terminal
+        sandboxes (issue #5398); the OCSF tail is always the first Popen call.
+        """
+        captured = {"cmds": []}
 
         def fake_popen(cmd, **kwargs):
-            captured["cmd"] = cmd
+            captured["cmds"].append(cmd)
             proc = MagicMock()
             proc.poll.return_value = None
             proc.stdout = io.StringIO("")
@@ -32,9 +36,11 @@ class TestOpenshellSandboxLogsTail(unittest.TestCase):
                 result = _openshell_sandbox_logs_tail("test-sandbox")
 
         self.assertIsNotNone(result)
-        self.assertIn("--tail", captured["cmd"])
-        self.assertIn("--source", captured["cmd"])
-        self.assertIn("all", captured["cmd"])
+        self.assertTrue(len(captured["cmds"]) >= 1)
+        ocsf_cmd = captured["cmds"][0]
+        self.assertIn("--tail", ocsf_cmd)
+        self.assertIn("--source", ocsf_cmd)
+        self.assertIn("all", ocsf_cmd)
 
     def test_returns_none_when_openshell_absent(self):
         """Returns None (no exception) when openshell binary is missing."""

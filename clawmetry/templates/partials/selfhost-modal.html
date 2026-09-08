@@ -1,0 +1,258 @@
+<!-- Self-Host sign-in modal — the self-host twin of cloud-modal.html.
+     Opened by the onboarding gate's "Set up Self-Host" button; driven by
+     static/js/onboarding.js (window.openSelfhostModal / shm* globals).
+     Same visual language as the cloud modal: logo header, provider
+     buttons, OR divider, inline email. Dismissible — closing returns to
+     the gate. -->
+<div id="selfhost-modal-overlay" onclick="if(event.target===this)closeSelfhostModal()" style="
+  display:none;
+  position:fixed;
+  inset:0;
+  z-index:2000;
+  background:rgba(0,0,0,0.6);
+  backdrop-filter:blur(4px);
+  align-items:center;
+  justify-content:center;
+  ">
+  <div style="
+    background:#0f1623;
+    border:1px solid rgba(229,68,58,0.2);
+    border-radius:16px;
+    width:90%;
+    max-width:440px;
+    padding:32px;
+    box-shadow:0 25px 60px rgba(0,0,0,0.5);
+    position:relative;
+    margin:auto;
+    ">
+    <button onclick="closeSelfhostModal()" style="
+      position:absolute;
+      top:16px;
+      right:16px;
+      background:rgba(255,255,255,0.05);
+      border:none;
+      border-radius:8px;
+      width:32px;
+      height:32px;
+      cursor:pointer;
+      font-size:18px;
+      color:#888;
+      ">×</button>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <img src="/static/img/logo.svg" width="28" height="28" style="border-radius:6px;">
+      <span style="font-size:18px;font-weight:700;color:#fff;" data-i18n="selfhost.title">Self-Host</span>
+    </div>
+    <p id="shm-tagline" style="
+      color:#94a3b8;
+      font-size:14px;
+      margin:0 0 24px;
+      line-height:1.5;
+      " data-i18n="selfhost.tagline">Everything stays on this machine. Sign in once for a free 7-day Pro trial that unlocks every runtime.</p>
+    <div id="shm-step-home">
+      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px;">
+        <button onclick="shmOauth('github')" style="
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          gap:10px;
+          width:100%;
+          padding:11px 14px;
+          background:#1a2235;
+          border:1px solid rgba(255,255,255,0.12);
+          border-radius:8px;
+          color:#fff;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          " onmouseover="this.style.background='#222c44'" onmouseout="this.style.background='#1a2235'">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.29-.01-1.04-.02-2.05-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.31-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.87.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22 0 1.6-.01 2.89-.01 3.29 0 .32.22.7.83.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/></svg>
+          <span data-i18n="selfhost.continue_github">Continue with GitHub</span>
+        </button>
+        <button onclick="shmOauth('google')" style="
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          gap:10px;
+          width:100%;
+          padding:11px 14px;
+          background:#fff;
+          border:1px solid rgba(255,255,255,0.12);
+          border-radius:8px;
+          color:#1f2937;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          " onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#fff'">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.99.66-2.26 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88l3.66-2.84z"/><path fill="#EA4335" d="M12 4.75c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 1.4 14.97.5 12 .5A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 6.68 9.14 4.75 12 4.75z"/></svg>
+          <span data-i18n="selfhost.continue_google">Continue with Google</span>
+        </button>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+          <div style="flex:1;height:1px;background:rgba(255,255,255,0.08);"></div>
+          <span style="color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;" data-i18n="selfhost.or">or</span>
+          <div style="flex:1;height:1px;background:rgba(255,255,255,0.08);"></div>
+        </div>
+      </div>
+      <label style="font-size:12px;font-weight:600;color:#94a3b8;display:block;margin-bottom:6px;" data-i18n="selfhost.your_email">YOUR EMAIL</label>
+      <div style="display:flex;gap:8px;">
+        <input id="shm-email-input" type="email" placeholder="you@example.com" autocomplete="email" style="
+          flex:1;
+          padding:10px 14px;
+          background:#1a2235;
+          border:1px solid rgba(255,255,255,0.1);
+          border-radius:8px;
+          color:#fff;
+          font-size:14px;
+          outline:none;
+          " onkeydown="if(event.key==='Enter')shmSendOtp()">
+        <button id="shm-send-btn" onclick="shmSendOtp()" style="
+          padding:10px 18px;
+          background:#E5443A;
+          color:#fff;
+          border:none;
+          border-radius:8px;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          white-space:nowrap;
+          " data-i18n="selfhost.get_started">Get Started</button>
+      </div>
+      <p id="shm-home-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
+        <a href="#" onclick="shmShowLicense();return false;" style="color:#94a3b8;font-size:12px;text-decoration:none;" data-i18n="selfhost.have_license">I have a license key</a>
+        <span style="color:#334155;font-size:12px;margin:0 8px;">·</span>
+        <span style="color:#64748b;font-size:12px;" data-i18n="selfhost.or_run">or run </span><code style="color:#94a3b8;font-size:12px;background:rgba(255,255,255,0.05);padding:2px 8px;border-radius:4px;">clawmetry login</code>
+      </div>
+    </div>
+    <div id="shm-step-otp" style="display:none;">
+      <p style="color:#94a3b8;font-size:13px;margin:0 0 16px;"><span data-i18n="selfhost.check_email">Check your email for a 6-digit code</span> <b id="shm-otp-email" style="color:#e2e8f0;"></b></p>
+      <div style="display:flex;gap:8px;">
+        <input id="shm-otp-input" type="text" inputmode="numeric" maxlength="6" placeholder="_ _ _ _ _ _" style="
+          flex:1;
+          padding:10px 14px;
+          background:#1a2235;
+          border:1px solid rgba(255,255,255,0.1);
+          border-radius:8px;
+          color:#fff;
+          font-size:18px;
+          letter-spacing:6px;
+          text-align:center;
+          outline:none;
+          " onkeydown="if(event.key==='Enter')shmVerifyOtp()">
+        <button id="shm-verify-btn" onclick="shmVerifyOtp()" style="
+          padding:10px 18px;
+          background:#E5443A;
+          color:#fff;
+          border:none;
+          border-radius:8px;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          " data-i18n="selfhost.activate_trial">Activate trial</button>
+      </div>
+      <p id="shm-otp-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <!-- An account whose trial is already spent fails activation with the
+           cloud's message and nothing to do about it. Offer the plans step
+           right there instead of sending them back to the email box. -->
+      <p id="shm-otp-plans" style="margin:8px 0 0;text-align:center;display:none;">
+        <span style="color:#E5443A;font-size:12px;font-weight:600;cursor:pointer;" onclick="shmShowPlans()" data-i18n="selfhost.see_plans">See plans</span>
+      </p>
+      <p style="color:#64748b;font-size:12px;margin:10px 0 0;text-align:center;">
+        <span style="cursor:pointer;" onclick="shmResendOtp()" data-i18n="selfhost.resend_code">Resend code</span>
+        <span style="color:#334155;margin:0 8px;">·</span>
+        <span style="cursor:pointer;" onclick="shmBackHome()" data-i18n="selfhost.different_email">Use a different email</span>
+      </p>
+    </div>
+    <div id="shm-step-wait" style="display:none;text-align:center;padding:16px 0;">
+      <div style="width:32px;height:32px;border:3px solid rgba(255,255,255,0.15);border-top-color:#60a5fa;border-radius:50%;margin:0 auto 14px;animation:shmspin 0.8s linear infinite;"></div>
+      <p style="color:#cbd5e1;font-size:14px;font-weight:600;margin:0 0 6px;" data-i18n="selfhost.finish_in_browser">Finish sign-in in the new browser tab</p>
+      <p style="color:#64748b;font-size:12px;margin:0;" data-i18n="selfhost.waiting_oauth">Your trial activates here automatically. Your data never leaves this machine.</p>
+      <p id="shm-wait-error" style="color:#E5443A;font-size:12px;margin:10px 0 0;display:none;"></p>
+      <p style="color:#64748b;font-size:12px;margin:10px 0 0;cursor:pointer;" onclick="shmBackHome()" data-i18n="selfhost.cancel">Cancel</p>
+      <style>@keyframes shmspin{to{transform:rotate(360deg)}}</style>
+    </div>
+    <div id="shm-step-license" style="display:none;">
+      <p style="color:#94a3b8;font-size:13px;margin:0 0 16px;" data-i18n="selfhost.paste_key">Paste the license key from your purchase email.</p>
+      <div style="display:flex;gap:8px;">
+        <input id="shm-license-input" type="text" placeholder="CLAW1.xxxx.xxxx" autocomplete="off" spellcheck="false" style="
+          flex:1;
+          padding:10px 14px;
+          background:#1a2235;
+          border:1px solid rgba(255,255,255,0.1);
+          border-radius:8px;
+          color:#fff;
+          font-size:14px;
+          outline:none;
+          " onkeydown="if(event.key==='Enter')shmActivateLicense()">
+        <button id="shm-license-btn" onclick="shmActivateLicense()" style="
+          padding:10px 18px;
+          background:#E5443A;
+          color:#fff;
+          border:none;
+          border-radius:8px;
+          font-size:14px;
+          font-weight:600;
+          cursor:pointer;
+          " data-i18n="selfhost.activate_license">Activate</button>
+      </div>
+      <p id="shm-license-error" style="color:#E5443A;font-size:12px;margin:6px 0 0;display:none;"></p>
+      <p style="color:#64748b;font-size:12px;margin:10px 0 0;text-align:center;cursor:pointer;" onclick="shmBackHome()" data-i18n="selfhost.back">Back</p>
+    </div>
+    <!-- Expired trial → in-modal plan picker. This step used to be a single
+         "See pricing" link out to clawmetry.com, which dropped a user who
+         had already signed in onto a public marketing page and made them
+         start a checkout from scratch. Everything needed to charge them is
+         already on this machine (the account's cm_ key), so the picker sells
+         here: interval × tier, then POST /api/trial/checkout mints a Stripe
+         Checkout Session scoped to that account. Prices/blurbs come from
+         window.CM_PLANS (app.js) so the hard-block overlay and this modal can
+         never quote different numbers. -->
+    <div id="shm-step-ended" style="display:none;padding:4px 0;">
+      <style>
+        #shm-step-ended .shm-seg{display:flex;gap:6px;background:#1a2235;border-radius:10px;padding:4px;margin:0 0 14px;}
+        #shm-step-ended .shm-seg button{flex:1;padding:8px 6px;border:none;border-radius:7px;background:transparent;color:#94a3b8;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;}
+        #shm-step-ended .shm-seg button[aria-pressed="true"]{background:#2a3550;color:#fff;}
+        #shm-step-ended .shm-save{display:block;font-size:10px;font-weight:600;color:#4ade80;letter-spacing:0.2px;}
+        #shm-step-ended .shm-tier{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:12px;margin-bottom:8px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:#141c2c;color:#e2e8f0;cursor:pointer;font-family:inherit;}
+        #shm-step-ended .shm-tier[aria-pressed="true"]{border-color:#E5443A;background:rgba(229,68,58,0.08);}
+        #shm-step-ended .shm-radio{flex:0 0 16px;width:16px;height:16px;margin-top:2px;border-radius:50%;border:2px solid #475569;}
+        #shm-step-ended .shm-tier[aria-pressed="true"] .shm-radio{border-color:#E5443A;background:radial-gradient(#E5443A 45%,transparent 47%);}
+        #shm-step-ended .shm-tier-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+        #shm-step-ended .shm-tier-name{font-size:14px;font-weight:700;color:#fff;}
+        #shm-step-ended .shm-tier-price{font-size:13px;font-weight:700;color:#fff;white-space:nowrap;}
+        #shm-step-ended .shm-tier-per{font-size:11px;font-weight:500;color:#94a3b8;}
+        #shm-step-ended .shm-was{color:#64748b;text-decoration:line-through;font-weight:500;margin-right:4px;}
+        #shm-step-ended .shm-tier-sub{display:block;margin-top:3px;font-size:12px;line-height:1.4;color:#94a3b8;}
+      </style>
+      <p style="color:#cbd5e1;font-size:14px;font-weight:600;margin:0 0 4px;" data-i18n="selfhost.trial_ended_title">Your 7-day trial has ended</p>
+      <p style="color:#94a3b8;font-size:13px;margin:0 0 14px;" data-i18n="selfhost.trial_ended_pick">Pick a plan to keep every runtime unlocked. Priced per node, cancel any time.</p>
+      <div class="shm-seg" role="group" aria-label="Billing interval">
+        <button type="button" data-interval="month" aria-pressed="false" onclick="shmSetInterval('month')" data-i18n="selfhost.monthly">Monthly</button>
+        <button type="button" data-interval="year" aria-pressed="true" onclick="shmSetInterval('year')"><span data-i18n="selfhost.annual">Annual</span><span class="shm-save" data-i18n="selfhost.two_months_free">2 months free</span></button>
+      </div>
+      <button type="button" class="shm-tier" data-tier="starter" aria-pressed="true" onclick="shmSetTier('starter')">
+        <span class="shm-radio"></span>
+        <span style="flex:1;">
+          <span class="shm-tier-head"><span class="shm-tier-name" data-i18n="selfhost.tier_starter">Starter</span><span class="shm-tier-price" id="shm-price-starter"></span></span>
+          <span class="shm-tier-sub" id="shm-blurb-starter"></span>
+        </span>
+      </button>
+      <button type="button" class="shm-tier" data-tier="pro" aria-pressed="false" onclick="shmSetTier('pro')">
+        <span class="shm-radio"></span>
+        <span style="flex:1;">
+          <span class="shm-tier-head"><span class="shm-tier-name" data-i18n="selfhost.tier_pro">Pro</span><span class="shm-tier-price" id="shm-price-pro"></span></span>
+          <span class="shm-tier-sub" id="shm-blurb-pro"></span>
+        </span>
+      </button>
+      <div id="shm-device" style="margin:2px 0 12px;padding:9px 11px;border-radius:8px;background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);color:#bbf7d0;font-size:12px;line-height:1.45;">
+        <span data-i18n="selfhost.device_perk">Includes a free $149 desk device, shipped when your first annual invoice is paid.</span>
+      </div>
+      <button type="button" id="shm-checkout-btn" onclick="shmCheckout()" style="display:block;width:100%;padding:11px 14px;background:#E5443A;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;" data-i18n="selfhost.continue_checkout">Continue to secure checkout</button>
+      <p id="shm-ended-status" style="color:#94a3b8;font-size:12px;margin:8px 0 0;text-align:center;line-height:1.45;display:none;"></p>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
+        <span style="color:#94a3b8;font-size:12px;cursor:pointer;" onclick="shmShowLicense()" data-i18n="selfhost.have_license">I have a license key</span>
+        <span style="color:#334155;font-size:12px;margin:0 8px;">·</span>
+        <span id="shm-signout-link" style="color:#94a3b8;font-size:12px;cursor:pointer;" onclick="shmSignOut()" data-i18n="selfhost.use_other_account">Use a different account</span>
+      </div>
+    </div>
+  </div>
+</div>

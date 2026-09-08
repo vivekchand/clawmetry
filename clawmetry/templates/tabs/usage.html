@@ -10,6 +10,12 @@
   <!-- Cost Warnings -->
   <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
 
+  <!-- Subscription-coverage banner (goal: stop the "API cost panic"
+       when the user's plan already covers the shown $$). Populated by
+       app.js renderBillingCoverageBanner() from /api/usage
+       .billingCoverage. Hidden until we've detected a plan. -->
+  <div id="usage-coverage-banner" style="display:none; margin-bottom: 16px;"></div>
+
   <!-- Main Usage Stats -->
   <div class="grid">
     <div class="card">
@@ -38,6 +44,27 @@
        `efficiency` snapshot slice on cloud). Hidden until the slice answers; honest
        collecting/empty states are rendered by JS, never a silent blank. -->
   <div class="card" id="efficiency-card" style="display:none;margin-bottom:16px;"></div>
+  <!-- Cache Hit Rate (Uber-play #1) — derived client-side from /api/efficiency
+       cache (same slice the efficiency grade uses; cloud-safe via the existing
+       cm-cloud-efficiency interceptor). Shows $ that caching already saved and
+       a conservative estimate of $ left on the table. JS: renderCacheHitRateCard(). -->
+  <div class="section-title" id="cache-hit-rate-title" style="display:none;">🎯 Cache Hit Rate <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">what caching already saved · what you are leaving on the table</span></div>
+  <div class="card" id="cache-hit-rate-card" style="display:none;margin-bottom:16px;"></div>
+  <!-- Routing Advisor (Uber-play #2) — derived client-side from /api/efficiency
+       cache (same rationale). Shows potential monthly savings from safe
+       same-provider model downgrades. JS: renderRoutingAdvisorCard(). -->
+  <div class="section-title" id="routing-advisor-title" style="display:none;">🔀 Routing Advisor <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">safe same-provider swaps · potential monthly savings</span></div>
+  <div class="card" id="routing-advisor-card" style="display:none;margin-bottom:16px;"></div>
+  <!-- Spend Flow (feat/spend-flow): where the money goes, as a flow — input
+       context categories -> runtime -> output categories, tokens + dollars.
+       Filled by app.js loadSpendFlow() from /api/spend-flow (cloud: the
+       cm-cloud-spend-flow interceptor serves the daemon's `spendFlow`
+       snapshot slice). Hidden until the data answers; honest collecting /
+       insufficient states are rendered by JS, never a silent blank. -->
+  <div class="section-title" id="spend-flow-title" style="display:none;">💸 <span data-i18n="usage.spend_flow_title">Where the money goes</span> <span id="spend-flow-window" style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;"></span></div>
+  <div class="card" id="spend-flow-card" style="display:none;margin-bottom:16px;">
+    <div id="spend-flow-content" style="min-height:48px;color:var(--text-muted);" data-i18n="app.loading">Loading...</div>
+  </div>
   <!-- QW4: title + card hidden together by app.js when the 14-day series is empty,
        so an empty chart never renders under populated totals. -->
   <div class="section-title" id="usage-chart-title">📊 <span data-i18n="usage.token_usage_14d">Token Usage (14 days)</span></div>

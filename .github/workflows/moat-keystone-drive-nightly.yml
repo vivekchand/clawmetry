@@ -27,6 +27,12 @@ concurrency:
   group: moat-keystone-drive-nightly
   cancel-in-progress: false
 
+# Least-privilege default. The drive job below declares its own
+# permissions block (contents: read + issues: write), which replaces this
+# default wholesale, so the auto-filed P0 issue still works.
+permissions:
+  contents: read
+
 jobs:
   drive:
     name: Keystone Drive (real openclaw turn -> 13 probes)
@@ -39,8 +45,10 @@ jobs:
       issues: write
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
           cache: pip
@@ -61,7 +69,6 @@ jobs:
         if: env.KEYSTONE_PRESENT == '1'
         uses: ./.github/actions/setup-openclaw
         with:
-          version: latest
           gateway-token: moat-keystone-drive-token
 
       - name: Install Python deps

@@ -51,6 +51,43 @@ def _annotate_risk(events):
     return events
 
 
+def _annotate_tool_risk(events):
+    """Stamp tool-call events with a ``toolRisk`` field (call-level risk
+    from clawmetry/tool_risk.py — a DIFFERENT axis from the hallucination
+    ``risk`` pill above: this one says what the CALL touches, not how
+    confident the model was). Key is namespaced so the two pills coexist.
+    Mutates in place, returns for chaining, never crashes."""
+    if not events:
+        return events
+    try:
+        from clawmetry.tool_risk import classify_tool_call
+    except Exception:
+        return events
+    for ev in events:
+        try:
+            if str(ev.get("type") or "").upper() not in (
+                    "TOOL_CALL", "TOOL.CALL", "EXEC"):
+                continue
+            tool = ev.get("toolName") or ev.get("tool") or ""
+            args = ev.get("toolInput")
+            if not tool and not args:
+                # Detail-only rows ("Bash: rm -rf x"): parse the prefix.
+                detail = str(ev.get("detail") or "")
+                if ":" in detail:
+                    tool, _, cmd = detail.partition(":")
+                    tool = tool.strip()
+                    args = {"command": cmd.strip()[:2000]}
+            if not tool:
+                continue
+            verdict = classify_tool_call(tool, args)
+            if verdict["level"] != "low":
+                ev["toolRisk"] = {"level": verdict["level"],
+                                  "reasons": verdict["reasons"]}
+        except Exception:
+            pass
+    return events
+
+
 _BRAIN_HISTORY_CACHE = {}
 _BRAIN_HISTORY_CACHE_TTL_SECONDS = 3.0
 _BRAIN_HISTORY_TAIL_BYTES = 512 * 1024
@@ -200,6 +237,83 @@ def _v3_message_content_to_text(content) -> str:
     return ""
 
 
+_TOOL_INPUT_PRIORITY_KEYS = (
+    "command", "cmd",
+    "file_path", "path", "filename",
+    "pattern", "query", "q",
+    "url",
+    "description",
+    "prompt",
+)
+
+
+def _summarise_tool_call_input(inp) -> str:
+    """Compress a tool-call input blob into a one-line preview.
+
+    Prefers a known "primary" key (command for Bash, file_path for Read/Write,
+    pattern for Grep, url for WebFetch, description/prompt as narrative
+    fallbacks). Falls back to the first string-valued entry, then a compact
+    JSON dump. Kept generic — new tool schemas fall through to the JSON path
+    without changes here.
+    """
+    if inp is None:
+        return ""
+    if isinstance(inp, str):
+        return inp
+    if isinstance(inp, dict):
+        for k in _TOOL_INPUT_PRIORITY_KEYS:
+            v = inp.get(k)
+            if isinstance(v, str) and v:
+                return v
+        for k, v in inp.items():
+            if isinstance(v, str) and v:
+                return "{}={}".format(k, v)
+        try:
+            import json as _json
+            return _json.dumps(inp, default=str)
+        except Exception:
+            return str(inp)
+    if isinstance(inp, list):
+        return ", ".join(str(x) for x in inp if x)[:180]
+    return str(inp)
+
+
+def _summarise_tool_calls(data: dict) -> str:
+    """Render the tool-call payload as ``Tool(arg preview)`` for the Brain feed.
+
+    v3 mapper stores tool-call rows with ``data.tool_calls = [{name, input}]``
+    (Anthropic/OpenAI-flavoured) and a flat ``data.tool_name`` mirror; the
+    generic flat-key extractor below returns "" for these because the top-level
+    ``content`` is an empty string and ``name`` doesn't sit at the top. Without
+    this branch the Brain feed prints TOOL_CALL rows with a blank body.
+    """
+    tool_calls = data.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        parts = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            name = tc.get("name") or tc.get("tool_name") or ""
+            inp = tc.get("input")
+            if inp is None:
+                inp = tc.get("arguments")
+            summary = _summarise_tool_call_input(inp)
+            if len(summary) > 140:
+                summary = summary[:140] + "…"
+            if name and summary:
+                parts.append("{}({})".format(name, summary))
+            elif name:
+                parts.append(str(name))
+            elif summary:
+                parts.append(summary)
+        if parts:
+            return " · ".join(parts)
+    tn = data.get("tool_name")
+    if isinstance(tn, str) and tn:
+        return tn
+    return ""
+
+
 def _extract_brain_detail(row: dict) -> str:
     """Pull a human-readable ``detail`` snippet from a DuckDB event row, then
     collapse any OpenClaw ``<task-notification>`` envelope to its summary so the
@@ -253,6 +367,14 @@ def _extract_brain_detail_raw(row: dict) -> str:
         role = msg.get("role")
         if role in ("assistant", "user"):
             return "(thinking)" if role == "assistant" else ""
+
+    # --- Tool-call shape: data.tool_calls[i].{name,input} + data.tool_name --
+    # Emitted by the v3 mapper for TOOL_CALL rows. content is "" on these
+    # rows, so the generic flat-key loop below returns nothing and Brain
+    # prints a blank body next to the TOOL_CALL badge (user-visible bug).
+    tool_call_detail = _summarise_tool_calls(data)
+    if tool_call_detail:
+        return tool_call_detail
 
     # --- v3 mapper shape: top-level projection -----------------------------
     for k in ("finalPromptText", "completionText", "output", "result",
@@ -325,79 +447,53 @@ def _collapse_duplicate_brain_events(events):
     path but not the other), so the ``(src, detail)`` key from pass 1 misses them.
     A 10-second cross-source window is tight enough to avoid collapsing genuine
     re-utterances while reliably catching the ~2s ingest gap.
+
+    The implementation now lives in :mod:`clawmetry.brain_dedupe` so the cloud
+    blob builder (``sync._build_brain_events``) applies the SAME collapse —
+    previously it applied none, and the hosted Brain feed showed each reply
+    three times while the local API showed it once (founder screenshot,
+    2026-07-31). The shared version also normalizes the text key (stripping
+    ``(untrusted metadata)`` preambles) and adds a same-session short-text
+    pass, so the gateway ``prompt.submitted`` + transcript ``USER`` copies of
+    one inbound channel message collapse too.
     """
-    import datetime as _dt
+    from clawmetry.brain_dedupe import collapse_events, type_priority
 
-    WINDOW_S = 120.0
-    CROSS_SRC_WINDOW_S = 10.0
-    MIN_DETAIL = 40
-    _PRIO = {"MESSAGE": 3, "ASSISTANT": 3, "AGENT": 3, "USER": 3, "RESULT": 3,
-             "THINK": 2, "MODEL.COMPLETED": 1, "MODEL": 1}
+    return collapse_events(
+        events,
+        get_src=lambda ev: ev.get("src") or ev.get("source")
+        or ev.get("sessionId") or "",
+        get_session=lambda ev: str(ev.get("sessionId") or ev.get("src")
+                                   or "")[:32],
+        get_detail=lambda ev: ev.get("detail") or "",
+        get_time=lambda ev: ev.get("time") or "",
+        get_richness=lambda ev: (type_priority(ev.get("type")),
+                                 ev.get("tokens") or 0),
+    )
 
-    def _src(ev):
-        return ev.get("src") or ev.get("source") or ev.get("sessionId") or ""
 
-    def _parse(ev):
-        ts = ev.get("time") or ""
-        try:
-            return _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        except Exception:
-            return None
+def _row_is_error(row: dict) -> bool:
+    """True when a stored tool-result row carries a real error flag.
 
-    def _richness(ev):
-        return (_PRIO.get((ev.get("type") or "").upper(), 2), ev.get("tokens") or 0)
-
-    def _collapse_groups(groups, window_s, drop):
-        for evs in groups.values():
-            if len(evs) < 2:
-                continue
-            ordered = sorted(evs, key=lambda e: (_parse(e) or _dt.datetime.min))
-            cluster = [ordered[0]]
-            clusters = [cluster]
-            for prev, cur in zip(ordered, ordered[1:]):
-                tp, tc = _parse(prev), _parse(cur)
-                if tp is None or tc is None or abs((tc - tp).total_seconds()) <= window_s:
-                    cluster.append(cur)
-                else:
-                    cluster = [cur]
-                    clusters.append(cluster)
-            for cl in clusters:
-                if len(cl) < 2:
-                    continue
-                best = max(cl, key=_richness)
-                for e in cl:
-                    if e is not best:
-                        drop.add(id(e))
-
-    # Pass 1: same-source dedup — (src, detail) key, 120s window.
-    # Collapses model.completed-vs-assistant siblings from a single ingest path.
-    groups: dict = {}
-    for ev in events:
-        detail = (ev.get("detail") or "").strip()
-        if len(detail) < MIN_DETAIL:
-            continue
-        groups.setdefault((_src(ev), detail), []).append(ev)
-
-    drop: set = set()
-    _collapse_groups(groups, WINDOW_S, drop)
-
-    # Pass 2: cross-source content dedup — detail key only, tight 10s window.
-    # Catches the session-file + via-index double-ingest of the same reply (#3924).
-    # Events already eliminated by pass 1 are skipped to avoid id() aliasing.
-    cross_groups: dict = {}
-    for ev in events:
-        if id(ev) in drop:
-            continue
-        detail = (ev.get("detail") or "").strip()
-        if len(detail) < MIN_DETAIL:
-            continue
-        cross_groups.setdefault(detail, []).append(ev)
-
-    _collapse_groups(cross_groups, CROSS_SRC_WINDOW_S, drop)
-
-    if not drop:
-        return events
-    return [ev for ev in events if id(ev) not in drop]
+    The flag lives in different spots per ingest path: family adapters
+    (Claude Code, Codex, …) stamp ``data.extra.isError``; the OpenClaw v3
+    mapper stamps ``data.is_error`` plus the ``data.data`` mirror. Benign
+    failures (read-guards, transient timeouts) are already downgraded at
+    ingest and marked ``benign_error`` — those must not resurface here.
+    """
+    data = row.get("data")
+    if not isinstance(data, dict):
+        return False
+    inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+    if data.get("benign_error") or inner.get("benign_error"):
+        return False
+    extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
+    return bool(
+        data.get("is_error")
+        or inner.get("is_error")
+        or extra.get("isError")
+        or extra.get("is_error")
+    )
 
 
 def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
@@ -493,10 +589,31 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
         # shapes (legacy, v3 mapper top-level, v3 mapper mirror).
         detail = _extract_brain_detail(r)
         evt_type = (r.get("event_type") or "").upper()
+        # Error surfacing (Brain-visualizer adoption #3): a failed tool
+        # result becomes a first-class ERROR event so the ❌ icon, the
+        # type chips, and the type filter all pick it up with no extra
+        # client plumbing. The store has carried the flag since ingest;
+        # this mapper just dropped it.
+        is_err = evt_type in ("TOOL_RESULT", "TOOL.RESULT") and _row_is_error(r)
+        if is_err:
+            evt_type = "ERROR"
+        if evt_type == "THINKING" and not str(detail).strip():
+            # Claude Code (and siblings) persist extended thinking as an
+            # ENCRYPTED signature block — the text itself is never written to
+            # the transcript (live-verified: 633/633 thinking blocks on a real
+            # machine were signature-only). Label the row honestly instead of
+            # rendering an empty line that reads as a truncation bug.
+            detail = "(thinking encrypted by the runtime; no text stored)"
         row = {
             "time":       r.get("ts", ""),
             "type":       evt_type,
-            "detail":     str(detail)[:200],
+            # FULL detail — no serve-time cap. The founder hit MESSAGE rows cut
+            # at exactly 200 chars mid-word ("the full log should be visible
+            # without stripping anything"). Size is already bounded upstream:
+            # tool-result bodies are capped at ingest (64 KB) and message/
+            # thinking text is whatever the model actually wrote. Collapsed
+            # rows are line-clamped client-side; click expands to everything.
+            "detail":     str(detail),
             "src":        (r.get("session_id") or r.get("agent_id") or "")[:32],
             "sessionId":  r.get("session_id") or "",
             "agentId":    r.get("agent_id") or "main",
@@ -509,6 +626,8 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
             # carries one extra short string per row.
             "eventId":    r.get("id") or "",
         }
+        if is_err:
+            row["isError"] = True
         # ── Channel-event enrichment (PR aca53ec8 / Telegram ingest) ─────
         # Channel turns land here as event_type=channel.in|channel.out with
         # the raw provider payload under ``data``. Surface a few flat fields
@@ -560,6 +679,23 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
         try:
             if is_llm_event(r):
                 row["risk"] = compute_hallucination_risk(r)
+        except Exception:
+            pass
+        # Call-level tool risk (clawmetry/tool_risk.py): classify from the
+        # RAW row's tool blocks (full args) so the feed's TOOL_CALL rows
+        # carry an honest risk chip. Worst block wins on multi-call rows.
+        try:
+            if evt_type in ("TOOL_CALL", "TOOL.CALL", "EXEC"):
+                from clawmetry.approvals import _extract_tool_blocks
+                from clawmetry.tool_risk import classify_tool_call, risk_rank
+                worst = None
+                for _tcid, _tname, _targs in _extract_tool_blocks(r):
+                    v = classify_tool_call(_tname, _targs)
+                    if worst is None or v["rank"] > worst["rank"]:
+                        worst = v
+                if worst and worst["level"] != "low":
+                    row["toolRisk"] = {"level": worst["level"],
+                                       "reasons": worst["reasons"]}
         except Exception:
             pass
         out.append(row)
@@ -1011,7 +1147,7 @@ def api_brain_history():
                                 "source": source_id,
                                 "sourceLabel": source_label,
                                 "type": "RESULT",
-                                "detail": text[:300],
+                                "detail": text,
                                 "color": color,
                             }
                         )
@@ -1035,7 +1171,7 @@ def api_brain_history():
                                 "source": source_id,
                                 "sourceLabel": source_label,
                                 "type": "USER",
-                                "detail": text[:300],
+                                "detail": text,
                                 "color": color,
                                 "taskType": _classify_task_type(text),
                             }
@@ -1057,7 +1193,7 @@ def api_brain_history():
                                         "source": source_id,
                                         "sourceLabel": source_label,
                                         "type": "THINK",
-                                        "detail": thinking_text[:300],
+                                        "detail": thinking_text,
                                         "color": color,
                                     }
                                 )
@@ -1073,7 +1209,7 @@ def api_brain_history():
                                         "source": source_id,
                                         "sourceLabel": source_label,
                                         "type": "AGENT",
-                                        "detail": text[:300],
+                                        "detail": text,
                                         "color": color,
                                         "taskType": _classify_task_type(text),
                                     }
@@ -1274,6 +1410,7 @@ def api_brain_history():
     # stable either way, and the local-store fast path above already
     # picked up the rich rows.
     _annotate_risk(events)
+    _annotate_tool_risk(events)
 
     # Issue #563 — Token Probability Visualizer. Per-token confidence
     # heatmap on assistant responses. Only stamps when upstream captured
@@ -1727,27 +1864,27 @@ def api_brain_stream():
         return "TOOL"
 
     def extract_detail(tn, inp):
+        # FULL detail — no truncation (matches the brain-history copy; the
+        # founder asked for the full log with nothing stripped).
         tn = tn.lower()
         if not isinstance(inp, dict):
-            return str(inp)[:300]
+            return str(inp)
         if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
-            return (inp.get("command") or inp.get("action") or "")[:300]
+            return inp.get("command") or inp.get("action") or ""
         if "read" in tn:
-            return (inp.get("path") or inp.get("file_path") or "")[:300]
+            return inp.get("path") or inp.get("file_path") or ""
         if "write" in tn or "edit" in tn:
-            return (inp.get("path") or inp.get("file_path") or "")[:300]
+            return inp.get("path") or inp.get("file_path") or ""
         if "browser" in tn:
-            return (inp.get("url") or inp.get("targetUrl") or inp.get("action") or "")[
-                :300
-            ]
+            return inp.get("url") or inp.get("targetUrl") or inp.get("action") or ""
         if tn == "message":
-            return (inp.get("message") or inp.get("target") or "")[:300]
+            return inp.get("message") or inp.get("target") or ""
         if "search" in tn or "fetch" in tn:
-            return (inp.get("query") or inp.get("url") or "")[:300]
+            return inp.get("query") or inp.get("url") or ""
         if "subagent" in tn or "spawn" in tn:
-            return (inp.get("label") or str(inp.get("message", "")))[:300]
+            return inp.get("label") or str(inp.get("message", ""))
         vals = list(inp.values())
-        return (str(vals[0]) if vals else "")[:300]
+        return str(vals[0]) if vals else ""
 
     def _parse_jsonl_event(obj, source_id, source_label, color):
         """Parse a JSONL line into a brain event dict, or return None."""
@@ -1778,7 +1915,7 @@ def api_brain_stream():
                             "source": source_id,
                             "sourceLabel": source_label,
                             "type": "THINK",
-                            "detail": thinking_text[:300],
+                            "detail": thinking_text,
                             "color": color,
                         }
                 if btype == "text":
@@ -1789,7 +1926,7 @@ def api_brain_stream():
                             "source": source_id,
                             "sourceLabel": source_label,
                             "type": "AGENT",
-                            "detail": text[:300],
+                            "detail": text,
                             "color": color,
                             "taskType": _classify_task_type(text),
                         }
@@ -1827,7 +1964,7 @@ def api_brain_stream():
                     "source": source_id,
                     "sourceLabel": source_label,
                     "type": "USER",
-                    "detail": text[:300],
+                    "detail": text,
                     "color": color,
                     "taskType": _classify_task_type(text),
                 }
@@ -1921,7 +2058,7 @@ def api_brain_stream():
                                 tool_kw = m.group(1).lower()
                                 rest = m.group(2).strip()
                                 ev_type = tool_to_type(tool_kw)
-                                detail = rest.split("\n")[0][:300]
+                                detail = rest.split("\n")[0]
                                 events.append(
                                     {
                                         "time": ts,
@@ -1988,7 +2125,10 @@ def api_brain_stream():
                                 pass
                     last_jsonl_scan = now
 
-                # Emit events
+                # Emit events (annotated with call-level tool risk so the
+                # LIVE stream carries the same chips as history loads —
+                # streams never pass through the history annotators).
+                _annotate_tool_risk(events)
                 for ev in events:
                     yield f"data: {json.dumps(ev)}\n\n"
 

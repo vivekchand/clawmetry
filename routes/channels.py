@@ -2824,3 +2824,16 @@ def api_channel_clickclack():
         if fast is not None:
             return jsonify(fast)
     return _d._generic_channel_data("clickclack")
+
+
+@bp_channels.route("/api/channel/buzz")
+def api_channel_buzz():
+    """Issue #4304 — ingest Buzz channel transcripts."""
+    import dashboard as _d
+    if _local_store_read_enabled():
+        fast = _try_local_store_provider_messages(
+            "buzz", request.args.get("limit", 50, type=int),
+        )
+        if fast is not None:
+            return jsonify(fast)
+    return _d._generic_channel_data("buzz")

@@ -35,6 +35,7 @@ def test_advisor_sessions_ingested_when_present():
 
     side_effects = [
         _run(0, sandbox_list),
+        _run(1, ""),  # cat main/sessions.json (subagent index absent)
         _run(1, ""),                   # ls agents/main/sessions (absent)
         _run(0, "adv-sess-1.jsonl\n"), # ls agents/advisor/sessions
         _run(0, advisor_line + "\n"),  # cat advisor/adv-sess-1.jsonl
@@ -60,6 +61,7 @@ def test_advisor_sessions_tagged_nemoclaw():
 
     side_effects = [
         _run(0, sandbox_list),
+        _run(1, ""),  # cat main/sessions.json (subagent index absent)
         _run(1, ""),
         _run(0, "adv-sess-2.jsonl\n"),
         _run(0, advisor_line + "\n"),
@@ -84,6 +86,7 @@ def test_advisor_cursor_namespaced_separately_from_main():
 
     side_effects = [
         _run(0, sandbox_list),
+        _run(1, ""),  # cat main/sessions.json (subagent index absent)
         _run(0, "sess.jsonl\n"),      # ls agents/main/sessions
         _run(0, main_line + "\n"),     # cat main/sess.jsonl
         _run(0, "sess.jsonl\n"),      # ls agents/advisor/sessions (same filename)
@@ -110,6 +113,7 @@ def test_main_events_not_stamped_with_agent_dir():
 
     side_effects = [
         _run(0, sandbox_list),
+        _run(1, ""),  # cat main/sessions.json (subagent index absent)
         _run(0, "main.jsonl\n"),
         _run(0, main_line + "\n"),
         _run(1, ""),

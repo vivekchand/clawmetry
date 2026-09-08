@@ -19,22 +19,43 @@ the pull endpoint at ``GET /api/otel/export``.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger("clawmetry.otel_push")
 
+# Memoized clawmetry-pro lookup. Contrary to the old docstring here, a FAILED
+# import is NOT cached by Python's import system — every retry pays a full
+# sys.path scan (~4ms), and this shim is called from LocalStore.ingest on
+# EVERY event. A successful import is cached forever; a miss is re-checked at
+# most every ``_PRO_RECHECK_SECS`` so a pro wheel installed at runtime is
+# still picked up without a daemon restart.
+_PRO_RECHECK_SECS = 30.0
+_pro_cache: tuple[float, Any] | None = None
+
 
 def _pro():
-    """Return ``clawmetry_pro.otel_push`` when importable, else ``None``.
-
-    Cached implicitly by the Python import system; the first call after
-    install pays one ImportError, subsequent calls are dict lookups.
-    """
+    """Return ``clawmetry_pro.otel_push`` when importable, else ``None``."""
+    global _pro_cache
+    now = time.monotonic()
+    if _pro_cache is not None:
+        ts, mod = _pro_cache
+        if mod is not None or now - ts < _PRO_RECHECK_SECS:
+            return mod
     try:
         from clawmetry_pro import otel_push as _otelp
-        return _otelp
+        mod = _otelp
     except Exception:
-        return None
+        mod = None
+    _pro_cache = (now, mod)
+    return mod
+
+
+def enabled() -> bool:
+    """Cheap per-batch check: is a real (clawmetry-pro) exporter available?
+    Used by ``LocalStore.ingest_many`` to skip the per-event hook entirely
+    when OTLP push can't possibly be active."""
+    return _pro() is not None
 
 
 def forward_event(event: dict[str, Any]) -> None:
@@ -68,8 +89,10 @@ def stats() -> dict:
 
 
 def reset_for_tests() -> None:
-    """Test-only helper. Forwards to clawmetry-pro's reset; no-op
-    when the closed package is unavailable."""
+    """Test-only helper. Clears the pro-module memo, then forwards to
+    clawmetry-pro's reset; no-op when the closed package is unavailable."""
+    global _pro_cache
+    _pro_cache = None
     pro = _pro()
     if pro is None:
         return

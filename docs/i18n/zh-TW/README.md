@@ -1,19 +1,21 @@
-<!-- i18n-src:8f42d460a973 -->
+<!-- i18n-src:88be2deff5d5 -->
 > 繁體中文 translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
 
-[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![PyPI Downloads/week](https://static.pepy.tech/badge/clawmetry/week)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
+[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
+[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**看見你的 agent 如何思考。** 為 **14 種 AI agent 執行環境**提供即時可觀測性：[OpenClaw](https://github.com/openclaw/openclaw)、[NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)、Claude Code、OpenAI Codex 以及其他 10 種。一個儀表板，掌握你整個 agent 艦隊。
+**看見你的代理在想什麼。** 針對 **30 種 AI 代理執行環境**提供即時可觀測性：[OpenClaw](https://github.com/openclaw/openclaw)、[NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)、Claude Code、OpenAI Codex，還有另外 26 種。一個儀表板，掌控你整個代理艦隊。
 
-> 🌐 **閱讀其他語言版本：** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [更多 →](docs/i18n/)
+> 🌐 **以下語言版本：** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [更多 →](docs/i18n/)
 
 一行指令。零設定。自動偵測一切。
 
@@ -21,364 +23,174 @@
 pip install clawmetry && clawmetry
 ```
 
-開啟 **http://localhost:8900** 即可完成。
+在 **http://localhost:8900** 開啟。零設定：它會找出你機器上已有的代理執行環境，以唯讀方式讀取，且完全不改變它們的運作方式。
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## 支援 14 種 agent 執行環境
+## 支援 30 種代理執行環境
 
-ClawMetry 一開始是為 OpenClaw 打造的可觀測性工具，如今已能在單一儀表板中計量你的**整個 agent 艦隊**，並自動偵測你機器上的每個執行環境：
+**開源應用中免費提供：** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
+**付費方案提供：** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-OpenClaw 與 NemoClaw 在開源應用中免費使用；其他執行環境則需要 ClawMetry Cloud 或自架的 Pro 授權才會啟用。從頁首切換執行環境後，每個分頁（成本、token、工具、追蹤軌跡）都會重新聚焦到該執行環境上。確切的免費／付費區分、方案矩陣、`/api/entitlement` 資料結構，以及 `clawmetry license` CLI，請參閱 **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)**。
+每種執行環境都能使用相同的儀表板。同時執行多種也沒問題，頂部的切換器會把每個分頁重新聚焦到其中一種上。
 
-## 你能得到什麼
+自己用 SDK 打造的代理呢？攔截器一樣能追蹤它的 LLM 呼叫。詳見 [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md)。
 
-- **Flow** — 即時動畫圖表，顯示訊息如何在頻道、大腦、工具之間流動並返回
-- **Overview** — 健康檢查、活動熱力圖、session 數量、模型資訊
-- **Usage** — token 與成本追蹤，提供日／週／月分項統計
-- **Sessions** — 顯示模型、token、最後活動時間的進行中 agent session
-- **Crons** — 排程任務，顯示狀態、下次執行時間、耗時
-- **Logs** — 彩色即時日誌串流
-- **Memory** — 瀏覽 SOUL.md、MEMORY.md、AGENTS.md、每日筆記
-- **Transcripts** — 以聊天氣泡介面閱讀 session 歷史紀錄
-- **Alerts** — 預算上限、錯誤率觸發、agent 離線偵測；可轉發至 Slack、Discord、PagerDuty、Telegram、Email
-- **Approvals** — 將破壞性刪除、強制推送、資料庫變更、sudo、套件安裝、網路呼叫攔截在單鍵核准之後
+## 你能獲得什麼
 
-## 螢幕截圖
+- **工作階段與逐字稿**：每個代理逐輪做了什麼，並可重播
+- **成本與 token**：依執行環境、模型、工作階段與日期呈現，附帶異常標記
+- **流程圖**：訊息在頻道、模型與工具間流動的即時圖示
+- **Brain**：即時的推理與工具呼叫事件串流
+- **上下文爆量**：依供應商換算的視窗使用率、壓縮 vs 強制溢位，加上每個執行環境「看不到什麼」的對照表（[原理](docs/CONTEXT_BLOWOUT.md)）
+- **記憶與技能**：每個執行環境實際載入了哪些檔案與技能
+- **健康狀態與日誌**：磁碟、記憶體、錯誤率、速率限制、即時日誌串流
+- **警示**：預算上限、錯誤激增、代理離線，可路由到 Slack、Discord、PagerDuty、Telegram、Email
+- **審核**：在有風險的工具呼叫*執行前*先暫停，並可從手機核准（[原理](docs/APPROVALS.md)）
 
-### 🧠 Brain — 即時 agent 事件串流
-![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
+## 上下文爆量，以及觀測本身的代價
 
-### 📊 Overview — Token 用量與 session 摘要
-![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+在你信任任何代理比較工具之前，有兩個問題值得先問清楚。
 
-### ⚡ Flow — 即時工具呼叫動態
-![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+**它如何處理跨執行環境的上下文視窗爆量？**
 
-### 💰 Tokens — 按模型與 session 分項的成本明細
-![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
+使用率百分比的可信度，取決於分母算得夠不夠誠實。ClawMetry 依供應商從[一張你可以閱讀也可以送 PR 的表格](clawmetry/context_windows.py)推算視窗大小，涵蓋 Anthropic、OpenAI、Google、xAI、DeepSeek、Kimi、Qwen、Mistral、Llama 與 GLM。它不會用單一廠商的尺去衡量全部 30 種執行環境。這很重要：一個 300K 的 GPT-5 回合若拿 Anthropic 的 200K 當基準衡量，會被讀成「>100%，已爆量」,但實際上只是 GPT-5 400K 視窗的 75%。同一把尺也會把一個真正溢位的 130K DeepSeek 回合，粉飾成看似安全的 65%。
 
-### 🧬 Memory — 工作區檔案瀏覽器
-![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
+每個視窗數字都附帶其來源:`model_table`、`explicit_marker`、`observed_floor`,或在我們不知道模型時老實顯示 `default`。建立在猜測之上的量表,絕不該和建立在查表之上的量表擁有同等的權威性。
 
-### 🔐 Security — 安全態勢與稽核紀錄
-![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
+ClawMetry 只能在部分執行環境上看到壓縮事件。因此 `GET /api/context-coverage` 會針對每種執行環境回報:**0 代表「乾淨運行」還是「我們看不見」**。真正代表看不見的 `0`,就會誠實地這樣標示。[完整說明](docs/CONTEXT_BLOWOUT.md)
 
-### 🚨 Alerts — 預算上限、錯誤率觸發、Slack／Discord／PagerDuty／Email webhook
-![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+**這套監測工具本身要花多少代價？**
 
-### ✋ Approvals — 將高風險工具呼叫攔截在手動核准之後；由政策驅動的保護規則
-![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+| 路徑 | 加諸於你的代理 | 預設啟用？ |
+|---|---|---|
+| 工作階段檔案追蹤（全部 30 種執行環境） | **0**。獨立處理程序，你的代理裡沒有任何 ClawMetry 程式碼 | 開啟 |
+| HTTP 攔截器（`CLAWMETRY_INTERCEPT=1`） | 每次 LLM 呼叫 **+0.44 毫秒**，相當於一次 5 秒呼叫的 0.009% | 關閉 |
+| 工具前置掛鉤閘門（熱快取） | 每次受管控的工具呼叫 **+44 毫秒**，疊加在 36 毫秒的直譯器基底之上 | 關閉 |
+| 執行代理（enforcement proxy） | 每次 LLM 呼叫 **+9.7 毫秒** | 關閉 |
+
+守護行程主機成本:攝入 **每秒 2,762 個事件**、磁碟上**每個事件 710 位元組**（每 10 萬個事件 67.7 MB）,在忙碌的安裝環境上持續佔用**約 12% 的單一核心**。最後這個數字超出我們自訂的 5-10% 預算,因此我們選擇把它當成一個要追查的 bug 公開,而不是隱而不宣。
+
+在 Apple M2 Pro 上以 `benchmarks/overhead.py` 測得。此測試工具會在獨立處理程序中執行每種情境、交替其順序,並且**在多輪結果正負號不一致時拒絕印出數字**。你可以在自己的機器上花一分鐘跑跑看:
+
+```bash
+pip install clawmetry && python -m benchmarks.overhead
+```
+
+每條路徑都經過量測,包括掛鉤閘門與執行代理,而且這套測試工具在 CI 中會於 Linux、macOS 與 Windows 上運行。值得留意的兩個結果:代理在 Windows 上的成本約為 Linux 的七倍;而守護行程目前持續佔用約 12% 的單一核心,超出我們自訂的 5-10% 預算。原始 JSON、方法說明,以及尚未量測的部分,都在 [docs/OVERHEAD.md](docs/OVERHEAD.md)。
+
+## 價格
+
+| 方案 | 涵蓋範圍 | 價格 |
+|---|---|---|
+| **Free** | OpenClaw + NVIDIA NemoClaw + Goose,完整儀表板,僅限本機 | $0 |
+| **Starter** | 上述以外的所有執行環境、艦隊檢視、雲端同步 | 每節點每月 $9 |
+| **Pro** | Starter 加上控制與評估功能:審核、工具風險政策、評估、異常偵測、成本優化器、OTel 匯出、防竄改稽核日誌 | 每節點每月 $19 |
+
+年繳方案、企業方案與最新價格請見 **[clawmetry.com/pricing](https://clawmetry.com/pricing)**。自架授權金鑰不需雲端即可使用（`clawmetry license`）。免費/付費的確切分界，詳見 [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)。
+
+## 你的資料留在你自己的機器上
+
+ClawMetry 讀取本機的工作階段檔案與日誌。**除非你執行 `clawmetry connect`，否則沒有任何工作階段資料會離開你的機器**——不會傳送提示詞、回覆、工具參數、檔案內容或日誌內容。當你真的連線時，快照會以你機器上永不外流的金鑰進行端對端加密，並在你的瀏覽器中解密。若某個節點沒有金鑰，上傳會被跳過而不是以明文傳送，且沒有任何伺服器回應能關閉這個保護。
+
+在你連線之前，預設就會執行兩件事，兩者都可選擇退出，且都不攜帶工作階段資料：一個匿名的安裝回報，以及對 PyPI 的版本檢查。預設安裝也會查詢一次你的公開 IP，用於啟動橫幅的一行資訊。每個目的地、其攜帶的內容、以及如何關閉它，都列在 [docs/EGRESS.md](docs/EGRESS.md) 中；自架、改指向自訂端點與氣隙（air-gapped）安裝完全不會有任何非必要的對外呼叫。
+
+解密發生在你的瀏覽器中，執行的是我們提供給你的程式碼。過去這只是一句承諾；現在你可以自行查證。每一行接觸到你金鑰的程式碼，都在同一個可讀的檔案 [`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js) 裡，它隨 wheel 一起發布，並以逐字方式提供，並用子資源完整性（Subresource Integrity）雜湊值釘選。若要確認瀏覽器執行的正是我們發布的版本：
+
+```bash
+curl -s https://app.clawmetry.com/static/js/cm-e2e.js -o served.js
+pip download --no-deps clawmetry==$(clawmetry --version | tr -d 'a-z ') -d /tmp/cm
+unzip -p /tmp/cm/clawmetry-*.whl clawmetry/static/js/cm-e2e.js > published.js
+diff served.js published.js && echo identical
+```
+
+這無法證明的是：我們也提供載入該檔案的頁面，因此理論上我們也可能提供另一個不同的頁面。完整性雜湊值能保護你免受被入侵的 CDN 所害，但無法防範供應商本身。你獲得的是：任何替換行為都必須是刻意的、在頁面原始碼中可見的，且會與任何人都能從 PyPI 取得的版本不同。若選擇自架或只在本機使用，則完全不需要依賴這件事。
 
 ## 安裝
 
-**一行指令（建議）：**
 ```bash
-curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
+pip install clawmetry     # 接著執行: clawmetry
 ```
 
-**pip：**
-```bash
-pip install clawmetry
-clawmetry
-```
+或使用一行指令：`curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-**從原始碼安裝：**
-```bash
-git clone https://github.com/vivekchand/clawmetry.git
-cd clawmetry && pip install flask && python3 dashboard.py
-```
+需要 macOS、Linux 或 Windows 上的 Python 3.8+，以及同一台機器上至少一種代理執行環境。Docker 安裝說明：[docs/DOCKER.md](docs/DOCKER.md)。
 
-## v2 前端開發
-
-v2 React 應用程式位於 `frontend/`，在 Flask 伺服器以啟用 v2 的方式啟動時，會於 `/v2` 提供服務。
-
-開發時請使用兩個終端機：
+或者讓代理幫你設定。[`agent-kill-switch`](skills/agent-kill-switch/SKILL.md) 技能可以教會 Claude Code、Codex、Cursor、Gemini CLI、Copilot 或 OpenCode 安裝 ClawMetry、回報機器上代理正在做什麼與花費多少、依要求停止某個工作階段、並暫留有風險的工具呼叫以待核准：
 
 ```bash
-# 終端機 1：Flask API／伺服器，於 :8900
-CLAWMETRY_V2=1 python3 dashboard.py
+npx skills add vivekchand/clawmetry --skill agent-kill-switch
 ```
 
-```bash
-# 終端機 2：Vite 開發伺服器，於 :5173
-cd frontend
-nvm use
-npm ci
-npm run dev
-```
+## 文件
 
-開啟 `http://localhost:5173/v2/`。Vite 會將 `/api` 請求代理到 `http://localhost:8900`，因此 React 應用程式無需額外的 CORS 設定即可與本機 Flask 伺服器溝通。
+| | |
+|---|---|
+| [執行環境相容性](docs/compatibility.md) | 每個轉接器讀取哪些資料，以及如何新增一種執行環境 |
+| [上下文爆量](docs/CONTEXT_BLOWOUT.md) | 依供應商劃分的視窗、壓縮 vs 溢位、每個執行環境的涵蓋範圍 |
+| [額外負擔](docs/OVERHEAD.md) | 監測工具實際量測到的成本，以及可重現此量測的測試工具 |
+| [授權額度](docs/ENTITLEMENTS.md) | 免費 vs 付費、方案等級表、授權金鑰 CLI |
+| [審核與政策](docs/APPROVALS.md) | 執行前把關、風險評分、手機審核 |
+| [OpenTelemetry](docs/OPENTELEMETRY.md) | 將追蹤資料匯出到任何地方，並從任何來源攝入 OTLP |
+| [自帶代理](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore、Pydantic AI、LangChain 端到端範例，附可執行程式碼 |
+| [SDK 追蹤](docs/SDK_TRACKING.md) | 為你自行打造的代理進行成本歸因 |
+| [聊天頻道](docs/CHANNELS.md) | Flow 中顯示的聊天轉接器 |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | 沙箱化的 NVIDIA NemoClaw 設定 |
+| [Docker](docs/DOCKER.md) | 映像檔、compose、掛載卷設定 |
+| [架構](ARCHITECTURE.md) · [開發](docs/DEVELOPMENT.md) | 內部運作原理；從原始碼執行 |
+| [遙測](docs/TELEMETRY.md) | 匿名安裝與桌面啟動回報，以及如何關閉它們 |
 
-若要建置隨 Python 套件一同發佈的組建：
+## 螢幕截圖
 
-```bash
-cd frontend
-npm run build
-```
+以下每個數字都來自一台真實機器，唯讀取得，沒有任何預先安排的資料。
 
-正式版組建會輸出至 `clawmetry/static/v2/dist/`。
+**它會告訴你哪裡出問題了，而不只是發生了什麼事。**
+頂部有兩則異常橫幅：支出達到日均值的 7 倍，以及一次 4.2 倍的成本激增。橫幅下方，最近 667 個工作階段中有 324 個帶有浪費訊號，並依原因逐一列出。
 
-## 執行環境／Agent 相容性
+![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
-ClawMetry 觀測許多 AI agent 執行環境，不僅止於 OpenClaw。每個非 OpenClaw 的執行環境都配有專屬的讀取轉接器，將其原生 session 格式轉譯為 ClawMetry 的統一資料結構；daemon 會將這些資料匯入同一個 DuckDB 儲存庫與雲端快照中，並標記所屬執行環境，當偵測到一個以上的執行環境時，Session 回放分頁會顯示**執行環境切換器**。完整矩陣與新增執行環境的指南請參見 [`docs/compatibility.md`](docs/compatibility.md)，OpenClaw 家族入門介紹請參見 [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md)。
+**它會告訴你錢花到哪裡去了，在每一個時間窗口。**
+今日 $252.47、本週 $513.15、本月 $1,312.92，各自附帶背後的 token 用量，以及你的訂閱方案已涵蓋多少。下方是約 $1,128/月被列為可回收的支出，以及快取重複使用已省下的 $17,256/月。
 
-| 執行環境／Agent | 狀態 | 說明 |
-|---|---|---|
-| **OpenClaw** | 原生支援 | 參考執行環境，自動偵測 |
-| **PicoClaw** | Beta 轉接器 | 扁平化的 `providers.Message` JSONL（`~/.picoclaw/workspace/sessions`）。支援 Transcripts、模型、工具呼叫。 |
-| **NanoClaw** | Beta 轉接器 | 每個 session 一份 SQLite（`data/v2-sessions`）。支援 Transcripts 與訊息計數。 |
-| **Hermes** | Beta 轉接器 | SQLite `~/.hermes/state.db`。支援 Transcripts、模型、token／成本。 |
-| **Claude Code** | Beta 轉接器 | JSONL `~/.claude/projects/.../<id>.jsonl`。支援 Transcripts、模型、工具呼叫與思考過程、token 用量。 |
-| **Codex** | Beta 轉接器 | Rollout JSONL `~/.codex/sessions/...`。支援 Transcripts、模型、工具呼叫、token 用量。 |
-| **Cursor** | Beta 轉接器 | SQLite `state.vscdb`。支援 Chat／Composer Transcripts、模型。 |
-| **Aider** | Beta 轉接器 | 每個專案一份 `.aider.chat.history.md`。支援 Transcripts、模型、token 計數。 |
-| **Goose** | Beta 轉接器 | SQLite `~/.local/share/goose`。支援 Transcripts、模型、工具呼叫、token 總計。 |
-| **opencode** | Beta 轉接器 | SQLite `~/.local/share/opencode`。支援 Transcripts、模型、工具呼叫、token 與成本。 |
-| **Qwen Code** | Beta 轉接器 | JSONL `~/.qwen/projects/.../chats`。支援 Transcripts、模型、工具呼叫、token 用量。 |
-| **Pi** | Beta 轉接器 | JSONL `~/.pi/agent/sessions`。支援 Transcripts、模型、工具呼叫、token 與成本。 |
-| **Deep Agents** | Beta 轉接器 | SQLite `~/.deepagents/.state/sessions.db`。支援 Transcripts、模型、工具呼叫、token 與成本。 |
+![Cost: today, this week and this month, with an efficiency grade and itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
 
-「Beta 轉接器」代表 ClawMetry 為該執行環境的實際磁碟格式提供了讀取器，每一款都是根據真實機器上的真實安裝所建置並驗證（見 `tests/fixtures/runtimes/<rt>/`）。轉接器皆為唯讀，並且如實反映該執行環境實際儲存的內容（例如 PicoClaw／NanoClaw／Cursor 並不會將 token 成本寫入磁碟）。當單一節點上運行多個執行環境時，執行環境切換器可將 session 檢視範圍限定在其中一個，方便深入查看。
+**它會畫出一則訊息如何變成一個答案。**
+即時流程圖：你、訊息抵達的頻道、閘道、正在回應的模型，以及它用到的每一項工具。隨著工作推進，節點會依序亮起。
 
-## 追蹤任何 SDK agent — 迴圈外成本歸因
+![Flow: live diagram from you through the gateway to the model and its tools](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-上述執行環境都會將 session 寫入磁碟。而你自行打造的**正式環境 agent**，也就是那個建構在 OpenAI Agents SDK、LangChain、Vercel AI SDK、LlamaIndex、E2B，或是單純 `httpx` 迴圈上的 agent，並不會這麼做。ClawMetry 的零設定攔截器仍可透過修補（monkey-patch）`httpx`／`requests` 來擷取其 LLM 呼叫（成本、token、延遲、錯誤）：
+**機器上的每個代理，都在同一張表格裡。**
+它在跑什麼、過去 24 小時與整個生命週期各花了多少、最後一次出現的時間、屬於誰、以及是否有訂閱方案涵蓋這筆費用。這裡有 14 個代理，3 個工作階段正在運作，13 個閒置中。
 
-```python
-import clawmetry.track            # 啟用攔截器
-clawmetry.track.set_source("support-agent")   # 為此產品命名
+![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
-# ...你的 agent 照常運行；每一次 LLM 呼叫現在都會被追蹤並歸因。
-```
+**它會逐一顯示一個回合的時間與金錢花在哪個工具上。**
+一次真實工作階段中的一個回合：11.2 分鐘內用了 11 個工具，花費 $1.16。每一次 Bash 呼叫與模型呼叫都有自己的時間軸長條，讓耗時 4.1 分鐘的指令和只花 226 毫秒的指令，一眼就能分辨出來。
 
-`set_source()`（或 `CLAWMETRY_SOURCE=support-agent` 環境變數）會為每次呼叫標記一個**命名來源**，因此你運行的每個產品都會在儀表板 Overview 的 **🔌 迴圈外來源** 卡片中，以獨立、可歸因成本的項目呈現——每個 agent 的呼叫次數、供應商、延遲、錯誤率一目瞭然。若未設定來源？呼叫依然會被追蹤，只是卡片會保持隱藏。
+![Sessions: one agent turn on a timeline, every tool call with its own duration and the turn's cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/sessions.png)
 
-```bash
-CLAWMETRY_SOURCE=billing-agent python my_agent.py
-```
+**它評的是工作成果，而不只是花費。**
+本週得到 A 評級：54 個任務乾淨完成，2 個不理想的任務花費 $48.57，而活動量太少、無法判斷的執行紀錄則被排除在評級之外，而不是被算作成功。每個不理想的執行紀錄都連結到它的追蹤記錄。
 
-這與執行環境轉接器所使用的資料層相同（DuckDB → 雲端快照），因此迴圈外來源會與其他所有資料一樣同步至雲端儀表板，並採端對端加密。
+![Quality: this week's report card with the rough runs and what they cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/quality.png)
 
-## OpenTelemetry — 供應商中立，將你的追蹤軌跡傳送至任何地方
+**它會顯示為什麼上下文視窗一直被填滿。**
+在最新一個回合中，1M token 視窗用掉了 715K，峰值達 83.3%，4 次壓縮全都是主動觸發、而非因溢位而觸發，並附上其背後每個回合的使用率。
 
-ClawMetry 使用 **GenAI 語意慣例**，雙向支援 **OpenTelemetry**，因此你的 agent 追蹤軌跡永遠不會被鎖定在單一工具上。
+![Context usage: window utilisation per turn, compaction events and tokens reclaimed](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/context.png)
 
-**匯出**每個 session 的資料——LLM 呼叫、工具、子 agent、token、成本——以 OTLP/HTTP GenAI span 的形式傳送至任何收集器（Datadog、Grafana、Honeycomb，或你自己的 OTel Collector）：
+**偵測功能不需要你做任何設定就能運作。**
+內建偵測器從安裝起就已啟用：代理無回應、遙測資料流中斷、成本激增、token 用量暴衝、錯誤率上升、錯誤激增、預算門檻、符合威脅特徵、安全工具發現異常、安全態勢改變。你也可以在此之上額外加上自己的規則。
 
-```bash
-clawmetry --otel-export http://localhost:4318/v1/traces
-# 等效寫法：
-CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
-```
+![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-驗證標頭與輪詢間隔為選填的環境變數：
+**暫留有風險的呼叫是選擇性啟用的，且預設關閉出貨。**
+遞迴刪除、強制推送、sudo、機密資訊、套件安裝與對外呼叫，各自都有一個你可以自行開啟的規則。在你開啟之前，ClawMetry 只會觀察而不改變任何事。一旦開啟某項規則，符合條件的呼叫就會在這裡（或你的手機上）等待核准或拒絕。
 
-```bash
-CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # 額外的 HTTP 標頭
-CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # 秒數（預設 60）
-```
+![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
-**接收**——內建的 OTLP 接收器可在 `/v1/traces` 與 `/v1/metrics` 接受來自其他系統的追蹤軌跡與指標（`pip install clawmetry[otel]` 以啟用 protobuf 接收）。
-
-你能同時擁有零設定、本機優先的 ClawMetry 儀表板，**以及**將資料保留在你團隊既有的任何後端——不被鎖定，也不需要再安裝第二個 agent。
-
-## 設定
-
-大多數人不需要任何設定。ClawMetry 會自動偵測你的工作區、日誌、session 與排程任務。
-
-若你確實需要自訂：
-
-```bash
-clawmetry --port 9000              # 自訂連接埠（預設：8900）
-clawmetry --host 127.0.0.1         # 僅綁定於 localhost
-clawmetry --workspace ~/mybot      # 自訂工作區路徑
-clawmetry --name "Alice"           # 你在 Flow 視覺化中的名稱
-```
-
-所有選項：`clawmetry --help`
-
-## 支援的頻道
-
-ClawMetry 會顯示你所設定的每個 OpenClaw 頻道的即時活動。只有在你的 `openclaw.json` 中實際設定過的頻道，才會顯示在 Flow 圖表中，未設定的頻道會自動隱藏。
-
-點擊 Flow 中的任何頻道節點，即可看到即時聊天氣泡檢視，含收發訊息計數。
-
-| 頻道 | 狀態 | 即時彈出視窗 | 說明 |
-|---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ 完整支援 | ✅ | 訊息、統計，每 10 秒更新 |
-| 💬 **iMessage** | ✅ 完整支援 | ✅ | 直接讀取 `~/Library/Messages/chat.db` |
-| 💚 **WhatsApp** | ✅ 完整支援 | ✅ | 透過 WhatsApp Web（Baileys） |
-| 🔵 **Signal** | ✅ 完整支援 | ✅ | 透過 signal-cli |
-| 🟣 **Discord** | ✅ 完整支援 | ✅ | 伺服器與頻道偵測 |
-| 🟪 **Slack** | ✅ 完整支援 | ✅ | 工作區與頻道偵測 |
-| 🌐 **Webchat** | ✅ 完整支援 | ✅ | 內建網頁 UI session |
-| 📡 **IRC** | ✅ 完整支援 | ✅ | 終端機風格氣泡介面 |
-| 🍏 **BlueBubbles** | ✅ 完整支援 | ✅ | 透過 BlueBubbles REST API 的 iMessage |
-| 🔵 **Google Chat** | ✅ 完整支援 | ✅ | 透過 Chat API webhook |
-| 🟣 **MS Teams** | ✅ 完整支援 | ✅ | 透過 Teams bot 外掛 |
-| 🔷 **Mattermost** | ✅ 完整支援 | ✅ | 自架團隊聊天工具 |
-| 🟩 **Matrix** | ✅ 完整支援 | ✅ | 去中心化，支援 E2EE |
-| 🟢 **LINE** | ✅ 完整支援 | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ 完整支援 | ✅ | 去中心化 NIP-04 私訊 |
-| 🟣 **Twitch** | ✅ 完整支援 | ✅ | 透過 IRC 連線的聊天室 |
-| 🔷 **Feishu/Lark** | ✅ 完整支援 | ✅ | WebSocket 事件訂閱 |
-| 🔵 **Zalo** | ✅ 完整支援 | ✅ | Zalo Bot API |
-
-> **自動偵測：** ClawMetry 會讀取你的 `~/.openclaw/openclaw.json`，只顯示你實際設定過的頻道，無需手動設定。
-
-## Docker 部署
-
-想在容器中執行 ClawMetry？沒問題！🐳
-
-**使用 Docker 快速上手：**
-
-```bash
-# 建置映像檔
-docker build -t clawmetry .
-
-# 以預設設定執行
-docker run -p 8900:8900 clawmetry
-
-# 或掛載你的 agent 資料目錄（此處以 OpenClaw 的 ~/.openclaw 為例）
-docker run -p 8900:8900 \
-  -v ~/.openclaw:/root/.openclaw \
-  -v /tmp/moltbot:/tmp/moltbot \
-  clawmetry
-```
-
-**Docker Compose 範例：**
-
-```yaml
-version: '3.8'
-services:
-  clawmetry:
-    build: .
-    ports:
-      - "8900:8900"
-    volumes:
-      - ~/.openclaw:/root/.openclaw:ro
-      - /tmp/moltbot:/tmp/moltbot:ro
-    restart: unless-stopped
-```
-
-> **注意：** 在 Docker 中執行時，請掛載你的 agent 資料與日誌目錄（例如 `~/.openclaw`、`~/.claude`、`~/.codex`），讓 ClawMetry 能自動偵測你的設定。
-
-## 系統需求
-
-- Python 3.8+
-- Flask（透過 pip 自動安裝）
-- 同一台機器上需有一個 AI agent 執行環境：OpenClaw、NVIDIA NemoClaw、Claude Code、Codex、Cursor、Goose、Hermes、opencode、Qwen Code、Aider、NanoClaw、PicoClaw、Pi 或 Deep Agents（若使用 Docker，可改為掛載對應磁碟區）
-- Linux 或 macOS
-
-## NemoClaw／OpenShell 支援
-
-ClawMetry 會自動偵測 [NemoClaw](https://github.com/NVIDIA/NemoClaw)，也就是 NVIDIA 為 OpenClaw 打造的企業級安全封裝層，讓 agent 在沙箱化的 OpenShell 容器中執行。
-
-多數情況下無需額外設定。無論 session 檔案位於主機的 `~/.openclaw/` 或是 OpenShell 容器內部，同步 daemon 都能自動發現。
-
-### 運作方式
-
-ClawMetry 透過兩種方式偵測 NemoClaw：
-
-1. **執行檔偵測** — 檢查是否存在 `nemoclaw` CLI，並執行 `nemoclaw status` 取得沙箱資訊
-2. **容器偵測** — 掃描執行中的 Docker 容器，尋找 `openshell`、`nemoclaw` 或 `ghcr.io/nvidia/` 映像檔，接著透過磁碟區掛載或 `docker cp` 讀取 session
-
-從 NemoClaw 容器同步的 session 檔案，會在雲端儀表板中標記 `runtime=nemoclaw` 及 `container_id` 中繼資料，讓你能一眼分辨出它們與標準 OpenClaw session 的差異。
-
-### 建議設定：在主機上執行同步 daemon
-
-為獲得最佳體驗，請在**主機**（而非沙箱內部）執行 ClawMetry 的同步 daemon，以避免受 NemoClaw 網路政策限制影響。
-
-```bash
-# 在主機上（沙箱外部）
-pip install clawmetry
-clawmetry connect
-clawmetry sync
-```
-
-同步 daemon 會自動在任何執行中的 OpenShell 容器內尋找 session。
-
-### 選用：明確指定沙箱名稱
-
-若自動偵測未能運作，可指定正確的沙箱給 ClawMetry：
-
-```bash
-export NEMOCLAW_SANDBOX=my-sandbox-name
-clawmetry sync
-```
-
-### 在沙箱內執行（進階）
-
-若你必須在 OpenShell 沙箱**內部**執行同步 daemon，請在你的 NemoClaw 網路政策中加入以下出站規則，讓它能連線至 ClawMetry 的接收 API：
-
-```yaml
-# nemoclaw-policy.yaml
-network:
-  egress:
-    - host: ingest.clawmetry.com
-      port: 443
-      protocol: https
-```
-
-套用方式：
-
-```bash
-nemoclaw policy apply --file nemoclaw-policy.yaml
-```
-
-### 連接埠與端點
-
-| 端點 | 連接埠 | 通訊協定 | 是否必要 |
-|---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | 是（同步 daemon → 雲端） |
-| `localhost:8900` | 8900 | HTTP | 是（本機儀表板 UI） |
-| Docker socket（`/var/run/docker.sock`） | — | Unix socket | 用於容器 session 發現 |
-
-同步 daemon 只會對 `ingest.clawmetry.com` 發出出站 HTTPS 呼叫，不需要任何入站連接埠。
-
----
-
-## 雲端部署
-
-請參閱 **[雲端測試指南](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)**，內含 SSH 通道、反向代理與 Docker 相關說明。
-
-## 測試
-
-本專案使用 BrowserStack 進行測試。
-
-[![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
-
-## 遙測
-
-ClawMetry 會在你第一次於新機器上執行 `clawmetry` CLI 時，向
-`https://app.clawmetry.com/api/install` 傳送單一次匿名的「首次執行」訊號。我們用這個數據來統計安裝次數（這是我們身為開源專案唯一擁有的行銷指標），並了解使用者安裝了哪些 agent 框架。
-
-**每次安裝僅傳送一次 POST**，內容包含：
-
-| 欄位 | 範例 | 用途 |
-|---|---|---|
-| `install_id` | 儲存於 `~/.clawmetry/install_id` 的隨機 UUID | 去重複；不會與你的電子郵件或 api_key 產生關聯 |
-| `version` | `0.12.167` | 了解實際使用中的版本分佈 |
-| `os` / `os_version` | `Darwin` / `25.3.0` | 平台支援優先順序 |
-| `python` | `3.11.15` | Python 版本支援矩陣 |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | 我們接下來應該整合哪些 agent |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | 區分真人安裝與 CI 產生的雜訊 |
-
-**我們不會傳送**：IP（雲端會在伺服器端從請求中推算國碼，之後即捨棄該 IP）、主機名稱、使用者名稱、工作區路徑、檔案內容、你的 api_key、你的電子郵件，或任何個資／工作區專屬資訊。傳輸內容可在
-[`clawmetry/telemetry.py`](clawmetry/telemetry.py) 中稽核。
-
-**退出方式**（以下任一種即可永久停用）：
-
-```bash
-export CLAWMETRY_NO_TELEMETRY=1                # 僅限當前 shell
-export DO_NOT_TRACK=1                          # W3C 跨工具標準
-touch ~/.clawmetry/notelemetry                 # 永久性檔案標記
-```
-
-網路失敗時絕不會阻擋 `clawmetry` 的執行，此訊號是在背景執行緒中以 3 秒逾時、發送後即忽略結果（fire-and-forget）的方式運作。
+更多依執行環境分類的內容：[docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md)。
 
 ## Star 歷史
 
@@ -392,11 +204,6 @@ touch ~/.clawmetry/notelemetry                 # 永久性檔案標記
 
 ## 授權條款
 
-MIT
+MIT · 由 [@vivekchand](https://github.com/vivekchand) 打造 · [clawmetry.com](https://clawmetry.com)
 
----
-
-<p align="center">
-  <strong>🦞 看見你的 agent 如何思考</strong><br>
-  <sub>由 <a href="https://github.com/vivekchand">@vivekchand</a> 打造 · <a href="https://clawmetry.com">clawmetry.com</a> · 隸屬於 <a href="https://github.com/openclaw/openclaw">OpenClaw</a> 生態系</sub>
-</p>
+<!-- osai-verify: f3ac716d40002c1ad6dd -->

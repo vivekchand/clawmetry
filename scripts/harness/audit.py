@@ -117,7 +117,38 @@ def _capabilities_enum() -> str:
     return _read(os.path.join(REPO_ROOT, "clawmetry", "adapters", "base.py"), 6000)
 
 
-def _build_prompt(h: dict, surface: str, adapter: str, caps: str) -> str:
+def _channel_coverage_context() -> str:
+    """Extract _CHANNEL_DIRS from sync.py + /api/channel/* route declarations from
+    routes/channels.py. Passed to the audit prompt so the model can verify channel
+    gaps against the actual ingest list — prevents repeated false-positives for channels
+    already wired in sync.py but not visible in the adapter source (e.g. #4103, #4240)."""
+    parts = []
+    sync_path = os.path.join(REPO_ROOT, "clawmetry", "sync.py")
+    try:
+        with open(sync_path, encoding="utf-8") as f:
+            src = f.read()
+        i = src.find("_CHANNEL_DIRS")
+        if i != -1:
+            j = src.find(")", i) + 1
+            parts.append("# clawmetry/sync.py — channel dirs ingested by the sync daemon:\n" + src[i:j])
+    except Exception:
+        pass
+    routes_path = os.path.join(REPO_ROOT, "routes", "channels.py")
+    try:
+        with open(routes_path, encoding="utf-8") as f:
+            for line in f:
+                if '@bp_channels.route("/api/channel/' in line:
+                    parts.append(line.rstrip())
+    except Exception:
+        pass
+    return "\n".join(parts)
+
+
+def _build_prompt(h: dict, surface: str, adapter: str, caps: str, channel_ctx: str = "") -> str:
+    _channel_block = (
+        f"\nClawMetry channel-ingest coverage (sync daemon _CHANNEL_DIRS + HTTP routes — "
+        f"a channel present here is already handled; do NOT report it as a gap):\n```\n{channel_ctx}\n```"
+    ) if channel_ctx else ""
     return f"""You audit observability coverage for ClawMetry, which monitors AI agent runtimes.
 
 RUNTIME: {h['runtime']} ({h.get('display', h['runtime'])})
@@ -132,7 +163,7 @@ ClawMetry's adapter that observes this runtime (what it ACTUALLY captures today)
 ```
 {adapter}
 ```
-
+{_channel_block}
 The upstream harness — its observable surface (recent commits + data/telemetry files):
 ```
 {surface or '(no public source available — reason for that is in NOTE above)'}
@@ -193,9 +224,13 @@ def _fingerprint(runtime: str, gap: dict) -> str:
     return "hgap-" + hashlib.sha1(key.encode()).hexdigest()[:10]
 
 
-def _existing_fingerprints() -> set:
+def _existing_fingerprints():
     """Fingerprints of already-filed gaps (from issue bodies), so a daily run
-    never re-files the same gap. Matches the `hgap-<10hex>` token we embed."""
+    never re-files the same gap. Matches the `hgap-<10hex>` token we embed.
+
+    Returns None when the lookup fails so callers can skip filing entirely
+    rather than treating every gap as new (which would re-file duplicates).
+    """
     import re
     try:
         out = subprocess.check_output(
@@ -205,8 +240,9 @@ def _existing_fingerprints() -> set:
         for it in json.loads(out):
             fps.update(re.findall(r"hgap-[0-9a-f]{10}", it.get("body") or ""))
         return fps
-    except Exception:
-        return set()
+    except Exception as exc:
+        print(f"  [warn] fingerprint lookup failed ({exc}); skipping --file-issues to avoid duplicates")
+        return None
 
 
 def _file_issue(runtime: str, gap: dict, fp: str, dry: bool) -> None:
@@ -259,7 +295,15 @@ def main() -> int:
     manifest = _load_manifest()
     clone_base = _clone_dir(manifest)
     caps = _capabilities_enum()
-    existing = _existing_fingerprints() if args.file_issues else set()
+    channel_ctx = _channel_coverage_context()
+    if args.file_issues:
+        existing = _existing_fingerprints()
+        if existing is None:
+            print("[abort] could not verify existing fingerprints — not filing to avoid duplicates."
+                  " Re-run when the gh API is reachable.")
+            return 1
+    else:
+        existing = set()
     total_gaps = 0
 
     for h in manifest["harnesses"]:
@@ -276,7 +320,7 @@ def main() -> int:
             print(f"  [skip] no clone at {clone} — run scripts/harness/sync.sh first")
             continue
         adapter = _adapter_source(h)
-        raw = _run_claude(_build_prompt(h, surface, adapter, caps))
+        raw = _run_claude(_build_prompt(h, surface, adapter, caps, channel_ctx))
         gaps = _extract_json_array(raw)
         print(f"  {len(gaps)} gap(s) reported")
         # Ground (anti-hallucination), severity-sort, drop low, cap per runtime so a

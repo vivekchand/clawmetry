@@ -14,8 +14,16 @@ openclaw plugins install clawmetry
 
 ### Via curl
 
+macOS / Linux:
+
 ```bash
 curl -fsSL https://clawmetry.com/install.sh | bash
+```
+
+Windows (cmd.exe / PowerShell — the sh line above cannot be parsed by cmd.exe):
+
+```
+curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd
 ```
 
 ### Via pip (standalone)

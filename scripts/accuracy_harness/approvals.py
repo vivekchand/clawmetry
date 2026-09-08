@@ -39,14 +39,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from _lib import (  # noqa: E402
+    daemon_call,
     discover_daemon,
     discover_dashboard_url,
-    daemon_call,
+    exit_skip,
     file_drift_issue_per_endpoint,
     http_get_json,
 )
 
-# ─── Config ─────────────────────────────────────────────────────────────────
+# ─── Config ──────────────────────────────────────────────────────────────────
 
 DEFAULT_RESOLVER = "harness@accuracy-audit"
 QUEUE_FLUSH_TIMEOUT_S = 10
@@ -68,7 +69,7 @@ SCHEMA_FIELDS = {
 }
 
 
-# ─── Data classes ───────────────────────────────────────────────────────────
+# ─── Data classes ──────────────────────────────────────────────────────────────
 
 @dataclass
 class ApprovalGroundTruth:
@@ -101,7 +102,7 @@ class CheckResult:
         return 0 if self.passed else 1
 
 
-# ─── Drive: synthetic approval via daemon proxy ─────────────────────────────
+# ─── Drive: synthetic approval via daemon proxy ────────────────────────────
 
 def drive_synthetic_approval(daemon: dict, *,
                               decision_target: str,
@@ -144,7 +145,7 @@ def drive_synthetic_approval(daemon: dict, *,
     )
 
 
-# ─── Wait: poll until row appears in DuckDB ─────────────────────────────────
+# ─── Wait: poll until row appears in DuckDB ─────────────────────────────
 
 def wait_for_pending_row(daemon: dict, approval_id: str,
                           timeout_s: int = QUEUE_FLUSH_TIMEOUT_S) -> dict | None:
@@ -174,7 +175,7 @@ def wait_for_decided_row(daemon: dict, approval_id: str, expected_status: str,
     return None
 
 
-# ─── Assertion builders ─────────────────────────────────────────────────────
+# ─── Assertion builders ────────────────────────────────────────────────────────
 
 def _eq_check(endpoint: str, stage: str, metric: str,
               ground: Any, actual: Any) -> CheckResult:
@@ -276,7 +277,7 @@ def assert_pending_no_longer_lists(payload: dict | None,
     )]
 
 
-# ─── Issue body builder ─────────────────────────────────────────────────────
+# ─── Issue body builder ───────────────────────────────────────────────────────
 
 def _format_approvals_issue_body(endpoint: str,
                                   cs: list[CheckResult],
@@ -404,10 +405,10 @@ def run_harness(args: argparse.Namespace) -> int:
 
     daemon = discover_daemon()
     if not daemon:
-        print("[harness] FATAL: daemon not discoverable; "
-              "the approvals harness needs a running daemon to ingest + "
-              "decide rows. See ~/.clawmetry/local_query.json.", file=sys.stderr)
-        return 2
+        exit_skip("approvals",
+                  "sync daemon not discoverable "
+                  "(~/.clawmetry/local_query.json missing or daemon not running); "
+                  "the approvals harness requires a live ClawMetry daemon")
     print(f"[harness] daemon proxy: 127.0.0.1:{daemon['port']}")
 
     run_id = uuid.uuid4().hex[:8]
@@ -462,7 +463,7 @@ def run_harness(args: argparse.Namespace) -> int:
     return 1
 
 
-# ─── CLI ────────────────────────────────────────────────────────────────────
+# ─── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,

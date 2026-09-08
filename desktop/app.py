@@ -36,25 +36,227 @@ import base64
 import json
 import os
 import platform
+import re
+import shutil
 import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
+# Top-level import so PyInstaller's static analysis bundles onboarding.py
+# into the .app (lazy imports inside DesktopAPI methods otherwise get
+# missed by the analyser and 500 at runtime with ModuleNotFoundError).
+# onboarding.py sits next to app.py in the bundle (build_mac.spec's
+# pathex includes desktop/).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import onboarding  # noqa: E402  (must follow sys.path insert)
+
 APP_TITLE = "ClawMetry"
 STARTUP_TIMEOUT_SECS = 45.0
-POLL_INTERVAL_SECS = 0.4
+POLL_INTERVAL_SECS = 0.15
 SHUTDOWN_WAIT_SECS = 5.0
-# Skip the pip-upgrade if we ran one this recently.
-UPGRADE_CHECK_INTERVAL_SECS = 6 * 3600
+# Blueprint "Desktop Application Distribution" contract: poll PyPI for a
+# newer clawmetry release. `_should_upgrade()` is the gate on the actual
+# update call; the watcher's own tick is separate — see WATCHER_TICK_SECS.
+#
+# Was 6h. Lowered to 60s (founder call 2026-08-15) so a desktop user picks
+# up a release within about a minute of it landing, matching the daemon's
+# own update worker (routes/update_check.py, CLAWMETRY_UPDATE_CHECK_SECS,
+# default 60s) instead of lagging it by up to a quarter of a day.
+#
+# What forced it: 0.12.707 armed the post-trial paywall, so the upgrade
+# overlay became the ONLY surface a lapsed user can reach — and a layout
+# bug there is a lockout, not a cosmetic defect. Shipping the fix in
+# 0.12.708 and then making trapped users wait up to six hours plus a
+# relaunch, with no in-app way to trigger it, is not a recovery path.
+#
+# Two guards landed with this, and it is worth being precise about why,
+# because the obvious story is wrong. They are NOT "safe at 6h, unsafe at
+# 60s" -- they were already broken at 6h.
+#
+# This interval is enforced ONLY through the stamp file, and the failure
+# paths never wrote one. So `_should_upgrade()` stayed True after any failed
+# update and the watcher retried on the very next tick: a failing update
+# re-ran every WATCHER_TICK_SECS (60s) forever, whatever this constant said.
+# The 6h number only ever throttled the SUCCESS path. Verified against the
+# pre-change code, three consecutive failures, stamp never written.
+#
+# So: stamp every attempt (making the interval mean something on the failure
+# path for the first time), and give the watcher's update its own shorter
+# timeout so a hung PyPI cannot sit inside pip while crash-respawn waits.
+# See WATCHER_UPDATE_TIMEOUT_SECS. Lowering the cadence did not create these;
+# it just removed the last reason to keep tolerating them.
+UPGRADE_CHECK_INTERVAL_SECS = 60
+# Hard bound on any pywebview call made from a background thread. The
+# Cocoa backend's evaluate_js/load_url block the caller on an UNBOUNDED
+# Semaphore.acquire() (webview/platforms/cocoa.py:916) that a wedged or
+# dead WebContent process never releases. Nothing on the supervision
+# path may wait on the GUI indefinitely. See _gui_call().
+GUI_CALL_TIMEOUT_SECS = 8.0
+# How often the watcher thread checks for drift and crashes while the
+# app is running. Short enough that clicking "Update now" in the
+# dashboard translates into a visible restart within ~a minute. The
+# pip-upgrade cadence is enforced by _should_upgrade(), NOT by this
+# constant — do not read this as an upgrade frequency.
+WATCHER_TICK_SECS = 60
+
+# Timeout for the watcher's periodic `clawmetry update`, as distinct from
+# the 300s first-install timeout in bootstrap().
+#
+# These two are NOT the same job. A first install has no runtime yet, must
+# succeed, and may pull ~100MB on a slow link — 300s is right. A periodic
+# refresh already has a working, launchable ClawMetry, so waiting five
+# minutes on an unreachable PyPI buys nothing.
+#
+# It buys LESS than nothing here: watch() calls this synchronously, and the
+# same loop is what respawns a crashed daemon. Every second spent blocked in
+# pip is a second the app cannot notice its daemon died.
+#
+# This was never bounded by the 6h cadence, contrary to how it reads. A
+# timed-out update wrote no stamp, so the next tick retried immediately --
+# an unreachable PyPI meant 300s blocked, 60s tick, 300s blocked, forever,
+# silently disabling crash-respawn the whole time. The 6h setting throttled
+# only successful updates. 90s bounds the starvation window to ~1-2 missed
+# crash checks instead of five minutes of them.
+WATCHER_UPDATE_TIMEOUT_SECS = 90
 
 BRAND_RED = "#E94644"
 BRAND_BG_DARK = "#0b0e14"
+
+# Injected after every navigation. WKWebView (macOS) and EdgeWebView2
+# (Windows) silently drop `window.open(...)` and `target="_blank"`
+# clicks that would need a new native window — so the Self-Host OAuth
+# flow (`cloudOauth` in gw-setup.js → `window.open(oauthUrl, '_blank')`)
+# never reaches a browser and the modal spins forever on
+# "Finish sign-in in the new browser tab."
+#
+# Route absolute cross-origin https URLs through the existing
+# DesktopAPI.open_external bridge (which already hands them to
+# webbrowser.open); leave same-origin and relative URLs (e.g. the
+# `/api/usage/export` download click) to the webview.
+_OPEN_EXTERNAL_SHIM = r"""
+(function(){
+  if (window.__clawmetryExternalShim) return;
+  window.__clawmetryExternalShim = true;
+  function isExternalHttps(u) {
+    try {
+      var url = new URL(String(u), window.location.href);
+      if (url.protocol !== 'https:') return false;
+      return url.host !== window.location.host;
+    } catch (e) { return false; }
+  }
+  function toBrowser(u) {
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.open_external) {
+        window.pywebview.api.open_external(String(u));
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  var _open = window.open;
+  window.open = function(u, target, features) {
+    if (u && isExternalHttps(u) && toBrowser(u)) return null;
+    return _open.apply(window, arguments);
+  };
+  document.addEventListener('click', function(e){
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || '';
+    if (!href || href.charAt(0) === '#') return;
+    if (isExternalHttps(href) && toBrowser(a.href)) {
+      e.preventDefault();
+    }
+  }, true);
+})();
+"""
+
+# Written by `clawmetry connect`; presence means this node has an account
+# key and the sync daemon can run.
+SYNC_CONFIG_FILE = Path.home() / ".clawmetry" / "config.json"
+# Written by the sync daemon's localhost query server on startup
+# ({"port": N, "token": "...", "pid": M}) — our liveness probe.
+SYNC_DISCOVERY_FILE = Path.home() / ".clawmetry" / "local_query.json"
+# Minimum seconds between `clawmetry sync` (re)start attempts, so a
+# persistently failing daemon can't turn the watcher into a spawn loop.
+SYNC_START_RETRY_SECS = 300
+
+
+def _auto_update_disabled() -> bool:
+    """Kill-switch parse for the shell's unattended upgrades, mirroring the
+    daemon's routes/update_check.py::_env_auto_update_disabled (the shell
+    cannot import the venv's clawmetry package, so the semantics are
+    duplicated here — keep the two in sync): an explicit truthy value
+    re-arms, any explicit falsy value disables (not just the literal "0"),
+    and CI environments are implicitly disabled so an ephemeral runner
+    never swaps its code out mid-job."""
+    val = os.environ.get("CLAWMETRY_AUTO_UPDATE", "").strip().lower()
+    if val in ("1", "true", "yes", "on"):
+        return False
+    if val in ("0", "false", "no", "off"):
+        return True
+    ci = os.environ.get("CI", "").strip().lower()
+    return ci not in ("", "0", "false")
+
+
+def _pid_alive(pid: int) -> bool:
+    """Best-effort 'is this PID a live process'. Never raises."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            import ctypes.wintypes
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            h = ctypes.windll.kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+            )
+            if not h:
+                return False
+            try:
+                code = ctypes.wintypes.DWORD()
+                ok = ctypes.windll.kernel32.GetExitCodeProcess(
+                    h, ctypes.byref(code)
+                )
+                return bool(ok) and code.value == STILL_ACTIVE
+            finally:
+                ctypes.windll.kernel32.CloseHandle(h)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _sync_daemon_alive() -> bool:
+    """True when the sync/ingest daemon is up: its discovery file names a
+    live PID AND its localhost query server accepts connections. Both
+    checks together survive stale files and PID reuse."""
+    try:
+        info = json.loads(SYNC_DISCOVERY_FILE.read_text())
+        port, pid = int(info.get("port", 0)), int(info.get("pid", 0))
+    except Exception:
+        return False
+    if not port or not _pid_alive(pid):
+        return False
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
+            return True
+    except OSError:
+        return False
 
 
 def _assets_dir() -> Path:
@@ -133,31 +335,604 @@ def _runtime_dir() -> Path:
     return d
 
 
-def _bootstrap_python() -> Optional[str]:
+def _webview_storage_dir() -> str:
+    """Private browser-profile dir for the pywebview window.
+
+    Without an explicit storage_path, pywebview uses a SHARED per-user
+    profile (%APPDATA%\\pywebview on Windows) that no uninstaller can
+    safely delete — cookies/localStorage from a signed-in session then
+    outlive every uninstall. Keeping the profile inside the ClawMetry
+    app-data dir means the uninstaller's existing directory sweep removes
+    it with everything else."""
+    d = _runtime_dir().parent / "webview"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return str(d)
+
+
+def _win_subprocess_kwargs() -> dict:
+    """Extra Popen/run kwargs that stop Windows from flashing a console
+    window. The desktop app is built windowed (console=False), but every
+    subprocess it spawns (python.exe, pip, clawmetry.exe) is a console
+    executable — without CREATE_NO_WINDOW, Windows opens a new console
+    for each one, visible for the duration of the call. No-op elsewhere."""
+    if platform.system() == "Windows":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}  # type: ignore[attr-defined]
+    return {}
+
+
+def _child_env() -> dict:
+    """Environment for child interpreters (probe, venv, pip). The frozen
+    shell's own interpreter state must not leak into the system/venv
+    python it spawns, and a user's pip config must not veto the venv
+    bootstrap (PIP_REQUIRE_VIRTUALENV=1 fails the base-interpreter
+    probe before any venv exists)."""
+    env = os.environ.copy()
+    for k in ("PYTHONHOME", "PYTHONPATH", "__PYVENV_LAUNCHER__",
+              "PIP_REQUIRE_VIRTUALENV"):
+        env.pop(k, None)
+    return env
+
+
+# ── Open telemetry (shell stage) ──────────────────────────────────────────
+# The .app/.exe phones home once per launch so we can tell a download
+# apart from an actual open, and a first open apart from the nth. This
+# is the ONLY stage that fires when the Python bootstrap fails (no
+# system Python, PyPI unreachable, venv wedged) — exactly the installs
+# we would otherwise never hear about.
+#
+# The daemon fires a second, richer ping (`desktop_ready`) once the
+# dashboard is live; see clawmetry/telemetry.py. The two are correlated
+# by `session_id`, so "opened but never got a working daemon" is a
+# subtraction, not a guess.
+#
+# What we send: install_id (random uuid4, same file the CLI telemetry
+# uses), a per-launch session_id, the open counter, app/OS versions.
+# What we DO NOT send: hostname, username, IP (the server derives a
+# country and drops the IP), workspace paths, transcript content.
+#
+# Opt-out (any one disables it): CLAWMETRY_NO_TELEMETRY=1, DO_NOT_TRACK=1,
+# ~/.clawmetry/notelemetry, or an enterprise endpoint (a self-hosted
+# deployment must never phone the managed cloud).
+CONFIG_DIR = Path.home() / ".clawmetry"
+INSTALL_ID_FILE = CONFIG_DIR / "install_id"
+OPTOUT_MARKER = CONFIG_DIR / "notelemetry"
+NOCLOUD_MARKER = CONFIG_DIR / "nocloud"
+CONFIG_JSON = CONFIG_DIR / "config.json"
+OPEN_STATE_FILE = CONFIG_DIR / "desktop-opens.json"
+OPEN_PING_TIMEOUT_SECS = 4.0
+DEFAULT_APP_BASE = "https://app.clawmetry.com"
+
+
+def _desktop_version() -> str:
+    """Version stamped into the bundle at build time (assets/version.txt,
+    written by .github/workflows/desktop-artifacts.yml). Dev runs from a
+    checkout have no stamp — report "dev" rather than lying."""
+    try:
+        v = (_assets_dir() / "version.txt").read_text(encoding="utf-8").strip()
+        return v[:32] if v else "dev"
+    except OSError:
+        return "dev"
+
+
+def _version_tuple(v: str) -> Optional[tuple]:
+    """A comparable tuple for a dotted numeric version, or None when the
+    string is not one ("dev", "installed", a pre-release suffix). One
+    parser, because the floor check and the dist-info picker have to
+    order versions the same way to agree about what "older" means."""
+    parts = (v or "").strip().split(".")
+    if not parts or not all(x.isdigit() for x in parts):
+        return None
+    return tuple(int(x) for x in parts)
+
+
+# The lowest clawmetry the shell will accept from pip, handed to pip as
+# `clawmetry>=<floor>`.
+#
+# Without a floor, `pip install --upgrade clawmetry` does not fail when a
+# dependency has no wheel for the interpreter — it backtracks *clawmetry
+# itself* until the graph resolves, and installs whatever ancient release
+# predates that dependency. Measured against live PyPI on py3.11 with the
+# `--only-binary=:all:` this shell uses on Windows (issue #5639): a win32
+# interpreter resolves clawmetry 0.12.163, from before duckdb was a
+# dependency at all, and a win-arm64 one resolves 0.12.793. Nothing
+# errors, the entry point exists, the splash clears, and the user runs a
+# 664-release-old ClawMetry against a current cloud — a failure no field
+# report can see, because from here the install succeeded.
+#
+# The bundle's own stamped version is the floor: this shell was BUILT at
+# that release, so PyPI demonstrably has it. A developer checkout carries
+# no stamp ("dev") and gets no floor, which is the old behaviour.
+def _pip_version_floor() -> str:
+    v = _desktop_version()
+    return v if _version_tuple(v) else ""
+
+
+def _pip_requirement() -> str:
+    floor = _pip_version_floor()
+    return f"clawmetry>={floor}" if floor else "clawmetry"
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip() not in ("", "0", "false", "False")
+
+
+def _telemetry_optout() -> bool:
+    if _truthy_env("CLAWMETRY_NO_TELEMETRY") or _truthy_env("DO_NOT_TRACK"):
+        return True
+    try:
+        return OPTOUT_MARKER.exists()
+    except OSError:
+        return False
+
+
+def _read_config() -> dict:
+    try:
+        data = json.loads(CONFIG_JSON.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _app_base(cfg: dict) -> Optional[str]:
+    """Where the open ping goes, or None when it must not be sent.
+
+    An enterprise/self-hosted endpoint (CLAWMETRY_ENDPOINT or the
+    `endpoint` key in config.json) means the deployment's data stays
+    inside the deployment — we skip the ping entirely rather than
+    redirect it at someone's private server."""
+    override = os.environ.get("CLAWMETRY_DESKTOP_PING_URL", "").strip()
+    if override:
+        return override.rstrip("/")
+    custom = (
+        os.environ.get("CLAWMETRY_ENDPOINT", "").strip()
+        or os.environ.get("CLAWMETRY_INGEST_URL", "").strip()
+        or str(cfg.get("endpoint") or "").strip()
+    )
+    if custom:
+        return None
+    return DEFAULT_APP_BASE
+
+
+def _install_id() -> str:
+    """Read (or create) ~/.clawmetry/install_id — the same identity the
+    pip CLI's first-run ping uses, so a desktop open and a CLI install
+    are the same install, not two."""
+    try:
+        if INSTALL_ID_FILE.exists():
+            txt = INSTALL_ID_FILE.read_text(encoding="utf-8").strip()
+            if 16 < len(txt) <= 64 and all(c in "0123456789abcdef-" for c in txt):
+                return txt
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        import uuid
+
+        new = str(uuid.uuid4())
+        INSTALL_ID_FILE.write_text(new + "\n", encoding="utf-8")
+        return new
+    except Exception:
+        return ""
+
+
+def _bump_open_state(session_id: str) -> dict:
+    """Increment the local open counter and return the new state.
+
+    Kept on disk (not derived server-side) so opens that happen offline
+    still show up in the count on the next successful ping."""
+    state = {}
+    try:
+        state = json.loads(OPEN_STATE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            state = {}
+    except Exception:
+        state = {}
+    now = time.time()
+    count = int(state.get("open_count") or 0) + 1
+    state = {
+        "open_count": count,
+        "first_open_ts": float(state.get("first_open_ts") or now),
+        "last_open_ts": now,
+        "session_id": session_id,
+    }
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        OPEN_STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    except OSError:
+        pass
+    return state
+
+
+def _sync_mode(cfg: dict) -> str:
+    """cloud | local | selfhosted | unknown — how this install is wired.
+
+    `local` is the `clawmetry disconnect` / nocloud state: the daemon
+    runs and stores everything on the machine, nothing leaves it."""
+    if (
+        os.environ.get("CLAWMETRY_ENDPOINT", "").strip()
+        or str(cfg.get("endpoint") or "").strip()
+    ):
+        return "selfhosted"
+    try:
+        if NOCLOUD_MARKER.exists():
+            return "local"
+    except OSError:
+        pass
+    if cfg.get("local_only"):
+        return "local"
+    if str(cfg.get("api_key") or "").startswith("cm_"):
+        return "cloud"
+    return "unknown"
+
+
+def _post_open_ping(payload: dict, base: str, api_key: str) -> None:
+    """Fire-and-forget POST. Every failure is swallowed — a launch must
+    never be slowed, blocked, or made to look broken by telemetry."""
+    try:
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": f"clawmetry-desktop/{payload.get('desktop_version', '?')}",
+        }
+        if api_key.startswith("cm_"):
+            # Attribution only: lets the account page show this machine
+            # under "Desktop apps". Anonymous when the app isn't paired.
+            headers["Authorization"] = f"Bearer {api_key}"
+        req = urllib.request.Request(
+            base + "/api/desktop/open",
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers=headers,
+        )
+        # A frozen bundle cannot verify public certs with the default
+        # context: OpenSSL looks for a trust store at build-machine paths
+        # that do not exist inside the .app/.exe, so every HTTPS call
+        # dies with CERTIFICATE_VERIFY_FAILED. That is what broke the
+        # onboarding "Send code" button on 2026-08-12, and the ladder
+        # built for it (OS trust store, then bundled certifi, then the
+        # default) is reused here rather than rediscovered. Without it
+        # the shell-stage ping fails silently in exactly the builds it
+        # exists to report on.
+        ctx = onboarding._ssl_context() if base.lower().startswith("https://") else None
+        with urllib.request.urlopen(req, timeout=OPEN_PING_TIMEOUT_SECS, context=ctx) as r:
+            r.read()
+    except Exception:
+        pass
+
+
+def open_ping_state(session_id: str, attached: bool = False) -> dict:
+    """Bump the counter, ping in the background, hand the state back to
+    the caller so the daemon child can inherit the same session/count.
+
+    `attached` marks a window that joined a daemon another instance
+    already owns; those launches never spawn a daemon, so the server
+    must not score them as a failed startup."""
+    state = _bump_open_state(session_id)
+    if _telemetry_optout():
+        return state
+    cfg = _read_config()
+    base = _app_base(cfg)
+    if not base:
+        return state
+    install_id = _install_id()
+    if not install_id:
+        return state
+    payload = {
+        "install_id": install_id,
+        "event": "desktop_open",
+        "stage": "shell",
+        "session_id": session_id,
+        "open_count": state["open_count"],
+        "first_open": state["open_count"] == 1,
+        "days_since_first_open": round(
+            max(0.0, state["last_open_ts"] - state["first_open_ts"]) / 86400.0, 2
+        ),
+        "desktop_version": _desktop_version(),
+        "os": platform.system() or "unknown",
+        "os_version": platform.release() or "",
+        "arch": platform.machine() or "",
+        "mode": _sync_mode(cfg),
+        "attached": bool(attached),
+    }
+    threading.Thread(
+        target=_post_open_ping,
+        args=(payload, base, str(cfg.get("api_key") or "")),
+        daemon=True,
+        name="clawmetry-desktop-open-ping",
+    ).start()
+    return state
+
+
+def bootstrap_failure_payload(
+    session_id: str, failure_class: str, bootstrap_python: str
+) -> dict:
+    """The COMPLETE field-failure report (AC-FFR-001.1). A closed dict of
+    aggregate facts — the failure family, the platform, which Python the
+    bootstrap found — and nothing else. No paths, no usernames, no
+    hostnames, no log or pip text, ever: the raw diagnostics stay in
+    bootstrap.log on the machine. Pure so the privacy contract is
+    testable key-by-key."""
+    return {
+        "install_id": _install_id(),
+        "event": "desktop_open",
+        "stage": "bootstrap_failed",
+        "session_id": session_id,
+        "failure_class": str(failure_class or "unknown")[:40],
+        "bootstrap_python": str(bootstrap_python or "")[:8],
+        "desktop_version": _desktop_version(),
+        "os": platform.system() or "unknown",
+        "os_version": platform.release() or "",
+        "arch": platform.machine() or "",
+    }
+
+
+def bootstrap_failure_ping(
+    session_id: str, failure_class: str, bootstrap_python: str
+) -> bool:
+    """Report a hard bootstrap failure to the open sink, correlated with
+    the shell-stage ping by session_id. Same gate, same sink, same
+    fire-and-forget posture as `open_ping_state` — a machine that opted
+    out of telemetry sends nothing and loses nothing locally
+    (AC-FFR-001.2 / AC-FFR-004.1). Returns whether a report was sent."""
+    if _telemetry_optout():
+        return False
+    cfg = _read_config()
+    base = _app_base(cfg)
+    if not base:
+        return False
+    payload = bootstrap_failure_payload(session_id, failure_class, bootstrap_python)
+    if not payload["install_id"]:
+        return False
+    threading.Thread(
+        target=_post_open_ping,
+        args=(payload, base, str(cfg.get("api_key") or "")),
+        daemon=True,
+        name="clawmetry-desktop-failure-ping",
+    ).start()
+    return True
+
+
+# The one probe every candidate interpreter must pass, shared by
+# `_bootstrap_python` (which reads both printed lines) and
+# `_known_good_python` (which only needs the exit status) so the 3.9
+# floor cannot drift between them.
+#
+# 3.9 is clawmetry's tested floor. venv+ensurepip is all the BASE
+# interpreter needs — the venv seeds its own pip — and requiring
+# `import pip` here rejected perfectly usable pythons. The Windows Store
+# execution-alias stub fails the import and is skipped.
+#
+# Line 1 is "major.minor", line 2 `sysconfig.get_platform()`.
+_PYTHON_PROBE = (
+    "import sys, sysconfig, venv, ensurepip; "
+    "print('%d.%d' % sys.version_info[:2]); "
+    "print(sysconfig.get_platform()); "
+    "sys.exit(0 if sys.version_info >= (3, 9) else 3)"
+)
+
+
+def _bootstrap_python(cache_file: Optional[Path] = None) -> Optional[str]:
     """A real Python interpreter the shell can use to create a venv.
     PyInstaller's bundled interpreter can't (its `sys.executable` is
     the bundle exe and `python -m venv` mispoints), so we use the
     system Python. On macOS this is `/usr/bin/python3` (ships with the
     OS since Big Sur). On Linux, `python3` on PATH. On Windows, `py`
-    or the Store Python."""
+    or the Store Python.
+
+    Each candidate probe spawns an interpreter (slow, worst-case ~6s
+    per dud candidate), so the winner is cached in ``cache_file`` and
+    revalidated with a cheap existence check on later launches."""
+    if cache_file is not None:
+        try:
+            cached = json.loads(cache_file.read_text()).get("python", "")
+            if cached and Path(cached).exists():
+                return cached
+        except Exception:
+            pass
+
     candidates = ["python3", "/usr/bin/python3", "python", "py"]
     if platform.system() == "Windows":
         candidates = ["py", "python", "python3"]
+
+    paths = [shutil.which(c) for c in candidates]
+    if platform.system() == "Windows":
+        # A Python that the NSIS installer (or the winget fallback below)
+        # just put down is NOT on this process's PATH — ClawMetry.exe
+        # inherited its environment before that install ran. Probe the
+        # per-user python.org install location directly, newest first.
+        local = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python"
+        paths += [
+            str(p) for p in sorted(local.glob("Python3*/python.exe"), reverse=True)
+        ]
+    # An interpreter below the floor creates the venv fine and then pip
+    # fails with "No matching distribution found" — a dead end the probe
+    # rejects up front. The probe's printed version rides along in the
+    # cache because the field-failure report wants to say WHICH Python a
+    # bootstrap died on (the 2026-08-29 cffi failure was invisible
+    # precisely because nothing recorded "3.14"), and its platform tag
+    # goes in bootstrap.log because "which interpreter did pip resolve
+    # wheels for" is the first question every no-wheel report asks and
+    # the version alone cannot answer it (win32 has no duckdb wheel at
+    # any Python version).
+    probe = _PYTHON_PROBE
+    for p in paths:
+        if not p:
+            continue
+        try:
+            # 20s, not 6: the first spawn of a freshly installed python
+            # gets AV-scanned on Windows and routinely blows a 6s budget,
+            # which read as "no python" on machines that had one.
+            r = subprocess.run(
+                [p, "-c", probe],
+                capture_output=True, text=True, timeout=20,
+                env=_child_env(), stdin=subprocess.DEVNULL,
+                **_win_subprocess_kwargs(),
+            )
+            if r.returncode == 0:
+                if cache_file is not None:
+                    out = (r.stdout or "").splitlines()
+                    try:
+                        cache_file.write_text(json.dumps({
+                            "python": p,
+                            "version": (out[0].strip() if out else "")[:8],
+                            "platform": (out[1].strip()
+                                         if len(out) > 1 else "")[:24],
+                        }))
+                    except OSError:
+                        pass
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def _bootstrap_python_version(cache_file: Optional[Path]) -> str:
+    """major.minor of the cached bootstrap interpreter, or "" when no
+    probe has succeeded (or the cache predates the version field)."""
+    if cache_file is None:
+        return ""
+    try:
+        v = str(json.loads(cache_file.read_text()).get("version") or "")
+        return v if re.fullmatch(r"\d+\.\d+", v) else ""
+    except Exception:
+        return ""
+
+
+def _bootstrap_python_platform(cache_file: Optional[Path]) -> str:
+    """`sysconfig.get_platform()` of the cached bootstrap interpreter
+    ("win-amd64", "win32", "macosx-14.0-arm64"), or "" when no probe has
+    succeeded or the cache predates the field. Bounded to the shape a
+    platform tag has; a log line is its only consumer."""
+    if cache_file is None:
+        return ""
+    try:
+        v = str(json.loads(cache_file.read_text()).get("platform") or "")
+        return v if re.fullmatch(r"[A-Za-z0-9_.\-]{1,24}", v) else ""
+    except Exception:
+        return ""
+
+
+# The interpreter the shell installs when it has to provide one, pinned
+# in ONE place because the winget id and the install directory have to
+# agree for `_known_good_python()` to find what `_winget_install_python`
+# put down.
+#
+# Deliberately NOT "the latest Python". Wheel coverage lags a Python
+# release by months, and the newest interpreter is the one most likely
+# to have none: the 2026-08-29 field failure was a python.org 3.14
+# machine where cffi shipped no cp314 wheel, so pip fell back to an sdist
+# and demanded MSVC. "Latest" is the failure mode; "known-good" is the
+# fix. Move this pin forward when wheels for a newer minor are the norm.
+KNOWN_GOOD_PYTHON_MINOR = "3.12"
+KNOWN_GOOD_PYTHON_WINGET_ID = "Python.Python.3.12"
+KNOWN_GOOD_PYTHON_DIRNAME = "Python312"
+
+
+def _known_good_python() -> Optional[str]:
+    """The pinned per-user python.org interpreter, if it is on disk and
+    passes the usual probe — the exact path `_winget_install_python`
+    installs to.
+
+    Addressed by path, NOT by re-probing: `_bootstrap_python()` tries
+    `py` first, and the `py` launcher resolves to the NEWEST installed
+    interpreter, which in the case this exists to fix is precisely the
+    one that has no wheels. A re-probe would hand back the broken
+    interpreter and the retry would fail identically."""
+    if platform.system() != "Windows":
+        return None
+    exe = (Path(os.environ.get("LOCALAPPDATA", ""))
+           / "Programs" / "Python" / KNOWN_GOOD_PYTHON_DIRNAME / "python.exe")
+    if not exe.exists():
+        return None
+    try:
+        r = subprocess.run(
+            [str(exe), "-c", _PYTHON_PROBE],
+            capture_output=True, text=True, timeout=20,
+            env=_child_env(), stdin=subprocess.DEVNULL,
+            **_win_subprocess_kwargs(),
+        )
+        return str(exe) if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _winget_install_python(log: Callable[[str], None]) -> None:
+    """Windows-only last resort: pull Python 3 in via winget, silently,
+    per-user (no UAC). Called when no usable interpreter was found — the
+    NSIS installer normally handles this at install time, but portable
+    .zip users and machines where that step failed land here. Best
+    effort: the caller re-probes `_bootstrap_python()` regardless of the
+    outcome, because winget's exit codes are unreliable (nonzero for
+    "already installed", "newer version present", etc.)."""
     import shutil
 
-    for c in candidates:
-        p = shutil.which(c)
-        if p:
-            try:
-                r = subprocess.run(
-                    [p, "-c", "import sys,venv,pip; print(sys.version_info[:2])"],
-                    capture_output=True, text=True, timeout=6,
-                )
-                if r.returncode == 0:
-                    return p
-            except Exception:
-                continue
-    return None
+    winget = shutil.which("winget")
+    if not winget:
+        # The WindowsApps alias dir is occasionally missing from a
+        # stripped-down PATH even though winget itself is present.
+        alias = (
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / "Microsoft" / "WindowsApps" / "winget.exe"
+        )
+        if alias.exists():
+            winget = str(alias)
+    if not winget:
+        log("winget not available; cannot auto-install python")
+        return
+    try:
+        r = subprocess.run(
+            [winget, "install", "-e", "--id", KNOWN_GOOD_PYTHON_WINGET_ID,
+             "--scope", "user", "--silent", "--disable-interactivity",
+             "--accept-package-agreements", "--accept-source-agreements"],
+            capture_output=True, text=True, timeout=600,
+            **_win_subprocess_kwargs(),
+        )
+        log(f"winget python install rc={r.returncode}")
+    except Exception as e:
+        log(f"winget python install failed: {e}")
+
+
+# User-facing hint per pip failure family (_classify_pip_failure). Keys
+# are the closed failure-class enum; the splash shows the value, the
+# field-failure report sends only the key.
+_PIP_FAILURE_HINTS = {
+    "broken_runtime": (
+        "The runtime environment was broken — relaunch the app to rebuild it."
+    ),
+    # Shown only after `_retry_on_known_good_python` has already tried to
+    # provide a supported interpreter on Windows, so this is the
+    # last-resort ask, not the first response. Names the pinned minor
+    # rather than a range: "install the latest Python" is what CAUSED the
+    # 2026-08-29 cffi/3.14 failure.
+    "compiler_demand": (
+        "A dependency has no prebuilt package for this Python "
+        "version — update ClawMetry (packaging fix), or install "
+        f"python.org Python {KNOWN_GOOD_PYTHON_MINOR} and relaunch."
+    ),
+    # NOT "Python too old": _bootstrap_python's probe enforces the 3.9
+    # floor, so pip is only ever reached on an interpreter that already
+    # passed it. Field failure #5628 was a Python 3.11 machine being
+    # told to go and install Python 3.11+. What is left when the index
+    # answered but carried nothing usable: a private mirror that does
+    # not proxy PyPI, or an interpreter PyPI ships no wheels for.
+    "no_distribution": (
+        "The package index has no installable ClawMetry for this Python "
+        "— if pip points at a private mirror, allow pypi.org; otherwise "
+        f"install python.org Python {KNOWN_GOOD_PYTHON_MINOR} and relaunch."
+    ),
+    "tls_intercepted": (
+        "A firewall or proxy is intercepting TLS to pypi.org — "
+        "check proxy/antivirus settings."
+    ),
+    "network": (
+        "Could not reach pypi.org — check this network's "
+        "connectivity/proxy, then relaunch."
+    ),
+    "permissions": (
+        "Permissions or antivirus blocked the install — "
+        "allowlist the ClawMetry data folder and relaunch."
+    ),
+    "pip_unknown": "See the log for the pip error.",
+}
 
 
 class RuntimeSupervisor:
@@ -173,7 +948,27 @@ class RuntimeSupervisor:
         self.runtime = _runtime_dir()
         self.venv = self.runtime / "venv"
         self.stamp_file = self.runtime / "last-upgrade.json"
+        # Which stranded version the old-version heal has already been
+        # attempted for (see _is_stranded_on_an_old_version).
+        self.heal_file = self.runtime / "version-heal.json"
         self.log_file = self.runtime / "bootstrap.log"
+        # {"app_pid": ..., "daemon_pid": ..., "port": ...} of the live
+        # instance — the single-instance guard and orphan cleanup key.
+        self.instance_file = self.runtime / "app-instance.json"
+        self._last_sync_start = 0.0
+        # Set to True by main() when the user closes the window so the
+        # watcher stops trying to respawn the daemon on the way out.
+        self.shutting_down = threading.Event()
+        # Version seen drifting on the PREVIOUS tick. A pip upgrade writes
+        # its dist-info ~4s before the console script exists, so a single
+        # tick's reading can describe an install that is still in flight.
+        # Acting on it killed a healthy daemon and could not respawn it
+        # (2026-08-17 freeze). Require two consecutive ticks to agree.
+        self._pending_drift: Optional[str] = None
+        # Wall-clock of the last completed watcher tick. The watchdog
+        # thread reads this to detect a stalled (not merely dead) watcher.
+        self._last_tick = 0.0
+        self._tick_count = 0
 
     def _venv_python(self) -> Path:
         return self.venv / ("Scripts" if platform.system() == "Windows" else "bin") / (
@@ -186,11 +981,26 @@ class RuntimeSupervisor:
         )
 
     def _log(self, line: str) -> None:
+        # utf-8 + errors=replace: pip output can carry characters the
+        # Windows locale codepage can't encode, and a UnicodeEncodeError
+        # is not an OSError — either way a log write must never take
+        # down the boot thread.
         try:
-            with self.log_file.open("a") as f:
+            with self.log_file.open("a", encoding="utf-8", errors="replace") as f:
                 f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
-        except OSError:
+        except Exception:
             pass
+
+    def _run_child(self, argv: list, timeout: float) -> subprocess.CompletedProcess:
+        """Run a bootstrap child (python/pip) with a scrubbed env, no
+        console window, and decode-safe output capture (a stray byte in
+        pip's output must not raise UnicodeDecodeError mid-boot)."""
+        return subprocess.run(
+            argv, capture_output=True, timeout=timeout,
+            text=True, encoding="utf-8", errors="replace",
+            env=_child_env(), stdin=subprocess.DEVNULL,
+            **_win_subprocess_kwargs(),
+        )
 
     def _should_upgrade(self) -> bool:
         if not self.stamp_file.exists():
@@ -209,7 +1019,88 @@ class RuntimeSupervisor:
         except OSError:
             pass
 
+    def _is_stranded_on_an_old_version(self, installed: str) -> bool:
+        """Whether the venv's clawmetry is OLDER than the shell that is
+        booting it — and worth one reinstall attempt to heal.
+
+        The floor above stops pip creating this state; this is what
+        rescues the machines already in it. A silent backtrack leaves a
+        COMPLETE, importable install, so the warm-launch short-circuit
+        accepted it and booted an ancient ClawMetry on every relaunch
+        forever — the same shape as the package-corpse bug, one step
+        removed (#5639).
+
+        Latched on disk, and deliberately: the heal reruns pip on the
+        boot path, and on Windows a floored failure now provisions an
+        interpreter, so a check that fired every launch would mean a pip
+        run (and possibly a winget install) on every launch of a machine
+        it cannot fix. One attempt per stranded version, then the launch
+        is allowed to proceed on the old install — a ClawMetry that is
+        behind still beats a shell that will not open."""
+        floor = _version_tuple(_pip_version_floor())
+        have = _version_tuple(installed)
+        if not floor or not have or have >= floor:
+            return False
+        try:
+            tried = json.loads(self.heal_file.read_text()).get("from", "")
+        except Exception:
+            tried = ""
+        if tried == installed:
+            self._log(f"clawmetry {installed} is older than this shell "
+                      f"({_pip_version_floor()}) and the reinstall already "
+                      f"ran for it — continuing on the old version")
+            return False
+        try:
+            self.heal_file.write_text(json.dumps({"from": installed}))
+        except OSError:
+            pass
+        self._log(f"clawmetry {installed} is older than this shell "
+                  f"({_pip_version_floor()}) — pip resolved a backtracked "
+                  f"release (see #5639); reinstalling with a version floor")
+        return True
+
     def _get_installed_version(self) -> Optional[str]:
+        """Version of clawmetry installed in the runtime venv, read
+        straight from the dist-info directory name — no interpreter
+        spawn (the old subprocess probe cost ~1s per call, on the boot
+        path and on every watcher tick). Falls back to the subprocess
+        probe only if no dist-info is found.
+
+        Multiple dist-infos can coexist: a pip upgrade that runs while
+        the daemon holds .pyd/.exe files open half-fails its uninstall
+        of the OLD version and leaves its dist-info behind (five stale
+        ones observed live, 2026-08-10). Pick the highest parsed
+        version, not the newest mtime — a partially-uninstalled stale
+        dir can carry a fresher mtime than the real install."""
+        if platform.system() == "Windows":
+            sp_globs = ["Lib/site-packages"]
+        else:
+            sp_globs = ["lib/python*/site-packages"]
+
+        def _ver_key(d: Path):
+            v = d.name[len("clawmetry-"):-len(".dist-info")]
+            return _version_tuple(v) or (-1,)
+
+        try:
+            infos = [
+                d
+                for g in sp_globs
+                for d in self.venv.glob(f"{g}/clawmetry-*.dist-info")
+                if d.is_dir()
+                # An install is only COMPLETE once pip has written RECORD.
+                # pip creates the dist-info dir and METADATA seconds before
+                # it re-creates `bin/clawmetry`; reading the version off the
+                # bare directory name reports a release that cannot yet be
+                # launched. On 2026-08-17 that made the watcher stop a
+                # healthy daemon 548ms before its replacement existed.
+                and (d / "RECORD").exists()
+            ]
+            if infos:
+                newest = max(infos, key=_ver_key)
+                return newest.name[len("clawmetry-"):-len(".dist-info")]
+        except OSError:
+            pass
+
         py = self._venv_python()
         if not py.exists():
             return None
@@ -218,6 +1109,7 @@ class RuntimeSupervisor:
                 [str(py), "-c",
                  "import importlib.metadata as m; print(m.version('clawmetry'))"],
                 capture_output=True, text=True, timeout=8,
+                **_win_subprocess_kwargs(),
             )
             if r.returncode == 0:
                 return r.stdout.strip()
@@ -225,64 +1117,427 @@ class RuntimeSupervisor:
             pass
         return None
 
-    def bootstrap(self) -> bool:
-        """Create the venv if missing; pip-install/upgrade clawmetry.
-        Idempotent. Returns True if a runnable clawmetry ends up in
-        the venv; False on any hard failure."""
-        py = _bootstrap_python()
-        if not py:
-            self.on_status(
-                "System Python 3 not found. Install python.org 3.11+ then relaunch."
-            )
-            self._log("no system python3 available")
+    def _venv_is_runnable(self) -> bool:
+        """The venv python on Windows is a launcher that resolves the
+        base interpreter through pyvenv.cfg. When that base Python is
+        upgraded, moved, or uninstalled (Store Python relocates on
+        every update; python.org minor upgrades remove the old dir)
+        the launcher still *exists* but every run fails with "No
+        Python at ..." — so existence alone is not a health check."""
+        py = self._venv_python()
+        if not py.exists():
+            return False
+        try:
+            r = self._run_child([str(py), "-c", "import sys; sys.exit(0)"],
+                                timeout=20)
+            return r.returncode == 0
+        except Exception:
             return False
 
-        if not self._venv_python().exists():
-            self.on_status("Creating runtime environment")
+    def _create_venv(self, py: str) -> bool:
+        """(Re)create the runtime venv from scratch, and make sure it
+        ends up with a working pip (ensurepip fallback for base
+        interpreters that seed a venv without one)."""
+        if self.venv.exists():
+            self._log(f"removing stale venv at {self.venv}")
             try:
-                subprocess.run(
-                    [py, "-m", "venv", str(self.venv)],
-                    check=True, capture_output=True, text=True, timeout=60,
-                )
-                self._log(f"venv created via {py}")
-            except subprocess.CalledProcessError as e:
-                self._log(f"venv creation failed: {e.stderr}")
-                self.on_status("Runtime setup failed. Check bootstrap.log.")
-                return False
+                shutil.rmtree(self.venv)
+            except OSError as e:
+                self._log(f"could not remove stale venv: {e}")
+        try:
+            r = self._run_child([py, "-m", "venv", str(self.venv)], timeout=180)
+        except subprocess.TimeoutExpired:
+            self._log("venv creation timed out")
+            return False
+        if r.returncode != 0:
+            self._log(f"venv creation failed rc={r.returncode}: "
+                      f"{(r.stderr or r.stdout or '')[-2000:]}")
+            return False
+        self._log(f"venv created via {py}")
+        vpy = str(self._venv_python())
+        try:
+            pipchk = self._run_child([vpy, "-m", "pip", "--version"], timeout=60)
+            if pipchk.returncode != 0:
+                self._log("venv has no pip; running ensurepip")
+                self._run_child([vpy, "-m", "ensurepip", "--upgrade"], timeout=120)
+        except subprocess.TimeoutExpired:
+            self._log("venv pip presence check timed out")
+        return self._venv_is_runnable()
 
-        needs_upgrade = self._should_upgrade()
-        currently_installed = self._get_installed_version()
-        if currently_installed is None or needs_upgrade:
-            action = "Installing" if currently_installed is None else "Checking for updates"
-            self.on_status(f"{action} ClawMetry from PyPI")
+    # Hard-won pip flags for the first install:
+    #   --no-input        never hang on a keyring/credential prompt in a
+    #                     windowless app (there is no console to answer it)
+    #   --only-binary=:all: on Windows — an end-user Windows machine has no
+    #                     compiler, so a source build can only ever fail
+    #                     with "Microsoft Visual C++ 14.0 or greater is
+    #                     required" (field failure 2026-08-29: cffi<2 had
+    #                     no cp314 wheel, pip fell back to the sdist).
+    #                     Every dependency ships wheels on Windows; a
+    #                     missing wheel must fail as a clear "no matching
+    #                     distribution", not an MSVC demand. Elsewhere a
+    #                     source build can succeed, so only prefer wheels.
+    #   --timeout/--retries  fail over faster than pip's 15s default —
+    #                     dual-stack networks with broken IPv6 burn the
+    #                     whole budget timing out per AAAA address
+    _PIP_FLAGS = (
+        "--disable-pip-version-check", "--no-input",
+        ("--only-binary=:all:" if platform.system() == "Windows"
+         else "--prefer-binary"),
+        "--timeout", "20", "--retries", "4",
+    )
+
+    def _pip_install_clawmetry(self) -> "tuple[int, str]":
+        """Install/upgrade clawmetry into the venv, retrying once with a
+        cold cache (a corrupt ~/pip cache fails identically forever).
+        Returns (rc, combined pip output)."""
+        vpy = str(self._venv_python())
+        # Old base interpreters seed venvs with a pip too old to pick
+        # current wheels; the CLI installer (install-clawmetry.ps1)
+        # upgrades pip first and the desktop shell must match it.
+        try:
+            up = self._run_child(
+                [vpy, "-m", "pip", "install", "--upgrade",
+                 "--disable-pip-version-check", "--no-input", "pip"],
+                timeout=180,
+            )
+            self._log(f"pip self-upgrade rc={up.returncode}")
+        except subprocess.TimeoutExpired:
+            self._log("pip self-upgrade timed out; continuing with bundled pip")
+        base = [vpy, "-m", "pip", "install", "--upgrade", *self._PIP_FLAGS]
+        # Floored, never bare: a bare `clawmetry` lets pip satisfy the
+        # requirement by backtracking to a release old enough to predate
+        # the dependency that has no wheel here (#5639).
+        req = _pip_requirement()
+        attempts = [base + [req],
+                    base + ["--no-cache-dir", req]]
+        rc, out = 1, ""
+        for i, argv in enumerate(attempts):
             try:
-                r = subprocess.run(
-                    [str(self._venv_python()), "-m", "pip", "install",
-                     "--upgrade", "--disable-pip-version-check", "clawmetry"],
-                    capture_output=True, text=True, timeout=300,
-                )
-                self._log(f"pip install rc={r.returncode}")
-                if r.returncode != 0:
-                    self._log(r.stderr[:2000])
-                    # If we already have a version installed, keep it — a
-                    # transient PyPI failure shouldn't block launch.
-                    if currently_installed is None:
-                        self.on_status("PyPI install failed. See bootstrap.log.")
-                        return False
-                new_version = self._get_installed_version()
-                self._mark_upgraded(new_version)
-                self._log(f"clawmetry now at {new_version}")
+                r = self._run_child(argv, timeout=300)
             except subprocess.TimeoutExpired:
-                self._log("pip install timed out")
-                if currently_installed is None:
-                    self.on_status("Install timed out. Check your connection.")
+                self._log(f"pip install attempt {i + 1} timed out after 300s")
+                rc, out = -1, out + "\npip install timed out"
+                continue
+            out = (r.stdout or "") + "\n" + (r.stderr or "")
+            rc = r.returncode
+            self._log(f"pip install attempt {i + 1} rc={rc}")
+            if rc == 0:
+                return rc, out
+            # stdout too, not just stderr: pip's resolver explains
+            # itself on stdout and that is the half we always lost.
+            self._log(f"pip output tail: {out[-4000:]}")
+        return rc, out
+
+    @staticmethod
+    def _explain_pip_failure(output: str) -> str:
+        """Map pip's error text to something the splash can show that a
+        user can act on. 'PyPI install failed. See bootstrap.log.' told
+        the affected machines nothing (and not where the log was)."""
+        return _PIP_FAILURE_HINTS[RuntimeSupervisor._classify_pip_failure(output)]
+
+    @staticmethod
+    def _classify_pip_failure(output: str) -> str:
+        """The machine-readable failure family for a failed pip run.
+        These codes are the vocabulary of the field-failure report
+        (AC-FFR-001) — a closed enum, never free text, because the code
+        is the ONLY part of a failure that ever leaves the machine."""
+        low = output.lower()
+        tls = "certificate" in low or "sslerror" in low or "ssl:" in low
+        network = ("timed out" in low or "connection" in low
+                   or "temporary failure" in low or "getaddrinfo" in low
+                   or "name or service not known" in low)
+        if "no python at" in low or "did not find executable" in low:
+            return "broken_runtime"
+        if "microsoft visual c++" in low or "build wheel did not run successfully" in low:
+            return "compiler_demand"
+        if "no matching distribution" in low or "could not find a version" in low:
+            # pip reports an index it could not READ exactly the way it
+            # reports an interpreter PyPI has no wheels for, and this
+            # branch used to swallow both — so a blocked proxy or an
+            # intercepted TLS handshake surfaced as "Python too old"
+            # (field failure #5628). The tell is pip's own candidate
+            # list: "(from versions: none)" means the index yielded no
+            # candidates AT ALL, so paired with transport evidence the
+            # transport is the cause. A real version list means the
+            # index answered and nothing in it fits — no_distribution.
+            if "from versions: none" in low:
+                if tls:
+                    return "tls_intercepted"
+                if network:
+                    return "network"
+            return "no_distribution"
+        if tls:
+            return "tls_intercepted"
+        if network:
+            return "network"
+        if "permission" in low or "access is denied" in low or "winerror 5" in low:
+            return "permissions"
+        return "pip_unknown"
+
+    # Failure families where a DIFFERENT interpreter is the remedy, so
+    # installing one can actually help. Both mean "PyPI has no artifact
+    # this interpreter can use": no wheel for its tag or Python minor
+    # (`no_distribution`), or a wheel-less dependency falling back to an
+    # sdist that demands MSVC (`compiler_demand`). Every other class is
+    # about the network, the index, the filesystem or the venv, where a
+    # new Python changes nothing — installing one there would be a
+    # gratuitous ~30 MB download that still ends in the same failure.
+    _INTERPRETER_REMEDIABLE = ("no_distribution", "compiler_demand")
+
+    def _retry_on_known_good_python(self, rc: int, out: str) -> "tuple[int, str]":
+        """Windows: when pip failed because PyPI has nothing this
+        interpreter can install, provide an interpreter that does rather
+        than telling the user to go and get one.
+
+        Python is a dependency the shell installs, not a prerequisite it
+        asks for — that is already how a machine with NO python is
+        handled, and a machine whose python has no wheels is the same
+        problem one step later. Field failure #5628 is what asking looks
+        like from the user's side: a Python 3.11 machine was told to
+        install Python 3.11+.
+
+        At most one attempt per bootstrap, and none at all when the
+        current interpreter IS the pinned one (nothing left to try) or
+        when the failure is about the network/index/filesystem, where a
+        new interpreter cannot help. Returns pip's (rc, output) —
+        unchanged when no retry was made, so the caller classifies the
+        ORIGINAL failure and the user still gets the accurate hint."""
+        if platform.system() != "Windows":
+            return rc, out
+        if self._classify_pip_failure(out) not in self._INTERPRETER_REMEDIABLE:
+            return rc, out
+        # getattr: bootstrap() assigns this (and the failure class) on
+        # entry rather than in __init__, so that tests can build a
+        # supervisor via __new__ — this method must not be the one place
+        # that assumes the attribute already exists.
+        if getattr(self, "bootstrap_python_version", "") == KNOWN_GOOD_PYTHON_MINOR:
+            self._log(f"pip failed on the pinned "
+                      f"{KNOWN_GOOD_PYTHON_MINOR} interpreter; no other "
+                      f"interpreter left to try")
+            return rc, out
+
+        self._log(f"pip found no installable artifact for this interpreter; "
+                  f"installing Python {KNOWN_GOOD_PYTHON_MINOR} and retrying")
+        good = _known_good_python()
+        if not good:
+            self.on_status(
+                f"Installing Python {KNOWN_GOOD_PYTHON_MINOR} runtime (one-time)"
+            )
+            _winget_install_python(self._log)
+            good = _known_good_python()
+        if not good:
+            self._log(f"could not provide a Python {KNOWN_GOOD_PYTHON_MINOR} "
+                      f"interpreter; keeping the original pip failure")
+            return rc, out
+
+        self.on_status("Retrying with a supported Python runtime")
+        self._log(f"rebuilding venv on {good}")
+        if not self._create_venv(good):
+            self._log("venv rebuild on the pinned interpreter failed; "
+                      "keeping the original pip failure")
+            return rc, out
+        rc2, out2 = self._pip_install_clawmetry()
+        self._log(f"retry on Python {KNOWN_GOOD_PYTHON_MINOR} rc={rc2}")
+        if rc2 == 0:
+            self.bootstrap_python_version = KNOWN_GOOD_PYTHON_MINOR
+            return rc2, out2
+        # Report what the SUPPORTED interpreter said: the first failure
+        # is now explained (that Python had no artifact), and this one is
+        # the real remaining problem.
+        return rc2, out2
+
+    def bootstrap(self) -> bool:
+        """Create the venv if missing; pip-install clawmetry if missing.
+        Idempotent. Returns True if a runnable clawmetry ends up in
+        the venv; False on any hard failure.
+
+        Warm launches never touch the network here: if the venv already
+        has a runnable clawmetry we return immediately and let the
+        watcher thread apply the 6h upgrade cadence in the background
+        (it restarts the daemon on version drift, so users still pick
+        up releases without ever staring at a "Checking for updates"
+        splash)."""
+        # Written on every False return: the closed failure-class code
+        # (plus the bootstrap interpreter's major.minor, when one was
+        # found) that the field-failure report sends. Assigned here, not
+        # in __init__, so tests building the supervisor via __new__ stay
+        # valid and a stale value can never outlive the attempt.
+        self.failure_class: Optional[str] = None
+        self.bootstrap_python_version: str = ""
+        if self._venv_clawmetry().exists():
+            # The exe stub existing is NOT the package existing. A pip
+            # upgrade that dies between uninstall and install (live field
+            # case 2026-08-29: the watcher updated in place seconds after
+            # a release while the daemon held clawmetry.exe open) leaves
+            # the stub with no clawmetry module behind it — every spawn
+            # then dies with ModuleNotFoundError, and trusting the stub
+            # here made that state permanent across relaunches. Require a
+            # COMPLETE install (dist-info with RECORD — a directory glob,
+            # so the healthy warm launch stays spawn-free and fast) and
+            # fall through to the normal install path when it is absent.
+            installed = self._get_installed_version()
+            if installed is not None:
+                if not self._is_stranded_on_an_old_version(installed):
+                    return True
+            else:
+                self._log("entry point exists but no complete clawmetry "
+                          "dist-info — package corpse from a half-failed "
+                          "in-place update; reinstalling")
+
+        cache = self.runtime / "bootstrap-python.json"
+        py = _bootstrap_python(cache)
+        if not py and platform.system() == "Windows":
+            # Python is a dependency we install, not one we ask for: the
+            # NSIS installer bootstraps it at install time, and this
+            # covers portable-.zip users / machines where that failed.
+            self.on_status("Installing Python 3 runtime (one-time, ~1 min)")
+            self._log("no system python3; attempting winget auto-install")
+            _winget_install_python(self._log)
+            py = _bootstrap_python(cache)
+        if not py:
+            self.on_status(
+                "Python 3 not found and automatic install failed. "
+                f"Install python.org {KNOWN_GOOD_PYTHON_MINOR} "
+                "then relaunch."
+            )
+            self._log("no usable python3 (need 3.9+ with venv+ensurepip)")
+            self.failure_class = "no_python"
+            return False
+        self.bootstrap_python_version = _bootstrap_python_version(cache)
+        self._log(f"bootstrap python: {py} "
+                  f"({self.bootstrap_python_version or '?'} "
+                  f"{_bootstrap_python_platform(cache) or '?'})")
+
+        # Health check, not existence check: we only get here with no
+        # runnable clawmetry, so a venv that exists is a venv left over
+        # from a failed install or orphaned by a base-Python upgrade —
+        # pip inside it fails identically on every relaunch until
+        # someone deletes it. Rebuild it instead.
+        if not self._venv_is_runnable():
+            if self._venv_python().exists():
+                self._log("venv exists but its python no longer runs "
+                          "(base interpreter moved/upgraded?) — rebuilding")
+            self.on_status("Creating runtime environment")
+            if not self._create_venv(py):
+                # The cached bootstrap python may itself be the stale
+                # part; drop the cache, re-probe, and try once more.
+                try:
+                    cache.unlink()
+                except OSError:
+                    pass
+                py2 = _bootstrap_python(cache)
+                if not (py2 and self._create_venv(py2)):
+                    self.on_status(f"Runtime setup failed. Log: {self.log_file}")
+                    self.failure_class = "venv_setup_failed"
                     return False
+                self.bootstrap_python_version = _bootstrap_python_version(cache)
 
-        return self._venv_clawmetry().exists()
+        self.on_status("Installing ClawMetry from PyPI")
+        rc, out = self._pip_install_clawmetry()
+        if rc != 0 and not self._venv_is_runnable():
+            # The base interpreter died mid-flight; rebuild once and
+            # give pip a second life rather than stranding the user.
+            self._log("venv went unrunnable during install — rebuilding once")
+            self.on_status("Rebuilding runtime environment")
+            if self._create_venv(py):
+                rc, out = self._pip_install_clawmetry()
+        if rc != 0:
+            rc, out = self._retry_on_known_good_python(rc, out)
+        if rc != 0:
+            self.failure_class = self._classify_pip_failure(out)
+            hint = _PIP_FAILURE_HINTS[self.failure_class]
+            self.on_status(f"Install failed: {hint} Log: {self.log_file}")
+            return False
+        new_version = self._get_installed_version()
+        self._mark_upgraded(new_version)
+        self._log(f"clawmetry now at {new_version}")
 
-    def start_daemon(self) -> None:
+        ok = self._venv_clawmetry().exists()
+        if not ok:
+            self._log(f"pip succeeded but entry point missing at "
+                      f"{self._venv_clawmetry()}")
+            self.on_status(f"Install incomplete. Log: {self.log_file}")
+            self.failure_class = "install_incomplete"
+        return ok
+
+    def ensure_sync_daemon(self) -> None:
+        """Local ingest is the product: without the sync daemon every
+        dashboard page renders its empty state, regardless of what data
+        sits on disk. Called at boot and from every watcher tick, and
+        deliberately independent of cloud sign-in — `clawmetry sync`
+        runs local-only ingest even when cloud sync is paused.
+
+        No-ops when the node has never been connected (no
+        ~/.clawmetry/config.json — onboarding's connect step starts sync
+        itself), when the daemon is already alive, or within
+        SYNC_START_RETRY_SECS of the previous attempt (a persistently
+        broken daemon must not become a 60s spawn loop)."""
+        if not SYNC_CONFIG_FILE.exists():
+            return
+        if _sync_daemon_alive():
+            return
+        if (time.time() - self._last_sync_start) < SYNC_START_RETRY_SECS:
+            return
+        self._last_sync_start = time.time()
+        cli = self._venv_clawmetry()
+        if not cli.exists():
+            return
+        try:
+            r = subprocess.run(
+                [str(cli), "sync"],
+                capture_output=True, text=True, timeout=120,
+                **_win_subprocess_kwargs(),
+            )
+            self._log(f"ensure_sync: clawmetry sync rc={r.returncode}")
+            if r.returncode != 0:
+                self._log((r.stderr or r.stdout or "")[:1000])
+        except subprocess.TimeoutExpired:
+            self._log("ensure_sync: clawmetry sync timed out")
+        except Exception as exc:
+            self._log(f"ensure_sync failed: {exc}")
+
+    def _write_instance_file(self) -> None:
+        try:
+            self.instance_file.write_text(json.dumps({
+                "app_pid": os.getpid(),
+                "daemon_pid": self.proc.pid if self.proc else 0,
+                "port": self.port,
+            }))
+        except OSError:
+            pass
+
+    def _clear_instance_file(self) -> None:
+        try:
+            self.instance_file.unlink()
+        except OSError:
+            pass
+
+    def entrypoint_ready(self) -> bool:
+        """True when the venv's clawmetry launcher exists and is
+        executable. pip DELETES this file and re-creates it ~4s later
+        during an upgrade; spawning inside that window raises
+        FileNotFoundError. Probe before every spawn."""
+        try:
+            cli = self._venv_clawmetry()
+            return cli.exists() and os.access(str(cli), os.X_OK)
+        except OSError:
+            return False
+
+    def start_daemon(self) -> bool:
+        """Spawn the dashboard child. Returns True if a process was
+        launched. NEVER raises — a failed spawn must cost one watcher
+        tick, not the supervisor thread (2026-08-17: an unguarded Popen
+        here killed the watcher and stranded the window for 6.5 hours)."""
+        cli = self._venv_clawmetry()
+        if not self.entrypoint_ready():
+            self._log(
+                f"start_daemon: {cli} missing or not executable "
+                "(pip upgrade in flight?); will retry"
+            )
+            self.proc = None
+            return False
         argv = [
-            str(self._venv_clawmetry()),
+            str(cli),
             "--no-debug",
             "--port", str(self.port),
         ]
@@ -290,6 +1545,13 @@ class RuntimeSupervisor:
         # WERKZEUG_RUN_MAIN handled by --no-debug (waitress path).
         env.pop("PYTHONHOME", None)
         env.pop("PYTHONPATH", None)
+        # The shell owns pip AND the restart for its own child. Leaving the
+        # daemon's in-process updater armed gave one venv two independent
+        # updaters: the child pip-upgrades, calls os._exit(0) expecting a
+        # supervisor, and races the shell's own upgrade over the same files.
+        # Mutate the COPY only — _auto_update_disabled() reads os.environ
+        # and would otherwise disable the shell's updater too.
+        env["CLAWMETRY_AUTO_UPDATE"] = "0"
         kwargs: dict = {
             "stdout": subprocess.DEVNULL,
             "stderr": subprocess.DEVNULL,
@@ -297,10 +1559,27 @@ class RuntimeSupervisor:
             "env": env,
         }
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+            # CREATE_NEW_PROCESS_GROUP lets stop() target the child alone
+            # with CTRL_BREAK_EVENT; CREATE_NO_WINDOW stops it from
+            # flashing a console (stdout/stderr going to DEVNULL doesn't
+            # suppress the window itself — console allocation happens
+            # regardless of stream redirection).
+            kwargs["creationflags"] = (  # type: ignore[attr-defined]
+                subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+            )
         else:
             kwargs["start_new_session"] = True
-        self.proc = subprocess.Popen(argv, **kwargs)
+        try:
+            self.proc = subprocess.Popen(argv, **kwargs)
+        except OSError as exc:
+            # FileNotFoundError (script unlinked mid-upgrade),
+            # PermissionError (written but not yet chmod +x), ENOEXEC...
+            self._log(f"start_daemon: Popen failed: {exc!r}")
+            self.proc = None
+            return False
+        self._log(f"start_daemon: spawned pid={self.proc.pid} port={self.port}")
+        self._write_instance_file()
+        return True
 
     def wait_ready(self, deadline_secs: float = STARTUP_TIMEOUT_SECS) -> bool:
         url = f"http://127.0.0.1:{self.port}/"
@@ -321,6 +1600,7 @@ class RuntimeSupervisor:
         p = self.proc
         if not p:
             return
+        self._log(f"stop: terminating daemon pid={p.pid}")
         try:
             if os.name == "nt":
                 p.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
@@ -339,6 +1619,326 @@ class RuntimeSupervisor:
             except (ProcessLookupError, OSError):
                 pass
         self.proc = None
+        self._clear_instance_file()
+
+    def _get_running_daemon_version(self) -> Optional[str]:
+        """Ask the CHILD daemon what version it thinks it is via its own
+        /api/version endpoint. Returns None if the daemon is down or
+        unreachable — which is normal during restarts."""
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{self.port}/api/version", timeout=1.5
+            ) as r:
+                return json.loads(r.read()).get("current")
+        except Exception:
+            return None
+
+    def _background_pip_upgrade(self) -> None:
+        """Upgrade via the venv's `clawmetry update --unattended`
+        subcommand — the flag makes the CLI apply the daemon's own update
+        policy (routes/update_check.py): the CLAWMETRY_AUTO_UPDATE kill
+        switch (incl. implicit CI disable) and the
+        CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window, pinning to the
+        newest aged-in release. Matches the blueprint contract "the shell
+        defers to the daemon's update policy rather than shipping its own";
+        the local _auto_update_disabled() check is only a cheap pre-flight
+        with the same semantics. Errors are logged and swallowed — a
+        transient PyPI failure should never take down the running app.
+
+        "Background" here means off the UI thread, NOT asynchronous: the
+        caller (watch()) blocks for the duration, and that same loop owns
+        crash-respawn. Hence WATCHER_UPDATE_TIMEOUT_SECS rather than the
+        300s first-install budget.
+
+        Stamps the attempt on EVERY outcome, including failure. Stamping only
+        successes meant a persistently failing update (offline, broken venv,
+        PyPI down) re-ran on every single watcher tick forever — and that was
+        already true at the OLD 6h cadence, not something the shorter interval
+        introduced. UPGRADE_CHECK_INTERVAL_SECS is enforced purely through the
+        stamp file, so a path that never stamps is a path with no interval at
+        all; 6h only ever throttled successes. A failed attempt is still an
+        attempt.
+        """
+        if _auto_update_disabled():
+            self._log(
+                "watcher upgrade: auto-update disabled "
+                "(CLAWMETRY_AUTO_UPDATE kill switch or CI env), skipping"
+            )
+            return
+        cli = self._venv_clawmetry()
+        if not cli.exists():
+            return
+        try:
+            r = subprocess.run(
+                [str(cli), "update", "--unattended"],
+                capture_output=True, text=True,
+                timeout=WATCHER_UPDATE_TIMEOUT_SECS,
+                **_win_subprocess_kwargs(),
+            )
+            if r.returncode != 0 and "--unattended" in (r.stderr or "") \
+                    and "unrecognized arguments" in (r.stderr or ""):
+                # Bootstrap compat: the venv still runs a clawmetry from
+                # before the flag existed, so no unattended run can ever
+                # succeed — one plain update to get onto a version that
+                # understands the policy flag.
+                self._log(
+                    "watcher upgrade: venv clawmetry predates --unattended; "
+                    "falling back to plain update once"
+                )
+                r = subprocess.run(
+                    [str(cli), "update"],
+                    capture_output=True, text=True,
+                    timeout=WATCHER_UPDATE_TIMEOUT_SECS,
+                    **_win_subprocess_kwargs(),
+                )
+            self._log(f"watcher clawmetry-update rc={r.returncode}")
+            if r.returncode != 0:
+                self._log(r.stderr[:2000])
+                self._heal_package_corpse(r.stderr or "")
+            # Stamp regardless of rc: see the docstring. A failed attempt
+            # still consumed an interval, and not stamping it turns the
+            # 60s cadence into "retry forever, every tick".
+            self._mark_upgraded(self._get_installed_version())
+        except subprocess.TimeoutExpired:
+            self._log("watcher clawmetry-update timed out")
+            # Same reasoning, and this is the case that matters most: a
+            # hanging PyPI is exactly the failure that would otherwise
+            # re-enter pip on every tick and starve crash-respawn.
+            self._mark_upgraded(self._get_installed_version())
+
+    def _heal_package_corpse(self, update_stderr: str) -> None:
+        """Reinstall clawmetry when an in-place update destroyed it.
+
+        Live field case 2026-08-29: `clawmetry update` ran seconds after
+        a release (watcher cadence is 60s, releases can be minutes
+        apart), pip uninstalled the old version and failed to install
+        the new one while the daemon held `clawmetry.exe` open — from
+        then on every `clawmetry ...` invocation died with
+        ModuleNotFoundError, every 60s, forever, because the updater the
+        watcher shells IS the package that no longer exists. The venv's
+        python and pip survive a corpse, so the shell repairs it
+        directly rather than asking the corpse to fix itself."""
+        if "No module named" not in update_stderr:
+            # Only the corpse signature. Other update failures (index
+            # propagation races, transient network) resolve themselves
+            # on a later tick and must not trigger surprise installs.
+            return
+        if self._get_installed_version() is not None:
+            return
+        self._log("update left an exe stub with no clawmetry package — "
+                  "reinstalling via the venv's pip")
+        rc, out = self._pip_install_clawmetry()
+        self._log(f"package-corpse reinstall rc={rc}")
+        if rc != 0:
+            self._log(f"reinstall output tail: {out[-2000:]}")
+
+    def restart_daemon(self) -> bool:
+        """Stop the current daemon and spawn a fresh one on the same
+        port. Returns True if the new daemon binds and answers before
+        the startup timeout. Idempotent; safe to call repeatedly.
+
+        Never raises, and never destroys a working backend it cannot
+        replace: the entrypoint is probed BEFORE stop(), so a half-written
+        venv leaves the current daemon serving instead of stranding the
+        window on a dead port."""
+        if not self.entrypoint_ready():
+            self._log(
+                "restart_daemon: venv entrypoint not ready; deferring restart "
+                "(current daemon left running)"
+            )
+            return False
+        self.stop()
+        # Give TCP TIME_WAIT a moment on the freed port; on most systems
+        # SO_REUSEADDR handles this, but on macOS a bare Popen can lose.
+        time.sleep(0.5)
+        for attempt in (1, 2, 3):
+            if self.shutting_down.is_set():
+                return False
+            if self.start_daemon() and self.wait_ready():
+                self._log(f"restart_daemon: ready (attempt {attempt})")
+                return True
+            self._log(f"restart_daemon: attempt {attempt} failed")
+            # Back off so a still-running pip has time to finish.
+            if self.shutting_down.wait(2.0 * attempt):
+                return False
+        self._log("restart_daemon: giving up after 3 attempts")
+        return False
+
+    def watch(self, on_restart: Callable[[], None]) -> None:
+        """Blocking watcher loop, meant to run in a daemon thread.
+
+        Every WATCHER_TICK_SECS:
+          1. If the child crashed, respawn (unless shutting down).
+          2. Compare the venv's installed clawmetry version to what the
+             running daemon reports. If they differ (user clicked
+             "Update now" in the dashboard, or any other mechanism
+             upgraded the venv), restart the daemon and invoke
+             on_restart() so the caller can refresh the webview.
+             This is how the blueprint contract "auto-upgrade it in
+             place" is actually delivered end-to-end — the pip install
+             changes the venv, and this loop makes the running process
+             pick it up without a manual quit-and-relaunch.
+          3. If 6 hours have elapsed since the last stamped upgrade
+             (`_should_upgrade()`), run a background `clawmetry update`
+             so users who never quit still get PyPI releases on the
+             blueprint's 6h cadence. Any resulting version change is
+             caught by step 2 on the next tick.
+
+        The loop body is wrapped: a raising tick logs a traceback and
+        the loop continues. Before that guard existed, one unguarded
+        FileNotFoundError out of Popen ended supervision permanently and
+        silently (2026-08-17) — the .app has no stderr, so the thread
+        simply vanished and the window sat on a dead port for 6.5 hours.
+        """
+        self._log("watcher: started")
+        try:
+            while not self.shutting_down.is_set():
+                if self.shutting_down.wait(WATCHER_TICK_SECS):
+                    return
+                try:
+                    self._tick(on_restart)
+                except BaseException:
+                    # Deliberately BaseException: supervision must outlive
+                    # anything short of interpreter teardown.
+                    self._log(
+                        "watcher tick raised (supervision continues):\n"
+                        + traceback.format_exc()
+                    )
+                finally:
+                    self._last_tick = time.time()
+                    self._tick_count += 1
+                    if self._tick_count % 10 == 1:
+                        self._log(
+                            f"watcher: heartbeat tick={self._tick_count} "
+                            f"daemon_pid={getattr(self.proc, 'pid', None)}"
+                        )
+        finally:
+            self._log("watcher: thread exiting")
+
+    def _tick(self, on_restart: Callable[[], None]) -> None:
+        """One watcher iteration. May raise; watch() contains the damage."""
+        if self.proc is not None and self.proc.poll() is not None:
+            self._log(f"daemon exited with code {self.proc.returncode}; respawning")
+            ok = self.restart_daemon()
+            self._log(f"respawn after exit -> {ok}")
+            if ok:
+                on_restart()
+            return
+
+        # Heal the sync/ingest daemon too — same contract as the
+        # dashboard child: the shell owns it while the app runs.
+        self.ensure_sync_daemon()
+
+        installed = self._get_installed_version()
+        running = self._get_running_daemon_version()
+        if installed and running and installed != running:
+            # Debounce: a pip upgrade is visible in site-packages for
+            # seconds before it is launchable. Requiring two consecutive
+            # ticks to agree means we only ever restart onto a settled
+            # install. pip finishes in ~4s; the tick is 60s.
+            if self._pending_drift != installed:
+                self._pending_drift = installed
+                self._log(
+                    f"version drift seen: venv={installed} running={running}; "
+                    "confirming on next tick"
+                )
+                return
+            self._log(
+                f"version drift: venv={installed} running={running}; restarting"
+            )
+            # Recovery FIRST, status second. A status call is a synchronous
+            # RPC into the webview; it must never gate the restart.
+            ok = self.restart_daemon()
+            self._log(f"restart after drift -> {ok}")
+            self._pending_drift = None
+            if ok:
+                on_restart()
+            else:
+                self.on_status(f"Update to v{installed} pending; will retry")
+            return
+
+        self._pending_drift = None
+
+        if self._should_upgrade():
+            self._log("watcher: upgrade interval elapsed, running clawmetry update")
+            self._background_pip_upgrade()
+
+
+def _ensure_user_path_windows(bin_dir: str, log: Callable[[str], None]) -> None:
+    """Append ``bin_dir`` to the per-user PATH (HKCU\\Environment) if it
+    isn't already there, then broadcast WM_SETTINGCHANGE so newly opened
+    cmd/PowerShell windows pick it up without a logoff. Per-user only —
+    never touches the machine PATH, no admin rights involved."""
+    import winreg
+
+    with winreg.OpenKey(
+        winreg.HKEY_CURRENT_USER, "Environment", 0,
+        winreg.KEY_READ | winreg.KEY_SET_VALUE,
+    ) as key:
+        try:
+            current, kind = winreg.QueryValueEx(key, "Path")
+        except FileNotFoundError:
+            current, kind = "", winreg.REG_EXPAND_SZ
+        entries = [e for e in current.split(";") if e]
+        if any(e.strip().lower().rstrip("\\") == bin_dir.lower().rstrip("\\")
+               for e in entries):
+            return
+        new_value = ";".join(entries + [bin_dir])
+        winreg.SetValueEx(key, "Path", 0, kind or winreg.REG_EXPAND_SZ, new_value)
+        log(f"added {bin_dir} to user PATH")
+
+    try:
+        import ctypes
+        HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x1A, 0x0002
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment",
+            SMTO_ABORTIFHUNG, 5000, None,
+        )
+    except Exception:
+        pass  # PATH is set; existing shells just won't see it until reopened
+
+
+def ensure_global_cli(sup: RuntimeSupervisor) -> None:
+    """Make the runtime venv's `clawmetry` globally invocable, so users
+    of the desktop app also get the CLI (`clawmetry` in any terminal)
+    without a separate pip install.
+
+    Windows: writes a tiny shim at %LOCALAPPDATA%\\ClawMetry\\bin\\
+    clawmetry.cmd (delegates to the venv exe, so venv upgrades need no
+    shim change) and adds that dir to the user PATH. macOS/Linux:
+    symlinks ~/.local/bin/clawmetry at the venv binary. Idempotent,
+    best-effort, and called off the boot path — a failure here must
+    never break the app, so everything is logged and swallowed."""
+    cli = sup._venv_clawmetry()
+    if not cli.exists():
+        return
+    try:
+        if platform.system() == "Windows":
+            bin_dir = sup.runtime.parent / "bin"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            shim = bin_dir / "clawmetry.cmd"
+            content = f'@echo off\r\n"{cli}" %*\r\n'
+            if not shim.exists() or shim.read_text() != content:
+                shim.write_text(content)
+                sup._log(f"global CLI shim written: {shim}")
+            _ensure_user_path_windows(str(bin_dir), sup._log)
+        else:
+            local_bin = Path.home() / ".local" / "bin"
+            local_bin.mkdir(parents=True, exist_ok=True)
+            link = local_bin / "clawmetry"
+            if link.is_symlink() or link.exists():
+                try:
+                    if link.is_symlink() and os.readlink(link) == str(cli):
+                        return
+                    link.unlink()
+                except OSError:
+                    return  # something else owns that name; leave it alone
+            link.symlink_to(cli)
+            sup._log(f"global CLI symlink: {link} -> {cli}")
+            if str(local_bin) not in os.environ.get("PATH", ""):
+                sup._log(f"note: {local_bin} not on PATH in this session")
+    except Exception as exc:
+        sup._log(f"global CLI setup failed: {exc}")
 
 
 def _find_free_port() -> int:
@@ -347,50 +1947,876 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _dashboard_alive(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/version", timeout=1.5
+        ) as r:
+            return 200 <= r.status < 400
+    except Exception:
+        return False
+
+
+def _kill_pid_tree(pid: int) -> None:
+    """Terminate a process (and its children on Windows). Used only for
+    orphaned daemons we positively identified via the instance file."""
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True, timeout=10,
+                **_win_subprocess_kwargs(),
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except Exception:
+        pass
+
+
+def _check_existing_instance(runtime: Path):
+    """Single-instance guard. Reads runtime/app-instance.json and returns:
+
+    - ("attach", port)      — another ClawMetry window is alive and its
+                              daemon answers: reuse it instead of
+                              stacking a second daemon.
+    - ("orphan", daemon_pid) — the app that owned the daemon is gone but
+                              the daemon still runs (pre-fix versions
+                              leaked these on every relaunch): caller
+                              kills it and boots fresh.
+    - None                  — no instance / stale file: boot normally.
+    """
+    instance_file = runtime / "app-instance.json"
+    try:
+        info = json.loads(instance_file.read_text())
+        app_pid = int(info.get("app_pid", 0))
+        daemon_pid = int(info.get("daemon_pid", 0))
+        port = int(info.get("port", 0))
+    except Exception:
+        return None
+    if port and _dashboard_alive(port):
+        if app_pid and _pid_alive(app_pid) and app_pid != os.getpid():
+            return ("attach", port, daemon_pid)
+        if daemon_pid and _pid_alive(daemon_pid):
+            return ("orphan", daemon_pid)
+    try:
+        instance_file.unlink()
+    except OSError:
+        pass
+    return None
+
+
+# ─── Boot orchestration ────────────────────────────────────────────────────────────────────
+# The first-launch onboarding flow is a small state machine driven from
+# a single worker thread. Phases:
+#
+#   1. bootstrap runtime venv + pip-install clawmetry (with the
+#      Ubuntu-installer-style carousel showing progress)
+#   2. if first launch AND cloud reachable: show sign-in pane and block
+#      the worker thread on `_auth_done` until user completes or skips
+#   3. if a cm_ key landed: run `clawmetry connect --key --start-sync-now`
+#      which validates, saves config, provisions the Pro wheel (only if
+#      the account is Trial/Starter/Pro/Enterprise entitled), and starts
+#      the sync daemon (cloud sync is default-ON per product spec)
+#   4. start the dashboard daemon on a free port
+#   5. load the ready-gate splash, which polls /api/overview and swaps
+#      to the real dashboard when there's content to show (capped at 20s)
+#
+# The DesktopAPI class below is what JS in the auth pane calls into via
+# ``window.pywebview.api.*``. Each method returns a small dict the pane
+# renders as inline status text.
+
+class DesktopAPI:
+    """pywebview JS bridge for the onboarding pane.
+
+    Methods are called synchronously from JS; the pywebview runtime
+    dispatches them onto a worker thread and marshals the return value
+    back. They must be idempotent-safe (a page reload can double-invoke)
+    and quick to return — long-running work (OAuth loopback, OTP) is
+    fine because pywebview never blocks the UI thread on them."""
+
+    def __init__(self, sup: "RuntimeSupervisor", app_base_override: Optional[str] = None):
+        self._sup = sup
+        self._app_base = app_base_override
+        self._auth_done = threading.Event()
+        self._mode_done = threading.Event()
+        self._captured_key: str = ""
+        self._captured_email: str = ""
+        self._captured_provider: str = ""
+        self._captured_mode: str = ""
+        self._skipped: bool = False
+        # Injected by main() once the window exists. The JS bridge is the
+        # only channel that still works when the HTTP origin is dead, so
+        # the page's outage overlay reaches recovery through here.
+        self._recover_backend: Optional[Callable[[], None]] = None
+        self._reload_window: Optional[Callable[[], None]] = None
+
+    # ── Recovery (reachable from a page whose backend is gone) ────────────
+    def backend_state(self) -> dict:
+        """Cheap liveness probe the page can poll without HTTP."""
+        proc = self._sup.proc
+        return {
+            "ok": True,
+            "port": self._sup.port,
+            "daemon_pid": getattr(proc, "pid", None) if proc else None,
+            "daemon_running": bool(proc and proc.poll() is None),
+            "last_tick": self._sup._last_tick,
+            "alive": _dashboard_alive(self._sup.port),
+        }
+
+    def restart_backend(self) -> dict:
+        """Restart the dashboard child and reload the window onto it.
+
+        Returns immediately — the restart can take up to
+        STARTUP_TIMEOUT_SECS and pywebview marshals this call on a worker
+        thread we must not hold."""
+        fn = self._recover_backend
+        if fn is None:
+            return {"ok": False, "error": "recovery not wired"}
+        threading.Thread(target=fn, daemon=True).start()
+        return {"ok": True}
+
+    def reload_dashboard(self) -> dict:
+        """Re-navigate the window to the dashboard URL."""
+        fn = self._reload_window
+        if fn is None:
+            return {"ok": False, "error": "reload not wired"}
+        threading.Thread(target=fn, daemon=True).start()
+        return {"ok": True}
+
+    # ── OAuth (GitHub / Google) ────────────────────────────────────────────
+    def start_oauth(self, provider: str) -> dict:
+        provider = (provider or "").lower()
+        if provider not in ("github", "google"):
+            return {"ok": False, "error": "unknown provider"}
+        ok, msg_or_key = onboarding.oauth_loopback_flow(
+            provider, app_base=self._app_base,
+        )
+        if not ok:
+            return {"ok": False, "error": msg_or_key}
+        self._captured_key = msg_or_key
+        self._captured_provider = provider
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── Email OTP ───────────────────────────────────────────────────────
+    def send_email_otp(self, email: str) -> dict:
+        ok, msg = onboarding.send_email_otp(email, app_base=self._app_base)
+        return {"ok": ok, "error": "" if ok else msg}
+
+    def verify_email_otp(self, email: str, otp: str) -> dict:
+        ok, key_or_err = onboarding.verify_email_otp(
+            email, otp, app_base=self._app_base,
+        )
+        if not ok:
+            return {"ok": False, "error": key_or_err}
+        self._captured_key = key_or_err
+        self._captured_email = email
+        self._captured_provider = "email"
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── Hosting choice (cloud vs local/self-host) ───────────────────────────
+    def choose_mode(self, mode: str) -> dict:
+        mode = (mode or "").lower()
+        if mode not in ("cloud", "selfhost"):
+            return {"ok": False, "error": "unknown mode"}
+        self._captured_mode = mode
+        self._mode_done.set()
+        return {"ok": True}
+
+    # ── Skip (dismiss without auth) ──────────────────────────────────────────
+    def skip_auth(self) -> dict:
+        # No key captured; downstream `_apply_and_boot_daemon` will
+        # just skip the connect step and go straight to the dashboard.
+        # `_skipped` records that this was an explicit choice: only an
+        # explicit skip stamps onboarding completed. A user who merely
+        # walked away (auth wait timeout) gets the pane again next boot.
+        self._skipped = True
+        self._auth_done.set()
+        return {"ok": True}
+
+    # ── External links (carousel CTAs) ──────────────────────────────────────
+    def open_external(self, url: str) -> dict:
+        # Restrict to https:// to keep the pane from being weaponised
+        # into launching arbitrary schemes if a slide is ever
+        # user-editable in the future.
+        if not (url or "").startswith("https://"):
+            return {"ok": False, "error": "only https:// URLs are opened"}
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            return {"ok": True}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+
+# ── Post-build self test ──────────────────────────────────────────────
+# A frozen bundle fails in ways a source run never does: a hidden import
+# that wasn't declared, a PyInstaller hook that quietly collected
+# nothing, a native backend whose support files didn't make it in. None
+# of that shows up in `make test` — it shows up on a user's machine as a
+# black window.
+#
+# desktop/smoke_test.py launches the BUILT artifact with
+# CLAWMETRY_DESKTOP_SELFTEST=1 and this mode does the smallest thing
+# that still exercises those paths: check the backend's support modules,
+# open a real window, load a real page, round-trip through JS, quit.
+# Nothing here touches the network or the runtime venv.
+SELFTEST_ENV = "CLAWMETRY_DESKTOP_SELFTEST"
+SELFTEST_OK = "CLAWMETRY_SELFTEST_OK"
+SELFTEST_FAIL = "CLAWMETRY_SELFTEST_FAIL"
+SELFTEST_LOAD_TIMEOUT_SECS = 45.0
+
+
+def _selftest_backend_checks() -> list:
+    """Verify the native webview backend's support files survived
+    freezing. Returns a list of problem strings; empty means healthy.
+
+    Call this only AFTER pywebview has started, never before. `gi`
+    resolves a namespace version on first import and then locks it, so
+    importing `gi.repository.Gtk` ahead of pywebview pins Gtk 4.0 and
+    its own `gi.require_version('Gtk', '3.0')` dies with "Namespace Gtk
+    is already loaded with version 4.0". Running afterwards also means
+    we inspect the modules the app actually loaded rather than a set we
+    imported ourselves."""
+    problems = []
+
+    if sys.platform.startswith("linux"):
+        # PyGObject's Python override layer (gi/overrides/*.py) is
+        # invisible to PyInstaller's analyser, and gi's own
+        # load_overrides() swallows its absence — it hands back the raw
+        # introspected API instead of raising. pywebview then calls the
+        # override-only signature `glib.idle_add(callable, user_data)`
+        # from on_load_finish and dies with "TypeError: Must be number,
+        # not method" on every page load, leaving a black window. That
+        # shipped in the 2026-08-15 AppImage; see build_linux.spec for
+        # why the hooks silently collected nothing.
+        try:
+            from gi.overrides import OverridesProxyModule
+            from gi.repository import Gdk, Gio, GLib, Gtk
+        except Exception as exc:
+            return [f"GTK backend imports failed: {exc!r}"]
+        for name, mod in (("GLib", GLib), ("Gtk", Gtk),
+                          ("Gdk", Gdk), ("Gio", Gio)):
+            if not isinstance(mod, OverridesProxyModule):
+                problems.append(
+                    f"gi.repository.{name} has no PyGObject overrides — "
+                    f"gi.overrides.{name} is missing from the bundle"
+                )
+        # Exercise the exact call pywebview makes, so a regression fails
+        # here by name instead of as a stray traceback during page load.
+        # The callback is dropped after one no-op tick.
+        try:
+            GLib.idle_add(lambda _unused: False, 1.0)
+        except TypeError as exc:
+            problems.append(
+                f"GLib.idle_add(callable, user_data) rejected: {exc} — "
+                "that is the raw girepository signature, not the override"
+            )
+
+    elif sys.platform == "darwin":
+        # The Cocoa backend is pure pyobjc: no overrides to lose, but
+        # the framework bridges are separate wheels and PyInstaller only
+        # bundles the ones it saw imported.
+        try:
+            import AppKit  # noqa: F401
+            import WebKit
+            import Foundation  # noqa: F401
+        except Exception as exc:
+            return [f"Cocoa backend imports failed: {exc!r}"]
+        if not hasattr(WebKit, "WKWebView"):
+            problems.append("WebKit bridge has no WKWebView class")
+
+    elif os.name == "nt":
+        # The EdgeChromium backend drives WebView2 through pythonnet,
+        # loading interop DLLs that ship as bundle *data* under
+        # webview/lib. Data files are collected by a hook, so they can
+        # go missing without any import error to notice.
+        try:
+            import clr  # noqa: F401
+            import webview as _wv
+        except Exception as exc:
+            return [f"WebView2 backend imports failed: {exc!r}"]
+        lib = Path(_wv.__file__).resolve().parent / "lib"
+        for dll in ("Microsoft.Web.WebView2.Core.dll",
+                    "Microsoft.Web.WebView2.WinForms.dll"):
+            if not (lib / dll).exists():
+                problems.append(f"WebView2 interop DLL missing: {lib / dll}")
+
+    return problems
+
+
+def _run_self_test() -> int:
+    """Open a real window against real onboarding HTML, prove JS runs in
+    it, then quit. Prints SELFTEST_FAIL lines for anything wrong and
+    SELFTEST_OK when clean."""
+    import webview
+
+    problems = []
+
+    def fail(problem: str) -> None:
+        """Report as we go, not at the end. A backend broken enough to
+        wedge the GTK main loop never reaches the summary print, and a
+        smoke test that dies with no reason attached is only marginally
+        better than no smoke test."""
+        problems.append(problem)
+        print(f"{SELFTEST_FAIL}: {problem}", file=sys.stderr, flush=True)
+
+    # Same objects the real launch path builds — constructing them is
+    # inert, and building them here means a broken import or a missing
+    # asset fails the smoke test rather than a user's first launch.
+    sup = RuntimeSupervisor(_find_free_port(), lambda _msg: None)
+    api = DesktopAPI(sup)
+    window = webview.create_window(
+        APP_TITLE,
+        html=onboarding.render_bootstrap_carousel(
+            assets_dir=_assets_dir(), status="Self test",
+        ),
+        js_api=api,
+        width=1024,
+        height=700,
+        background_color=BRAND_BG_DARK,
+    )
+
+    finished = threading.Event()   # set once the probe has its verdict
+    _exited = threading.Event()    # set once webview.start() returns
+
+    def _probe() -> None:
+        try:
+            loaded = window.events.loaded.wait(SELFTEST_LOAD_TIMEOUT_SECS)
+            # Only now is the backend guaranteed to have imported — and
+            # to have pinned its namespace versions. Running the checks
+            # earlier would race pywebview's own `gi.require_version`
+            # calls. Runs on the timeout path too, because that's the
+            # path where they explain what went wrong.
+            for problem in _selftest_backend_checks():
+                fail(problem)
+            if not loaded:
+                # The GTK override bug lands here as well: on_load_finish
+                # throws before it can mark the window loaded, so this
+                # times out even if nothing else looks wrong.
+                fail(f"window never fired `loaded` within "
+                     f"{SELFTEST_LOAD_TIMEOUT_SECS:.0f}s")
+            else:
+                value = window.evaluate_js(
+                    "document.querySelectorAll('*').length"
+                )
+                if not isinstance(value, int) or value < 2:
+                    fail(f"page has no DOM — evaluate_js returned {value!r}")
+        except Exception as exc:
+            fail(f"probe raised {exc!r}")
+        finally:
+            finished.set()
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+    def _watchdog() -> None:
+        """Quit hard if the toolkit won't. A backend sick enough to fail
+        the probe is often too sick to unwind its main loop on
+        `destroy()`, and CI should get an exit code and a reason rather
+        than sit on a hung process until the job's own timeout."""
+        finished.wait()
+        if _exited.wait(SHUTDOWN_WAIT_SECS):
+            return
+        print(f"{SELFTEST_FAIL}: the UI event loop did not exit within "
+              f"{SHUTDOWN_WAIT_SECS:.0f}s of the window being destroyed",
+              file=sys.stderr, flush=True)
+        sys.stderr.flush()
+        os._exit(1)
+
+    threading.Thread(target=_probe, daemon=True).start()
+    threading.Thread(target=_watchdog, daemon=True).start()
+    webview.start(private_mode=False)
+    _exited.set()
+
+    if not finished.wait(SHUTDOWN_WAIT_SECS):
+        fail("event loop exited before the probe finished")
+    if problems:
+        return 1
+    print(SELFTEST_OK, flush=True)
+    return 0
+
+
 def main() -> int:
     import webview
 
+    if os.environ.get(SELFTEST_ENV) == "1":
+        return _run_self_test()
+
+    runtime = _runtime_dir()
+    existing = _check_existing_instance(runtime)
+    if existing and existing[0] == "attach" and onboarding.is_first_launch(runtime):
+        # A live daemon on a first-launch install is leftover state from a
+        # broken/manual uninstall — attaching would land on the dashboard
+        # with zero onboarding (the last of the three skip-login bypasses,
+        # founder report 2026-08-10). Kill it and boot fresh so the auth
+        # pane runs.
+        if len(existing) > 2 and existing[2]:
+            _kill_pid_tree(existing[2])
+        existing = None
+
+    # Count and report this launch before anything can fail. Every path
+    # below (attach, orphan-kill, cold boot) is a user opening the app,
+    # so the ping fires first and carries whether this window attached to
+    # an already-running daemon — otherwise a second window would look
+    # like an open whose daemon never came up.
+    import uuid as _uuid
+
+    _session_id = str(_uuid.uuid4())
+    _open_state = open_ping_state(
+        _session_id, attached=bool(existing and existing[0] == "attach")
+    )
+    # Inherited by the daemon child (start_daemon copies os.environ), which
+    # fires the enriched `desktop_ready` ping under the same session_id.
+    os.environ["CLAWMETRY_LAUNCHER"] = "desktop"
+    os.environ["CLAWMETRY_DESKTOP_VERSION"] = _desktop_version()
+    os.environ["CLAWMETRY_DESKTOP_SESSION"] = _session_id
+    os.environ["CLAWMETRY_DESKTOP_OPEN_COUNT"] = str(_open_state.get("open_count", 0))
+    if existing and existing[0] == "attach":
+        # Another instance owns the daemon — open a window onto it and
+        # get out of the way. No supervisor, no watcher, and closing
+        # this window must not stop the other instance's daemon.
+        webview.create_window(
+            APP_TITLE,
+            url=f"http://127.0.0.1:{existing[1]}/",
+            width=1280, height=820, min_size=(900, 600),
+            background_color=BRAND_BG_DARK,
+        )
+        webview.start(private_mode=False, storage_path=_webview_storage_dir())
+        return 0
+    if existing and existing[0] == "orphan":
+        # Daemon outlived its app (pre-guard versions leaked one per
+        # relaunch). Kill it; we boot a fresh one on a fresh port.
+        _kill_pid_tree(existing[1])
+
     port = int(os.environ.get("CLAWMETRY_APP_PORT") or _find_free_port())
+    assets = _assets_dir()
+
+    # Open with the carousel HTML directly — no more static splash.
+    # bootstrap progress messages update the top-bar via `set_status`.
+    initial_html = onboarding.render_bootstrap_carousel(
+        assets_dir=assets, status="Preparing runtime",
+    )
+
+    # Instantiate API + supervisor before window so we can pass js_api
+    # in at create_window time (pywebview binds the API namespace on
+    # window creation, not after).
+    sup = RuntimeSupervisor(port, lambda _msg: None)  # placeholder; real hook set below
+    api = DesktopAPI(sup)
 
     window = webview.create_window(
         APP_TITLE,
-        html=_splash_html("Preparing runtime"),
+        html=initial_html,
+        js_api=api,
         width=1280,
         height=820,
         min_size=(900, 600),
         background_color=BRAND_BG_DARK,
     )
 
+    def _gui_call(fn: Callable, *args, timeout: float = GUI_CALL_TIMEOUT_SECS) -> None:
+        """Run a pywebview call with a hard wall-clock bound.
+
+        pywebview's Cocoa backend blocks the CALLING thread on an
+        unbounded `Semaphore.acquire()` (webview/platforms/cocoa.py:916)
+        until the WebView's completion handler fires. If the WebContent
+        process is wedged or gone, that handler never fires and the
+        caller is parked forever. The supervisor thread must never take
+        that risk, so the call is pushed onto a throwaway thread and we
+        wait a bounded time for it. A hung webview then costs one leaked
+        thread instead of all supervision."""
+        done = threading.Event()
+
+        def _run() -> None:
+            try:
+                fn(*args)
+            except Exception:
+                pass
+            finally:
+                done.set()
+
+        threading.Thread(target=_run, daemon=True).start()
+        if not done.wait(timeout):
+            sup._log(
+                f"gui call {getattr(fn, '__name__', fn)!r} did not return "
+                f"within {timeout}s; continuing without it"
+            )
+
     def _set_status(msg: str) -> None:
+        """Push a progress line into the carousel's top bar. When the
+        pane isn't the carousel (e.g. we've swapped to the auth pane),
+        the JS call is a no-op. Bounded: status messages are hints, and
+        must never be able to stall the caller (see _gui_call)."""
+        _gui_call(
+            window.evaluate_js,
+            f"window.set_status && window.set_status({json.dumps(msg)});",
+        )
+
+    # Late-bind the real status hook now that window exists.
+    sup.on_status = _set_status
+
+    dashboard_url = f"http://127.0.0.1:{port}/"
+
+    def _reload_window() -> None:
+        """Callback the watcher fires after a successful daemon
+        restart. Reloading the same URL is enough — the WebView picks
+        up whatever the fresh daemon serves, so users see the new
+        version immediately without having to quit and relaunch.
+
+        Bounded for the same reason as _set_status: this runs on the
+        supervisor thread."""
+        _gui_call(window.load_url, dashboard_url)
+
+    def _do_uninstall_flow() -> None:
+        """Menu handler — confirm, then shell out to
+        ``clawmetry uninstall --yes`` in the runtime venv, then quit.
+
+        The uninstall itself removes the runtime dir the venv lives in;
+        that's safe on POSIX because the venv's clawmetry binary is
+        already mmap'd by the child process (unlinked files stay open
+        for the running process). On Windows the uninstall reschedules
+        the exe delete for after we exit.
+        """
         try:
-            window.load_html(_splash_html(msg))
+            ok = window.evaluate_js(
+                "confirm('Uninstall ClawMetry?\\n\\n"
+                "This removes the runtime, local event history, and your "
+                "sign-in token.\\n\\n"
+                "The app in /Applications is not deleted — drag it to "
+                "Trash separately.')"
+            )
+        except Exception:
+            ok = True  # If we can't render a dialog, assume the menu click
+            # is intent enough. The CLI would still refuse on a bad flag.
+        if not ok:
+            return
+
+        _set_status("Uninstalling ClawMetry…")
+        # Stop the daemon before removing its files: on Windows a live
+        # process holds an exclusive lock on its exe; on macOS/Linux the
+        # rmtree still works but the sync.log deletion races.
+        try:
+            sup.shutting_down.set()
+        except Exception:
+            pass
+        try:
+            sup.stop()
         except Exception:
             pass
 
-    sup = RuntimeSupervisor(port, _set_status)
-
-    def _boot():
-        ok = sup.bootstrap()
-        if not ok:
-            return  # status HTML already shown
-        _set_status("Starting local daemon")
-        sup.start_daemon()
-        ready = sup.wait_ready()
-        if ready:
+        venv_cli = sup._venv_clawmetry()
+        if venv_cli.exists():
             try:
-                window.load_url(f"http://127.0.0.1:{port}/")
+                subprocess.run(
+                    [str(venv_cli), "uninstall", "--yes"],
+                    check=False,
+                    timeout=300,
+                )
             except Exception:
                 pass
+
+        # Quit the app. The runtime dir is gone; a relaunch would re-bootstrap.
+        try:
+            window.destroy()
+        except Exception:
+            os._exit(0)
+
+    def _on_menu_uninstall() -> None:
+        # Menu callbacks run on the GUI thread; move the confirm+shell-out
+        # off it so evaluate_js and subprocess don't block the main loop.
+        threading.Thread(target=_do_uninstall_flow, daemon=True).start()
+
+    def _on_menu_reload() -> None:
+        """Re-navigate to the dashboard. The window has no browser chrome
+        and pywebview's Cocoa backend swallows Cmd-R, so without this the
+        user has literally no way to retry a page whose backend blipped."""
+        threading.Thread(target=_reload_window, daemon=True).start()
+
+    def _recover_backend() -> None:
+        """Restart the child daemon, then reload the page onto it."""
+        sup._log("manual recovery requested")
+        if sup.restart_daemon():
+            _reload_window()
         else:
+            _set_status("Could not restart the backend. See bootstrap.log.")
+
+    def _on_menu_restart_backend() -> None:
+        # restart_daemon blocks for up to STARTUP_TIMEOUT_SECS; menu
+        # callbacks run on the GUI thread, so never inline it.
+        threading.Thread(target=_recover_backend, daemon=True).start()
+
+    # Give the API object the recovery hook so a stranded PAGE can call it.
+    # When the HTTP origin is dead the JS bridge is the only channel left.
+    api._recover_backend = _recover_backend  # type: ignore[attr-defined]
+    api._reload_window = _reload_window  # type: ignore[attr-defined]
+
+    # Build the menu — tolerant of pywebview versions without a menu API.
+    # macOS shows this alongside the standard app menu; the item name uses
+    # the platform convention "Uninstall ClawMetry…" (ellipsis = confirms).
+    menu_items: list = []
+    try:
+        from webview.menu import Menu, MenuAction, MenuSeparator  # type: ignore
+        menu_items = [
+            Menu(APP_TITLE, [
+                MenuAction("Reload Dashboard", _on_menu_reload),
+                MenuAction("Restart Backend", _on_menu_restart_backend),
+                MenuSeparator(),
+                MenuAction("Uninstall ClawMetry…", _on_menu_uninstall),
+            ]),
+        ]
+    except Exception:
+        try:
+            from webview.menu import Menu, MenuAction  # type: ignore
+            menu_items = [
+                Menu(APP_TITLE, [
+                    MenuAction("Reload Dashboard", _on_menu_reload),
+                    MenuAction("Restart Backend", _on_menu_restart_backend),
+                    MenuAction("Uninstall ClawMetry…", _on_menu_uninstall),
+                ]),
+            ]
+        except Exception:
+            menu_items = []
+
+    def _boot():
+        # Phase 1: bootstrap the runtime venv.
+        ok = sup.bootstrap()
+        if not ok:
+            # bootstrap() already set a status message on failure; leave
+            # the carousel up with the failure text at the top so the
+            # user has something to read while filing a bug. Report the
+            # classified failure family (and nothing else) so the fleet
+            # learns about the failure class without anyone photographing
+            # a screen — see AC-FFR-001.
+            try:
+                bootstrap_failure_ping(
+                    _session_id,
+                    getattr(sup, "failure_class", None) or "unknown",
+                    getattr(sup, "bootstrap_python_version", ""),
+                )
+            except Exception:
+                pass
+            return
+
+        # Install the macOS app-vanished watchdog so drag-to-trash of
+        # /Applications/ClawMetry.app triggers a full uninstall without
+        # the user having to open a terminal. No-op on non-macOS and in
+        # dev mode (sys.frozen unset). See clawmetry/watchdog.py.
+        try:
+            from clawmetry.watchdog import ensure_app_watchdog_installed
+            ensure_app_watchdog_installed(
+                runtime_dir=sup.runtime,
+                venv_clawmetry=sup._venv_clawmetry(),
+            )
+        except Exception:
+            # Never let a watchdog install failure block launch — the
+            # in-app menu and manual CLI still work without it.
+            pass
+
+        # Expose the CLI globally (PATH shim / symlink) and make sure
+        # local ingest is running — both in the background, neither may
+        # delay the boot sequence. ensure_sync_daemon here is what turns
+        # a "connected but sync died" install (empty dashboard, banner
+        # blaming the user) back into a working product without anyone
+        # touching a terminal.
+        threading.Thread(
+            target=ensure_global_cli, args=(sup,), daemon=True
+        ).start()
+        threading.Thread(
+            target=sup.ensure_sync_daemon, daemon=True
+        ).start()
+
+        # Phase 2: onboarding — on first launch, or when the credentials a
+        # previous run left behind are explicitly rejected by the cloud.
+        # A stamp file alone must never present a signed-in app: leftover
+        # state from a broken/manual uninstall used to skip login entirely
+        # (founder report 2026-08-10). Network trouble fails OPEN so an
+        # offline machine still gets its dashboard.
+        runtime = sup.runtime
+        show_pane = onboarding.is_first_launch(runtime)
+        if not show_pane:
+            cred_state = onboarding.stored_credentials_state()
+            if cred_state == "invalid":
+                onboarding.clear_onboarding_stamp(runtime)
+                show_pane = True
+        if show_pane:
+            _set_status("Ready — please sign in")
+            detected = onboarding.detect_runtimes_via_venv(sup._venv_python())
+            auth_html = onboarding.render_auth_pane(
+                assets_dir=assets, detected_runtimes=detected,
+            )
+            try:
+                window.load_html(auth_html)
+            except Exception:
+                # Non-fatal: proceed to boot the dashboard anyway. The
+                # user can sign in from the dashboard later.
+                pass
+            # Block on the JS bridge until the user completes or skips.
+            # Cap at 5 minutes: a user who walks away shouldn't leave
+            # the app stuck on the pane forever.
+            api._auth_done.wait(timeout=300)
+
+        # Phase 2b: hosting choice — only when a key was captured. Both
+        # options start the same 7-day trial; this decides whether
+        # E2E-encrypted snapshots leave the machine (cloud) or the sync
+        # daemon runs local-only ingest (selfhost). Explicit per product
+        # spec: cloud-vs-selfhost must be a user decision, not a side
+        # effect of which onboarding path happened to run.
+        captured_key = api._captured_key
+        if captured_key:
+            try:
+                window.load_html(onboarding.render_mode_pane(assets_dir=assets))
+            except Exception:
+                pass
+            # Walked away? Default to cloud — matches the product spec
+            # default (cloud sync ON) and the pre-pane behavior.
+            api._mode_done.wait(timeout=180)
+            if not api._captured_mode:
+                api._captured_mode = "cloud"
+
+        # Phase 3: apply the cm_ key if we captured one.
+        if captured_key:
+            # Swap back to the carousel while the connect subprocess
+            # runs — it's the more informative surface than a spinner.
+            try:
+                window.load_html(onboarding.render_bootstrap_carousel(
+                    assets_dir=assets, status="Setting up your account",
+                ))
+            except Exception:
+                pass
+            ok_key, msg_key = onboarding.apply_cm_key(
+                sup._venv_clawmetry(), captured_key,
+                mode=api._captured_mode or "cloud",
+            )
+            if ok_key:
+                onboarding.mark_onboarding_completed(
+                    runtime,
+                    signed_in=True,
+                    provider=api._captured_provider,
+                    email=api._captured_email,
+                )
+            else:
+                # Do NOT stamp: a failed connect must re-prompt on the next
+                # launch instead of wedging the install in a signed-in-
+                # not-really state that the pane can never fix again.
+                _set_status(f"Sign-in step failed ({msg_key}) — continuing without cloud sync")
+                # We got here because captured_key is a real cm_ key that
+                # cloud minted in this same request (verify_email_otp /
+                # oauth_loopback_flow returned it). Record signed_in=True
+                # and pass the chosen mode regardless of apply_cm_key's exit
+                # code — the subprocess failing is a downstream setup issue
+                # (daemon start, permissions, Pro-wheel network hiccup), not
+                # a sign-in failure. apply_cm_key's fallback has already
+                # persisted the key to ~/.openclaw so the dashboard's cloud
+                # status flips to connected either way. Recording
+                # signed_in=False here used to make the dashboard's
+                # onboarding gate re-prompt for the SAME cloud/self-host
+                # choice on every relaunch even after a "successful" OTP
+                # (founder report 2026-08-12).
+                onboarding.mark_onboarding_completed(
+                    runtime,
+                    signed_in=True,
+                    provider=api._captured_provider,
+                    email=api._captured_email,
+                    mode=api._captured_mode or "cloud",
+                )
+        elif show_pane and api._skipped:
+            # User explicitly skipped — stamp so we don't nag on every
+            # launch. (A walk-away timeout deliberately does NOT stamp.)
+            onboarding.mark_onboarding_completed(
+                runtime, signed_in=False, provider="", email="",
+            )
+
+        # Phase 4: start the dashboard daemon.
+        _set_status("Starting local daemon")
+        sup.start_daemon()
+        if not sup.wait_ready():
             _set_status("Daemon did not come up. See bootstrap.log.")
+            return
+
+        # Start the watcher after wait_ready so the initial startup exit
+        # is never mistaken for a crash. Handles version drift ("Update
+        # now") and unexpected exits by restarting + reloading the WebView.
+        sup._last_tick = time.time()
+        threading.Thread(
+            target=sup.watch, args=(_reload_window,), daemon=True
+        ).start()
+
+        def _supervise_the_supervisor() -> None:
+            """Watch the watcher.
+
+            watch() now contains its own exceptions, but a thread can
+            still be lost to something it cannot catch — a wedged GUI
+            call, a hung subprocess, an interpreter-level kill. Nothing
+            noticed on 2026-08-17 because nothing was looking. A stale
+            _last_tick is the one signal that distinguishes "supervising"
+            from "gone", and re-arming is cheap and idempotent."""
+            stale_after = 3 * WATCHER_TICK_SECS
+            while not sup.shutting_down.wait(WATCHER_TICK_SECS):
+                try:
+                    last = sup._last_tick
+                    if not last or (time.time() - last) <= stale_after:
+                        continue
+                    sup._log(
+                        f"WATCHER STALLED: {time.time() - last:.0f}s since last "
+                        "tick; re-arming supervision"
+                    )
+                    # Re-arm first so a still-parked old thread cannot make
+                    # us spawn a new one every tick.
+                    sup._last_tick = time.time()
+                    threading.Thread(
+                        target=sup.watch, args=(_reload_window,), daemon=True
+                    ).start()
+                except Exception:
+                    sup._log("watchdog raised:\n" + traceback.format_exc())
+
+        threading.Thread(target=_supervise_the_supervisor, daemon=True).start()
+
+        # Phase 5: load the ready-gate spinner, poll /api/overview
+        # from Python (avoids CORS from a load_html origin), then load
+        # the real dashboard. Capped at 20s so an offline user is
+        # never stuck on a spinner.
+        try:
+            window.load_html(onboarding.render_ready_gate())
+        except Exception:
+            pass  # spinner is polish, not a gate
+        onboarding.wait_for_dashboard_content(port, deadline_secs=20.0)
+        try:
+            window.load_url(dashboard_url)
+        except Exception:
+            pass
 
     def _on_closed():
+        # Stop the watcher FIRST — otherwise it sees the daemon exit
+        # from our stop() call below and respawns it while we're
+        # trying to quit.
+        sup.shutting_down.set()
         sup.stop()
 
+    def _install_open_external_shim():
+        # Fires on every navigation (splash, onboarding, dashboard,
+        # daemon-restart reload) so the shim always covers the current
+        # document. `window.__clawmetryExternalShim` guards against
+        # double-install if the event fires twice on one page.
+        try:
+            window.evaluate_js(_OPEN_EXTERNAL_SHIM)
+        except Exception:
+            pass
+
     window.events.closed += _on_closed
+    window.events.loaded += _install_open_external_shim
     threading.Thread(target=_boot, daemon=True).start()
 
-    webview.start(private_mode=False)
+    # js_api makes DesktopAPI methods callable as window.pywebview.api.*
+    # Older pywebview versions don't accept `menu=`; fall back cleanly.
+    # Pass storage_path so browser state (cookies/localStorage) is scoped
+    # to the app's runtime dir and doesn't survive an uninstall-reinstall.
+    _storage = _webview_storage_dir()
+    try:
+        webview.start(private_mode=False, menu=menu_items, storage_path=_storage)
+    except TypeError:
+        webview.start(private_mode=False, storage_path=_storage)
     return 0
 
 

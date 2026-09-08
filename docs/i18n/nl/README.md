@@ -1,395 +1,289 @@
-<!-- i18n-src:8f42d460a973 -->
+<!-- i18n-src:88be2deff5d5 -->
 > Nederlands translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
 
-[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![PyPI Downloads/week](https://static.pepy.tech/badge/clawmetry/week)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
+[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
+[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Zie je agent denken.** Realtime observability voor **14 AI-agentruntimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex en 10 andere. Eén dashboard voor je hele agentvloot.
+**Zie hoe je agent denkt.** Realtime observability voor **30 AI-agentruntimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 andere. Eén dashboard voor je hele agentvloot.
 
 > 🌐 **Lees dit in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [meer →](docs/i18n/)
 
-Eén commando. Geen configuratie nodig. Detecteert alles automatisch.
+Eén commando. Geen configuratie. Detecteert alles automatisch.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-Opent op **http://localhost:8900** en je bent klaar.
+Opent op **http://localhost:8900**. Geen configuratie nodig: het vindt de agentruntimes
+die je al hebt, leest ze alleen-lezen, en verandert niets aan hoe ze draaien.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## Werkt met 14 agentruntimes
+## Werkt met 30 agentruntimes
 
-ClawMetry begon als observability voor OpenClaw, en meet nu je **hele agentvloot** in één dashboard, met automatische detectie van elke runtime op je machine:
+**Gratis in de opensource-app:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
+**Bij een betaald abonnement:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-OpenClaw en NemoClaw zijn gratis in de open-source app; de andere runtimes worden geactiveerd met ClawMetry Cloud of een self-hosted Pro-licentie. Wissel van runtime via de header en elk tabblad, kosten, tokens, tools, traces, wordt opnieuw geschaald naar die runtime. Zie **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** voor de exacte gratis/betaald-verdeling, de tiermatrix, de vorm van `/api/entitlement` en de `clawmetry license` CLI.
+Elke runtime krijgt hetzelfde dashboard. Draai er meerdere tegelijk en de
+schakelaar in de header herschaalt elk tabblad naar één daarvan.
+
+Heb je je eigen agent op een SDK gebouwd in plaats daarvan? De interceptor
+volgt ook diens LLM-aanroepen. Zie [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 
 ## Wat je krijgt
 
-- **Flow** — Live geanimeerd diagram dat toont hoe berichten stromen door kanalen, brein, tools en terug
-- **Overzicht** — Gezondheidscontroles, activiteitsheatmap, sessieaantallen, modelinformatie
-- **Gebruik** — Token- en kostentracking met dagelijkse/wekelijkse/maandelijkse uitsplitsingen
-- **Sessies** — Actieve agentsessies met model, tokens, laatste activiteit
-- **Crons** — Geplande taken met status, volgende run, duur
-- **Logs** — Kleurgecodeerde realtime logstreaming
-- **Geheugen** — Blader door SOUL.md, MEMORY.md, AGENTS.md, dagelijkse notities
-- **Transcripten** — Chatbubbel-UI voor het lezen van sessiegeschiedenissen
-- **Meldingen** — Budgetlimieten, foutpercentage-triggers, detectie van offline agents; routeert naar Slack, Discord, PagerDuty, Telegram, e-mail
-- **Goedkeuringen** — Blokkeer destructieve verwijderingen, force pushes, database-mutaties, sudo, pakketinstallaties, netwerkoproepen achter een goedkeuring met één klik
+- **Sessies & transcripten**: wat elke agent deed, beurt voor beurt, met replay
+- **Kosten & tokens**: per runtime, model, sessie en dag, met anomaliemarkeringen
+- **Flow**: live diagram van berichten die door kanalen, modellen en tools bewegen
+- **Brain**: de stream van redeneer- en tool-aanroepgebeurtenissen terwijl het gebeurt
+- **Context blowout**: venstergebruik geschaald per provider, compactie versus geforceerde overflow, plus een overzicht per runtime van wat we *niet* kunnen zien ([hoe](docs/CONTEXT_BLOWOUT.md))
+- **Memory & skills**: de bestanden en skills die elke runtime daadwerkelijk laadde
+- **Health & logs**: schijf, geheugen, foutpercentages, rate limits, live logstream
+- **Alerts**: budgetplafonds, foutpieken, agent-offline, doorgestuurd naar Slack, Discord, PagerDuty, Telegram, e-mail
+- **Approvals**: pauzeer risicovolle tool-aanroepen *voordat* ze worden uitgevoerd en keur ze goed vanaf je telefoon ([hoe](docs/APPROVALS.md))
 
-## Screenshots
+## Context blowout, en wat het kost om te monitoren
 
-### 🧠 Brein — Live agentgebeurtenisstream
-![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
+Twee vragen die de moeite waard zijn om te beantwoorden voordat je een tool
+voor agentvergelijking vertrouwt.
 
-### 📊 Overzicht — Tokengebruik & sessiesamenvatting
-![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+**Hoe gaat het om met context-window blowout tussen runtimes?**
 
-### ⚡ Flow — Realtime feed van tool-aanroepen
-![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+Een gebruikspercentage is alleen zo eerlijk als waar het door gedeeld wordt.
+ClawMetry bepaalt de venstergrootte per provider vanuit [een tabel die je
+kunt lezen en waar je een PR op kunt indienen](clawmetry/context_windows.py),
+met dekking voor Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen,
+Mistral, Llama en GLM. Het meet niet alle 30 runtimes met de liniaal van
+één leverancier. Dat is belangrijk: een beurt van 300K tokens bij GPT-5,
+afgezet tegen Anthropics 200K, leest als ">100%, geblazen" terwijl het in
+werkelijkheid op 75% van GPT-5's 400K zit. Diezelfde liniaal verbergt een
+daadwerkelijk overgelopen beurt van 130K bij DeepSeek als een comfortabele
+65%.
 
-### 💰 Tokens — Kostenuitsplitsing per model & sessie
-![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
+Elk venster wordt geleverd met zijn herkomst: `model_table`,
+`explicit_marker`, `observed_floor`, of een eerlijke `default` wanneer we
+het model niet kennen. Een meter gebouwd op een gok wordt nooit weergegeven
+met hetzelfde gezag als een meter gebouwd op een opzoeking.
 
-### 🧬 Geheugen — Werkruimtebestandsverkenner
-![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
+ClawMetry kan compactiegebeurtenissen alleen zien bij sommige runtimes.
+Daarom meldt `GET /api/context-coverage`, per runtime, of een **nul
+betekent "verliep schoon" of "we zijn blind"**. Een `0` die eigenlijk blind
+betekent, zegt dat ook. [Volledige details](docs/CONTEXT_BLOWOUT.md)
 
-### 🔐 Beveiliging — Status & auditlog
-![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
+**Wat kost de instrumentatie?**
 
-### 🚨 Meldingen — Budgetlimieten, foutpercentage-triggers, webhooks naar Slack / Discord / PagerDuty / E-mail
-![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+| Pad | Toegevoegd aan je agent | Standaard? |
+|---|---|---|
+| Session-file tailing (alle 30 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
+| HTTP-interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** per LLM-aanroep, oftewel 0,009% van een aanroep van 5 s | uit |
+| Pre-tool hook gate (warme cache) | **+44 ms** per gepoorte tool-aanroep, boven op een interpretervloer van 36 ms | uit |
+| Enforcement proxy | **+9,7 ms** per LLM-aanroep | uit |
 
-### ✋ Goedkeuringen — Blokkeer riskante tool-aanroepen achter handmatige goedkeuring; beleidsgedreven beschermingsregels
-![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+Kosten van de daemon-host: **2.762 gebeurtenissen/sec** ingest, **710
+bytes/gebeurtenis** op schijf (67,7 MB per 100k gebeurtenissen), en **~12%
+van één core** aanhoudend op een drukke installatie. Dat laatste getal ligt
+boven ons eigen gestelde budget van 5-10%, dus het wordt gepubliceerd als
+een bug om achteraan te jagen in plaats van het van de pagina te laten.
+
+Gemeten op een Apple M2 Pro met `benchmarks/overhead.py`. De harness draait
+elke conditie in een apart proces, wisselt hun volgorde af, en **weigert een
+getal te printen wanneer de rondes het oneens zijn over het teken ervan**.
+Draai het zelf in een minuut op je eigen machine:
+
+```bash
+pip install clawmetry && python -m benchmarks.overhead
+```
+
+Elk pad wordt gemeten, inclusief de hook gates en de enforcement proxy, en
+de harness draait op Linux, macOS en Windows in CI. Twee resultaten die de
+moeite waard zijn om te weten: de proxy kost ongeveer zeven keer zoveel op
+Windows als op Linux, en de daemon houdt momenteel ongeveer 12% van één
+core aan, boven ons eigen budget van 5-10%. De ruwe JSON, de methode, en
+wat nog niet gemeten is, staan in [docs/OVERHEAD.md](docs/OVERHEAD.md).
+
+## Prijzen
+
+| Abonnement | Wat het dekt | Prijs |
+|---|---|---|
+| **Free** | OpenClaw + NVIDIA NemoClaw + Goose, volledig dashboard, alleen lokaal | $0 |
+| **Starter** | Elke andere runtime hierboven, vlootweergave, cloud sync | $9 per node / maand |
+| **Pro** | Starter + control en evaluatie: approvals, tool-risicobeleid, evaluaties, anomaliedetectie, cost optimizer, OTel-export, manipulatiebestendig auditlog | $19 per node / maand |
+
+Jaarabonnementen, Enterprise en de actuele bedragen staan op
+**[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Self-hosted
+licentiesleutels werken zonder de cloud (`clawmetry license`). De exacte
+verdeling tussen gratis en betaald staat in
+[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
+
+## Jouw data blijft op je machine
+
+ClawMetry leest lokale sessiebestanden en logs. **Er verlaat geen sessiedata
+je machine tenzij je `clawmetry connect` uitvoert** — geen prompts,
+antwoorden, tool-argumenten, bestandsinhoud of logregels. Wanneer je dat wel
+doet, wordt de snapshot end-to-end versleuteld met een sleutel die nooit je
+machine verlaat, en ontsleuteld in je browser. Als een node geen sleutel
+heeft, wordt de upload overgeslagen in plaats van onversleuteld verzonden,
+en geen serverreactie kan dat uitschakelen.
+
+Twee dingen draaien wel standaard voordat je verbinding maakt, beide opt-out
+en geen van beide met sessiedata: een anonieme installatieping en een
+versiecontrole tegen PyPI. Een standaardinstallatie zoekt ook eenmalig je
+publieke IP op voor een startbannerregel. Elke bestemming, wat die
+meestuurt en hoe je die uitschakelt staat vermeld in
+[docs/EGRESS.md](docs/EGRESS.md); self-hosted, omgeleide en air-gapped
+installaties maken helemaal geen optionele uitgaande aanroepen.
+
+De ontsleuteling gebeurt in je browser, in code die wij aan je leveren. Dat
+was ooit een belofte; het is nu iets wat je kunt controleren. Elke regel die
+je sleutel aanraakt staat in één leesbaar bestand,
+[`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js), dat
+meegeleverd wordt in de wheel en woordelijk wordt geserveerd, vastgepind met
+een Subresource Integrity-hash. Om te bevestigen dat de browser draait wat
+wij hebben gepubliceerd:
+
+```bash
+curl -s https://app.clawmetry.com/static/js/cm-e2e.js -o served.js
+pip download --no-deps clawmetry==$(clawmetry --version | tr -d 'a-z ') -d /tmp/cm
+unzip -p /tmp/cm/clawmetry-*.whl clawmetry/static/js/cm-e2e.js > published.js
+diff served.js published.js && echo identical
+```
+
+Wat dit niet bewijst: wij serveren de pagina die het bestand laadt, dus we
+zouden een andere pagina kunnen serveren. Integrity-hashes beschermen je
+tegen een gecompromitteerde CDN, niet tegen de leverancier. Wat je wint is
+dat elke vervanging opzettelijk moet zijn, zichtbaar in de paginabron, en
+anders dan een artefact op PyPI dat iedereen kan ophalen. Self-hosten of
+alleen lokaal blijven verwijdert de afhankelijkheid volledig.
 
 ## Installeren
 
-**One-liner (aanbevolen):**
 ```bash
-curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
+pip install clawmetry     # daarna: clawmetry
 ```
 
-**pip:**
-```bash
-pip install clawmetry
-clawmetry
-```
+Of de one-liner: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-**Vanaf de broncode:**
-```bash
-git clone https://github.com/vivekchand/clawmetry.git
-cd clawmetry && pip install flask && python3 dashboard.py
-```
+Vereist Python 3.8+ op macOS, Linux of Windows, en minstens één
+agentruntime op dezelfde machine. Docker-instructies:
+[docs/DOCKER.md](docs/DOCKER.md).
 
-## v2 Frontend-ontwikkeling
-
-De v2 React-app bevindt zich in `frontend/` en wordt geserveerd op `/v2` wanneer de Flask-server wordt gestart met v2 ingeschakeld.
-
-Gebruik twee terminals tijdens de ontwikkeling:
+Of laat de agent het voor je installeren. De
+[`agent-kill-switch`](skills/agent-kill-switch/SKILL.md)-skill leert Claude
+Code, Codex, Cursor, Gemini CLI, Copilot of OpenCode om ClawMetry te
+installeren, te rapporteren wat de agents op de machine doen en uitgeven,
+een sessie op verzoek te stoppen, en risicovolle tool-aanroepen vast te
+houden voor goedkeuring:
 
 ```bash
-# Terminal 1: Flask API/server op :8900
-CLAWMETRY_V2=1 python3 dashboard.py
+npx skills add vivekchand/clawmetry --skill agent-kill-switch
 ```
 
-```bash
-# Terminal 2: Vite dev server op :5173
-cd frontend
-nvm use
-npm ci
-npm run dev
-```
-
-Open `http://localhost:5173/v2/`. Vite proxyt `/api`-verzoeken naar
-`http://localhost:8900`, zodat de React-app met de lokale Flask-server kan praten
-zonder extra CORS-configuratie.
-
-Om de bundel te bouwen die met het Python-pakket wordt meegeleverd:
-
-```bash
-cd frontend
-npm run build
-```
-
-De productiebundel wordt weggeschreven naar `clawmetry/static/v2/dist/`.
-
-## Runtime-/agentcompatibiliteit
-
-ClawMetry observeert veel AI-agentruntimes, niet alleen OpenClaw. Elke niet-OpenClaw-runtime levert een eigen leesadapter die het native sessieformaat vertaalt naar de uniforme vormen van ClawMetry; de daemon neemt ze op in dezelfde DuckDB-opslag + cloud-snapshot, getagd met de runtime, en het tabblad Sessie-replay toont een **runtime-schakelaar** wanneer er meer dan één aanwezig is. Zie [`docs/compatibility.md`](docs/compatibility.md) voor de volledige matrix + een gids voor het toevoegen van runtimes, en [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) voor de inleiding over de OpenClaw-familie.
-
-| Runtime/agent | Status | Opmerkingen |
-|---|---|---|
-| **OpenClaw** | Native | Referentieruntime, automatisch gedetecteerd |
-| **PicoClaw** | Bèta-adapter | Platte `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). Transcripten, model, tool-aanroepen. |
-| **NanoClaw** | Bèta-adapter | SQLite per sessie (`data/v2-sessions`). Transcripten + berichtaantallen. |
-| **Hermes** | Bèta-adapter | SQLite `~/.hermes/state.db`. Transcripten, model, tokens/kosten. |
-| **Claude Code** | Bèta-adapter | JSONL `~/.claude/projects/.../<id>.jsonl`. Transcripten, model, tool-aanroepen + denkstappen, tokengebruik. |
-| **Codex** | Bèta-adapter | Rollout-JSONL `~/.codex/sessions/...`. Transcripten, model, tool-aanroepen, tokengebruik. |
-| **Cursor** | Bèta-adapter | SQLite `state.vscdb`. Chat-/composer-transcripten, model. |
-| **Aider** | Bèta-adapter | `.aider.chat.history.md` per project. Transcripten, model, tokenaantallen. |
-| **Goose** | Bèta-adapter | SQLite `~/.local/share/goose`. Transcripten, model, tool-aanroepen, tokentotalen. |
-| **opencode** | Bèta-adapter | SQLite `~/.local/share/opencode`. Transcripten, model, tool-aanroepen, tokens + kosten. |
-| **Qwen Code** | Bèta-adapter | JSONL `~/.qwen/projects/.../chats`. Transcripten, model, tool-aanroepen, tokengebruik. |
-| **Pi** | Bèta-adapter | JSONL `~/.pi/agent/sessions`. Transcripten, model, tool-aanroepen, tokens + kosten. |
-| **Deep Agents** | Bèta-adapter | SQLite `~/.deepagents/.state/sessions.db`. Transcripten, model, tool-aanroepen, tokens + kosten. |
-
-"Bèta-adapter" betekent dat ClawMetry een reader levert voor het echte formaat op schijf van die runtime, elk gebouwd en geverifieerd tegen een echte installatie op een echte machine (zie `tests/fixtures/runtimes/<rt>/`). Adapters zijn alleen-lezen; elk is eerlijk over wat de runtime daadwerkelijk opslaat (bijv. PicoClaw/NanoClaw/Cursor schrijven geen tokenkosten naar schijf). Wanneer er meerdere runtimes op één node draaien, beperkt de runtime-schakelaar de sessieweergave tot één voor een overzichtelijke deep-dive.
-
-## Volg elke SDK-agent — kostentoerekening buiten de lus
-
-De bovenstaande runtimes schrijven allemaal sessies naar schijf. Jouw eigen **productieagent**, degene die je hebt gebouwd op de OpenAI Agents SDK, LangChain, de Vercel AI SDK, LlamaIndex, E2B, of een gewone `httpx`-lus, doet dat niet. De zero-config interceptor van ClawMetry legt zijn LLM-aanroepen (kosten, tokens, latency, fouten) toch vast door `httpx`/`requests` te monkey-patchen:
-
-```python
-import clawmetry.track            # activeer de interceptor
-clawmetry.track.set_source("support-agent")   # geef dit product een naam
-
-# ...je agent draait zoals gewoonlijk; elke LLM-aanroep wordt nu getrackt + toegewezen.
-```
-
-`set_source()` (of de omgevingsvariabele `CLAWMETRY_SOURCE=support-agent`) tagt elke aanroep met een **benoemde bron**, zodat elk product dat je draait verschijnt als zijn eigen volwaardige, aan kosten toe te wijzen regel in de kaart **🔌 Out-loop sources** op het Overzicht van het dashboard, aanroepen, providers, latency, foutpercentage per agent. Geen bron ingesteld? De aanroepen worden nog steeds getrackt; de kaart blijft dan gewoon verborgen.
-
-```bash
-CLAWMETRY_SOURCE=billing-agent python my_agent.py
-```
-
-Dit is dezelfde datalaag die door de runtime-adapters wordt gevoed (DuckDB → cloud-snapshot), dus out-loop-bronnen synchroniseren met het clouddashboard net als al het andere, end-to-end versleuteld.
-
-## OpenTelemetry — leveranciersneutraal, stuur je traces overal naartoe
-
-ClawMetry spreekt **OpenTelemetry** in beide richtingen, met gebruik van de **GenAI-semantische conventies**, zodat je agenttraces nooit vastzitten aan één tool.
-
-**Exporteer** elke sessie, LLM-aanroepen, tools, sub-agents, tokens, kosten, als OTLP/HTTP GenAI-spans naar elke collector (Datadog, Grafana, Honeycomb, of je eigen OTel Collector):
-
-```bash
-clawmetry --otel-export http://localhost:4318/v1/traces
-# equivalent:
-CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
-```
-
-Auth-headers en pollinterval zijn optionele omgevingsvariabelen:
-
-```bash
-CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP-headers
-CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconden (standaard 60)
-```
-
-**Ontvangen** — de ingebouwde OTLP-ontvanger accepteert traces en metrics van alles anders op `/v1/traces` en `/v1/metrics` (`pip install clawmetry[otel]` voor protobuf-ingest).
-
-Je krijgt het zero-config, local-first ClawMetry-dashboard **en** je data in welke backend je team ook al gebruikt, geen lock-in, geen tweede agent om te installeren.
-
-## Configuratie
-
-De meeste mensen hebben geen configuratie nodig. ClawMetry detecteert automatisch je werkruimte, logs, sessies en crons.
-
-Als je toch wilt aanpassen:
-
-```bash
-clawmetry --port 9000              # Aangepaste poort (standaard: 8900)
-clawmetry --host 127.0.0.1         # Alleen binden aan localhost
-clawmetry --workspace ~/mybot      # Aangepast werkruimtepad
-clawmetry --name "Alice"           # Jouw naam in de Flow-visualisatie
-```
-
-Alle opties: `clawmetry --help`
-
-## Ondersteunde kanalen
-
-ClawMetry toont live activiteit voor elk OpenClaw-kanaal dat je hebt geconfigureerd. Alleen kanalen die daadwerkelijk zijn ingesteld in je `openclaw.json` verschijnen in het Flow-diagram; niet-geconfigureerde kanalen worden automatisch verborgen.
-
-Klik op een kanaalknooppunt in de Flow om een live chatbubbelweergave te zien met aantallen inkomende/uitgaande berichten.
-
-| Kanaal | Status | Live pop-up | Opmerkingen |
-|---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ Volledig | ✅ | Berichten, statistieken, verversing elke 10s |
-| 💬 **iMessage** | ✅ Volledig | ✅ | Leest `~/Library/Messages/chat.db` rechtstreeks |
-| 💚 **WhatsApp** | ✅ Volledig | ✅ | Via WhatsApp Web (Baileys) |
-| 🔵 **Signal** | ✅ Volledig | ✅ | Via signal-cli |
-| 🟣 **Discord** | ✅ Volledig | ✅ | Guild + kanaaldetectie |
-| 🟪 **Slack** | ✅ Volledig | ✅ | Werkruimte + kanaaldetectie |
-| 🌐 **Webchat** | ✅ Volledig | ✅ | Ingebouwde web-UI-sessies |
-| 📡 **IRC** | ✅ Volledig | ✅ | Terminal-stijl bubbel-UI |
-| 🍏 **BlueBubbles** | ✅ Volledig | ✅ | iMessage via BlueBubbles REST API |
-| 🔵 **Google Chat** | ✅ Volledig | ✅ | Via Chat API-webhooks |
-| 🟣 **MS Teams** | ✅ Volledig | ✅ | Via Teams-bot-plugin |
-| 🔷 **Mattermost** | ✅ Volledig | ✅ | Zelfgehoste teamchat |
-| 🟩 **Matrix** | ✅ Volledig | ✅ | Gedecentraliseerd, met E2EE-ondersteuning |
-| 🟢 **LINE** | ✅ Volledig | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ Volledig | ✅ | Gedecentraliseerde NIP-04 DM's |
-| 🟣 **Twitch** | ✅ Volledig | ✅ | Chat via IRC-verbinding |
-| 🔷 **Feishu/Lark** | ✅ Volledig | ✅ | WebSocket-gebeurtenisabonnement |
-| 🔵 **Zalo** | ✅ Volledig | ✅ | Zalo Bot API |
-
-> **Automatische detectie:** ClawMetry leest je `~/.openclaw/openclaw.json` en rendert alleen de kanalen die je daadwerkelijk hebt geconfigureerd. Geen handmatige instelling nodig.
-
-## Docker-implementatie
-
-Wil je ClawMetry in een container draaien? Geen probleem! 🐳
-
-**Snelstart met Docker:**
-
-```bash
-# Bouw de image
-docker build -t clawmetry .
-
-# Draai met standaardinstellingen
-docker run -p 8900:8900 clawmetry
-
-# Of koppel de datamap van je agent (getoond: OpenClaw's ~/.openclaw)
-docker run -p 8900:8900 \
-  -v ~/.openclaw:/root/.openclaw \
-  -v /tmp/moltbot:/tmp/moltbot \
-  clawmetry
-```
-
-**Voorbeeld Docker Compose:**
-
-```yaml
-version: '3.8'
-services:
-  clawmetry:
-    build: .
-    ports:
-      - "8900:8900"
-    volumes:
-      - ~/.openclaw:/root/.openclaw:ro
-      - /tmp/moltbot:/tmp/moltbot:ro
-    restart: unless-stopped
-```
-
-> **Opmerking:** Wanneer je in Docker draait, koppel dan de data- en logmappen van je agent (bijv. `~/.openclaw`, `~/.claude`, `~/.codex`) zodat ClawMetry je opstelling automatisch kan detecteren.
-
-## Vereisten
-
-- Python 3.8+
-- Flask (automatisch geïnstalleerd via pip)
-- Een AI-agentruntime op dezelfde machine: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, of Deep Agents (of gekoppelde volumes voor Docker)
-- Linux of macOS
-
-## NemoClaw-/OpenShell-ondersteuning
-
-ClawMetry detecteert automatisch [NemoClaw](https://github.com/NVIDIA/NemoClaw), NVIDIA's enterprise-beveiligingswrapper voor OpenClaw die agents laat draaien binnen gesandboxte OpenShell-containers.
-
-In de meeste gevallen is geen extra configuratie nodig. De sync-daemon ontdekt automatisch sessiebestanden, of ze zich nu in `~/.openclaw/` op de host bevinden of binnen een OpenShell-container.
-
-### Hoe het werkt
-
-ClawMetry detecteert NemoClaw op twee manieren:
-
-1. **Binaire detectie** — controleert op de `nemoclaw` CLI en voert `nemoclaw status` uit om sandbox-informatie op te halen
-2. **Containerdetectie** — scant draaiende Docker-containers op `openshell`, `nemoclaw`, of `ghcr.io/nvidia/`-images, en leest vervolgens sessies via volume-koppelingen of `docker cp`
-
-Sessiebestanden gesynchroniseerd vanuit NemoClaw-containers worden getagd met `runtime=nemoclaw` en `container_id`-metadata in het clouddashboard, zodat je ze op het eerste gezicht kunt onderscheiden van standaard OpenClaw-sessies.
-
-### Aanbevolen opzet: sync-daemon op de HOST
-
-Voor de beste ervaring draai je de sync-daemon van ClawMetry op de **hostmachine** (niet binnen de sandbox). Dit voorkomt beperkingen door het netwerkbeleid van NemoClaw.
-
-```bash
-# Op de host (buiten de sandbox)
-pip install clawmetry
-clawmetry connect
-clawmetry sync
-```
-
-De sync-daemon vindt automatisch sessies binnen elke draaiende OpenShell-container.
-
-### Optioneel: expliciete sandboxnaam
-
-Als automatische detectie niet werkt, wijs ClawMetry dan naar de juiste sandbox:
-
-```bash
-export NEMOCLAW_SANDBOX=my-sandbox-name
-clawmetry sync
-```
-
-### Draaien binnen de sandbox (geavanceerd)
-
-Als je de sync-daemon **binnen** de OpenShell-sandbox moet draaien, voeg dan deze uitgaande regel toe aan je NemoClaw-netwerkbeleid, zodat deze bij de ClawMetry-ingest-API kan komen:
-
-```yaml
-# nemoclaw-policy.yaml
-network:
-  egress:
-    - host: ingest.clawmetry.com
-      port: 443
-      protocol: https
-```
-
-Toepassen met:
-
-```bash
-nemoclaw policy apply --file nemoclaw-policy.yaml
-```
-
-### Poorten en eindpunten
-
-| Eindpunt | Poort | Protocol | Vereist |
-|---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | Ja (sync-daemon → cloud) |
-| `localhost:8900` | 8900 | HTTP | Ja (lokale dashboard-UI) |
-| Docker-socket (`/var/run/docker.sock`) | — | Unix-socket | Voor het ontdekken van containersessies |
-
-De sync-daemon doet alleen uitgaande HTTPS-oproepen naar `ingest.clawmetry.com`. Er zijn geen inkomende poorten vereist.
-
----
-
-## Cloud-implementatie
-
-Zie de **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** voor SSH-tunnels, reverse proxy en Docker.
-
-## Testen
-
-Dit project wordt getest met BrowserStack.
-
-[![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
-
-## Telemetrie
-
-ClawMetry stuurt één anonieme "eerste run"-ping naar
-`https://app.clawmetry.com/api/install` de eerste keer dat je de
-`clawmetry` CLI op een nieuwe machine draait. We gebruiken dit om installaties te tellen (de
-enige marketingmeting die we hebben voor een open-source project) en om te leren welke
-agentframeworks onze gebruikers hebben geïnstalleerd.
-
-**Precies één POST per installatie**, met daarin:
-
-| Veld | Voorbeeld | Waarom |
-|---|---|---|
-| `install_id` | willekeurige UUID opgeslagen op `~/.clawmetry/install_id` | deduplicatie; niet gekoppeld aan je e-mail of api_key |
-| `version` | `0.12.167` | welke versies er in omloop zijn |
-| `os` / `os_version` | `Darwin` / `25.3.0` | prioriteiten voor platformondersteuning |
-| `python` | `3.11.15` | ondersteuningsmatrix voor Python-versies |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | met welke agents we ons vervolgens moeten integreren |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | menselijke installaties scheiden van CI-ruis |
-
-**Wat we NIET versturen**: IP (de cloud leidt de landcode serverzijde af
-uit het verzoek en gooit vervolgens het IP weg), hostnaam, gebruikersnaam, werkruimtepad,
-bestandsinhoud, je api_key, je e-mail, iets dat PII of
-werkruimte-specifiek is. De payload op de lijn is controleerbaar in
-[`clawmetry/telemetry.py`](clawmetry/telemetry.py).
-
-**Afmelden** (elk van deze schakelt het permanent uit):
-
-```bash
-export CLAWMETRY_NO_TELEMETRY=1                # per shell
-export DO_NOT_TRACK=1                          # W3C cross-tool-standaard
-touch ~/.clawmetry/notelemetry                 # permanente bestandsmarkering
-```
-
-Een netwerkfout hierbij blokkeert `clawmetry` nooit om te draaien; de
-ping is fire-and-forget op een daemon-thread met een timeout van 3 seconden.
-
-## Star History
+## Documentatie
+
+| | |
+|---|---|
+| [Compatibiliteit van runtimes](docs/compatibility.md) | Wat elke adapter leest, en hoe je een runtime toevoegt |
+| [Context blowout](docs/CONTEXT_BLOWOUT.md) | Vensters per provider, compactie versus overflow, dekking per runtime |
+| [Overhead](docs/OVERHEAD.md) | Wat instrumentatie kost, gemeten, met de harness om het te reproduceren |
+| [Entitlements](docs/ENTITLEMENTS.md) | Gratis versus betaald, tiermatrix, licentie-CLI |
+| [Approvals & beleid](docs/APPROVALS.md) | Pre-executie gating, risicoscore, goedkeuring vanaf de telefoon |
+| [OpenTelemetry](docs/OPENTELEMETRY.md) | Exporteer traces overal naartoe, ingest OTLP vanuit alles |
+| [Bring your own agent](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore, Pydantic AI, LangChain van begin tot eind, met uitvoerbare voorbeelden |
+| [SDK-tracking](docs/SDK_TRACKING.md) | Kostentoewijzing voor agents die je zelf hebt gebouwd |
+| [Chatkanalen](docs/CHANNELS.md) | De chatadapters die in Flow worden getoond |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Gesandboxte NVIDIA NemoClaw-opstellingen |
+| [Docker](docs/DOCKER.md) | Image, compose, volume mounts |
+| [Architectuur](ARCHITECTURE.md) · [Ontwikkeling](docs/DEVELOPMENT.md) | Hoe het intern werkt; draaien vanuit de broncode |
+| [Telemetrie](docs/TELEMETRY.md) | De anonieme installatie- en desktop-open-pings, en hoe je ze uitschakelt |
+
+## Screenshots
+
+Elk getal hieronder komt van één echte machine, alleen-lezen, zonder iets
+vooraf ingevuld.
+
+**Het vertelt je wanneer er iets mis is, niet alleen wat er is gebeurd.**
+Twee anomaliebanners bovenaan: uitgaven die 7x het dagelijkse gemiddelde
+draaien, en een kostenpiek van 4,2x. Daaronder, 324 van de 667 recente
+sessies met een verspillingssignaal, uitgesplitst per oorzaak.
+
+![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+
+**Het laat je zien waar het geld naartoe ging, in elk venster.**
+$252,47 vandaag, $513,15 deze week, $1.312,92 deze maand, elk met de
+tokens erachter en hoeveel daarvan je abonnement al dekt. Daaronder, ongeveer
+$1.128/maand uitgesplitst als herwinbaar en $17.256/maand al bespaard door
+cachehergebruik.
+
+![Cost: today, this week and this month, with an efficiency grade and itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
+
+**Het tekent hoe een bericht een antwoord wordt.**
+Het live flow-diagram: jij, het kanaal waarop het binnenkwam, de gateway,
+het model dat op dit moment antwoordt, en elke tool die het aanraakte.
+Knooppunten lichten op naarmate werk erdoorheen beweegt.
+
+![Flow: live diagram from you through the gateway to the model and its tools](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+
+**Elke agent op de machine, in één tabel.**
+Wat hij draait, wat hij kost in de laatste 24 uur en gedurende zijn hele
+levensduur, wanneer hij voor het laatst is gezien, wie hem bezit, en of een
+abonnement de rekening dekt. 14 agents hier, 3 sessies aan het werk, 13
+stil.
+
+![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
+
+**Het laat zien waar de tijd en het geld van een beurt naartoe gingen, tool voor tool.**
+Eén beurt van een echte sessie: 11 tools in 11,2 minuten voor $1,16. Elke
+Bash-aanroep en modelaanroep krijgt zijn eigen balk op de tijdlijn, zodat
+het commando dat 4,1 minuten draaide en dat wat 226 ms draaide in één
+oogopslag te onderscheiden zijn.
+
+![Sessions: one agent turn on a timeline, every tool call with its own duration and the turn's cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/sessions.png)
+
+**Het beoordeelt het werk, niet alleen de uitgaven.**
+Een A deze week: 54 taken kwamen schoon terug, 2 ruwe kostten $48,57, en de
+runs met te weinig activiteit om te beoordelen worden weggelaten uit het
+cijfer in plaats van als winst te worden geteld. Elke ruwe run linkt naar
+zijn trace.
+
+![Quality: this week's report card with the rough runs and what they cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/quality.png)
+
+**Het laat zien waarom het contextvenster maar blijft vollopen.**
+715K van een venster van 1M tokens bij de laatste beurt, een piek van
+83,3%, 4 compacties die allemaal proactief afgingen in plaats van bij een
+overflow, en het gebruik van elke beurt erachter.
+
+![Context usage: window utilisation per turn, compaction events and tokens reclaimed](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/context.png)
+
+**Detectie draait zonder dat jij iets hoeft te configureren.**
+De ingebouwde detectors staan aan vanaf installatie: agent werd stil,
+telemetriefeed stopte, kostenpiek, tokenpiek, oplopende fouten, foutpiek,
+budgetdrempel, dreigingssignatuur gematcht, bevinding van beveiligingstool,
+veranderde beveiligingshouding. Je eigen regels zijn optioneel daarbovenop.
+
+![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+
+**Een risicovolle aanroep vasthouden is opt-in, en wordt uitgeschakeld verzonden.**
+Recursieve verwijderingen, force pushes, sudo, geheimen, pakketinstallaties
+en uitgaande aanroepen krijgen elk een regel die je kunt inschakelen. Tot
+je dat doet, kijkt ClawMetry toe en verandert niets. Zodra er één aan staat,
+wachten overeenkomende aanroepen hier (of op je telefoon) op goedkeuring of
+afwijzing.
+
+![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+
+Meer, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
+
+## Stergeschiedenis
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
  <picture>
@@ -401,11 +295,6 @@ ping is fire-and-forget op een daemon-thread met een timeout van 3 seconden.
 
 ## Licentie
 
-MIT
+MIT · Gebouwd door [@vivekchand](https://github.com/vivekchand) · [clawmetry.com](https://clawmetry.com)
 
----
-
-<p align="center">
-  <strong>🦞 Zie je agent denken</strong><br>
-  <sub>Gebouwd door <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · Onderdeel van het <a href="https://github.com/openclaw/openclaw">OpenClaw</a>-ecosysteem</sub>
-</p>
+<!-- osai-verify: f3ac716d40002c1ad6dd -->

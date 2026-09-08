@@ -34,6 +34,7 @@ def test_happy_path_flushes_events_and_advances_cursor():
 
     side_effects = [
         _run(0, sandbox_list),
+        _run(1, ""),  # cat main/sessions.json (subagent index absent)
         _run(0, ls_output),   # ls agents/main/sessions
         _run(0, cat_output),  # cat main/abc123.jsonl
         _run(1, ""),          # ls agents/advisor/sessions (absent — nonzero)
@@ -61,6 +62,7 @@ def test_sidecar_files_excluded():
     # Only abc.jsonl should be read (1 cat call); sidecars produce no cat call
     side_effects = [
         _run(0, sandbox_list),
+        _run(1, ""),  # cat main/sessions.json (subagent index absent)
         _run(0, ls_output),   # ls agents/main/sessions
         _run(0, cat_output),  # cat main/abc.jsonl (only non-sidecar)
         _run(1, ""),          # ls agents/advisor/sessions (absent)
@@ -86,6 +88,7 @@ def test_sandbox_sessions_tagged_as_nemoclaw():
 
     side_effects = [
         _run(0, sandbox_list),
+        _run(1, ""),  # cat main/sessions.json (subagent index absent)
         _run(0, ls_output),   # ls agents/main/sessions
         _run(0, cat_output),  # cat main/sess.jsonl
         _run(1, ""),          # ls agents/advisor/sessions (absent)
@@ -117,6 +120,7 @@ def test_cursor_skips_already_seen_lines_on_second_call():
     def make_effects():
         return [
             _run(0, sandbox_list),
+            _run(1, ""),  # cat main/sessions.json (subagent index absent)
             _run(0, ls_output),  # ls agents/main/sessions
             _run(0, cat_output), # cat main/sess.jsonl
             _run(1, ""),         # ls agents/advisor/sessions (absent)

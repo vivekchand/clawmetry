@@ -24,10 +24,13 @@ node_id ownership check).
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 from flask import Blueprint, jsonify, request
+
+log = logging.getLogger("clawmetry.local_query")
 
 bp_local_query = Blueprint("local_query", __name__)
 
@@ -133,6 +136,13 @@ def _read_discovery():
 
         if not _pid_alive(pid):
             return None
+        # The daemon only owns ITS DuckDB. A process pointed at a different
+        # file (CLAWMETRY_LOCAL_STORE_PATH — pytest fixtures, a scratch DB)
+        # must not forward reads OR writes to it: that is how test fixture
+        # rows ended up in an operator's live alert_rules table.
+        from clawmetry.local_server import discovery_serves_this_db
+        if not discovery_serves_this_db(data):
+            return None
         return {"port": port, "token": token}
     except (FileNotFoundError, ValueError, OSError):
         return None
@@ -199,8 +209,31 @@ def _coerce_args(shape: str, raw: dict) -> dict:
             "session_id": sid,
             "limit":      _safe_int(raw.get("limit"), default=500, lo=1, hi=5000),
         }
+    if shape == "transcript_page":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("transcript_page shape requires session_id")
+        bt = raw.get("before_ts")
+        try:
+            bt = int(bt) if bt is not None and str(bt).strip() != "" else None
+        except (TypeError, ValueError):
+            bt = None
+        return {
+            "session_id": sid,
+            "before_ts":  bt,
+            "limit":      _safe_int(raw.get("limit"), default=150, lo=1, hi=250),
+        }
     if shape == "health":
         return {}
+    if shape == "similar_sessions":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("similar_sessions shape requires session_id")
+        return {
+            "session_id":  sid,
+            "window_days": _safe_int(raw.get("window_days"), default=30, lo=1, hi=365),
+            "limit":       _safe_int(raw.get("limit"), default=10, lo=1, hi=50),
+        }
     if shape == "spans":
         return {
             "trace_id":   raw.get("trace_id"),
@@ -257,9 +290,27 @@ def _coerce_args(shape: str, raw: dict) -> dict:
         }
     if shape == "agent_graph":
         return {
+            "runtime": raw.get("runtime") or None,
             "since": raw.get("since"),
             "until": raw.get("until"),
             "limit": _safe_int(raw.get("limit"), default=500, lo=1, hi=2000),
+        }
+    if shape == "replay_events":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("replay_events shape requires session_id")
+        return {
+            "session_id": sid,
+            "limit": _safe_int(raw.get("limit"), default=2000, lo=1, hi=10000),
+        }
+    if shape == "session_context":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("session_context shape requires session_id")
+        return {
+            "session_id": sid,
+            "agent_type": raw.get("agent_type") or None,
+            "limit": _safe_int(raw.get("limit"), default=200, lo=1, hi=1000),
         }
     raise ValueError(f"unknown shape: {shape}")
 
@@ -334,15 +385,18 @@ def _dispatch(shape: str, args: dict) -> dict:
         body = _proxy_dispatch(shape, args)
         body["_via"] = "daemon_proxy"
         body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        if shape == "sessions":
+            _attach_nondeterminism(body)
         return body
     except Exception:
         pass
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape == "agent_graph":
-        # agent_graph returns a dict directly (nodes/edges/count), not a list,
-        # so pass it through like health rather than wrapping in {"rows": ...}.
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions"):
+        # These return a dict directly (nodes/edges/count for agent_graph,
+        # rows/has_more/next_before_ts for transcript_page), not a list, so
+        # pass them through like health rather than wrapping in {"rows": ...}.
         body = getattr(store, _SHAPES[shape])(**args)
     else:
         method_name = _SHAPES[shape]
@@ -351,7 +405,66 @@ def _dispatch(shape: str, args: dict) -> dict:
     body["_shape"] = shape
     body["_via"] = "direct"
     body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    if shape == "sessions":
+        _attach_nondeterminism(body, store=store)
     return body
+
+
+# Replay agreement is written by an opt-in scheduler and changes at most a
+# few times an hour, so one cached read serves every sessions call in the
+# window instead of a second store hop per request (perf is a cost).
+_ND_CACHE: dict = {"ts": 0.0, "rows": {}}
+_ND_TTL_SEC = 60.0
+
+
+def _replay_stats_map(store=None) -> dict:
+    now = time.monotonic()
+    if (now - float(_ND_CACHE.get("ts") or 0)) < _ND_TTL_SEC:
+        return _ND_CACHE.get("rows") or {}
+    rows = None
+    try:
+        if store is not None:
+            rows = store.query_session_replay_stats(limit=2000)
+        else:
+            rows = local_store_via_daemon("query_session_replay_stats", limit=2000)
+            if rows is None:
+                rows = _store().query_session_replay_stats(limit=2000)
+    except Exception:
+        rows = None
+    out = {}
+    for r in rows or []:
+        if isinstance(r, dict) and r.get("session_id"):
+            out[str(r["session_id"])] = r
+    _ND_CACHE["ts"] = now
+    _ND_CACHE["rows"] = out
+    return out
+
+
+def _attach_nondeterminism(body: dict, store=None) -> None:
+    """Add ``nondeterminism`` to every session row: ``None`` when never
+    measured (the honest default), else ``{runs, agreement_pct}``. Free on
+    every plan; the run-by-run compare view stays behind ``per_run_compare``.
+    Never raises; a failure leaves the rows untouched except for the null."""
+    try:
+        rows = body.get("rows") if isinstance(body, dict) else None
+        if not isinstance(rows, list) or not rows:
+            return
+        stats = _replay_stats_map(store)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get("session_id") or row.get("sessionId") or row.get("id") or "")
+            st = stats.get(sid) if sid else None
+            if st and st.get("runs"):
+                row["nondeterminism"] = {
+                    "runs": int(st.get("runs") or 0),
+                    "agreement_pct": st.get("agreement_pct"),
+                    "measured_at": st.get("updated_at"),
+                }
+            else:
+                row.setdefault("nondeterminism", None)
+    except Exception:
+        return
 
 
 # ── HTTP routes ────────────────────────────────────────────────────────────
@@ -482,6 +595,26 @@ def http_agent_graph():
         return jsonify({"error": str(e)[:300]}), 500
 
 
+@bp_local_query.route("/api/local/replay-events/<path:session_id>", methods=["GET"])
+def http_replay_events(session_id: str):
+    """Flat canonical replay-event rows for one session (#4813).
+
+    Powers ``/api/replay-tree/<session_id>`` (the tree-building endpoint
+    lives in ``routes/sessions.py``). Returned rows are ts-ascending; the
+    endpoint layer groups them into turns/delegations/workflows.
+    Empty ``rows`` is the honest shape until adapter mappers land.
+    """
+    try:
+        raw = dict(request.args.to_dict())
+        raw["session_id"] = session_id
+        args = _coerce_args("replay_events", raw)
+        return jsonify(_dispatch("replay_events", args))
+    except ValueError as e:
+        return jsonify({"error": str(e)[:300]}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)[:300]}), 500
+
+
 @bp_local_query.route("/api/local/sandbox-logs/<sandbox_name>", methods=["GET"])
 def http_sandbox_logs(sandbox_name: str):
     """Return OCSF sandbox audit log events for a NemoClaw sandbox.
@@ -547,7 +680,60 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    # Cohort compare + similar runs (WO-60): routes/cohort.py reads both
+    # through the proxy; the similarity walk runs in the daemon process.
+    "query_cohort_sessions",
+    "query_similar_sessions",
     "query_events",
+    # Same rows as query_events with the two bulk ``data`` keys dropped
+    # (content / tool_calls). The Cost-tab roll-ups scan 20k-50k events and
+    # the full shape marshals ~38 MB per call, which is what starves sibling
+    # reads until they trip _PROXY_TIMEOUTS and render a false empty tab.
+    "query_events_slim",
+    # Inputs & context: /api/sessions/<id>/context reads the session_context
+    # table (system prompt, tools, runtime setup) through the daemon.
+    "query_session_context",
+    # Trail (schema v15): per-session intent + git outcome join. Read by
+    # routes/sessions.py (/api/transcript, /api/sessions/<id>/git-outcomes)
+    # from the dashboard process while the daemon holds the writer lock.
+    "get_session_intent",
+    "query_session_intents",
+    "query_session_git_outcomes",
+    "query_session_git_counts",
+    # Runtime event counts. NemoClawAdapter.detect() used to run
+    # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses
+    # (private helpers would be arbitrary SQL over the RPC), so on every
+    # standard install -- where the daemon owns the writer lock -- the call
+    # returned None and NemoClaw, a FREE runtime, was never detected.
+    "query_event_count",
+    # Emergency-stop cwd lookup: routes/sessions.py:api_session_stop routes
+    # family sids through process_control and needs the session's working
+    # directory (sessions.cwd) to resolve the pid — read via the daemon so
+    # the dashboard process never opens DuckDB itself.
+    "get_session_location",
+    # "Needs you" state. The hook receiver (routes/hooks.py) runs in the
+    # DASHBOARD process while the daemon owns the writer lock, so these must
+    # be proxied — an unlisted method is a silent no-op and the badge would
+    # simply never appear.
+    "set_session_attention",
+    "clear_session_attention",
+    # Lifecycle facts from runtime hooks (WO-61). The intake in
+    # routes/hooks.py runs in the DASHBOARD process; an unlisted writer is a
+    # silent no-op, so the trail would simply never show a denial.
+    "ingest_lifecycle_events",
+    "upsert_session_instructions",
+    "get_session_instructions",
+    "query_lifecycle_events",
+    # Agent-Inventory roster (#task-12): ``sync._build_runtime_summary`` runs
+    # in the DASHBOARD process when /api/inventory composes locally; without
+    # this method the proxy returned None, ``by_runtime``/``by_runtime_model``
+    # came back empty, and every roster row showed 0 conversations / $0 even
+    # though the store had real sessions (live-hit 2026-07-29).
+    "query_model_rollup",
+    # #5643: fair per-runtime session picks for the cloud snapshot's
+    # transcript slots. Also read by tests/diagnostics from the
+    # dashboard process, which has no writer lock.
+    "query_recent_sessions_by_runtime",
     "query_sessions",
     "query_sessions_table",
     "query_aggregates",
@@ -555,6 +741,10 @@ _DAEMON_METHODS = frozenset({
     # split for the Tokens-tab daily chart. Replaces the legacy fast-path
     # that returned 0 for every split on real OpenClaw v3 installs.
     "query_daily_usage_splits",
+    # Issue #5289: Fish Audio TTS cost breakdown for /api/usage attribution.
+    # TTS events store cost_usd in ``events``; this rollup surfaces per-provider
+    # spend alongside the LLM model breakdown so audio synthesis costs are visible.
+    "query_tts_provider_rollup",
     "query_heartbeats",
     "query_channels",
     # MOAT Tier-1 sweep (refs #1565): /api/flow/runs was opening DuckDB
@@ -571,12 +761,34 @@ _DAEMON_METHODS = frozenset({
     # gateway RPC (down), surfacing as the same 6 s timeout the PR was
     # supposed to fix. Adding both here closes the loop.
     "query_alert_rules",
+    # Founder 2026-08-15: locally-created alert rules live in the fleet
+    # SQLite DB, but ``sync._evaluate_alerts_local`` only ever reads DuckDB.
+    # Nothing bridged the two (``ingest_alert_rule`` was cloud-relay-only),
+    # so a rule created from the Alerts tab on a no-cloud node was evaluated
+    # by nobody and sat on "never triggered" forever. routes/alerts.py now
+    # mirrors on write/update/delete through these two.
+    "ingest_alert_rule",
+    # ── Guard: live session control + enforcement policies ──────────────
+    # The Guard tab authors policies from the dashboard process, but the
+    # daemon owns the DuckDB writer lock, so every one of these has to be
+    # reachable through the proxy. Without them the reads return None and the
+    # tab renders an empty state that looks like "no policies" rather than
+    # "could not reach the store" — and the writes silently no-op.
+    "query_session_policies",
+    "upsert_session_policy",
+    "delete_session_policy",
+    "query_policy_actions",
+    "delete_alert_rule",
     "query_channel_config_status",
     "query_crons",
     # Issue #605 DuckDB follow-up: per-job cron-run timeline. Read by
     # ``routes/crons.py:_cron_runs_from_duckdb`` via the daemon proxy.
     "query_cron_runs",
     "query_subagents",
+    # Orchestration capture: events-join-free subagent rows (kind / workflow
+    # run / prompt / reply / nowTool live in the data blob). Read by
+    # /api/session-orchestration and the Brain feed's per-run header.
+    "query_subagents_lite",
     # Context graph: decision-lineage tree (recursive subagent fan-out) for a session.
     "query_session_lineage",
     # Context graph: per-parent sub-agent cost rollup (true-cost-of-an-ask chip).
@@ -621,6 +833,9 @@ _DAEMON_METHODS = frozenset({
     # repeatedly-overflow-then-retry session flag. Powers the Context
     # Economics tab (routes/context_economics.py:/api/context-economics).
     "query_context_economics",
+    # Per-runtime blowout-signal coverage (routes/context_economics.py:
+    # /api/context-coverage).
+    "query_context_coverage",
     # Phase 4 (issue #1088 follow-up, 2026-05-13): channel-message
     # foundation. Three helpers proved out the schema; the remaining 18
     # per-provider channel routes follow once these go green.
@@ -654,6 +869,12 @@ _DAEMON_METHODS = frozenset({
     # dashboard. Read by routes/health.py:/api/loop-signals via the daemon
     # proxy so the dashboard process never opens DuckDB writable.
     "query_recent_loop_signals",
+    # WO-5 (repo AI-readiness): sessions joined to their loop signals by the
+    # directory they ran in, so the Harness tab can put a repo's readiness
+    # grade next to the stuck rate that repo actually produced. Read by
+    # routes/readiness.py through this proxy -- the dashboard process never
+    # opens DuckDB writable.
+    "query_repo_activity",
     # Issue #1364 (MOAT 1.b): surface OTel spans we already persist.
     # Powers /api/spans + the Brain-tab "Spans" table.
     "query_recent_spans",
@@ -678,6 +899,28 @@ _DAEMON_METHODS = frozenset({
     # set_agent_meta. The handler calls put_span(span=...) by keyword (the proxy
     # only forwards kwargs).
     "put_span",
+    # WO-7 daemon-free intake. The OTLP /v1/logs receiver runs in the
+    # DASHBOARD process, which does not own the DuckDB writer lock, so its
+    # batch write has to come through here or it silently no-ops on every
+    # real install (the same trap put_span hit above). Call it by KEYWORD:
+    # put_otlp_batch(records=[...], events=[...]) — the proxy forwards
+    # **kwargs only. One call per OTLP export batch, not per record.
+    "put_otlp_batch",
+    # WO-55: sessions materialized from OTLP spans. The /v1/traces receiver
+    # (dashboard process, no writer lock) recomputes the touched sessions'
+    # rollups from the spans table and upserts sessions rows through the
+    # daemon, so a span-only app (AgentCore, OpenLLMetry) shows in the
+    # Sessions tab + runtime switcher. Keyword-only through the proxy:
+    # materialize_otlp_sessions(session_ids=[...], environments={...}).
+    "materialize_otlp_sessions",
+    # Read side of the same table: per-team / per-repo / per-person rollups
+    # over the daemon-free path, and the persisted-row count /api/otel-status
+    # shows so an operator can tell durable storage from the in-memory cache.
+    "query_otlp_records",
+    "query_otlp_rollup",
+    "count_otlp_records",
+    # latest_otlp_record(service_name=..., agent_type=...) — WO-57 status.
+    "latest_otlp_record",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider
     # transition aggregator. Replaces a JSONL walker that opened up to 100
     # transcript files per request — multi-second on a busy workspace.
@@ -713,6 +956,16 @@ _DAEMON_METHODS = frozenset({
     # ongoing) for the Overview tile + /api/outcomes endpoint. Inline-
     # classifies any unlabeled rows so the dashboard never paints "0%".
     "query_outcomes",
+    # Quality tab (2026-08-15 rebuild). Scopes by the REAL runtime (session-id
+    # prefix) and returns metadata, which carries both the true runtime label
+    # and the persisted quality verdicts. Deliberately separate from
+    # query_outcomes, which filters on the hardcoded agent_type column.
+    "query_quality_sessions",
+    # Drive-by: `make lint-daemon-allowlist` was red on main. Session replay
+    # (routes/sessions.py:3010) calls this through the proxy, but the entry
+    # was never added — so on daemon installs the replay tree silently came
+    # back empty. Same failure mode as the query_cache_metrics drive-by below.
+    "query_replay_events",
     "reclassify_session_outcome",
     # Issue #1619 Phase 1: LLM-as-judge eval surface. Reads + the persist
     # write all go via the daemon (writer-lock owner) so the dashboard
@@ -721,10 +974,27 @@ _DAEMON_METHODS = frozenset({
     "query_recent_evals",
     "query_eval_summary",
     "persist_eval_score",
+    # Issue #2862 (resurrected) — per-metric eval verdicts (deterministic
+    # checks now, named metric engines later). Same daemon-proxy rationale
+    # as the judge surface above.
+    "query_eval_metrics",
+    "query_sessions_missing_eval_metrics",
+    "persist_eval_metric",
+    # Drive-by (make lint-daemon-allowlist was red on main): both methods
+    # exist on LocalStore and are already called through the proxy from
+    # routes/usage.py and routes/channels.py; the allowlist entries were
+    # simply never added, so those proxy calls silently returned None on
+    # daemon installs.
+    "query_cache_metrics",
+    "query_channel_delivery_health",
     # Eval->monitor loop: per-session eval/outcome fields for the two runs in
     # /api/run-compare's quality rows. Read-only; routed through the daemon
     # proxy so the dashboard process never opens the writer-locked DuckDB.
     "query_session_quality",
+    # Evals drill-down (feat/evals-simplify): one-shot per-session eval detail
+    # for the Recently Scored row-click drawer. Read-only through the daemon
+    # so the dashboard never opens the writer-locked DuckDB itself.
+    "query_session_eval_detail",
     "health",
     # Issue #876 — NemoClaw guardrail enforcement events + metrics.
     # Routed through the daemon proxy so /api/nemoclaw/events and
@@ -756,6 +1026,17 @@ _DAEMON_METHODS = frozenset({
     # returns None and the proxy 400s (memory feedback_cli_methods_need_daemon_allowlist).
     "query_agent_meta",
     "set_agent_meta",
+    # Node settings. Retention is the one that matters: the daemon prunes to
+    # this value, so the dashboard has to write it through the daemon rather
+    # than into a store the daemon never reads.
+    "get_node_setting",
+    "set_node_setting",
+    "list_node_settings",
+    # Agent identity: one principal per AGENT (node + runtime + agent_id),
+    # derived from sessions and overlaid with the agent_meta labels above.
+    # Read-only; the daemon owns the writer, and ownership writes reuse
+    # set_agent_meta (already allowlisted) keyed by principal id.
+    "query_agent_principals",
     # Issue #2860: session full-text search. Read-only; routed through the
     # daemon proxy so the dashboard process never opens DuckDB writable.
     "query_search",
@@ -774,6 +1055,10 @@ _DAEMON_METHODS = frozenset({
     # routes/usage.py:/api/efficiency through the daemon proxy (read-only;
     # the daemon owns the writer lock).
     "query_efficiency_rollup",
+    # Spend flow (feat/spend-flow): the cached event-content walk behind
+    # GET /api/spend-flow (input categories -> runtime -> output categories).
+    # Read-only; computed + TTL-cached inside the daemon (writer-lock owner).
+    "query_spend_flow",
     # Issue #2861 -- version-aware health regression. Read-only join of
     # sessions + heartbeats; routed through the daemon proxy so the
     # dashboard process never opens DuckDB writable.
@@ -784,6 +1069,17 @@ _DAEMON_METHODS = frozenset({
     # proxy so the dashboard process never opens DuckDB writable.
     "ingest_security_event",
     "query_security_events",
+    # Severity rollup for the Security tab's tiles — counted in SQL so the
+    # numbers survive the list cap.
+    "count_security_events",
+    # Undo for findings that should not have been recorded (engine-prefixed
+    # ids, so one engine's output can be removed without touching another's).
+    # A write, so it must go through the daemon like every other write.
+    "delete_security_events_by_id_prefix",
+    # Undo for an unwanted ingest (e.g. a numbat at-rest scan backfilling the
+    # live activity feed). Write under the daemon's _write_lock, so it must
+    # go through the proxy like every other write.
+    "delete_events_by_type",
     # Issue #3306 — audit log read path. ingest_ is called from operator
     # actions; query_ serves /api/audit-log. Both routed through the daemon
     # proxy so the dashboard process never opens DuckDB writable.
@@ -807,6 +1103,79 @@ _DAEMON_METHODS = frozenset({
     "query_ar_history",
     # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
     "query_backups",
+    # Agent CLI Phase 1 (docs/CLI.md): `clawmetry usage --by team`
+    # reads the per-team rollup through the daemon proxy. Every other method
+    # the agent CLI calls was already allowlisted; guards-in-same-PR rule.
+    "query_usage_by_team",
+    # Guard baselines (learned normal per cohort). The daemon writes them on
+    # every detector tick and a dashboard read needs the same proxy, because
+    # the daemon holds the DuckDB writer lock
+    # (memory: feedback_cli_methods_need_daemon_allowlist).
+    "record_guard_observation",
+    "query_guard_baseline",
+    "prune_guard_baseline",
+    # Session phase (clawmetry/adapters/phase.py). The daemon stamps a
+    # transition on every ingest pass and the dashboard reads it back to say
+    # how long a session has been waiting; both sides need the proxy because
+    # the daemon holds the writer lock
+    # (memory: feedback_cli_methods_need_daemon_allowlist).
+    "record_session_phase",
+    "query_session_phases",
+    # Git outcomes (REQ-OBS-CEA-022). The daemon writes a repository scan and
+    # the dashboard reads the joined answer; both cross the process boundary
+    # because the daemon holds the DuckDB writer lock. An unlisted method here
+    # 400s and the surface silently reports nothing, which is exactly the
+    # failure mode this feature exists to stop
+    # (memory: feedback_cli_methods_need_daemon_allowlist).
+    "ingest_git_scan",
+    "query_git_repos",
+    "query_git_outcomes",
+    # Harness Engineering tab (routes/bench.py): per-runtime sub-agent
+    # fan-out stats. Unlisted -> the proxy 400s, the fast path returns
+    # None, and the bench silently shows every harness as unseen.
+    "query_subagent_stats_by_runtime",
+    # Behaviour Signals (WO-58, clawmetry/behaviour_signals.py). The daemon
+    # writes turns + matches on its tick; the Signals tab, the alert rule
+    # and the snapshot read grouped counts back through the same proxy
+    # because the daemon holds the writer lock. Unlisted -> 400 -> the tab
+    # shows "no daemon" instead of numbers.
+    "record_signal_turns",
+    "query_signal_grouped",
+    "query_signal_coverage",
+    "query_signal_sessions",
+    "query_signal_rate_window",
+    # Signal shifts + briefs (WO-62, clawmetry/signal_shifts.py, briefs.py).
+    # Issues are written by the daemon tick and transitioned by the operator
+    # from the Signals tab; briefs are edited from the tab and run by the
+    # daemon scheduler. Same proxy for the same reason as above.
+    "query_signal_shift_inputs",
+    "query_signal_shift_breakdown",
+    "upsert_signal_issue",
+    "get_signal_issue",
+    "query_signal_issues",
+    "set_signal_issue_status",
+    "list_briefs",
+    "get_brief",
+    "upsert_brief",
+    "delete_brief",
+    "mark_brief_run",
+    "dives_table_columns",
+    # Non-determinism (replay agreement) + silent-failure delivery latch.
+    # Read by routes/guard.py and the sessions-shape enrichment below.
+    "query_session_replay_stats",
+    "query_incident_alerts",
+    # ── Agent self-diagnostics (WO-59) ───────────────────────────────────
+    # The MCP ``report_to_operator`` tool runs in the agent's own process
+    # and writes through the daemon (which owns the writer lock); the
+    # dashboard's /api/self-reports and the MCP read tools read the same
+    # way. An unlisted method here is a silent 400 -> "no reports".
+    "ingest_self_report",
+    "query_self_reports",
+    "query_self_report_counts",
+    "query_self_report_honesty",
+    "query_guard_incidents",
+    "query_session_denials",
+    "find_session_by_cwd",
 })
 
 
@@ -864,6 +1233,105 @@ def _invalidate_daemon_cache():
     _DAEMON_CACHE["ts"] = 0.0
 
 
+class _ProxyUnavailable:
+    """Sentinel for "the daemon proxy could not answer".
+
+    Distinct from ``None``, which is what a *successful* call to any void
+    method (every ``ingest_*`` writer, ``mark_*``, ``log_*``) returns, and
+    from ``{}`` / ``[]``, which are successful empty reads. Callers that
+    treated those as failure re-ran the call against a direct store — the
+    source of both the duplicate 400s in sync.log and ``_ls_write``
+    reporting a successful write as failed.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):  # pragma: no cover - debugging aid
+        return "<PROXY_UNAVAILABLE>"
+
+    def __bool__(self):
+        return False
+
+
+PROXY_UNAVAILABLE = _ProxyUnavailable()
+
+
+# ── Page-load fan-out collapse for the heavy event scans ──────────────────
+#
+# The Cost tab's roll-ups (token split, per-plugin, per-model, per-skill,
+# runtime summary) live behind SEPARATE endpoints that the browser fires
+# concurrently, and each one independently asks the daemon for the newest
+# 20k-50k events. Ten such scans per page load, every one marshalled as JSON
+# across the RPC, is what saturates the daemon's single DuckDB connection
+# until sibling reads exceed ``_PROXY_TIMEOUTS`` and their handlers return
+# ``None`` — which the tabs render as a confident EMPTY ("no sessions have a
+# transcript yet" over a store holding thousands).
+#
+# The daemon's own ``_READ_CACHE`` cannot fix this: it spares the SQL, not
+# the per-call marshalling, and the dashboard still pays a round trip each
+# time. So memoise HERE, and single-flight it — concurrent callers asking
+# for the same scan share one in-flight RPC instead of queueing N of them.
+#
+# Deliberately narrow: only shapes named in ``_RPC_MEMO_METHODS`` are
+# eligible, so this can never serve a stale answer to a shape that did not
+# opt in. TTL matches the store's own ``CLAWMETRY_AGG_CACHE_TTL`` contract
+# (a roll-up may lag by seconds; a wrong number is worse than a late one).
+import threading as _threading
+
+_RPC_MEMO_METHODS = frozenset({"query_events_slim"})
+try:
+    _RPC_MEMO_TTL = float(_os.environ.get("CLAWMETRY_RPC_MEMO_TTL", "10") or "0")
+except ValueError:
+    _RPC_MEMO_TTL = 10.0
+_RPC_MEMO_MAX = 8
+_RPC_MEMO: dict = {}
+_RPC_MEMO_LOCK = _threading.Lock()
+_RPC_INFLIGHT: dict = {}
+
+
+def _rpc_memo_key(method_name: str, kwargs: dict):
+    return (method_name, tuple(sorted((k, repr(v)) for k, v in kwargs.items())))
+
+
+def invalidate_rpc_memo() -> None:
+    """Drop every memoised scan. For tests and for callers that just wrote."""
+    with _RPC_MEMO_LOCK:
+        _RPC_MEMO.clear()
+
+
+def _rpc_memoized(method_name: str, kwargs: dict, compute):
+    """Serve ``compute()`` from the bounded per-shape memo, single-flighted."""
+    if _RPC_MEMO_TTL <= 0 or method_name not in _RPC_MEMO_METHODS:
+        return compute()
+    key = _rpc_memo_key(method_name, kwargs)
+    with _RPC_MEMO_LOCK:
+        hit = _RPC_MEMO.get(key)
+        if hit is not None and (time.monotonic() - hit[0]) < _RPC_MEMO_TTL:
+            return hit[1]
+        flight = _RPC_INFLIGHT.get(key)
+        if flight is None:
+            flight = _threading.Lock()
+            if len(_RPC_INFLIGHT) < _RPC_MEMO_MAX:
+                _RPC_INFLIGHT[key] = flight
+    # One caller runs the RPC; the rest block here and then read the memo the
+    # leader just filled, rather than firing duplicate 8 MB round trips.
+    with flight:
+        with _RPC_MEMO_LOCK:
+            hit = _RPC_MEMO.get(key)
+            if hit is not None and (time.monotonic() - hit[0]) < _RPC_MEMO_TTL:
+                return hit[1]
+        result = compute()
+        # Never memoise the unavailable sentinel: the daemon being down for
+        # one call must not blind the next one for the whole TTL.
+        if result is not PROXY_UNAVAILABLE:
+            with _RPC_MEMO_LOCK:
+                if len(_RPC_MEMO) >= _RPC_MEMO_MAX:
+                    oldest = min(_RPC_MEMO, key=lambda k: _RPC_MEMO[k][0])
+                    _RPC_MEMO.pop(oldest, None)
+                _RPC_MEMO[key] = (time.monotonic(), result)
+        return result
+
+
 def local_store_via_daemon(method_name: str, **kwargs):
     """Cross-process LocalStore call.
 
@@ -881,17 +1349,36 @@ def local_store_via_daemon(method_name: str, **kwargs):
     through to the legacy direct-open path (``get_store()`` works fine in
     single-process boots, e.g. tests + dev mode).
     """
+    result = local_store_call_via_daemon(method_name, **kwargs)
+    return None if result is PROXY_UNAVAILABLE else result
+
+
+def local_store_call_via_daemon(method_name: str, **kwargs):
+    """Same call as :func:`local_store_via_daemon`, but returns the
+    :data:`PROXY_UNAVAILABLE` sentinel — not ``None`` — when the daemon
+    could not be reached, the method is not allowlisted, or the call
+    errored. Use this whenever ``None`` / ``{}`` / ``[]`` is a legitimate
+    result and you need to know whether to fall back to a direct store.
+    """
+    return _rpc_memoized(
+        method_name, kwargs,
+        lambda: _local_store_call_via_daemon_uncached(method_name, **kwargs),
+    )
+
+
+def _local_store_call_via_daemon_uncached(method_name: str, **kwargs):
+    """The real round trip. Split out so :func:`_rpc_memoized` can wrap it."""
     # Loop-break: when local_server is hosted in THIS process (the daemon)
     # the proxy hop is pointless — talk to the LocalStore directly.
     try:
         from clawmetry import local_server as _ls_srv
         if _ls_srv.is_running():
-            return None
+            return PROXY_UNAVAILABLE
     except ImportError:
         pass
     disc = _cached_discovery()
     if not disc:
-        return None
+        return PROXY_UNAVAILABLE
     import urllib.request
     import urllib.error
     payload = _json.dumps({"kwargs": kwargs}).encode("utf-8")
@@ -910,9 +1397,13 @@ def local_store_via_daemon(method_name: str, **kwargs):
         # Stale port / daemon restarted / network gremlin (after retrying
         # timeouts) — drop the cache so the next call re-reads discovery.
         _invalidate_daemon_cache()
-        return None
+        return PROXY_UNAVAILABLE
     if "error" in body:
-        return None
+        log.warning(
+            "local_query: daemon refused %s(): %s",
+            method_name, str(body.get("error"))[:200],
+        )
+        return PROXY_UNAVAILABLE
     return body.get("result")
 
 

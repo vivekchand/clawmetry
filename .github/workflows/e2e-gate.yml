@@ -1,0 +1,97 @@
+name: E2E Gate (required)
+
+# Aggregates the 12 required CI and E2E checks into one required status check.
+# The owner adds ONE check name to branch protection instead of twelve:
+#   "E2E Gate (required)"
+#
+# Polls the Check Runs API every 30s until all required checks complete.
+# Fails immediately if any required check fails (fast-fail).
+# Passes only when all required checks have a success conclusion.
+# Times out after 60 min (scripts/e2e_gate.py MAX_WAIT=3600). This ceiling
+# exists to handle runner starvation on days with many concurrent PRs; on a
+# quiet day the gate exits as soon as all checks pass, typically in 20-30 min.
+#
+# Required checks aggregated (authoritative list: scripts/e2e_gate.py):
+#   - OSS golden path (wheel + OpenClaw + 9 tabs)
+#   - Cross-repo handoff (C4)
+#   - MOAT Keystone (13-endpoint bar)
+#   - E2E Browser Tests (critical subset)
+#   - Syntax & Lint
+#   - API Tests (3 OS)
+#   - MOAT Verifier (72 tests)
+#   - Entitlement API tests
+#   - pip install matrix (x4)
+#   - Wheel install & asset presence
+#   - Store invariants (property-based)
+#   - Drift Bot  [skip_if_unreported: only enforced when 8090 App posts]
+#
+# Tracking: vivekchand/clawmetry#4029 (C6)
+#
+# This workflow intentionally runs on pull_request only -- not on push events.
+# Drift Bot (8090-software-factory app) posts its commit status to PR head
+# SHAs only; the app never re-posts to the merge commit that lands on main.
+# If the gate ran on push events, it would wait the full timeout for
+# a Drift Bot status that never arrives (confirmed on run #33224218966).
+# The enforcement that matters happens on the PR; no extra run is needed after
+# the merge. Supersedes PR #5323 which fixed the same issue via code but was
+# blocked by a Blueprint update on 8090.ai.
+
+on:
+  pull_request:
+
+concurrency:
+  group: e2e-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  checks: read
+  statuses: read
+
+jobs:
+  e2e-gate:
+    name: E2E Gate (required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+
+    steps:
+      # Required because the gate logic is a repo script now. This job had no
+      # checkout while the logic was an inline heredoc, which needs nothing
+      # from the working tree -- converting it to a script call silently broke
+      # that assumption and the gate died with "No such file or directory".
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The gate logic lives in scripts/e2e_gate.py so it can be unit-tested
+      # (tests/test_e2e_gate.py) instead of only being exercised in anger on a
+      # real PR. That file is the merge gate: a check not listed in its
+      # REQUIRED_SPECS cannot block a merge, however good its test is.
+      - name: Wait for required checks and verify they passed
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REPO: ${{ github.repository }}
+          MAX_WAIT: "3600"
+        run: python3 scripts/e2e_gate.py
+
+      - name: Write job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          {
+            echo "## E2E Gate"
+            echo ""
+            echo "Checked commit: \`${COMMIT_SHA:0:12}\`"
+            echo ""
+            echo "Required checks (derived from scripts/e2e_gate.py):"
+            echo ""
+            echo '```'
+            python3 scripts/e2e_gate.py --list
+            echo '```'
+            echo ""
+            echo "This single context, **E2E Gate (required)**, is the only name"
+            echo "in branch protection. Everything above is aggregated through it."
+          } >> "$GITHUB_STEP_SUMMARY"
+# ci-trigger (auto-mergeability sweep 2026-08-14)

@@ -38,6 +38,11 @@ _LLM_URL_PATTERNS = [
     "openrouter.ai",
 ]
 
+# TTS provider URL patterns (per-character cost, not per-token). (#4749)
+_TTS_URL_PATTERNS = [
+    "api.fish.audio",   # Fish Audio S2.1 hosted streaming TTS
+]
+
 # Hosts to exclude from external-API capture (noise / internal traffic).
 # User can extend via CLAWMETRY_INTERCEPT_HOSTS_EXCLUDE=host1,host2 (substring).
 _EXCLUDED_HOST_DEFAULTS = frozenset([
@@ -55,6 +60,20 @@ _EXCLUDED_HOST_DEFAULTS = frozenset([
     "ingest.clawmetry.com",
     "app.clawmetry.com",
 ])
+
+
+def _clawmetry_endpoint_hosts() -> frozenset:
+    """Hostnames of the *configured* ClawMetry endpoint (self-hosted installs
+    repoint sync away from *.clawmetry.com; those hosts must be excluded too
+    or the interceptor records our own sync traffic as external API calls)."""
+    try:
+        from clawmetry.endpoints import endpoint_hosts
+        return frozenset(endpoint_hosts())
+    except Exception:
+        return frozenset()
+
+
+_EXCLUDED_HOST_DEFAULTS = _EXCLUDED_HOST_DEFAULTS | _clawmetry_endpoint_hosts()
 
 
 # Output file — in ClawMetry's OWN data dir (~/.clawmetry), never inside the
@@ -166,6 +185,14 @@ def _is_llm_url(url: str) -> bool:
     return any(pattern in url_lower for pattern in _LLM_URL_PATTERNS)
 
 
+def _is_tts_url(url: str) -> bool:
+    """Return True if the URL looks like a hosted TTS provider endpoint."""
+    if not url:
+        return False
+    url_lower = url.lower()
+    return any(pattern in url_lower for pattern in _TTS_URL_PATTERNS)
+
+
 def _is_excluded_host(url: str) -> bool:
     """Return True if the URL should be silently skipped for external-call capture."""
     if not url:
@@ -219,6 +246,64 @@ def _detect_provider(url: str) -> str:
     if "openrouter.ai" in url_lower:
         return "openrouter"
     return "unknown"
+
+
+def _detect_tts_provider(url: str) -> str:
+    """Detect TTS provider name from URL."""
+    url_lower = url.lower()
+    if "fish.audio" in url_lower:
+        return "fish-audio"
+    return "unknown-tts"
+
+
+def _extract_char_count_from_tts_request(body_bytes: bytes) -> int:
+    """Extract synthesised-text character count from a TTS request body.
+
+    Fish Audio (and most TTS APIs) accept ``{"text": "…"}``; the char count
+    is used with ``estimate_tts_cost_usd`` to compute per-call cost.
+    """
+    if not body_bytes:
+        return 0
+    try:
+        body = json.loads(body_bytes.decode("utf-8", errors="replace"))
+        text = body.get("text") or body.get("input") or ""
+        if isinstance(text, str):
+            return len(text)
+    except Exception:
+        pass
+    return 0
+
+
+def _build_tts_event(
+    provider: str,
+    url: str,
+    char_count: int,
+    latency_ms: float,
+    status_code: int,
+    library: str,
+) -> dict[str, Any]:
+    """Build a ``tts_call`` event dict with per-character cost estimate."""
+    cost = 0.0
+    try:
+        from clawmetry.providers_pricing import estimate_tts_cost_usd
+        cost = estimate_tts_cost_usd(provider, char_count)
+    except Exception:
+        pass
+    ev: dict[str, Any] = {
+        "type": "tts_call",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "provider": provider,
+        "url": url,
+        "library": library,
+        "status_code": status_code,
+        "latency_ms": round(latency_ms, 1),
+        "char_count": char_count,
+        "cost_usd": cost,
+    }
+    src = _get_source()
+    if src:
+        ev["source"] = src
+    return ev
 
 
 # ── Request/Response parsing ───────────────────────────────────────────────────
@@ -384,6 +469,21 @@ def _patch_httpx() -> bool:
             self: httpx.Client, request: httpx.Request, **kwargs: Any
         ) -> httpx.Response:
             url = str(request.url)
+            if _is_tts_url(url):
+                tts_provider = _detect_tts_provider(url)
+                req_body = b""
+                try:
+                    req_body = request.content
+                except Exception:
+                    pass
+                char_count = _extract_char_count_from_tts_request(req_body)
+                t0 = time.monotonic()
+                response = _original_send(self, request, **kwargs)
+                latency_ms = (time.monotonic() - t0) * 1000
+                _write_event(_build_tts_event(
+                    tts_provider, url, char_count, latency_ms, response.status_code, "httpx"
+                ))
+                return response
             if not _is_llm_url(url):
                 if not _is_excluded_host(url):
                     t0 = time.monotonic()
@@ -451,6 +551,21 @@ def _patch_httpx() -> bool:
                 self: httpx.AsyncClient, request: httpx.Request, **kwargs: Any
             ) -> httpx.Response:
                 url = str(request.url)
+                if _is_tts_url(url):
+                    tts_provider = _detect_tts_provider(url)
+                    req_body = b""
+                    try:
+                        req_body = request.content
+                    except Exception:
+                        pass
+                    char_count = _extract_char_count_from_tts_request(req_body)
+                    t0 = time.monotonic()
+                    response = await _original_async_send(self, request, **kwargs)
+                    latency_ms = (time.monotonic() - t0) * 1000
+                    _write_event(_build_tts_event(
+                        tts_provider, url, char_count, latency_ms, response.status_code, "httpx.async"
+                    ))
+                    return response
                 if not _is_llm_url(url):
                     if not _is_excluded_host(url):
                         t0 = time.monotonic()
@@ -535,6 +650,25 @@ def _patch_requests() -> bool:
             **kwargs: Any,
         ) -> requests.Response:
             url = str(request.url or "")
+            if _is_tts_url(url):
+                tts_provider = _detect_tts_provider(url)
+                req_body = b""
+                try:
+                    body = request.body
+                    if isinstance(body, bytes):
+                        req_body = body
+                    elif isinstance(body, str):
+                        req_body = body.encode("utf-8")
+                except Exception:
+                    pass
+                char_count = _extract_char_count_from_tts_request(req_body)
+                t0 = time.monotonic()
+                response = _original_session_send(self, request, **kwargs)
+                latency_ms = (time.monotonic() - t0) * 1000
+                _write_event(_build_tts_event(
+                    tts_provider, url, char_count, latency_ms, response.status_code, "requests"
+                ))
+                return response
             if not _is_llm_url(url):
                 if not _is_excluded_host(url):
                     t0 = time.monotonic()

@@ -4,7 +4,24 @@ Outbound OTLP trace exporter for ClawMetry.
 Exports completed sessions as OpenTelemetry GenAI spans to a configurable
 remote endpoint (Datadog / Grafana / Honeycomb / any OTLP HTTP collector).
 
-Activated when CLAWMETRY_OTEL_EXPORT_ENDPOINT is set. Off by default.
+Activation (off by default):
+
+* env ``CLAWMETRY_OTEL_EXPORT_ENDPOINT`` — dashboard process starts the
+  exporter (``start_exporter()``, the historical path), OR
+* config ``otlp_endpoint`` in ~/.clawmetry/config.json — the sync daemon
+  starts it (``start_exporter(scope="config")``, the enterprise path for
+  headless nodes).
+
+The two scopes are disjoint on purpose: env activates only the dashboard's
+exporter, the config key activates only the daemon's, so a machine running
+both processes never double-exports. Headers/interval follow the same split
+(env CLAWMETRY_OTEL_EXPORT_HEADERS / CLAWMETRY_OTEL_EXPORT_INTERVAL vs
+config ``otlp_headers`` / ``otlp_export_interval``).
+
+This export is IN ADDITION to ClawMetry's own ingest protocol — it mirrors
+agent activity into a customer's Datadog/Grafana/Honeycomb without replacing
+the ClawMetry dashboard.
+
 No new dependencies — uses urllib.request (stdlib) and the DuckDB proxy
 that is already wired for the dashboard process.
 
@@ -12,9 +29,9 @@ GenAI semantic conventions: https://opentelemetry.io/docs/specs/semconv/gen-ai/
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
-import secrets
 import threading
 import time
 import urllib.error
@@ -26,6 +43,20 @@ _EXPORT_ENDPOINT_ENV = "CLAWMETRY_OTEL_EXPORT_ENDPOINT"
 _EXPORT_HEADERS_ENV = "CLAWMETRY_OTEL_EXPORT_HEADERS"
 _EXPORT_INTERVAL_ENV = "CLAWMETRY_OTEL_EXPORT_INTERVAL"
 _DEFAULT_INTERVAL_S = 60
+
+_CONFIG_PATH = os.path.expanduser("~/.clawmetry/config.json")
+
+
+def _config_get(key: str, default=None):
+    """Best-effort read of one key from ~/.clawmetry/config.json."""
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data.get(key, default)
+    except Exception:
+        pass
+    return default
 
 _stats: dict[str, Any] = {
     "endpoint": "",
@@ -68,19 +99,33 @@ def _iso_to_nano(ts: str | None) -> int:
 
 # ── Span builder ───────────────────────────────────────────────────────────
 
+def _trace_id(session_id: str) -> str:
+    """Deterministic 16-byte trace id per session, so tool spans exported in
+    later flushes still land in the same trace."""
+    return hashlib.sha256(("cm-trace:" + session_id).encode()).hexdigest()[:32]
+
+
+def _span_id(seed: str) -> str:
+    return hashlib.sha256(("cm-span:" + seed).encode()).hexdigest()[:16]
+
+
 def _session_to_span(session: dict[str, Any]) -> dict | None:
     """Build one OTLP span dict from a DuckDB session row."""
     sid = session.get("session_id") or ""
     if not sid:
         return None
 
+    system = str(session.get("agent_type") or "openclaw")
     attrs = [
-        _str_attr("gen_ai.system", "openclaw"),
-        _str_attr("gen_ai.operation.name", "session"),
+        _str_attr("gen_ai.system", system),
+        _str_attr("gen_ai.operation.name", "invoke_agent"),
         _str_attr("session.id", sid),
     ]
     if session.get("agent_id"):
+        attrs.append(_str_attr("gen_ai.agent.name", str(session["agent_id"])))
         attrs.append(_str_attr("agent.id", str(session["agent_id"])))
+    if session.get("model"):
+        attrs.append(_str_attr("gen_ai.request.model", str(session["model"])))
     token_count = int(session.get("token_count") or 0)
     if token_count:
         attrs.append(_int_attr("gen_ai.usage.input_tokens", token_count))
@@ -100,15 +145,74 @@ def _session_to_span(session: dict[str, Any]) -> dict | None:
         end_ns = now_ns
 
     return {
-        "traceId": secrets.token_hex(16),
-        "spanId": secrets.token_hex(8),
-        "name": "openclaw.session",
+        "traceId": _trace_id(sid),
+        "spanId": _span_id(sid),
+        "name": f"{system}.session",
         "kind": 2,  # SERVER
         "startTimeUnixNano": str(start_ns),
         "endTimeUnixNano": str(end_ns),
         "attributes": attrs,
         "status": {"code": 1},  # OK
     }
+
+
+def _tool_event_to_span(event: dict[str, Any]) -> list[dict]:
+    """Build child ``execute_tool`` spans from one tool-call event row.
+
+    Uses clawmetry.detectors' shape-tolerant extractor — the same code the
+    approvals watcher trusts — so all four tool-call payload shapes in the
+    wild (top-level, family data.tool_calls[], v3 toolMetas[], content
+    blocks) map correctly.
+    """
+    sid = str(event.get("session_id") or "")
+    if not sid:
+        return []
+    data = event.get("data")
+    if isinstance(data, (bytes, str)):
+        try:
+            data = json.loads(data)
+        except Exception:
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    try:
+        from clawmetry.detectors import _iter_tool_calls_from_data
+        calls = list(_iter_tool_calls_from_data(str(event.get("event_type") or ""), data))
+    except Exception:
+        calls = []
+    if not calls:
+        return []
+
+    ts_ns = _iso_to_nano(event.get("ts")) or int(time.time() * 1_000_000_000)
+    system = str(event.get("agent_type") or "openclaw")
+    spans = []
+    for idx, call in enumerate(calls):
+        name = ""
+        if isinstance(call, dict):
+            name = str(
+                call.get("name") or call.get("tool") or call.get("tool_name") or ""
+            )
+        attrs = [
+            _str_attr("gen_ai.system", system),
+            _str_attr("gen_ai.operation.name", "execute_tool"),
+            _str_attr("session.id", sid),
+        ]
+        if name:
+            attrs.append(_str_attr("gen_ai.tool.name", name))
+        spans.append(
+            {
+                "traceId": _trace_id(sid),
+                "spanId": _span_id(f"{event.get('id')}:{idx}"),
+                "parentSpanId": _span_id(sid),
+                "name": f"execute_tool {name}".strip(),
+                "kind": 1,  # INTERNAL
+                "startTimeUnixNano": str(ts_ns),
+                "endTimeUnixNano": str(ts_ns),
+                "attributes": attrs,
+                "status": {"code": 1},
+            }
+        )
+    return spans
 
 
 def _build_payload(spans: list[dict]) -> bytes:
@@ -154,6 +258,19 @@ def _flush_once(endpoint: str, headers: dict) -> int:
     sessions: list[dict] = store.query_sessions(since=since, limit=200) or []
 
     spans = [s for s in (_session_to_span(r) for r in sessions) if s is not None]
+
+    # Child execute_tool spans for tool-call events in the same window.
+    events: list[dict] = []
+    try:
+        events = store.query_events(since=since, limit=500) or []
+    except Exception:
+        events = []
+    for ev in events:
+        try:
+            spans.extend(_tool_event_to_span(ev))
+        except Exception:
+            continue
+
     if not spans:
         return 0
 
@@ -174,9 +291,12 @@ def _flush_once(endpoint: str, headers: dict) -> int:
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"OTLP HTTP {exc.code}: {exc.reason}") from exc
 
-    # Advance watermark to the most-recent updated_at we just exported.
+    # Advance watermark to the most-recent timestamp we just exported.
     newest = max(
-        (r.get("updated_at") or r.get("started_at") or "" for r in sessions),
+        (
+            *(r.get("updated_at") or r.get("started_at") or "" for r in sessions),
+            *(str(e.get("ts") or "") for e in events),
+        ),
         default="",
     )
     if newest:
@@ -204,30 +324,41 @@ def _export_loop(endpoint: str, headers: dict, interval_s: int) -> None:
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
-def start_exporter() -> bool:
+def start_exporter(scope: str = "env") -> bool:
     """Start the OTLP export daemon thread. Returns True if started.
 
-    Reads configuration from environment variables:
-      CLAWMETRY_OTEL_EXPORT_ENDPOINT  — required; OTLP HTTP/JSON traces URL
-                                         e.g. http://localhost:4318/v1/traces
-      CLAWMETRY_OTEL_EXPORT_HEADERS   — optional JSON dict of extra HTTP headers
-                                         e.g. {"X-API-Key": "tok_xxx"}
-      CLAWMETRY_OTEL_EXPORT_INTERVAL  — optional poll interval in seconds (default 60)
+    ``scope`` picks the activation source (see module docstring — the split
+    keeps a machine running both the dashboard and the daemon from
+    double-exporting):
+
+    * ``"env"``    — dashboard: CLAWMETRY_OTEL_EXPORT_ENDPOINT /
+                     CLAWMETRY_OTEL_EXPORT_HEADERS (JSON dict) /
+                     CLAWMETRY_OTEL_EXPORT_INTERVAL
+    * ``"config"`` — sync daemon: ``otlp_endpoint`` / ``otlp_headers`` /
+                     ``otlp_export_interval`` keys in ~/.clawmetry/config.json
     """
-    endpoint = os.environ.get(_EXPORT_ENDPOINT_ENV, "").strip()
+    if scope == "config":
+        endpoint = str(_config_get("otlp_endpoint") or "").strip()
+        headers = _config_get("otlp_headers") or {}
+        if not isinstance(headers, dict):
+            headers = {}
+        raw_interval = _config_get("otlp_export_interval", _DEFAULT_INTERVAL_S)
+    else:
+        endpoint = os.environ.get(_EXPORT_ENDPOINT_ENV, "").strip()
+        raw_headers = os.environ.get(_EXPORT_HEADERS_ENV, "").strip()
+        try:
+            headers = json.loads(raw_headers) if raw_headers else {}
+            if not isinstance(headers, dict):
+                headers = {}
+        except Exception:
+            headers = {}
+        raw_interval = os.environ.get(_EXPORT_INTERVAL_ENV, _DEFAULT_INTERVAL_S)
+
     if not endpoint:
         return False
 
-    raw_headers = os.environ.get(_EXPORT_HEADERS_ENV, "").strip()
     try:
-        headers: dict = json.loads(raw_headers) if raw_headers else {}
-        if not isinstance(headers, dict):
-            headers = {}
-    except Exception:
-        headers = {}
-
-    try:
-        interval_s = max(5, int(os.environ.get(_EXPORT_INTERVAL_ENV, _DEFAULT_INTERVAL_S)))
+        interval_s = max(5, int(raw_interval))
     except (ValueError, TypeError):
         interval_s = _DEFAULT_INTERVAL_S
 

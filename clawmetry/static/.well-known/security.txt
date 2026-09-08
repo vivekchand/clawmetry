@@ -1,0 +1,16 @@
+# ClawMetry security contact — RFC 9116
+#
+# Deploy this at https://clawmetry.com/.well-known/security.txt and
+# https://app.clawmetry.com/.well-known/security.txt as well. The dashboard
+# serves it so a self-hosted or on-prem instance also answers the question.
+#
+# Expires must stay in the future — RFC 9116 says a stale file should be
+# treated as invalid. tests/test_security_txt.py fails once this date passes,
+# which is the renewal alarm: bump the date, don't delete the test.
+
+Contact: mailto:security@clawmetry.com
+Contact: https://github.com/vivekchand/clawmetry/security/advisories/new
+Expires: 2027-08-17T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://clawmetry.com/.well-known/security.txt
+Policy: https://github.com/vivekchand/clawmetry/blob/main/SECURITY.md

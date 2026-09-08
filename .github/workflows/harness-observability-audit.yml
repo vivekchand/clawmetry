@@ -30,7 +30,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: harness-audit
@@ -39,6 +38,9 @@ concurrency:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     timeout-minutes: 45
     env:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -46,18 +48,35 @@ jobs:
       HARNESS_DIR: ${{ github.workspace }}/.harness
     steps:
       - name: Checkout clawmetry (OSS)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
-      - name: Install Claude Code CLI
-        run: npm install -g @anthropic-ai/claude-code
+      # Installed from a committed lockfile rather than the registry's moving
+      # `latest`. This job holds `issues: write` and the CLAUDE_CODE_OAUTH_TOKEN
+      # secret, so whatever this step installs runs with both — and
+      # `npm install -g @anthropic-ai/claude-code` took whatever the tag pointed
+      # at the moment the job ran, which is the window a compromised release is
+      # published into.
+      #
+      # `npm ci` installs exactly the tree recorded in
+      # .github/claude-cli/package-lock.json and verifies every tarball against
+      # the integrity hash stored beside it. A bare `@version` pin does neither:
+      # it re-resolves transitive deps on each run and checks nothing. The npm
+      # entry in .github/dependabot.yml is what keeps the lock from going stale.
+      - name: Install Claude Code CLI (from lockfile)
+        working-directory: .github/claude-cli
+        run: |
+          npm ci --no-audit --no-fund --silent
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Token visibility (presence only)
         run: |
@@ -66,16 +85,19 @@ jobs:
       - name: Sync harness sources
         run: bash scripts/harness/sync.sh
 
-      - name: Audit observability coverage (summary-only; internal tracking in 8090 Factory)
+      - name: Audit observability coverage + file gap issues
+        # Dispatch inputs are untrusted text. Bind them to env vars and read
+        # them as quoted shell variables so the runner never expands them as
+        # code. Never interpolate ${{ github.event.* }} into a `run:` block.
+        env:
+          RUNTIME: ${{ github.event.inputs.runtime }}
+          FILE_ISSUES: ${{ github.event.inputs.file_issues }}
         run: |
-          ARGS=""
-          [ -n "${{ github.event.inputs.runtime }}" ] && ARGS="--runtime ${{ github.event.inputs.runtime }}"
-          # No longer files GitHub issues on the public repo — findings go to the
-          # workflow-run summary (and to the 8090 Factory once the router is wired).
-          # Reopen filing on manual dispatch only if you explicitly ask for it.
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.file_issues }}" = "true" ]; then
-            echo "::warning::--file-issues was requested via dispatch; noise auto-close workflow will re-close them."
-            python3 scripts/harness/audit.py --file-issues $ARGS
+          ARGS=()
+          [ -n "$RUNTIME" ] && ARGS=(--runtime "$RUNTIME")
+          # default to filing issues on schedule; honor the dispatch toggle
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$FILE_ISSUES" = "false" ]; then
+            echo "dry-run (no issues)"; python3 scripts/harness/audit.py "${ARGS[@]}"
           else
-            python3 scripts/harness/audit.py $ARGS
+            python3 scripts/harness/audit.py --file-issues "${ARGS[@]}"
           fi

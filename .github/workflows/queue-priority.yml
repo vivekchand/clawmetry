@@ -1,0 +1,152 @@
+# Main-first runner priority.
+#
+# GitHub Actions has no queue priority on hosted runners: a push to main can sit
+# behind hundreds of queued PR / dependabot jobs, which delays the release ->
+# PyPI -> cloud pipeline (the one queue position that actually matters). This
+# workflow implements the priority by hand:
+#
+#   1. clear-queue  — on every push to main, cancel all *queued* (never
+#      in-progress) runs on non-main refs so main's jobs take the runners next.
+#   2. requeue      — once main is quiet again (Auto-deploy Cloud completed, or
+#      the half-hourly sweep finds main idle), re-run the latest cancelled run
+#      of each workflow for every open PR whose drift-bot commit status is
+#      green. Red-drift PRs stay parked until their drift is fixed and
+#      re-reported.
+#
+# No third-party actions on purpose: every step is `gh api` against
+# GITHUB_TOKEN, so there is nothing to SHA-pin and no checkout needed.
+
+name: Queue priority (main first)
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: ["Auto-deploy Cloud on OSS update"]
+    types: [completed]
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+# Nothing at the workflow level: each job below declares exactly the scopes it
+# spends. `actions: write` is the scope that cancels and re-runs other people's
+# jobs, so it is granted per job rather than to every job in the file.
+permissions: {}
+
+# One instance at a time; a queued follow-up collapses into the latest.
+concurrency:
+  group: queue-priority
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  REPO: ${{ github.repository }}
+
+jobs:
+  clear-queue:
+    name: Cancel queued non-main runs
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Lists queued runs and cancels them. No checks or pull-request reads here.
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel every queued run not on main
+        run: |
+          set -u
+          ok=0; fail=0
+          for id in $(gh api "/repos/$REPO/actions/runs?status=queued&per_page=100" --paginate \
+                        --jq '.workflow_runs[]
+                              | select(.head_branch != "main")
+                              # The PyPI publish fires on pull_request:closed, so its
+                              # head branch is the merged PR branch, not main. Cancelling
+                              # it left a [RELEASE] commit on main with nothing
+                              # published (2026-09-03, #5464 vs #5455). Never park it.
+                              | select(.name != "Auto-release on [RELEASE] merge")
+                              | .id'); do
+            if gh api -X POST "/repos/$REPO/actions/runs/$id/cancel" >/dev/null 2>&1; then
+              ok=$((ok+1))
+            else
+              # Already started / already finished / zombie run: not actionable.
+              fail=$((fail+1))
+            fi
+          done
+          echo "cancelled=$ok not-cancellable=$fail"
+
+  requeue:
+    name: Re-run green-drift PRs once main is idle
+    if: github.event_name == 'workflow_run' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # actions: re-run parked runs; statuses: read drift-bot's commit status;
+    # pull-requests: list the open PRs to consider.
+    #
+    # `statuses: read` rather than `checks: read`: drift-bot is a commit
+    # status, not a check run (see the step below), and the two surfaces are
+    # governed by different scopes. Nothing here reads /check-runs any more.
+    permissions:
+      actions: write
+      statuses: read
+      pull-requests: read
+    steps:
+      - name: Skip while main still has queued or running jobs
+        id: gate
+        # SELF is read by jq through `env`, not expanded into the filter. A
+        # `${{ }}` expression is substituted as text before jq (or bash) parses
+        # the line, so a workflow name containing a quote or a backslash would
+        # otherwise land in the filter as jq source rather than as a string.
+        env:
+          SELF: ${{ github.workflow }}
+        run: |
+          set -u
+          busy=$(gh api "/repos/$REPO/actions/runs?branch=main&per_page=100" \
+                   --jq '[.workflow_runs[]
+                          | select(.status == "queued" or .status == "in_progress")
+                          | select(.name != env.SELF)] | length')
+          echo "main busy runs: $busy"
+          echo "idle=$([ "$busy" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Re-run cancelled runs for open PRs with green drift-bot
+        if: steps.gate.outputs.idle == 'true'
+        run: |
+          set -u
+          CUTOFF=$(date -u -d '48 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          export CUTOFF
+          gh api "/repos/$REPO/pulls?state=open&per_page=100" --paginate \
+            --jq '.[] | select(.head.repo.full_name == env.REPO) | "\(.number)\t\(.head.ref)\t\(.head.sha)"' |
+          while IFS=$'\t' read -r pr branch sha; do
+            # drift-bot is a COMMIT STATUS posted by the 8090-software-factory
+            # App, not an Actions check run. It never appears in /check-runs --
+            # scripts/e2e_gate.py grew list_commit_statuses() for exactly this
+            # reason. Reading the wrong surface returned "missing" for every
+            # PR, so the guard below rejected all of them and this job has
+            # re-run nothing since it landed: every run clear-queue cancelled
+            # stayed cancelled. /commits/<sha>/status already collapses to the
+            # latest status per context.
+            drift=$(gh api "/repos/$REPO/commits/$sha/status" \
+                      --jq '[.statuses[] | select(.context == "drift-bot") | .state]
+                            | first // "unreported"')
+            # Success-only, exactly as the Main-First Runner Queue Priority
+            # requirement states. "unreported" is its own case and is NOT
+            # treated as green here: the App only posts on PRs touching Python
+            # or product-record files, so a frontend-only Dependabot npm bump
+            # never receives a status and stays parked. Widening the condition
+            # to cover it is a change to the requirement, not to this file --
+            # see the PR discussion. Kept distinct from "missing" only so the
+            # log says which of the two happened.
+            [ "$drift" = "success" ] || { echo "PR #$pr: drift=$drift, parked"; continue; }
+            # Latest run per workflow on this head branch; re-run it only if it
+            # ended cancelled (i.e. we parked it) and recently.
+            gh api "/repos/$REPO/actions/runs?branch=$branch&event=pull_request&per_page=100" \
+              --jq '[.workflow_runs[] | select(.created_at > env.CUTOFF)]
+                   | group_by(.workflow_id) | .[] | max_by(.created_at)
+                   | select(.conclusion == "cancelled") | .id' |
+            while read -r id; do
+              if gh api -X POST "/repos/$REPO/actions/runs/$id/rerun" >/dev/null 2>&1; then
+                echo "PR #$pr: re-ran $id"
+              else
+                echo "PR #$pr: could not re-run $id"
+              fi
+            done
+          done

@@ -83,6 +83,47 @@ def emit(event: str, payload: Dict[str, Any] | None = None) -> None:
             )
 
 
+def call(event: str, payload: Dict[str, Any] | None = None,
+         default: Any = None) -> Any:
+    """Ask handlers a question and return the first real answer.
+
+    :func:`emit` announces something that happened and discards return
+    values. ``call`` is the opposite: a handler's RETURN VALUE is the whole
+    point. The first handler to return a non-``None`` result wins; a handler
+    that raises is skipped and logged, exactly as in :func:`emit`, so one
+    broken plugin can never make the host raise.
+
+    With no handler registered — the common case, an OSS install with no
+    paid package — this returns ``default``. Callers therefore express
+    their own unlicensed behaviour by choosing that default, rather than
+    catching ImportError around a direct import of code that may not be
+    installed. Pick the SAFE value: a gate asking "should I arm?" passes
+    ``default=False`` so an unlicensed node stays in its pre-feature state.
+
+    ``None`` from a handler means "no opinion, ask the next one" and is
+    indistinguishable from not being registered. A handler that needs to
+    answer "no" must return a falsey value that is not ``None`` (``False``,
+    ``0``, ``{}``) — same convention as the runtime pre-tool gate handlers
+    in ``clawmetry/approvals.py``.
+    """
+    if payload is None:
+        payload = {}
+    with _lock:
+        handlers = list(_registry.get(event, []))
+    for handler in handlers:
+        try:
+            result = handler(payload)
+        except Exception as exc:
+            logger.warning(
+                f"Extension handler {getattr(handler, '__name__', handler)!r} "
+                f"raised on call {event!r}: {exc}"
+            )
+            continue
+        if result is not None:
+            return result
+    return default
+
+
 def _select_entry_points(group: str):
     """Return entry points for ``group`` across Python versions.
 
@@ -132,6 +173,27 @@ def load_plugins(app=None) -> None:
     with _lock:
         _loaded_plugins.clear()
         _failed_plugins.clear()
+
+    # Trial-end hard block: refuse to load ``clawmetry-pro`` (or any other
+    # paid-tier plugin) when the resolver reports an unpaid / expired
+    # entitlement AND the operator has not opted out. This is belt-and-braces
+    # on top of the Flask 402 gate — even if a paid blueprint somehow bypasses
+    # the request-level gate, it never got a chance to register in the first
+    # place. Fail-open on any internal error so a bug in the enforcement
+    # module can never brick a legitimate paying customer. Documented in
+    # ``docs/TRIAL_ENFORCEMENT.md``.
+    try:
+        from clawmetry import trial_enforcement as _te
+        if _te.is_hard_blocked():
+            logger.warning(
+                "clawmetry.extensions: hard-block active — skipping plugin "
+                "load until a valid license lands (upgrade at %s)",
+                _te.resolved_upgrade_url(),
+            )
+            return
+    except Exception as _te_exc:
+        logger.debug("hard-block probe failed, proceeding with plugin load: %s",
+                     _te_exc)
 
     try:
         eps = _select_entry_points("clawmetry.extensions")

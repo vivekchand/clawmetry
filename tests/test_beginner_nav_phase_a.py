@@ -1,8 +1,9 @@
 """Guards for the Phase A beginner-IA nav restructure (UX_AUDIT.md).
 
 The contract:
-  * Tier-1 = seven plain-words items (Home, Agents, Activity, Cost,
-    Conversations, Approvals, Alerts), in that order, at the top level.
+  * Tier-1 = the plain-words beginner items (Home, Agents, Activity, Cost,
+    Sessions, Approvals, Alerts, Notifications, Evals), in that order, at
+    the top level.
   * Every expert view lives inside the Developer drawer, which is COLLAPSED
     by default (hidden attribute + JS opens only on stored cm_live_open=1).
   * The Developer group header carries NO data-tab: overview belongs to the
@@ -26,7 +27,7 @@ _EN_JSON = os.path.join(_HERE, "..", "clawmetry", "static", "locales", "en.json"
 
 
 def _nav_block() -> str:
-    """The live left-nav markup (from the second DASHBOARD_HTML)."""
+    """The live left-nav markup (from the last DASHBOARD_HTML assignment)."""
     with open(_DASH, encoding="utf-8") as fh:
         src = fh.read()
     start = src.rindex('<aside id="left-nav"')
@@ -41,11 +42,19 @@ def _ordered_tabs(html: str) -> list:
 def test_tier1_order_and_membership():
     nav = _nav_block()
     tabs = _ordered_tabs(nav)
-    tier1 = tabs[:7]
+    tier1 = tabs[:14]
+    # Session-first IA (Trail, 2026-09): Sessions is the landing item and
+    # comes first; Home + the raw-signal views (Agents, Activity, Cost,
+    # Models, Context usage) sit under a "Monitoring" label; Quality +
+    # Harness Engineering under Analyze; Approvals / Guard / Alerts /
+    # Notifications under Govern. Notifications still rides directly under
+    # its two consumers (Approvals, Alerts) - founder request 2026-07-29.
     assert tier1 == [
-        "overview", "inventory", "brain", "usage",
-        "transcripts", "approvals", "alerts",
-    ], f"Tier-1 must be the seven beginner items in order, got {tier1}"
+        "transcripts",
+        "overview", "inventory", "brain", "usage", "models", "context-economics",
+        "evals", "bench",
+        "approvals", "guard", "signals", "alerts", "notifications",
+    ], f"Tier-1 must be the beginner items in order, got {tier1}"
 
 
 def test_group_header_has_no_data_tab():
@@ -70,17 +79,23 @@ def test_no_tab_lost_in_restructure():
     nav = _nav_block()
     tabs = set(_ordered_tabs(nav))
     expected = {
-        # Tier-1
+        # Tier-1 (notifications promoted from Advanced, founder 2026-07-29;
+        # evals added top-level in #4295)
         "overview", "inventory", "brain", "usage", "transcripts",
-        "approvals", "alerts",
+        "approvals", "alerts", "notifications", "evals",
         # Developer drawer. Phase B (UX_AUDIT.md) deliberately moved the
         # session-scoped views (tracing, turn-anatomy, swimlane) OUT of the
         # nav and into the session drill-down - their pages and switchTab ids
         # still work; tests/test_session_deep_dive.py guards that entry point.
-        "flow", "models", "context", "agents",
-        "tool-catalog", "context-economics", "harness", "dives",
+        # "context" (LLM Context) merged into context-economics 2026-08-01;
+        # switchTab('context') aliases there so old deep links still land.
+        # "gateway" (the opt-in manual-token tab from #4575) was removed:
+        # the gateway token is auto-detected server-side, so the form asked
+        # users for something the product already knows.
+        "flow", "models", "agents",
+        "tool-catalog", "context-economics", "harness",
         # Advanced
-        "crons", "memory", "notifications", "security", "policy", "skills",
+        "crons", "memory", "security", "policy", "skills",
         "selfevolve", "version-impact", "nemoclaw",
     }
     missing = expected - tabs
@@ -97,9 +112,14 @@ def test_developer_drawer_membership():
     end = nav.index("left-nav-advanced-toggle", start)
     drawer = nav[start:end]
     got = set(_ordered_tabs(drawer))
+    # "gateway" joined the drawer in #4575 and left again when the manual
+    # token form was retired — the token is auto-detected server-side.
+    # "tracing" came back to the drawer after Phase B moved it out; this
+    # expectation had drifted from the shipped nav before this change.
+    # Models + Context usage moved up into the Monitoring group with the
+    # session-first IA (Trail, 2026-09).
     assert got == {
-        "flow", "models", "context", "agents",
-        "tool-catalog", "context-economics", "harness", "dives",
+        "flow", "tracing", "agents", "tool-catalog", "harness",
     }, f"Developer drawer membership drifted: {sorted(got)}"
 
 
@@ -134,9 +154,10 @@ def test_i18n_keys_present_and_renamed():
     assert en["nav.home"] == "Home"
     assert en["nav.developer"] == "Developer"
     assert en["nav.brain"] == "Activity"
-    assert en["nav.session_replay"] == "Conversations"
+    assert en["nav.session_replay"] == "Sessions"
+    assert en["nav.section_monitoring"] == "Monitoring"
     assert en["nav.crons"] == "Schedules"
     for key in ("nav.agent_graph", "nav.turn_timing", "nav.tools",
-                "nav.context_usage", "nav.compare_sessions", "nav.ask",
+                "nav.context_usage", "nav.compare_sessions",
                 "nav.runtime_extras", "nav.home_tooltip", "nav.developer_tooltip"):
         assert key in en, f"missing i18n key {key}"

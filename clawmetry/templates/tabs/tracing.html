@@ -5,7 +5,10 @@
       <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="tracing.subtitle">Every session as a trace. Open one for the span tree, waterfall, and agent graph  -  with full inputs/outputs per span.</div>
     </div>
     <div style="display:flex;gap:6px;align-items:center;">
-      <button class="refresh-btn" id="trace-back-btn" style="display:none;" onclick="tracingShowList()">← <span data-i18n="tracing.back_to_traces">Back to traces</span></button>
+      <!-- Back must RELOAD the list (same trap as ta-back-btn): the deep-dive
+           handoff path skips loadTracing's list fetch, so a bare
+           tracingShowList() shows an empty/stale list container. -->
+      <button class="refresh-btn" id="trace-back-btn" style="display:none;" onclick="loadTracing()">← <span data-i18n="tracing.back_to_traces">Back to traces</span></button>
       <button class="refresh-btn" onclick="loadTracing()">↻</button>
     </div>
   </div>

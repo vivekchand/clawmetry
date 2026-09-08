@@ -11,7 +11,6 @@ copy checks is overkill — a focused grep is sufficient and runs in <100 ms.
 from __future__ import annotations
 
 import os
-import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -46,33 +45,38 @@ def test_bug2_notifications_count_only_enabled_rows() -> None:
 
 
 # ── Bug 3 ────────────────────────────────────────────────────────────────────
-def test_bug3_gw_setup_modal_has_non_docker_path() -> None:
-    """The gateway-setup modal must show a local-install path before Docker."""
-    py = _read("dashboard.py")
-    assert "Local install (pip / brew / install.sh)" in py, (
-        "Gateway-setup modal must include a local-install instruction so "
-        "non-Docker users have a working command."
+def test_bug3_no_manual_gateway_token_form() -> None:
+    """There is no manual gateway-token form left to get wrong.
+
+    Historical note: this originally pinned copy inside the auto-popping
+    "ClawMetry Setup" modal (dashboard.py). That modal was retired
+    (2026-08-06: it kept reappearing regardless of onboarding state, and
+    the product now detects 20+ runtimes instead of assuming OpenClaw), and
+    the opt-in Gateway tab that inherited its copy was removed too — the
+    gateway token is auto-detected server-side from ~/.openclaw/openclaw.json
+    (`_detect_gateway_token`), so asking the user to paste one was a dead end
+    dressed up as configuration. Pin that neither surface comes back.
+    """
+    tab = os.path.join(ROOT, "clawmetry", "templates", "tabs", "gateway.html")
+    assert not os.path.exists(tab), (
+        "The manual gateway-token tab is gone; the token is auto-detected."
     )
-    # Docker block must still be present for Docker users.
-    assert "Docker install" in py
+    nav = _read("dashboard.py")
+    assert 'data-tab="gateway"' not in nav, "Gateway nav item must stay removed."
 
 
 # ── Bug 4 ────────────────────────────────────────────────────────────────────
-def test_bug4_gw_setup_skips_when_cloud_modal_open() -> None:
-    """The gateway-setup overlay must defer when a cloud modal is open, and
-    openCloudModal must hide the gateway overlay when it shows."""
+def test_bug4_no_leftover_gw_setup_overlay_z_stacking_code() -> None:
+    """Historical note: bug 4 was the auto-popping gateway-setup overlay
+    z-stacking on top of the cloud sign-in modal. That overlay was retired
+    entirely (2026-08-06) in favor of the onboarding-gate modal, so there
+    is no longer a second modal to stack with — pin that the dead
+    z-stacking guard (`_isCloudModalOpen`, only ever called from the
+    removed modal's auto-show path) was cleaned up rather than left as
+    dead code calling a now-nonexistent overlay."""
     js = _read("clawmetry/static/js/gw-setup.js")
-    assert "_isCloudModalOpen" in js, "gw-setup.js missing cloud-modal guard"
-    assert "cloud-modal-overlay" in js
-    # And the cloud modal open path explicitly hides the gw overlay. Match
-    # within the openCloudModal function body (its closing `}` ends the
-    # block).
-    m = re.search(r"function openCloudModal\([^)]*\)\s*\{([\s\S]*?)^\}", js, re.MULTILINE)
-    assert m, "could not locate openCloudModal() body in gw-setup.js"
-    body = m.group(1)
-    assert "gw-setup-overlay" in body and "display = 'none'" in body, (
-        "openCloudModal must suppress gw-setup-overlay (set display='none')"
-    )
+    assert "gw-setup-overlay" not in js
+    assert "_isCloudModalOpen" not in js
 
 
 # ── Bug 5 ────────────────────────────────────────────────────────────────────

@@ -238,3 +238,55 @@ def test_extract_brain_detail_unit_handles_all_shapes():
     assert br._extract_brain_detail({}) == ""
     assert br._extract_brain_detail({"data": None}) == ""
     assert br._extract_brain_detail({"data": "raw string"}) == "raw string"
+
+
+def test_extract_brain_detail_tool_call_shapes():
+    """Regression guard for the TOOL_CALL blank-body bug (2026-08-14).
+
+    The v3 mapper writes tool-call rows with ``data.tool_calls=[{name,input}]``
+    and a flat ``data.tool_name`` mirror; ``data.content`` is an empty string.
+    Without the tool-call branch, the generic flat-key extractor returned "" and
+    the Brain feed painted TOOL_CALL rows with no body next to the badge.
+    """
+    import importlib
+    import routes.brain as br
+    importlib.reload(br)
+
+    # Canonical Bash tool_call row from claude_code sync
+    assert br._extract_brain_detail({"data": {
+        "_runtime": "claude_code", "content": "", "role": "assistant",
+        "tool_calls": [{"id": "t1", "name": "Bash",
+                        "input": {"command": "ls -la", "description": "list"}}],
+        "tool_name": "Bash",
+    }}) == "Bash(ls -la)"
+
+    # Read tool prefers file_path over other keys
+    assert br._extract_brain_detail({"data": {
+        "tool_calls": [{"name": "Read",
+                        "input": {"file_path": "/x/a.py", "limit": 15}}],
+    }}) == "Read(/x/a.py)"
+
+    # Multiple tool_calls in one row render as ` · ` separated
+    assert br._extract_brain_detail({"data": {
+        "tool_calls": [
+            {"name": "Read", "input": {"file_path": "/a.py"}},
+            {"name": "Read", "input": {"file_path": "/b.py"}},
+        ],
+    }}) == "Read(/a.py) · Read(/b.py)"
+
+    # OpenAI-style ``arguments`` key is honoured alongside ``input``
+    assert br._extract_brain_detail({"data": {
+        "tool_calls": [{"name": "write_file",
+                        "arguments": {"path": "/a.txt", "content": "hi"}}],
+    }}) == "write_file(/a.txt)"
+
+    # Flat ``tool_name`` mirror is the fallback when tool_calls is missing
+    assert br._extract_brain_detail({"data": {"tool_name": "OnlyName"}}) == "OnlyName"
+
+    # Junk list entries are skipped without crashing
+    assert br._extract_brain_detail({"data": {
+        "tool_calls": [None, "x", {}, {"name": "Bash", "input": "notadict"}],
+    }}) == "Bash(notadict)"
+
+    # Empty tool_calls list → falls through to other extractors (empty here)
+    assert br._extract_brain_detail({"data": {"tool_calls": []}}) == ""

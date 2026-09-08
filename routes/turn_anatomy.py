@@ -27,6 +27,9 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request
 
+from clawmetry import event_shape as _event_shape
+from routes.tracing import _thinking_texts
+
 bp_turn_anatomy = Blueprint("turn_anatomy", __name__)
 
 # Pure-plumbing event types that never become a span of their own.
@@ -34,7 +37,16 @@ _PLUMBING_TYPES = frozenset({
     "session.started", "session.ended", "session.created",
     "model.changed", "thinking_level_change", "context.compiled",
     "agent.heartbeat", "queue-operation",
+    # Claude Code native-telemetry events (WO-57) that carry no timeline
+    # meaning of their own. ``assistant_response`` would read as a second
+    # model call next to the request event; ``user_prompt`` is handled in
+    # ``_classify`` (a boundary only when the transcript gave none).
+    "assistant_response", "permission_mode_changed",
+    "mcp_server_connection", "auth",
 })
+
+# Zero-width markers on the waterfall: they explain a gap rather than fill it.
+_MARKER_TYPES = frozenset({"api_error", "api_refusal", "tool_decision"})
 
 # How long (minutes) a session's latest turn may sit with no new event before
 # we flag it as stalled / long-running.
@@ -92,8 +104,12 @@ def _data(e):
     return d if isinstance(d, dict) else {}
 
 
-def _classify(e):
+def _classify(e, otlp_prompt_ok=False):
     """Classify an event into a turn-anatomy kind.
+
+    ``otlp_prompt_ok``: treat a Claude Code ``user_prompt`` telemetry event
+    as a prompt boundary. Only set when the session has NO transcript prompt
+    (a daemon-free machine), otherwise every turn would be split twice.
 
     Handles BOTH OpenClaw v3 normalized types (prompt.submitted /
     model.completed / tool_call / tool_result) AND the multi-runtime adapter
@@ -107,13 +123,31 @@ def _classify(e):
     et = (e.get("event_type") or "").lower()
     if et in _PLUMBING_TYPES:
         return ""
+    if et == "user_prompt":
+        return "prompt" if otlp_prompt_ok else ""
+    if et in _MARKER_TYPES:
+        return "marker"
+    if et == "llm_call":
+        # The receiver's api_request row (daemon-free intake / WO-57): a
+        # model call with no transcript twin, else it would have been dropped.
+        return "model"
+    if et == "waiting_on_user":
+        # Claude Code ``tool.blocked_on_user`` span: the agent sat waiting
+        # for a human decision. Its own span kind, its own per-turn total.
+        return "wait"
     if "compact" in et:
         return "compaction"
     d = _data(e)
-    role = (d.get("role") or "").lower()
+    # Speaker / tool / error come from the ONE normaliser
+    # (clawmetry.event_shape) rather than a private ``data.role`` sniff, so
+    # a Claude Code ``tool_result`` block, a Codex ``tool_result`` row and an
+    # OpenClaw ``tool.result`` event all land on the same span kind.
+    shape = _event_shape.classify(et, d)
+    role = shape["role"] or (d.get("role") or "").lower()
 
     # Tool plumbing first (a tool_call row may also have role=assistant).
-    if "tool_result" in et or "tool_use_result" in et or role == "tool":
+    if "tool_result" in et or "tool_use_result" in et or role == "tool" \
+            or shape["block_kind"] == "tool_result":
         return "tool_result"
     if "tool_call" in et or "tool.call" in et or d.get("tool_name") or d.get("tool_calls"):
         return "tool_call"
@@ -130,19 +164,23 @@ def _classify(e):
             or (role == "assistant" and et in ("message", "text")):
         return "model"
 
-    if et == "thinking":
+    if et == "thinking" or shape["block_kind"] == "thinking":
+        # Its own kind: the reasoning that drove the next action, never folded
+        # into "model" (a model call is what the thinking produced).
+        return "thinking"
+    if role == "user" and shape["block_kind"] == "text" and shape["text"]:
+        return "prompt"
+    if role == "assistant" and shape["block_kind"] in ("text", "tool_use"):
         return "model"
     return ""
 
 
 def _tool_name(e):
-    d = _data(e)
-    name = d.get("tool_name")
-    if name:
-        return str(name).replace("mcp__openclaw__", "")
-    tcs = d.get("tool_calls")
-    if isinstance(tcs, list) and tcs and isinstance(tcs[0], dict):
-        n = tcs[0].get("name") or (tcs[0].get("function") or {}).get("name")
+    shape = _event_shape.classify(e.get("event_type"), _data(e))
+    if shape["tool_name"]:
+        return shape["tool_name"]
+    if shape["tool_uses"]:
+        n = shape["tool_uses"][0].get("name")
         if n:
             return str(n).replace("mcp__openclaw__", "")
     return "tool"
@@ -169,6 +207,8 @@ def _tool_result_id(e):
 
 def _is_error(e):
     d = _data(e)
+    if _event_shape.classify(e.get("event_type"), d)["is_error"]:
+        return True
     ex = d.get("extra") if isinstance(d.get("extra"), dict) else {}
     return bool(ex.get("isError") or d.get("isError") or d.get("is_error")
                 or (e.get("event_type") or "").endswith("error"))
@@ -196,8 +236,11 @@ def _build_turns(rows):
     next event's ts (so a bar's width is the wall-clock gap until the next
     activity); a tool span instead ends at its matched result.
     """
+    # A Claude Code ``user_prompt`` telemetry event is a boundary only when
+    # the transcript gave none (daemon-free machine, WO-57).
+    otlp_prompt_ok = not any(_classify(e) == "prompt" for e in rows)
     evs = sorted(
-        (e for e in rows if _classify(e)),
+        (e for e in rows if _classify(e, otlp_prompt_ok)),
         key=lambda e: _ts_ms(e.get("ts")) or 0,
     )
     if not evs:
@@ -208,7 +251,7 @@ def _build_turns(rows):
     turns = []
     cur = None
     for i, e in enumerate(evs):
-        kind = _classify(e)
+        kind = _classify(e, otlp_prompt_ok)
         if kind == "prompt" or cur is None:
             if kind == "prompt" or not turns:
                 cur = {"events": [], "idx": []}
@@ -226,7 +269,7 @@ def _build_turns(rows):
         n = len(turn["events"])
         for j, e in enumerate(turn["events"]):
             gi = turn["idx"][j]
-            kind = _classify(e)
+            kind = _classify(e, otlp_prompt_ok)
             s_ms = start_ms[gi]
             # Default end = next event's start within the WHOLE session.
             nxt = start_ms[gi + 1] if gi + 1 < len(start_ms) else s_ms
@@ -272,6 +315,48 @@ def _build_turns(rows):
                     tool_open[tuid] = sp
                 continue
 
+            if kind == "marker":
+                d = _data(e)
+                et = (e.get("event_type") or "").lower()
+                if et == "api_error":
+                    label = "API error" + (f" {d.get('status_code')}" if d.get("status_code") else "")
+                elif et == "api_refusal":
+                    label = "API refusal"
+                else:
+                    label = f"{d.get('tool') or 'tool'} {d.get('decision') or 'rejected'}"
+                    if d.get("source"):
+                        label += f" by {d['source']}"
+                spans.append({
+                    "kind": "marker", "label": label,
+                    "started_ms": s_ms, "ended_ms": s_ms, "duration_ms": 0,
+                    "status": "error" if et == "api_error" else "ok",
+                })
+                continue
+
+            if kind == "wait":
+                try:
+                    _w = float(_data(e).get("duration_ms") or 0.0)
+                except (TypeError, ValueError):
+                    _w = 0.0
+                _tool = _data(e).get("tool") or ""
+                spans.append({
+                    "kind": "wait",
+                    "label": "waiting on you" + (f" ({_tool})" if _tool else ""),
+                    "started_ms": s_ms, "ended_ms": s_ms + int(_w),
+                    "duration_ms": int(_w), "status": "ok",
+                })
+                continue
+
+            if kind == "thinking":
+                _txt = _data(e).get("content")
+                spans.append({
+                    "kind": "thinking", "label": "thinking",
+                    "started_ms": s_ms, "ended_ms": nxt,
+                    "duration_ms": max(0, nxt - s_ms), "status": "ok",
+                    "text": (str(_txt)[:600] if isinstance(_txt, str) else ""),
+                })
+                continue
+
             if kind == "compaction":
                 spans.append({
                     "kind": "compaction", "label": "context compaction",
@@ -282,6 +367,9 @@ def _build_turns(rows):
 
             if kind == "prompt":
                 txt = _prompt_text(e)
+                if not txt and (e.get("event_type") or "").lower() == "user_prompt":
+                    _n = _data(e).get("prompt_length")
+                    txt = f"prompt ({_n} chars)" if _n else "prompt"
                 spans.append({
                     "kind": "prompt",
                     "label": (txt[:80] or "prompt").replace("\n", " "),
@@ -289,6 +377,17 @@ def _build_turns(rows):
                     "duration_ms": max(0, nxt - s_ms), "status": "ok",
                 })
                 continue
+
+            # Thinking blocks carried inside the assistant message (OpenClaw
+            # content lists, extra.thinking) get their own span ahead of the
+            # model span so the reasoning is never hidden inside "model call".
+            for _think in _thinking_texts(_data(e)):
+                spans.append({
+                    "kind": "thinking", "label": "thinking",
+                    "started_ms": s_ms, "ended_ms": nxt,
+                    "duration_ms": max(0, nxt - s_ms), "status": "ok",
+                    "text": _think[:600],
+                })
 
             # model: the last model event of the turn is the reply.
             is_last = (j == n - 1)
@@ -316,6 +415,14 @@ def _build_turns(rows):
         total_tokens = sum(int(s.get("tokens") or 0) for s in spans)
         total_cost = sum(float(s.get("cost") or 0.0) for s in spans)
         has_error = any(s.get("status") == "error" for s in spans)
+        # Time the agent spent blocked on a human this turn. Present only
+        # when a Claude Code ``blocked_on_user`` span was received (WO-57);
+        # absent spans give no figure, never a zero that reads as "instant".
+        _wait_spans = [s for s in spans if s["kind"] == "wait"]
+        waiting_on_you_ms = (
+            sum(int(s.get("duration_ms") or 0) for s in _wait_spans)
+            if _wait_spans else None
+        )
         out.append({
             "turn": tn + 1,
             "started_ms": turn_start,
@@ -327,6 +434,7 @@ def _build_turns(rows):
             "total_cost": round(total_cost, 6),
             "span_count": len(spans),
             "status": "error" if has_error else "ok",
+            "waiting_on_you_ms": waiting_on_you_ms,
             "spans": spans,
         })
     return out
@@ -358,8 +466,23 @@ def api_turn_anatomy():
         "session_id": session_id,
         "turns": turns,
         "turn_count": len(turns),
+        "reasoning": _reasoning_summary(session_id, turns),
         "_source": "local_store",
     })
+
+
+def _reasoning_summary(session_id, turns):
+    """Thinking-span count plus the adapter's declared reasoning coverage, so
+    the UI can say "not exposed by <runtime>" instead of showing a gap."""
+    runtime = session_id.split(":", 1)[0].lower() if ":" in session_id else "openclaw"
+    try:
+        from routes.trail import coverage_for_runtime
+        cov = coverage_for_runtime(runtime)
+    except Exception:
+        cov = {"reasoning": "unknown", "note": ""}
+    n = sum(1 for t in turns for sp in (t.get("spans") or []) if sp.get("kind") == "thinking")
+    return {"runtime": runtime, "span_count": n,
+            "coverage": cov.get("reasoning", "unknown"), "note": cov.get("note", "")}
 
 
 @bp_turn_anatomy.route("/api/turn-anatomy/stalled")
@@ -410,7 +533,7 @@ def api_turn_anatomy_stalled():
         opened = sum(1 for k in kinds_only if k == "tool_call")
         closed = sum(1 for k in kinds_only if k == "tool_result")
         pending_tool = opened > closed
-        running = last_kind in ("prompt", "tool_call", "model") or pending_tool
+        running = last_kind in ("prompt", "tool_call", "model", "thinking") or pending_tool
         if not running:
             continue
         stalled.append({

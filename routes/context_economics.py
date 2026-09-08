@@ -55,22 +55,29 @@ def api_context_economics():
         (the UI session picker / clickable chips). Compactions + overflow
         flags are computed workspace-wide; the route filters them to the
         picked session here so the chips/list stay coherent with the gauge.
+      * ``runtime`` — scope everything to one runtime's sessions (the
+        global runtime switcher). Server-side, same prefix contract as the
+        snapshot's ``contextEconomics.byRuntime`` slice on cloud.
       * ``limit`` — max utilization points (<=2000, default 400).
 
     The ``summary`` block is a small derived rollup the tab paints as chips:
     compaction count, overflow count, total tokens reclaimed, peak window %.
     """
     session_id = (request.args.get("session_id") or "").strip() or None
+    runtime = (request.args.get("runtime") or "").strip() or None
+    if runtime and runtime.lower() == "all":
+        runtime = None
     try:
         limit = max(1, min(2000, int(request.args.get("limit", 400))))
     except (TypeError, ValueError):
         limit = 400
 
-    data = _coerce(_ls_call(
-        "query_context_economics",
-        session_id=session_id,
-        util_limit=limit,
-    ))
+    kwargs = {"session_id": session_id, "util_limit": limit}
+    if runtime:
+        # Only sent when set: an older daemon wheel without the kwarg
+        # 400s the proxy call and _ls_call falls back to a direct read.
+        kwargs["runtime"] = runtime
+    data = _coerce(_ls_call("query_context_economics", **kwargs))
     utilization = data.get("utilization") or []
     compactions = data.get("compactions") or []
     overflow_sessions = data.get("overflow_sessions") or []
@@ -120,4 +127,33 @@ def api_context_economics():
         "session_chips":     session_chips,
         "summary":           summary,
         "_source":           "local_store",
+    })
+
+
+@bp_context_economics.route("/api/context-coverage")
+def api_context_coverage():
+    """Per-runtime honesty map for the blowout numbers.
+
+    ``GET /api/context-coverage?since=<iso>``
+
+    A "compactions: 0" tile means two different things depending on the
+    runtime — a clean run, or no way to see one. This endpoint says which,
+    per runtime per signal, so the UI can render a blind spot as a blind spot
+    instead of as a reassuring zero. See ``clawmetry/context_coverage.py``.
+
+    Returns ``{runtimes: [...], summary: {...}}``. Only runtimes actually
+    present in this store are listed. Never 500s: an unreachable store
+    returns empty rows and the tab renders an honest empty state.
+    """
+    since = (request.args.get("since") or "").strip() or None
+    data = _coerce(_ls_call("query_context_coverage", since=since))
+    rows = data.get("runtimes") or []
+    summary = data.get("summary") or {
+        "runtimes": 0, "fully_observable": 0, "partially_observable": 0,
+        "signals": ["utilization", "compaction", "overflow"],
+    }
+    return jsonify({
+        "runtimes": rows,
+        "summary": summary,
+        "_source": "local_store",
     })

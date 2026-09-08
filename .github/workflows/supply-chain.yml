@@ -1,0 +1,217 @@
+name: Supply chain
+
+# Everything a vendor security review asks about the code we ship, enforced on
+# every PR so the answers stay true between reviews:
+#
+#   "Which third parties does the dashboard contact?"  -> none, gated below
+#   "Is the vendored JS the real published release?"   -> byte-compared to npm
+#   "Do you produce an SBOM?"                          -> yes, per run + release
+#   "Any known-vulnerable dependencies?"               -> pip-audit + OSV
+#
+# These jobs are cheap (no matrix, no browser) and deliberately independent so
+# one failure names one problem.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # Advisories land continuously; a passing PR months ago says nothing about
+    # today. Re-audit the shipped tree every Monday 06:00 UTC.
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: supply-chain-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  no-external-assets:
+    name: No third-party asset loads
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Scan served pages for absolute http(s) asset references
+        run: python3 scripts/verify_no_external_assets.py
+
+  vendored-assets:
+    name: Vendored assets match npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Verify sha256 pins and byte-compare against the npm registry
+        run: python3 scripts/verify_vendor.py
+
+  fonts-current:
+    name: Vendored fonts not stale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # requests is needed because tests/conftest.py imports it at module
+      # scope, so pytest cannot collect without it. Flagged automatically by
+      # tests/test_workflow_yaml_valid.py when this step first gained pytest.
+      - run: python3 -m pip install --quiet certifi pytest requests
+      # Proves the distinction the check depends on: an unreachable upstream is
+      # reported as unverified, while a real difference still fails. Runs first
+      # and needs no network, so a Google Fonts outage cannot stop it.
+      - name: Font check degrades on an unreachable upstream (and only then)
+        run: python3 -m pytest tests/test_vendor_fonts_degrades.py -q
+      # Regenerates from the Google Fonts API and diffs against what is checked
+      # in, so a hand-edited stylesheet or a half-finished regeneration fails.
+      # An outage or an API-shape change is reported as SKIP rather than DRIFT:
+      # the API is outside any contributor's control, so failing on it would
+      # leave every PR red with nothing anyone could do about it.
+      - name: Check checked-in font CSS matches a fresh generation
+        run: python3 scripts/vendor_fonts.py --check
+
+  python-deps:
+    name: Python dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install --quiet pip-audit cyclonedx-bom
+      - name: Audit declared dependencies for known advisories
+        # Non-blocking on PRs: a fresh advisory in a transitive dep should not
+        # wedge unrelated work. It still fails the scheduled run, which is the
+        # signal that someone needs to act.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: pip-audit --requirement requirements.txt --strict --progress-spinner off
+      - name: Generate CycloneDX SBOM
+        run: |
+          python3 -m pip install --quiet -r requirements.txt
+          cyclonedx-py environment --output-format JSON > clawmetry-sbom.json
+      - name: Publish SBOM as a build artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: clawmetry-sbom
+          path: clawmetry-sbom.json
+          retention-days: 90
+
+  fuzz:
+    name: Fuzz untrusted parsers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Atheris publishes Linux wheels up to CPython 3.11; 3.12+ would build
+      # from source and need clang. Pinning 3.11 here keeps the job a wheel
+      # install, independent of what the rest of the matrix moves to.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # requests is needed because tests/conftest.py imports it at module
+      # scope, so pytest exits 4 (collection error) without it, before a
+      # single test runs. Asserted by tests/test_workflow_yaml_valid.py.
+      - run: python3 -m pip install --quiet atheris pytest requests
+
+      # The seed corpus first: it is the set of inputs that have ALREADY broken
+      # these contracts, it runs in under a second, and it fails loudly. If a
+      # refactor reintroduces a known bug, this names it before the fuzzer
+      # spends any time rediscovering it.
+      - name: Known-bad corpus (regressions)
+        run: python3 -m pytest tests/test_fuzz_targets.py -q
+
+      # Bounded run counts, not a time budget, so the job cannot become the
+      # slowest thing on the PR. The scheduled Monday run is where a long
+      # search would belong if we ever want one.
+      - name: Fuzz clawmetry.otlp_json (network-facing decoder)
+        run: python3 tests/fuzz/fuzz_otlp_json.py -atheris_runs=50000 -artifact_prefix=fuzz-crash-
+
+      - name: Fuzz clawmetry.event_shape (transcript classifier)
+        run: python3 tests/fuzz/fuzz_event_shape.py -atheris_runs=50000 -artifact_prefix=fuzz-crash-
+
+      # A crashing input is the whole product of a fuzz run. Without this the
+      # bytes that triggered the failure exist only in a deleted runner.
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-crashes
+          path: fuzz-crash-*
+          if-no-files-found: ignore
+          retention-days: 30
+
+  action-refs:
+    name: Action references resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # An unresolvable action fails its job at "Set up job" before any step
+      # runs, so the workflow looks like it ran and failed when it never
+      # started. ossf/scorecard-action@v2 was exactly that, permanently, from
+      # the day the job was written. This belongs in the supply-chain workflow
+      # because an action reference IS a supply-chain dependency.
+      - name: Resolve every `uses:` reference against the GitHub API
+        env:
+          CLAWMETRY_LIVE_CHECKS: "1"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_action_refs.py
+
+  scorecard:
+    name: OpenSSF Scorecard
+    runs-on: ubuntu-latest
+    # Scorecard reads repo settings/branch protection, and publishing results
+    # needs id-token. Skipped on forks, which cannot mint the token.
+    if: github.event_name != 'pull_request'
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Pinned to the v2.4.4 commit, not a floating tag. Two reasons:
+      #
+      # 1. `ossf/scorecard-action@v2` DOES NOT EXIST. The project publishes
+      #    v2.4.4, v2.4.3, ... but no floating `v2`, so this job failed at
+      #    "Set up job" with "Unable to resolve action" on every run since it
+      #    was written. Nothing downstream ever executed.
+      # 2. Scorecard grades repositories on whether they pin their own actions
+      #    by digest, so a floating tag here would be this workflow failing the
+      #    check it exists to run.
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          # Publishes to the public OpenSSF API so the README badge resolves.
+          # Results are already public for a public repo.
+          publish_results: true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-results
+          path: scorecard-results.sarif
+          retention-days: 30
+      # Surfaces findings in the GitHub Security tab rather than only in logs.
+      - uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: scorecard-results.sarif

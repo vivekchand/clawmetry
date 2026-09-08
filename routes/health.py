@@ -5,6 +5,7 @@ Extracted from dashboard.py as Phase 5.5 of the incremental modularisation.
 Owns the routes registered on bp_health:
 
   GET  /healthz                   — liveness probe (k8s / load-balancer, unauthenticated)
+  GET  /api/_internal/healthz    — same probe at a GFE-bypass path (GFE intercepts bare /healthz on Cloud Run)
   GET  /api/reliability           — cross-session behavioral reliability trend
   GET  /api/heatmap               — activity heatmap (events per hour, N days)
   GET  /api/system-health         — comprehensive system health (services, disks, crons)
@@ -37,7 +38,6 @@ Module-level helpers (``_history_db``, ``AgentReliabilityScorer``,
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -49,11 +49,13 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, Response, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
+from clawmetry import nonsecret_hash as _nsh
 
 bp_health = Blueprint('health', __name__)
 
 
 @bp_health.route("/healthz")
+@bp_health.route("/api/_internal/healthz")
 def healthz():
     """Kubernetes/load-balancer liveness probe — always returns 200."""
     import dashboard as _d
@@ -581,7 +583,7 @@ def compute_gateway_health(
           "uptime_seconds": int | null,
           "rss_mb": float | null,
           "cpu_pct": float | null,
-          "status": "healthy" | "warning" | "critical" | "not_running",
+          "status": "healthy" | "warning" | "critical" | "not_running" | "externally_supervised",
           "memory_threshold_mb": 900,
         }
     """
@@ -600,6 +602,8 @@ def compute_gateway_health(
         except Exception:
             pid = None
     if pid is None:
+        if os.environ.get("OPENCLAW_SUPERVISOR_MODE") == "external":
+            payload["status"] = "externally_supervised"
         return payload
 
     vitals = None
@@ -1315,6 +1319,18 @@ def api_system_health():
     else:
         top_source = "gateway"
 
+    # Trusted-proxy device pairing (#4431): surface auto-approved vs
+    # manually-approved device grants from the gateway in the health view.
+    # _gateway_trusted_proxy_devices() reads gateway.status (+ fallback
+    # gateway.devices RPC); returns {} when the gateway is down or the
+    # feature hasn't shipped yet — never raises.
+    trusted_devices: dict = {}
+    try:
+        from clawmetry.adapters.openclaw import _gateway_trusted_proxy_devices
+        trusted_devices = _gateway_trusted_proxy_devices()
+    except Exception:
+        pass
+
     return jsonify(
         {
             "services": services,
@@ -1335,6 +1351,7 @@ def api_system_health():
             "sandbox": _d._detect_sandbox_metadata(),
             "inference": _d._detect_inference_metadata(),
             "security": _d._detect_security_metadata(),
+            "trusted_devices": trusted_devices,
             "service_status": service_status,
             "daemon": daemon_health,
             "daemon_error_rate_per_min": round(
@@ -1760,16 +1777,17 @@ def api_health():
 
     # 3. Memory usage (RSS of this process + overall)
     try:
-        import resource
+        # `resource` is POSIX-only and `free` is Linux-only, so this whole
+        # memory check silently vanished on Windows. helpers.system covers
+        # all three platforms with stdlib calls.
+        from helpers.system import memory_usage
 
-        rss_mb = (
-            resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-        )  # KB -> MB on Linux
-        mem = subprocess.run(["free", "-m"], capture_output=True, text=True, timeout=2)
-        mem_parts = mem.stdout.strip().split("\n")[1].split()
-        used_mb = int(mem_parts[2])
-        total_mb = int(mem_parts[1])
-        pct = (used_mb / total_mb) * 100
+        mu = memory_usage()
+        if not mu:
+            raise RuntimeError("memory usage unavailable")
+        used_mb = mu["used_mb"]
+        total_mb = mu["total_mb"]
+        pct = mu["pct"]
         if pct > 90:
             checks.append(
                 {
@@ -2005,7 +2023,7 @@ def _try_local_store_service_status():
         except Exception:
             return None
 
-    hb_rows = _query("query_heartbeats", limit=1)
+    hb_rows = _query("query_heartbeats", limit=1, include_data=True)
     if not hb_rows:
         return None
     hb = hb_rows[0]
@@ -2782,7 +2800,7 @@ def _detect_loops_in_sessions(sessions_dir, max_sessions=20, window=10, min_repe
                             continue
                         inp = blk.get("input") or {}
                         raw_args = json.dumps(inp, sort_keys=True, default=str)[:500]
-                        fp = hashlib.md5(raw_args.encode()).hexdigest()[:8]
+                        fp = _nsh.md5(raw_args.encode()).hexdigest()[:8]
                         tool_seq.append((name, fp, ts))
         except Exception:
             continue
@@ -2870,7 +2888,7 @@ def _try_local_store_loop_detection(window: int, min_repeats: int):
             raw_args = json.dumps(inp, sort_keys=True, default=str)[:500]
         except Exception:
             raw_args = str(inp)[:500]
-        fp = hashlib.md5(raw_args.encode()).hexdigest()[:8]
+        fp = _nsh.md5(raw_args.encode()).hexdigest()[:8]
         by_session.setdefault(sid, []).append((name, fp, r.get("ts") or ""))
 
     if not by_session:
@@ -2986,6 +3004,69 @@ def api_loop_detection():
 # ---------------------------------------------------------------------------
 
 
+# Severity ladder shared with ``clawmetry.detectors`` (higher is louder).
+_LOOP_SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
+
+
+def _loop_signal_details(row) -> dict:
+    """``details`` as a dict, whatever the store handed back.
+
+    The column is a BLOB the writer JSON-encodes, and the read path can return
+    a dict, a JSON string, or None depending on how the row travelled (direct
+    open, daemon proxy, cloud relay). Never raises."""
+    details = row.get("details")
+    if isinstance(details, dict):
+        return details
+    if isinstance(details, str) and details.strip():
+        try:
+            import json as _json
+            parsed = _json.loads(details)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _loop_signal_enriched(row: dict) -> dict:
+    """Lift the money and the plain-words headline out of ``details``.
+
+    A renderer that has to reach into a nested blob to find the number it
+    sorts on will eventually forget to, and then the list silently reverts to
+    newest-first. Flattening makes the ranking contract visible in the
+    response shape itself."""
+    out = dict(row)
+    details = _loop_signal_details(row)
+    try:
+        at_risk = round(float(details.get("spend_at_risk_usd") or 0), 4)
+    except (TypeError, ValueError):
+        at_risk = 0.0
+    out["kind"] = str(details.get("kind") or "")
+    out["title"] = str(details.get("message") or "")
+    out["spend_at_risk_usd"] = at_risk
+    basis = str(details.get("spend_basis") or "unknown")
+    out["spend_basis"] = basis
+    # Same figure, said out loud. ``spend_basis`` has been on this row for a
+    # while and no renderer ever showed it; the provenance entry is the one
+    # the badge reads, and it nulls the dollar figure when the basis is
+    # unknown so a session nobody could price stops looking like a free one.
+    try:
+        from clawmetry import provenance as _prov
+        _prov.stamp(out, {"spend_at_risk_usd": _prov.from_spend_basis(basis)})
+    except Exception:
+        pass
+    return out
+
+
+def _loop_signal_rank(row: dict) -> tuple:
+    """Sort key: money, then severity, then recency."""
+    try:
+        spend = float(row.get("spend_at_risk_usd") or 0)
+    except (TypeError, ValueError):
+        spend = 0.0
+    sev = _LOOP_SEVERITY_RANK.get(str(row.get("severity") or "").lower(), 0)
+    return (spend, sev, str(row.get("last_seen") or ""))
+
+
 @bp_health.route("/api/loop-signals")
 def api_loop_signals():
     """Return recent LoopDetector signals for the dashboard's Brain badge.
@@ -2999,12 +3080,24 @@ def api_loop_signals():
         "signals": [
           {"session_id": str, "signature": str, "repeat_count": int,
            "first_seen": str, "last_seen": str, "severity": str,
-           "agent_type": str, "details": dict|str|None}
+           "agent_type": str, "details": dict|str|None,
+           # Flattened from details so a renderer never has to parse a blob:
+           "kind": str,                  # detector kind, "" for proxy signals
+           "title": str,                 # plain-words headline
+           "spend_at_risk_usd": float,   # cost of the flagged stretch (est.)
+           "spend_basis": str}           # burn_rate | window_fraction | unknown
         ],
         "count": <int>,
         "total_count": <int>,         # rows the store would have returned
-        "capped_pro_gated": <bool>    # True when OSS cap dropped rows
+        "capped_pro_gated": <bool>,   # True when OSS cap dropped rows
+        "spend_at_risk_usd": <float>  # total across the returned signals
       }
+
+    **Ordering is by what it costs to ignore**, then severity, then recency.
+    Sorting by recency alone put a two-cent "continued after a failed command"
+    above a session that had burned $170 while looping, which is the opposite
+    of the question the reader is asking. Where no cost is known every row ties
+    at 0.0 and the old newest-first order survives.
 
     Empty-list fallback (HTTP 200) on any error so the badge never breaks
     the page.
@@ -3040,18 +3133,52 @@ def api_loop_signals():
     if rows is None:
         rows = []
 
+    rows = [_loop_signal_enriched(r) for r in rows if isinstance(r, dict)]
+    rows.sort(key=_loop_signal_rank, reverse=True)
+
     total_count = len(rows)
     capped_pro_gated = False
     if not is_pro and total_count > 1:
+        # The teaser row is now the costliest one rather than the newest, so a
+        # free node's single visible signal is the one worth acting on.
         rows = rows[:1]
         capped_pro_gated = True
 
-    return jsonify({
+    # The total is only ever a floor when some signals could not be priced,
+    # and a floor rendered as a total is its own kind of lie. Count the holes
+    # and say so on the badge.
+    priced = [r for r in rows if r.get("spend_at_risk_usd") is not None]
+    unpriced = len(rows) - len(priced)
+    payload = {
         "signals": rows,
         "count": len(rows),
         "total_count": total_count,
         "capped_pro_gated": capped_pro_gated,
-    })
+        "spend_at_risk_usd": round(sum(
+            float(r.get("spend_at_risk_usd") or 0) for r in priced), 2),
+    }
+    try:
+        from clawmetry import provenance as _prov
+        if rows and not priced:
+            entry = _prov.unknown(
+                "none of these signals could be priced, because no cost was "
+                "recorded for the sessions they came from",
+                source="/api/loop-signals")
+        elif unpriced:
+            entry = _prov.derived(
+                "sum of the spend at risk across the signals that could be "
+                "priced. It is a floor, not a total",
+                "/api/loop-signals",
+                inputs={"priced_signals": len(priced),
+                        "unpriced_signals": unpriced})
+        else:
+            entry = _prov.derived(
+                "sum of the spend at risk across every signal shown",
+                "/api/loop-signals", inputs={"signals": len(rows)})
+        _prov.stamp(payload, {"spend_at_risk_usd": entry})
+    except Exception:
+        pass
+    return jsonify(payload)
 
 
 @bp_health.route("/api/backups")
@@ -3574,6 +3701,9 @@ def api_security_threats_history():
     session_id = (request.args.get("session_id") or "").strip() or None
     severity = (request.args.get("severity") or "").strip() or None
     since = (request.args.get("since") or "").strip() or None
+    runtime = (request.args.get("runtime") or "").strip().lower() or None
+    if runtime in ("all", "node"):
+        runtime = None
     try:
         limit = max(1, min(1000, int(request.args.get("limit", 200))))
     except (TypeError, ValueError):
@@ -3588,21 +3718,77 @@ def api_security_threats_history():
                 session_id=session_id,
                 severity=severity,
                 since=since,
+                runtime=runtime,
                 limit=limit,
             )
         except Exception:
             rows = None
+        if rows is None and runtime:
+            # Version skew: a daemon older than the runtime kwarg raises rather
+            # than filtering. Retry unfiltered and narrow here — a scoped view
+            # that degrades to node-wide silently would break FLYWHEEL §1c.
+            try:
+                from routes.local_query import local_store_via_daemon
+                rows = local_store_via_daemon(
+                    "query_security_events",
+                    session_id=session_id,
+                    severity=severity,
+                    since=since,
+                    limit=limit,
+                )
+                if rows is not None:
+                    rows = [
+                        r for r in rows
+                        if str((r or {}).get("session_id") or "")
+                        .split(":", 1)[0].lower() == runtime
+                    ]
+            except Exception:
+                rows = None
 
     if rows is None:
         try:
             from clawmetry import local_store as _ls
             rows = _ls.get_store().query_security_events(
-                session_id=session_id, severity=severity, since=since, limit=limit
+                session_id=session_id, severity=severity, since=since,
+                runtime=runtime, limit=limit,
             )
         except Exception:
             rows = []
 
-    return jsonify({"threats": rows or [], "total": len(rows or [])})
+    # True severity rollup, counted in SQL. The list above is capped for the
+    # browser; counting it would under-report the tiles on a node that holds
+    # hundreds of findings.
+    counts = None
+    try:
+        from routes.local_query import local_store_via_daemon
+        counts = local_store_via_daemon(
+            "count_security_events", runtime=runtime, since=since
+        )
+    except Exception:
+        counts = None
+    if counts is None:
+        try:
+            from clawmetry import local_store as _ls
+            counts = _ls.get_store().count_security_events(
+                runtime=runtime, since=since
+            )
+        except Exception:
+            counts = None
+    if not isinstance(counts, dict):
+        # Last resort: count what we actually have rather than claiming zero.
+        counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+                  "total": len(rows or [])}
+        for r in rows or []:
+            sev = str((r or {}).get("severity") or "").lower()
+            if sev in counts and sev != "total":
+                counts[sev] += 1
+
+    return jsonify({
+        "threats": rows or [],
+        "total": len(rows or []),
+        "counts": counts,
+        "scope": runtime or "node",
+    })
 
 
 @bp_health.route("/api/doctor-findings")

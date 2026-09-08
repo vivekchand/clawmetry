@@ -499,7 +499,7 @@ def test_inspect_key_fingerprint_degrades_to_none_when_pubkey_broken(lic, monkey
 # a UI can render the row without special-casing which keys are present.
 
 _EXPECTED_FILE_EXISTS_KEYS = frozenset({
-    "valid", "status", "tier", "nodes", "sub", "exp", "days_left",
+    "valid", "status", "tier", "nodes", "sub", "exp", "issued_at", "days_left",
     "pubkey_fingerprint_sha256", "permissions_safe", "file_mode",
 })
 

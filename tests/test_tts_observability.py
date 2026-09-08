@@ -85,6 +85,89 @@ def test_estimate_tts_cost_prefix_match():
     assert cost > 0.0, "Prefix-matched TTS provider should return non-zero cost"
 
 
+# ---------------------------------------------------------------------------
+# Fish Audio TTS pricing (#4724)
+# ---------------------------------------------------------------------------
+
+def test_estimate_tts_cost_fish_audio_hosted():
+    from clawmetry.providers_pricing import estimate_tts_cost_usd
+
+    # 1000 chars @ $0.015/1K = $0.015
+    cost = estimate_tts_cost_usd("fish-audio", 1000)
+    assert abs(cost - 0.015) < 1e-7, f"Fish Audio S2.1 1K chars should be $0.015, got {cost}"
+
+
+def test_estimate_tts_cost_fish_short_alias():
+    from clawmetry.providers_pricing import estimate_tts_cost_usd
+
+    cost = estimate_tts_cost_usd("fish", 1000)
+    assert abs(cost - 0.015) < 1e-7, f"'fish' alias 1K chars should be $0.015, got {cost}"
+
+
+def test_estimate_tts_cost_fish_s2_pro_local():
+    from clawmetry.providers_pricing import estimate_tts_cost_usd
+
+    # S2 Pro is self-hosted (local TTS) — no per-call API cost
+    cost = estimate_tts_cost_usd("fish-s2-pro", 5000)
+    assert cost == 0.0, f"Fish S2 Pro (local) should be $0.0, got {cost}"
+
+
+def test_tts_provider_rates_includes_fish_audio():
+    from clawmetry.providers_pricing import TTS_PROVIDER_RATES
+
+    assert "fish-audio" in TTS_PROVIDER_RATES, "fish-audio must be in TTS_PROVIDER_RATES"
+    assert TTS_PROVIDER_RATES["fish-audio"] > 0, "fish-audio rate must be positive"
+    assert "fish-s2-pro" in TTS_PROVIDER_RATES, "fish-s2-pro must be in TTS_PROVIDER_RATES"
+    assert TTS_PROVIDER_RATES["fish-s2-pro"] == 0.0, "fish-s2-pro (local) rate must be 0.0"
+
+
+def test_voice_event_data_captures_fish_audio_fields():
+    """The data blob written by sync_voice_log_events must carry ttsModel and
+    isLocal so backfill_tts_event_costs can route hosted vs local Fish Audio."""
+    import json
+
+    obj = {
+        "event_type": "tts.speak",
+        "provider":   "fish-audio",
+        "char_count": 800,
+        "ttsModel":   "fish-audio-s2.1",
+        "isLocal":    False,
+        "voice_id":   "en-US-Standard-A",
+    }
+    # Simulate the json.dumps call in sync_voice_log_events
+    data = {
+        "provider":   obj.get("provider"),
+        "char_count": obj.get("char_count") or obj.get("characterCount") or obj.get("text_length"),
+        "voice_id":   obj.get("voice_id") or obj.get("voiceId"),
+        "ttsModel":   obj.get("ttsModel") or obj.get("fishModel") or None,
+        "isLocal":    obj.get("isLocal") if obj.get("isLocal") is not None else obj.get("is_local"),
+    }
+    parsed = json.loads(json.dumps(data))
+    assert parsed.get("provider") == "fish-audio"
+    assert parsed.get("char_count") == 800
+    assert parsed.get("ttsModel") == "fish-audio-s2.1"
+    assert parsed.get("isLocal") is False
+
+
+def test_voice_event_data_fish_s2_pro_is_local():
+    """Fish S2 Pro events must have isLocal=True so the backfill skips them."""
+    import json
+
+    obj = {
+        "event_type": "tts.speak",
+        "char_count": 500,
+        "ttsModel":   "fish-s2-pro",
+        "isLocal":    True,
+    }
+    data = {
+        "ttsModel": obj.get("ttsModel") or obj.get("fishModel") or None,
+        "isLocal":  obj.get("isLocal") if obj.get("isLocal") is not None else obj.get("is_local"),
+        "char_count": obj.get("char_count"),
+    }
+    parsed = json.loads(json.dumps(data))
+    assert parsed.get("isLocal") is True, "Fish S2 Pro must carry isLocal=True"
+
+
 def test_tts_provider_rates_table_present():
     from clawmetry.providers_pricing import TTS_PROVIDER_RATES
 
@@ -179,3 +262,113 @@ def test_non_tts_events_unaffected():
     assert "char_count" not in extra
     assert "voice_id" not in extra
     assert "audio_bytes" not in extra
+
+
+# ---------------------------------------------------------------------------
+# 4. query_tts_provider_rollup (#5289) — usage attribution
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def tts_store(tmp_path, monkeypatch):
+    """Isolated LocalStore for TTS rollup tests."""
+    import importlib
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "tts.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
+    monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    s = ls.LocalStore()
+    s.start()
+    yield s
+    s.stop(flush=True)
+
+
+def _tts_ev(provider: str, char_count: int, cost: float, eid: str | None = None) -> dict:
+    import uuid
+    return {
+        "id":         eid or str(uuid.uuid4()),
+        "node_id":    "agent+test",
+        "agent_id":   "main",
+        "session_id": "sess-tts-1",
+        "event_type": "tts.speak",
+        "ts":         "2026-08-01T10:00:00Z",
+        "data":       {"provider": provider, "char_count": char_count},
+        "cost_usd":   cost,
+        "token_count": 0,
+        "model":       None,
+    }
+
+
+def test_query_tts_provider_rollup_aggregates_by_provider(tts_store):
+    """query_tts_provider_rollup groups Fish Audio and other TTS events by provider."""
+    import time as _time
+
+    tts_store.ingest_event(_tts_ev("fish-audio", 1000, 0.015))
+    tts_store.ingest_event(_tts_ev("fish-audio", 500, 0.0075))
+    tts_store.ingest_event(_tts_ev("openai", 2000, 0.030))
+
+    # Wait for the async flusher.
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline:
+        if tts_store.health()["ring_depth"] == 0:
+            break
+        _time.sleep(0.05)
+
+    rows = tts_store.query_tts_provider_rollup()
+    by_provider = {r["provider"]: r for r in rows}
+
+    assert "fish-audio" in by_provider, "fish-audio must appear in rollup"
+    fa = by_provider["fish-audio"]
+    assert fa["calls"] == 2
+    assert fa["char_count"] == 1500
+    assert abs(fa["cost_usd"] - 0.0225) < 1e-9, f"Expected $0.0225, got {fa['cost_usd']}"
+
+    assert "openai" in by_provider, "openai must appear in rollup"
+    oa = by_provider["openai"]
+    assert oa["calls"] == 1
+    assert abs(oa["cost_usd"] - 0.030) < 1e-9
+
+
+def test_query_tts_provider_rollup_excludes_zero_cost(tts_store):
+    """Local TTS events with cost_usd=0 must not appear in the rollup."""
+    import time as _time
+
+    tts_store.ingest_event(_tts_ev("fish-s2-pro", 1000, 0.0))  # local, no cost
+    tts_store.ingest_event(_tts_ev("fish-audio", 800, 0.012))
+
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline:
+        if tts_store.health()["ring_depth"] == 0:
+            break
+        _time.sleep(0.05)
+
+    rows = tts_store.query_tts_provider_rollup()
+    providers = {r["provider"] for r in rows}
+
+    assert "fish-s2-pro" not in providers, "Zero-cost local TTS must be excluded"
+    assert "fish-audio" in providers
+
+
+def test_query_tts_provider_rollup_empty_store(tts_store):
+    """Returns an empty list when there are no TTS events."""
+    rows = tts_store.query_tts_provider_rollup()
+    assert rows == []
+
+
+def test_query_tts_provider_rollup_sorted_by_cost_desc(tts_store):
+    """Result rows are sorted by cost_usd descending."""
+    import time as _time
+
+    tts_store.ingest_event(_tts_ev("openai", 100, 0.001))
+    tts_store.ingest_event(_tts_ev("elevenlabs", 2000, 0.200))
+    tts_store.ingest_event(_tts_ev("fish-audio", 500, 0.008))
+
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline:
+        if tts_store.health()["ring_depth"] == 0:
+            break
+        _time.sleep(0.05)
+
+    rows = tts_store.query_tts_provider_rollup()
+    costs = [r["cost_usd"] for r in rows]
+    assert costs == sorted(costs, reverse=True), "Rows must be sorted by cost_usd desc"

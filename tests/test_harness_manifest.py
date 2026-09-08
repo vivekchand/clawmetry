@@ -4,6 +4,12 @@ scripts/harness/manifest.json drives the daily audit that keeps ClawMetry's
 coverage current as the runtimes evolve. If it drifts (a runtime dropped, a bad
 repo URL, a wrong adapter path), the audit silently skips that runtime — so we
 pin the shape here.
+
+Split (2026-06-04): the OSS manifest is free-only (openclaw + nemoclaw). The 10
+pro runtimes (claude_code, codex, goose, aider, opencode, qwen_code, cursor,
+hermes, picoclaw, nanoclaw) moved to clawmetry-pro's private manifest and audit
+workflow to keep closed adapter paths out of the public repo. This test guards
+that the free-only scope is preserved; the pro side is guarded separately there.
 """
 import json
 import os
@@ -12,12 +18,10 @@ import re
 HERE = os.path.dirname(__file__)
 MANIFEST = os.path.join(HERE, "..", "scripts", "harness", "manifest.json")
 
-# The 12 runtimes ClawMetry monitors (matches the v1 API _RUNTIME_PREFIXES +
-# openclaw/nemoclaw). The manifest must cover exactly these.
-_RUNTIMES = {
-    "openclaw", "nemoclaw", "claude_code", "codex", "goose", "aider",
-    "opencode", "qwen_code", "cursor", "hermes", "picoclaw", "nanoclaw",
-}
+# Only the two free runtimes live in the OSS manifest. Pro runtimes are audited
+# by clawmetry-pro's own private manifest (see scripts/harness/manifest.json
+# _comment and _verified fields for the authoritative rationale).
+_FREE_RUNTIMES = {"openclaw", "nemoclaw"}
 
 
 def _load():
@@ -25,12 +29,12 @@ def _load():
         return json.load(f)
 
 
-def test_manifest_is_valid_json_and_covers_all_runtimes():
+def test_manifest_is_valid_json_and_covers_free_runtimes():
     m = _load()
     runtimes = {h["runtime"] for h in m["harnesses"]}
-    assert runtimes == _RUNTIMES, (
-        f"manifest runtimes drifted: missing={_RUNTIMES - runtimes}, "
-        f"extra={runtimes - _RUNTIMES}"
+    assert runtimes == _FREE_RUNTIMES, (
+        f"manifest runtimes drifted: missing={_FREE_RUNTIMES - runtimes}, "
+        f"extra={runtimes - _FREE_RUNTIMES}"
     )
 
 

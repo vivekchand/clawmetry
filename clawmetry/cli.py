@@ -108,14 +108,78 @@ def _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM) -> None:
         return
 
     print()
-    result = subprocess.run(["bash", script_path], check=False)
-    if result.returncode == 0:
+    # The preset helper is a .sh script. Windows has no bash on PATH by
+    # default, and Popen raises FileNotFoundError rather than returning a
+    # non-zero code, which would abort onboarding instead of falling through
+    # to the "run this manually" hint below.
+    try:
+        result = subprocess.run(["bash", script_path], check=False)
+    except (FileNotFoundError, OSError):
+        print(f"  {DIM('bash was not found on PATH.')}")
+        result = None
+    if result is not None and result.returncode == 0:
         print()
         return
 
     print(f"  {DIM('Preset setup did not complete. Run this manually:')}")
     print(f"    {CYAN(f'bash {script_path}')}")
     print()
+
+
+def _maybe_offer_secure(_input, BOLD, CYAN, DIM) -> None:
+    """Offer monitor-only agent security monitoring (numbat) after onboarding.
+
+    Default-yes, but always ASKED: the hook install edits each harness's own
+    config (Claude settings.json, Codex hooks.json, ...), which crosses
+    ClawMetry's read-only default, so onboard never enables it silently
+    (founder 2026-08-02 — visible [Y/n] over auto-on). The wizard answer IS
+    the consent, so cmd_enable runs with yes=True and doesn't re-prompt."""
+    try:
+        from clawmetry.secure import cmd_enable, find_numbat
+    except Exception:
+        return
+    try:
+        if find_numbat():
+            return  # already set up (or user's own install) — don't re-nag
+    except Exception:
+        return
+
+    print(f"  {BOLD('Agent security monitoring')} {DIM('(recommended)')}")
+    print(f"  {DIM('numbat (Perplexity, Apache-2.0) watches your agents for secret')}")
+    print(f"  {DIM('exfiltration, permission bypasses and persistence; findings land in')}")
+    print(f"  {DIM('the Security tab. Monitor-only: nothing is ever blocked. Installs')}")
+    print(f"  {DIM('hooks into your agent configs; undo anytime: clawmetry secure disable')}")
+
+    try:
+        choice = _input("  → [Y/n]: ").strip().lower() or "y"
+    except (EOFError, KeyboardInterrupt):
+        # No interactive answer: never touch agent configs.
+        choice = "n"
+        print()
+    if choice not in ("y", "yes"):
+        print(f"  {DIM('Enable later:')} {CYAN('clawmetry secure enable')}")
+        print()
+        return
+
+    print()
+    import argparse as _ap
+
+    try:
+        rc = cmd_enable(_ap.Namespace(
+            yes=True, port=None, emit_all=False, reinstall=False,
+        ))
+    except Exception as e:
+        print(f"  ⚠️  Security setup did not complete: {e}")
+        rc = 1
+    if rc != 0:
+        print(f"  {DIM('Try again later:')} {CYAN('clawmetry secure enable')}")
+    print()
+
+
+def _post_onboard_offers(_input, BOLD, CYAN, DIM) -> None:
+    """Every terminal path of onboard runs the same optional extras."""
+    _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
+    _maybe_offer_secure(_input, BOLD, CYAN, DIM)
 
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -451,7 +515,8 @@ def _oauth_browser_login(provider: str, input_fn=input, api_call=None) -> str:
     import hashlib as _hashlib
     import base64 as _base64
 
-    app_base = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+    from clawmetry.endpoints import app_url as _resolve_app_url
+    app_base = _resolve_app_url()
 
     # PKCE: the verifier stays in CLI memory only; only its SHA256 (the
     # challenge) ever leaves this process, in the start URL.
@@ -548,6 +613,11 @@ def _get_api_key_interactive() -> str:
         except OSError:
             pass
 
+    if _tty is None and not sys.stdin.isatty():
+        print("\n  ❌  Interactive sign-in needs a terminal.")
+        print("  Run this in your own shell, or pass --key cm_xxx to skip the prompt.\n")
+        sys.exit(1)
+
     def _input(prompt):
         """input() that reads from /dev/tty when stdin is a pipe."""
         if _tty is not None:
@@ -555,9 +625,15 @@ def _get_api_key_interactive() -> str:
             sys.stdout.flush()
             line = _tty.readline()
             return line.rstrip("\n")
-        return input(prompt)
+        try:
+            return input(prompt)
+        except EOFError:
+            print("\n  ❌  Interactive sign-in needs a terminal.")
+            print("  Run this in your own shell, or pass --key cm_xxx to skip the prompt.\n")
+            sys.exit(1)
 
-    INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+    INGEST_URL = _resolve_ingest_url()
 
     def _api_call(path, body):
         result, status = _post_json(INGEST_URL.rstrip("/") + path, body)
@@ -592,56 +668,95 @@ def _get_api_key_interactive() -> str:
 
     if not _re.match(r"^[^@]+@[^@]+\.[^@]+$", entry):
         print("  ❌  That doesn't look like a valid email.")
-        return getpass.getpass("  API key (cm_…): ").strip()
+        entry = _input("  📧 Try again — your email: ").strip()
+        if not _re.match(r"^[^@]+@[^@]+\.[^@]+$", entry):
+            return getpass.getpass("  API key (cm_…): ").strip()
 
     email = entry.lower()
-    print(f"\n  📨 Sending code to {email}…", end="", flush=True)
-    r = _api_call("/api/auth/email-otp", {"action": "send", "email": email})
-    if r.get("_status") == 503:
-        import time as _time
 
-        retry_after = r.get("retry_after") or 5
-        try:
-            retry_after = max(1, min(int(retry_after), 30))
-        except (TypeError, ValueError):
-            retry_after = 5
-        print(f"\n  ⏳ Server's busy — retrying in {retry_after}s…", flush=True)
-        _time.sleep(retry_after)
-        print(f"  📨 Sending code to {email}…", end="", flush=True)
-        r = _api_call("/api/auth/email-otp", {"action": "send", "email": email})
+    def _send_code(addr):
+        """Send an OTP to ``addr`` with the 503 backoff. Returns the response."""
+        print(f"\n  📨 Sending code to {addr}…", end="", flush=True)
+        rr = _api_call("/api/auth/email-otp", {"action": "send", "email": addr})
+        if rr.get("_status") == 503:
+            import time as _time
+
+            retry_after = rr.get("retry_after") or 5
+            try:
+                retry_after = max(1, min(int(retry_after), 30))
+            except (TypeError, ValueError):
+                retry_after = 5
+            print(f"\n  ⏳ Server's busy — retrying in {retry_after}s…", flush=True)
+            _time.sleep(retry_after)
+            print(f"  📨 Sending code to {addr}…", end="", flush=True)
+            rr = _api_call("/api/auth/email-otp", {"action": "send", "email": addr})
+        return rr
+
+    # OTP loop with RECOVERY: a typo'd email or a code that never arrives must
+    # never force a restart of the whole wizard (founder live-hit 2026-07-30).
+    # At the code prompt: `r` resends, typing a different email switches to it,
+    # blank input never burns an attempt; even three wrong codes offer a way
+    # back before falling to the paste-an-API-key exit.
+    while True:
+        r = _send_code(email)
         if r.get("_status") == 503:
             print(" ❌")
             print("\n  Couldn't reach our servers right now.")
             print("  Please try `clawmetry connect` again in a minute.\n")
             sys.exit(1)
-    if r.get("error"):
-        print(f" ❌  {r['error']}")
-        print("  Visit https://clawmetry.com/connect to get your API key.")
-        return getpass.getpass("  API key (cm_…): ").strip()
-    print(" ✅")
-    print()
+        if r.get("error"):
+            print(f" ❌  {r['error']}")
+            fix = _input("  Type a corrected email to retry, or press Enter to use an API key instead: ").strip()
+            if "@" in fix:
+                email = fix.lower()
+                continue
+            print("  Visit https://clawmetry.com/connect to get your API key.")
+            return getpass.getpass("  API key (cm_…): ").strip()
+        print(" ✅")
+        print("  Typo in the email, or no code arriving? Type r to resend, or just type the right email.")
+        print()
 
-    # Ask for OTP
-    for attempt in range(3):
-        otp = _input("  🔑 Enter the 6-digit code: ").strip()
-        if not otp:
+        wrong = 0
+        switched = False
+        while wrong < 3:
+            otp = _input("  🔑 Enter the 6-digit code (r = resend): ").strip()
+            if not otp:
+                continue  # a stray Enter must not burn an attempt
+            if otp.lower() in ("r", "resend"):
+                rr = _send_code(email)
+                print(" ✅" if not rr.get("error") and rr.get("_status") != 503 else f" ❌  {rr.get('error', 'server busy')}")
+                continue
+            if "@" in otp:
+                # They typed an email at the code prompt: that IS the typo fix.
+                email = otp.lower()
+                switched = True
+                break
+            print("  Verifying…", end="", flush=True)
+            r2 = _api_call(
+                "/api/auth/email-otp", {"action": "verify", "email": email, "otp": otp}
+            )
+            if r2.get("error"):
+                print(f" ❌  {r2['error']}")
+                wrong += 1
+                if wrong < 3:
+                    print("  Try again (r = resend, or type a different email).")
+                continue
+            api_key = r2.get("api_key", "")
+            if api_key.startswith("cm_"):
+                is_new = r2.get("is_new", False)
+                print(f" ✅  {'Account created' if is_new else 'Welcome back'}!")
+                print()
+                return api_key
+            print(" ❌  Server returned an unexpected response.")
+            wrong += 1
+        if switched:
+            continue  # send a code to the corrected address
+        fix = _input("  Still stuck? Type a different email, r to resend, or press Enter to stop: ").strip()
+        if fix.lower() in ("r", "resend"):
             continue
-        print("  Verifying…", end="", flush=True)
-        r2 = _api_call(
-            "/api/auth/email-otp", {"action": "verify", "email": email, "otp": otp}
-        )
-        if r2.get("error"):
-            print(f" ❌  {r2['error']}")
-            if attempt < 2:
-                print("  Try again.")
+        if "@" in fix:
+            email = fix.lower()
             continue
-        api_key = r2.get("api_key", "")
-        if api_key.startswith("cm_"):
-            is_new = r2.get("is_new", False)
-            print(f" ✅  {'Account created' if is_new else 'Welcome back'}!")
-            print()
-            return api_key
-        print(" ❌  Server returned an unexpected response.")
         break
 
     print()
@@ -672,7 +787,8 @@ def _verify_key_ownership(api_key: str) -> None:
             return _tty.readline().rstrip("\n")
         return input(prompt)
 
-    INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+    INGEST_URL = _resolve_ingest_url()
 
     def _api(path, body):
         result, status = _post_json(INGEST_URL.rstrip("/") + path, body)
@@ -751,6 +867,33 @@ def _keychain_set(node_id: str, key: str) -> None:
         pass
 
 
+def _reset_family_sync_marks() -> int:
+    """Drop the family-runtime high-water marks so the next daemon pass
+    re-ingests every session and pushes the full set to the cloud.
+
+    Sessions ingested during local-only operation are stamped "done" in
+    ``family_event_high_water``; without this reset, the first pass after
+    ``clawmetry connect`` skips them all and the cloud account never sees
+    the node's history. Local re-ingest is idempotent (PK upserts), so the
+    only cost is one full re-read. Returns the number of session marks
+    cleared (0 when there is nothing to backfill)."""
+    import json as _json
+    state_file = Path.home() / ".clawmetry" / "sync-state.json"
+    try:
+        with open(state_file, encoding="utf-8") as fh:
+            state = _json.load(fh)
+    except (FileNotFoundError, ValueError, OSError):
+        return 0
+    marks = state.pop("family_event_high_water", None)
+    if not marks:
+        return 0
+    tmp = state_file.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        _json.dump(state, fh)
+    os.replace(tmp, state_file)
+    return len(marks)
+
+
 def _cmd_connect(args) -> None:
     """clawmetry connect — validate key, save config, start daemon."""
     # #1937: respect the persistent local-only marker. If the user did
@@ -758,7 +901,26 @@ def _cmd_connect(args) -> None:
     # re-prompt for an email on the next update / install.sh run. The
     # `--force` flag lets the user override after explicit confirmation.
     from clawmetry.config import is_cloud_disabled, NOCLOUD_MARKER_PATH
-    if is_cloud_disabled() and not getattr(args, "force", False):
+    # Sign in while KEEPING the nocloud marker: account + trial license yes,
+    # data egress no. Set by the Case-B "keep local-only" answer below, or
+    # passed in directly by onboard's Self-Hosted trial path (args.keep_local),
+    # which has already asked its own questions and must not be re-prompted.
+    _keep_local_signin = bool(getattr(args, "keep_local", False))
+    if _keep_local_signin:
+        # A fresh self-host machine has NO marker yet (the interactive
+        # Case-B path below only runs when one already exists). Write it
+        # BEFORE any config/daemon work: the daemon must never observe a
+        # cm_ key without the marker, or it starts pushing (founder
+        # live-hit 2026-08-09; the end-of-flow touch alone leaves a
+        # window where a respawning daemon sees key-without-marker).
+        try:
+            from pathlib import Path as _P
+
+            _P(NOCLOUD_MARKER_PATH).parent.mkdir(parents=True, exist_ok=True)
+            _P(NOCLOUD_MARKER_PATH).touch(exist_ok=True)
+        except Exception:
+            pass
+    if is_cloud_disabled() and not getattr(args, "force", False) and not _keep_local_signin:
         # Two cases here:
         #
         # (A) AUTOMATED invocation -- install.sh / curl|bash / wrappers that
@@ -826,10 +988,28 @@ def _cmd_connect(args) -> None:
             _choice = ""
 
         if _choice != "1":
+            # Keeping data local must NOT mean staying anonymous: identity is
+            # what unlocks runtimes (the trial license), egress is a separate
+            # decision (founder spec 2026-07-30 — answering "keep local-only"
+            # used to silently drop the sign-in the user had just chosen).
             print()
-            print("Staying local-only. Dashboard: http://localhost:8900")
-            print(f"(To convert later: rm {NOCLOUD_MARKER_PATH} && clawmetry connect)")
-            return
+            print("Staying local-only: your data will not leave this machine.")
+            try:
+                sys.stdout.write(
+                    "Sign in anyway to unlock every runtime here with a free "
+                    "7-day Pro trial license? [Y/n]: "
+                )
+                sys.stdout.flush()
+                _t2 = (_choice_src.readline() or "").strip().lower()
+            except (OSError, KeyboardInterrupt, EOFError):
+                _t2 = "n"
+            if _t2 in ("n", "no"):
+                print()
+                print("Staying local-only. Dashboard: http://localhost:8900")
+                print(f"(To convert later: rm {NOCLOUD_MARKER_PATH} && clawmetry connect)")
+                return
+            _keep_local_signin = True
+            print()
 
         # User chose cloud signup -- remove the marker, then fall through to
         # the normal connect flow below (it'll prompt for email + OTP).
@@ -876,7 +1056,7 @@ def _cmd_connect(args) -> None:
     import platform
     import socket
 
-    api_key = args.key or os.environ.get("CLAWMETRY_API_KEY") or ""
+    api_key = getattr(args, "key", None) or os.environ.get("CLAWMETRY_API_KEY") or ""
     if not api_key:
         api_key = _get_api_key_interactive()
 
@@ -893,23 +1073,57 @@ def _cmd_connect(args) -> None:
     # actual security bar: the cm_ key is a bearer credential the server
     # accepts directly on /auth and ingest, so the client-side OTP never
     # stopped anyone who already holds the key.
-    if args.key:
+    if getattr(args, "key", None):
         if _saved_api_key and api_key == _saved_api_key:
             pass  # Already verified — reconnecting with same key
-        elif getattr(args, "start_sync_now", False):
-            pass  # Key from the authenticated dashboard command — already proven
+        elif (
+            getattr(args, "start_sync_now", False)
+            or getattr(args, "defer_sync", False)
+            or getattr(args, "keep_local", False)
+        ):
+            # Key from the authenticated dashboard command (--start-sync-now)
+            # or the desktop onboarding's self-host path (--defer-sync). Both
+            # flags only exist on machine-generated invocations whose key was
+            # just minted in an OAuth/OTP-verified session. --defer-sync runs
+            # non-interactively (no stdin), so an OTP prompt here doesn't just
+            # add friction, it kills the sign-in: _verify_key_ownership exits 1
+            # without a tty, the trial never provisions, and a self-host user
+            # is left on the OSS tier with every runtime locked.
+            pass
         else:
-            _verify_key_ownership(api_key)
+            from clawmetry.endpoints import is_custom_endpoint as _is_custom_ep
+            if _is_custom_ep():
+                pass  # Self-hosted server — no email-OTP service; /auth is the gate
+            else:
+                _verify_key_ownership(api_key)
 
     custom_name = getattr(args, "custom_node_id", None) or ""
     machine_hostname = custom_name or socket.gethostname()
     _existing_node_id = _saved_node_id
-    print("Connecting to ClawMetry Cloud… ", end="", flush=True)
+    _server_e2e = None
+    print("Verifying your account… " if _keep_local_signin
+          else "Connecting to ClawMetry Cloud… ", end="", flush=True)
     try:
         result = validate_key(
             api_key, hostname=machine_hostname, existing_node_id=_existing_node_id
         )
         node_id = result.get("node_id") or machine_hostname
+        # Self-hosted servers may answer {"e2e": false} — data stays inside the
+        # customer deployment, so blob encryption is optional there and the
+        # server needs plaintext to serve fleet views / audit export.
+        #
+        # SECURITY (2026-08-24 review, finding 1): this flag is only ever
+        # honoured for a CUSTOM endpoint. The managed cloud answering
+        # {"e2e": false} used to downgrade any client to plaintext ingest —
+        # a remote kill switch on the product's headline privacy guarantee,
+        # signalled by one line in a log file. `is_custom_endpoint()` is the
+        # same resolver every other client call already routes through, so
+        # "self-hosted" now means what the comment always claimed it meant.
+        _server_e2e = result.get("e2e") if isinstance(result, dict) else None
+        if _server_e2e is False:
+            from clawmetry.endpoints import is_custom_endpoint as _is_custom_ep2
+            if not _is_custom_ep2():
+                _server_e2e = None  # managed cloud cannot turn E2E off
         print("✅")
     except Exception as e:
         err = str(e)
@@ -944,50 +1158,170 @@ def _cmd_connect(args) -> None:
     _enc_key_arg = getattr(args, "enc_key", None) or ""
     _kc_key = _keychain_get(node_id)  # '' when keyring not installed
 
+    if _keep_local_signin:
+        # No snapshots ever leave on this path — the E2E key ceremony is
+        # noise (and printing a "keep this safe" secret mid-Self-Hosted run
+        # reads like a cloud signup; founder live-hit 2026-07-30).
+        enc_key = _kc_key or _saved_enc_key or generate_encryption_key()
+    # A self-hosted server answering {"e2e": false} opts this node into
+    # plaintext ingest (data never leaves the deployment; the server needs
+    # plaintext for fleet views + audit export). An explicit --enc-key wins.
+    #
+    # SECURITY (2026-08-24 review, finding 1): a node that ALREADY has a key
+    # is never downgraded. `save_config` is a whole-file overwrite that only
+    # re-adds `encryption_key` when it is non-empty, so accepting e2e:false on
+    # a reconnect used to destroy the existing key with no keychain fallback —
+    # turning a working E2E node into a plaintext one and orphaning everything
+    # it had already synced. Opting an existing node into plaintext is now an
+    # explicit act: re-run with --enc-key "" after clearing the key.
+    _existing_key = _kc_key or _saved_enc_key
+    _server_plaintext = (
+        _server_e2e is False
+        and not _enc_key_arg
+        and not _keep_local_signin
+        and not _existing_key
+    )
+    if _server_e2e is False and _existing_key and not _enc_key_arg and not _keep_local_signin:
+        print(
+            "  This server asked for plaintext ingest, but this node already "
+            "has an encryption key — keeping it. Your data stays encrypted."
+        )
     print()
-    print("🔐 Encryption key protects your data end-to-end.")
-    if _enc_key_arg:
+    if not _keep_local_signin and not _server_plaintext:
+        print("🔐 Encryption key protects your data end-to-end.")
+
+    # Non-interactive callers (--start-sync-now / --keep-local from the
+    # dashboard's OTP paste-and-go and the desktop pane's apply_cm_key
+    # subprocess; also any pipe/redirect where stdin isn't a TTY) must
+    # never hit `input()` — the desktop pane runs connect with
+    # capture_output=True and `input()` raises EOFError, killing the
+    # whole subprocess and leaving the user paired-but-trial-less.
+    # Founder 2026-08-13 hit exactly this: signed up via the desktop
+    # pane cloud pane, saw `Cloud Connected` in the dashboard (my
+    # _fallback_persist_cm_key from #4776 caught the failure and saved
+    # the token), but `clawmetry status` showed Free with no trial
+    # because the subprocess crashed BEFORE reaching
+    # _activate_signup_trial. In non-interactive mode we silently keep
+    # the existing key (keychain/config) or auto-generate one — the
+    # user can re-key later from Settings if they want a custom secret.
+    _non_interactive = (
+        bool(getattr(args, "start_sync_now", False))
+        or _keep_local_signin
+        or not sys.stdin.isatty()
+    )
+
+    if _keep_local_signin:
+        pass  # enc_key already chosen above, silently
+    elif _server_plaintext:
+        enc_key = ""
+        print("🔓 This self-hosted server stores your data unencrypted.")
+        from clawmetry.endpoints import ingest_url as _resolve_ingest_url_pt
+        print(f"     Endpoint: {_resolve_ingest_url_pt()}")
+        print("     Session content — prompts, replies, tool arguments — is")
+        print("     readable by whoever runs that server. End-to-end")
+        print("     encryption is off for this node.")
+    elif _enc_key_arg:
         enc_key = _derive_key_for_storage(_enc_key_arg)
         print("  Using provided encryption key.")
     elif _kc_key:
         masked = _kc_key[:6] + "…" + _kc_key[-4:]
         print(f"  Key from OS keychain: {masked}")
-        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else _kc_key
+        if _non_interactive:
+            enc_key = _kc_key
+        else:
+            custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else _kc_key
     elif _saved_enc_key:
         masked = _saved_enc_key[:6] + "…" + _saved_enc_key[-4:]
         print(f"  Existing key: {masked}")
-        custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else _saved_enc_key
+        if _non_interactive:
+            enc_key = _saved_enc_key
+        else:
+            custom_key = _input("  Press Enter to keep it, or type a new one: ").strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else _saved_enc_key
     else:
-        custom_key = _input(
-            "  Enter a custom secret key (or press Enter to auto-generate): "
-        ).strip()
-        enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
+        if _non_interactive:
+            enc_key = generate_encryption_key()
+            print("  Encryption key auto-generated (change in Settings).")
+        else:
+            custom_key = _input(
+                "  Enter a custom secret key (or press Enter to auto-generate): "
+            ).strip()
+            enc_key = _derive_key_for_storage(custom_key) if custom_key else generate_encryption_key()
 
-    _keychain_set(node_id, enc_key)  # persist to OS keychain when available
+    if enc_key:
+        _keychain_set(node_id, enc_key)  # persist to OS keychain when available
 
     config = {
         "api_key": api_key,
         "node_id": node_id,
         "platform": platform.system(),
         "connected_at": __import__("datetime").datetime.now().isoformat(),
-        "encryption_key": enc_key,
     }
+    if enc_key:
+        config["encryption_key"] = enc_key
     save_config(config)
+
+    # Record the choice the dashboard's first-run gate reads, so a machine
+    # onboarded from the terminal is never asked to onboard AGAIN in the
+    # browser (founder live-hit 2026-08-22: `clawmetry status` showed the
+    # linked cloud_pro account while http://localhost:8900 showed the
+    # "Welcome to ClawMetry" modal and a second sign-in). The keep-local
+    # sign-in is self-host by definition — the marker staying put is that
+    # path's whole point — and the trial it mints is what unlocks runtimes.
+    try:
+        from clawmetry import onboarding_state as _obs
+
+        _obs.record_choice(
+            "selfhost_trial" if _keep_local_signin else "managed",
+            source="cli:connect",
+        )
+    except Exception:
+        pass  # never let gate bookkeeping fail a successful connect
 
     # Explicit connect is an opt-in to cloud: clear any local-only marker so the
     # daemon actually pushes (otherwise a prior local-only install / disconnect
     # leaves it ingesting to DuckDB only and the node never appears in cloud).
-    try:
-        from clawmetry.config import enable_cloud as _enable_cloud
-        if _enable_cloud():
-            print("  Re-enabled cloud sync (was local-only)")
-    except Exception:
-        pass
+    # EXCEPT the keep-local sign-in: there the marker staying put is the point.
+    if not _keep_local_signin:
+        try:
+            from clawmetry.config import enable_cloud as _enable_cloud
+            if _enable_cloud():
+                print("  Re-enabled cloud sync (was local-only)")
+        except Exception:
+            pass
+
+    # Backfill guarantee: sessions ingested while the node ran local-only are
+    # stamped "done" in the family high-water marks, so the first cloud-
+    # connected pass would skip them all and the cloud dashboard would sit at
+    # 0 sessions forever (founder live-hit 2026-07-29: local said Connected,
+    # cloud said "No machines connected yet"). Clearing the marks makes the
+    # next family pass re-ingest every session (idempotent PK upserts locally)
+    # and push the full set to the newly connected account.
+    if not _keep_local_signin:
+        try:
+            _cleared = _reset_family_sync_marks()
+            if _cleared:
+                print(f"  Queued {_cleared} existing session(s) for cloud backfill")
+        except Exception:
+            pass  # connect must never fail because of backfill housekeeping
 
     print()
     print(f"  Connected as: {node_id}")
+
+    # Every successful sign-in mints-or-reuses the account's 7-day trial
+    # license and activates it HERE (idempotent server-side) — including the
+    # keep-local path, where the license is the entire reason to sign in.
+    # Must run BEFORE the entitlement probe below: on a brand-new signup the
+    # account is still FREE until this trial is minted, so a probe that ran
+    # first would see "not entitled", install nothing, and print nothing —
+    # even though the trial (unlocking every runtime) was about to activate
+    # a moment later. (2026-08-06 Straive Windows onboarding: OTP verified,
+    # `clawmetry status` correctly showed the trial active, but Runtimes
+    # stayed "NOT syncing" because the wheel was probed-for before it existed
+    # to be entitled to, and only the 30-min pro-entitlement watcher in
+    # sync.py ever caught up.)
+    _trial_activated = _activate_signup_trial()
 
     # Auto-provision clawmetry-pro for entitled cloud accounts (Starter/Pro/
     # Trial/Enterprise). The cloud is the single source of truth: license.py
@@ -1000,13 +1334,43 @@ def _cmd_connect(args) -> None:
         from clawmetry.license import auto_provision_pro
         _pro_installed, _pro_msg = auto_provision_pro(api_key, node_id)
         if _pro_installed:
-            print("  Pro adapters installed - all 14 runtimes available.")
+            print("  Pro adapters installed - all 30 runtimes available.")
         elif _pro_msg:
             # Entitled but the wheel could not be installed right now; surface a
             # quiet hint without alarming the user (connect still succeeded).
             print(f"  Note: {_pro_msg}")
+        elif _trial_activated:
+            # The trial just activated (see message above) but this probe still
+            # came back empty-handed - e.g. entitlement propagation lag rather
+            # than an error. Don't leave the terminal looking like nothing
+            # happened; the pro-entitlement watcher retries every ~30 min.
+            print("  Pro runtimes are activating - run `clawmetry status` in "
+                  "a few minutes to check, or they'll pick up automatically.")
     except Exception:
         pass  # connect must never fail because of pro provisioning
+
+    if _keep_local_signin:
+        # Belt-and-braces: the marker was never removed on this path, but a
+        # future refactor must not accidentally flip a keep-local sign-in
+        # into cloud sync.
+        try:
+            from pathlib import Path as _P
+
+            _P(NOCLOUD_MARKER_PATH).parent.mkdir(parents=True, exist_ok=True)
+            _P(NOCLOUD_MARKER_PATH).touch()
+        except Exception:
+            pass
+        print()
+        print("  Local-only kept: your data stays on this machine.")
+        # --defer-sync means a supervisor (the desktop app) manages the
+        # daemon and dashboard itself — spawning a second dashboard here
+        # would race it for the DuckDB writer lock.
+        if not getattr(args, "defer_sync", False):
+            _dash_up = _ensure_local_dashboard()
+            if _dash_up:
+                print("  Dashboard: http://localhost:8900 (live now)")
+            else:
+                print("  Dashboard did not come up at http://localhost:8900. Start it: clawmetry")
 
     print()
 
@@ -1018,7 +1382,9 @@ def _cmd_connect(args) -> None:
         return
 
     # Skip enc key reminder when --enc-key was passed (automated/sandbox use)
-    if not _enc_key_arg:
+    # and on keep-local sign-ins (no snapshot ever leaves; the secret is
+    # cloud-viewer material and printing it reads like a cloud signup).
+    if not _enc_key_arg and not _keep_local_signin:
         print("  Keep this secret key safe (like a password):")
         print(f"  {enc_key}")
         print()
@@ -1044,14 +1410,51 @@ def _cmd_connect(args) -> None:
     else:
         _start_daemon(config, args)
 
-    # Open browser with encryption key in URL fragment (never sent to server)
-    # The #key=... fragment stays client-side — true E2E encryption
+    if _keep_local_signin:
+        # Self-Hosted stays self-hosted: no cloud dashboard URL, no secret
+        # in a URL fragment, no browser hand-off to app.clawmetry.com
+        # (founder live-hit 2026-07-30: the keep-local run ended by OPENING
+        # the cloud fleet page — a betrayal of "everything stays on your
+        # devices" even though zero data had synced).
+        print()
+        print("  All done! Your dashboard: http://localhost:8900")
+        print()
+        if not getattr(args, "defer_sync", False):
+            try:
+                import webbrowser
+                webbrowser.open("http://localhost:8900")
+            except Exception:
+                pass
+        return
+
+    # Hand off to the browser entirely in the URL FRAGMENT. A fragment is
+    # never transmitted, so nothing here reaches a server log, a Referer
+    # header, or an intermediary.
+    #
+    # SECURITY (2026-08-24 review, finding 11): the account key used to ride
+    # in the query string as `/cloud?token=<key>`. A `cm_` key is a whole
+    # account credential and the server records the request line, so every
+    # connect wrote one into Cloud Logging in plaintext, where it stayed for
+    # the retention window; it also sat in the user's browser history. The
+    # cloud page's setup bridge now reads `#token=` and hands it to the
+    # one-step-onboarding claim in a POST body instead.
     _node_id = config.get("node_id", "")
-    _dashboard_url = f"https://app.clawmetry.com/cloud?token={api_key}#key={enc_key}&node={_node_id}"
+    from clawmetry.endpoints import app_url as _resolve_app_url2
+    _app_base_done = _resolve_app_url2()
+    _dashboard_url = (
+        f"{_app_base_done}/cloud"
+        f"#token={api_key}&key={enc_key}&node={_node_id}"
+    )
+
+    # Cloud includes the local dashboard too (the onboard copy promises
+    # BOTH app.clawmetry.com and localhost:8900) — make it true, best-effort.
+    _local_dash_up = _ensure_local_dashboard()
 
     print()
     print("  All done! Opening your dashboard...")
-    print(f"  https://app.clawmetry.com/cloud")
+    print(f"  {_app_base_done}/cloud")
+    if _local_dash_up:
+        print("  Also on this machine: http://localhost:8900")
     print()
 
     # If this was a zero-friction connect (no real key), the node landed on a
@@ -1060,11 +1463,244 @@ def _cmd_connect(args) -> None:
     # discover a silent "0 nodes" later. No-op (+ skipped) for a keyed connect.
     _warn_if_placeholder_account(api_key)
 
+    _open_url_without_argv(_dashboard_url)
+
+
+def _quiet_unlink(path):
     try:
-        import webbrowser
-        webbrowser.open(_dashboard_url)
+        os.unlink(path)
     except Exception:
         pass
+
+
+def _open_url_without_argv(url):
+    """Open ``url`` in the browser without putting it in any process's argv.
+
+    SECURITY (2026-08-24 review, finding 11): ``webbrowser.open`` shells out —
+    ``open`` on macOS, ``xdg-open`` on Linux — so the full URL, encryption-key
+    fragment included, is visible to every other process on the machine for as
+    long as that command runs (``ps``, ``/proc/<pid>/cmdline``). Handing the
+    browser a local redirect page instead keeps the key out of argv entirely.
+
+    Falls back to a direct open if the temp file cannot be written — a browser
+    that opens beats a dead end, and the fallback is what we always did.
+    """
+    import webbrowser
+
+    try:
+        import html as _html
+        import json as _json
+        import tempfile
+        import threading
+
+        fd, path = tempfile.mkstemp(suffix=".html", prefix="clawmetry-open-")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(
+                "<!doctype html><meta charset='utf-8'>"
+                "<title>Opening ClawMetry\u2026</title>"
+                "<script>location.replace(%s)</script>"
+                "<p>Opening your dashboard\u2026 "
+                "<a href='%s'>continue</a></p>"
+                % (_json.dumps(url), _html.escape(url, quote=True))
+            )
+        os.chmod(path, 0o600)  # mkstemp already does this; be explicit
+        if webbrowser.open("file://" + path):
+            # The redirect page holds the key too, so it does not outlive the
+            # hand-off. 0600 keeps it to this user in the meantime — the same
+            # user can already read ~/.clawmetry/config.json, so this exposes
+            # nothing new, whereas argv is visible to every user on the box.
+            _t = threading.Timer(30.0, lambda: _quiet_unlink(path))
+            _t.daemon = True
+            _t.start()
+            return
+    except Exception:
+        pass
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
+def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
+    """Make ``http://localhost:<port>`` actually serve the dashboard.
+
+    For a local-only install the URL IS the product, and onboard used to
+    print it while nothing listened (founder report 2026-07-29:
+    ERR_CONNECTION_REFUSED straight after "Watching your agents locally") —
+    the sync daemon was the only thing ever started. Any HTTP answer counts
+    as alive (an auth page or 404 still proves a server); when the port is
+    silent, register a KeepAlive launchd job on macOS or fall back to a
+    detached subprocess, then poll within a hard bound (NEVER-HANG: this
+    returns within ~``wait_secs`` no matter what). Returns True only when
+    the port actually answered — callers print the truth either way.
+    """
+    import platform as _plat
+    import subprocess as _sp
+    import time as _t
+    import urllib.error as _ue
+    import urllib.request as _ur
+
+    def _alive() -> bool:
+        try:
+            _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=2)
+            return True
+        except _ue.HTTPError:
+            return True  # the server answered; status code is irrelevant here
+        except Exception:
+            return False
+
+    if _alive():
+        return True
+
+    exe = os.path.join(os.path.dirname(sys.executable), "clawmetry")
+    cmd = ([exe, "--port", str(port)] if os.path.exists(exe)
+           else [sys.executable, "-m", "clawmetry", "--port", str(port)])
+    log_path = os.path.expanduser("~/.clawmetry/dashboard.log")
+    system = _plat.system()
+    started = False
+
+    if system == "Darwin":
+        try:
+            from pathlib import Path as _P
+
+            label = "com.clawmetry.dashboard"
+            plist_path = _P.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+            # Use `python -m clawmetry` (not the console-script path) so the
+            # plist stays valid if the venv is rebuilt without entry points.
+            # The console-script path rots silently; the interpreter path is
+            # stable across venv rebuilds (#4297).
+            # ``--no-debug`` because dashboard.py's ``--debug`` DEFAULTS TO
+            # TRUE: without it the service ran Flask's development server
+            # with the stat reloader, which restarts on any file change
+            # (every self-update), polls thousands of files a second, and is
+            # not the waitress server every other launcher (systemd unit,
+            # desktop app, CI) starts. Found 2026-09-02 on a machine whose
+            # dashboard log read "Debugger is active!" under launchd.
+            _launchd_cmd = [sys.executable, "-m", "clawmetry", "--no-debug", "--port", str(port)]
+            _args_xml = "\n".join(f"        <string>{a}</string>" for a in _launchd_cmd)
+            # launchd starts agents with cwd="/" and does not always export
+            # HOME. dashboard.py's workspace auto-detect ends in os.getcwd(),
+            # so cwd="/" made WORKSPACE="/" and the fleet DB resolve to
+            # "/.clawmetry-fleet.db" -- unwritable, so the dashboard exited(1)
+            # on every boot and the user saw no dashboard at all. Pin both.
+            _home_dir = str(_P.home())
+            plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>             <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+{_args_xml}
+    </array>
+    <key>WorkingDirectory</key>  <string>{_home_dir}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>          <string>{_home_dir}</string>
+    </dict>
+    <key>RunAtLoad</key>         <true/>
+    <key>KeepAlive</key>         <true/>
+    <key>StandardOutPath</key>   <string>{log_path}</string>
+    <key>StandardErrorPath</key> <string>{log_path}</string>
+    <key>ThrottleInterval</key>  <integer>30</integer>
+</dict>
+</plist>"""
+            plist_path.parent.mkdir(parents=True, exist_ok=True)
+            plist_path.write_text(plist)
+            uid = os.getuid()
+            r = _sp.run(
+                ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+                capture_output=True, check=False,
+            )
+            if r.returncode != 0:
+                # Already bootstrapped (e.g. re-onboard) — restart it; legacy
+                # load for pre-10.11 launchctl.
+                _sp.run(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"],
+                        capture_output=True, check=False)
+                _sp.run(["launchctl", "load", "-w", str(plist_path)],
+                        capture_output=True, check=False)
+            started = True
+        except Exception:
+            started = False
+
+    if not started:
+        try:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            log = open(log_path, "ab")
+            kw = {"stdout": log, "stderr": log, "stdin": _sp.DEVNULL}
+            if system == "Windows":
+                # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP. NO_WINDOW (a
+                # hidden console the daemon's own console-subsystem children
+                # inherit), NOT DETACHED_PROCESS (no console at all): a
+                # console-less parent's unflagged children each get a fresh
+                # VISIBLE console — on Win11, a Windows Terminal tab that sits
+                # on the user's screen for the daemon's lifetime (founder
+                # report 2026-08-09, "open forever" window after self-update).
+                kw["creationflags"] = 0x08000200
+            else:
+                kw["start_new_session"] = True
+            _sp.Popen(cmd, **kw)
+        except Exception:
+            return False
+
+    deadline = _t.time() + wait_secs
+    while _t.time() < deadline:
+        if _alive():
+            return True
+        _t.sleep(0.5)
+    return _alive()
+
+
+def _activate_signup_trial() -> bool:
+    """Mint-or-reuse the signed-in account's 7-day trial license and
+    activate it locally, unlocking every runtime on the license rail.
+
+    Called at the end of every successful connect (founder spec 2026-07-30:
+    identity is what unlocks runtimes — including when the user keeps their
+    data local-only). Server-side it is idempotent: repeats reissue the
+    SAME license with its ORIGINAL expiry, an expired trial comes back
+    ``expired: true`` and gets an honest notice instead of a key.
+    Best-effort: returns True only when a live trial key ended up
+    activated; every failure path leaves the install exactly as it was.
+    """
+    try:
+        import json as _jk
+        import time as _tm
+        import urllib.request as _ur
+
+        cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as _fh:
+                api_key = (_jk.load(_fh).get("api_key") or "").strip()
+        except Exception:
+            return False
+        if not api_key.startswith("cm_"):
+            return False
+
+        from clawmetry import license as _lic
+
+        req = _ur.Request(
+            _lic._cloud_base() + "/api/license/trial/signup",
+            data=_jk.dumps({"api_key": api_key}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=15) as resp:
+            body = _jk.loads(resp.read().decode())
+        if not (isinstance(body, dict) and body.get("ok") and body.get("key")):
+            return False
+        if body.get("expired"):
+            print("  Your 7-day Pro trial has ended. Keep every runtime: https://clawmetry.com/pricing")
+            return False
+        ok, _msg = _lic.activate(body["key"], node_id=_lic._node_id())
+        if not ok:
+            return False
+        _left = max(1, int((float(body.get("expires_at", 0)) - _tm.time() + 86399) // 86400))
+        _days = "day" if _left == 1 else "days"
+        print(f"  Pro trial active: every runtime unlocked on this machine, {_left} {_days} left.")
+        return True
+    except Exception:
+        return False
 
 
 def _start_daemon(config: dict, args) -> None:
@@ -1083,8 +1719,19 @@ def _start_daemon(config: dict, args) -> None:
         _register_launchd(config)
     elif system == "Linux":
         _register_systemd(config)
+    elif os.name == "nt":
+        # Windows has no launchd/systemd equivalent short of Task Scheduler.
+        # Without a registered task the daemon (and with it, all auto-update
+        # polling) does not survive a reboot/logoff/crash -- confirmed live
+        # on the founder's own Windows box (2026-07-28, CHANGELOG #4146).
+        # Register a logon-triggered, restart-on-failure scheduled task;
+        # fall back to the old unsupervised subprocess if schtasks fails
+        # (e.g. sandboxed/locked-down environments with no Task Scheduler
+        # access) so `clawmetry connect`/`onboard` never hard-fails here.
+        from clawmetry.daemon_registration import register_windows_task
+        if not register_windows_task(config):
+            _start_subprocess()
     else:
-        # Windows / fallback: subprocess
         _start_subprocess()
 
 
@@ -1287,8 +1934,24 @@ def _register_launchd(config: dict) -> None:
             capture_output=True,
             check=False,
         )
-    print("  Running in the background. Your data is syncing to the cloud.")
+    print(f"  Running in the background. {_daemon_mode_line(config)}")
     print("  To stop: clawmetry disconnect")
+
+
+def _daemon_mode_line(config: dict) -> str:
+    """Truthful one-liner for daemon registration: a LOCAL-ONLY node must
+    never be told its data is syncing to the cloud (founder report
+    2026-07-29 — this printed right above "Nothing leaves this machine")."""
+    local = bool(isinstance(config, dict) and config.get("local_only"))
+    if not local:
+        try:
+            from clawmetry.config import is_cloud_disabled
+
+            local = is_cloud_disabled()
+        except Exception:
+            pass
+    return ("Nothing leaves this machine." if local
+            else "Your data is syncing to the cloud.")
 
 
 def _register_systemd(config: dict) -> None:
@@ -1361,7 +2024,7 @@ WantedBy={wanted_by}
 
     if _installed:
         _how = "system service" if _is_root else "user service"
-        print(f"  Running in the background as a systemd {_how}. Your data is syncing to the cloud.")
+        print(f"  Running in the background as a systemd {_how}. {_daemon_mode_line(config)}")
         print("  To stop: clawmetry disconnect")
     else:
         if sys.stdout.isatty():
@@ -1374,8 +2037,16 @@ def _start_subprocess() -> None:
     import subprocess
     import shutil
 
+    import os as _os
+
     sync_script = str(__import__("pathlib").Path(__file__).parent / "sync.py")
-    log_file = str(__import__("pathlib").Path.home() / ".clawmetry" / "sync.log")
+    log_path = __import__("pathlib").Path.home() / ".clawmetry" / "sync.log"
+    # A fresh install may not have ~/.clawmetry yet; open(..., "a") would raise.
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    log_file = str(log_path)
 
     # Use setsid if available — ensures daemon survives kubectl exec session end
     cmd = (
@@ -1383,14 +2054,36 @@ def _start_subprocess() -> None:
         if shutil.which("setsid")
         else [sys.executable, sync_script]
     )
-    proc = subprocess.Popen(
-        cmd,
-        stdout=open(log_file, "a"),
-        stderr=subprocess.STDOUT,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
+
+    spawn_kwargs = {"stdin": subprocess.DEVNULL, "close_fds": True}
+    if _os.name == "nt":
+        # start_new_session is POSIX-only and silently no-ops on Windows, which
+        # left the daemon inside the launching console's process group: closing
+        # that window delivered CTRL_CLOSE_EVENT and killed the daemon with it.
+        # CREATE_NO_WINDOW gives the daemon its OWN (hidden) console — cut
+        # loose from the launching terminal like DETACHED_PROCESS, but unlike
+        # DETACHED its console-subsystem children inherit the hidden console
+        # instead of each allocating a fresh VISIBLE one (founder report
+        # 2026-08-09: persistent Windows Terminal tab after self-update).
+        # The new process group still stops parent-terminal Ctrl+C propagating.
+        spawn_kwargs["creationflags"] = (
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        spawn_kwargs["start_new_session"] = True
+
+    # The child inherits a duplicate of this handle, so closing ours right
+    # after the spawn is correct and avoids leaking it for the CLI's lifetime.
+    log_fh = open(log_file, "a")
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=log_fh, stderr=subprocess.STDOUT, **spawn_kwargs
+        )
+    finally:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
     print(f"✅  Sync daemon started (pid {proc.pid})")
 
 
@@ -1439,7 +2132,13 @@ def _cmd_disconnect(args) -> None:
         _kill_sync_daemon()  # also kill any bare subprocess daemon
         print("✅  Stopped sync daemon")
 
+    _node_id_dc = ""
     if CONFIG_FILE.exists():
+        try:
+            import json as _json_dc
+            _node_id_dc = _json_dc.loads(CONFIG_FILE.read_text()).get("node_id", "")
+        except Exception:
+            pass
         CONFIG_FILE.unlink()
         print(f"✅  Removed config ({CONFIG_FILE})")
     if STATE_FILE.exists():
@@ -1473,6 +2172,16 @@ def _cmd_disconnect(args) -> None:
     except Exception as _e:
         print(f"⚠️  Could not write opt-out marker: {_e}")
 
+    # Clear the cloud token mirrored into ~/.openclaw/openclaw.json and
+    # the OS-keychain workspace key.  Neither lives under ~/.clawmetry so
+    # they survive a config-delete; explicit cleanup prevents a later
+    # install from silently re-adopting the old identity (founder bug
+    # 2026-08-10: fresh desktop install landed on the dashboard signed-in).
+    from clawmetry.config import clear_cloud_token, delete_workspace_keychain_entry
+    if clear_cloud_token():
+        print("✅  Removed cloud token from OpenClaw config")
+    if _node_id_dc:
+        delete_workspace_keychain_entry(_node_id_dc)
     print("Disconnected from ClawMetry Cloud.")
 
 
@@ -1569,13 +2278,123 @@ def _uninstall_nemoclaw_sandbox(
         pass
 
 
-def _cmd_uninstall() -> None:
-    """clawmetry uninstall — fully remove clawmetry, stop daemons, delete all files."""
+def _desktop_runtime_dir() -> "Path":
+    """Where the desktop thin-shell keeps its runtime venv + logs.
+    Mirrors ``desktop/app.py::_runtime_dir`` (kept in sync there). We
+    reimplement it here so the uninstall path doesn't have to import
+    the desktop package (which pulls pywebview into the CLI process).
+
+        macOS   ~/Library/Application Support/ClawMetry
+        Windows %LOCALAPPDATA%/ClawMetry
+        Linux   ~/.local/share/ClawMetry  (or $XDG_DATA_HOME/ClawMetry)
+    """
+    import platform as _pl
+    from pathlib import Path as _P
+
+    system = _pl.system()
+    if system == "Darwin":
+        return _P.home() / "Library" / "Application Support" / "ClawMetry"
+    if system == "Windows":
+        return _P(os.environ.get("LOCALAPPDATA", str(_P.home()))) / "ClawMetry"
+    return _P(
+        os.environ.get("XDG_DATA_HOME", str(_P.home() / ".local" / "share"))
+    ) / "ClawMetry"
+
+
+def _openclaw_sidecar_paths() -> list:
+    """Files under ``~/.openclaw`` that ClawMetry owns and is safe to
+    remove on uninstall. Deliberately excludes ``openclaw.json`` — that
+    file belongs to OpenClaw; we only strip our ``clawmetry`` key from
+    it in a separate step."""
+    from pathlib import Path as _P
+
+    home = _P.home()
+    oc = home / ".openclaw"
+    paths = [
+        oc / "clawmetry.db",
+        oc / "clawmetry.db-shm",
+        oc / "clawmetry.db-wal",
+        oc / "clawmetry-alerts.json",
+        oc / ".clawmetry",  # insights_config.json lives here
+        oc / "workspace" / ".clawmetry-fleet.db",
+        oc / "workspace" / ".clawmetry-fleet.db-shm",
+        oc / "workspace" / ".clawmetry-fleet.db-wal",
+        oc / "workspace" / ".clawmetry-metrics.json",
+    ]
+    return [p for p in paths if p.exists()]
+
+
+def _strip_clawmetry_from_openclaw_json() -> "tuple[bool, str]":
+    """Remove the ``clawmetry`` key from ``~/.openclaw/openclaw.json``.
+
+    Leaves the rest of the file intact so OpenClaw keeps working. If
+    the resulting object is empty, delete the file so a fresh install
+    doesn't inherit an empty stub. Returns (changed, path)."""
+    import json as _json
+    from pathlib import Path as _P
+
+    p = _P.home() / ".openclaw" / "openclaw.json"
+    if not p.exists():
+        return False, str(p)
+    try:
+        with p.open() as f:
+            data = _json.load(f)
+    except Exception:
+        return False, str(p)
+    if not isinstance(data, dict) or "clawmetry" not in data:
+        return False, str(p)
+    del data["clawmetry"]
+    try:
+        if not data:
+            p.unlink()
+        else:
+            with p.open("w") as f:
+                _json.dump(data, f, indent=2)
+        return True, str(p)
+    except Exception:
+        return False, str(p)
+
+
+def _cmd_uninstall(args=None) -> None:
+    """clawmetry uninstall — fully remove clawmetry, stop daemons, delete all files.
+
+    Flags (all optional; if ``args`` is None the interactive default holds):
+
+        --yes / -y     skip the interactive "type uninstall to confirm" prompt.
+                       Required for the desktop-app menu shell-out and the
+                       app-vanished watchdog.
+        --unattended   non-interactive, quiet, exit 0 even on partial failure.
+                       Implies --yes. This is what the macOS app-vanished
+                       watchdog uses.
+        --keep-data    preserve DuckDB local store + history.db (users who
+                       want their event history to survive a reinstall).
+        --dry-run      list everything that would be removed without touching
+                       disk.
+    """
     import shutil
     import platform
     import subprocess
     from pathlib import Path
     from clawmetry.sync import CONFIG_FILE, STATE_FILE, LOG_FILE
+
+    _yes = bool(getattr(args, "yes", False) or getattr(args, "unattended", False))
+    _unattended = bool(getattr(args, "unattended", False))
+    _keep_data = bool(getattr(args, "keep_data", False))
+    _dry_run = bool(getattr(args, "dry_run", False))
+
+    def _say(msg: str) -> None:
+        if not _unattended:
+            print(msg)
+
+    # Under --unattended (watchdog-driven), silence every remaining `print`
+    # in this function so the LaunchAgent's log stays clean. We restore
+    # stdout on the way out.
+    _orig_stdout = sys.stdout
+    if _unattended:
+        try:
+            sys.stdout = open(os.devnull, "w")  # noqa: SIM115 — restored below
+        except Exception:
+            pass
 
     home = Path.home()
     system = platform.system()
@@ -1637,41 +2456,152 @@ def _cmd_uninstall() -> None:
             ("NemoClaw", f"Sandbox {_sb}: stop daemon, remove config + clawmetry")
         )
 
-    # 6. pip package
+    # 6. Desktop thin-shell runtime (~/Library/Application Support/ClawMetry etc.)
+    # The .app itself lives in /Applications and is user-managed (drag-to-trash),
+    # but the pip-managed venv, bootstrap.log, and onboarding-completed.json
+    # under the runtime dir are ours to wipe. This is the piece that was
+    # silently surviving drag-to-trash and auto-logging the user back in on
+    # reinstall (support thread 2026-08-12).
+    _desktop_runtime = _desktop_runtime_dir()
+    if _desktop_runtime.exists():
+        items.append(("Desktop", f"Desktop runtime dir: {_desktop_runtime}"))
+
+    # 7. OpenClaw sidecar files ClawMetry owns (SQLite anomalies, fleet DB,
+    # insights config, alerts JSON). We DON'T touch ~/.openclaw/openclaw.json
+    # here — that file belongs to OpenClaw. The clawmetry.cloudToken key
+    # inside it is stripped separately (see step 8).
+    _oc_sidecar = _openclaw_sidecar_paths()
+    for _p in _oc_sidecar:
+        items.append(("Sidecar", f"OpenClaw sidecar file: {_p}"))
+
+    # 8. Cloud token embedded in ~/.openclaw/openclaw.json — the *file* is
+    # OpenClaw's, but the `clawmetry.cloudToken` key inside it is what caused
+    # the "auto-logged-in after drag-to-trash reinstall" surprise. Strip that
+    # key only. If openclaw.json ends up empty, the strip step deletes it.
+    _oc_json = home / ".openclaw" / "openclaw.json"
+    if _oc_json.exists():
+        try:
+            import json as _json_probe
+            with _oc_json.open() as _f:
+                _oc_data = _json_probe.load(_f)
+            if isinstance(_oc_data, dict) and "clawmetry" in _oc_data:
+                items.append(
+                    ("Token", f"Strip clawmetry.cloudToken from: {_oc_json}")
+                )
+        except Exception:
+            pass
+
+    # 10. Runtime hooks (#4817). MUST run before pip uninstall so the
+    # ``clawmetry.hooks`` module is still importable. Every entry in
+    # ``~/.clawmetry/hooks/installed.json`` names a hook file we dropped
+    # into a runtime's config dir (Claude Code, Cursor, opencode, Pi, …)
+    # plus the config-file key we merged. Draining the manifest removes
+    # both, so the runtime never boots into a settings.json referencing
+    # a script that pip just deleted. Non-negotiable per goal thread
+    # 2026-08-14 ("runtime should not error out when clawmetry is
+    # uninstalled").
+    try:
+        from clawmetry import hooks as _cm_hooks
+        for _installed in _cm_hooks.status():
+            items.append((
+                "Hook",
+                f"Runtime hook: {_installed.runtime}/{_installed.hook_id} "
+                f"({_installed.install_path})",
+            ))
+    except Exception:
+        pass
+
+    # 10b. numbat (agent-EDR) — only if `clawmetry secure enable` installed
+    # it (managed binary in ~/.clawmetry/bin). Its hooks live in each
+    # harness's own config and reference that binary, so they must be
+    # de-registered before the ~/.clawmetry purge deletes it — the same
+    # stale-hook class as #4817. A user-installed numbat (PATH) is never
+    # touched. Skipped under --keep-data: that path keeps ~/.clawmetry, so
+    # binary + hooks stay valid for the reinstall-later flow.
+    if not _keep_data:
+        try:
+            from clawmetry import secure as _cm_secure
+            _numbat_bin = _cm_secure.managed_numbat()
+            if _numbat_bin:
+                items.append((
+                    "Numbat",
+                    f"numbat hooks (all agent configs) + binary: {_numbat_bin}",
+                ))
+        except Exception:
+            pass
+
+    # 9. pip package
     items.append(("Package", "pip package: clawmetry"))
 
+    if _keep_data:
+        # Filter out the DuckDB/SQLite/fleet DBs while keeping the runtime,
+        # config, and daemon teardown intact. This is the "I want to reinstall
+        # later and pick up where I left off" path.
+        def _is_data(cat: str, detail: str) -> bool:
+            data_hints = (
+                "clawmetry.db",
+                ".clawmetry-fleet",
+                "clawmetry.duckdb",
+                "history.db",
+                "Config directory",  # ~/.clawmetry holds the DuckDB
+            )
+            return any(hint in detail for hint in data_hints)
+
+        items = [(c, d) for (c, d) in items if not _is_data(c, d)]
+
+    def _restore_stdout():
+        if sys.stdout is not _orig_stdout:
+            try:
+                sys.stdout.close()
+            except Exception:
+                pass
+            sys.stdout = _orig_stdout
+
     if not items:
-        print("  Nothing to uninstall. ClawMetry does not appear to be installed.")
+        _say("  Nothing to uninstall. ClawMetry does not appear to be installed.")
+        _restore_stdout()
         return
 
-    # Show confirmation
-    print()
-    print("  \033[1m\033[91m⚠️  ClawMetry Uninstall\033[0m")
-    print("  \033[2m" + "─" * 50 + "\033[0m")
-    print()
-    print("  The following will be removed:")
-    print()
-    for category, detail in items:
-        print(f"    \033[91m✗\033[0m  [{category}] {detail}")
-    print()
-    print("  \033[2mThis action is irreversible. Your encryption key and cloud")
-    print("  config will be permanently deleted.\033[0m")
-    print()
-
-    try:
-        confirm = input("  Type 'uninstall' to confirm: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\n  Cancelled.")
+    if _dry_run:
+        _say("")
+        _say("  \033[1mDry run — no files touched.\033[0m")
+        _say("")
+        for category, detail in items:
+            _say(f"    \033[93m•\033[0m  [{category}] {detail}")
+        _say("")
+        _restore_stdout()
         return
 
-    if confirm != "uninstall":
-        print("  Cancelled.")
-        return
+    # Show confirmation (skipped under --yes / --unattended)
+    if not _yes:
+        print()
+        print("  \033[1m\033[91m⚠️  ClawMetry Uninstall\033[0m")
+        print("  \033[2m" + "─" * 50 + "\033[0m")
+        print()
+        print("  The following will be removed:")
+        print()
+        for category, detail in items:
+            print(f"    \033[91m✗\033[0m  [{category}] {detail}")
+        print()
+        print("  \033[2mThis action is irreversible. Your encryption key and cloud")
+        print("  config will be permanently deleted.\033[0m")
+        print()
 
-    print()
+        try:
+            confirm = input("  Type 'uninstall' to confirm: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Cancelled.")
+            return
+
+        if confirm != "uninstall":
+            print("  Cancelled.")
+            return
+
+        print()
 
     # Execute uninstall
     # 0. Purge server-side registration (node_registry + node data)
+    _node_id = ""
     try:
         import json as _json_u
         cfg_path = home / ".clawmetry" / "config.json"
@@ -1686,8 +2616,9 @@ def _cmd_uninstall() -> None:
                 def _purge_server():
                     try:
                         import urllib.request
+                        from clawmetry.endpoints import app_url as _resolve_app_url
                         _req = urllib.request.Request(
-                            "https://app.clawmetry.com/api/unregister",
+                            _resolve_app_url() + "/api/unregister",
                             data=_json_u.dumps({
                                 "node_id": _node_id,
                                 "hostname": _hostname,
@@ -1772,6 +2703,59 @@ def _cmd_uninstall() -> None:
     if _stray_dash:
         print(f"  ✅  Killed {_stray_dash} dashboard process(es)")
 
+    # 1b. Drain runtime hooks (#4817). MUST run BEFORE pip uninstall so the
+    # ``clawmetry.hooks`` module is still importable. Every registered hook
+    # gets its config-file key merged-removed (only ClawMetry-owned keys are
+    # touched; user config survives) and its hook file deleted. If this
+    # doesn't run cleanly, a runtime like Claude Code boots into a
+    # settings.json referencing a script pip is about to delete, and
+    # errors out on next start — the exact scenario the goal thread
+    # 2026-08-14 flagged as non-negotiable.
+    try:
+        from clawmetry import hooks as _cm_hooks
+        _drained = _cm_hooks.uninstall_all()
+        if _drained:
+            print(f"  ✅  Drained {len(_drained)} runtime hook(s): "
+                  f"{', '.join(_drained)}")
+    except Exception as _e:
+        print(f"  ⚠️  Could not drain runtime hooks: {_e}")
+
+    # 1b-ii. Drain the Claude Code PreToolUse gate + PermissionRequest
+    # mirror. These are installed by clawmetry/claude_code_gate.py, NOT by
+    # the clawmetry.hooks registry the step above drains, so an uninstall
+    # used to walk straight past them and leave settings.json naming a
+    # binary it was about to delete — a hook error on every tool call, with
+    # no ClawMetry left running that could ever clean it up. Same #4817
+    # rule as above: BEFORE the pip uninstall, while the module still
+    # imports.
+    try:
+        from clawmetry import claude_code_gate as _cc_gate
+        _gate_res = _cc_gate.uninstall_all_hooks()
+        if _gate_res.get("gate") or _gate_res.get("mirror"):
+            print("  ✅  Removed Claude Code gate hooks from settings.json")
+        for _err in _gate_res.get("errors") or []:
+            print(f"  ⚠️  Could not remove Claude Code hook ({_err})")
+    except Exception as _e:
+        print(f"  ⚠️  Could not remove Claude Code gate hooks: {_e}")
+
+    # 1c. Drain numbat hooks (clawmetry secure). MUST run BEFORE the
+    # ~/.clawmetry purge below: the drain shells out to the managed binary
+    # in ~/.clawmetry/bin, and the hooks numbat registered in each agent's
+    # own config (Claude Code settings.json, Codex hooks.json, …) reference
+    # that binary by absolute path. Purge first and every harness boots
+    # into a config pointing at a deleted binary (#4817's bug class).
+    # No-ops when numbat isn't ours (PATH install) or under --keep-data.
+    if not _keep_data:
+        try:
+            from clawmetry import secure as _cm_secure
+            _nb_acted, _nb_msg = _cm_secure.drain_hooks_for_uninstall()
+            if _nb_acted:
+                print(f"  ✅  {_nb_msg}")
+            elif _nb_msg:
+                print(f"  ⚠️  {_nb_msg}")
+        except Exception as _e:
+            print(f"  ⚠️  Could not drain numbat hooks: {_e}")
+
     # 2. Pip uninstall (BEFORE removing venv, since sys.executable may live there)
     print("  ⏳  Uninstalling pip package...")
     subprocess.run(
@@ -1805,7 +2789,11 @@ def _cmd_uninstall() -> None:
     # 3. Remove config directory (includes venv). ignore_errors hides
     # locked-file failures, so verify and re-try instead of printing a
     # false success over a directory that is still there (#3914).
-    if clawmetry_dir.exists():
+    #
+    # --keep-data: skip the whole directory wipe so the DuckDB / history.db
+    # survive. The pip-uninstall above already deregistered the package, so
+    # leaving the venv on disk is harmless (it's just files).
+    if clawmetry_dir.exists() and not _keep_data:
         shutil.rmtree(clawmetry_dir, ignore_errors=True)
         if clawmetry_dir.exists():
             import time as _time_u
@@ -1813,16 +2801,16 @@ def _cmd_uninstall() -> None:
             _time_u.sleep(0.5)
             shutil.rmtree(clawmetry_dir, ignore_errors=True)
         if clawmetry_dir.exists():
-            print(f"  ⚠️  Could not fully remove {clawmetry_dir} (files in use). Remove it manually.")
+            _say(f"  ⚠️  Could not fully remove {clawmetry_dir} (files in use). Remove it manually.")
         else:
-            print(f"  ✅  Removed {clawmetry_dir}")
+            _say(f"  ✅  Removed {clawmetry_dir}")
 
     # 4. Remove config/state/log files. A locked file (e.g. sync.log under
     # a daemon that survived the stop) warns and continues, never aborts.
     for f in [CONFIG_FILE, STATE_FILE, LOG_FILE]:
         if f.exists():
             if _safe_unlink(f):
-                print(f"  ✅  Removed {f}")
+                _say(f"  ✅  Removed {f}")
 
     # 5. Remove venv installs
     for vp in venv_paths:
@@ -1870,16 +2858,88 @@ def _cmd_uninstall() -> None:
             cluster = None
         if cluster:
             for sb in _nemoclaw_sandboxes:
-                print(f"  ⏳  Uninstalling from sandbox {sb}...")
+                _say(f"  ⏳  Uninstalling from sandbox {sb}...")
                 _uninstall_nemoclaw_sandbox(cluster, sb, docker_bin=_docker)
-                print(f"  ✅  Sandbox {sb} cleaned")
+                _say(f"  ✅  Sandbox {sb} cleaned")
 
-    print()
-    print("  \033[1m\033[92m✓ ClawMetry fully uninstalled.\033[0m")
-    print(
-        "  \033[2mTo reinstall: curl -fsSL https://clawmetry.com/install.sh | bash\033[0m"
-    )
-    print()
+    # 8. OpenClaw sidecar files ClawMetry owns. Skipped under --keep-data
+    # (the fleet DB + anomalies count as "data").
+    if not _keep_data:
+        for _p in _oc_sidecar:
+            try:
+                if _p.is_dir():
+                    shutil.rmtree(_p, ignore_errors=True)
+                    if not _p.exists():
+                        _say(f"  ✅  Removed {_p}")
+                else:
+                    if _safe_unlink(_p):
+                        _say(f"  ✅  Removed {_p}")
+            except Exception as _e:
+                _say(f"  ⚠️  Could not remove {_p}: {_e}")
+
+    # 9. Strip clawmetry.cloudToken from ~/.openclaw/openclaw.json. This is
+    # what caused the "auto-logged-in after drag-to-trash reinstall" surprise
+    # — a stale token in a file OpenClaw owns. We only remove our own key;
+    # the rest of openclaw.json is preserved (or the file is deleted if our
+    # key was the only thing in it).
+    from clawmetry.config import clear_cloud_token, delete_workspace_keychain_entry
+    if clear_cloud_token():
+        _say(f"  ✅  Stripped clawmetry section from ~/.openclaw/openclaw.json")
+    if _node_id:
+        delete_workspace_keychain_entry(_node_id)
+
+    # 10. Desktop thin-shell runtime dir (~/Library/Application Support/ClawMetry
+    # on macOS, %LOCALAPPDATA%/ClawMetry on Windows, ~/.local/share/ClawMetry
+    # on Linux). Holds the pip-managed venv + bootstrap.log + onboarding
+    # state. Removed LAST so we don't yank the venv out from under a running
+    # `clawmetry` process (this uninstall itself may be executing from that
+    # venv). On Windows the `.exe` self-delete pattern already handled by
+    # step 2b lets us delete the parent dir after this process exits.
+    #
+    # We don't touch /Applications/ClawMetry.app itself — that's the user's
+    # to manage (Finder → drag to Trash, or macOS Ventura+ "Move to Bin"). If
+    # this uninstall was triggered from an in-app menu the caller is expected
+    # to quit the app after the uninstall returns.
+    _desktop_runtime = _desktop_runtime_dir()
+    if _desktop_runtime.exists():
+        try:
+            shutil.rmtree(_desktop_runtime, ignore_errors=True)
+            if _desktop_runtime.exists():
+                # Retry once — venv teardown occasionally races the process
+                # exit on macOS (open file handles under load_url).
+                import time as _time_dr
+                _time_dr.sleep(0.5)
+                shutil.rmtree(_desktop_runtime, ignore_errors=True)
+            if _desktop_runtime.exists():
+                _say(
+                    f"  ⚠️  Could not fully remove {_desktop_runtime} "
+                    "(files in use). Remove it manually."
+                )
+            else:
+                _say(f"  ✅  Removed desktop runtime dir {_desktop_runtime}")
+        except Exception as _e:
+            _say(f"  ⚠️  Could not remove {_desktop_runtime}: {_e}")
+
+    if not _unattended:
+        print()
+        print("  \033[1m\033[92m✓ ClawMetry fully uninstalled.\033[0m")
+        # Reinstall hint matches the host OS — a curl|bash line pasted into
+        # cmd.exe would just error, so Windows gets the .cmd fetch+run pair.
+        _reinstall_cmd = (
+            "curl -fsSL https://clawmetry.com/install.cmd -o install.cmd && install.cmd"
+            if sys.platform.startswith("win")
+            else "curl -fsSL https://clawmetry.com/install.sh | bash"
+        )
+        print(f"  \033[2mTo reinstall: {_reinstall_cmd}\033[0m")
+        print()
+
+    # Restore stdout if we swapped it out under --unattended.
+    if sys.stdout is not _orig_stdout:
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        sys.stdout = _orig_stdout
 
 
 def _status_live_line(rows, prev, now):
@@ -1976,12 +3036,15 @@ def _resolve_account_email(api_key: str):
             return None, None
         import json as _json
         import os as _os
-        import urllib.parse as _up
         import urllib.request as _ur
 
-        base = _os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
-        url = base + "/api/cloud/account?token=" + _up.quote(api_key)
-        with _ur.urlopen(url, timeout=2.5) as resp:
+        from clawmetry.endpoints import app_url as _resolve_app_url
+        base = _resolve_app_url()
+        # Key in a header, never the query string: the server logs the
+        # request line, and a cm_ key is a whole account credential.
+        req = _ur.Request(base + "/api/cloud/account",
+                          headers={"X-Api-Key": api_key}, method="GET")
+        with _ur.urlopen(req, timeout=2.5) as resp:
             data = _json.loads(resp.read() or b"{}")
         email = (data.get("email") or "").strip()
         plan = (data.get("plan") or "").strip()
@@ -2142,6 +3205,11 @@ def _status_snapshot(args) -> dict:
                     cloud["encryption"]["secret_key"] = enc_key
         except Exception as exc:
             cloud["config_error"] = str(exc)
+        try:
+            from clawmetry.config import is_cloud_disabled as _icd_json
+            cloud["local_only"] = _icd_json()
+        except Exception:
+            cloud["local_only"] = None
         snap["cloud_sync"] = cloud
 
     # Sync state.
@@ -2155,6 +3223,14 @@ def _status_snapshot(args) -> dict:
             }
         except Exception:
             snap["sync_state"] = {"last_sync": None, "files_seen": 0}
+
+    # Native exporter blocks per profiled runtime (WO-57). Same source as
+    # the human line.
+    try:
+        from clawmetry.instrument import status_all as _instr_status_all
+        snap["instrumented_runtimes"] = _instr_status_all(probe=False)
+    except Exception:
+        snap["instrumented_runtimes"] = None
 
     # Runtimes. Same resolution as the human path.
     try:
@@ -2305,6 +3381,24 @@ def _status_snapshot(args) -> dict:
     except Exception:
         pass
 
+    # Installs — this CLI copy vs the daemon environment the auto-updater
+    # keeps current. ``version`` (above) is THIS process's package version,
+    # which on a machine with a stale duplicate install (a pre-venv
+    # ``pip install --user`` shadowing ``~/.clawmetry/bin`` on PATH) is NOT
+    # the version the daemon runs — that mismatch read as "auto-update is
+    # broken" (founder live-hit 2026-07-31). ``daemon.installed_version`` is
+    # the on-disk truth for the daemon env; ``installs.stale_cli`` is the
+    # one-bit answer scripts can alert on.
+    try:
+        from clawmetry.installs import installs_snapshot as _installs_snap
+        _inst = _installs_snap()
+        snap["installs"] = _inst
+        _dver = (_inst.get("daemon_env") or {}).get("version")
+        if _dver and isinstance(snap.get("daemon"), dict):
+            snap["daemon"]["installed_version"] = _dver
+    except Exception:
+        snap["installs"] = None
+
     return snap
 
 
@@ -2335,6 +3429,21 @@ def _cmd_status(args) -> None:
         _cm_ver = ""
     if _cm_ver:
         print(f"  Version:     {_cm_ver}")
+    # Stale-duplicate guard: when this CLI is a separate copy that is OLDER
+    # than the daemon's auto-updated install, the version above is misleading
+    # (the node itself IS current). Say so, with the daemon's real version.
+    try:
+        from clawmetry.installs import installs_snapshot as _inst_snap, \
+            stale_warning_lines as _stale_lines
+        _inst = _inst_snap()
+        _dver = (_inst.get("daemon_env") or {}).get("version")
+        if _dver and _dver != _cm_ver:
+            print(f"  Daemon ver:  {_dver}  (auto-updated install at "
+                  f"{(_inst.get('daemon_env') or {}).get('home')})")
+        for _ln in _stale_lines(_inst):
+            print("  " + _ln)
+    except Exception:
+        pass
 
     # Config
     if CONFIG_FILE.exists():
@@ -2347,7 +3456,18 @@ def _cmd_status(args) -> None:
             masked_api = (
                 api_key[:6] + "…" + api_key[-4:] if len(api_key) > 10 else api_key
             )
-            print("  Cloud sync:  ✅  Connected")
+            try:
+                from clawmetry.config import is_cloud_disabled as _icd_status
+                _status_local_only = _icd_status()
+            except Exception:
+                _status_local_only = False
+            if _status_local_only:
+                # Signed-in Self-Hosted: the account exists (it holds the
+                # trial license) but nothing syncs — saying "Connected"
+                # here read as a betrayal (founder 2026-07-30).
+                print("  Cloud sync:  ⏸   Local-only (account linked; data stays on this machine)")
+            else:
+                print("  Cloud sync:  ✅  Connected")
             print(f"  API key:     {masked_api}")
             _acct_email, _acct_plan = _resolve_account_email(api_key)
             # Self-heal the local plan cache from the LIVE account. The runtime
@@ -2359,10 +3479,16 @@ def _cmd_status(args) -> None:
             # Mirroring the live plan here makes the gate reflect the real plan
             # immediately and seeds the entitlement resolver so paid runtimes
             # flip on without waiting for the daemon. Best-effort; never raises.
+            # ``allow_provision=False``: mirroring the plan must stay a local
+            # file write. Without it this line reached auto_provision_pro and
+            # a plain `clawmetry status` spent ~80s downloading the pro wheel
+            # (20s entitlement probe + 60s wheel GET) whenever the first
+            # resolved address was unreachable — the daemon, not a status
+            # read, owns provisioning.
             if _acct_plan:
                 try:
                     from clawmetry.sync import _persist_cloud_plan_to_disk as _pcp
-                    _pcp(_acct_plan)
+                    _pcp(_acct_plan, allow_provision=False)
                 except Exception:
                     pass
             if _acct_email:
@@ -2406,17 +3532,69 @@ def _cmd_status(args) -> None:
     # the cloud on a Trial/Pro account — so we read the daemon's plan cache.
     try:
         print()
-        # Is this node's account entitled? (daemon mirrors the cloud plan here.)
+        # Is this node entitled? Resolve through clawmetry.entitlements — the
+        # SAME source the dashboard and gate use (license.key first, cloud
+        # plan cache second). Reading only cloud_plan.json here made status
+        # contradict itself on a self-hosted trial: "License: Trial" in the
+        # header while this gate said "FREE plan, NOT syncing" because the
+        # user's OLD cloud account was trial_expired (founder live-hit
+        # 2026-07-28).
         _entitled = False
         _plan = ""
+        _e = None
         try:
-            import json as _j2
-            _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
-            if _cp.is_file():
-                _plan = str((json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
-                _entitled = _plan not in ("", "cloud_free", "free")
+            from clawmetry import entitlements as _ent_st
+            _e = _ent_st.get_entitlement(force=True)
+            # is_paid / expired are properties — calling them raised and the
+            # fallback silently reported the stale cloud plan ("FREE plan")
+            # under a valid trial key (founder live-hit 2026-07-28, twice).
+            _entitled = bool(_e.is_paid and not _e.expired)
+            _plan = _e.tier or ""
         except Exception:
-            pass
+            # Fallback: the old cloud-plan cache read (entitlements missing
+            # on a very old install).
+            try:
+                import json as _j2
+                _cp = Path(os.path.expanduser("~/.clawmetry/cloud_plan.json"))
+                if _cp.is_file():
+                    _plan = str((json.loads(_cp.read_text()) or {}).get("plan", "")).lower()
+                    _entitled = _plan not in ("", "cloud_free", "free")
+            except Exception:
+                pass
+
+        # Plan: — one unambiguous line for Free / Trial / Trial Expired /
+        # Starter / Pro / Enterprise, unlike the old License: block below
+        # (silent unless a local key FILE exists, so a cloud-only Free/Trial
+        # account showed nothing at all here). `_e.tier` + `_e.expired`
+        # already carry an expired trial correctly — the resolver preserves
+        # tier="trial" with expiry in the past rather than silently falling
+        # through to oss (entitlements.py's own allows_runtime/allows_feature
+        # rely on that same distinction to deny paid access even in GRACE
+        # mode) — so no new plumbing is needed here, just an honest label.
+        if _e is not None:
+            _tier_lc = (_e.tier or "").strip().lower()
+            if _tier_lc == "trial" and _e.expired:
+                _plan_label = "Trial Expired"
+            else:
+                _plan_label = {
+                    "oss": "Free",
+                    "cloud_free": "Free",
+                    "trial": "Trial",
+                    "cloud_starter": "Starter",
+                    "cloud_pro": "Pro",
+                    "pro": "Pro",
+                    "enterprise": "Enterprise",
+                }.get(_tier_lc, (_e.tier or "Free").capitalize())
+            if _tier_lc == "trial" and _e.expired:
+                print(f"  Plan:        ⚠️  {_plan_label} — upgrade at "
+                      f"https://clawmetry.com/pricing to keep paid runtimes")
+            elif _tier_lc == "trial":
+                _left = _e.days_until_expiry()
+                _left_txt = f", {_left}d left" if isinstance(_left, int) else ""
+                print(f"  Plan:        {_plan_label}{_left_txt}")
+            else:
+                print(f"  Plan:        {_plan_label}")
+
         _prover = None
         try:
             from clawmetry.license import _pro_installed_version as _pv
@@ -2430,18 +3608,34 @@ def _cmd_status(args) -> None:
         except Exception:
             _det = []
         print("  Runtimes:")
-        print("    🦞 OpenClaw            ✅ syncing  (free)")
+        # OpenClaw line is DETECTION-GATED: this used to print
+        # "OpenClaw syncing" unconditionally, telling a machine with no
+        # OpenClaw install that OpenClaw was detected and syncing (founder
+        # live-hit 2026-07-28). Wording: "watching (local)" is the local
+        # DuckDB ingest that renders the dashboard; "syncing" is reserved
+        # for the separate Cloud sync line above — one word per concept.
+        try:
+            import dashboard as _dash_det
+            _oc_present = bool(_dash_det._detect_openclaw_install())
+        except Exception:
+            _oc_present = False
+        # One bullet style for every runtime — no runtime gets a logo (the
+        # 🦞/⚡ prefixes made OpenClaw/NemoClaw look privileged next to the
+        # plain-bullet family rows, and the emoji width broke column
+        # alignment; founder live-hit 2026-07-31).
+        if _oc_present:
+            print(f"    • {'OpenClaw':<18} ✅ watching (local)  (free)")
         try:
             from clawmetry.adapters.nemo import NemoClawAdapter as _NCA
             _nemo = _NCA().detect()
             if _nemo.detected:
-                print("    ⚡ NemoClaw            ✅ syncing  (free)")
+                print(f"    • {'NemoClaw':<18} ✅ watching (local)  (free)")
         except Exception:
             pass
         for _r in _det:
             _n = int(_r.get("sessionCount") or 0)
             _nm = _r.get("displayName") or _r.get("name") or "runtime"
-            _state = "✅ syncing" if _entitled else "○ detected, NOT syncing"
+            _state = "✅ watching (local)" if _entitled else "○ detected, NOT watched"
             print(f"    • {_nm:<18} {_state}  ({_n} session{'s' if _n != 1 else ''})")
         if not _prover:
             print("    ⚠ Claude Code / Codex / Cursor / Aider / Goose / opencode / Qwen — NOT syncing")
@@ -2452,9 +3646,12 @@ def _cmd_status(args) -> None:
                 print("      → paid runtimes need a Trial/Pro account. The daemon auto-downloads the")
                 print("        runtime pack on start once entitled — link your account in the dashboard.")
         elif _det and not _entitled:
-            print(f"    clawmetry-pro {_prover} installed and detecting the above — but your account")
-            print(f"      is on the FREE plan ({_plan or 'free'}), so paid runtimes are NOT synced to")
-            print("      the cloud. Link to a Trial/Pro account (the dashboard prompts you) to sync them.")
+            print(f"    clawmetry-pro {_prover} installed and detecting the above — but this node")
+            print(f"      has no active Trial/Pro entitlement ({_plan or 'free'}), so paid runtimes")
+            print("      are not watched. Start the free trial from the dashboard to turn them on.")
+        elif _det and _entitled:
+            _lbl = {"trial": "Trial"}.get((_plan or "").lower(), _plan or "entitled")
+            print(f"    clawmetry-pro {_prover} watching the above locally ({_lbl} plan).")
         elif _prover and not _det:
             print(f"    clawmetry-pro {_prover} installed — no other runtimes found on this machine yet.")
     except Exception:
@@ -2504,6 +3701,29 @@ def _cmd_status(args) -> None:
             else:
                 _status = str(_lic.get("status") or "invalid")
                 print(f"  License:     ⚠️  {_status}  (run `clawmetry license` for details)")
+    except Exception:
+        pass
+
+    # Native exporter blocks (WO-57): one line per runtime that has an
+    # instrument profile registered, so a node without any prints nothing.
+    try:
+        from clawmetry.instrument import status_all as _instr_status_all
+        _all = _instr_status_all(probe=False)
+        if _all:
+            print()
+        for _rt, _st in sorted(_all.items()):
+            _lbl = _st.get("label") or _rt
+            if _st.get("configured"):
+                print(f"  {_lbl} telemetry: on (by clawmetry) -> "
+                      f"{_st.get('endpoint') or '?'}")
+            elif _st.get("telemetry_enabled"):
+                print(f"  {_lbl} telemetry: on (not by clawmetry) -> "
+                      f"{_st.get('endpoint') or '?'}")
+            elif _st.get("entitled") is False:
+                print(f"  {_lbl} telemetry: off  (paid runtime; not on this plan)")
+            else:
+                print(f"  {_lbl} telemetry: off  (run `clawmetry instrument "
+                      f"{_rt}` for the runtime's own exporter signals)")
     except Exception:
         pass
 
@@ -2714,7 +3934,8 @@ def _instant_register(BOLD, GREEN, DIM):
     import socket
     import platform
 
-    INGEST_URL = os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+    INGEST_URL = _resolve_ingest_url()
     url = INGEST_URL.rstrip("/") + "/api/register"
 
     hostname = socket.gethostname()
@@ -2774,6 +3995,25 @@ def _instant_register(BOLD, GREEN, DIM):
         return None
 
     return result
+
+
+def _record_gate_choice(choice: str) -> None:
+    """Tell the dashboard's first-run gate that onboarding finished here.
+
+    The wizard's branches each end in a different place, so this is called
+    at the branch, not at a shared exit: the paths where sign-in FAILED and
+    we fall back to local ("No account connected. Running local-only") must
+    NOT record anything — the user tried to choose and the flow broke, so
+    the browser gate is their second chance, not noise.
+
+    Best-effort by contract; see clawmetry/onboarding_state.py.
+    """
+    try:
+        from clawmetry import onboarding_state as _obs
+
+        _obs.record_choice(choice, source="cli:onboard")
+    except Exception:
+        pass
 
 
 def _cmd_onboard(args) -> None:
@@ -2861,18 +4101,28 @@ def _cmd_onboard(args) -> None:
         for _i, _line in enumerate(_detect_lines):
             if _i == 0:
                 print(f"  {BOLD(_line)}")
-            elif _line.startswith("  [x]"):
-                print(f"  {GREEN('✓')} {_line[6:]}")
+            elif "[x]" in _line:
+                # Grid rows carry several "[x] Label" cells; the uniform
+                # marker swap keeps the pure renderer's column padding intact.
+                print(f"  {_line.replace('[x]', GREEN('✓'))}")
             else:
                 print(f"  {DIM(_line)}" if _line else "")
     print()
+    print(f"  {BOLD('Plans')} {DIM('(same either way; each tier includes the one before):')}")
+    print(f"    {DIM('Free    $0          watch OpenClaw + NVIDIA NemoClaw, forever')}")
+    print(f"    {DIM('Starter $9/node/mo  everything in Free + observability for all 30 runtimes')}")
+    print(f"    {DIM('Pro    $19/node/mo  everything in Starter + governance (alerts, approvals, evals)')}")
+    print()
     print(f"  {BOLD('How do you want to run ClawMetry?')}")
     print()
-    print(f"    {BOLD('[1] Local only')}    {DIM('Free. No account, nothing leaves this machine.')}")
-    print(f"                     {DIM('Watch OpenClaw and NeMo at http://localhost:8900.')}")
-    print(f"    {BOLD('[2] Cloud')}         {DIM('Free trial. A dashboard you can open from anywhere.')}")
-    print(f"                     {DIM('Creates an account for this machine. No card needed.')}")
-    print(f"    {BOLD('[3] License key')}   {DIM('Self-Hosted Pro: all 14 runtimes, offline. Paste a key.')}")
+    print(f"    {BOLD('[1] Managed')}    {DIM('We host the dashboard for you: easy to manage when')}")
+    print(f"                   {DIM('observing a large fleet of nodes. app.clawmetry.com from')}")
+    print(f"                   {DIM('anywhere PLUS http://localhost:8900 on this machine; desk')}")
+    print(f"                   {DIM('device at clawmetry.com/device. E2E-encrypted: snapshots')}")
+    print(f"                   {DIM('are sealed here and only you hold the key.')}")
+    print(f"    {BOLD('[2] Self-Host')}  {DIM('You host it: great for observing one node, difficult')}")
+    print(f"                   {DIM('to manage for a fleet. Everything stays on your devices;')}")
+    print(f"                   {DIM('dashboard at http://localhost:8900.')}")
     print()
 
     def _write_nocloud_marker():
@@ -2911,23 +4161,34 @@ def _cmd_onboard(args) -> None:
             })
         except Exception:
             pass
-        print(f"  Starting local dashboard...")
+        print(f"  Starting background collector...")
         _stop_existing_daemon()
         _start_daemon({"local_only": True}, args)
+        print(f"  Starting local dashboard...")
+        # The URL below is the whole product for a local-only node — verify
+        # the port ANSWERS before promising it (found live 2026-07-29:
+        # onboard printed localhost:8900 while nothing was listening).
+        _dash_up = _ensure_local_dashboard()
         print()
-        print(f"  {GREEN(BOLD('Watching your agents locally.'))}")
-        print(f"     {BOLD('http://localhost:8900')}")
+        if _dash_up:
+            print(f"  {GREEN(BOLD('Watching your agents locally.'))}")
+            print(f"     {BOLD('http://localhost:8900')} {DIM('(live now)')}")
+        else:
+            print(f"  ⚠️  The dashboard did not come up at {BOLD('http://localhost:8900')}.")
+            print(f"     {DIM('Start it yourself:')} {CYAN('clawmetry')}   {DIM('logs: ~/.clawmetry/dashboard.log')}")
         print(f"     {DIM('Nothing leaves this machine. Enable cloud anytime: clawmetry connect')}")
         print()
 
     # Scriptable / non-interactive overrides. A headless install (curl | bash
     # with no /dev/tty) must NEVER silently create a cloud account, so the
-    # default AND the EOF fallback are both LOCAL.
+    # EOF fallback is the free local tier ("0"), even though the interactive
+    # default keypress is [1] Cloud (founder 2026-07-30: lead with the full
+    # capability; self-host is the deliberate alternative).
     _env_local = _os.environ.get("CLAWMETRY_LOCAL_ONLY", "").strip().lower() in ("1", "true", "yes", "on")
     if getattr(args, "local", False) or _env_local:
-        choice = "1"
+        choice = "0"
     elif getattr(args, "cloud", False):
-        choice = "2"
+        choice = "1"
     else:
         # When already connected, the default on an empty Enter is "keep current
         # setup" (return without changes) so re-running onboard never silently
@@ -2937,8 +4198,13 @@ def _cmd_onboard(args) -> None:
         try:
             choice = _input(_prompt).strip()
         except (EOFError, KeyboardInterrupt):
-            choice = ""
+            # No interactive answer possible: never mint an account. A
+            # connected node keeps its setup; a fresh one goes free-local.
             print()
+            if already_connected:
+                print(f"\n  {DIM('Keeping your current setup. Run  clawmetry status  to check sync health.')}\n")
+                return
+            choice = "0"
         if not choice:
             if already_connected:
                 print(f"\n  {DIM('Keeping your current setup. Run  clawmetry status  to check sync health.')}\n")
@@ -2947,9 +4213,66 @@ def _cmd_onboard(args) -> None:
 
     print()
 
-    if choice == "3":
-        # ── Self-Hosted Pro license (local, offline, all 14 runtimes) ──────
+    if choice == "0":
+        # ── Free local tier (no account): --local / env / EOF fallback ────
+        print(f"  {GREEN(BOLD('Local only.'))} {DIM('No account, no cloud.')}")
+        print()
         _write_nocloud_marker()
+        _record_gate_choice("selfhost_free")
+        _post_onboard_offers(_input, BOLD, CYAN, DIM)
+        _finish_local()
+        return
+
+    def _config_api_key() -> str:
+        try:
+            import json as _jk
+            with open(_os.path.expanduser("~/.clawmetry/config.json"), "r", encoding="utf-8") as _fh:
+                return (_jk.load(_fh).get("api_key") or "").strip()
+        except Exception:
+            return ""
+
+    import argparse as _ap
+
+    if choice != "2":
+        # ── [1] Cloud (default): sign in, fleet dashboard from anywhere ───
+        # The keypress IS the cloud consent: clear the marker so connect goes
+        # straight to sign-in; an incomplete sign-in re-writes it below.
+        try:
+            from clawmetry.config import NOCLOUD_MARKER_PATH as _nocloud_path
+
+            _os.unlink(_nocloud_path)
+        except Exception:
+            pass
+        _fake_args = _ap.Namespace(
+            key=None, foreground=False, custom_node_id=None,
+            enc_key=None, key_only=False, no_daemon=False,
+        )
+        _cmd_connect(_fake_args)
+        print()
+        if _config_api_key():
+            # Trial mint + local activation already happened inside connect.
+            _post_onboard_offers(_input, BOLD, CYAN, DIM)
+            return
+        print(f"  {DIM('No account connected. Running local-only; try again anytime:')} {CYAN('clawmetry onboard')}")
+        print()
+        _write_nocloud_marker()
+        _post_onboard_offers(_input, BOLD, CYAN, DIM)
+        _finish_local()
+        return
+
+    # ── [2] Self-Hosted: key if you have one, else trial sign-in ────────────
+    # Data never leaves the machine on this path (nocloud marker). Identity
+    # is still how the trial unlocks runtimes: no key -> sign in (Google /
+    # GitHub / email OTP) via connect's keep-local mode, which mints and
+    # activates the 7-day trial license with the marker KEPT.
+    _write_nocloud_marker()
+    try:
+        _has_key = (_input("  Do you already have a license key? [y/N]: ").strip().lower() or "n")
+    except (EOFError, KeyboardInterrupt):
+        _has_key = "n"
+        print()
+    print()
+    if _has_key in ("y", "yes"):
         try:
             _lic_key = _input("  Paste your license key (CLAW1...), or press Enter to do it later: ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -2967,119 +4290,52 @@ def _cmd_onboard(args) -> None:
                 print(f"  ⚠️  Activation failed: {_e}")
                 print(f"     {DIM('Try again later:')} {CYAN('clawmetry activate <key>')}")
         else:
-            print(f"  {DIM('No problem. Buy a key at')} {CYAN('https://clawmetry.com/pricing')}")
-            print(f"  {DIM('then run')} {CYAN('clawmetry activate <key>')}")
+            _pricing_url = "https://clawmetry.com/pricing?deploy=self"
+            print(f"  {DIM('Get one at')} {CYAN(_pricing_url)} {DIM('then run')} {CYAN('clawmetry activate <key>')}")
+            # Self-host WAS chosen; the key just arrives later. Record it so
+            # the browser gate doesn't re-ask a question already answered
+            # (activation itself upgrades the record to selfhost_license).
+            _record_gate_choice("selfhost_free")
         print()
-        _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
+        _post_onboard_offers(_input, BOLD, CYAN, DIM)
         _finish_local()
         return
 
-    if choice == "2":
-        # ── Cloud (free trial) ────────────────────────────────────────────
-        try:
-            has_acct = (_input("  Already have a ClawMetry account? [y/N]: ").strip().lower() or "n")
-        except (EOFError, KeyboardInterrupt):
-            has_acct = "n"
-            print()
+    # No key: offer the trial (the default), free tier if declined.
+    try:
+        _want_trial = (_input(
+            "  Start your free 7-day Pro trial? Sign in with Google, GitHub, or an\n"
+            "  email code; your data still stays on this machine. [Y/n]: "
+        ).strip().lower() or "y")
+    except (EOFError, KeyboardInterrupt):
+        _want_trial = "n"
         print()
-        if has_acct in ("y", "yes"):
-            # Existing user: email -> OTP -> connect
-            import argparse as _ap
-
-            _fake_args = _ap.Namespace(
-                key=None, foreground=False, custom_node_id=None,
-                enc_key=None, key_only=False, no_daemon=False,
-            )
-            _cmd_connect(_fake_args)
-
-            print()
-            _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
-            return
-
-        # New user: instant registration (no OTP)
-        print(f"  Setting up your cloud dashboard...")
+    print()
+    if _want_trial in ("n", "no"):
+        _record_gate_choice("selfhost_free")
+        print(f"  {DIM('Free plan: OpenClaw + NeMo at http://localhost:8900.')}")
+        print(f"  {DIM('Trial or license anytime:')} {CYAN('clawmetry onboard')} {DIM('·')} {CYAN('https://clawmetry.com/pricing?deploy=self')}")
         print()
-
-        result = _instant_register(BOLD, GREEN, DIM)
-        if result is None:
-            # Registration failed -- fall back to local mode
-            print(f"  {GREEN('Installed')} (local mode)\n")
-            print("  Start your dashboard:")
-            print(
-                f"    {CYAN('clawmetry --host 0.0.0.0 --port 8900')}          {DIM('# foreground (LAN)')}"
-            )
-            print(f"\n  {DIM('Connect to cloud later: clawmetry setup')}\n")
-            _print_nemoclaw_preset_hint(BOLD, CYAN, DIM)
-            return
-
-        api_key = result.get("api_key", "")
-        dashboard_url = result.get("dashboard_url", "")
-        dashboard_id = result.get("dashboard_id", "")
-        node_id = result.get("node_id", "")
-
-        # Build the bookmarkable URL
-        if dashboard_id:
-            bookmark_url = f"https://app.clawmetry.com/d/{dashboard_id}"
-        else:
-            bookmark_url = dashboard_url
-
-        # Generate E2E encryption key and save config
-        from clawmetry.sync import generate_encryption_key, save_config
-        import platform
-
-        enc_key = generate_encryption_key()
-        config = {
-            "api_key": api_key,
-            "node_id": node_id,
-            "platform": platform.system(),
-            "connected_at": __import__("datetime").datetime.now().isoformat(),
-            "encryption_key": enc_key,
-            "dashboard_id": dashboard_id,
-        }
-        save_config(config)
-
-        print(f"  {GREEN(BOLD('Dashboard ready!'))}")
-        print()
-        print(f"     {BOLD(bookmark_url)}")
-        print()
-        print(f"     Bookmark this URL -- it's your private dashboard.")
-        print(f"     Data is E2E encrypted. Only you can read it.")
-        print()
-        print(f"  {BOLD('Your secret key')} (paste this when opening the dashboard):")
-        print()
-        print(f"     {CYAN(enc_key)}")
-        print()
-        print(f"     {DIM('Keep this safe -- you need it to view your data.')}")
-        print(f"     {DIM('Run')} {CYAN('clawmetry status --show-key')} {DIM('to see it again.')}")
-
-        # Auto-open the dashboard in browser
-        try:
-            import webbrowser
-            webbrowser.open(bookmark_url)
-            print(f"     {DIM('(opened in your browser)')}")
-        except Exception:
-            pass
-        print()
-        print(f"  {DIM('Want to add more nodes or never lose access?')}")
-        print(f"  {DIM('Run:')} {CYAN('clawmetry account')}")
-        print(f"  {DIM('(creates an email-based account to manage all your nodes)')}")
-        print()
-
-        _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
-
-        # Start sync daemon
-        print(f"  Starting sync daemon...")
-        _stop_existing_daemon()
-        _start_daemon(config, args)
-        print(f"  {GREEN(BOLD('Your agent is now being monitored!'))}")
-        print()
+        _post_onboard_offers(_input, BOLD, CYAN, DIM)
+        _finish_local()
         return
 
-    # ── [1] Local only (default) ──────────────────────────────────────────
-    print(f"  {GREEN(BOLD('Local only.'))} {DIM('No account, no cloud.')}")
+    _fake_args = _ap.Namespace(
+        key=None, foreground=False, custom_node_id=None,
+        enc_key=None, key_only=False, no_daemon=False, keep_local=True,
+    )
+    _cmd_connect(_fake_args)
     print()
-    _write_nocloud_marker()
-    _maybe_apply_nemoclaw_preset(_input, BOLD, CYAN, DIM)
+    if _config_api_key():
+        # Connect (keep-local mode) minted + activated the trial, kept the
+        # marker, and ensured the local dashboard.
+        _post_onboard_offers(_input, BOLD, CYAN, DIM)
+        return
+
+    # Sign-in didn't complete: free local tier, no account.
+    print(f"  {DIM('No account connected. Running the free plan; try again anytime:')} {CYAN('clawmetry onboard')}")
+    print()
+    _post_onboard_offers(_input, BOLD, CYAN, DIM)
     _finish_local()
     return
 
@@ -3144,7 +4400,8 @@ def _cmd_account(args) -> None:
     import urllib.error
     import json as _json
 
-    INGEST_URL = _os.environ.get("CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com")
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+    INGEST_URL = _resolve_ingest_url()
 
     def _api_call(path, body):
         result, status = _post_json(INGEST_URL.rstrip("/") + path, body)
@@ -3158,7 +4415,8 @@ def _cmd_account(args) -> None:
     print()
     print(f"  Node:      {node_id}")
     if dashboard_id:
-        print(f"  Dashboard: https://app.clawmetry.com/d/{dashboard_id}")
+        from clawmetry.endpoints import app_url as _resolve_app_url_d
+        print(f"  Dashboard: {_resolve_app_url_d()}/d/{dashboard_id}")
     print(f"  API key:   {api_key[:8]}...")
     print()
 
@@ -3228,7 +4486,8 @@ def _cmd_account(args) -> None:
         print(f" {GREEN('verified')}")
         print(f"\n  {GREEN(BOLD('Email linked to your account!'))}")
         if dashboard_id:
-            print(f"  Dashboard: https://app.clawmetry.com/d/{dashboard_id}")
+            from clawmetry.endpoints import app_url as _resolve_app_url_d
+        print(f"  Dashboard: {_resolve_app_url_d()}/d/{dashboard_id}")
         print()
         return
 
@@ -3287,7 +4546,7 @@ def _cmd_proxy(args) -> None:
         config.save()
 
         print()
-        print(f"  {BOLD('🦞 ClawMetry Proxy')}")
+        print(f"  {BOLD('ClawMetry Proxy')}")
         print()
         print(f"  Listening on {CYAN(f'http://{config.host}:{config.port}')}")
         print()
@@ -3412,7 +4671,7 @@ def _cmd_proxy(args) -> None:
         print()
 
     else:
-        print(f"\n  {BOLD('🦞 ClawMetry Proxy')} — enforcement layer for LLM API calls")
+        print(f"\n  {BOLD('ClawMetry Proxy')}: enforcement layer for LLM API calls")
         print()
         print(f"  {BOLD('Commands:')}")
         print("    clawmetry proxy start    Start the proxy server")
@@ -3450,9 +4709,10 @@ def _format_uptime(seconds):
 
 
 def _cmd_mcp(args) -> None:
-    """Start the ClawMetry MCP server on stdio (refs #2859)."""
-    from clawmetry.mcp_server import run
-    run()
+    """`clawmetry mcp ...` (refs #2859, WO-59). Normally intercepted by the
+    fast path in main(); kept for callers that build a Namespace directly."""
+    from clawmetry.mcp_install import cli_main as _mcp_cli
+    raise SystemExit(_mcp_cli(list(getattr(args, "mcp_args", None) or [])))
 
 
 def _cmd_reports(args) -> None:
@@ -3463,6 +4723,281 @@ def _cmd_reports(args) -> None:
     print(f"Opening {url} …")
     print("(Make sure `clawmetry` is running. Write .md files to ~/.clawmetry/reports/.)")
     webbrowser.open(url)
+
+
+def _trace_capture(rest) -> int:
+    """`clawmetry trace capture` — build a publishable bundle (PRD §4b).
+
+    Local half only. Upload lives in clawmetry-cloud (§4j); until it exists
+    this writes the bundle and a self-contained HTML page you can open, which
+    is also the review artefact §4f requires before any publish.
+    """
+    import json as _json
+    import os as _os
+    from clawmetry import trace_capture, trace_viewer
+
+    def _opt(name, default=None):
+        return rest[rest.index(name) + 1] if name in rest[:-1] else default
+
+    repo = _opt("--repo") or _os.getcwd()
+    out_dir = _opt("--out") or "."
+
+    # Zero-arg by default. CLAUDE.md: "users should never need to configure
+    # anything manually." A revision range is the most manual thing there is,
+    # and the first person to run this hit exactly that -- they were on a
+    # branch where `origin/main..HEAD` meant something they did not intend.
+    commit_range = _opt("--range")
+    if not commit_range:
+        commit_range = trace_capture.infer_range(repo)
+        if not commit_range:
+            print("Nothing to trace: this branch has no commits of its own yet.")
+            print("Commit something, then run `clawmetry trace capture` again.")
+            return 1
+        print(f"  branch       {trace_capture._git(repo, 'rev-parse', '--abbrev-ref', 'HEAD').strip()}"
+              f"  (vs {trace_capture.default_branch(repo)})")
+
+    pr = _opt("--pr")
+    if not pr and "--no-pr" not in rest:
+        pr = trace_capture.infer_pr(repo)
+
+    commits = trace_capture.read_commits(repo, commit_range)
+    if not commits:
+        print(f"No commits in range {commit_range!r}.")
+        return 1
+
+    try:
+        from clawmetry.cli_cmds._common import get_read_store
+        store, source = get_read_store()
+    except Exception as exc:
+        print(f"Cannot read the local store: {exc}")
+        print("Run `clawmetry sync` (or start the dashboard) and retry.")
+        return 1
+
+    try:
+        sessions = store.query_sessions(limit=1000) or []
+    except Exception as exc:
+        print(f"Session query failed: {exc}")
+        return 1
+    sessions = [dict(r) for r in sessions]
+
+    session_ids, attribution = trace_capture.resolve_sessions(commits, sessions)
+    if not session_ids:
+        stamped = sum(1 for c in commits if c.get("session_id"))
+        branch = trace_capture._git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+        print(f"No sessions resolved for {commit_range}.")
+        print(f"  examined {len(commits)} commit(s) on {branch}; "
+              f"{stamped} carried a Clawmetry-Session trailer")
+        if stamped == 0:
+            print("  Those commits were made before `clawmetry trace init` ran here.")
+            print("  Coverage starts at install and cannot be backfilled: transcripts")
+            print("  rotate and the store keeps only recent sessions (PRD 3a).")
+        else:
+            print("  The trailers name sessions the local store no longer has.")
+        return 1
+
+    meta = {s["session_id"]: s for s in sessions if s.get("session_id")}
+    events = {}
+    for sid in session_ids:
+        try:
+            # shape "transcript" -> LocalStore.query_events (routes/local_query
+            # _SHAPES is the source of truth). A wrong method name here does
+            # NOT raise on the proxy store -- it returns [] -- so the guard
+            # below is what catches a rename.
+            events[sid] = [dict(r) for r in (store.query_events(
+                session_id=sid, limit=5000) or [])]
+        except Exception as exc:
+            print(f"  ! transcript unavailable for {sid}: {exc}")
+            events[sid] = []
+
+    if not any(events.values()):
+        print(f"Resolved {len(session_ids)} session(s) but no events came back.")
+        print("Nothing to publish. This usually means the sessions aged out of")
+        print("the local store (CLAWMETRY_FAMILY_SESSION_LIMIT, PRD 3a).")
+        return 1
+
+    bundle = trace_capture.build_bundle(
+        repo=repo, commit_range=commit_range, commits=commits,
+        session_ids=session_ids, attribution=attribution,
+        events_by_session=events, sessions_meta=meta, pr=pr,
+    )
+
+    stem = f"trace-{pr or commits[-1]['short_sha']}"
+    json_path = _os.path.join(out_dir, stem + ".json")
+    html_path = _os.path.join(out_dir, stem + ".html")
+    with open(json_path, "w", encoding="utf-8") as fh:
+        fh.write(trace_viewer.render_json(bundle))
+    with open(html_path, "w", encoding="utf-8") as fh:
+        fh.write(trace_viewer.render_html(bundle))
+
+    sm = bundle["summary"]
+    print(f"  project      {bundle.get('project') or '(no remote)'}"
+          + (f"  #{pr}" if pr else ""))
+    print(f"  range        {commit_range}  ({len(commits)} commits, source={source})")
+    print(f"  sessions     {len(session_ids)}  attribution={bundle['attribution']}")
+    print(f"  captured     {sm['prompts']} prompts · {sm['turns']} turns · "
+          f"{sm['tools']} tools")
+    print(f"  cost         ${sm['cost_usd']:.2f}"
+          + ("  (upper bound)" if sm["cost_is_upper_bound"] else "")
+          + f" · {sm['tokens']:,} tokens")
+    print()
+    print(f"  bundle  {json_path}")
+    print(f"  review  {html_path}")
+    print()
+
+    if "--publish" not in rest:
+        print("  Nothing was published. Open the review page, confirm it is safe")
+        print("  to share, then re-run with --publish.")
+        print()
+        print("  Redaction removed: API keys and tokens, private keys, home paths,")
+        print("  email addresses, IP addresses, and provider ids (Stripe and the")
+        print("  like). It does NOT know what is commercially sensitive. An agent")
+        print("  session sees everything your terminal saw, so read the page for:")
+        print("    - pricing, revenue or roadmap discussion")
+        print("    - internal hostnames, ticket ids, customer names")
+        print("    - anything you would not put in the repository itself")
+        return 0
+
+    # Publication is a separate, explicit step: the thing being written is a
+    # public web page containing the contents of somebody's terminal.
+    if not pr:
+        print("  --publish needs --pr <number> so the trace has a URL.")
+        return 1
+    print("  Publishing…")
+    res = trace_capture.publish(bundle)
+    if res.get("ok"):
+        print(f"  LIVE  {res.get('url')}")
+        print()
+        print("  Anyone with the link can read it, with no account.")
+        print("  Re-running capture --publish for the same PR replaces it.")
+        return 0
+    print(f"  Publish failed: {res.get('error')}")
+    if res.get("detail"):
+        print(f"  {res['detail']}")
+    print("  The bundle is still on disk; nothing was sent.")
+    return 1
+
+
+def trace_main(argv) -> int:
+    """`clawmetry trace …` — commit stamping for PR-trace attribution.
+
+    Stdlib-only and dispatched from the FAST PATH in :func:`main`, for the
+    same reason `hooks` is: ``trace stamp`` runs on EVERY commit, and paying
+    the ~300ms dashboard import there would be felt on every `git commit`.
+
+    ``stamp`` always exits 0 — a stamping failure must never block a commit.
+    See PRD-pr-trace.md §4a.
+    """
+    from clawmetry import trace_stamp
+
+    sub = argv[0] if argv else "status"
+    rest = argv[1:]
+
+    def _opt(name):
+        return rest[rest.index(name) + 1] if name in rest[:-1] else None
+
+    if sub == "capture":
+        return _trace_capture(rest)
+
+    if sub == "autopublish":
+        # Driven by the pre-push hook. ALWAYS exits 0: an observability tool
+        # must never be the reason a push fails.
+        from clawmetry import trace_auto
+        res = trace_auto.run(_opt("--repo"))
+        if res.get("skipped"):
+            return 0
+        if res.get("url"):
+            print(f"  ClawMetry trace: {res['url']}")
+        elif res.get("bundle") and not res.get("published"):
+            print("  ClawMetry captured a trace but did not publish it.")
+            print(f"  {res.get('hint', '')}")
+        elif res.get("error"):
+            print(f"  ClawMetry trace failed: {res['error']}")
+        return 0
+
+    if sub == "stamp":
+        if rest:
+            trace_stamp.stamp_file(rest[0])
+        return 0  # always
+
+    repo = _opt("--repo")
+
+    if sub == "init":
+        # Automatic by DEFAULT. `trace init` is itself the explicit act, and
+        # requiring a second flag on top of it was the same mistake as asking
+        # for a revision range: a manual step the product's own conventions
+        # say should not exist. --no-publish is the escape hatch.
+        auto = "--no-publish" not in rest
+        res = trace_stamp.install(repo)
+        status = res.get("status")
+        if status == "installed":
+            print(f"Installed commit stamping -> {res['path']}")
+            print("Agent commits from now on carry a Clawmetry-Session trailer.")
+            print("Earlier commits cannot be backfilled (PRD-pr-trace.md §3a).")
+        elif status == "already-installed":
+            print(f"Already installed -> {res['path']}")
+        elif status == "stale-binary":
+            print("Not installing: the `clawmetry` on your PATH has no `trace`")
+            print("command, so the hook would be written and then silently do")
+            print("nothing on every commit.")
+            print(f"  {res.get('hint', '')}")
+            return 1
+        elif status == "foreign-hook":
+            print(f"A different prepare-commit-msg hook exists: {res['path']}")
+            print(f"Hint: {res.get('hint', '')}")
+            return 1
+        else:
+            print(f"Could not install: {res.get('error')}")
+            return 1
+
+        from clawmetry import trace_auto
+        pp = trace_stamp.install_prepush(repo)
+        if pp.get("status") == "foreign-hook":
+            print()
+            print(f"A different pre-push hook exists: {pp['path']}")
+            print(f"Hint: {pp.get('hint', '')}")
+            print("Commit stamping is on; automatic publishing is not.")
+            return 0
+        trace_auto.set_policy(repo, publish=auto, comment=auto)
+        print()
+        if auto:
+            print("That is the only setup step. From now on, `git push` will:")
+            print("  1. capture what the agent was asked to do")
+            print("  2. publish it to trace.clawmetry.com")
+            print("  3. comment on the pull request with the link")
+            print()
+            print("Published pages are PUBLIC and contain the prompts and tool")
+            print("output the agent saw. Removed automatically: API keys and")
+            print("tokens, private keys, home paths, emails, IP addresses and")
+            print("provider ids. NOT removed, because no pattern can find it:")
+            print("pricing, roadmap or anything else you would not put in the")
+            print("repository itself.")
+            print()
+            print("  publish only when you ask :  clawmetry trace init --no-publish")
+            print("  stop publishing entirely  :  git config clawmetry.autopublish false")
+        else:
+            print("Commit stamping is on; nothing will be published.")
+            print("Capture a trace yourself with `clawmetry trace capture`.")
+        return 0
+
+    if sub == "uninstall":
+        res = trace_stamp.uninstall(repo)
+        print(res.get("status", "unknown"))
+        return 0 if res.get("ok") else 1
+
+    if sub in ("status", "--help", "-h", "help"):
+        if sub in ("--help", "-h", "help"):
+            print("usage: clawmetry trace [init|status|uninstall|stamp <file>|\n                    capture --range A..B [--pr N] [--out DIR]] [--repo PATH]")
+            return 0
+        st = trace_stamp.status(repo)
+        print(f"hook installed : {'yes' if st['hook_installed'] else 'no'}")
+        print(f"hook path      : {st['hook_path']}")
+        print(f"session now    : {st['session_id'] or '(no agent runtime detected)'}")
+        if not st["hook_installed"]:
+            print("\nRun `clawmetry trace init` to start stamping commits.")
+        return 0
+
+    print(f"unknown: trace {sub}")
+    return 2
 
 
 def _cmd_eval(args) -> None:
@@ -3622,15 +5157,161 @@ def _cmd_eval_regression(args) -> None:
     sys.exit(exit_code)
 
 
-def _cmd_update() -> None:
-    """Self-update clawmetry to the latest PyPI version."""
+def _unattended_update_target(current: str):
+    """Resolve what an unattended ``clawmetry update --unattended`` run may
+    install, deferring to the DAEMON's policy helpers in
+    ``routes/update_check.py`` so the two paths cannot drift:
+
+      * ``_env_auto_update_disabled()`` — the CLAWMETRY_AUTO_UPDATE kill
+        switch, including the implicit CI-environment disable.
+      * ``_autoupdate_min_age_hours()`` + ``_newest_aged_in_version()`` —
+        the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS stability window, targeting
+        the newest release that has aged past it (NOT the absolute latest).
+
+    Returns ``(target_version_or_None, human_reason)``. ``None`` means
+    "install nothing this cycle" — including when the policy helpers cannot
+    be imported: an unattended caller must never do MORE than the policy
+    allows, so an unevaluable policy fails closed (the caller's next
+    scheduled cycle retries).
+    """
+    import json
+    import urllib.request
+
+    try:
+        from routes.update_check import (
+            _autoupdate_min_age_hours,
+            _env_auto_update_disabled,
+            _newest_aged_in_version,
+        )
+    except Exception as exc:
+        return None, f"Update policy unavailable ({exc}); skipping unattended update"
+    if _env_auto_update_disabled():
+        return None, (
+            "Unattended updates disabled "
+            "(CLAWMETRY_AUTO_UPDATE kill switch or CI environment)"
+        )
+    # A deployment that declared itself private (self-hosted, air-gapped, or
+    # repointed at a customer-run server) must not reach pypi.org. On a network
+    # with no route out the call can only time out; on a monitored one it is
+    # unexplained egress during a security review. Upgrades in these
+    # deployments belong to the operator's change process, not to us.
+    try:
+        from clawmetry.endpoints import egress_suppressed
+        if egress_suppressed():
+            return None, (
+                "Unattended updates disabled (self-hosted / offline deployment "
+                "— upgrade through your own change process)"
+            )
+    except Exception:
+        # Fail closed: no policy module means no unattended network call.
+        return None, "Update policy unavailable; skipping unattended update"
+    try:
+        req = urllib.request.Request(
+            "https://pypi.org/pypi/clawmetry/json",
+            headers={"User-Agent": f"clawmetry/{current}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:
+        return None, f"PyPI check failed ({exc}); skipping unattended update"
+    min_age = _autoupdate_min_age_hours()
+    target = _newest_aged_in_version(data.get("releases", {}), current, min_age)
+    if not target:
+        latest = data.get("info", {}).get("version", "") or current
+        if latest == current:
+            return None, f"Already on latest version ({current})"
+        return None, (
+            f"Newest release v{latest} has not aged past the "
+            f"{min_age:g}h stability window yet; nothing to install"
+        )
+    return target, (
+        f"Unattended target: v{target} "
+        f"(newest release aged past the {min_age:g}h stability window)"
+    )
+
+
+def _print_pro_sync_result() -> None:
+    """Reconcile clawmetry-pro with this node's entitlement and print ONE line
+    about it (nothing at all when there is no cloud account). Shared shape with
+    install.sh's ``_cm_sync_pro``. Never raises."""
+    try:
+        from clawmetry.license import sync_pro_from_config
+
+        state, before, after, _msg = sync_pro_from_config()
+    except Exception:
+        return
+    if state == "updated":
+        if before:
+            print(f"Pro runtime adapters updated: clawmetry-pro {before} → {after}")
+        else:
+            print(f"Pro runtime adapters installed: clawmetry-pro {after}")
+    elif state == "current":
+        print(f"Pro runtime adapters already current (clawmetry-pro {after})")
+    elif state == "kept":
+        print(f"clawmetry-pro {after} kept — could not confirm entitlement right now")
+
+
+def _restore_previous_install(current: str) -> None:
+    """Best-effort pip-reinstall of ``current`` after a failed upgrade (#5357).
+
+    ``pip install --upgrade`` uninstalls the old version before installing
+    the new one; if the new install then fails (live-hit on Windows: the
+    daemon still holds ``clawmetry.exe`` open seconds after a fresh wheel
+    upload, so pip's overwrite fails AFTER the uninstall already ran), the
+    venv is left with the launcher stub but no ``clawmetry`` package at all.
+    ``--force-reinstall`` regenerates the console-script entry points
+    regardless of what site-packages metadata claims, matching the rollback
+    ``routes/meta.py::perform_self_update`` already does for the
+    daemon/dashboard self-update path. Never raises; ``current == "unknown"``
+    (the version probe itself failed) has nothing to roll back to.
+    """
+    if not current or current == "unknown":
+        return
+    import subprocess as _sp
+
+    try:
+        restore = _sp.run(
+            [
+                sys.executable, "-m", "pip", "install", "--no-cache-dir",
+                "--force-reinstall", "--no-deps", "--break-system-packages",
+                f"clawmetry=={current}",
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+        if restore.returncode == 0:
+            print(f"Restored previous version ({current}) after the failed update")
+        else:
+            tail = ((restore.stdout or "") + (restore.stderr or "")).strip()[-300:]
+            print(f"Warning: could not restore previous version ({current}): "
+                  f"{tail or '(no output)'}")
+    except Exception as exc:
+        print(f"Warning: could not restore previous version ({current}): {exc}")
+
+
+def _cmd_update(args=None) -> None:
+    """Self-update clawmetry to the latest PyPI version.
+
+    ``--unattended`` (the desktop shell's 6h background path) routes target
+    selection through the daemon's update policy (kill switch + stability
+    window) via ``_unattended_update_target`` and pins the pip install to
+    that version; the plain interactive command keeps installing the
+    absolute latest.
+    """
     import subprocess
 
+    unattended = bool(getattr(args, "unattended", False))
     try:
         from dashboard import __version__ as current
     except Exception:
         current = "unknown"
     print(f"Current version: {current}")
+    install_spec = "clawmetry"
+    if unattended:
+        target, reason = _unattended_update_target(current)
+        print(reason)
+        if not target:
+            return
+        install_spec = f"clawmetry=={target}"
     print("Checking for updates...")
     try:
         result = subprocess.run(
@@ -3641,7 +5322,7 @@ def _cmd_update() -> None:
                 "install",
                 "--upgrade",
                 "--break-system-packages",
-                "clawmetry",
+                install_spec,
             ],
             capture_output=True,
             text=True,
@@ -3662,6 +5343,12 @@ def _cmd_update() -> None:
                 ).stdout.strip()
             except Exception:
                 new_ver = "unknown"
+            # The paid runtime adapters ship as a SEPARATE wheel on its own
+            # cadence, so "updated" has to mean both or an entitled node ends
+            # up on a current core with months-old adapters. Runs before the
+            # daemon restart below so it comes back on a matched pair. Silent
+            # + no-op for a free account; never fails the update.
+            _print_pro_sync_result()
             if new_ver == current:
                 print(f"Already on latest version ({current})")
             else:
@@ -3686,13 +5373,79 @@ def _cmd_update() -> None:
                     print("Tip: restart the daemon to use the new version")
         else:
             print(f"Update failed:\n{result.stderr}")
+            # pip already ran the uninstall half of --upgrade; the venv may
+            # now have zero clawmetry installed (#5357). Never leave a failed
+            # update worse than a no-op.
+            _restore_previous_install(current)
             sys.exit(1)
     except subprocess.TimeoutExpired:
         print("Update timed out. Try manually: pip install --upgrade clawmetry")
+        # A pip KILLED mid-install can leave the same uninstall-without-
+        # reinstall gap as a nonzero exit (#5357).
+        _restore_previous_install(current)
         sys.exit(1)
     except Exception as e:
         print(f"Update error: {e}")
         sys.exit(1)
+
+
+def _read_key_from_file(path: str) -> tuple[bool, str, str]:
+    """Read a license key from ``path`` for ``--file <path>``.
+
+    Returns ``(ok, key, message)``. On success ``key`` is the trimmed contents
+    (leading/trailing whitespace and a single trailing newline are stripped —
+    the same shape ``activate()`` / ``inspect_key()`` accept) and ``message``
+    is empty. On failure ``key`` is empty and ``message`` is a human-readable
+    reason (missing file, unreadable, empty). Never raises: every OS error is
+    caught and surfaced through ``message`` so the caller can render the same
+    ``ok=false`` envelope both branches already use for a missing positional
+    key. Kept as a module-level helper so the ``activate`` shortcut and
+    ``license activate|verify`` share ONE reader — a bug fix in either lands
+    for all three subcommands, and tests can exercise the reader once.
+    """
+    if not path:
+        return False, "", "Usage: --file <path> requires a path"
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        return False, "", f"--file: not found: {path}"
+    except IsADirectoryError:
+        return False, "", f"--file: is a directory, expected a file: {path}"
+    except PermissionError:
+        return False, "", f"--file: permission denied: {path}"
+    except OSError as exc:
+        return False, "", f"--file: could not read {path}: {exc}"
+    key = (raw or "").strip()
+    if not key:
+        return False, "", f"--file: {path} is empty"
+    return True, key, ""
+
+
+def _resolve_activate_key(args) -> tuple[bool, str, str]:
+    """Resolve the license key from either ``args.key`` (positional) or
+    ``args.file`` (``--file <path>``). Exactly one must be supplied — passing
+    both is refused so a wrapper does not silently prefer one over the other
+    on a mistake, and passing neither is refused with the same "Usage:" line
+    the file-less path used before this flag existed.
+
+    Returns ``(ok, key, message)`` matching :func:`_read_key_from_file` so the
+    caller renders the same ``ok=false`` envelope regardless of which error
+    branch fired.
+    """
+    file_path = (getattr(args, "file", None) or "").strip()
+    key = (getattr(args, "key", None) or "").strip()
+    if file_path and key:
+        return (
+            False,
+            "",
+            "Usage: pass either <KEY> or --file <path>, not both",
+        )
+    if file_path:
+        return _read_key_from_file(file_path)
+    if key:
+        return True, key, ""
+    return False, "", "Usage: clawmetry activate <KEY>  (or --file <path>)"
 
 
 def _cmd_activate(args) -> None:
@@ -3704,11 +5457,22 @@ def _cmd_activate(args) -> None:
     what ``clawmetry license activate <KEY> --json`` emits
     (``{action: "activate", ok, message}``) so a script that already parses
     the license subcommand does not need to branch on which spelling ran.
+
+    ``--file <path>`` reads the key from a file instead of the command line,
+    keeping the raw token out of shell history / ``ps`` listings. Exactly one
+    of the positional key and ``--file`` must be supplied.
     """
     from clawmetry import license as _lic
 
     as_json = bool(getattr(args, "as_json", False))
-    ok, msg = _lic.activate(args.key, node_id=_lic._node_id(), actor="cli")
+    ok_read, key, read_msg = _resolve_activate_key(args)
+    if not ok_read:
+        if as_json:
+            _license_json_dump({"action": "activate", "ok": False, "message": read_msg})
+        else:
+            print(f"❌  {read_msg}")
+        sys.exit(1)
+    ok, msg = _lic.activate(key, node_id=_lic._node_id(), actor="cli")
     if as_json:
         _license_json_dump({"action": "activate", "ok": bool(ok), "message": msg})
         if not ok:
@@ -3723,6 +5487,29 @@ def _cmd_activate(args) -> None:
         sys.exit(1)
 
 
+def _resolve_license_action_key(args, action: str) -> tuple[bool, str, str]:
+    """Same contract as :func:`_resolve_activate_key` but for ``clawmetry
+    license <activate|verify>``, whose positional key is bound to
+    ``license_key`` (not ``key``) by argparse. The ``action`` string just
+    picks the ``Usage:`` line that best names the subcommand — the rest of
+    the logic mirrors the shortcut resolver so a bug in either lands for
+    both spellings.
+    """
+    file_path = (getattr(args, "file", None) or "").strip()
+    key = (getattr(args, "license_key", None) or "").strip()
+    if file_path and key:
+        return (
+            False,
+            "",
+            "Usage: pass either <KEY> or --file <path>, not both",
+        )
+    if file_path:
+        return _read_key_from_file(file_path)
+    if key:
+        return True, key, ""
+    return False, "", f"Usage: clawmetry license {action} <KEY>  (or --file <path>)"
+
+
 def _license_json_dump(payload: dict) -> None:
     """Emit ``payload`` as pretty JSON on stdout for ``clawmetry license --json``.
 
@@ -3734,6 +5521,238 @@ def _license_json_dump(payload: dict) -> None:
     import json as _json
 
     print(_json.dumps(payload, indent=2, sort_keys=True))
+
+
+def _cmd_team(args) -> None:
+    """`clawmetry team key` -- create, accept or inspect the organisation key.
+
+    The organisation key is what makes a session readable by the people you
+    work with instead of only by you. It is created on one machine, handed to
+    colleagues out of band, and never sent to the hosted service.
+
+    The key is never accepted on the command line. A secret in argv is a secret
+    in shell history and in every `ps` listing on the machine, and this one
+    opens an organisation's content rather than one machine's -- so it is read
+    from a file, from stdin, or from a prompt, matching `clawmetry license`.
+    """
+    import json as _json
+
+    from clawmetry import org_key as _ok
+    from clawmetry.sync import load_config, save_config
+
+    action = getattr(args, "team_action", "show") or "show"
+    as_json = bool(getattr(args, "as_json", False))
+    # A machine that has never run `clawmetry connect` has no config file at
+    # all. That is not an error to report as a stack trace: `show` should say
+    # plainly that no key is set, and the write actions should name the one
+    # step that has to happen first.
+    try:
+        cfg = load_config() or {}
+    except Exception:
+        cfg = None
+    if cfg is None:
+        if action == "show":
+            if as_json:
+                print(_json.dumps({"action": "show", "ok": True,
+                                   "organisation_key": False,
+                                   "fingerprint": "",
+                                   "content_key_scope": "none",
+                                   "connected": False}, indent=2))
+            else:
+                print("Organisation key: not set")
+                print("This machine is not connected to ClawMetry Cloud yet, "
+                      "so there is nothing for colleagues to read.")
+                print("Connect it first with:  clawmetry connect")
+            return
+        print("This machine is not connected to ClawMetry Cloud yet.")
+        print("Run `clawmetry connect` first, then set the organisation key.")
+        raise SystemExit(1)
+
+    def _emit(payload: dict, lines: list) -> None:
+        if as_json:
+            print(_json.dumps(payload, indent=2))
+        else:
+            for ln in lines:
+                print(ln)
+
+    if action == "show":
+        fp = _ok.fingerprint(_ok.get(cfg))
+        scoped = _ok.is_org_sealed(cfg)
+        _emit(
+            {"action": "show", "ok": True, "organisation_key": scoped,
+             "fingerprint": fp, "content_key_scope":
+                 "organisation" if scoped else "node"},
+            ([f"Organisation key: set (fingerprint {fp})",
+              "This machine's sessions can be read by your organisation once "
+              "they are shared."]
+             if scoped else
+             ["Organisation key: not set",
+              "This machine's content can be read only by you.",
+              "Create one with:  clawmetry team key create",
+              "or accept your organisation's with:  clawmetry team key set --file KEYFILE"]),
+        )
+        return
+
+    if action == "create":
+        if _ok.get(cfg) and not getattr(args, "force", False):
+            print("This machine already holds an organisation key "
+                  f"(fingerprint {_ok.fingerprint(_ok.get(cfg))}).")
+            print("Replacing it makes content sealed with the old key "
+                  "unreadable. Re-run with --force if that is what you want.")
+            raise SystemExit(1)
+        key = _ok.generate()
+        cfg[_ok.CONFIG_FIELD] = key
+        save_config(cfg)
+        fp = _ok.fingerprint(key)
+        if as_json:
+            print(_json.dumps({"action": "create", "ok": True,
+                               "fingerprint": fp, "key": key}, indent=2))
+        else:
+            print("Organisation key created. It is shown once -- store it in "
+                  "your password manager now.")
+            print("")
+            print(f"    {key}")
+            print("")
+            print(f"Fingerprint: {fp}")
+            print("Give it to a colleague over a channel you trust. Anyone "
+                  "holding it can read what your organisation shares; the "
+                  "hosted service never receives it and cannot recover it for "
+                  "you.")
+        return
+
+    if action == "set":
+        key = _read_secret_arg(
+            getattr(args, "file", None),
+            prompt="Paste your organisation key: ",
+        )
+        if not key:
+            print("No key provided.")
+            raise SystemExit(1)
+        prev = _ok.get(cfg)
+        if prev and _ok.fingerprint(prev) != _ok.fingerprint(key) \
+                and not getattr(args, "force", False):
+            print("This machine already holds a DIFFERENT organisation key "
+                  f"(fingerprint {_ok.fingerprint(prev)}).")
+            print("Replacing it makes content sealed with the old key "
+                  "unreadable. Re-run with --force if that is what you want.")
+            raise SystemExit(1)
+        cfg[_ok.CONFIG_FIELD] = key
+        save_config(cfg)
+        fp = _ok.fingerprint(key)
+        _emit({"action": "set", "ok": True, "fingerprint": fp},
+              [f"Organisation key accepted (fingerprint {fp}).",
+               "Check it matches the fingerprint your colleague read out. If "
+               "it does not, you hold a different key and will not be able to "
+               "read what they share."])
+        return
+
+    if action == "forget":
+        if not _ok.get(cfg):
+            _emit({"action": "forget", "ok": True, "changed": False},
+                  ["This machine holds no organisation key."])
+            return
+        cfg.pop(_ok.CONFIG_FIELD, None)
+        save_config(cfg)
+        _emit({"action": "forget", "ok": True, "changed": True},
+              ["Organisation key removed from this machine.",
+               "Content sealed with it stays sealed; this machine can no "
+               "longer open it, and neither can the hosted service."])
+        return
+
+    print(f"Unknown action: {action}")
+    raise SystemExit(2)
+
+
+def _read_secret_arg(path, prompt: str) -> str:
+    """Read a secret from a file, from stdin, or from an interactive prompt.
+
+    Never from argv. `clawmetry license --file` exists for the same reason:
+    a token on the command line is a token in shell history and in `ps`.
+    """
+    import sys as _sys
+
+    if path:
+        with open(os.path.expanduser(str(path)), "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    if not _sys.stdin.isatty():
+        return _sys.stdin.read().strip()
+    try:
+        import getpass as _gp
+
+        return _gp.getpass(prompt).strip()
+    except Exception:
+        return ""
+
+
+def _cmd_cursor(args) -> None:
+    """Manage the opt-in Cursor connection used to price delegated work.
+
+    A Grok Bot -- and any future runtime that delegates -- hands work to Cursor
+    cloud agents that belong to YOU and are billed to YOU. Cursor meters them;
+    this is how ClawMetry is allowed to ask.
+
+    Nothing here runs unless you connect: with no key stored, the daemon makes
+    no outbound call to Cursor at all.
+
+    This function never binds the raw key. Reading, storing and masking happen
+    inside ``cursor_connector``, and only a masked form is ever returned to
+    here -- so no print, log or traceback in this file can carry the secret.
+    """
+    from clawmetry import cursor_connector as cc
+
+    action = getattr(args, "cursor_action", "status") or "status"
+
+    if action == "status":
+        masked = cc.masked_key()
+        if not masked:
+            print("Cursor: not connected.")
+            print("  Delegated cloud-agent work cannot be priced without it.")
+            print("  Connect with:  clawmetry cursor connect --file /path/to/key")
+            print("  Needs any PAID Cursor plan -- Cursor's free tier cannot use")
+            print("  their agents API at all, and that gate is theirs, not ours.")
+            return
+        from clawmetry.delegated_usage import get_store
+        print(f"Cursor: connected (key {masked})")
+        print(f"  Delegated agents seen in local transcripts: "
+              f"{len(get_store().observed())}")
+        print(f"  Endpoint: {cc.API_BASE}")
+        return
+
+    if action == "connect":
+        path = getattr(args, "cursor_file", None)
+        try:
+            masked = cc.save_key_from_file(path) if path else cc.save_key_from_env()
+        except OSError:
+            # Deliberately not printing the exception: this path handles a
+            # credential and an exception string is an uncontrolled channel.
+            print(f"Could not read the key file: {path}")
+            return
+        except ValueError:
+            print("No key supplied.")
+            print("  clawmetry cursor connect --file /path/to/key")
+            print("  (or set CLAWMETRY_CURSOR_API_KEY)")
+            return
+        except Exception:
+            print("Could not save the key.")
+            return
+        print(f"Cursor connected (key {masked}).")
+        print(f"  Stored 0600 at {cc.key_path()}; never synced, never logged.")
+        print("  Run 'clawmetry cursor sync', or let the daemon refresh it.")
+        return
+
+    if action == "sync":
+        out = cc.sync()
+        if not out.get("enabled"):
+            print("Cursor: not connected -- nothing to sync.")
+            return
+        print(f"Cursor sync: {out['fetched']} refreshed, {out['skipped']} still "
+              f"fresh, {out['failed']} unavailable, of {out['observed']} "
+              f"agent(s) seen locally.")
+        return
+
+    if action == "forget":
+        print("Cursor key removed." if cc.forget_key() else "No stored key to remove.")
+        return
 
 
 def _cmd_license(args) -> None:
@@ -3752,19 +5771,23 @@ def _cmd_license(args) -> None:
     as_json = bool(getattr(args, "as_json", False))
 
     if action == "activate":
-        key = getattr(args, "license_key", None) or ""
-        if not key:
+        # ``license_key`` is the positional arg; ``file`` is the ``--file`` flag.
+        # _resolve_license_action_key() normalises the two into a single trimmed
+        # key or an ok=false envelope so the activate/verify branches share ONE
+        # reader (matches the top-level ``clawmetry activate`` shortcut).
+        ok_read, key, read_msg = _resolve_license_action_key(args, "activate")
+        if not ok_read:
             if as_json:
                 _license_json_dump({
                     "action": "activate",
                     "ok": False,
-                    "message": "Usage: clawmetry license activate <KEY>",
+                    "message": read_msg,
                 })
             else:
-                print("❌  Usage: clawmetry license activate <KEY>")
+                print(f"❌  {read_msg}")
             sys.exit(1)
         from clawmetry import license as _lic
-        ok, msg = _lic.activate(key.strip(), node_id=_lic._node_id(), actor="cli")
+        ok, msg = _lic.activate(key, node_id=_lic._node_id(), actor="cli")
         if as_json:
             _license_json_dump({"action": "activate", "ok": bool(ok), "message": msg})
             if not ok:
@@ -3830,21 +5853,21 @@ def _cmd_license(args) -> None:
     elif action == "verify":
         # Dry-run: verify a key OFFLINE and show what it would unlock,
         # WITHOUT writing anything to disk. Useful for support and pre-flight.
-        key = getattr(args, "license_key", None) or ""
-        if not key:
+        ok_read, key, read_msg = _resolve_license_action_key(args, "verify")
+        if not ok_read:
             if as_json:
                 _license_json_dump({
                     "action": "verify",
                     "ok": False,
                     "status": "usage",
                     "inspection": None,
-                    "message": "Usage: clawmetry license verify <KEY>",
+                    "message": read_msg,
                 })
             else:
-                print("❌  Usage: clawmetry license verify <KEY>")
+                print(f"❌  {read_msg}")
             sys.exit(1)
         from clawmetry import license as _lic
-        info = _lic.inspect_key(key.strip())
+        info = _lic.inspect_key(key)
         if as_json:
             if info is None:
                 _license_json_dump({
@@ -5066,6 +7089,58 @@ def _cmd_extensions(args) -> None:
         print("    (none)")
 
 
+def _cmd_scan_repo(args) -> None:
+    """Report configuration in a checkout that runs code when an agent opens it.
+
+    The GitSpawn class of bugs (Manifold Security, 2026-09-01) makes this a
+    pre-flight question rather than a monitoring one: a repository's own
+    ``.git/config`` can name a program in ``core.fsmonitor``, git runs it during
+    an ordinary background ``git status``, and the code executes outside the
+    agent's sandbox before any approval prompt. There is no session to observe,
+    because opening the folder was the exploit. So this command is meant to run
+    BEFORE you point an agent at code you did not write.
+
+    Read-only: it opens files and prints findings. It never edits a config,
+    never runs a command it finds, and never invokes git (asking git to read an
+    untrusted repository's config is part of how several of these bugs fire).
+
+    Exit codes: 0 clean, 1 findings, 2 the path is unreadable — so it can gate a
+    clone step in CI.
+    """
+    from clawmetry import repo_scan
+
+    path = os.path.abspath(os.path.expanduser(args.path or "."))
+    if not os.path.isdir(path):
+        print("Not a directory: %s" % path, file=sys.stderr)
+        raise SystemExit(2)
+
+    findings = repo_scan.scan_workspace(path)
+
+    if getattr(args, "as_json", False):
+        print(json.dumps({"path": path, "findings": findings}, indent=2))
+        raise SystemExit(1 if findings else 0)
+
+    if not findings:
+        print("clean  %s" % path)
+        print("No config in this checkout names a program to run.")
+        raise SystemExit(0)
+
+    word = "finding" if len(findings) == 1 else "findings"
+    print("%d %s  %s\n" % (len(findings), word, path))
+    for f in findings:
+        sev = str(f.get("severity", "warning")).upper()
+        print("  [%s] %s" % (sev, f.get("title", "")))
+        ev = f.get("evidence") or {}
+        for hit in (ev.get("hits") or []):
+            print("      %s = %s" % (hit.get("key"), hit.get("command")))
+        for cmd in (ev.get("commands") or []):
+            print("      %s" % cmd)
+        print("      %s\n" % f.get("detail", ""))
+    print("Do not open this directory with an agent until you have read the "
+          "entries above.")
+    raise SystemExit(1)
+
+
 def _cmd_verify_integrity(args) -> None:
     """clawmetry verify-integrity — walk the hash chain and report validity.
 
@@ -5190,6 +7265,8 @@ def _cmd_verify_integrity(args) -> None:
                 "checked": int(checked or 0),
                 "pre_chain": int(pre_chain or 0),
                 "broken_at": broken_at,
+                "unlinked": int(result.get("unlinked") or 0),
+                "fork_points": int(result.get("fork_points") or 0),
                 "error": error,
             }
         else:
@@ -5215,14 +7292,525 @@ def _cmd_verify_integrity(args) -> None:
         print("               (set CLAWMETRY_INTEGRITY=1 to enable stamping)")
     elif status == "valid":
         print(f"  Result:      ✅  VALID — chain intact across {checked} event(s)")
+    elif status == "degraded":
+        # Every event matches its own fingerprint; only the ordering links are
+        # incomplete (older builds chained two flush batches off one head).
+        # That is not a tamper finding and must not exit non-zero — a CI job
+        # gating on this would fail on a healthy node.
+        unlinked = result.get("unlinked") if isinstance(result, dict) else 0
+        print(
+            f"  Result:      ⚠️   VERIFIED: all {checked} event(s) match their "
+            f"recorded hash; {unlinked or 0} could not be ordered into one chain"
+        )
+        print("               (no record was altered or removed)")
     else:
         print(f"  Result:      ❌  INVALID — {error}")
         print(f"  First break: {broken_at}")
         raise SystemExit(1)
 
 
+def _cmd_login(args) -> None:
+    """clawmetry login — sign in / sign up for ClawMetry Cloud.
+
+    Friendly front door over the existing machinery: already logged in →
+    show account info (same as `clawmetry account`); otherwise run the
+    interactive connect flow (email OTP or Google/GitHub, incl. the
+    headless paste-code path). `connect` stays for scripted/advanced use.
+    """
+    import json as _json
+
+    cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+    api_key = ""
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            api_key = (_json.load(f) or {}).get("api_key") or ""
+    except Exception:
+        pass
+    if api_key:
+        print("Already logged in — your account:")
+        print()
+        _cmd_account(args)
+        print()
+        print("Not you? `clawmetry disconnect` first, then `clawmetry login`.")
+        return
+    _cmd_connect(args)
+
+
+def _purge_cloud_data(api_key: str, *, timeout: float = 15.0) -> tuple[bool, str]:
+    """POST /api/account/purge-data — flush every trace of THIS account's
+    telemetry from the cloud while keeping the account itself.
+
+    Sister of the local ``--turn-off-cloud-sync`` marker flip: the marker
+    stops future egress; this call deletes what already landed on the cloud.
+    Best-effort — returns ``(ok, message)`` and never raises: if the network
+    is down or the cloud rejects, local-only mode is still in effect and
+    the user can retry the purge later. Skipped for self-hosted endpoints
+    (``CLAWMETRY_ENDPOINT`` set) — the operator owns that data plane.
+    """
+    if not api_key:
+        return (True, "no account linked")
+    try:
+        from clawmetry.endpoints import ingest_url, is_custom_endpoint
+    except Exception as e:
+        return (False, f"endpoints module unavailable: {e}")
+    if is_custom_endpoint():
+        return (True, "self-hosted endpoint — skipping managed-cloud purge")
+    import json as _json
+    import urllib.error as _ue
+    import urllib.request as _ur
+    url = ingest_url().rstrip("/") + "/api/account/purge-data"
+    req = _ur.Request(
+        url,
+        data=_json.dumps({"confirm": "PURGE_DATA"}).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+    except _ue.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:200]
+        except Exception:
+            pass
+        # A cloud that predates this endpoint answers 404. Fall back to
+        # per-node DELETE so at least the visible node disappears.
+        if e.code in (404, 405):
+            return _purge_cloud_node_fallback(api_key, timeout=timeout)
+        return (False, f"HTTP {e.code}{': ' + detail if detail else ''}")
+    except (_ue.URLError, TimeoutError, OSError) as e:
+        return (False, f"network error: {e}")
+    except Exception as e:
+        return (False, f"unexpected: {e}")
+    purged = body.get("purged") or {}
+    total = sum(v for v in purged.values() if isinstance(v, int) and v > 0)
+    return (True, f"deleted {total} row(s) across {len(purged)} table(s)")
+
+
+def _purge_cloud_node_fallback(api_key: str, *, timeout: float = 15.0) -> tuple[bool, str]:
+    """Older cloud without ``/api/account/purge-data``: purge just this
+    node via the per-node DELETE endpoint. Covers the visible fleet row
+    even when the account-scoped purge isn't deployed yet.
+    """
+    import json as _json
+    import urllib.error as _ue
+    import urllib.parse as _up
+    import urllib.request as _ur
+    from clawmetry.endpoints import ingest_url
+    from clawmetry.sync import CONFIG_FILE
+
+    node_id = ""
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            node_id = (_json.load(f) or {}).get("node_id") or ""
+    except Exception:
+        pass
+    if not node_id:
+        return (False, "no node_id in config; cloud already has no /api/account/purge-data")
+    url = (ingest_url().rstrip("/") + "/api/cloud/nodes/"
+           + _up.quote(node_id, safe=""))
+    req = _ur.Request(
+        url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="DELETE",
+    )
+    try:
+        with _ur.urlopen(req, timeout=timeout) as resp:
+            body = _json.loads(resp.read().decode("utf-8", errors="replace"))
+    except _ue.HTTPError as e:
+        return (False, f"per-node DELETE HTTP {e.code}")
+    except (_ue.URLError, TimeoutError, OSError) as e:
+        return (False, f"per-node DELETE network error: {e}")
+    except Exception as e:
+        return (False, f"per-node DELETE unexpected: {e}")
+    purged = body.get("purged") or {}
+    total = sum(v for v in purged.values() if isinstance(v, int) and v > 0)
+    return (True, f"per-node fallback: deleted {total} row(s) (upgrade cloud for account-scoped purge)")
+
+
+def _kick_daemon_for_toggle() -> None:
+    """Bounce the sync daemon so any in-flight snapshot upload aborts.
+
+    The nocloud marker gates every subsequent ``_post`` call, so the
+    daemon self-stops within seconds even without a restart. But a
+    snapshot POST that is ALREADY streaming its body can complete before
+    the next marker check — restarting kills it mid-stream, so the user's
+    "no more data goes to the cloud" expectation holds instantly. Best-
+    effort; a machine without launchd/systemd (or without permission to
+    poke either) just falls back to the marker-check behaviour.
+    """
+    import platform
+    import subprocess as _sp
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            uid = os.getuid()
+            _sp.run(["launchctl", "kickstart", "-k",
+                     f"gui/{uid}/com.clawmetry.sync"],
+                    capture_output=True, check=False, timeout=5)
+        elif system == "Linux":
+            import shutil
+            if shutil.which("systemctl"):
+                for _scope in (["--user"], []):
+                    _sp.run(["systemctl", *_scope, "restart", "clawmetry-sync"],
+                            capture_output=True, check=False, timeout=5)
+    except Exception:
+        pass
+
+
+def _cmd_cloud_toggle(enable: bool) -> int:
+    """--turn-on-cloud-sync / --turn-off-cloud-sync.
+
+    OFF: writes the ``~/.clawmetry/nocloud`` marker (stops future egress),
+    then flushes every trace of this account's data from the cloud so the
+    fleet page immediately shows zero data — best-effort; local-only still
+    applies even if the purge call fails. Keeps the account key (unlike
+    ``clawmetry disconnect``) so the user can flip sync back on later.
+
+    ON: pure marker flip — the daemon checks ``is_cloud_disabled()`` on
+    every cloud POST, so egress resumes within seconds without a restart.
+    """
+    import json as _json
+    from clawmetry import config as _cfg
+
+    if enable:
+        removed = _cfg.enable_cloud()
+        env = os.environ.get("CLAWMETRY_NO_CLOUD", "").strip().lower()
+        if env in ("1", "true", "yes", "on"):
+            print("⚠️  CLAWMETRY_NO_CLOUD=" + env + " is set in the environment.")
+            print("   The marker was removed, but that env var still forces")
+            print("   local-only mode — unset it (and restart the daemon's")
+            print("   service) to actually resume cloud sync.")
+            return 1
+        api_key = ""
+        try:
+            with open(os.path.expanduser("~/.clawmetry/config.json"), "r",
+                      encoding="utf-8") as f:
+                api_key = (_json.load(f) or {}).get("api_key") or ""
+        except Exception:
+            pass
+        if not api_key:
+            print("✅  Cloud sync enabled — but no account is linked yet.")
+            print("    Run `clawmetry login` to sign in / sign up, then the")
+            print("    daemon starts syncing automatically.")
+            return 0
+        print("✅  Cloud sync is ON."
+              + ("  (removed local-only marker)" if removed else "  (was already on)"))
+        print("    The running daemon picks this up within seconds.")
+        print("    Daemon not running? Start it with: clawmetry sync")
+        print("    Dashboard: https://app.clawmetry.com/cloud")
+        return 0
+    # OFF: write the persistent marker (survives updates and restarts).
+    marker = _cfg.NOCLOUD_MARKER_PATH
+    try:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("cloud sync disabled via clawmetry --turn-off-cloud-sync\n")
+    except Exception as e:
+        print("❌  Could not write the local-only marker: %s" % e)
+        return 1
+    print("✅  Cloud sync is OFF (local-only mode).")
+    print("    • No data leaves this machine — heartbeats and snapshot")
+    print("      uploads stop within seconds (no restart needed).")
+    print("    • The local dashboard at http://localhost:8900 keeps working.")
+    print("    • Your account login is kept; turn back on any time with:")
+    print("        clawmetry --turn-on-cloud-sync")
+
+    # Kick the daemon so an in-flight snapshot upload can't outrace the
+    # marker check that gates the NEXT POST.
+    _kick_daemon_for_toggle()
+
+    # Flush every trace of this account's data from the cloud. Best-effort:
+    # local-only is already in effect regardless of what the network does.
+    api_key = ""
+    try:
+        with open(os.path.expanduser("~/.clawmetry/config.json"), "r",
+                  encoding="utf-8") as f:
+            api_key = (_json.load(f) or {}).get("api_key") or ""
+    except Exception:
+        pass
+    if os.environ.get("CLAWMETRY_TOGGLE_SKIP_PURGE") == "1":
+        print("    (skipping cloud purge: CLAWMETRY_TOGGLE_SKIP_PURGE=1)")
+    elif api_key:
+        print()
+        print("  Deleting cloud copy of your data…")
+        ok, msg = _purge_cloud_data(api_key)
+        if ok:
+            print(f"    ✅  Cloud data purged: {msg}")
+            print("       Your account (login, plan) is kept.")
+        else:
+            print(f"    ⚠️  Cloud purge did not complete: {msg}")
+            print("       Local-only is still in effect (nothing new is being")
+            print("       uploaded). Retry the purge with:")
+            print("         clawmetry --turn-off-cloud-sync")
+    return 0
+
+
+def _cmd_compliance(args) -> None:
+    """``clawmetry compliance bundle --framework <id> --from --to --out``.
+
+    Fetches an auditor-ready evidence bundle (zip) from the running local
+    dashboard's Compliance Pack endpoint. The engine lives in clawmetry-pro;
+    vanilla OSS answers HTTP 402 and we explain the upgrade path.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    verb = getattr(args, "compliance_cmd", None)
+    if verb != "bundle":
+        print("Usage: clawmetry compliance bundle "
+              "[--framework nist-ai-rmf|soc2-cc] [--from DATE] [--to DATE] "
+              "[--out FILE] [--port PORT]")
+        sys.exit(2)
+    port = getattr(args, "port", None) or 8900
+    query = {"framework": getattr(args, "framework", None) or "nist-ai-rmf"}
+    if getattr(args, "date_from", None):
+        query["from"] = args.date_from
+    if getattr(args, "date_to", None):
+        query["to"] = args.date_to
+    url = (f"http://127.0.0.1:{port}/api/compliance/bundle?"
+           + urllib.parse.urlencode(query))
+    req = urllib.request.Request(url, method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=120)
+    except urllib.error.HTTPError as e:
+        if e.code == 402:
+            print("❌  The Compliance Pack is a paid feature (Pro and up).")
+            print("    Install clawmetry-pro with a license key, or see "
+                  "clawmetry.com/pricing.")
+        elif e.code == 404:
+            print(f"❌  Unknown framework {query['framework']!r} (or the "
+                  "dashboard predates the Compliance Pack — update it).")
+        else:
+            print(f"❌  Bundle request failed: HTTP {e.code}")
+        sys.exit(1)
+    except (urllib.error.URLError, OSError):
+        print(f"❌  No dashboard at http://127.0.0.1:{port} — start it with "
+              "`clawmetry` first (or pass --port).")
+        sys.exit(1)
+    blob = resp.read()
+    out = getattr(args, "out", None)
+    if not out:
+        frm = (query.get("from") or "start")[:10]
+        to = (query.get("to") or "now")[:10]
+        out = f"clawmetry-compliance_{query['framework']}_{frm}_{to}.zip"
+    with open(out, "wb") as fh:
+        fh.write(blob)
+    sha = resp.headers.get("X-Clawmetry-Bundle-Sha256", "")
+    n_controls = resp.headers.get("X-Clawmetry-Bundle-Controls", "?")
+    print(f"✅  Wrote {out} ({len(blob):,} bytes, {n_controls} controls)")
+    if sha:
+        print(f"    sha256: {sha}")
+    print("    Contents: manifest, integrity proof, controls.json, "
+          "approvals.csv, violations.csv, audit_log.csv, attestation.md")
+
+
+def _cmd_export(args) -> None:
+    """``clawmetry export --from <date> --to <date> --format jsonl|csv``.
+
+    Audit/compliance dump of the immutable event log for a time range,
+    fetched from the configured endpoint (managed cloud or a self-hosted
+    Enterprise server — resolution: CLAWMETRY_ENDPOINT env > config
+    ``endpoint`` > cloud default) with the configured credentials.
+
+    The server side is ``GET /api/export/events?from=&to=`` returning JSONL
+    (one event per line). CSV conversion happens client-side so the server
+    contract stays minimal. Exit codes: 0 ok, 1 error.
+    """
+    import csv as _csv
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+
+    api_key = os.environ.get("CLAWMETRY_API_KEY", "").strip()
+    if not api_key:
+        try:
+            from clawmetry.sync import CONFIG_FILE as _CFG
+            api_key = json.loads(_CFG.read_text()).get("api_key", "")
+        except Exception:
+            api_key = ""
+    if not api_key:
+        print("❌  No API key. Set CLAWMETRY_API_KEY or run `clawmetry connect` first.")
+        sys.exit(1)
+
+    base = _resolve_ingest_url()
+    query = []
+    if getattr(args, "date_from", None):
+        query.append("from=" + urllib.parse.quote(args.date_from))
+    if getattr(args, "date_to", None):
+        query.append("to=" + urllib.parse.quote(args.date_to))
+    url = base + "/api/export/events"
+    if query:
+        url += "?" + "&".join(query)
+
+    fmt = getattr(args, "format", "jsonl") or "jsonl"
+    out_path = getattr(args, "out", None)
+
+    req = urllib.request.Request(
+        url, headers={"X-Api-Key": api_key, "Accept": "application/x-ndjson"}
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=120)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"❌  {base} does not implement /api/export/events.")
+            print("    Self-hosted servers support it from clawmetry 0.12.602;")
+            print("    for ClawMetry Cloud, contact support to enable audit export.")
+        elif e.code == 401:
+            print("❌  Unauthorized — check your API key against the configured endpoint.")
+        else:
+            print(f"❌  Export failed: HTTP {e.code} {e.reason}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌  Could not reach {base}: {e}")
+        sys.exit(1)
+
+    sink = open(out_path, "w", encoding="utf-8", newline="") if out_path else sys.stdout
+    count = 0
+    try:
+        if fmt == "csv":
+            cols = (
+                "id", "node_id", "agent_type", "agent_id", "session_id",
+                "event_type", "ts", "model", "token_count", "cost_usd",
+                "data", "received_at",
+            )
+            writer = _csv.writer(sink)
+            writer.writerow(cols)
+            for raw in resp:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                data = rec.get("data")
+                if isinstance(data, (dict, list)):
+                    data = json.dumps(data, separators=(",", ":"), default=str)
+                writer.writerow(
+                    [rec.get(c) if c != "data" else data for c in cols]
+                )
+                count += 1
+        else:
+            for raw in resp:
+                line = raw.decode("utf-8", errors="replace").rstrip("\n")
+                if line.strip():
+                    sink.write(line + "\n")
+                    count += 1
+    finally:
+        resp.close()
+        if out_path:
+            sink.close()
+
+    dest = out_path or "stdout"
+    print(f"✅  Exported {count} events to {dest}", file=sys.stderr)
+
+
 def main() -> None:
     import argparse
+    # FAST PATH — `clawmetry hooks …` must dispatch before the dashboard
+    # import below (~300ms): `hooks run pretooluse` executes on EVERY Claude
+    # Code tool call, and a policy-miss must cost ~40ms, not a third of a
+    # second. Handled entirely in hooks_claude_code (stdlib-only imports).
+    if len(sys.argv) > 1 and sys.argv[1] == "hooks":
+        from clawmetry.hooks_claude_code import cli_main as _hooks_cli
+        raise SystemExit(_hooks_cli(sys.argv[2:]))
+    # FAST PATH — `clawmetry trace …`: `trace stamp` is invoked by the
+    # prepare-commit-msg hook on EVERY commit, so it must not pay the
+    # dashboard import. Stdlib-only; `stamp` always exits 0 (fail-open).
+    if len(sys.argv) > 1 and sys.argv[1] == "trace":
+        raise SystemExit(trace_main(sys.argv[2:]))
+    # FAST PATH — `clawmetry mcp [serve|install|uninstall|status]` (WO-59).
+    # `serve` is started by the agent host on every session and must not
+    # pay the dashboard import; the installer is stdlib-only as well.
+    if len(sys.argv) > 1 and sys.argv[1] == "mcp":
+        from clawmetry.mcp_install import cli_main as _mcp_cli
+        raise SystemExit(_mcp_cli(sys.argv[2:]))
+    # FAST PATH — `clawmetry instrument <runtime> …` (WO-57): writes the
+    # runtime's own OpenTelemetry exporter settings so it reports to this
+    # ClawMetry. Which runtimes: whatever profiles are registered (free ones
+    # here, paid ones from the clawmetry-pro wheel). No dashboard import.
+    if len(sys.argv) > 1 and sys.argv[1] == "instrument":
+        from clawmetry.instrument import cli_main as _instr_cli
+        raise SystemExit(_instr_cli(sys.argv[2:]))
+    # FAST PATH — `clawmetry hook claude-code --base <url>`: the LOCAL-first
+    # PreToolUse gate client (auto-installed by the policy watcher — see
+    # clawmetry/claude_code_gate.py). Runs on every gated Claude Code tool
+    # call; POSTs the stdin event to the local dashboard's
+    # /api/hooks/claude-code/pretooluse receiver and prints the decision
+    # JSON. ALWAYS exits 0 — any failure means "no opinion" (fail-open),
+    # never a blocked agent. Stdlib-only imports.
+    if len(sys.argv) > 1 and sys.argv[1] == "hook":
+        # `clawmetry hook attention --runtime <id>` — the runtime-agnostic
+        # needs-you reporter. Split out from the claude-code gate because it
+        # is a different job: it OBSERVES that a prompt is open and returns,
+        # where the gate DECIDES. Same fail-open, stdlib-only, always-exit-0
+        # contract. See clawmetry/attention_hook.py and docs/NEEDS_YOU.md.
+        if len(sys.argv) > 2 and sys.argv[2] == "attention":
+            from clawmetry.attention_hook import attention_main
+            raise SystemExit(attention_main(sys.argv[3:]))
+        # `clawmetry hook cursor|copilot --base <url>` — same gate-client
+        # contract as claude-code (stdlib-only, fail-open, always exit 0)
+        # but speaking the runtime's own hook payload/response shapes. See
+        # clawmetry/runtime_gates.py.
+        if len(sys.argv) > 2 and sys.argv[2] in ("cursor", "copilot"):
+            from clawmetry.runtime_gates import hook_main as _rt_hook_cli
+            raise SystemExit(_rt_hook_cli(sys.argv[2:]))
+        from clawmetry.claude_code_gate import hook_main as _hook_cli
+        raise SystemExit(_hook_cli(sys.argv[2:]))
+    # FAST PATH — agent-facing read CLI (`clawmetry sessions|activity|waste|
+    # progress|usage|selfevolve`, see docs/CLI.md + clawmetry/cli_cmds/).
+    # Dispatches BEFORE the dashboard import (~300ms) and before this process
+    # tags itself CLAWMETRY_ROLE=dashboard, so local_store.get_store()
+    # resolves the transport ladder itself: daemon HTTP proxy when the sync
+    # daemon owns the writer, direct read-only DuckDB in single-process
+    # installs. These commands are read-only and never take the writer lock.
+    try:
+        from clawmetry.cli_cmds import AGENT_COMMANDS as _agent_cmds
+    except Exception:
+        _agent_cmds = ()
+    if len(sys.argv) > 1 and sys.argv[1] in _agent_cmds:
+        from clawmetry.cli_cmds import dispatch as _agent_dispatch
+        raise SystemExit(_agent_dispatch(sys.argv[1:]))
+    # Enterprise TLS/proxy bootstrap — OS trust store (truststore), 3.13
+    # strict-flag relax, CLAWMETRY_CA_BUNDLE, proxy env vars — so every
+    # outbound HTTPS call from the CLI/dashboard (connect, OTP, telemetry,
+    # update check) works behind corporate TLS-intercepting proxies.
+    try:
+        from clawmetry.net import configure_outbound_network
+        configure_outbound_network(role="cli")
+    except Exception:
+        pass
+    # Stale-duplicate guard: the auto-updater keeps the DAEMON's environment
+    # (~/.clawmetry venv) current, not every stray pip copy on the machine.
+    # When this process is such a stray copy and it's older than the daemon
+    # install, every version this CLI prints is misleading — warn once, on
+    # stderr, with the exact upgrade command. Cheap (directory glob, no
+    # subprocess, no network); skipped for JSON output so wrapper scripts
+    # stay parseable on stdout AND quiet on stderr. CLAWMETRY_NO_STALE_WARN=1
+    # silences it. The hooks / agent-read fast paths above return before this
+    # line on purpose — they are latency-critical.
+    try:
+        if "--json" not in sys.argv:
+            from clawmetry.installs import maybe_warn_stale_cli
+            maybe_warn_stale_cli()
+    except Exception:
+        pass
+    # Cloud-sync toggles — plain flags so a non-engineer can flip sync from
+    # any docs snippet without learning subcommands. Handled before all
+    # parsing (position-independent), exit immediately.
+    if "--turn-on-cloud-sync" in sys.argv:
+        raise SystemExit(_cmd_cloud_toggle(True))
+    if "--turn-off-cloud-sync" in sys.argv:
+        raise SystemExit(_cmd_cloud_toggle(False))
     # --v2 opt-in flag for the React SPA scaffold (see clawmetry/v2/routes.py).
     # Strip it from argv so dashboard.main's argparse doesn't choke on it.
     # Sets the env var that dashboard.py checks at blueprint registration time.
@@ -5278,30 +7866,6 @@ def main() -> None:
             _v = "unknown"
         print(f"clawmetry {_v}")
         return
-    # Tag this process as the dashboard BEFORE importing dashboard, so every
-    # get_store() in dashboard.py (module-level + handlers) is barred from the
-    # DuckDB writer — only the sync daemon writes. Set before the import or a
-    # module-level open would race in before the gate is active. The daemon
-    # (-m clawmetry.sync) never takes this path and calls mark_writer_owner(),
-    # which overrides the gate.
-    os.environ["CLAWMETRY_ROLE"] = "dashboard"
-    from dashboard import main as dashboard_main
-
-    # Anonymous, opt-out, once-per-install ping. See clawmetry/telemetry.py
-    # for the privacy contract. Fires on a daemon thread so a network
-    # failure can't slow CLI startup; honours CLAWMETRY_NO_TELEMETRY=1
-    # and ~/.clawmetry/notelemetry.
-    try:
-        from clawmetry import telemetry as _telemetry
-        try:
-            from dashboard import __version__ as _ver
-        except Exception:
-            _ver = "unknown"
-        _telemetry.maybe_ping(_ver)
-    except Exception:
-        # Never let telemetry plumbing break startup.
-        pass
-
     # Windows: protect against closed/detached stdout/stderr before any library
     # (argparse colour detection, click._winconsole) calls fileno() on them.
     #
@@ -5313,6 +7877,8 @@ def main() -> None:
     # click._winconsole._is_console() calls f.fileno() → ValueError when closed.
     # NO_COLOR suppresses argparse / click colour paths (Python 3.14+).
     # We *also* replace closed handles with devnull sinks so later code is safe.
+    # (Moved ahead of the parser build below so it also guards the `<subcmd>
+    # --help` short-circuit's own printing, not just the post-import path.)
     if sys.platform == "win32":
         import io as _io
 
@@ -5382,6 +7948,15 @@ def main() -> None:
     )
 
     # connect
+    p_login = sub.add_parser(
+        "login",
+        help="Log in / sign up for ClawMetry Cloud (email or Google/GitHub)",
+    )
+    p_login.add_argument(
+        "--force", action="store_true",
+        help="Offer cloud signup even in local-only mode",
+    )
+
     p_connect = sub.add_parser("connect", help="Activate cloud sync")
     p_connect.add_argument("--key", metavar="cm_xxx", help="API key (skip prompt)")
     p_connect.add_argument(
@@ -5427,6 +8002,14 @@ def main() -> None:
         "--force",
         action="store_true",
         help="Override the persistent local-only marker (#1937) and connect anyway",
+    )
+    p_connect.add_argument(
+        "--keep-local",
+        action="store_true",
+        dest="keep_local",
+        help="Sign in for the account + trial license but keep this install "
+        "local-only: the nocloud marker stays, no snapshots ever leave "
+        "this machine (the desktop app's Self-Hosted choice uses this)",
     )
 
     # setup — alias for onboard (new user-facing name)
@@ -5495,6 +8078,38 @@ def main() -> None:
     )
 
     # proxy
+    # secure — numbat (Perplexity agent-EDR) install + hook status
+    p_secure = sub.add_parser(
+        "secure",
+        help="Agent security via numbat: install hooks, show status (docs/NUMBAT.md)",
+    )
+    secure_sub = p_secure.add_subparsers(dest="secure_cmd")
+    p_secure_enable = secure_sub.add_parser(
+        "enable", help="Install numbat + monitor-only hooks wired to ClawMetry"
+    )
+    p_secure_enable.add_argument(
+        "--yes", action="store_true",
+        help="Skip the confirmation prompt (hook install edits agent configs)",
+    )
+    p_secure_enable.add_argument(
+        "--port", type=int, default=None,
+        help="Dashboard port for the HTTP sink (default: 8900)",
+    )
+    p_secure_enable.add_argument(
+        "--emit-all", action="store_true",
+        help="Emit full event stream to the file sink, not just findings",
+    )
+    p_secure_enable.add_argument(
+        "--reinstall", action="store_true",
+        help="Re-download the numbat binary even if one is already installed",
+    )
+    secure_sub.add_parser(
+        "status", help="Per-agent hook wiring + findings ingested by ClawMetry"
+    )
+    secure_sub.add_parser(
+        "disable", help="Remove numbat hooks from all agent configs"
+    )
+
     p_proxy = sub.add_parser(
         "proxy", help="Local enforcement proxy (budget, loops, routing)"
     )
@@ -5617,24 +8232,84 @@ def main() -> None:
     )
 
     # update — self-update to latest PyPI version
-    sub.add_parser("update", help="Update clawmetry to the latest version")
-
-    # mcp — start MCP server on stdio (issue #2859)
-    sub.add_parser(
-        "mcp",
-        help="Start ClawMetry MCP server (stdio) — lets agents query their own telemetry",
+    p_update = sub.add_parser("update", help="Update clawmetry to the latest version")
+    p_update.add_argument(
+        "--unattended",
+        action="store_true",
+        help=(
+            "Apply the daemon's unattended-update policy instead of blindly "
+            "upgrading: honor the CLAWMETRY_AUTO_UPDATE kill switch (including "
+            "implicit CI disable) and the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS "
+            "stability window, installing the newest aged-in release (pinned) "
+            "rather than the absolute latest. Used by the desktop shell's 6h "
+            "background upgrade."
+        ),
     )
 
+    # mcp — intercepted by the fast path at the top of main() (WO-59); the
+    # parser entry exists so `clawmetry --help` discovery shows it.
+    p_mcp = sub.add_parser(
+        "mcp",
+        help="MCP server: `mcp` serves on stdio; `mcp install [--runtime <id>|all] "
+             "[--dry-run] [--write-guidance]` registers it with each runtime; "
+             "`mcp uninstall`; `mcp status`",
+    )
+    p_mcp.add_argument("mcp_args", nargs="*")
+
     # uninstall — fully remove clawmetry
-    sub.add_parser(
+    p_uninstall = sub.add_parser(
         "uninstall", help="Fully uninstall clawmetry (stop daemons, remove all files)"
+    )
+    p_uninstall.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Skip the interactive 'type uninstall to confirm' prompt "
+        "(required for desktop-app menu shell-out and the app-vanished watchdog).",
+    )
+    p_uninstall.add_argument(
+        "--unattended",
+        action="store_true",
+        help="Non-interactive, minimal output, always exit 0 even on partial "
+        "failures. Implies --yes. This is what the macOS app-vanished watchdog uses "
+        "when it detects that /Applications/ClawMetry.app has been dragged to trash.",
+    )
+    p_uninstall.add_argument(
+        "--keep-data",
+        action="store_true",
+        help="Preserve the DuckDB local store and history DB. Removes runtime, "
+        "config, and daemons; keeps event data on disk in case you reinstall.",
+    )
+    p_uninstall.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        help="List everything that would be removed without touching disk.",
     )
 
     # activate — install a self-hosted Pro/Enterprise license key
     p_activate = sub.add_parser(
         "activate", help="Activate a self-hosted Pro/Enterprise license key"
     )
-    p_activate.add_argument("key", help="License key (CLAW1.…)")
+    # ``key`` is nargs="?" now that ``--file <path>`` is accepted; the CLI
+    # handler refuses the "neither supplied" branch itself so the same
+    # ``ok=false`` envelope surfaces in both --json and human paths.
+    p_activate.add_argument(
+        "key",
+        nargs="?",
+        default=None,
+        help="License key (CLAW1.…) — omit when using --file",
+    )
+    p_activate.add_argument(
+        "--file",
+        dest="file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Read the license key from PATH instead of the command line "
+            "(keeps the raw token out of shell history and `ps` listings). "
+            "Mutually exclusive with the positional <KEY>."
+        ),
+    )
     p_activate.add_argument(
         "--json",
         action="store_true",
@@ -5648,6 +8323,61 @@ def main() -> None:
     )
 
     # license — manage the self-hosted Pro/Enterprise license
+    p_team = sub.add_parser(
+        "team",
+        help="Share this machine's sessions with your organisation",
+    )
+    team_sub = p_team.add_subparsers(dest="team_target")
+    p_team_key = team_sub.add_parser(
+        "key", help="Create, accept or inspect the organisation key"
+    )
+    p_team_key.add_argument(
+        "team_action",
+        nargs="?",
+        default="show",
+        choices=["show", "create", "set", "forget"],
+        help="show (default) | create | set | forget",
+    )
+    p_team_key.add_argument(
+        "--file",
+        dest="file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "For 'set': read the key from PATH instead of typing it. The key "
+            "is never accepted as a command-line argument -- that would put "
+            "an organisation's secret in shell history and in every `ps` "
+            "listing. Without --file the key is read from stdin, or prompted "
+            "for without echo."
+        ),
+    )
+    p_team_key.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Replace a key this machine already holds. Content sealed with "
+            "the old key becomes unreadable, so this is never the default."
+        ),
+    )
+    p_team_key.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Emit {action, ok, fingerprint} JSON (jq-friendly).",
+    )
+
+    p_cursor = sub.add_parser(
+        "cursor",
+        help="Connect your Cursor account so delegated cloud-agent work can be priced",
+    )
+    p_cursor.add_argument(
+        "cursor_action", nargs="?", default="status",
+        choices=["status", "connect", "sync", "forget"],
+        help="status (default) | connect <KEY> | sync | forget",
+    )
+    p_cursor.add_argument(
+        "--file", dest="cursor_file", default=None, metavar="PATH",
+        help="For 'connect': read the key from PATH instead of the command line",
+    )
+
     p_license = sub.add_parser("license", help="Manage the self-hosted Pro/Enterprise license")
     p_license.add_argument(
         "license_action",
@@ -5660,7 +8390,19 @@ def main() -> None:
         "license_key",
         nargs="?",
         default=None,
-        help="License key (CLAW1.…) — required for 'activate' / 'verify'",
+        help="License key (CLAW1.…) — required for 'activate' / 'verify' unless --file is used",
+    )
+    p_license.add_argument(
+        "--file",
+        dest="file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "For 'activate' / 'verify': read the license key from PATH "
+            "instead of the command line (keeps the raw token out of shell "
+            "history and `ps` listings). Mutually exclusive with the "
+            "positional <KEY>."
+        ),
     )
     p_license.add_argument(
         "--json",
@@ -5893,6 +8635,28 @@ def main() -> None:
     # diagnose — surface the entitlement resolver inputs so an operator
     # can answer "why did my install resolve to <tier>?" without reading
     # ~/.clawmetry by hand. Same shape as GET /api/entitlement/diagnostic.
+    # scan-repo — read a checkout for executable content before an agent opens it
+    p_scan = sub.add_parser(
+        "scan-repo",
+        help=(
+            "Check a repository for config that runs code when an agent opens "
+            "it (GitSpawn-class: core.fsmonitor, hooksPath, filters, auto-run "
+            "tasks, foreign agent hooks)"
+        ),
+    )
+    p_scan.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Repository to scan (default: current directory)",
+    )
+    p_scan.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit findings as JSON",
+    )
+
     p_diagnose = sub.add_parser(
         "diagnose",
         help=(
@@ -5908,6 +8672,21 @@ def main() -> None:
             "Emit resolution_diagnostic() as JSON (same shape as "
             "GET /api/entitlement/diagnostic)"
         ),
+    )
+
+    # doctor — enterprise network/TLS connectivity diagnostics
+    p_doctor = sub.add_parser(
+        "doctor",
+        help=(
+            "Diagnose cloud connectivity: DNS, TCP, proxy, TLS "
+            "(detects corporate TLS interception), heartbeat POST"
+        ),
+    )
+    p_doctor.add_argument(
+        "--host",
+        dest="doctor_host",
+        default=None,
+        help="Override target (default: ingest.clawmetry.com / CLAWMETRY_INGEST_URL)",
     )
 
     # verify-integrity — walk hash chain and report validity (Issue #2200)
@@ -5932,16 +8711,132 @@ def main() -> None:
         ),
     )
 
+    # export — audit/compliance dump of the immutable event log (enterprise)
+    p_export = sub.add_parser(
+        "export",
+        help=(
+            "Export the event log for a time range from the configured "
+            "endpoint (cloud or self-hosted) for compliance handoff"
+        ),
+    )
+    p_export.add_argument(
+        "--from",
+        dest="date_from",
+        default=None,
+        metavar="DATE",
+        help="Start of range (ISO date/datetime, e.g. 2026-07-01)",
+    )
+    p_export.add_argument(
+        "--to",
+        dest="date_to",
+        default=None,
+        metavar="DATE",
+        help="End of range (ISO date/datetime, inclusive)",
+    )
+    p_export.add_argument(
+        "--format",
+        dest="format",
+        choices=["jsonl", "csv"],
+        default="jsonl",
+        help="Output format (default: jsonl)",
+    )
+    p_export.add_argument(
+        "--out",
+        dest="out",
+        default=None,
+        metavar="FILE",
+        help="Write to FILE instead of stdout",
+    )
+
+    p_compliance = sub.add_parser(
+        "compliance",
+        help=(
+            "Compliance Pack — generate an auditor-ready evidence bundle "
+            "from the running dashboard (Pro)"
+        ),
+    )
+    comp_sub = p_compliance.add_subparsers(dest="compliance_cmd")
+    p_comp_bundle = comp_sub.add_parser(
+        "bundle",
+        help="Build and download the evidence bundle zip",
+    )
+    p_comp_bundle.add_argument(
+        "--framework",
+        dest="framework",
+        default="nist-ai-rmf",
+        metavar="ID",
+        help="Control map to evaluate (default: nist-ai-rmf; also: soc2-cc)",
+    )
+    p_comp_bundle.add_argument(
+        "--from",
+        dest="date_from",
+        default=None,
+        metavar="DATE",
+        help="Start of reporting period (ISO date; default: 30 days ago)",
+    )
+    p_comp_bundle.add_argument(
+        "--to",
+        dest="date_to",
+        default=None,
+        metavar="DATE",
+        help="End of reporting period (ISO date; default: now)",
+    )
+    p_comp_bundle.add_argument(
+        "--out",
+        dest="out",
+        default=None,
+        metavar="FILE",
+        help="Write the zip to FILE (default: derived name in cwd)",
+    )
+    p_comp_bundle.add_argument(
+        "--port",
+        dest="port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="Local dashboard port (default: 8900)",
+    )
+
     # Parse just the first token to decide if it's a sub-command or dashboard flag
+    # `hooks` is absent from this tuple ON PURPOSE: it's intercepted by the
+    # fast path at the top of main() before the dashboard import. The parser
+    # entry below exists only so `clawmetry --help`-style discovery shows it.
+    p_hooks = sub.add_parser(
+        "hooks",
+        help="Claude Code hooks: install | uninstall | status | "
+             "run <event> (pre-execution gate, phone push, and the "
+             "lifecycle events: tool failures, subagents, denials, "
+             "compactions, session start, instructions loaded)")
+    p_hooks.add_argument("hooks_cmd", nargs="*")
+    # `instrument` is likewise intercepted by the fast path (WO-57).
+    p_instr = sub.add_parser(
+        "instrument",
+        help="Turn on a runtime's own OpenTelemetry export and point it at "
+             "this ClawMetry: instrument <runtime> [--project] [--content] "
+             "[--uninstall | --status]  (--help lists runtimes)")
+    p_instr.add_argument("instrument_args", nargs="*")
+
+    # `hook` (singular) is likewise intercepted by its fast path in main();
+    # this parser entry exists only for --help discovery. It is the
+    # LOCAL-first PreToolUse gate client the policy watcher auto-installs
+    # into Claude Code's settings.json (clawmetry/claude_code_gate.py).
+    p_hook = sub.add_parser(
+        "hook",
+        help="Runtime pre-tool hook client (auto-installed): "
+             "hook claude-code --base <dashboard url>")
+    p_hook.add_argument("hook_cmd", nargs="*")
+
     _subcmds = (
         "onboard",
         "setup",
         "account",
+        "login",
         "connect",
         "disconnect",
         "sync",
         "status",
         "proxy",
+        "secure",
         "reports",
         "eval",
         "mcp",
@@ -5949,6 +8844,8 @@ def main() -> None:
         "uninstall",
         "activate",
         "license",
+        "cursor",
+        "team",
         "tier",
         "runtimes",
         "features",
@@ -5958,9 +8855,75 @@ def main() -> None:
         "bundle",
         "extensions",
         "diagnose",
+        "doctor",
+        "scan-repo",
         "verify-integrity",
+        "export",
+        "compliance",
         "nemoclaw-daemons",
     )
+
+    # Short-circuit `<subcmd> --help`/`-h` (e.g. `clawmetry connect --help`)
+    # before importing dashboard. A subcommand's help is printed entirely by
+    # argparse's own subparser -h action (every sub.add_parser() above gets
+    # one for free) and never touches dashboard_main or the store, but the
+    # dashboard import below still ran first because it used to sit ahead of
+    # the parser build — paying for get_store()'s module-level DuckDB init
+    # just to print text argparse already knows how to print. That init
+    # SIGSEGVs on some Python 3.9/Linux runners (#5108, #5309: `clawmetry
+    # connect --help` observed crashing in CI while `status`/`sync --help`
+    # in the same run did not). Let argparse handle it and exit first.
+    if len(sys.argv) > 1 and sys.argv[1] in _subcmds and (
+        "-h" in sys.argv[2:] or "--help" in sys.argv[2:]
+    ):
+        parser.parse_args()
+        return  # argparse's -h action always exits; unreachable in practice
+
+    # Bare `clawmetry --help`/`-h` (no subcommand) needs the same guard
+    # (#5492): argv[1] is "--help" itself, not a member of _subcmds, so the
+    # check above never caught it and this process fell all the way through
+    # to `from dashboard import main as dashboard_main` just to print help
+    # text -- the exact import the guard above exists to avoid. This is what
+    # the Conformance Heartbeat's `clawmetry --help > /dev/null` step hit on
+    # py3.9/Linux while `<subcmd> --help` (already guarded) passed in the
+    # same run. `parser` has no subcommand chosen here, so parse_args() would
+    # error on an "unrecognized argument" instead of printing help (its own
+    # -h action is off, by design, so a real subcommand's `-h` in argv[2:]
+    # above is the one that fires) -- print_help() is what argparse uses
+    # internally for -h and works the same without an -h action registered.
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        parser.print_help()
+        sys.exit(0)
+
+    # Tag this process as the dashboard BEFORE importing dashboard, so every
+    # get_store() in dashboard.py (module-level + handlers) is barred from the
+    # DuckDB writer — only the sync daemon writes. Set before the import or a
+    # module-level open would race in before the gate is active. The daemon
+    # (-m clawmetry.sync) never takes this path and calls mark_writer_owner(),
+    # which overrides the gate.
+    os.environ["CLAWMETRY_ROLE"] = "dashboard"
+    from dashboard import main as dashboard_main
+
+    # Anonymous, opt-out install-lifecycle ping (install once ever, update
+    # once per new version). See clawmetry/telemetry.py for the privacy
+    # contract. Fires on a daemon thread so a network failure can't slow
+    # CLI startup; honours CLAWMETRY_NO_TELEMETRY=1 and
+    # ~/.clawmetry/notelemetry.
+    try:
+        from clawmetry import telemetry as _telemetry
+        try:
+            from dashboard import __version__ as _ver
+        except Exception:
+            _ver = "unknown"
+        _telemetry.maybe_ping(_ver)
+        # Desktop shell launched us? Report the open (which runtimes this
+        # machine has, cloud vs local) once things settle. No-ops for a
+        # plain `pip install clawmetry && clawmetry`.
+        _telemetry.maybe_desktop_ping(_ver)
+    except Exception:
+        # Never let telemetry plumbing break startup.
+        pass
+
     if len(sys.argv) > 1 and sys.argv[1] in _subcmds:
         args = parser.parse_args()
         # Issue #322: Set OpenClaw config directory from CLI flag
@@ -5971,6 +8934,8 @@ def main() -> None:
             _cmd_onboard(args)
         elif args.cmd == "account":
             _cmd_account(args)
+        elif args.cmd == "login":
+            _cmd_login(args)
         elif args.cmd == "connect":
             _cmd_connect(args)
         elif args.cmd == "disconnect":
@@ -5979,8 +8944,13 @@ def main() -> None:
             _cmd_sync(args)
         elif args.cmd == "status":
             _cmd_status(args)
+        elif args.cmd == "cursor":
+            _cmd_cursor(args)
         elif args.cmd == "proxy":
             _cmd_proxy(args)
+        elif args.cmd == "secure":
+            from clawmetry.secure import cmd_secure
+            sys.exit(cmd_secure(args))
         elif args.cmd == "reports":
             _cmd_reports(args)
         elif args.cmd == "eval":
@@ -5988,11 +8958,13 @@ def main() -> None:
         elif args.cmd == "mcp":
             _cmd_mcp(args)
         elif args.cmd == "update":
-            _cmd_update()
+            _cmd_update(args)
         elif args.cmd == "uninstall":
-            _cmd_uninstall()
+            _cmd_uninstall(args)
         elif args.cmd == "activate":
             _cmd_activate(args)
+        elif args.cmd == "team":
+            _cmd_team(args)
         elif args.cmd == "license":
             _cmd_license(args)
         elif args.cmd == "tier":
@@ -6013,8 +8985,17 @@ def main() -> None:
             _cmd_extensions(args)
         elif args.cmd == "diagnose":
             _cmd_diagnose(args)
+        elif args.cmd == "doctor":
+            from clawmetry.doctor import run_doctor
+            sys.exit(run_doctor(host=getattr(args, "doctor_host", None)))
+        elif args.cmd == "scan-repo":
+            _cmd_scan_repo(args)
         elif args.cmd == "verify-integrity":
             _cmd_verify_integrity(args)
+        elif args.cmd == "export":
+            _cmd_export(args)
+        elif args.cmd == "compliance":
+            _cmd_compliance(args)
         elif args.cmd == "nemoclaw-daemons":
             _register_nemoclaw_sandbox_daemons()
     else:

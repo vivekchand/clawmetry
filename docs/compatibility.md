@@ -1,6 +1,6 @@
 # Runtime / Agent Compatibility
 
-ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each runtime that
+ClawMetry observes 30 AI-agent runtimes. Each runtime that
 isn't OpenClaw ships a dedicated reader adapter (`clawmetry/adapters/`) that
 translates its native session format into ClawMetry's unified Session/Event
 shapes; the daemon then ingests them into the same local DuckDB store and cloud
@@ -11,9 +11,14 @@ This page tracks each one's real status, honestly.
 > New to NanoClaw / PicoClaw? See [`RUNTIME_FAMILY.md`](RUNTIME_FAMILY.md) for a
 > primer on the OpenClaw-family runtimes specifically.
 
+Running [Perplexity's numbat](https://github.com/perplexityai/numbat) agent-security
+tool? ClawMetry ingests its findings and enforcement decisions out of the box.
+See [`NUMBAT.md`](NUMBAT.md).
+
 | Runtime / Agent | Status         | Session store                          | Notes |
 | --------------- | -------------- | -------------------------------------- | ----- |
 | OpenClaw    | Native         | v3 JSONL `~/.openclaw/agents/main/sessions/` | Reference runtime; auto-detected. |
+| NVIDIA NemoClaw | Native | OpenClaw v3 JSONL on the host or inside an OpenShell container | Auto-detected (binary + container scan). See [`NEMOCLAW.md`](NEMOCLAW.md). |
 | PicoClaw    | Beta adapter   | Flat `providers.Message` JSONL `~/.picoclaw/workspace/sessions/` | Transcripts, model, tool calls. Tokens/cost not on disk. |
 | NanoClaw    | Beta adapter   | Per-session SQLite `data/v2-sessions/<group>/<session>/{inbound,outbound}.db` | Transcripts. Model/tokens/cost not on disk. |
 | Hermes      | Beta adapter   | SQLite `~/.hermes/state.db` (sessions + messages) | Transcripts, model, pre-computed tokens/cost. |
@@ -21,12 +26,36 @@ This page tracks each one's real status, honestly.
 | Codex       | Beta adapter   | "rollout" JSONL `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | Transcripts, model, tool calls, token usage (from `token_count` events). |
 | Cursor      | Beta adapter   | SQLite `state.vscdb` (`cursorDiskKV` / `ItemTable`, global + per-workspace) | Chat/composer transcripts, model. No billed cost on disk (server-side). |
 | Aider       | Beta adapter   | Markdown `.aider.chat.history.md` per project dir (+ `.aider.input.history`) | Transcripts, model, token counts. Per-project history (set `AIDER_HISTORY_DIRS`). |
-| Goose       | Beta adapter   | SQLite `~/.local/share/goose/sessions/sessions.db` (`sessions` + `messages`) | Transcripts, model, tool calls, real token totals. |
+| Goose       | Beta adapter (**free**) | SQLite `<goose data dir>/sessions/sessions.db` — `${XDG_DATA_HOME:-~/.local/share}/goose` on macOS **and** Linux, `%APPDATA%\Block\goose\data` on Windows, or `$GOOSE_PATH_ROOT/data` when that is set (`sessions` + `messages` tables) | Transcripts, model, tool calls, real token totals. Adapter ships in the OSS package (`clawmetry/adapters/goose.py`) — no plan required. |
 | opencode    | Beta adapter   | SQLite `~/.local/share/opencode/opencode.db` (`session`/`message`/`part`) | Transcripts, model, tool calls, real tokens + cost. |
 | Qwen Code   | Beta adapter   | JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl` (Gemini-CLI lineage) | Transcripts, model, tool calls + thinking, real token usage. |
 | Pi          | Beta adapter   | JSONL `~/.pi/agent/sessions/` | Transcripts, model, tool calls, real tokens + cost. |
 | Deep Agents | Beta adapter   | SQLite `~/.deepagents/.state/sessions.db` | Transcripts, model, tool calls, real tokens + cost. |
+| n8n         | Beta adapter   | SQLite `~/.n8n/database.sqlite` (`execution_entity`/`execution_data`, WAL) | Workflow executions as sessions, node runs as tool calls, AI Agent prompts + model attribution; tokens + cost where the model sub-node records usage. Postgres and n8n Cloud installs are not covered by this adapter. |
+| Antigravity | Beta adapter   | Brain JSONL under `~/.gemini/<flavor>/brain/<uuid>/` (flavors: `antigravity`, `antigravity-cli`, `antigravity-ide`, `jetski`) + `conversations/<uuid>.db` (SQLite, WAL) | Conversations as sessions, planner/tool steps as events, thinking + checkpoint (compaction) events; per-generation model, token split (prompt/thinking/response) and cost decoded from `gen_metadata`; background-generation burn; subagent + battle-mode metadata. |
+| GitHub Copilot | Beta adapter | Copilot CLI `events.jsonl` under `~/.copilot/session-state/` + the `session-store.db` per-call usage ledger | Conversations, tool calls, model routing, cache-aware token split, vendor-billed AI-credit cost. |
+| Grok Build | Beta adapter | xAI Grok Build CLI: `~/.grok/logs/unified.jsonl` + per-session `~/.grok/sessions/<enc-cwd>/<uuid>/{events.jsonl,summary.json}` | Conversations, per-turn token split, model routing, and the outbound repo payload staged under `~/.grok/upload_queue/`. |
+| Grok Bot | Beta adapter | xAI Grok Bot desktop client (Anysphere `com.anysphere.sand`): `~/Library/Application Support/Grok Bot/sand-client-persistence/*.blob` (base32-named plaintext JSON) + `~/.grokbot/` | Full transcripts, both sides, plus local tool-permission asks and the MCP / egress-tunnel posture. **No tokens, model or cost:** the bot infers on its own cloud VM and none of that reaches the client, so no spend is reported rather than a derived guess. One desktop process serves every bot, so there is no per-bot pause/stop/kill. |
+| QM | Beta adapter | Postgres (no on-disk session store); adapter reads `DATABASE_URL` / `CLAWMETRY_QM_DATABASE_URL` read-only | YC's multiplayer harness; delegates to Pi / opencode / Codex / Claude Code, which show up as their own runtimes. |
+| DeepSeek Harness | Beta adapter | JSONL under `$DSH_HOME/sessions` (default `~/.dsh/sessions`), zstd-compressed by default | Transcripts, model, tool calls. `zstandard` is installed lazily, only once compressed dsh data is detected. |
+| Exo | Beta adapter | One pretty-printed JSON file per event under `<workspace>/.exo/exoharness/agents/*/conversations/*/events/` | Per-call usage + cost persisted by Exo itself. State dir is workspace-relative; set `CLAWMETRY_EXO_ROOTS` for unusual layouts. |
+| Kimi CLI | Beta adapter | One `wire.jsonl` event log per session under `<share>/sessions/<md5(workdir)>/<uuid>/` | Reads both share dirs (`~/.kimi`, `~/.kimi-code`) plus `$KIMI_SHARE_DIR`. Model id is not written to disk. |
+| Gemini CLI | Beta adapter | One JSONL chat recording per session under `~/.gemini/tmp/<project-basename>/chats/session-<ts>-<id8>.jsonl` | Recording is always on (no setting to enable). Per-turn token split + model id + tool calls with results, and nested `chats/<parentSessionId>/` sub-agent transcripts. The project dir is the cwd's BASENAME; the sha256 is stored inside the file as `projectHash`. `GEMINI_CLI_HOME` names the dir *containing* `.gemini`. |
+| Cline | Beta adapter | SQLite index at `~/.cline/data/db/sessions.db` plus `~/.cline/data/sessions/<id>/<id>.messages.json` per session | Cost in USD is on disk, which is rare. The index records `pid`, `status` and sub-agent lineage, so liveness is reported rather than guessed. Rejected tool calls are surfaced as errors. Note the `data` leaf: `~/.cline` itself holds only hooks and worktrees. |
+| OpenHands | Beta adapter | One directory per conversation under `~/.openhands/conversations/<hex>/` — `base_state.json` plus one immutable JSON file per event | Tokens and per-call cost live in the sidecar, never on the events. The directory name is the conversation id with dashes stripped. `prompt_tokens` is cumulative across calls, and cost reads 0.0 both for a free local model and for a failed pricing lookup. Delegated sub-agents nest under `subagents/`. |
+| Devin | Beta adapter | One SQLite store for every session (`$XDG_DATA_HOME/devin/cli/sessions.db`) holding a message forest plus the ACP tool-call records | Sessions and tool calls. Fork and revert leave abandoned branches, which the adapter excludes so they are never billed. Whether usage and cost are recorded has not been verified against a real capture yet, so no token or cost number is claimed. Devin Cloud sessions are API-only and not ingested. |
+| Lovable | Beta adapter | A local git clone of the Lovable-synced GitHub repo — Lovable's agent runs entirely in the vendor cloud, and its GitHub two-way sync writes one bot commit per accepted agent edit, so the clone is a real per-edit activity record (`CLAWMETRY_LOVABLE_DIRS` points at clone roots) | One session per project, one event per accepted edit, with the prompting teammate attributed from the co-author trailer. **No tokens, model or cost:** Lovable bills credits in the vendor cloud and none of it reaches the clone, so no spend is reported rather than a derived guess. Data is only as fresh as the last `git fetch`, which the session states. No liveness claims and no per-session control: nothing runs locally. |
+| Replit Agent | Beta adapter | One `transcript.jsonl` journal per session under `<workspace>/.local/state/replit/agent/transcript/<uuid>/` — the agent loop runs on Replit's infrastructure but serializes into the Repl workspace, so the daemon reads it from inside the Repl (`pip install clawmetry` in the workspace shell) or over a clone (`CLAWMETRY_REPLIT_ROOTS`) | Full transcripts with tool calls (write/edit/bash/screenshot vocabulary), typed prompts extracted from the injected wrapper, structural tool errors. **No tokens, model, cost or timestamps in the workspace journal:** Replit bills effort-based checkpoints server-side, so no spend is reported rather than a derived guess, and session times come from file mtimes with the basis declared. No per-session pause/stop/kill: the loop is not a workspace process. |
+| OpenWorker | Beta adapter | A SQLite index plus one append-only JSONL per session under `~/.config/coworker/` (`$COWORKER_STATE_DIR`, or `%APPDATA%\coworker` on Windows). The same `coworker.db` file holds both the session index and the audit log | Sessions, events, cost and sub-agents. The token split rides a per-message sidecar tagged with the model that produced that turn, so a session that switches models is priced per model. OpenWorker writes no dollars, so cost is always derived and never reported. Team workers carry their lead session, which becomes real sub-agent lineage. The audit log's token columns meter the Auto-Approve reviewer rather than the agent, so they are excluded from session cost. Per-session pause and stop are not offered: one desktop process serves every session. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
+
+OpenClaw, NVIDIA NemoClaw and Goose are free in the OSS package — their
+adapters ship in `pip install clawmetry`, so observing them needs no
+account, no licence key and no network call. The rule: an **open-source
+runtime** gets a free, open-source adapter; a **commercial vendor product**
+(Claude Code, Codex, GitHub Copilot, Cursor, Antigravity, Grok) needs a
+Starter or Pro plan, or a self-hosted licence key. See
+[`ENTITLEMENTS.md`](ENTITLEMENTS.md).
 
 ## What "Beta adapter" means (and what it does not)
 

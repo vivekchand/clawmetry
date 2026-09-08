@@ -166,6 +166,8 @@ EXPECTED_TRUST = {
     "rollup_sessions": "e2e",
     "session": "e2e",
     "transcript": "e2e",
+    # Replay history paging: pages carry full message content -> e2e.
+    "transcript_page": "e2e",
     "brain": "e2e",
     "spans": "e2e",
     "traces": "e2e",
@@ -173,6 +175,12 @@ EXPECTED_TRUST = {
     "search": "e2e",
     # #1012 Agent Graph: aggregate node/edge counts only, no content.
     "agent_graph": "plaintext",
+    # #4813 replay events: carry LLM message/tool-arg payloads -> e2e.
+    "replay_events": "e2e",
+    # Inputs & context: carries the system prompt + first user prompt -> e2e.
+    "session_context": "e2e",
+    # WO-60 similar runs: neighbour rows carry session titles -> e2e.
+    "similar_sessions": "e2e",
 }
 
 

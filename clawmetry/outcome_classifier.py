@@ -495,6 +495,34 @@ def _session_has_cognitive_loop(
     return False
 
 
+def _has_corroborating_stall_evidence(sess_events: list[dict[str, Any]]) -> bool:
+    """True when an evidence-bearing signal independently says this session
+    was stuck — repeated identical tool calls that failed, or repeated edits
+    to one file with nothing ever run to check them.
+
+    This is the corroboration requirement that demotes text similarity from a
+    verdict to a hint. It delegates to ``clawmetry.quality_signals`` rather
+    than re-deriving the checks, so there is exactly ONE reader of event
+    payload shapes; a second, drifting interpretation is how the original
+    blindness happened.
+
+    Returns False (i.e. do NOT flag) whenever the signals module is
+    unavailable or errors. Failing open here would restore the very
+    false-positive behaviour this guard exists to remove.
+    """
+    try:
+        from clawmetry.quality_signals import assess_session
+    except Exception:
+        return False
+    try:
+        a = assess_session(sess_events, runtime="", session_id="")
+    except Exception:
+        return False
+    return any(
+        v.name in ("tool_thrash", "no_forward_progress") for v in a.verdicts
+    )
+
+
 def find_cognitive_loops(
     events: list[dict[str, Any]] | None,
     *,
@@ -608,15 +636,28 @@ def classify_session(
         if stuck:
             return OUTCOME_TOOL_CALL_STUCK, 0.8
 
-    # ── 3. Cognitive loop — recursive self-validation (issue #1706) ─
-    # Runs BEFORE ongoing because a still-chattering session whose
-    # assistant keeps emitting the same text is no longer healthy ongoing.
+    # ── 3. Cognitive loop — now requires corroborating evidence ──────
+    #
+    # Audit 2026-08-15. This branch used to fire on text similarity ALONE.
+    # Its only false-positive guard read tool use from the Anthropic
+    # block-list shape, so on every family runtime it parsed nothing, never
+    # fired, and the branch flagged sessions that had made 39-63 real tool
+    # calls inside the window it examined. Measured over a real week the
+    # resulting label was uncorrelated with the only ground truth available
+    # (flagged sessions: 3.59% real tool-error rate; "successes": 2.96%).
+    #
+    # Text repetition survives as a SUPPORTING signal only. The label now
+    # requires an independent, evidence-bearing verdict from
+    # ``clawmetry.quality_signals`` — which reads both event dialects and
+    # cannot emit a verdict without exhibits. That keeps every consumer of
+    # ``sessions.outcome`` (the Overview tile via /api/outcomes, evals,
+    # the cloud snapshot) off the fabricated label, not just the Quality tab.
     if _session_has_cognitive_loop(
         evs,
         window_seconds=COGNITIVE_LOOP_WINDOW_SECONDS,
         similarity_threshold=COGNITIVE_LOOP_SIMILARITY_THRESHOLD,
         min_repeats=COGNITIVE_LOOP_MIN_REPEATS,
-    ):
+    ) and _has_corroborating_stall_evidence(evs):
         return OUTCOME_COGNITIVE_LOOP, 0.8
 
     # ── 4. Ongoing — no terminal marker AND recent activity ─────────
@@ -890,4 +931,162 @@ def aggregate_impacts(
         "total_classified": total,
         "sessions_with_any_impact": with_any,
         "impacts": counts,
+    }
+
+
+# ── Period-over-period trend ────────────────────────────────────────────
+#
+# The Evaluate pillar's procurement question is "can I tell whether my agent
+# is improving over time?" A single-window success rate cannot answer that:
+# 82% is only meaningful next to what it was last week. These helpers turn
+# two windows of the SAME ``query_outcomes`` rows into that comparison.
+#
+# Deliberately outcome-first, not judge-first: "did it finish the job, and
+# what did that cost" comes from data every install already has, for free.
+# An LLM judge score is supporting detail layered on top, never the headline.
+#
+# Pure functions — no DuckDB, no Flask, no clock. The caller picks the two
+# row sets; these only do arithmetic, which is what makes them testable.
+
+# A period needs at least this many FINISHED sessions before we are willing
+# to call a move a trend. Below it we report the numbers and say "not enough
+# yet" rather than dressing up noise as a direction (the Quality-tab lesson:
+# a confident letter over one unreliable bit is worse than no letter).
+TREND_MIN_FINISHED = 3
+
+# Success-rate move (in rate units, so 0.02 == 2 percentage points) that has
+# to be cleared before a period counts as better or worse rather than flat.
+TREND_RATE_EPSILON = 0.02
+
+
+def _finished_count(agg: dict[str, Any]) -> int:
+    """Sessions that reached a terminal, agent-owned outcome.
+
+    The same denominator ``aggregate_outcomes`` divides by for
+    ``success_rate`` — success + failed + cognitive_loop + tool_call_stuck.
+    Excludes ``ongoing`` (still in flight) and ``escalated`` (a human took
+    over, which is not the agent failing).
+    """
+    return int(
+        (agg.get("success") or 0)
+        + (agg.get("failed") or 0)
+        + (agg.get("cognitive_loop") or 0)
+        + (agg.get("tool_call_stuck") or 0)
+    )
+
+
+def aggregate_cost(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Roll ``cost_usd`` / ``total_tokens`` up over the same rows.
+
+    ``aggregate_outcomes`` deliberately counts outcomes only; its shape is
+    frozen into the Overview tile and the snapshot slice, so cost lives here
+    instead of being bolted onto it.
+
+    ``cost_per_finished`` is the number that actually moves a buying
+    decision: total spend divided by the sessions that reached a terminal
+    outcome. It is ``None`` (not 0.0) when nothing finished — 0.0 would read
+    as "free", and a real $0 has to stay distinguishable from missing data
+    (memory ``reference_cost_windows_one_definition``).
+    """
+    total_cost = 0.0
+    total_tokens = 0
+    priced = 0
+    for r in rows or []:
+        c = (r or {}).get("cost_usd")
+        if c is not None:
+            try:
+                total_cost += float(c)
+                priced += 1
+            except (TypeError, ValueError):
+                pass
+        t = (r or {}).get("total_tokens")
+        if t is not None:
+            try:
+                total_tokens += int(t)
+            except (TypeError, ValueError):
+                pass
+    finished = _finished_count(aggregate_outcomes(rows))
+    # None on BOTH "nothing finished" and "nothing priced". The second case
+    # is the subtle one: a runtime with no pricing table yet sums to 0.0, and
+    # publishing that as $0.00-per-task would read as "this agent is free"
+    # instead of "we don't know what this cost".
+    cost_per_finished = None
+    if finished and priced:
+        cost_per_finished = round(total_cost / finished, 6)
+    return {
+        "cost_usd": round(total_cost, 6),
+        "total_tokens": total_tokens,
+        "priced_sessions": priced,
+        "cost_per_finished": cost_per_finished,
+    }
+
+
+def summarize_period(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """One period of the trend: outcome counts + cost, in a single dict."""
+    agg = aggregate_outcomes(rows)
+    agg.update(aggregate_cost(rows))
+    agg["finished"] = _finished_count(agg)
+    return agg
+
+
+def _signed_delta(now: float | None, before: float | None) -> float | None:
+    """``now - before``, or None when either side is missing."""
+    if now is None or before is None:
+        return None
+    return round(now - before, 6)
+
+
+def outcome_trend(
+    current_rows: list[dict[str, Any]],
+    previous_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare two equal-length windows of outcome rows.
+
+    Returns::
+
+        {
+          "current":  {…summarize_period…},
+          "previous": {…summarize_period…},
+          "delta": {"success_rate": +0.06, "cost_per_finished": -0.08,
+                    "finished": +4},
+          "direction": "improving" | "regressing" | "flat" | "unknown",
+          "comparable": True,
+        }
+
+    ``direction`` reads the success rate only — cost is reported beside it
+    but never allowed to flip the verdict, because an agent that got cheaper
+    by giving up earlier is not improving. ``unknown`` when either period has
+    fewer than :data:`TREND_MIN_FINISHED` finished sessions; ``comparable``
+    is the same fact in boolean form for the UI to branch on.
+    """
+    cur = summarize_period(current_rows)
+    prev = summarize_period(previous_rows)
+
+    comparable = (
+        cur["finished"] >= TREND_MIN_FINISHED
+        and prev["finished"] >= TREND_MIN_FINISHED
+    )
+    rate_delta = _signed_delta(cur.get("success_rate"), prev.get("success_rate"))
+    if not comparable or rate_delta is None:
+        direction = "unknown"
+    elif rate_delta > TREND_RATE_EPSILON:
+        direction = "improving"
+    elif rate_delta < -TREND_RATE_EPSILON:
+        direction = "regressing"
+    else:
+        direction = "flat"
+
+    return {
+        "current": cur,
+        "previous": prev,
+        "delta": {
+            "success_rate": rate_delta,
+            "cost_per_finished": _signed_delta(
+                cur.get("cost_per_finished"), prev.get("cost_per_finished")
+            ),
+            "finished": cur["finished"] - prev["finished"],
+        },
+        "direction": direction,
+        "comparable": comparable,
+        "min_finished": TREND_MIN_FINISHED,
     }

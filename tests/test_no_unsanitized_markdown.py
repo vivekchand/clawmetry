@@ -15,8 +15,8 @@ straight into the DOM, or a regression to the unpinned CDN, goes red.
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-APP_JS = (ROOT / "clawmetry" / "static" / "js" / "app.js").read_text()
-DASHBOARD = (ROOT / "dashboard.py").read_text()
+APP_JS = (ROOT / "clawmetry" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+DASHBOARD = (ROOT / "dashboard.py").read_text(encoding="utf-8")
 VENDOR = ROOT / "clawmetry" / "static" / "vendor"
 
 
@@ -49,5 +49,5 @@ def test_vendored_libs_present_and_pinned():
     assert marked.exists(), "vendored marked.min.js missing (won't ship in wheel)"
     assert purify.exists(), "vendored purify.min.js missing (won't ship in wheel)"
     # Pinned, recognizable builds (banner comment carries the version).
-    assert "marked v" in marked.read_text()[:200]
-    assert "DOMPurify" in purify.read_text()[:200]
+    assert "marked v" in marked.read_text(encoding="utf-8")[:200]
+    assert "DOMPurify" in purify.read_text(encoding="utf-8")[:200]

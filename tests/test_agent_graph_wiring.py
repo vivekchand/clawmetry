@@ -1,6 +1,7 @@
 """Guards for the Agent Graph tab wiring (founder report 2026-07-02).
 
-The bug class: dashboard.py defines DASHBOARD_HTML twice and only the SECOND
+The bug class: a tab loader wired only where it never renders (dashboard.py
+once defined DASHBOARD_HTML twice; only the last assignment
 renders. #3315 added `if (name === 'agents') loadAgentGraph();` to the inline
 switchTab inside the DEAD first block, so the loader never fired and the tab
 sat on its static "Loading..." forever, on localhost and cloud alike.
@@ -51,7 +52,7 @@ def test_no_wiring_exists_only_in_dead_block():
     nav_tabs = set(re.findall(r'data-tab="([a-z-]+)"', nav))
     orphaned = (dead_wirings - live_wirings) & nav_tabs
     assert not orphaned, (
-        f"tab loader(s) wired ONLY in the dead first DASHBOARD_HTML: {sorted(orphaned)} - "
+        f"tab loader(s) with no live nav entry: {sorted(orphaned)} - "
         "move the wiring to static/js/app.js switchTab or the tab never loads"
     )
 
@@ -65,3 +66,43 @@ def test_loader_handles_cloud_410_honestly():
         "loadAgentGraph must show the honest local-only message on the cloud's "
         "410, not an empty-data state"
     )
+
+
+# ── runtime filter wiring (WS-A: Agent Graph spans for all runtimes) ────────
+#
+# The read path grew a ``runtime`` arg (query_agent_graph WHERE
+# COALESCE(agent_type,'openclaw') = ?). These guards pin the plumbing so the
+# arg can't silently fall out of any of its three layers: the query contract,
+# the route's arg coercion, and the store method signature.
+
+
+def test_agent_graph_contract_lists_runtime_arg():
+    from clawmetry.query_contract import QUERY_CONTRACT
+
+    assert "runtime" in QUERY_CONTRACT["agent_graph"]["args"], (
+        "agent_graph contract entry must declare the 'runtime' arg - "
+        "without it the drift CI and the coercion allowlist disagree"
+    )
+
+
+def test_agent_graph_coercion_passes_runtime_through():
+    import routes.local_query as lq
+
+    coerced = lq._coerce_args("agent_graph", {"runtime": "claude_code"})
+    assert coerced.get("runtime") == "claude_code"
+    # Absent/blank runtime coerces to None (unfiltered graph), never "".
+    assert lq._coerce_args("agent_graph", {})["runtime"] is None
+    assert lq._coerce_args("agent_graph", {"runtime": ""})["runtime"] is None
+
+
+def test_query_agent_graph_accepts_runtime_kwarg():
+    import inspect
+
+    from clawmetry.local_store import LocalStore
+
+    params = inspect.signature(LocalStore.query_agent_graph).parameters
+    assert "runtime" in params, (
+        "LocalStore.query_agent_graph must accept runtime= - the coerced "
+        "route arg is passed as **kwargs and would TypeError otherwise"
+    )
+    assert params["runtime"].default is None

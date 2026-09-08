@@ -7,7 +7,8 @@ are logically adjacent observability concerns:
 
   bp_logs     (4 routes) — /api/logs, /api/flow[-events], /api/logs-stream
   bp_memory   (4 routes) — /api/memory[-files], /api/file, /api/memory-analytics
-  bp_security (3 routes) — /api/security/{threats,signatures,posture}
+  bp_security (5 routes) — /api/security/{threats,signatures,posture}
+                           + /api/security/retention (GET/POST)
   bp_config   (4 routes) — /api/llmfit, /api/cost-optimizer, /api/cost-optimization,
                            /api/automation-analysis
 
@@ -23,6 +24,8 @@ Module-level helpers (``_find_log_file``, ``_tail_lines``, ``_ext_emit``,
 ``dashboard.py`` and are reached via late ``import dashboard as _d``. Pure
 mechanical move — zero behaviour change.
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -94,6 +97,16 @@ bp_config = Blueprint('config', __name__)
 
 @bp_logs.route("/api/logs")
 def api_logs():
+    # Runtime-aware dispatch: ?runtime=<rt> for any non-openclaw runtime is
+    # served via the adapter registry's log_sources() contract. Absent or
+    # 'openclaw' -> the legacy dated-file path below, byte-for-byte
+    # backward compatible.
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime and runtime != "openclaw":
+        from helpers.logs import read_runtime_logs
+        lines_count = int(request.args.get("lines", 100))
+        return jsonify(read_runtime_logs(runtime, lines_count))
+
     import dashboard as _d
     lines_count = int(request.args.get("lines", 100))
     date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
@@ -434,7 +447,6 @@ def _try_local_store_cost_optimization():
     ``test_cost_optimizer_local_store_v3``).
     """
     from routes.sessions import _ls_call  # late import to avoid cycle
-    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
 
     # Sibling handles today + projected + expensiveOps from the same
     # query_aggregates + query_events rows; reuse it so the two
@@ -445,9 +457,13 @@ def _try_local_store_cost_optimization():
 
     # Compute the week + month rollups the sibling doesn't surface.
     agg_rows = _ls_call("query_aggregates") or []
-    now = _dt.now(_tz.utc)
-    week_start = (now - _td(days=7)).date().isoformat()
-    month_start = (now - _td(days=30)).date().isoformat()
+    # Canonical calendar windows in the node's local timezone. This used to
+    # compute a UTC day plus ROLLING 7/30-day spans, so the same events gave
+    # this route a different "week" and "month" than the budget panel and the
+    # cloud snapshot. See clawmetry/cost_windows.py.
+    from clawmetry.cost_windows import window_start_days
+
+    _today_start, week_start, month_start = window_start_days()
     week_cost = 0.0
     month_cost = 0.0
     for r in agg_rows:
@@ -948,10 +964,180 @@ def _generate_openclaw_json_logs(started_at, sse_max_seconds, release_fn):
         release_fn()
 
 
+def _generate_runtime_log_stream(runtime, started_at, sse_max_seconds, release_fn):
+    """SSE generator for /api/logs-stream?runtime=<rt> (non-openclaw).
+
+    Source preference:
+      1. file source        -> initial tail (last 50) + pure-Python follow
+      2. follow_command     -> Popen + PipeLineReader (docker logs -f style)
+      3. command w/ path    -> poll-tail the file (same as 1)
+      4. nothing            -> ONE honest {"available": false, "reason"} event,
+                               then a clean ``done`` — never an HTTP error.
+    Event shapes:
+      event: log-meta  data: {"runtime", "available": true, "label", "source"}
+      data: {"line": "..."}                       (each log line)
+      data: {"available": false, "runtime", "reason"}   (no source case)
+      event: done      data: {"reason": "..."}
+    """
+    from helpers.logs import (
+        _read_source_tail,
+        _source_display,
+        resolve_runtime_log_sources,
+    )
+
+    try:
+        adapter, sources, reason = resolve_runtime_log_sources(runtime)
+        if not sources:
+            yield "data: " + json.dumps(
+                {"available": False, "runtime": runtime, "reason": reason}
+            ) + "\n\n"
+            yield 'event: done\ndata: {"reason":"no_log_source"}\n\n'
+            return
+
+        # Pick the followable source per the preference order above.
+        file_src = next(
+            (
+                s for s in sources
+                if s.kind == "file" and s.path and os.path.isfile(s.path)
+            ),
+            None,
+        )
+        cmd_src = next((s for s in sources if s.follow_command), None)
+        path_fallback = next(
+            (s for s in sources if s.path and os.path.isfile(s.path)), None
+        )
+
+        if file_src is not None or (cmd_src is None and path_fallback is not None):
+            src = file_src or path_fallback
+            yield "event: log-meta\ndata: " + json.dumps(
+                {
+                    "runtime": runtime,
+                    "available": True,
+                    "label": src.label,
+                    "source": src.path,
+                    "format": src.format,
+                }
+            ) + "\n\n"
+            initial = _read_source_tail(src, 50) or []
+            for line in initial:
+                yield f"data: {json.dumps({'line': line})}\n\n"
+            try:
+                fh = open(src.path, "r", encoding="utf-8", errors="replace")
+            except OSError:
+                yield 'event: done\ndata: {"reason":"log_file_unreadable"}\n\n'
+                return
+            fh.seek(0, 2)
+            try:
+                while True:
+                    if time.time() - started_at > sse_max_seconds:
+                        yield 'event: done\ndata: {"reason":"max_duration_reached"}\n\n'
+                        break
+                    line = fh.readline()
+                    if not line:
+                        time.sleep(1.0)
+                        continue
+                    yield f"data: {json.dumps({'line': line.rstrip()})}\n\n"
+            finally:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
+            return
+
+        if cmd_src is not None:
+            from clawmetry.process_control import PipeLineReader
+
+            yield "event: log-meta\ndata: " + json.dumps(
+                {
+                    "runtime": runtime,
+                    "available": True,
+                    "label": cmd_src.label,
+                    "source": _source_display(cmd_src),
+                    "format": cmd_src.format,
+                }
+            ) + "\n\n"
+            try:
+                proc = subprocess.Popen(
+                    list(cmd_src.follow_command),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,  # docker logs writes to stderr
+                    text=True,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                yield "data: " + json.dumps(
+                    {
+                        "available": False,
+                        "runtime": runtime,
+                        "reason": f"follow command failed to start: {exc}",
+                    }
+                ) + "\n\n"
+                yield 'event: done\ndata: {"reason":"follow_command_failed"}\n\n'
+                return
+            reader = PipeLineReader(proc.stdout)
+            try:
+                while True:
+                    if time.time() - started_at > sse_max_seconds:
+                        yield 'event: done\ndata: {"reason":"max_duration_reached"}\n\n'
+                        break
+                    raw_line = reader.readline(1.0)
+                    if raw_line is None:
+                        if reader.eof:
+                            yield 'event: done\ndata: {"reason":"stream_ended"}\n\n'
+                            break
+                        continue
+                    yield f"data: {json.dumps({'line': raw_line.rstrip()})}\n\n"
+            finally:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            return
+
+        # Sources exist on paper but nothing is followable right now.
+        yield "data: " + json.dumps(
+            {
+                "available": False,
+                "runtime": runtime,
+                "reason": "log source(s) present but not followable "
+                          "(no readable file, no follow-style command)",
+            }
+        ) + "\n\n"
+        yield 'event: done\ndata: {"reason":"no_followable_source"}\n\n'
+    except GeneratorExit:
+        pass
+    finally:
+        release_fn()
+
+
 @bp_logs.route("/api/logs-stream")
 def api_logs_stream():
     """SSE endpoint - streams new log lines in real-time."""
     import shutil
+
+    # Runtime-aware dispatch: any non-openclaw runtime streams via its
+    # adapter's log_sources(). Kept ahead of the openclaw fast path so the
+    # legacy behaviour (absent / 'openclaw') is untouched.
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime and runtime != "openclaw":
+        try:
+            import dashboard as _d
+            if not _d._acquire_stream_slot("log"):
+                return jsonify({"error": "Too many active log streams"}), 429
+            _release = lambda: _d._release_stream_slot("log")  # noqa: E731
+            _max_secs = _d.SSE_MAX_SECONDS
+        except Exception:
+            # Hermetic contexts (blueprint mounted without dashboard):
+            # degrade to no slot accounting rather than 500.
+            _release = lambda: None  # noqa: E731
+            _max_secs = 3600
+        return Response(
+            _generate_runtime_log_stream(
+                runtime, time.time(), _max_secs, _release
+            ),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     import dashboard as _d
     if not _d._acquire_stream_slot("log"):
         return jsonify({"error": "Too many active log streams"}), 429
@@ -1584,9 +1770,20 @@ def api_memory_access():
 
 @bp_security.route("/api/security/threats")
 def api_security_threats():
-    """Scan recent agent activity for security threats using built-in signatures."""
+    """Live signature scan over recent agent activity.
+
+    Findings persisted by a connected agent-EDR (numbat) are a separate,
+    durable feed served by ``/api/security-threats`` and rendered by the
+    "Recorded findings" panel — they are deliberately NOT merged here, so the
+    same finding never appears twice on one screen. The page-level verdict
+    (tiles + all-clear line) combines both; see ``loadSecurityPage``.
+
+    ``?runtime=<id>`` scopes the scan to one runtime; without it the response
+    is node-wide and says so via ``scope``.
+    """
     import dashboard as _d
     from routes.brain import api_brain_history
+    runtime = (request.args.get("runtime") or "").strip().lower() or None
     try:
         # Call brain-history endpoint internally
         brain_resp = api_brain_history()
@@ -1595,7 +1792,7 @@ def api_security_threats():
     except Exception:
         events = []
 
-    threats, counts = _d._scan_events_for_threats(events)
+    threats, counts = _d._scan_events_for_threats(events, runtime=runtime)
 
     # Fire alerts for critical/high threats (with cooldown via _fire_alert)
     for t in threats:
@@ -1633,8 +1830,108 @@ def api_security_threats():
             pass
 
     return jsonify(
-        {"threats": threats, "counts": counts, "scanned_events": len(events)}
+        {
+            "threats": threats,
+            "counts": counts,
+            "scanned_events": len(events),
+            "scope": runtime or "node",
+        }
     )
+
+
+@bp_security.route("/api/numbat/ingest", methods=["POST"])
+def api_numbat_ingest():
+    """Receive Perplexity numbat NDJSON records over HTTP.
+
+    numbat (github.com/perplexityai/numbat) POSTs application/x-ndjson
+    batches from its HTTP sink; any 2xx acknowledges. Wire it with:
+
+        numbat hook install --agent all --emit all --output file \\
+            --output http --http-url http://127.0.0.1:8900/api/numbat/ingest
+
+    Loopback needs no numbat auth flags; for remote delivery use numbat's
+    ``--http-auth bearer`` with NUMBAT_HTTP_TOKEN set to the gateway token —
+    the global /api/* before_request check validates it. Duplicate batches
+    are expected (numbat retries); all mapped ids are deterministic and the
+    store upserts, so replays are no-ops. finding → security_events,
+    enforcement → guardrail_events (mapper: clawmetry/numbat_ingest.py).
+    The durable path is the daemon's file tail (sync_numbat_events) — this
+    endpoint is the low-latency supplement, and the two dedupe by id.
+    """
+    import dashboard as _d
+    from clawmetry import numbat_ingest as _ni
+
+    raw = request.get_data(cache=False)
+    if not raw:
+        return jsonify({"ok": True, "ingested": 0, "note": "empty body"})
+    if len(raw) > 32 * 1024 * 1024:
+        return jsonify({"error": "body too large"}), 413
+    if (request.headers.get("Content-Encoding") or "").lower() == "gzip":
+        import gzip as _gzip
+        try:
+            raw = _gzip.decompress(raw)
+        except Exception:
+            return jsonify({"error": "bad gzip body"}), 400
+
+    records, bad_lines = _ni.parse_records(raw.decode("utf-8", errors="replace"))
+    mapped = _ni.map_records(records)  # no node_id: shadow rows are daemon-side
+
+    ingested = 0
+    errors = 0
+    try:
+        from routes.local_query import local_store_via_daemon
+        from clawmetry import local_store as _ls_mod
+
+        def _write(method: str, ev: dict) -> None:
+            nonlocal ingested, errors
+            try:
+                result = local_store_via_daemon(method, event=ev)
+                if result is None:
+                    getattr(_ls_mod.get_store(), method)(ev)
+                ingested += 1
+            except Exception:
+                errors += 1
+
+        for sec in mapped["security_events"]:
+            _write("ingest_security_event", sec)
+        for gr in mapped["guardrail_events"]:
+            _write("ingest_guardrail_event", gr)
+    except Exception:
+        errors += len(mapped["security_events"]) + len(mapped["guardrail_events"])
+
+    # Critical/high findings ping the operator now (cooldown via _fire_alert),
+    # mirroring /api/security/threats. Rule-based alerting over shadow rows
+    # covers the file-tail path; this covers HTTP-only setups.
+    for rec in mapped["findings_raw"]:
+        # Live findings only: a `numbat scan` backfill of historical
+        # transcripts can emit thousands at once and must never page.
+        if rec.get("severity") in ("critical", "high") and _ni.is_live_finding(rec):
+            try:
+                _d._fire_alert(
+                    rule_id=f"numbat_{rec.get('rule_id', 'finding')}",
+                    alert_type="numbat_finding",
+                    message=(
+                        f"🛡️ numbat: {str(rec.get('severity', '')).upper()} — "
+                        f"{rec.get('title', rec.get('rule_id', 'finding'))}"
+                        f" [{rec.get('source_agent', '?')}]"
+                    ),
+                    channels=["banner", "telegram"],
+                )
+            except Exception:
+                pass
+
+    return jsonify({
+        "ok": errors == 0,
+        "ingested": ingested,
+        "findings": len(mapped["security_events"]),
+        "enforcements": len(mapped["guardrail_events"]),
+        "skipped_events": mapped["skipped_events"],
+        "skipped_schema": mapped["skipped_schema"],
+        "skipped_other": mapped["skipped_other"],
+        "bad_lines": bad_lines,
+        "errors": errors,
+        "_source": "local_store",
+    })
 
 
 @bp_security.route("/api/security/signatures")
@@ -1659,11 +1956,17 @@ def api_security_signatures():
 
 @bp_security.route("/api/security/posture")
 def api_security_posture():
-    """Scan OpenClaw configuration for security misconfigurations and return a posture score."""
-    import dashboard as _d
+    """Runtime-aware security posture scan.
+
+    ``?runtime=<rt>`` selects the provider (clawmetry.security_posture
+    registry); absent -> 'openclaw' for backward compatibility. Runtimes
+    without a provider return an honest ``status: not_available`` envelope
+    with HTTP 200 — "no checks yet" is a state, not an error.
+    """
+    runtime = (request.args.get("runtime") or "openclaw").strip().lower()
     try:
-        result = _d._scan_security_posture()
-        return jsonify(result)
+        from clawmetry.security_posture import get_posture
+        return jsonify(get_posture(runtime))
     except Exception as e:
         return jsonify({"error": str(e), "score": "U", "checks": []}), 500
 
@@ -1740,13 +2043,19 @@ def _integrity_status() -> dict:
         }
     status = raw.get("status") or "unknown"
     return {
-        # ``ok`` is True only when the chain verified, False when broken,
-        # None when there's nothing stamped yet (empty / unknown).
+        # ``ok`` is True only when the chain verified end to end, False when a
+        # record was altered or removed, None otherwise — including the
+        # "degraded" verdict (every event matches its own hash, but some could
+        # not be placed in one ordered chain). None is the safe value for a
+        # stale cached frontend: it renders the neutral state rather than
+        # shouting "Tampered" about a linkage artefact.
         "ok": True if status == "valid" else (False if status == "invalid" else None),
         "status": status,
         "chain_length": int(raw.get("checked") or 0),
         "pre_chain": int(raw.get("pre_chain") or 0),
         "first_break": raw.get("broken_at"),
+        "unlinked": int(raw.get("unlinked") or 0),
+        "fork_points": int(raw.get("fork_points") or 0),
         "error": raw.get("error"),
     }
 
@@ -2528,3 +2837,102 @@ def api_context_anatomy():
         "context_limit": CONTEXT_LIMIT,
         "pct_used": round(total / CONTEXT_LIMIT * 100, 1) if CONTEXT_LIMIT else 0,
     })
+
+
+# ── data retention: how long this node keeps event history ──────────────
+#
+# "How long do you keep my data, and can I change it?" is the first question
+# a security reviewer asks. The answer used to be implicit (your billing
+# tier) and only changeable through an environment variable set before the
+# daemon started. This exposes the number, says what is setting it, and lets
+# the operator shorten it.
+#
+# Shrink-only by construction (clawmetry/retention.py): a setting can ask for
+# LESS retention, never more than the plan allows. So the write is safe to
+# expose — the worst a mistake does is delete the operator's own data sooner,
+# which is the direction this control should fail in. The global cross-origin
+# guard in dashboard.py::_check_auth covers the POST.
+
+
+def _retention_store():
+    """Writer-lock-safe store handle, or None. Writes go through the daemon
+    proxy; only the daemon may hold the DuckDB writer."""
+    try:
+        from clawmetry import local_store
+        return local_store.get_store(read_only=True)
+    except Exception:
+        return None
+
+
+@bp_security.route("/api/security/retention", methods=["GET"])
+def api_security_retention():
+    """The effective retention window, the plan ceiling, and which is binding."""
+    try:
+        from clawmetry import retention as _ret
+        from routes.sessions import _ls_call
+        state = None
+        try:
+            # Prefer the daemon's view: it is the process that actually
+            # prunes, so its answer is the one that comes true.
+            settings = _ls_call("list_node_settings") or {}
+            if isinstance(settings, dict):
+                state = _ret.resolve(store=_StaticSettings(settings))
+        except Exception:
+            state = None
+        if state is None:
+            state = _ret.resolve(store=_retention_store())
+        return jsonify(state)
+    except Exception:
+        return jsonify({
+            "effective_days": None, "cap_days": None, "configured_days": None,
+            "env_days": None, "source": "unlimited", "tier": "unknown",
+            "can_configure": False, "explanation": "",
+        })
+
+
+class _StaticSettings:
+    """Adapter so ``retention.resolve`` can read settings fetched over the
+    daemon proxy without opening the store a second time."""
+
+    def __init__(self, settings):
+        self._settings = settings or {}
+
+    def get_node_setting(self, key):
+        return self._settings.get(key)
+
+
+@bp_security.route("/api/security/retention", methods=["POST"])
+def api_security_retention_set():
+    """Set (or clear) how long this node keeps event history.
+
+    Body: ``{"days": <int>}`` to set, ``{"days": null}`` to fall back to the
+    plan. A value above the plan ceiling is stored as asked but resolves down
+    to the ceiling; the response shows both numbers so nobody concludes they
+    bought more retention by typing a bigger one.
+    """
+    body = request.get_json(silent=True) or {}
+    if "days" not in body:
+        return jsonify({"ok": False, "error": "missing 'days'"}), 400
+    days = body.get("days")
+    try:
+        from routes.sessions import _ls_call
+        if days is None:
+            _ls_call("set_node_setting", key="retention_days", value=None)
+        else:
+            from clawmetry.retention import _coerce_days
+            n = _coerce_days(days)
+            if n is None:
+                return jsonify({
+                    "ok": False,
+                    "error": "days must be a whole number of days, 1 or more",
+                }), 400
+            _ls_call("set_node_setting", key="retention_days", value=n)
+    except Exception:
+        return jsonify({"ok": False, "error": "write failed"}), 200
+    from clawmetry import retention as _ret
+    try:
+        settings = _ls_call("list_node_settings") or {}
+        state = _ret.resolve(store=_StaticSettings(settings))
+    except Exception:
+        state = _ret.resolve(store=_retention_store())
+    return jsonify({"ok": True, **state})

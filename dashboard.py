@@ -14,6 +14,11 @@ https://github.com/vivekchand/clawmetry
 MIT License
 """
 
+from clawmetry.gateway_protocol import (
+    GATEWAY_MAX_PROTOCOL as _GW_MAX_PROTO,
+    GATEWAY_MIN_PROTOCOL as _GW_MIN_PROTO,
+)
+import hashlib
 import hmac
 import os
 import sys
@@ -54,6 +59,7 @@ import time
 import threading
 import select
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from flask import (
     Flask,
     render_template_string,
@@ -68,6 +74,7 @@ from flask import (
 # truth for module-level helpers — see routes/sessions.py for the pattern.
 from routes.sessions import bp_sessions
 from routes.tracing import bp_tracing
+from routes.trail import bp_trail
 from routes.brain import bp_brain
 from routes.advisor import bp_advisor
 from routes.selfevolve import bp_selfevolve
@@ -100,21 +107,32 @@ from helpers.gateway import (  # noqa: F401 — re-export for routes/
 from routes.usage import bp_usage
 from routes.crons import bp_crons
 from routes.harness import bp_harness
+from routes.delegated import bp_delegated
+from routes.readiness import bp_readiness
+from routes.guard import bp_guard
+from routes.signals import bp_signals
+from routes.selfdiag import bp_selfdiag
 from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
 from routes.overview import bp_overview
+from routes.trial import bp_trial
+from routes.onboarding import bp_onboarding
 from routes.components import bp_components
 from routes.fleet_history import bp_fleet
 from routes.infra import bp_logs, bp_memory, bp_security, bp_config
 from routes.meta import bp_auth, bp_cloud_relay, bp_gateway, bp_otel, bp_otlp_traces, bp_version, bp_version_impact
+from routes.compliance import bp_compliance
+from routes.org_analytics import bp_org_analytics
 from routes.nemoclaw import bp_nemoclaw
 from routes.skills import bp_skills
+from routes.runtime_memory import bp_runtime_memory
 from routes.heartbeat import bp_heartbeat
 from routes.autonomy import bp_autonomy
 from routes.selfconfig import bp_selfconfig
 from routes.agents import bp_agents
 from routes.inventory import bp_inventory
+from routes.govern import bp_govern
 from routes.assets import bp_assets
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
@@ -125,6 +143,9 @@ from routes.bootstrap import bp_bootstrap
 from routes.insights import bp_insights
 from routes.review import bp_review
 from routes.evals import bp_evals
+from routes.bench import bp_bench
+from routes.cohort import bp_cohort
+from routes.quality import bp_quality
 from routes.dives import bp_dives
 from routes.reports import bp_reports
 from routes.scheduler import bp_scheduler
@@ -132,6 +153,7 @@ from routes.policy import bp_policy
 from routes.turn_anatomy import bp_turn_anatomy
 from routes.tool_catalog import bp_tool_catalog
 from routes.context_economics import bp_context_economics
+from routes.spend_flow import bp_spend_flow
 from routes.entitlement import bp_entitlement
 from routes.extensions import bp_extensions
 from routes.otel_export import bp_otel_export
@@ -140,6 +162,8 @@ from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
 from routes.sla import bp_sla
 from routes.hitl import bp_hitl
+from routes.rules import bp_rules
+from routes.attention import bp_attention
 from helpers.openapi import bp_openapi
 
 # History / time-series module
@@ -223,6 +247,59 @@ def _otlp_decode(pb_data, proto_msg, content_encoding=None, content_type=None):
     return proto_msg
 
 
+def _otlp_request(pb_data, kind, content_encoding=None, content_type=None):
+    """Decode an OTLP body for ``kind`` ('traces' | 'logs' | 'metrics').
+
+    Issue #4781. ``opentelemetry-proto`` is behind the ``otel`` extra, so on a
+    default install every OTLP POST used to answer 501 and the advertised
+    receiver was simply off. Binary bodies still decode with protobuf exactly as
+    before; JSON bodies go through the stdlib decoder in
+    ``clawmetry.otlp_json``, which returns objects that duck-type the protobuf
+    message API -- so ``_process_otlp_*`` and ``_otel_to_row`` run unchanged
+    over either format and there is no second mapping path to drift.
+
+    Raises ``OtlpProtobufUnavailable`` when the payload genuinely needs the
+    extra (a protobuf body); the HTTP layer turns that into
+    501 with the install hint. Malformed bodies still raise (caller -> 400).
+
+    OTLP/JSON traces and logs go through the stdlib decoder even when protobuf
+    IS installed. That is deliberate, and it fixes a silent corruption: protobuf
+    JSON maps ``bytes`` fields from BASE64, but the OTLP/JSON spec overrides
+    that for ``traceId`` / ``spanId`` / ``parentSpanId``, which are lowercase
+    HEX. ``json_format.Parse`` therefore base64-decoded every id and we stored
+    the garbage. Measured against a live dashboard: span id ``3333333333333333``
+    persisted as ``df7df7df7df7df7df7df7df7``, and every id in the batch was
+    mangled the same way, so ids never matched the user's own trace ids or any
+    other backend they correlate with.
+    """
+    ct = (content_type or "").lower()
+    if ("application/json" in ct or "application/x-ndjson" in ct) and kind in (
+        "traces", "logs", "metrics",
+    ):
+        from clawmetry.otlp_json import decode as _json_decode
+        return _json_decode(pb_data, kind, content_encoding=content_encoding)
+
+    if _HAS_OTEL_PROTO:
+        factories = {
+            "traces": lambda: trace_service_pb2.ExportTraceServiceRequest(),
+            "logs": lambda: logs_service_pb2.ExportLogsServiceRequest(),
+            "metrics": lambda: metrics_service_pb2.ExportMetricsServiceRequest(),
+        }
+        factory = factories.get(kind)
+        if factory is None:
+            raise ValueError(f"unknown OTLP kind: {kind}")
+        return _otlp_decode(pb_data, factory(), content_encoding, content_type)
+
+    # No protobuf, and this is either a binary body or JSON metrics (whose
+    # mapper still reaches into sum/gauge/histogram point types).
+    from clawmetry.otlp_json import OtlpProtobufUnavailable
+
+    raise OtlpProtobufUnavailable(
+        "this payload needs opentelemetry-proto; OTLP/JSON traces, logs and "
+        "metrics work without it (send Content-Type: application/json)"
+    )
+
+
 def _otlp_service_name_to_agent_type(service_name):
     """Map an OTLP resource ``service.name`` onto a ClawMetry ``agent_type``.
 
@@ -260,7 +337,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.567"
+__version__ = "0.12.748"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -277,16 +354,16 @@ except ImportError:
         pass  # noqa
 
 
-app = Flask(
-    __name__,
-    static_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'static'),
-    template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
-)
-
-# Plugins (e.g. ``clawmetry-pro``) can now register Blueprints on ``app``.
-# Older plugins with ``register_all()`` (no args) keep working unchanged:
-# the loader inspects the signature and only passes ``app`` when accepted.
-_ext_load(app)
+# NOTE: the Flask app is constructed ONCE, further down this module (search
+# for ``app = Flask(``). A second, earlier construction used to live here and
+# silently orphaned every plugin Blueprint: clawmetry-pro registered its
+# routes on the early app, then the later ``app = Flask(...)`` replaced it and
+# every pro-only endpoint (nemoclaw, selfevolve, assets, compliance, ...)
+# 404'd on licensed installs while the OSS 402 stubs skipped registration
+# because ``clawmetry_pro.is_loaded()`` was True. ``_ext_load(app)`` must be
+# invoked on the app instance that actually serves — it is called immediately
+# after the real construction below. Guarded by
+# tests/test_plugin_load_on_served_app.py.
 
 # ── Cross-platform helpers ──────────────────────────────────────────────
 import re as _re
@@ -312,7 +389,11 @@ SESSIONS_DIR = None
 USER_NAME = None
 GATEWAY_URL = None  # e.g. http://localhost:18789
 GATEWAY_TOKEN = None  # Bearer token for /tools/invoke
-CET = timezone(timedelta(hours=1))
+# Removed: a fixed UTC+1 with no DST handling. It was wrong for Europe half
+# the year and for everyone else all year, and it made this file's cost
+# windows disagree with every other cost surface. Use
+# clawmetry.cost_windows.now_local() for windows and .astimezone() for
+# display. Guarded by tests/test_cost_windows_one_definition.py.
 # SSE_MAX_SECONDS moved to helpers/streams.py (re-exported above)
 # Stream-slot caps + state moved to helpers/streams.py (re-exported above)
 # _active_brain_stream_clients moved to helpers/streams.py
@@ -492,7 +573,18 @@ def _fleet_db_path():
     if FLEET_DB_PATH:
         return FLEET_DB_PATH
     if WORKSPACE:
-        return os.path.join(WORKSPACE, ".clawmetry-fleet.db")
+        _ws_db = os.path.join(WORKSPACE, ".clawmetry-fleet.db")
+        # Only honour the workspace-relative path when we can actually write
+        # there. Under launchd the process starts with cwd="/", and the
+        # workspace auto-detect below falls back to os.getcwd(), so WORKSPACE
+        # becomes "/" on any machine with no detectable OpenClaw workspace.
+        # That resolved to "/.clawmetry-fleet.db" -- unwritable on macOS -- and
+        # the dashboard exited(1) on every launchd boot instead of falling
+        # through to the ~/.clawmetry path this function documents as
+        # authoritative. A dev-mode workspace stays honoured; only an
+        # unwritable one is skipped.
+        if os.access(os.path.dirname(_ws_db) or ".", os.W_OK):
+            return _ws_db
     # Always use ~/.clawmetry/fleet.db -- create the dir if the installer
     # has not run yet or this is a fresh pip install without curl | bash.
     preferred_dir = os.path.expanduser("~/.clawmetry")
@@ -619,6 +711,7 @@ def _budget_init_db():
             channels TEXT NOT NULL,
             cooldown_min INTEGER DEFAULT 30,
             enabled INTEGER DEFAULT 1,
+            runtime TEXT DEFAULT 'all',
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
@@ -638,6 +731,23 @@ def _budget_init_db():
         CREATE INDEX IF NOT EXISTS idx_alert_history_rule
             ON alert_history(rule_id, fired_at DESC);
     """)
+    try:
+        # Pre-0.12.639 DBs lack the per-runtime scope column. SQLite has no
+        # IF-NOT-EXISTS for columns; the duplicate-column error is the no-op.
+        db.execute("ALTER TABLE alert_rules ADD COLUMN runtime TEXT DEFAULT 'all'")
+        db.commit()
+    except Exception:
+        pass
+    try:
+        # Pre-0.12.711 DBs drop the cloud-vocabulary ``alert_type`` the
+        # Alerts tab POSTed, keeping only the mapped local ``type``. That
+        # made a rule un-round-trippable: on update we could no longer tell
+        # WHICH cloud type an ``anomaly`` row came from, so the DuckDB mirror
+        # could not be rebuilt and the daemon evaluator stayed blind to it.
+        db.execute("ALTER TABLE alert_rules ADD COLUMN alert_type TEXT DEFAULT ''")
+        db.commit()
+    except Exception:
+        pass
     db.close()
 
 
@@ -702,10 +812,16 @@ def _set_budget_config(updates):
 
 
 def _default_alerts_webhook_config():
+    # NOTE: dashboard.py defines this trio (default/load/save) TWICE; the
+    # LATER definitions (~line 9600) win at import time and carry the full
+    # schema (pagerduty/opsgenie/telegram/min_severity). This early copy is
+    # shadowed dead code kept in sync so nobody "fixes" the wrong one again.
     return {
         "webhook_url": "",
         "slack_webhook_url": "",
         "discord_webhook_url": "",
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
         "cost_spike_alerts": True,
         "agent_error_rate_alerts": True,
         "security_posture_changes": True,
@@ -805,7 +921,7 @@ def _otel_cost_is_fresh(since_ts: float) -> bool:
     return False
 
 
-def _duckdb_cost_since(since_iso: str) -> float:
+def _duckdb_cost_since(since_iso: str) -> Optional[float]:
     """Sum billable-turn USD over the ``events`` table since ``since_iso``.
 
     Reuses the v3-aware helpers from ``clawmetry.local_store`` so every
@@ -842,7 +958,13 @@ def _duckdb_cost_since(since_iso: str) -> float:
             store = local_store.get_store(read_only=True)
             rows = store.query_aggregates(since=since_iso)
         except Exception:
-            return 0.0
+            # A read that FAILED is not a window that cost $0.00. Returning
+            # 0.0 here made a transient daemon-proxy timeout or writer-lock
+            # contention indistinguishable from a genuinely idle window, and
+            # the caller then published that zero as fact. Signal absence.
+            return None
+    if rows is None:
+        return None
     total = 0.0
     for r in rows or []:
         try:
@@ -866,19 +988,11 @@ def _get_budget_status():
     global _budget_paused, _budget_paused_at, _budget_paused_reason
     config = _get_budget_config()
     now = time.time()
-    today_start = (
-        datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    )
-    week_start = (
-        (datetime.now() - timedelta(days=datetime.now().weekday()))
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
-    month_start = (
-        datetime.now()
-        .replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
+    # Same calendar-local windows every other cost surface uses. Sampling
+    # datetime.now() three separate times could also straddle midnight.
+    from clawmetry.cost_windows import window_start_epochs
+
+    today_start, week_start, month_start = window_start_epochs()
 
     daily_spent = 0.0
     weekly_spent = 0.0
@@ -910,10 +1024,18 @@ def _get_budget_status():
             duck_daily   = _duckdb_cost_since(daily_iso)
             duck_weekly  = _duckdb_cost_since(weekly_iso)
             duck_monthly = _duckdb_cost_since(monthly_iso)
+            # These are three INDEPENDENT reads. Pre-fix each one degraded to
+            # 0.0 on failure, so a transient timeout on the daily call while
+            # the monthly call succeeded published daily=$0.00 next to a real
+            # month -- a triple mixing fact and failure, flipping back on the
+            # next poll. That is the "numbers change every few seconds" a
+            # customer reported on 2026-08-22. Promote all three or none.
+            _duck = (duck_daily, duck_weekly, duck_monthly)
+            _duck_ok = all(v is not None for v in _duck)
             # Only switch sources when DuckDB has *something* to report.
             # An empty store on a brand-new install should look the same as
             # an empty OTLP buffer (daily_spent=0), not crash the evaluator.
-            if duck_monthly > 0 or duck_weekly > 0 or duck_daily > 0:
+            if _duck_ok and any(v > 0 for v in _duck):
                 daily_spent   = duck_daily
                 weekly_spent  = duck_weekly
                 monthly_spent = duck_monthly
@@ -2063,6 +2185,10 @@ def _budget_monitor_loop():
                 threshold = rule["threshold"]
                 channels = json.loads(rule.get("channels", '["banner"]'))
                 cooldown = rule.get("cooldown_min", 30) * 60
+                # Per-runtime scope: 'all' (node-wide) or one runtime id.
+                # Scoped rules read per-runtime slices from DuckDB via the
+                # daemon proxy; node-wide rules keep the legacy aggregates.
+                rt_scope = str(rule.get("runtime") or "all").lower()
 
                 last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                 if now - last_fired < cooldown:
@@ -2072,8 +2198,12 @@ def _budget_monitor_loop():
                 msg = ""
 
                 if rtype == "threshold":
-                    if status["daily_spent"] >= threshold:
-                        msg = f"Daily spending ${status['daily_spent']:.2f} exceeded threshold ${threshold:.2f}"
+                    _spent = status["daily_spent"]
+                    if rt_scope != "all":
+                        _spent = _runtime_daily_spend(rt_scope)
+                    if _spent is not None and _spent >= threshold:
+                        _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
+                        msg = f"Daily spending{_scope_lbl} ${_spent:.2f} exceeded threshold ${threshold:.2f}"
                         fired = True
                 elif rtype == "spike":
                     # Spike: cost in last hour > threshold x average hourly rate
@@ -2097,20 +2227,112 @@ def _budget_monitor_loop():
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
                 elif rtype == "token_spike":
-                    try:
-                        vel = _compute_velocity_status()
-                    except Exception:
-                        vel = None
-                    if vel:
-                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
-                        if tokens_per_min >= threshold:
-                            sid = vel.get("triggeringSession") or ""
-                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                    if rt_scope != "all":
+                        _tpm = _runtime_tokens_per_min(rt_scope)
+                        if _tpm is not None and _tpm >= threshold:
                             msg = (
-                                f"Token spike: {int(tokens_per_min):,} tokens/min "
-                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                                f"Token spike [{rt_scope}]: {int(_tpm):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min)"
                             )
                             fired = True
+                    else:
+                        try:
+                            vel = _compute_velocity_status()
+                        except Exception:
+                            vel = None
+                        if vel:
+                            tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                            if tokens_per_min >= threshold:
+                                sid = vel.get("triggeringSession") or ""
+                                sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                                msg = (
+                                    f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                    f"(threshold: {int(threshold):,}/min){sid_hint}"
+                                )
+                                fired = True
+                elif rtype == "agent_down":
+                    # "Agent offline > N min" (UI alert_type ``node_offline``).
+                    # Founder 2026-08-15: this rtype has been accepted by the
+                    # POST validator since the self-hosted bridge landed but
+                    # never had a branch here, so every rule created from the
+                    # tab's "Agent offline" row was a silent no-op.
+                    #
+                    # Signal is the most recent REAL agent event in DuckDB —
+                    # not OTLP (the hardcoded ``agent_down`` monitor above
+                    # keys off ``_otel_last_received``, which stays 0 on the
+                    # many installs without ``[otel]``, so it never fires
+                    # there either). ``exclude_daemon`` keeps ClawMetry's own
+                    # diagnostics from masking a dead agent as "alive".
+                    try:
+                        from datetime import datetime as _dt2, timezone as _tz2
+                        from routes.local_query import local_store_via_daemon
+                        _rows = local_store_via_daemon(
+                            "query_events", limit=1, exclude_daemon=True,
+                            **({"runtime": rt_scope} if rt_scope != "all" else {}),
+                        ) or []
+                        _last_iso = (_rows[0].get("ts") or "") if _rows else ""
+                        if _last_iso:
+                            _last = _dt2.fromisoformat(
+                                str(_last_iso).replace("Z", "+00:00")
+                            )
+                            if _last.tzinfo is None:
+                                _last = _last.replace(tzinfo=_tz2.utc)
+                            _idle_min = (
+                                _dt2.now(_tz2.utc) - _last
+                            ).total_seconds() / 60.0
+                            if _idle_min >= threshold:
+                                _scope_lbl = (
+                                    "" if rt_scope == "all" else f" [{rt_scope}]"
+                                )
+                                msg = (
+                                    f"Agent offline{_scope_lbl}: no activity for "
+                                    f"{int(_idle_min)} min "
+                                    f"(threshold: {int(threshold)} min)"
+                                )
+                                fired = True
+                    except Exception:
+                        pass
+                elif rtype == "session_cost":
+                    # "Session cost > $N" (UI alert_type ``session_cost``).
+                    # Previously mapped onto ``threshold``, which evaluates
+                    # DAILY spend — so a $5 per-session rule actually fired on
+                    # the whole day's total. This checks the costliest single
+                    # session in the last 24h, which is what the row promises.
+                    #
+                    # Cost is API-equivalent (token split x API rates), never
+                    # the user's invoice — say so, per the cost-copy honesty
+                    # pass (a Max-plan subscriber pays $0 incremental).
+                    try:
+                        from datetime import datetime as _dt3, timedelta as _td3, timezone as _tz3
+                        from routes.local_query import local_store_via_daemon
+                        _since = (_dt3.now(_tz3.utc) - _td3(hours=24)).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        _sessions = local_store_via_daemon(
+                            "query_sessions", since=_since, limit=500,
+                        ) or []
+                        _worst = None
+                        for _s in _sessions:
+                            _sid = _s.get("session_id") or ""
+                            if rt_scope != "all" and _session_runtime_of(_sid) != rt_scope:
+                                continue
+                            try:
+                                _c = float(_s.get("cost_usd") or 0)
+                            except (TypeError, ValueError):
+                                continue
+                            if _c >= threshold and (_worst is None or _c > _worst[1]):
+                                _worst = (_sid, _c)
+                        if _worst:
+                            _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
+                            msg = (
+                                f"Session cost{_scope_lbl}: session "
+                                f"{_worst[0][:12]} reached ${_worst[1]:.2f} "
+                                f"(threshold: ${threshold:.2f}) - API-equivalent, "
+                                f"not a billed amount"
+                            )
+                            fired = True
+                    except Exception:
+                        pass
                 elif rtype == "unproductive_burn":
                     # Issue #1707 — forward-progress signal. Fires when any
                     # session burns >= ``threshold`` tokens per state delta
@@ -2128,6 +2350,9 @@ def _budget_monitor_loop():
                         worst = None
                         for r in rows:
                             try:
+                                if rt_scope != "all" and _session_runtime_of(
+                                        r.get("session_id") or "") != rt_scope:
+                                    continue
                                 if float(r.get("ratio") or 0) >= float(threshold):
                                     if worst is None or r["ratio"] > worst["ratio"]:
                                         worst = r
@@ -2260,13 +2485,10 @@ def _get_dp_attrs(dp):
 
 
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP metrics protobuf/JSON and store relevant data."""
-    req = _otlp_decode(
-        pb_data,
-        metrics_service_pb2.ExportMetricsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    """DEAD COPY — shadowed. dashboard.py defines this twice and the SECOND
+    definition (search for "Claude Code native metrics (WO-57)") is the one
+    that runs. Edit that one."""
+    req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -2491,7 +2713,9 @@ def _hex(b):
 
 
 def _otel_to_row(span, resource_attrs):
-    """Translate one OTel proto Span (plus its resource attributes) to the
+    """DEAD COPY — shadowed by the second definition below; edit that one.
+
+    Translate one OTel proto Span (plus its resource attributes) to the
     dict shape :func:`clawmetry.local_store.LocalStore.ingest_span` expects.
 
     Issue #1007 / epic #1006. Maps common OTel attribute conventions onto
@@ -2534,6 +2758,18 @@ def _otel_to_row(span, resource_attrs):
     attrs = {}
     for attr in span.attributes:
         attrs[attr.key] = _otel_attr_value(attr.value)
+
+    # deployment.environment is a RESOURCE attribute (deployment.environment
+    # .name since semconv 1.27; the bare key before that), so it used to be
+    # dropped with the rest of the resource. Keep it on the span's attribute
+    # blob so a dev/tst/prod fleet (AgentCore's normal shape) stays separable
+    # after ingest; the session materializer lifts it onto session metadata.
+    if "deployment.environment" not in attrs:
+        for _env_key in ("deployment.environment.name", "deployment.environment"):
+            _env_val = attrs.get(_env_key) or resource_attrs.get(_env_key)
+            if _env_val not in (None, ""):
+                attrs["deployment.environment"] = str(_env_val)
+                break
 
     # Time columns. OTel proto carries unix-nano; we store unix-seconds in
     # ``start_ts`` / ``end_ts`` (DOUBLE) so chart libs can format them
@@ -2765,7 +3001,9 @@ def _otel_to_row(span, resource_attrs):
 
 
 def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP traces protobuf and extract relevant span data.
+    """DEAD COPY — shadowed by the second definition below; edit that one.
+
+    Decode OTLP traces protobuf and extract relevant span data.
 
     Two-path design (issue #1007): we still feed the in-memory metrics
     cache (the live dashboard's hot path — sub-second tiles for tokens /
@@ -2774,12 +3012,12 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     query historical traces. The DuckDB write is best-effort wrapped in
     try/except — a write failure must NOT break the metrics cache path.
     """
-    req = _otlp_decode(
-        pb_data,
-        trace_service_pb2.ExportTraceServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "traces", content_encoding, content_type)
+
+    # session_id -> deployment.environment (or None) for every non-OpenClaw
+    # span in this batch. Feeds ONE materialize_otlp_sessions call at the end
+    # so span-only apps (AgentCore, OpenLLMetry) get a sessions row (WO-55).
+    _otlp_sessions_seen = {}
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -2900,7 +3138,17 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         # real install). put_span is allowlisted in
                         # routes/local_query._DAEMON_METHODS so the daemon
                         # executes the real write.
-                        _store.put_span(span=_otel_to_row(span, resource_attrs))
+                        _row = _otel_to_row(span, resource_attrs)
+                        _store.put_span(span=_row)
+                        # Track for session materialization (WO-55). OpenClaw
+                        # sessions come from transcripts; only foreign apps
+                        # need a span-derived sessions row.
+                        _sid = _row.get("session_id")
+                        if _sid and (_row.get("agent_type") or "") != "openclaw":
+                            _env = (_row.get("attributes") or {}).get(
+                                "deployment.environment")
+                            if _env or str(_sid) not in _otlp_sessions_seen:
+                                _otlp_sessions_seen[str(_sid)] = _env
                     except Exception as e:
                         try:
                             import logging as _lg
@@ -2910,9 +3158,32 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         except Exception:
                             pass
 
+    # One materialization call per export batch (not per span — get_store()
+    # here can be an HTTP proxy to the daemon; FLYWHEEL 1e). Recomputes the
+    # touched sessions from their spans and upserts sessions rows so the
+    # Sessions tab and runtime switcher show a span-only OTLP app (WO-55).
+    if _store is not None and _otlp_sessions_seen:
+        try:
+            _store.materialize_otlp_sessions(
+                session_ids=sorted(_otlp_sessions_seen),
+                environments={k: v for k, v in _otlp_sessions_seen.items() if v},
+            )
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "materialize_otlp_sessions failed: %s", e
+                )
+            except Exception:
+                pass
+
 
 def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
+    """DEAD COPY — shadowed. dashboard.py defines this twice and the SECOND
+    definition wins (search for "Daemon-free OTLP intake"). Edits here change
+    nothing at runtime; make them in the live copy.
+
+    Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
 
     Claude Code (and other runtimes) export their per-turn event stream as OTel
     *logs* — ``event_name`` like ``claude_code.api_request`` / ``tool_decision``
@@ -2922,12 +3193,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
     /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
     Best-effort: a bad record never breaks the batch.
     """
-    req = _otlp_decode(
-        pb_data,
-        logs_service_pb2.ExportLogsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "logs", content_encoding, content_type)
 
     def _f(attrs, *keys):
         for k in keys:
@@ -3098,56 +3364,6 @@ def _safe_date_ts(date_str):
         return 0
 
 
-def validate_configuration():
-    """Validate the detected configuration and provide helpful feedback for new users."""
-    warnings = []
-    tips = []
-
-    # Check if workspace looks like a real OpenClaw setup
-    workspace_files = ["SOUL.md", "AGENTS.md", "MEMORY.md", "memory"]
-    found_files = []
-    for f in workspace_files:
-        path = os.path.join(WORKSPACE, f)
-        if os.path.exists(path):
-            found_files.append(f)
-
-    if not found_files:
-        warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
-        tips.append(
-            "[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace"
-        )
-
-    # Check if log directory exists and has recent logs
-    if not os.path.exists(LOG_DIR):
-        warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
-    else:
-        # Check for recent log files
-        log_pattern = os.path.join(LOG_DIR, "*claw*.log")
-        recent_logs = [
-            f
-            for f in glob.glob(log_pattern)
-            if os.path.getmtime(f) > time.time() - 86400
-        ]  # Last 24h
-        if not recent_logs:
-            warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
-            tips.append("[tip] Start your OpenClaw agent to see real-time data")
-
-    # Check if sessions directory exists
-    if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
-        warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
-        tips.append("[tip] Sessions will appear when your agent starts conversations")
-
-    # Check if OpenClaw binary is available
-    try:
-        subprocess.run(["openclaw", "--version"], capture_output=True, timeout=10)
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("[warn]  OpenClaw binary not found in PATH")
-        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
-
-    return warnings, tips
-
-
 def _auto_detect_data_dir():
     """Auto-detect OpenClaw data directory, including Docker volume mounts."""
     # Standard locations
@@ -3297,7 +3513,11 @@ def detect_config(args=None):
                 WORKSPACE = c
                 break
         if not WORKSPACE:
-            WORKSPACE = os.getcwd()
+            # "/" is not a workspace. launchd starts agents with cwd="/", so
+            # this last-resort guess silently poisoned every workspace-relative
+            # state path (see _fleet_db_path) on an auto-started install.
+            _cwd = os.getcwd()
+            WORKSPACE = _cwd if _cwd not in ("/", "") else os.path.expanduser("~")
 
     MEMORY_DIR = os.path.join(WORKSPACE, "memory")
 
@@ -3351,6 +3571,122 @@ def detect_config(args=None):
         _init_data_provider()
     except Exception:
         pass
+
+
+# Cache for _sync_scope_runtimes(). The sync banner polls, and adapter
+# detect() calls glob session dirs (~3.3s measured on a busy machine), so this
+# must never run inline in a request handler. 60s is well under how fast a user
+# installs a new agent.
+_SYNC_SCOPE_CACHE = {"ts": 0.0, "runtimes": [], "running": False}
+_SYNC_SCOPE_LOCK = threading.Lock()
+
+
+def _sync_scope_runtimes():
+    """Cached runtime list for the sync banner, served off the request path.
+
+    The first call returns ``[]`` (banner shows the runtime-neutral "Syncing
+    your AI agents") and kicks a background refresh; the next poll has the real
+    list. Never blocks, never raises.
+    """
+    with _SYNC_SCOPE_LOCK:
+        stale = time.time() - float(_SYNC_SCOPE_CACHE.get("ts") or 0) >= 60
+        if stale and not _SYNC_SCOPE_CACHE["running"]:
+            _SYNC_SCOPE_CACHE["running"] = True
+            threading.Thread(target=_sync_scope_refresh_safe, daemon=True).start()
+        return _SYNC_SCOPE_CACHE["runtimes"]
+
+
+def _sync_scope_refresh_safe():
+    """Thread target: refresh the cache, and always clear the in-flight flag.
+
+    Without this a single unexpected raise would leave ``running`` True and
+    wedge the cache at its last value for the life of the process.
+    """
+    try:
+        _sync_scope_refresh()
+    except Exception as _e:
+        with _SYNC_SCOPE_LOCK:
+            _SYNC_SCOPE_CACHE["ts"] = time.time()
+            _SYNC_SCOPE_CACHE["running"] = False
+        print(f"[sync-scope] runtime detection failed: {_e}")
+
+
+def _sync_scope_refresh():
+    """Detect which agent runtimes actually have sessions on this machine.
+
+    Powers the sync banner title so it names the real runtimes ("Syncing your
+    Claude Code data") instead of asserting OpenClaw on a machine that never
+    had it. Pure filesystem detection: no DuckDB, no writer lock, never raises.
+
+    Same honesty rule as ``_detect_runtimes_for_heartbeat``: a runtime is only
+    named when it has **sessions on disk**. Presence alone is not enough, the
+    Cursor IDE creates its state dir whether or not the agent was ever used,
+    and naming a runtime we aren't actually syncing is the same lie this
+    function exists to remove.
+
+    Returns ``[{"id": ..., "label": ...}, ...]``; empty when nothing qualifies.
+    """
+    found = {}   # id -> {"label": str, "sessions": int}
+
+    def _put(rid, label, sessions):
+        rid = str(rid or "").strip().lower()
+        if not rid:
+            return
+        cur = found.get(rid)
+        if cur is None or int(sessions or 0) > cur["sessions"]:
+            found[rid] = {"label": label or (cur or {}).get("label") or rid,
+                          "sessions": int(sessions or 0)}
+
+    # OpenClaw / NemoClaw ship as adapters in OSS. Prefer the live registry
+    # (plugins may have overridden an adapter); fall back to the built-ins,
+    # because registration happens at app creation and can be empty here.
+    _oss = []
+    try:
+        from clawmetry.adapters import registry as _reg
+        _oss = list(_reg.detect_all())
+    except Exception:
+        pass
+    if not _oss:
+        try:
+            from clawmetry.adapters.openclaw import OpenClawAdapter as _OC
+            from clawmetry.adapters.nemo import NemoClawAdapter as _NC
+            for _cls in (_OC, _NC):
+                try:
+                    _oss.append(_cls().detect())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    for _r in _oss:
+        if getattr(_r, "detected", False):
+            _put(getattr(_r, "name", ""), getattr(_r, "display_name", ""),
+                 getattr(_r, "session_count", 0))
+
+    # Every other runtime. The lite detector is free and always present; the
+    # family adapters are more accurate but live in clawmetry-pro, so they
+    # return nothing in OSS. Merge both, keep the higher count per runtime.
+    try:
+        from clawmetry import sync as _sync_mod
+        try:
+            for _r in (_sync_mod._detect_runtimes_lite() or []):
+                _put(_r.get("id"), _r.get("label"), _r.get("sessions"))
+        except Exception:
+            pass
+        try:
+            for _r in (_sync_mod._detect_family_runtimes() or []):
+                _put(_r.get("name"), _r.get("displayName"), _r.get("sessionCount"))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    rows = [{"id": k, "label": v["label"]}
+            for k, v in found.items() if v["sessions"] > 0]
+    with _SYNC_SCOPE_LOCK:
+        _SYNC_SCOPE_CACHE["ts"] = time.time()
+        _SYNC_SCOPE_CACHE["runtimes"] = rows
+        _SYNC_SCOPE_CACHE["running"] = False
+    return rows
 
 
 def _detect_workspace_from_config():
@@ -3510,7 +3846,14 @@ def _detect_disk_mounts():
 
 
 def get_public_ip():
-    """Get the machine's public IP address (useful for cloud/VPS users)."""
+    """Get the machine's public IP address (useful for cloud/VPS users).
+
+    Shadowed by the second definition further down this file, which is the one
+    that actually runs. Gated identically so the dead copy cannot reintroduce
+    an ungated third-party call if the definitions are ever reordered.
+    """
+    if _egress_suppressed():
+        return None
     try:
         import urllib.request
 
@@ -3543,5040 +3886,6 @@ def get_local_ip():
 
 # ── HTML Template ───────────────────────────────────────────────────────
 
-DASHBOARD_HTML = r"""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ClawMetry</title>
-<link rel="icon" href="/favicon.ico" type="image/x-icon">
-<link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-  :root {
-    /* Light theme (default) */
-    --bg-primary: #f5f7fb;
-    --bg-secondary: #ffffff;
-    --bg-tertiary: #ffffff;
-    --bg-hover: #f3f5f8;
-    --bg-accent: #0f6fff;
-    --border-primary: #e4e8ee;
-    --border-secondary: #edf1f5;
-    --text-primary: #101828;
-    --text-secondary: #344054;
-    --text-tertiary: #475467;
-    --text-muted: #667085;
-    --text-faint: #98a2b3;
-    --text-accent: #0f6fff;
-    --text-link: #0f6fff;
-    --text-success: #15803d;
-    --text-warning: #b45309;
-    --text-error: #b42318;
-    --bg-success: #ecfdf3;
-    --bg-warning: #fffaeb;
-    --bg-error: #fef3f2;
-    --log-bg: #f7f9fc;
-    --file-viewer-bg: #ffffff;
-    --button-bg: #f3f5f8;
-    --button-hover: #e9eef5;
-    --card-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.1);
-    --card-shadow-hover: 0 10px 18px rgba(16, 24, 40, 0.08), 0 2px 6px rgba(16, 24, 40, 0.06);
-  }
-
-  [data-theme="dark"] {
-    /* Dark theme */
-    --bg-primary: #0b0f14;
-    --bg-secondary: #121820;
-    --bg-tertiary: #151d28;
-    --bg-hover: #1b2430;
-    --bg-accent: #3b82f6;
-    --border-primary: #273243;
-    --border-secondary: #1f2937;
-    --text-primary: #e6edf5;
-    --text-secondary: #c1cad6;
-    --text-tertiary: #98a2b3;
-    --text-muted: #7c8a9d;
-    --text-faint: #667085;
-    --text-accent: #60a5fa;
-    --text-link: #7dd3fc;
-    --text-success: #4ade80;
-    --text-warning: #fbbf24;
-    --text-error: #f87171;
-    --bg-success: #10291c;
-    --bg-warning: #2a2314;
-    --bg-error: #341717;
-    --log-bg: #0f141c;
-    --file-viewer-bg: #111722;
-    --button-bg: #1d2632;
-    --button-hover: #263344;
-    --card-shadow: 0 1px 3px rgba(0,0,0,0.4);
-    --card-shadow-hover: 0 8px 18px rgba(0,0,0,0.45);
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease; }
-  body { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, sans-serif; background: radial-gradient(1200px 600px at 70% -20%, rgba(15,111,255,0.06), transparent 55%), var(--bg-primary); color: var(--text-primary); min-height: 100vh; font-size: 14px; font-weight: 500; line-height: 1.5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-
-  .nav { background: color-mix(in srgb, var(--bg-secondary) 90%, transparent); border-bottom: 1px solid var(--border-primary); padding: 8px 16px; display: flex; align-items: center; gap: 12px; overflow: visible; box-shadow: 0 1px 2px rgba(16,24,40,0.06); position: sticky; top: 0; z-index: 10; backdrop-filter: blur(8px); }
-  .nav h1 { font-size: 18px; font-weight: 700; color: var(--text-primary); white-space: nowrap; letter-spacing: -0.3px; }
-  .nav h1 span { color: var(--text-accent); }
-  .version-badge { font-size: 11px; color: var(--text-secondary); background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 2px 8px; white-space: nowrap; cursor: default; transition: all 0.2s; user-select: none; }
-  .version-badge.update-available { color: #22c55e; border-color: rgba(34,197,94,0.4); cursor: pointer; }
-  .version-badge.update-available:hover { background: rgba(34,197,94,0.1); }
-  .version-badge.updating { color: #f59e0b; border-color: rgba(245,158,11,0.4); cursor: wait; }
-  .theme-toggle { background: var(--button-bg); border: none; border-radius: 8px; padding: 8px 12px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; margin-left: 12px; transition: all 0.15s; box-shadow: var(--card-shadow); }
-  .theme-toggle:hover { background: var(--button-hover); color: var(--text-secondary); }
-  .theme-toggle:active { transform: scale(0.98); }
-  
-  /* === Zoom Controls === */
-  .zoom-controls { display: flex; align-items: center; gap: 4px; margin-left: 12px; }
-  .zoom-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; width: 28px; height: 28px; color: var(--text-tertiary); cursor: pointer; font-size: 16px; font-weight: 700; display: flex; align-items: center; justify-content: center; transition: all 0.15s; }
-  .zoom-btn:hover { background: var(--button-hover); color: var(--text-secondary); }
-  .zoom-level { font-size: 11px; color: var(--text-muted); font-weight: 600; min-width: 36px; text-align: center; }
-  .nav-tabs { display: flex; gap: 4px; margin-left: auto; position: relative; }
-  /* Brain tab */
-  /* Wrap by default so the turn-summary badges (steps/LLM/tools/duration)
-     live on their own row below the detail, instead of squeezing the
-     detail to ~40% of viewport. */
-  .brain-event { display:flex; align-items:flex-start; gap:10px; padding:5px 0; border-bottom:1px solid var(--border); font-size:12px; font-family:monospace; flex-wrap:wrap; cursor:pointer; transition:background 0.15s; }
-  .brain-event:hover { background:rgba(255,255,255,0.02); }
-  .brain-event.expanded { flex-wrap:wrap; }
-  .brain-event.expanded .brain-detail { white-space:pre-wrap; overflow:visible; text-overflow:unset; }
-  .brain-event > .brain-turn-summary { flex-basis: 100%; width: 100%; margin-left: 80px; margin-top: 4px; }
-  .brain-meta { display:contents; } /* Desktop: render children directly in brain-event flex row */
-  .brain-time { color:var(--text-muted); min-width:70px; }
-  .brain-source { min-width:120px; max-width:200px; font-weight:600; word-break:break-all; flex-shrink:0; }
-  .brain-type { padding:1px 6px; border-radius:3px; font-size:10px; font-weight:700; min-width:60px; text-align:center; display:inline-block; }
-  .badge-spawn { background:rgba(168,85,247,0.2); color:#a855f7; }
-  .badge-shell { background:rgba(234,179,8,0.2); color:#eab308; }
-  .badge-read { background:rgba(59,130,246,0.2); color:#3b82f6; }
-  .badge-write { background:rgba(249,115,22,0.2); color:#f97316; }
-  .badge-browser { background:rgba(6,182,212,0.2); color:#06b6d4; }
-  .badge-msg { background:rgba(236,72,153,0.2); color:#ec4899; }
-  .badge-search { background:rgba(20,184,166,0.2); color:#14b8a6; }
-  .badge-done { background:rgba(34,197,94,0.2); color:#22c55e; }
-  .badge-error { background:rgba(239,68,68,0.2); color:#ef4444; }
-  .badge-tool { background:rgba(148,163,184,0.2); color:#94a3b8; }
-  .brain-detail { color:var(--text-secondary); flex:1; min-width:0; white-space:pre-wrap; word-break:break-word; overflow-wrap:anywhere; }
-  .brain-view-toggle { display:flex; gap:6px; margin-bottom:12px; }
-  .brain-view-btn { padding:4px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text-muted); font-size:11px; font-weight:600; cursor:pointer; }
-  .brain-view-btn.active { border-color:#a855f7; background:rgba(168,85,247,0.2); color:#a855f7; }
-  .brain-graph-container { width:100%; height:500px; background:var(--bg-secondary); border-radius:8px; border:1px solid var(--border); overflow:hidden; }
-  #brain-graph-canvas { width:100%; height:500px; display:block; }
-    .nav-tab { padding: 8px 16px; border-radius: 8px; background: transparent; border: 1px solid transparent; color: var(--text-tertiary); cursor: pointer; font-size: 13px; font-weight: 600; white-space: nowrap; transition: all 0.2s ease; position: relative; }
-    .nav-tab-more { position: relative; }
-    .advanced-tabs-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 4px; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.3); min-width: 140px; margin-top: 4px; display: flex; flex-direction: column; }
-    .advanced-tabs-dropdown .nav-tab { display: block; width: 100%; text-align: left; border-radius: 6px; margin: 2px 0; }
-  .nav-tab:hover { background: var(--bg-hover); color: var(--text-secondary); }
-  .nav-tab.active { background: var(--bg-accent); color: #ffffff; border-color: var(--bg-accent); }
-  .nav-tab:active { transform: scale(0.98); }
-  .time-btn { padding: 4px 12px; border-radius: 6px; background: var(--bg-secondary); border: 1px solid var(--border-primary); color: var(--text-tertiary); cursor: pointer; font-size: 12px; font-weight: 600; transition: all 0.2s; }
-  .time-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
-  .time-btn.active { background: var(--bg-accent); color: #fff; border-color: var(--bg-accent); }
-
-  .page { display: none; padding: 16px 20px; max-width: 1200px; margin: 0 auto; }
-  #page-flow { padding: 0; max-width: 100%; }
-  #page-overview { max-width: 1600px; padding: 8px 12px; }
-  .page.active { display: block; }
-  body.booting #zoom-wrapper { opacity: 0; pointer-events: none; transform: translateY(4px); }
-  #zoom-wrapper { opacity: 1; transition: opacity 0.28s ease, transform 0.28s ease; }
-  .boot-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: radial-gradient(1000px 540px at 70% -20%, rgba(15,111,255,0.18), transparent 60%), var(--bg-primary);
-    transition: opacity 0.28s ease;
-  }
-  .boot-overlay.hide { opacity: 0; pointer-events: none; }
-  .boot-card {
-    width: min(540px, calc(100vw - 32px));
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--bg-secondary) 92%, transparent);
-    border: 1px solid var(--border-primary);
-    box-shadow: var(--card-shadow-hover);
-    padding: 18px 18px 14px;
-  }
-  .boot-title { font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 4px; }
-  .boot-sub { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
-  .boot-spinner {
-    width: 28px; height: 28px; border-radius: 50%;
-    border: 2px solid var(--border-primary); border-top-color: var(--bg-accent);
-    animation: spin 0.8s linear infinite; margin-bottom: 10px;
-  }
-  .boot-steps { display: grid; gap: 8px; }
-  .boot-step {
-    display: flex; align-items: center; gap: 8px; padding: 8px 10px;
-    border: 1px solid var(--border-secondary); border-radius: 10px; background: var(--bg-tertiary);
-    font-size: 12px; color: var(--text-secondary);
-  }
-  .boot-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
-  .boot-step.loading .boot-dot { background: #f59e0b; box-shadow: 0 0 0 4px rgba(245,158,11,0.18); }
-  .boot-step.done .boot-dot { background: #22c55e; box-shadow: 0 0 0 4px rgba(34,197,94,0.16); }
-  .boot-step.fail .boot-dot { background: #ef4444; box-shadow: 0 0 0 4px rgba(239,68,68,0.16); }
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 16px; }
-  .card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 20px; box-shadow: var(--card-shadow); transition: transform 0.2s ease, box-shadow 0.2s ease; }
-  .card-title { font-size: 12px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
-  .card-title .icon { font-size: 16px; }
-  .card-value { font-size: 32px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.5px; }
-  .card-sub { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
-
-  .stat-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border-secondary); }
-  .stat-row:last-child { border-bottom: none; }
-  .stat-label { color: var(--text-tertiary); font-size: 13px; }
-  .stat-val { color: var(--text-primary); font-size: 13px; font-weight: 600; }
-  .stat-val.green { color: var(--text-success); }
-  .stat-val.yellow { color: var(--text-warning); }
-  .stat-val.red { color: var(--text-error); }
-
-  .session-item { padding: 12px; border-bottom: 1px solid var(--border-secondary); }
-  .session-item:last-child { border-bottom: none; }
-  .session-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
-  .session-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
-  .session-meta span { display: flex; align-items: center; gap: 4px; }
-  .session-anomaly { color: #f59e0b; font-size: 14px; margin-left: 6px; cursor: help; }
-
-  .cron-item { padding: 12px; border-bottom: 1px solid var(--border-secondary); }
-  .cron-item:last-child { border-bottom: none; }
-  .cron-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
-  .cron-schedule { font-size: 12px; color: var(--text-accent); margin-top: 2px; font-family: 'SF Mono', 'Fira Code', monospace; }
-  .cron-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-  .cron-status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .cron-status.ok { background: var(--bg-success); color: var(--text-success); }
-  .cron-status.error { background: var(--bg-error); color: var(--text-error); }
-  .cron-status.pending { background: var(--bg-warning); color: var(--text-warning); }
-  .cron-status.no-data { background: rgba(107,114,128,0.18); color: #9ca3af; cursor: help; }
-  .cron-status.stale { background: rgba(245,158,11,0.18); color: #f59e0b; cursor: help; }
-  .cron-status.scheduled { background: rgba(96,165,250,0.18); color: #60a5fa; cursor: help; }
-
-  /* Cron view tabs (Active / Paused / Calendar) */
-  .cron-view-tabs { display: flex; gap: 4px; margin-bottom: 10px; padding: 4px; background: var(--bg-secondary); border-radius: 10px; width: fit-content; }
-  .cron-view-tab { background: transparent; border: none; color: var(--text-muted); padding: 6px 14px; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s, color 0.15s; }
-  .cron-view-tab:hover { color: var(--text-primary); }
-  .cron-view-tab.active { background: var(--bg-tertiary); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-  .cron-view-count { font-weight: 500; color: var(--text-muted); margin-left: 4px; font-size: 11px; }
-  .cron-view-tab.active .cron-view-count { color: var(--text-secondary); }
-  .cron-cal-section { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 8px 0 8px; display: flex; align-items: center; gap: 6px; }
-  .cron-cal-day { background: var(--bg-secondary); border-radius: 8px; margin-bottom: 8px; padding: 8px 12px; }
-  .cron-cal-daylabel { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 600; }
-  .cron-cal-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,0.04); font-size: 13px; }
-  .cron-cal-row:nth-child(2) { border-top: none; }
-  .cron-cal-time { font-family: 'SF Mono','Fira Code',monospace; color: var(--text-accent); font-size: 12px; min-width: 56px; }
-  .cron-cal-status { width: 18px; text-align: center; }
-  .cron-cal-name { color: var(--text-primary); font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cron-cal-sched { font-size: 11px; color: var(--text-muted); font-family: 'SF Mono','Fira Code',monospace; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-  /* Cron error info & fix */
-  .cron-error-actions { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; vertical-align: middle; }
-  .cron-info-icon { cursor: pointer; font-size: 14px; color: var(--text-muted); transition: color 0.15s; user-select: none; }
-  .cron-info-icon:hover { color: var(--text-accent); }
-  .cron-fix-btn { background: #f59e0b; color: #fff; border: none; border-radius: 6px; padding: 2px 10px; font-size: 11px; font-weight: 600; cursor: pointer; transition: background 0.15s; white-space: nowrap; }
-  .cron-fix-btn:hover { background: #d97706; }
-  .cron-error-popover { position: fixed; z-index: 1000; background: #1a1a2e; color: #e0e0e0; border: 1px solid #333; border-radius: 10px; padding: 14px 18px; max-width: 400px; font-size: 12px; line-height: 1.6; box-shadow: 0 8px 30px rgba(0,0,0,0.5); pointer-events: auto; }
-  .cron-error-popover .ep-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #888; margin-bottom: 2px; }
-  .cron-error-popover .ep-value { color: #fca5a5; margin-bottom: 10px; word-break: break-word; }
-  .cron-error-popover .ep-value.ts { color: #93c5fd; }
-  .cron-error-popover .ep-close { position: absolute; top: 8px; right: 12px; cursor: pointer; color: #888; font-size: 16px; }
-  .cron-error-popover .ep-close:hover { color: #fff; }
-  .cron-toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #16a34a; color: #fff; padding: 10px 24px; border-radius: 8px; font-size: 13px; font-weight: 600; z-index: 2000; box-shadow: 0 4px 16px rgba(0,0,0,0.3); transition: opacity 0.3s; }
-  .cron-confirm-modal { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; }
-  .cron-confirm-box { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 24px; max-width: 360px; text-align: center; box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
-  .cron-confirm-box p { margin-bottom: 16px; font-size: 14px; color: var(--text-primary); }
-  .cron-confirm-box button { padding: 8px 20px; border-radius: 8px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; margin: 0 6px; }
-  .cron-confirm-box .confirm-yes { background: #f59e0b; color: #fff; }
-  .cron-confirm-box .confirm-yes:hover { background: #d97706; }
-  .cron-confirm-box .confirm-no { background: var(--button-bg); color: var(--text-secondary); }
-  .cron-confirm-box .confirm-no:hover { background: var(--button-hover); }
-  .cron-actions { display: flex; gap: 6px; margin-top: 8px; }
-  .cron-actions button { padding: 4px 12px; border-radius: 6px; border: none; font-size: 11px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
-  .cron-btn-run { background: #10b981; color: #fff; }
-  .cron-btn-run:hover { background: #059669; }
-  .cron-btn-toggle { background: #6366f1; color: #fff; }
-  .cron-btn-toggle:hover { background: #4f46e5; }
-  .cron-btn-edit { background: #3b82f6; color: #fff; }
-  .cron-btn-edit:hover { background: #2563eb; }
-  .cron-btn-delete { background: #ef4444; color: #fff; }
-  .cron-btn-delete:hover { background: #dc2626; }
-  .cron-disabled { opacity: 0.5; }
-  .cron-expand { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-secondary); font-size: 12px; color: var(--text-muted); }
-  .cron-expand .run-entry { padding: 4px 0; display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.05); }
-  .cron-expand .run-status-ok { color: var(--text-success); }
-  .cron-expand .run-status-error { color: var(--text-error); }
-  .cron-item { cursor: pointer; }
-  .cron-config-detail { margin-top: 8px; padding: 8px; background: var(--bg-secondary); border-radius: 6px; font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
-
-  .log-viewer { background: var(--log-bg); border: 1px solid var(--border-primary); border-radius: 8px; font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; padding: 12px; max-height: 500px; overflow-y: auto; -webkit-overflow-scrolling: touch; white-space: pre-wrap; word-break: break-all; }
-  .log-line { padding: 1px 0; }
-  .log-line .ts { color: var(--text-muted); }
-  .log-line .info { color: var(--text-link); }
-  .log-line .warn { color: var(--text-warning); }
-  .log-line .err { color: var(--text-error); }
-  .log-line .msg { color: var(--text-secondary); }
-
-  .memory-item { padding: 10px 12px; border-bottom: 1px solid var(--border-secondary); display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: background 0.15s; }
-  .memory-item:hover { background: var(--bg-hover); }
-  .memory-item:last-child { border-bottom: none; }
-  .file-viewer { background: var(--file-viewer-bg); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; margin-top: 16px; display: none; }
-  .file-viewer-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-  .file-viewer-title { font-size: 14px; font-weight: 600; color: var(--text-accent); }
-  .file-viewer-close { background: var(--button-bg); border: none; color: var(--text-secondary); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .file-viewer-close:hover { background: var(--button-hover); }
-  .file-viewer-content { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; max-height: 60vh; overflow-y: auto; line-height: 1.5; }
-  .memory-name { font-weight: 600; font-size: 14px; color: var(--text-link); cursor: pointer; }
-  .memory-name:hover { text-decoration: underline; }
-  .memory-size { font-size: 12px; color: var(--text-faint); }
-
-  .refresh-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-  .refresh-btn { padding: 8px 16px; background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; color: var(--text-primary); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s ease; }
-  .refresh-btn:hover { background: var(--button-hover); }
-  .refresh-btn:active { transform: scale(0.98); }
-  .refresh-time { font-size: 12px; color: var(--text-muted); }
-  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #16a34a; animation: pulse 1.5s infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1; box-shadow: 0 0 4px #16a34a; } 50% { opacity: 0.3; box-shadow: none; } }
-  .live-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; background: var(--bg-success); color: var(--text-success); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; animation: pulse 1.5s infinite; }
-
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .badge.model { background: var(--bg-hover); color: var(--text-accent); }
-  .badge.channel { background: var(--bg-hover); color: #7c3aed; }
-  .badge.tokens { background: var(--bg-success); color: var(--text-success); }
-
-  /* Cost Optimizer Styles */
-  .cost-optimizer-summary { margin-bottom: 20px; }
-  .cost-stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
-  .cost-stat { background: var(--bg-hover); border-radius: 8px; padding: 12px; text-align: center; border: 1px solid var(--border-primary); }
-  .cost-label { font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; margin-bottom: 4px; }
-  .cost-value { font-size: 20px; font-weight: 700; color: var(--text-primary); }
-  .local-status-good { padding: 8px 12px; background: var(--bg-success); color: var(--text-success); border-radius: 6px; font-size: 13px; font-weight: 600; }
-  .local-status-warning { padding: 8px 12px; background: var(--bg-warning); color: var(--text-warning); border-radius: 6px; font-size: 13px; font-weight: 600; }
-  .model-list { display: flex; flex-wrap: wrap; gap: 6px; }
-  .model-badge { background: var(--bg-accent); color: #ffffff; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .recommendation { border-left: 3px solid var(--text-accent); }
-
-  /* Cost Optimizer Enhanced Cards */
-  .co-section { margin-top: 20px; }
-  .co-section h3 { color: var(--text-accent); margin-bottom: 12px; font-size: 15px; font-weight: 700; }
-  .co-model-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
-  .co-model-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px; transition: border-color 0.2s, transform 0.15s; cursor: default; }
-  .co-model-card:hover { border-color: var(--text-accent); transform: translateY(-2px); }
-  .co-model-name { font-weight: 700; font-size: 13px; color: var(--text-primary); margin-bottom: 6px; word-break: break-all; }
-  .co-model-provider { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
-  .co-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
-  .co-badge.chat { background: #1e3a5f; color: #60a5fa; }
-  .co-badge.coding { background: #14532d; color: #4ade80; }
-  .co-model-stats { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; display: flex; flex-direction: column; gap: 2px; }
-  .co-model-stat { display: flex; justify-content: space-between; }
-  .co-model-stat span:last-child { font-weight: 600; color: var(--text-primary); }
-  .co-speed-note { font-size: 10px; color: #4ade80; margin-top: 4px; }
-  .co-action-btn { display: inline-block; margin-top: 8px; padding: 4px 10px; background: var(--bg-accent); color: #fff; border: none; border-radius: 5px; font-size: 11px; font-weight: 600; cursor: pointer; width: 100%; text-align: center; transition: opacity 0.15s; }
-  .co-action-btn:hover { opacity: 0.8; }
-  .co-action-btn.secondary { background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-primary); }
-  .co-savings-row { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; background: var(--bg-hover); border-radius: 8px; border-left: 3px solid #fbbf24; margin-bottom: 8px; }
-  .co-savings-title { font-weight: 600; font-size: 13px; color: var(--text-primary); }
-  .co-savings-detail { font-size: 12px; color: var(--text-secondary); }
-  .co-savings-amount { font-size: 12px; color: #4ade80; font-weight: 600; }
-  .co-sys-info { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: var(--text-secondary); margin-bottom: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
-  .co-sys-item { display: flex; align-items: center; gap: 5px; }
-  .co-sys-item strong { color: var(--text-primary); }
-  .co-ollama-prompt { background: #1c1c2e; border: 1px dashed #7c3aed; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
-  .co-ollama-cmd { font-family: monospace; font-size: 12px; background: var(--bg-tertiary); padding: 6px 10px; border-radius: 5px; margin-top: 6px; color: #a78bfa; }
-
-  /* Cost Optimizer v2 -- llmfit-powered */
-  .cost-overview { background: linear-gradient(135deg, #1a2a1a, #1a1a2a); border: 1px solid #2d4a2d; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px; }
-  .cost-overview-header { font-size: 14px; font-weight: 700; color: #4ade80; margin-bottom: 10px; letter-spacing: 0.3px; }
-  .cost-overview-row { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
-  .cost-overview-item { display: flex; flex-direction: column; }
-  .cost-overview-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #6b7280; margin-bottom: 2px; }
-  .cost-overview-value { font-size: 20px; font-weight: 700; color: #fbbf24; }
-  .cost-overview-value.green { color: #4ade80; }
-  .savings-highlight { background: #0f2d0f; border: 1px solid #14532d; border-radius: 8px; padding: 8px 12px; font-size: 12px; color: #4ade80; font-weight: 600; margin-top: 8px; }
-  .hw-card { background: var(--bg-tertiary); border: 1px solid #2d3748; border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .hw-card-chip { background: #1e3a5f; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; color: #60a5fa; }
-  .hw-card-chip.green { background: #14532d; color: #4ade80; }
-  .hw-card-chip.amber { background: #451a03; color: #fbbf24; }
-  .hw-metal-notice { background: #1c1500; border: 1px solid #92400e; border-radius: 8px; padding: 8px 12px; font-size: 11px; color: #fbbf24; margin-bottom: 12px; }
-  .model-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px; margin-bottom: 10px; transition: border-color 0.2s, transform 0.15s; }
-  .model-card:hover { border-color: #4ade80; transform: translateY(-1px); }
-  .model-card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
-  .model-card-name { font-weight: 700; font-size: 13px; color: var(--text-primary); }
-  .model-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
-  .model-badge.coding { background: #14532d; color: #4ade80; }
-  .model-badge.chat { background: #1e3a5f; color: #60a5fa; }
-  .model-card-stats { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
-  .model-card-stat { display: flex; flex-direction: column; }
-  .model-card-stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 1px; }
-  .model-card-stat-value { font-weight: 600; color: var(--text-primary); }
-  .model-install-cmd { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; font-family: monospace; font-size: 11px; color: #e6edf3; margin-top: 6px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
-  .model-install-cmd:hover { border-color: #4ade80; }
-  .task-rec { background: var(--bg-hover); border-left: 3px solid #fbbf24; border-radius: 0 8px 8px 0; padding: 10px 14px; margin-bottom: 8px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: start; }
-  .task-rec-title { font-weight: 600; font-size: 13px; color: var(--text-primary); }
-  .task-rec-savings { font-size: 12px; font-weight: 700; color: #4ade80; white-space: nowrap; }
-  .task-rec-arrow { font-size: 11px; color: var(--text-muted); grid-column: 1; }
-  .task-rec-reason { font-size: 11px; color: var(--text-muted); grid-column: 1 / -1; }
-
-  .full-width { grid-column: 1 / -1; }
-  .section-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin: 24px 0 12px; display: flex; align-items: center; gap: 8px; }
-
-  /* === Flow Visualization === */
-  .flow-container { width: 100%; overflow: visible; position: relative; }
-  .flow-stats { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
-  .flow-stat { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 8px 14px; flex: 1; min-width: 100px; box-shadow: var(--card-shadow); }
-  .flow-stat-label { font-size: 10px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 1px; display: block; }
-  .flow-stat-value { font-size: 20px; font-weight: 700; color: var(--text-primary); display: block; margin-top: 2px; }
-  #flow-svg { width: 100%; height: calc(100vh - 155px); min-height: 400px; display: block; overflow: visible; }
-  #flow-svg text { font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; font-weight: 700; text-anchor: middle; dominant-baseline: central; pointer-events: none; letter-spacing: -0.1px; }
-  .flow-node-channel text, .flow-node-gateway text, .flow-node-session text, .flow-node-tool text { fill: #ffffff !important; }
-  .flow-node-optimizer text { fill: #ffffff !important; }
-  .flow-node-infra > text { fill: #ffffff !important; }
-  /* Refined palette: lower saturation, clearer hierarchy */
-  [id$="node-human"] circle:first-child { fill: #6d5ce8 !important; stroke: #5b4bd4 !important; }
-  [id$="node-human"] text { fill: #6d5ce8 !important; }
-  [id$="node-telegram"] rect { fill: #2f6feb !important; stroke: #1f4fb8 !important; }
-  [id$="node-signal"] rect { fill: #0f766e !important; stroke: #115e59 !important; }
-  [id$="node-whatsapp"] rect { fill: #2f9e44 !important; stroke: #237738 !important; }
-  [id$="node-imessage"] rect { fill: #34C759 !important; stroke: #248A3D !important; }
-  [id$="node-discord"] rect { fill: #5865F2 !important; stroke: #4752C4 !important; }
-  [id$="node-slack"] rect { fill: #4A154B !important; stroke: #350e36 !important; }
-  [id$="node-irc"] rect { fill: #6B7280 !important; stroke: #4B5563 !important; }
-  [id$="node-webchat"] rect { fill: #0EA5E9 !important; stroke: #0369A1 !important; }
-  [id$="node-googlechat"] rect { fill: #1A73E8 !important; stroke: #1557B0 !important; }
-  [id$="node-bluebubbles"] rect { fill: #1C6EF3 !important; stroke: #1558C0 !important; }
-  [id$="node-msteams"] rect { fill: #6264A7 !important; stroke: #464775 !important; }
-  [id$="node-matrix"] rect { fill: #0DBD8B !important; stroke: #0A9E74 !important; }
-  [id$="node-mattermost"] rect { fill: #0058CC !important; stroke: #0047A3 !important; }
-  [id$="node-line"] rect { fill: #00B900 !important; stroke: #009900 !important; }
-  [id$="node-nostr"] rect { fill: #8B5CF6 !important; stroke: #6D28D9 !important; }
-  [id$="node-twitch"] rect { fill: #9146FF !important; stroke: #772CE8 !important; }
-  [id$="node-feishu"] rect { fill: #3370FF !important; stroke: #2050CC !important; }
-  [id$="node-zalo"] rect { fill: #0068FF !important; stroke: #0050CC !important; }
-  [id$="node-gateway"] rect { fill: #334155 !important; stroke: #1f2937 !important; }
-  [id$="node-brain"] rect { fill: #312e81 !important; stroke: #1e1b4b !important; }
-  [id$="brain-model-label"] { fill: #e0e7ff !important; }
-  [id$="brain-model-text"] { fill: #c7d2fe !important; }
-  [id$="node-session"] rect { fill: #3158d4 !important; stroke: #2648b6 !important; }
-  [id$="node-exec"] rect { fill: #d97706 !important; stroke: #b45309 !important; }
-  [id$="node-browser"] rect { fill: #5b39c6 !important; stroke: #4629a1 !important; }
-  [id$="node-search"] rect { fill: #0f766e !important; stroke: #115e59 !important; }
-  [id$="node-cron"] rect { fill: #4b5563 !important; stroke: #374151 !important; }
-  [id$="node-tts"] rect { fill: #a16207 !important; stroke: #854d0e !important; }
-  [id$="node-memory"] rect { fill: #1e3a8a !important; stroke: #172554 !important; }
-  [id$="node-cost-optimizer"] rect { fill: #166534 !important; stroke: #14532d !important; }
-  [id$="node-automation-advisor"] rect { fill: #4338ca !important; stroke: #3730a3 !important; }
-  [id$="node-runtime"] rect { fill: #334155 !important; stroke: #475569 !important; }
-  [id$="node-machine"] rect { fill: #424b57 !important; stroke: #2f3945 !important; }
-  [id$="node-storage"] rect { fill: #52525b !important; stroke: #3f3f46 !important; }
-  [id$="node-network"] rect { fill: #0f766e !important; stroke: #115e59 !important; }
-  .flow-node-clickable { cursor: pointer; }
-  .flow-node-clickable:hover rect, .flow-node-clickable:hover circle { filter: brightness(1.08); }
-  .flow-node rect { rx: 12; ry: 12; stroke-width: 1.6; transition: all 0.25s ease; }
-  .flow-node-brain rect { stroke-width: 2.5; }
-  @keyframes pulse-dot { 0%,100% { opacity:1; box-shadow:0 0 4px #2ecc71; } 50% { opacity:0.4; box-shadow:none; } }
-  @keyframes dashFlow { to { stroke-dashoffset: -24; } }
-  .flow-path { stroke-dasharray: 8 4; animation: dashFlow 1.2s linear infinite; }
-  .flow-path.flow-path-infra { stroke-dasharray: 6 3; animation: dashFlow 2s linear infinite; }
-  .flow-node-channel.active rect { filter: drop-shadow(0 0 8px rgba(59,130,246,0.38)); stroke-width: 2.2; }
-  .flow-node-gateway.active rect { filter: drop-shadow(0 0 8px rgba(71,85,105,0.38)); stroke-width: 2.2; }
-  .flow-node-session.active rect { filter: drop-shadow(0 0 8px rgba(49,88,212,0.35)); stroke-width: 2.2; }
-  .flow-node-tool.active rect { filter: drop-shadow(0 0 7px rgba(217,119,6,0.32)); stroke-width: 2.2; }
-  .flow-node-optimizer.active rect { filter: drop-shadow(0 0 7px rgba(22,101,52,0.35)); stroke-width: 2.2; }
-  .flow-path { fill: none; stroke: var(--text-muted); stroke-width: 1.8; stroke-linecap: round; transition: stroke 0.35s, opacity 0.35s; opacity: 0.45; }
-  .flow-path.glow-blue { stroke: #4080e0; filter: drop-shadow(0 0 6px rgba(64,128,224,0.6)); }
-  .flow-path.glow-yellow { stroke: #f0c040; filter: drop-shadow(0 0 6px rgba(240,192,64,0.6)); }
-  .flow-path.glow-green { stroke: #50e080; filter: drop-shadow(0 0 6px rgba(80,224,128,0.6)); }
-  .flow-path.glow-red { stroke: #e04040; filter: drop-shadow(0 0 6px rgba(224,64,64,0.6)); }
-  @keyframes brainPulse { 0%,100% { filter: drop-shadow(0 0 6px rgba(129,140,248,0.18)); } 50% { filter: drop-shadow(0 0 18px rgba(129,140,248,0.45)); } }
-  .brain-group { animation: brainPulse 2.2s ease-in-out infinite; }
-  .tool-indicator { opacity: 0.2; transition: opacity 0.3s ease; }
-  .tool-indicator.active { opacity: 1; }
-  .flow-label { font-size: 10px !important; fill: var(--text-muted) !important; font-weight: 500 !important; }
-  .flow-node-human circle { transition: all 0.3s ease; }
-  .flow-node-human.active circle { filter: drop-shadow(0 0 12px rgba(176,128,255,0.7)); }
-  @keyframes humanGlow { 0%,100% { filter: drop-shadow(0 0 3px rgba(160,112,224,0.15)); } 50% { filter: drop-shadow(0 0 10px rgba(160,112,224,0.45)); } }
-  .flow-node-human { animation: humanGlow 3.5s ease-in-out infinite; }
-  .flow-ground { stroke: var(--border-primary); stroke-width: 1; stroke-dasharray: 8 4; }
-  .flow-ground-label { font-size: 10px !important; fill: var(--text-muted) !important; font-weight: 700 !important; letter-spacing: 3px; }
-  .flow-node-infra rect { rx: 6; ry: 6; stroke-width: 2; stroke-dasharray: 5 2; transition: all 0.3s ease; }
-  .flow-node-infra text { font-size: 12px !important; }
-  .flow-node-infra .infra-sub { font-size: 8px !important; fill: var(--text-muted) !important; font-weight: 500 !important; opacity: 0.9; }
-  .flow-node-runtime rect { stroke: #4a7090; }
-  .flow-node-machine rect { stroke: #606880; }
-  .flow-node-storage rect { stroke: #806a30; }
-  .flow-node-network rect { stroke: #308080; }
-  [data-theme="dark"] .flow-node-runtime rect { fill: #10182a; }
-  [data-theme="dark"] .flow-node-machine rect { fill: #141420; }
-  [data-theme="dark"] .flow-node-storage rect { fill: #1a1810; }
-  [data-theme="dark"] .flow-node-network rect { fill: #0e1c20; }
-  .flow-node-runtime.active rect { filter: drop-shadow(0 0 10px rgba(74,112,144,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
-  .flow-node-machine.active rect { filter: drop-shadow(0 0 10px rgba(96,104,128,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
-  .flow-node-storage.active rect { filter: drop-shadow(0 0 10px rgba(128,106,48,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
-  .flow-node-network.active rect { filter: drop-shadow(0 0 10px rgba(48,128,128,0.7)); stroke-dasharray: none; stroke-width: 2.5; }
-  .flow-path-infra { stroke-dasharray: 6 3; opacity: 0.3; }
-  .flow-path.glow-cyan { stroke: #40a0b0; filter: drop-shadow(0 0 6px rgba(64,160,176,0.6)); stroke-dasharray: none; opacity: 1; }
-  .flow-path.glow-purple { stroke: #b080ff; filter: drop-shadow(0 0 6px rgba(176,128,255,0.6)); }
-
-  /* === Activity Heatmap === */
-  .heatmap-wrap { overflow-x: auto; padding: 8px 0; }
-  .heatmap-grid { display: grid; grid-template-columns: 60px repeat(24, 1fr); gap: 2px; min-width: 650px; }
-  .heatmap-label { font-size: 11px; color: #666; display: flex; align-items: center; padding-right: 8px; justify-content: flex-end; }
-  .heatmap-hour-label { font-size: 10px; color: #555; text-align: center; padding-bottom: 4px; }
-  .heatmap-cell { aspect-ratio: 1; border-radius: 3px; min-height: 16px; transition: all 0.15s; cursor: default; position: relative; }
-  .heatmap-cell:hover { transform: scale(1.3); z-index: 2; outline: 1px solid #f0c040; }
-  .heatmap-cell[title]:hover::after { content: attr(title); position: absolute; bottom: 120%; left: 50%; transform: translateX(-50%); background: #222; color: #eee; padding: 3px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap; z-index: 10; pointer-events: none; }
-  .heatmap-legend { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 11px; color: #666; }
-  .heatmap-legend-cell { width: 14px; height: 14px; border-radius: 3px; }
-
-  /* === Health Checks === */
-  .health-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-  .health-item { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; transition: border-color 0.3s; box-shadow: var(--card-shadow); }
-  .health-item.healthy { border-left: 3px solid #16a34a; }
-  .health-item.warning { border-left: 3px solid #d97706; }
-  .health-item.critical { border-left: 3px solid #dc2626; }
-  .health-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-  .health-dot.green { background: #16a34a; box-shadow: 0 0 8px rgba(22,163,74,0.5); }
-  .health-dot.yellow { background: #d97706; box-shadow: 0 0 8px rgba(217,119,6,0.5); }
-  .health-dot.red { background: #dc2626; box-shadow: 0 0 8px rgba(220,38,38,0.5); }
-  .health-info { flex: 1; }
-  .health-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-  .health-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-
-  /* === Usage/Token Charts === */
-  .usage-chart { display: flex; align-items: flex-end; gap: 6px; height: 200px; padding: 16px 8px 32px; position: relative; }
-  .usage-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; position: relative; }
-  .usage-bar { width: 100%; min-width: 20px; max-width: 48px; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, var(--bg-accent), #1d4ed8); transition: height 0.4s ease; position: relative; cursor: default; }
-  .usage-bar:hover { filter: brightness(1.25); }
-  .usage-bar-label { font-size: 9px; color: var(--text-muted); margin-top: 6px; text-align: center; white-space: nowrap; }
-  .usage-bar-value { font-size: 9px; color: var(--text-tertiary); text-align: center; position: absolute; top: -16px; width: 100%; white-space: nowrap; }
-  .usage-grid-line { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--border-secondary); }
-  .usage-grid-label { position: absolute; right: 100%; padding-right: 8px; font-size: 10px; color: var(--text-muted); white-space: nowrap; }
-  .usage-table { width: 100%; border-collapse: collapse; }
-  .usage-table th { text-align: left; font-size: 12px; color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border-primary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-  .usage-table td { padding: 8px 12px; font-size: 13px; color: var(--text-secondary); border-bottom: 1px solid var(--border-secondary); }
-  .usage-table tr:last-child td { border-bottom: none; font-weight: 700; color: var(--text-accent); }
-  
-  /* === Cost Warnings === */
-  .cost-warning { padding: 12px 16px; border-radius: 8px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
-  /* === Markdown Rendered Content === */
-  .md-rendered h1,.md-rendered h2,.md-rendered h3,.md-rendered h4 { margin: 8px 0 4px; color: var(--text-primary); }
-  .md-rendered h1 { font-size: 18px; } .md-rendered h2 { font-size: 16px; } .md-rendered h3 { font-size: 14px; }
-  .md-rendered p { margin: 4px 0; }
-  .md-rendered code { background: var(--bg-secondary); padding: 1px 5px; border-radius: 4px; font-size: 12px; font-family: 'SF Mono','JetBrains Mono',monospace; }
-  .md-rendered pre { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 10px 14px; overflow-x: auto; margin: 6px 0; }
-  .md-rendered pre code { background: none; padding: 0; }
-  .md-rendered ul,.md-rendered ol { padding-left: 20px; margin: 4px 0; }
-  .md-rendered blockquote { border-left: 3px solid var(--text-accent); padding-left: 12px; margin: 6px 0; color: var(--text-secondary); }
-  .md-rendered strong { color: var(--text-primary); }
-  .md-rendered a { color: var(--text-link); }
-  .md-rendered table { border-collapse: collapse; margin: 6px 0; }
-  .md-rendered th,.md-rendered td { border: 1px solid var(--border-primary); padding: 4px 8px; font-size: 12px; }
-
-  .cost-warning.error { background: var(--bg-error); border: 1px solid var(--text-error); color: var(--text-error); }
-  .cost-warning.warning { background: var(--bg-warning); border: 1px solid var(--text-warning); color: var(--text-warning); }
-  .cost-warning-icon { font-size: 16px; }
-  .cost-warning-message { flex: 1; }
-
-  /* === Transcript Viewer === */
-  .transcript-item { padding: 12px 16px; border-bottom: 1px solid var(--border-secondary); cursor: pointer; transition: background 0.15s; display: flex; justify-content: space-between; align-items: center; }
-  .transcript-item:hover { background: var(--bg-hover); }
-  .transcript-item:last-child { border-bottom: none; }
-  .transcript-name { font-weight: 600; font-size: 14px; color: var(--text-link); }
-  .transcript-meta-row { font-size: 12px; color: var(--text-muted); margin-top: 4px; display: flex; gap: 12px; flex-wrap: wrap; }
-  .transcript-viewer-meta { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-  .transcript-viewer-meta .stat-row { padding: 6px 0; }
-  .chat-messages { display: flex; flex-direction: column; gap: 10px; padding: 8px 0; }
-  .chat-msg { max-width: 85%; padding: 12px 16px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .chat-msg.user { background: #1a2a4a; border: 1px solid #2a4a7a; color: #c0d8ff; align-self: flex-end; border-bottom-right-radius: 4px; }
-  .chat-msg.assistant { background: #1a3a2a; border: 1px solid #2a5a3a; color: #c0ffc0; align-self: flex-start; border-bottom-left-radius: 4px; }
-  .chat-msg.system { background: #2a2a1a; border: 1px solid #4a4a2a; color: #f0e0a0; align-self: center; font-size: 12px; font-style: italic; max-width: 90%; }
-  .chat-msg.tool { background: #1a1a24; border: 1px solid #2a2a3a; color: #a0a0b0; align-self: flex-start; font-family: 'SF Mono', monospace; font-size: 12px; border-left: 3px solid #555; }
-  .chat-role { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; opacity: 0.7; }
-  .chat-ts { font-size: 10px; color: #555; margin-top: 6px; text-align: right; }
-  .chat-expand { display: inline-block; color: #f0c040; font-size: 11px; cursor: pointer; margin-top: 4px; }
-  .chat-expand:hover { text-decoration: underline; }
-  .chat-content-truncated { max-height: 200px; overflow: hidden; position: relative; }
-  .chat-content-truncated::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: linear-gradient(transparent, rgba(26,42,74,0.9)); pointer-events: none; }
-  .chat-msg.assistant .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,58,42,0.9)); }
-  .chat-msg.tool .chat-content-truncated::after { background: linear-gradient(transparent, rgba(26,26,36,0.9)); }
-
-  /* === Mini Dashboard Widgets === */
-  .tool-spark { font-size: 11px; color: var(--text-muted); padding: 3px 8px; background: var(--bg-secondary); border-radius: 6px; border: 1px solid var(--border-secondary); }
-  .tool-spark span { color: var(--text-accent); font-weight: 600; }
-  .card:hover { transform: translateY(-1px); box-shadow: var(--card-shadow-hover); }
-  .card[onclick] { cursor: pointer; }
-
-  /* === Sub-Agent Worker Bees === */
-  .subagent-item { display: flex; align-items: center; gap: 6px; padding: 2px 0; font-size: 10px; }
-  .subagent-status { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-  .subagent-status.active { background: #16a34a; box-shadow: 0 0 4px rgba(22,163,74,0.5); }
-  .subagent-status.idle { background: #d97706; box-shadow: 0 0 4px rgba(217,119,6,0.5); }
-  .subagent-status.stale { background: #dc2626; box-shadow: 0 0 4px rgba(220,38,38,0.5); }
-  .subagent-name { font-weight: 600; color: var(--text-secondary); }
-  .subagent-task { color: var(--text-muted); font-size: 9px; }
-  .subagent-runtime { color: var(--text-faint); font-size: 9px; margin-left: auto; }
-
-  /* === Sub-Agent Detailed View === */
-  .subagent-row { padding: 12px 16px; border-bottom: 1px solid var(--border-secondary); display: flex; align-items: center; gap: 12px; }
-  .subagent-row:last-child { border-bottom: none; }
-  .subagent-row:hover { background: var(--bg-hover); }
-  .subagent-indicator { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-  .subagent-indicator.active { background: #16a34a; box-shadow: 0 0 8px rgba(22,163,74,0.6); animation: pulse 2s infinite; }
-  .subagent-indicator.idle { background: #d97706; box-shadow: 0 0 8px rgba(217,119,6,0.6); }
-  .subagent-indicator.stale { background: #dc2626; box-shadow: 0 0 8px rgba(220,38,38,0.6); opacity: 0.7; }
-  .subagent-info { flex: 1; }
-  .subagent-header { display: flex; justify-content: between; align-items: center; margin-bottom: 4px; }
-  .subagent-id { font-weight: 600; font-size: 14px; color: var(--text-primary); }
-  .subagent-runtime-badge { background: var(--bg-accent); color: var(--bg-primary); padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
-  .subagent-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 16px; flex-wrap: wrap; }
-  .subagent-meta span { display: flex; align-items: center; gap: 4px; }
-  .subagent-description { font-size: 13px; color: var(--text-secondary); margin-top: 4px; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-
-  /* === Active Tasks Cards === */
-  .task-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 12px; padding: 16px; box-shadow: var(--card-shadow); position: relative; overflow: hidden; }
-  .task-card.running { border-left: 4px solid #16a34a; }
-  .task-card.complete { border-left: 4px solid #2563eb; opacity: 0.7; }
-  .task-card.failed { border-left: 4px solid #dc2626; }
-  .task-card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
-  .task-card-name { font-weight: 700; font-size: 14px; color: var(--text-primary); line-height: 1.3; }
-  .task-card-badge { padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; white-space: nowrap; }
-  .task-card-badge.running { background: #dcfce7; color: #166534; }
-  .task-card-badge.complete { background: #dbeafe; color: #1e40af; }
-  .task-card-badge.failed { background: #fef2f2; color: #991b1b; }
-  [data-theme="dark"] .task-card-badge.running { background: #14532d; color: #86efac; }
-  [data-theme="dark"] .task-card-badge.complete { background: #1e3a5f; color: #93c5fd; }
-  [data-theme="dark"] .task-card-badge.failed { background: #450a0a; color: #fca5a5; }
-  .task-card-duration { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
-  .task-card-action { font-size: 12px; color: var(--text-secondary); font-family: 'JetBrains Mono', monospace; background: var(--bg-secondary); padding: 6px 10px; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .task-card-pulse { position: absolute; top: 12px; right: 12px; width: 10px; height: 10px; border-radius: 50%; background: #22c55e; }
-  .task-card-pulse.active { animation: taskPulse 1.5s ease-in-out infinite; }
-  @keyframes taskPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); } 50% { box-shadow: 0 0 0 8px rgba(34,197,94,0); } }
-
-  /* === Enhanced Active Tasks Panel === */
-  .tasks-panel-scroll { max-height: 70vh; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; scrollbar-color: var(--border-primary) transparent; }
-  .tasks-panel-scroll::-webkit-scrollbar { width: 6px; }
-  .tasks-panel-scroll::-webkit-scrollbar-track { background: transparent; }
-  .tasks-panel-scroll::-webkit-scrollbar-thumb { background: var(--border-primary); border-radius: 3px; }
-  .task-group-header { font-size: 13px; font-weight: 700; color: var(--text-secondary); padding: 8px 4px 6px; margin-top: 4px; letter-spacing: 0.3px; }
-  .task-group-header:first-child { margin-top: 0; }
-  @keyframes idleBreathe { 0%,100% { opacity: 0.5; transform: scale(1); } 50% { opacity: 1; transform: scale(1.05); } }
-  .tasks-empty-icon { animation: idleBreathe 3s ease-in-out infinite; display: inline-block; }
-  @keyframes statusPulseGreen { 0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); } 50% { box-shadow: 0 0 0 6px rgba(34,197,94,0); } }
-  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
-  .status-dot.running { background: #22c55e; animation: statusPulseGreen 1.5s ease-in-out infinite; }
-  .status-dot.complete { background: #3b82f6; }
-  .status-dot.failed { background: #ef4444; }
-
-  /* === Zoom Wrapper === */
-  .zoom-wrapper { transform-origin: top left; transition: transform 0.3s ease; }
-
-  /* === Split-Screen Overview === */
-  /* height:auto + min-height (not a fixed height): when the left column's
-     System Health panel is tall it must grow the grid, not overflow it and
-     collide with #heartbeat-panel below (the flow-pane keeps its own
-     min-height so flex:3 can't collapse it in an auto-height grid). */
-  .overview-split { display: grid; grid-template-columns: 60fr 1px 40fr; gap: 0; margin-bottom: 0; height: auto; min-height: calc(100vh - 175px); }
-  .overview-flow-pane { position: relative; border: 1px solid var(--border-primary); border-radius: 8px 0 0 8px; overflow: hidden; background: var(--bg-secondary); padding: 4px; min-height: 55vh; }
-  .overview-flow-pane .flow-container { height: 100%; }
-  .overview-flow-pane svg { width: 100%; height: 100%; min-width: 0 !important; }
-  .overview-divider { background: var(--border-primary); width: 1px; }
-  .overview-tasks-pane { overflow-y: auto; border: 1px solid var(--border-primary); border-left: none; border-radius: 0 8px 8px 0; padding: 10px 12px; }
-  /* Scanline overlay */
-  .scanline-overlay { pointer-events: none; position: absolute; inset: 0; z-index: 2; background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,255,65,0.015) 2px, rgba(0,255,65,0.015) 4px); }
-  .grid-overlay { pointer-events: none; position: absolute; inset: 0; z-index: 1; background-image: linear-gradient(var(--border-secondary) 1px, transparent 1px), linear-gradient(90deg, var(--border-secondary) 1px, transparent 1px); background-size: 40px 40px; opacity: 0.3; }
-  /* Task cards in overview */
-  .ov-task-card { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--card-shadow); position: relative; transition: box-shadow 0.2s; }
-  .ov-task-card:hover { box-shadow: var(--card-shadow-hover); }
-  .ov-task-card.running { border-left: 4px solid #16a34a; }
-  .ov-task-card.complete { border-left: 4px solid #2563eb; opacity: 0.75; }
-  .ov-task-card.failed { border-left: 4px solid #dc2626; }
-  .ov-task-pulse { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; display: inline-block; animation: taskPulse 1.5s ease-in-out infinite; }
-  .ov-details { display: none; margin-top: 10px; padding: 10px; background: var(--bg-secondary); border: 1px solid var(--border-secondary); border-radius: 8px; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 11px; line-height: 1.7; color: var(--text-tertiary); }
-  .ov-details.open { display: block; }
-  .ov-toggle-btn { background: none; border: 1px solid var(--border-primary); border-radius: 6px; padding: 3px 10px; font-size: 11px; color: var(--text-tertiary); cursor: pointer; transition: all 0.15s; }
-  .ov-toggle-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
-
-  /* === Task Detail Modal === */
-  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
-  .modal-overlay.open { display: flex; }
-  .modal-card { background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 16px; width: 95%; max-width: 900px; max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 25px 50px rgba(0,0,0,0.25); }
-  .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border-primary); flex-shrink: 0; }
-  .modal-header-left { flex: 1; min-width: 0; }
-  .modal-title { font-size: 16px; font-weight: 700; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .modal-session-key { font-size: 11px; color: var(--text-muted); font-family: monospace; margin-top: 2px; }
-  .modal-header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-  .modal-auto-refresh { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-tertiary); cursor: pointer; }
-  .modal-auto-refresh input { cursor: pointer; }
-  .modal-close { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; color: var(--text-tertiary); transition: all 0.15s; }
-  .modal-close:hover { background: var(--bg-error); color: var(--text-error); }
-  .modal-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-primary); padding: 0 20px; flex-shrink: 0; }
-  .modal-tab { padding: 10px 18px; font-size: 13px; font-weight: 600; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s; }
-  .modal-tab:hover { color: var(--text-secondary); }
-  .modal-tab.active { color: var(--text-accent); border-bottom-color: var(--text-accent); }
-  .modal-content { flex: 1; overflow-y: auto; padding: 20px; -webkit-overflow-scrolling: touch; }
-  .modal-footer { border-top: 1px solid var(--border-primary); padding: 10px 20px; display: flex; gap: 16px; font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
-  /* Modal event items */
-  .evt-item { border: 1px solid var(--border-secondary); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
-  .evt-header { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; transition: background 0.15s; }
-  .evt-header:hover { background: var(--bg-hover); }
-  .evt-icon { font-size: 16px; flex-shrink: 0; }
-  .evt-summary { flex: 1; font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .evt-summary strong { color: var(--text-primary); }
-  .evt-ts { font-size: 11px; color: var(--text-muted); flex-shrink: 0; font-family: monospace; }
-  .evt-body { display: none; padding: 0 14px 12px; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 12px; line-height: 1.6; color: var(--text-tertiary); white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; }
-  .evt-body.open { display: block; }
-  .evt-item.type-agent { border-left: 3px solid #3b82f6; }
-  .evt-item.type-exec { border-left: 3px solid #16a34a; }
-  .evt-item.type-read { border-left: 3px solid #8b5cf6; }
-  .evt-item.type-result { border-left: 3px solid #ea580c; }
-  .evt-item.type-thinking { border-left: 3px solid #6b7280; }
-  .evt-item.type-user { border-left: 3px solid #7c3aed; }
-  /* === Component Detail Modal === */
-  .comp-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1100; justify-content: center; align-items: center; }
-  .comp-modal-overlay.open { display: flex; }
-  .comp-modal-card { background: var(--bg-primary); border: 1px solid var(--border-primary); border-radius: 16px; width: 90%; max-width: 560px; display: flex; flex-direction: column; box-shadow: 0 25px 50px rgba(0,0,0,0.25); max-height: 90vh; }
-  .comp-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border-primary); }
-  .comp-modal-title { font-size: 18px; font-weight: 700; color: var(--text-primary); }
-  .comp-modal-close { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; color: var(--text-tertiary); transition: all 0.15s; }
-  .comp-modal-close:hover { background: var(--bg-error); color: var(--text-error); }
-  
-  /* Time Travel Controls */
-  .time-travel-bar { display: none; padding: 12px 20px; border-bottom: 1px solid var(--border-primary); background: var(--bg-secondary); }
-  .time-travel-bar.active { display: block; }
-  .time-travel-controls { display: flex; align-items: center; gap: 12px; }
-  .time-travel-toggle { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 6px; padding: 4px 8px; color: var(--text-tertiary); cursor: pointer; font-size: 12px; transition: all 0.15s; }
-  .time-travel-toggle:hover { background: var(--button-hover); }
-  .time-travel-toggle.active { background: var(--bg-accent); color: white; }
-  .time-scrubber { flex: 1; display: flex; align-items: center; gap: 8px; }
-  .time-slider { flex: 1; height: 4px; background: var(--border-primary); border-radius: 2px; cursor: pointer; position: relative; }
-  .time-slider-thumb { width: 16px; height: 16px; background: var(--bg-accent); border-radius: 50%; position: absolute; top: -6px; margin-left: -8px; box-shadow: var(--card-shadow); transition: all 0.15s; }
-  .time-slider-thumb:hover { transform: scale(1.2); }
-  .time-display { font-size: 12px; color: var(--text-secondary); font-weight: 600; min-width: 120px; }
-  .time-nav-btn { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 4px; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 12px; color: var(--text-tertiary); }
-  .time-nav-btn:hover { background: var(--button-hover); }
-  .time-nav-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .comp-modal-body { padding: 24px 20px; font-size: 14px; color: var(--text-secondary); line-height: 1.6; max-height: 70vh; overflow-y: auto; }
-
-  /* Telegram Chat Bubbles */
-  .tg-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .tg-stats .in { color: #3b82f6; } .tg-stats .out { color: #22c55e; }
-  .tg-chat { display: flex; flex-direction: column; gap: 8px; }
-  .tg-bubble { max-width: 85%; padding: 10px 14px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .tg-bubble.in { background: #1e3a5f; border: 1px solid #2a5a8a; color: #c0d8ff; align-self: flex-start; border-bottom-left-radius: 4px; }
-  .tg-bubble.out { background: #1a3a2a; border: 1px solid #2a5a3a; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 4px; }
-  [data-theme="light"] .tg-bubble.in { background: #dbeafe; border-color: #93c5fd; color: #1e3a5f; }
-  [data-theme="light"] .tg-bubble.out { background: #dcfce7; border-color: #86efac; color: #14532d; }
-  .tg-bubble .tg-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
-  .tg-bubble .tg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .tg-bubble .tg-text { white-space: pre-wrap; }
-  .tg-load-more { text-align: center; padding: 10px; }
-  /* iMessage styles */
-  .imsg-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .imsg-stats .in { color: #007AFF; } .imsg-stats .out { color: #34C759; }
-  .imsg-chat { display: flex; flex-direction: column; gap: 8px; }
-  .imsg-bubble { max-width: 85%; padding: 10px 14px; border-radius: 18px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .imsg-bubble.in { background: #1e2a3f; border: 1px solid #2a4a7a; color: #b0d0ff; align-self: flex-start; border-bottom-left-radius: 4px; }
-  .imsg-bubble.out { background: #1a3a2a; border: 1px solid #2a6a3a; color: #b0ffb0; align-self: flex-end; border-bottom-right-radius: 4px; }
-  [data-theme="light"] .imsg-bubble.in { background: #e1e8f5; border-color: #93c5fd; color: #1e3a5f; }
-  [data-theme="light"] .imsg-bubble.out { background: #d4f5d4; border-color: #86efac; color: #14532d; }
-  .imsg-bubble .imsg-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
-  .imsg-bubble .imsg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .imsg-bubble .imsg-text { white-space: pre-wrap; }
-  /* WebChat styles - neutral/white browser-style bubbles */
-  .wc-stats { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  [data-theme="dark"] .wc-stats { background: #1e2533; border-color: #2d3748; }
-  .wc-stat-item { color: #374151; }
-  [data-theme="dark"] .wc-stat-item { color: #9ca3af; }
-  .wc-messages { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
-  .wc-msg-row { display: flex; }
-  .wc-msg-row.wc-row-out { justify-content: flex-end; }
-  .wc-bubble { max-width: 80%; padding: 9px 13px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-wrap: break-word; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
-  .wc-bubble.wc-msg-in { background: #f1f5f9; color: #1e293b; border-bottom-left-radius: 4px; border: 1px solid #e2e8f0; }
-  .wc-bubble.wc-msg-out { background: #0ea5e9; color: #fff; border-bottom-right-radius: 4px; }
-  [data-theme="dark"] .wc-bubble.wc-msg-in { background: #1e2a3f; color: #cbd5e1; border-color: #2d3748; }
-  [data-theme="dark"] .wc-bubble.wc-msg-out { background: #0369a1; color: #e0f2fe; }
-  .wc-bubble-text { white-space: pre-wrap; }
-  .wc-bubble-time { font-size: 10px; margin-top: 3px; text-align: right; opacity: 0.65; }
-  /* IRC styles - dark terminal theme */
-  .irc-loading { background: #1a1a2e; color: #9ca3af; font-family: 'Courier New', monospace; padding: 40px; text-align: center; font-size: 13px; }
-  .irc-header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #0f0f1a; border-bottom: 1px solid #2d2d4a; font-family: 'Courier New', monospace; font-size: 12px; flex-wrap: wrap; }
-  .irc-stat { color: #6b7280; }
-  .irc-channels { color: #60a5fa; font-weight: 700; }
-  .irc-nick { color: #a78bfa; margin-left: auto; }
-  .irc-log { background: #0d0d1a; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; font-family: 'Courier New', monospace; font-size: 12px; overflow-y: auto; max-height: 500px; }
-  .irc-line { line-height: 1.6; word-wrap: break-word; }
-  .irc-ts { color: #4b5563; }
-  .irc-nick-tag { color: #60a5fa; font-weight: 600; }
-  .irc-text { color: #d1d5db; }
-  /* BlueBubbles styles - Apple green */
-  .bb-stats { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: #0a1f0a; border: 1px solid #166534; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  [data-theme="light"] .bb-stats { background: #f0fdf4; border-color: #bbf7d0; }
-  .bb-stat-item { color: #4ade80; }
-  [data-theme="light"] .bb-stat-item { color: #166534; }
-  .bb-messages { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; }
-  .bb-msg-row { display: flex; }
-  .bb-msg-row.bb-row-out { justify-content: flex-end; }
-  .bb-bubble { max-width: 80%; padding: 9px 13px; border-radius: 18px; font-size: 13px; line-height: 1.5; word-wrap: break-word; }
-  .bb-bubble.bb-msg-in { background: #1a2a1a; color: #86efac; border-bottom-left-radius: 4px; border: 1px solid #166534; }
-  .bb-bubble.bb-msg-out { background: #34C759; color: #fff; border-bottom-right-radius: 4px; }
-  [data-theme="light"] .bb-bubble.bb-msg-in { background: #dcfce7; color: #14532d; border-color: #86efac; }
-  [data-theme="light"] .bb-bubble.bb-msg-out { background: #34C759; color: #fff; }
-  .bb-bubble-text { white-space: pre-wrap; }
-  .bb-bubble-time { font-size: 10px; margin-top: 3px; text-align: right; opacity: 0.65; }
-  /* Google Chat styles */
-  .gc-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .gc-stats .in { color: #1a73e8; } .gc-stats .out { color: #34a853; }
-  .gc-chat { display: flex; flex-direction: column; gap: 8px; }
-  .gc-bubble { max-width: 85%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .gc-bubble.in { background: #1a2a4a; border: 1px solid #1a73e8; color: #c0d8ff; align-self: flex-start; border-bottom-left-radius: 2px; }
-  .gc-bubble.out { background: #1a3a2a; border: 1px solid #34a853; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
-  [data-theme="light"] .gc-bubble.in { background: #e8f0fe; border-color: #1a73e8; color: #1a237e; }
-  [data-theme="light"] .gc-bubble.out { background: #e6f4ea; border-color: #34a853; color: #1b5e20; }
-  .gc-bubble .gc-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #1a73e8; }
-  .gc-bubble .gc-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .gc-bubble .gc-text { white-space: pre-wrap; }
-  /* MS Teams styles */
-  .mst-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .mst-stats .in { color: #6264A7; } .mst-stats .out { color: #33b55b; }
-  .mst-chat { display: flex; flex-direction: column; gap: 8px; }
-  .mst-bubble { max-width: 85%; padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .mst-bubble.in { background: #1e1e3a; border: 1px solid #6264A7; color: #c8c8ff; align-self: flex-start; border-bottom-left-radius: 2px; }
-  .mst-bubble.out { background: #1a3a2a; border: 1px solid #33b55b; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
-  [data-theme="light"] .mst-bubble.in { background: #f0f0ff; border-color: #6264A7; color: #2d2d7a; }
-  [data-theme="light"] .mst-bubble.out { background: #e6f4ea; border-color: #33b55b; color: #1b5e20; }
-  .mst-bubble .mst-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #6264A7; }
-  .mst-bubble .mst-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .mst-bubble .mst-text { white-space: pre-wrap; }
-  /* Mattermost styles */
-  .mm-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .mm-stats .in { color: #0058CC; } .mm-stats .out { color: #3db887; }
-  .mm-chat { display: flex; flex-direction: column; gap: 8px; }
-  .mm-bubble { max-width: 85%; padding: 10px 14px; border-radius: 4px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .mm-bubble.in { background: #0a1a3a; border-left: 3px solid #0058CC; color: #b0ccff; align-self: flex-start; }
-  .mm-bubble.out { background: #0a2a1a; border-left: 3px solid #3db887; color: #b0ffe0; align-self: flex-end; }
-  [data-theme="light"] .mm-bubble.in { background: #e8f0ff; border-color: #0058CC; color: #003399; }
-  [data-theme="light"] .mm-bubble.out { background: #e6faf3; border-color: #3db887; color: #005a3c; }
-  .mm-bubble .mm-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #0058CC; }
-  .mm-bubble .mm-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .mm-bubble .mm-text { white-space: pre-wrap; }
-
-  /* === WhatsApp Channel === */
-  .wa-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .wa-stats .in { color: #25D366; } .wa-stats .out { color: #128C7E; }
-  .wa-chat { display: flex; flex-direction: column; gap: 8px; }
-  .wa-bubble { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .wa-bubble.in { background: #1a2f1a; border: 1px solid #25D366; color: #b0ffc0; align-self: flex-start; border-bottom-left-radius: 4px; }
-  .wa-bubble.out { background: #0d2b1f; border: 1px solid #128C7E; color: #90e8d0; align-self: flex-end; border-bottom-right-radius: 4px; }
-  [data-theme="light"] .wa-bubble.in { background: #dcfce7; border-color: #25D366; color: #14532d; }
-  [data-theme="light"] .wa-bubble.out { background: #d1faf0; border-color: #128C7E; color: #0d4a36; }
-  .wa-bubble .wa-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
-  .wa-bubble .wa-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .wa-bubble .wa-text { white-space: pre-wrap; }
-
-  /* === Signal Channel === */
-  .sig-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .sig-stats .in { color: #3A76F0; } .sig-stats .out { color: #5b4fe8; }
-  .sig-chat { display: flex; flex-direction: column; gap: 8px; }
-  .sig-bubble { max-width: 85%; padding: 10px 14px; border-radius: 18px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .sig-bubble.in { background: #1a2040; border: 1px solid #3A76F0; color: #b0ccff; align-self: flex-start; border-bottom-left-radius: 4px; }
-  .sig-bubble.out { background: #1e1a40; border: 1px solid #5b4fe8; color: #d0c8ff; align-self: flex-end; border-bottom-right-radius: 4px; }
-  [data-theme="light"] .sig-bubble.in { background: #dbeafe; border-color: #3A76F0; color: #1e3a5f; }
-  [data-theme="light"] .sig-bubble.out { background: #ede9fe; border-color: #5b4fe8; color: #3b0764; }
-  .sig-bubble .sig-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; opacity: 0.7; }
-  .sig-bubble .sig-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .sig-bubble .sig-text { white-space: pre-wrap; }
-
-  /* === Discord Channel === */
-  .discord-stats { display: flex; gap: 16px; padding: 10px 14px; background: #2f3136; border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .discord-stats .in { color: #5865F2; } .discord-stats .out { color: #57F287; }
-  .discord-server-info { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #36393f; border-radius: 6px; margin-bottom: 10px; font-size: 12px; color: #b9bbbe; }
-  .discord-server-info .guild-name { color: #5865F2; font-weight: 700; } .discord-server-info .ch-name { color: #8a8f95; }
-  .discord-chat { display: flex; flex-direction: column; gap: 8px; }
-  .discord-bubble { max-width: 85%; padding: 10px 14px; border-radius: 8px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .discord-bubble.in { background: #36393f; border: 1px solid #5865F2; color: #dcddde; align-self: flex-start; border-bottom-left-radius: 2px; }
-  .discord-bubble.out { background: #2f3136; border: 1px solid #57F287; color: #c0ffc0; align-self: flex-end; border-bottom-right-radius: 2px; }
-  [data-theme="light"] .discord-bubble.in { background: #eef0ff; border-color: #5865F2; color: #2c2f33; }
-  [data-theme="light"] .discord-bubble.out { background: #f0fff4; border-color: #3ba55d; color: #1a3a24; }
-  .discord-bubble .discord-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #5865F2; }
-  .discord-bubble.out .discord-sender { color: #57F287; }
-  .discord-bubble .discord-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .discord-bubble .discord-text { white-space: pre-wrap; }
-
-  /* === Slack Channel === */
-  .slack-stats { display: flex; gap: 16px; padding: 10px 14px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 12px; font-size: 13px; font-weight: 600; }
-  .slack-stats .in { color: #E01E5A; } .slack-stats .out { color: #2EB67D; }
-  .slack-workspace-info { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #4A154B; border-radius: 6px; margin-bottom: 10px; font-size: 12px; color: #cfc3cf; }
-  .slack-workspace-info .ws-name { color: #ECB22E; font-weight: 700; } .slack-workspace-info .ch-name { color: #36C5F0; }
-  .slack-chat { display: flex; flex-direction: column; gap: 8px; }
-  .slack-bubble { max-width: 85%; padding: 10px 14px; border-radius: 6px; font-size: 13px; line-height: 1.5; word-wrap: break-word; position: relative; }
-  .slack-bubble.in { background: #1a1a2e; border: 1px solid #E01E5A; color: #f0c0d0; align-self: flex-start; border-bottom-left-radius: 2px; }
-  .slack-bubble.out { background: #0d1f18; border: 1px solid #2EB67D; color: #b0f0d8; align-self: flex-end; border-bottom-right-radius: 2px; }
-  [data-theme="light"] .slack-bubble.in { background: #fce8f0; border-color: #E01E5A; color: #4A154B; }
-  [data-theme="light"] .slack-bubble.out { background: #e8f8f0; border-color: #2EB67D; color: #0a3a25; }
-  .slack-bubble .slack-sender { font-size: 11px; font-weight: 700; margin-bottom: 2px; color: #E01E5A; }
-  .slack-bubble.out .slack-sender { color: #2EB67D; }
-  .slack-bubble .slack-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-align: right; }
-  .slack-bubble .slack-text { white-space: pre-wrap; }
-
-  .tg-load-more button { background: var(--button-bg); border: 1px solid var(--border-primary); border-radius: 8px; padding: 6px 20px; color: var(--text-secondary); cursor: pointer; font-size: 13px; }
-  .tg-load-more button:hover { background: var(--button-hover); }
-  .comp-modal-footer { border-top: 1px solid var(--border-primary); padding: 10px 20px; font-size: 11px; color: var(--text-muted); }
-  /* === Compact Stats Footer Bar === */
-  .stats-footer { display: flex; gap: 0; border: 1px solid var(--border-primary); border-radius: 8px; margin-bottom: 6px; background: var(--bg-tertiary); overflow: hidden; }
-  .stats-footer-item { flex: 1; padding: 6px 12px; display: flex; align-items: center; gap: 8px; border-right: 1px solid var(--border-primary); cursor: pointer; transition: background 0.15s; }
-  .stats-footer-item:last-child { border-right: none; }
-  .stats-footer-item:hover { background: var(--bg-hover); }
-  .stats-footer-icon { font-size: 14px; }
-  .stats-footer-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
-  .tooltip-info-icon {
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    width:14px;
-    height:14px;
-    margin-left:6px;
-    border-radius:999px;
-    border:1px solid var(--border-primary);
-    color:var(--text-muted);
-    font-size:10px;
-    font-weight:700;
-    line-height:1;
-    cursor:help;
-    opacity:0.9;
-    vertical-align:middle;
-  }
-  .tooltip-info-icon:hover { color: var(--text-primary); border-color: var(--text-accent); }
-  .stats-footer-value { font-size: 14px; font-weight: 700; color: var(--text-primary); }
-  .stats-footer-sub { font-size: 10px; color: var(--text-faint); }
-  @media (max-width: 1024px) {
-    .stats-footer { flex-wrap: wrap; }
-    .stats-footer-item { flex: 1 1 45%; min-width: 0; }
-  }
-
-  /* Narrative view */
-  .narrative-item { padding: 10px 0; border-bottom: 1px solid var(--border-secondary); font-size: 13px; line-height: 1.6; color: var(--text-secondary); }
-  .narrative-item:last-child { border-bottom: none; }
-  .narrative-item .narr-icon { margin-right: 8px; }
-  .narrative-item code { background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }
-  /* Summary view */
-  .summary-section { margin-bottom: 16px; }
-  .summary-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 6px; }
-  .summary-text { font-size: 14px; color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; }
-
-  @media (max-width: 1024px) {
-    .overview-split { grid-template-columns: 1fr; height: auto; }
-    .overview-flow-pane { height: 40vh; min-height: 250px; border-radius: 8px 8px 0 0; }
-    .overview-divider { width: auto; height: 1px; }
-    .overview-tasks-pane { height: 60vh; border-radius: 0 0 8px 8px; border-left: 1px solid var(--border-primary); border-top: none; }
-  }
-
-  @media (max-width: 768px) {
-    .nav { padding: 10px 12px; gap: 8px; }
-    .nav h1 { font-size: 16px; }
-    .nav-tab { padding: 6px 12px; font-size: 12px; }
-    .page { padding: 12px; }
-    #page-flow { padding: 0; }
-    .grid { grid-template-columns: 1fr; gap: 12px; }
-    .card-value { font-size: 22px; }
-    .flow-stats { gap: 8px; }
-    .flow-stat { min-width: 70px; padding: 6px 10px; }
-    .flow-stat-value { font-size: 16px; }
-    #flow-svg { min-width: 0; }
-    .heatmap-grid { min-width: 500px; }
-    .chat-msg { max-width: 95%; }
-    .usage-chart { height: 150px; }
-    
-    /* Enhanced Flow mobile optimizations */
-    .flow-container { 
-      padding-bottom: 20px; 
-      overflow: visible; 
-    }
-    #flow-svg text { font-size: 11px !important; }
-    .flow-label { font-size: 7px !important; }
-    .flow-node rect { stroke-width: 1 !important; }
-    .flow-node.active rect { stroke-width: 1.5 !important; }
-    .brain-group { animation-duration: 1.8s; } /* Faster on mobile */
-    
-    /* Mobile zoom controls */
-    .zoom-controls { margin-left: 8px; gap: 2px; }
-    .zoom-btn { width: 24px; height: 24px; font-size: 14px; }
-    .zoom-level { min-width: 32px; font-size: 10px; }
-
-    /* Nav: logo+icons row, tabs scroll row below */
-    .nav { flex-wrap: wrap; padding: 6px 10px; gap: 6px; }
-    .nav h1 { order: 1; font-size: 15px; }
-    .theme-toggle { order: 2; }
-    .zoom-controls { order: 3; margin-left: auto; }
-    .nav-tabs {
-      order: 4; width: 100%; margin-left: 0;
-      overflow-x: auto; flex-wrap: nowrap;
-      padding-bottom: 2px; gap: 2px;
-      scrollbar-width: none;
-    }
-    .nav-tabs::-webkit-scrollbar { display: none; }
-    .nav-tab { padding: 5px 10px; font-size: 11px; white-space: nowrap; }
-
-    /* Brain event stream: stack rows on mobile */
-    .brain-event { flex-direction: column; gap: 2px; padding: 6px 0; align-items: flex-start; }
-    .brain-meta { display: flex !important; align-items: center; gap: 5px; flex-shrink: 0; width: 100%; }
-    .brain-time { min-width: unset; font-size: 10px; flex-shrink: 0; }
-    .brain-source { min-width: unset; max-width: 140px; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .brain-type { min-width: 42px; font-size: 9px; padding: 1px 3px; flex-shrink: 0; }
-    .brain-detail { font-size: 11px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; width: 100%; white-space: normal; }
-    .brain-event.expanded .brain-detail { -webkit-line-clamp: unset; overflow: visible; }
-
-    /* Filter chips: single scrollable row, no wrap */
-    #brain-filter-chips { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
-    #brain-filter-chips::-webkit-scrollbar { display: none; }
-    #brain-type-chips { flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
-    #brain-type-chips::-webkit-scrollbar { display: none; }
-
-    /* Cards */
-    .card { padding: 12px 14px; }
-    .card-label { font-size: 10px; }
-    .card-value { font-size: 20px; }
-    
-    /* Overview grid already 1-col, just tighten gap */
-    .grid { gap: 8px; }
-
-    /* Memory / cron tables */
-    .mem-file-row { flex-direction: column; gap: 4px; }
-    .cron-job { flex-wrap: wrap; gap: 6px; }
-  }
-</style>
-
-<script>
-window.toggleAdvancedTabs = function(e) {
-  e.stopPropagation();
-  var dd = e.target.closest('.nav-tab-more').querySelector('.advanced-tabs-dropdown');
-  if (!dd) return;
-  var vis = dd.style.display === 'none' || !dd.style.display;
-  document.querySelectorAll('.advanced-tabs-dropdown').forEach(function(d){ d.style.display = 'none'; });
-  if (vis) dd.style.display = 'block';
-};
-window.hideAdvDropdown = function() {
-  document.querySelectorAll('.advanced-tabs-dropdown').forEach(function(d){ d.style.display = 'none'; });
-};
-document.addEventListener('click', function(e) {
-  if (!e.target.closest('.nav-tab-more') && !e.target.closest('.advanced-tabs-dropdown')) {
-    hideAdvDropdown();
-  }
-});
-</script>
-
-<script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
-</head>
-<body data-theme="dark" class="booting">
-<!-- Login overlay -->
-<div id="login-overlay" style="display:none;position:fixed;inset:0;z-index:99999;background:var(--bg-primary,#0f172a);align-items:center;justify-content:center;flex-direction:column;">
-  <div style="background:var(--card-bg,#1e293b);border-radius:16px;padding:40px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.4);text-align:center;">
-    <img src="/static/img/logo.svg" style="width:64px;height:64px;margin-bottom:16px;display:block;margin-left:auto;margin-right:auto;" alt="ClawMetry">
-    <h2 style="color:#e2e8f0;margin:0 0 8px;">ClawMetry</h2>
-    <p style="color:#94a3b8;margin:0 0 24px;font-size:14px;">Enter your OpenClaw Gateway Token</p>
-    <input id="login-token" type="password" placeholder="Gateway token..." style="width:100%;box-sizing:border-box;padding:12px 16px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:15px;margin-bottom:16px;outline:none;" onkeydown="if(event.key==='Enter')clawmetryLogin()">
-    <button onclick="clawmetryLogin()" style="width:100%;padding:12px;border-radius:8px;border:none;background:#3b82f6;color:#fff;font-size:15px;font-weight:600;cursor:pointer;">Login</button>
-    <p id="login-error" style="color:#f87171;margin:12px 0 0;font-size:13px;display:none;">Invalid token</p>
-  </div>
-</div>
-<script>
-(function(){
-  var stored = localStorage.getItem('clawmetry-token');
-  fetch('/api/auth/check' + (stored ? '?token=' + encodeURIComponent(stored) : ''))
-    .then(function(r){return r.json()})
-    .then(function(d){
-      if(d.needsSetup){
-        // No gateway token configured -- show mandatory gateway setup wizard
-        document.getElementById('login-overlay').style.display='none';
-        var overlay=document.getElementById('gw-setup-overlay');
-        overlay.dataset.mandatory='true';
-        document.getElementById('gw-setup-close').style.display='none';
-        overlay.style.display='flex';
-        return;
-      }
-      if(!d.authRequired){
-        document.getElementById('login-overlay').style.display='none';
-        return;
-      }
-      if(d.valid){
-        document.getElementById('login-overlay').style.display='none';
-        var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
-        return;
-      }
-      localStorage.removeItem('cm-token');localStorage.removeItem('clawmetry-token');sessionStorage.removeItem('cm-token');document.getElementById('login-overlay').style.display='flex';
-    })
-    .catch(function(){document.getElementById('login-overlay').style.display='none';});
-})();
-function clawmetryLogin(){
-  var tok=document.getElementById('login-token').value.trim();
-  if(!tok)return;
-  fetch('/api/auth/check?token='+encodeURIComponent(tok))
-    .then(function(r){return r.json()})
-    .then(function(d){
-      if(d.valid){
-        localStorage.setItem('clawmetry-token',tok);
-        document.getElementById('login-overlay').style.display='none';
-        var lb=document.getElementById('logout-btn');if(lb)lb.style.display='';
-        location.reload();
-      } else {
-        document.getElementById('login-error').style.display='block';
-      }
-    });
-}
-function clawmetryLogout(){
-  localStorage.removeItem('clawmetry-token');
-  location.reload();
-}
-// Inject auth header into all fetch calls
-(function(){
-  var _origFetch=window.fetch;
-  window.fetch=function(url,opts){
-    var tok=localStorage.getItem('clawmetry-token');
-    if(tok && typeof url==='string' && url.startsWith('/api/')){
-      opts=opts||{};
-      opts.headers=opts.headers||{};
-      if(opts.headers instanceof Headers){opts.headers.set('Authorization','Bearer '+tok);}
-      else{opts.headers['Authorization']='Bearer '+tok;}
-    }
-    return _origFetch.call(this,url,opts);
-  };
-})();
-
-// ── Version badge + one-click update ──
-(function(){
-  function checkVersion(){
-    fetch('/api/version').then(function(r){return r.json();}).then(function(d){
-      var badges=document.querySelectorAll('.version-badge');
-      badges.forEach(function(badge){
-        if(d.update_available){
-          badge.textContent='v'+d.current+' -> v'+d.latest+' \u2B06';
-          badge.className='version-badge update-available';
-          badge.title='Click to update ClawMetry to v'+d.latest;
-          badge.onclick=function(){triggerUpdate(d.latest,badges);};
-        }else{
-          badge.textContent='v'+d.current;
-        }
-      });
-    }).catch(function(){});
-  }
-  function triggerUpdate(latest,badges){
-    if(!confirm('Update ClawMetry to v'+latest+'? Dashboard will restart.'))return;
-    badges.forEach(function(b){b.textContent='Updating...';b.className='version-badge updating';b.onclick=null;});
-    fetch('/api/update',{method:'POST'}).then(function(r){return r.json();}).then(function(d){
-      if(d.ok){
-        badges.forEach(function(b){b.textContent='Restarting...';});
-        setTimeout(function(){window.location.reload();},5000);
-      }else{
-        badges.forEach(function(b){b.textContent='Update failed';b.className='version-badge';});
-      }
-    }).catch(function(){
-      badges.forEach(function(b){b.textContent='Update failed';b.className='version-badge';});
-    });
-  }
-  checkVersion();
-})();
-</script>
-<div class="boot-overlay" id="boot-overlay">
-  <div class="boot-card">
-    <div class="boot-spinner"></div>
-    <div class="boot-title">Initializing ClawMetry</div>
-    <div class="boot-sub" id="boot-sub">Loading model, tasks, system health, and live streams…</div>
-    <div class="boot-steps">
-      <div class="boot-step loading" id="boot-step-overview"><span class="boot-dot"></span><span>Loading overview + model context</span></div>
-      <div class="boot-step" id="boot-step-tasks"><span class="boot-dot"></span><span>Loading active tasks</span></div>
-      <div class="boot-step" id="boot-step-health"><span class="boot-dot"></span><span>Loading system health</span></div>
-      <div class="boot-step" id="boot-step-streams"><span class="boot-dot"></span><span>Connecting live streams</span></div>
-    </div>
-  </div>
-</div>
-<div class="zoom-wrapper" id="zoom-wrapper">
-<div class="nav">
-  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
-  <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
-  <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
-    <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      <span id="workspace-switcher-label" style="display:none">default</span>
-    </button>
-    <div id="workspace-switcher-menu" style="display:none;position:absolute;top:calc(100% + 6px);left:0;min-width:240px;max-height:320px;overflow-y:auto;background:var(--bg-card,#1c2333);border:1px solid var(--border-color,rgba(255,255,255,0.1));border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.35);z-index:200;padding:4px;"></div>
-  </div>
-  <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
-  <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
-
-  <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
-  <div class="zoom-controls">
-    <button class="zoom-btn" onclick="zoomOut()" title="Zoom out (Ctrl/Cmd + -)">−</button>
-    <span class="zoom-level" id="zoom-level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
-    <button class="zoom-btn" onclick="zoomIn()" title="Zoom in (Ctrl/Cmd + +)">+</button>
-  </div>
-  <div class="nav-tabs">
-    <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
-    <div class="nav-tab" onclick="switchTab('brain')">Brain</div>
-    <div class="nav-tab active" onclick="switchTab('overview')">Overview <span id="nav-stuck-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
-    <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
-    <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
-    <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
-    <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
-    <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
-    <div class="nav-tab" onclick="switchTab('security')">Security</div>
-    <div class="nav-tab" id="nemoclaw-tab" onclick="switchTab('nemoclaw')" style="display:none;">NemoClaw</div>
-    <!-- History tab hidden until mature -->
-    <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
-  </div>
-</div>
-
-<!-- Alert Banner -->
-<div id="alert-banner" style="display:none;padding:10px 16px;background:var(--bg-error);border-bottom:2px solid var(--text-error);color:var(--text-error);font-size:13px;font-weight:600;display:none;align-items:center;gap:10px;">
-  <span style="font-size:18px;">&#9888;&#65039;</span>
-  <span id="alert-banner-msg" style="flex:1;"></span>
-  <button onclick="ackAllAlerts()" style="background:var(--text-error);color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Dismiss</button>
-  <button id="alert-resume-btn" onclick="resumeGateway()" style="display:none;background:#16a34a;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Resume Gateway</button>
-</div>
-
-<!-- Issue #556: Anthropic OAuth migration banner. Hidden until /api/overview
-     returns client_health.using_oauth=true. Dismiss is sticky via localStorage. -->
-<div id="oauth-banner" style="display:none;padding:10px 16px;background:#451a03;border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:500;align-items:center;gap:10px;">
-  <span style="font-size:16px;">&#9888;&#65039;</span>
-  <span id="oauth-banner-msg" style="flex:1;">You appear to be using an Anthropic <b>OAuth token</b> (Claude.ai). OAuth tokens have lower rate limits and different pricing than API keys &mdash; switch to an API key from <code>console.anthropic.com</code> for higher limits and metered billing.</span>
-  <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="background:#f59e0b;color:#1a1a2e;text-decoration:none;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Why migrate?</a>
-  <button onclick="dismissOauthBanner()" style="background:transparent;color:#fbbf24;border:1px solid #f59e0b80;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
-</div>
-
-<!-- Upgrade Impact Banner -->
-<div id="upgrade-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#1e3a5f 0%,#1a1a2e 100%);border-bottom:2px solid #3b82f6;color:#93c5fd;font-size:13px;font-weight:500;align-items:center;gap:10px;">
-  <span style="font-size:16px;">&#128640;</span>
-  <span id="upgrade-banner-msg" style="flex:1;"></span>
-  <button onclick="switchTab('version-impact')" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">View Details</button>
-  <button onclick="dismissUpgradeBanner()" style="background:transparent;color:#93c5fd;border:1px solid #3b82f680;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
-</div>
-
-<!-- Issue #1233: gateway WS tap is now opt-in. Hidden until /api/overview returns
-     _comms.show_gateway_tap_banner=true. Dismiss is sticky via localStorage. -->
-<div id="gw-tap-banner" style="display:none;padding:10px 16px;background:linear-gradient(90deg,#3a2d05 0%,#1a1a2e 100%);border-bottom:2px solid #f59e0b;color:#fbbf24;font-size:13px;font-weight:500;align-items:center;gap:10px;">
-  <span style="font-size:16px;">&#9888;&#65039;</span>
-  <span id="gw-tap-banner-msg" style="flex:1;">Live channel watch (Telegram, Signal, Discord, etc.) is now opt-in for safety. Set <code>CLAWMETRY_ENABLE_WS_TAP=1</code> and restart the sync daemon to re-enable inbound message capture.</span>
-  <a id="gw-tap-banner-pro" href="/cloud/billing" style="display:none;background:#f59e0b;color:#1a1a2e;text-decoration:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;font-weight:600;">Pro enables this by default</a>
-  <button onclick="dismissGwTapBanner()" style="background:transparent;color:#fbbf24;border:1px solid #f59e0b80;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">Dismiss</button>
-</div>
-
-<!-- Budget Settings Modal -->
-<div id="budget-modal" style="display:none;position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
-  <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:16px;width:90%;max-width:560px;padding:24px;box-shadow:0 25px 50px rgba(0,0,0,0.25);">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-      <h3 style="font-size:18px;font-weight:700;color:var(--text-primary);">&#128176; Budget & Alerts</h3>
-      <button onclick="document.getElementById('budget-modal').style.display='none'" style="background:var(--button-bg);border:1px solid var(--border-primary);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:18px;color:var(--text-tertiary);">&times;</button>
-    </div>
-    <div id="budget-modal-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-primary);margin-bottom:16px;">
-      <div class="modal-tab active" onclick="switchBudgetTab('limits',this)">Budget Limits</div>
-      <div class="modal-tab" onclick="switchBudgetTab('alerts',this)">Alert Rules</div>
-      <div class="modal-tab" onclick="switchBudgetTab('telegram',this)">Telegram</div>
-      <div class="modal-tab" onclick="switchBudgetTab('history',this)">History</div>
-    </div>
-    <!-- Budget Limits Tab -->
-    <div id="budget-tab-limits">
-      <div style="display:grid;gap:12px;">
-        <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Daily Limit (USD, 0 = no limit)</label>
-          <input id="budget-daily" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
-        </div>
-        <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Weekly Limit (USD)</label>
-          <input id="budget-weekly" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
-        </div>
-        <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Monthly Limit (USD)</label>
-          <input id="budget-monthly" type="number" step="0.01" min="0" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
-        </div>
-        <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Warning at (%)</label>
-          <input id="budget-warn-pct" type="number" step="1" min="1" max="100" value="80" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <input id="budget-autopause" type="checkbox" style="cursor:pointer;">
-          <label for="budget-autopause" style="font-size:13px;color:var(--text-secondary);cursor:pointer;">Auto-pause gateway when budget exceeded</label>
-        </div>
-        <button onclick="saveBudgetConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px;font-size:14px;font-weight:600;cursor:pointer;">Save Budget Settings</button>
-      </div>
-      <div id="budget-status-display" style="margin-top:16px;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Current Spending</div>
-        <div id="budget-status-content" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
-      </div>
-      <div style="margin-top:16px;border-top:1px solid var(--border-primary);padding-top:12px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:8px;">Per-Agent Overrides</div>
-        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:12px;">Override global limits per agent. Leave blank to fall back to global. Alerts fire at 80% (warning) and 100% (critical).</div>
-        <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
-          <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Add / Update Override</div>
-          <div style="display:grid;gap:8px;">
-            <input id="agent-budget-id" type="text" placeholder="Agent ID (e.g. main, my-subagent)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <input id="agent-budget-daily" type="number" step="0.01" min="0" placeholder="Daily limit USD (blank = global)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <input id="agent-budget-monthly" type="number" step="0.01" min="0" placeholder="Monthly limit USD (blank = global)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <div style="display:flex;gap:8px;">
-              <button onclick="saveAgentBudget()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save Override</button>
-              <span id="agent-budget-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
-            </div>
-          </div>
-        </div>
-        <div id="agent-budget-list" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
-      </div>
-    </div>
-    <!-- Alert Rules Tab -->
-    <div id="budget-tab-alerts" style="display:none;">
-      <div style="margin-bottom:12px;">
-        <button onclick="showAddAlertForm()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;">+ Add Alert Rule</button>
-      </div>
-      <div id="add-alert-form" style="display:none;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
-        <div style="display:grid;gap:8px;">
-          <select id="alert-type" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <option value="threshold">Threshold (daily $ amount)</option>
-            <option value="spike">Spike (hourly rate multiplier)</option>
-            <option value="token_spike">Token spike (tokens/min)</option>
-          </select>
-          <input id="alert-threshold" type="number" step="0.01" min="0" placeholder="Threshold value" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-banner" checked> Banner</label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-ch-telegram"> Telegram</label>
-          </div>
-          <input id="alert-cooldown" type="number" value="30" min="1" placeholder="Cooldown (min)" style="padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-          <div style="display:flex;gap:8px;">
-            <button onclick="createAlertRule()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 16px;font-size:13px;cursor:pointer;">Create</button>
-            <button onclick="document.getElementById('add-alert-form').style.display='none'" style="background:var(--button-bg);color:var(--text-secondary);border:none;border-radius:6px;padding:6px 16px;font-size:13px;cursor:pointer;">Cancel</button>
-          </div>
-        </div>
-      </div>
-      <div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;margin-bottom:12px;">
-        <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Alert Channels (Webhooks)</div>
-        <div style="display:grid;gap:8px;">
-          <div style="display:flex;gap:6px;align-items:center;">
-            <input id="alert-webhook-url" type="text" placeholder="Generic webhook URL (JSON payload)" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <button onclick="testWebhookConfig('generic')" style="background:#374151;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
-          </div>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <input id="alert-slack-url" type="text" placeholder="Slack incoming webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <button onclick="testWebhookConfig('slack')" style="background:#4a154b;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
-          </div>
-          <div style="display:flex;gap:6px;align-items:center;">
-            <input id="alert-discord-url" type="text" placeholder="Discord webhook URL" style="flex:1;padding:8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);">
-            <button onclick="testWebhookConfig('discord')" style="background:#5865f2;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;white-space:nowrap;">Test</button>
-          </div>
-          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-cost-spike"> Cost spike alerts</label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-agent-error"> Agent error rate alerts</label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="alert-toggle-security"> Security posture changes</label>
-          </div>
-          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-            <label style="font-size:12px;color:var(--text-muted);">Min severity:</label>
-            <select id="alert-min-severity" style="padding:4px 8px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-tertiary);color:var(--text-primary);font-size:12px;">
-              <option value="info">Info (all alerts)</option>
-              <option value="warning" selected>Warning+</option>
-              <option value="critical">Critical only</option>
-            </select>
-          </div>
-          <div style="display:flex;gap:8px;">
-            <button onclick="saveWebhookConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Save</button>
-            <button onclick="testWebhookConfig('all')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Test All</button>
-            <span id="alert-webhook-status" style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;"></span>
-          </div>
-        </div>
-      </div>
-      <div id="alert-rules-list" style="font-size:13px;color:var(--text-secondary);">Loading...</div>
-    </div>
-    <!-- Telegram Tab -->
-    <div id="budget-tab-telegram" style="display:none;">
-      <div style="display:grid;gap:12px;">
-        <div style="font-size:12px;color:var(--text-muted);line-height:1.5;">
-          Configure direct Telegram notifications for budget alerts. Create a bot via <a href="https://t.me/BotFather" target="_blank" style="color:var(--text-accent);">@BotFather</a> and get your chat ID.
-        </div>
-        <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Bot Token</label>
-          <input id="tg-bot-token" type="password" placeholder="123456:ABC-DEF..." style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
-        </div>
-        <div>
-          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">Chat ID</label>
-          <input id="tg-chat-id" type="text" placeholder="-100123456789" style="width:100%;padding:8px 12px;border:1px solid var(--border-primary);border-radius:8px;background:var(--bg-secondary);color:var(--text-primary);font-size:14px;">
-        </div>
-        <div style="display:flex;gap:8px;">
-          <button onclick="saveTelegramConfig()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Save</button>
-          <button onclick="testTelegram()" style="background:#16a34a;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;">Send Test</button>
-        </div>
-        <div id="tg-status" style="font-size:12px;color:var(--text-muted);"></div>
-      </div>
-    </div>
-    <!-- History Tab -->
-    <div id="budget-tab-history" style="display:none;">
-      <div id="alert-history-list" style="font-size:13px;color:var(--text-secondary);max-height:400px;overflow-y:auto;">Loading...</div>
-    </div>
-  </div>
-</div>
-
-<!-- OVERVIEW (Split-Screen Hacker Dashboard) -->
-<div class="page active" id="page-overview">
-
-  <!-- PRIMARY KPI: Autonomy Score (#688) -->
-  <div id="autonomy-card" style="
-    background:var(--bg-secondary);
-    border:2px solid var(--border-primary);
-    border-radius:12px;
-    padding:18px 22px;
-    margin-bottom:14px;
-    box-shadow:var(--card-shadow);
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:16px;
-    align-items:start;
-  ">
-    <!-- Left: big number + subtitle -->
-    <div>
-      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">&#127919; Autonomy Score</div>
-      <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
-        <span id="autonomy-score-value" style="font-size:48px;font-weight:800;line-height:1;color:var(--text-primary);">--</span>
-        <span id="autonomy-trend-badge" style="font-size:13px;font-weight:600;padding:3px 8px;border-radius:20px;"></span>
-      </div>
-      <div id="autonomy-median-gap" style="font-size:13px;color:var(--text-muted);margin-top:6px;">Median time between nudges: --</div>
-      <div id="autonomy-trend-pct" style="font-size:12px;color:var(--text-muted);margin-top:2px;"></div>
-      <div style="font-size:10px;color:var(--text-muted);margin-top:10px;font-style:italic;line-height:1.4;max-width:420px;">
-        Alex&#8217;s definition: &#8220;Success = human nudges space out exponentially&#8221;
-      </div>
-    </div>
-    <!-- Right: sparkline -->
-    <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;text-align:right;">7-day autonomy ratio</div>
-      <svg id="autonomy-sparkline" width="160" height="48" viewBox="0 0 160 48" style="overflow:visible;">
-        <text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">No data yet</text>
-      </svg>
-      <div id="autonomy-samples" style="font-size:10px;color:var(--text-muted);margin-top:4px;text-align:right;"></div>
-    </div>
-  </div>
-
-  <!-- Outcome tile (Issue #1614): success rate + escalated + failed counts.
-       Renders from /api/outcomes (DuckDB-backed). Click expands the drill-
-       down list of failed/escalated sessions. -->
-  <div id="outcome-card" style="
-    background:var(--bg-secondary);
-    border:1px solid var(--border-primary);
-    border-radius:10px;
-    padding:14px 18px;
-    margin-bottom:10px;
-    box-shadow:var(--card-shadow);
-    cursor:pointer;
-  " onclick="toggleOutcomeDrilldown()" title="Click for details">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-      <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
-        <span style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">Today</span>
-        <span id="outcome-tile-summary" style="font-size:14px;color:var(--text-primary);">Loading task outcomes...</span>
-      </div>
-      <span id="outcome-tile-chevron" style="font-size:11px;color:var(--text-muted);">show details</span>
-    </div>
-    <div id="outcome-drilldown" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-secondary);font-size:12px;">
-      <div id="outcome-drilldown-body" style="color:var(--text-muted);">Loading...</div>
-    </div>
-  </div>
-
-  <div class="refresh-bar" style="margin-bottom:6px;">
-    <button class="refresh-btn" onclick="loadAll()" style="padding:4px 12px;font-size:12px;">↻</button>
-    <span class="pulse"></span>
-    <span class="live-badge">LIVE</span>
-    <span class="refresh-time" id="refresh-time" style="font-size:11px;">Loading...</span>
-  </div>
-
-  <!-- Token Velocity Alert Banner (GH #313) -->
-  <div id="velocity-alert-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-      <span id="velocity-alert-msg"></span>
-      <span style="font-size:11px;font-weight:400;color:inherit;opacity:0.8;">auto-refreshes every 30s</span>
-    </div>
-    <div id="velocity-flagged-list" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;"></div>
-  </div>
-
-  <!-- Prompt-Error Banner (GH #601) -->
-  <div id="prompt-error-banner" style="display:none;margin-bottom:8px;border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600;background:rgba(220,38,38,0.15);border:1px solid rgba(239,68,68,0.4);color:#fca5a5;">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-      <span id="prompt-error-msg"></span>
-      <button onclick="document.getElementById('prompt-error-banner').style.display='none'" style="background:none;border:none;color:inherit;opacity:0.7;cursor:pointer;font-size:18px;line-height:1;padding:0;">&times;</button>
-    </div>
-    <div id="prompt-error-list" style="margin-top:8px;display:flex;flex-direction:column;gap:4px;font-weight:400;font-size:12px;"></div>
-  </div>
-
-  <!-- Stats Bar (top) -->
-  <div class="stats-footer">
-    <div class="stats-footer-item">
-      <span class="stats-footer-icon">💰</span>
-      <div>
-        <div class="stats-footer-label">Spending <span id="cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
-        <div class="stats-footer-value" id="cost-today">$0.00</div>
-        <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
-      </div>
-      <div style="margin-left:auto;text-align:right;">
-        <div class="stats-footer-sub">wk: <span id="cost-week">--</span></div>
-        <div class="stats-footer-sub">mo: <span id="cost-month">--</span></div>
-      </div>
-      <span id="cost-trend" style="display:none;">Estimated from usage -- may be $0 billed with OAuth auth</span>
-    </div>
-    <div class="stats-footer-item">
-      <span class="stats-footer-icon">🤖</span>
-      <div>
-        <div class="stats-footer-label">Model</div>
-        <div class="stats-footer-value" id="model-primary">--</div>
-      </div>
-      <div id="model-breakdown" style="display:none;">Loading...</div>
-    </div>
-    <div class="stats-footer-item">
-      <span class="stats-footer-icon">📊</span>
-      <div>
-        <div class="stats-footer-label">Tokens</div>
-        <div class="stats-footer-value" id="token-rate">--</div>
-      </div>
-      <span class="stats-footer-sub" style="margin-left:auto;">today: <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
-    </div>
-    <div class="stats-footer-item">
-      <span class="stats-footer-icon">💬</span>
-      <div>
-        <div class="stats-footer-label">Sessions</div>
-        <div class="stats-footer-value" id="hot-sessions-count">--</div>
-        <div id="hot-sessions-sub" style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.3;"></div>
-      </div>
-      <div id="hot-sessions-list" style="display:none;">Loading...</div>
-    </div>
-    <div class="stats-footer-item" id="reliability-card">
-      <span class="stats-footer-icon" id="reliability-icon">🔄</span>
-      <div>
-        <div class="stats-footer-label">Reliability</div>
-        <div class="stats-footer-value" id="reliability-direction">--</div>
-      </div>
-      <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail"></span>
-    </div>
-    <!-- Issue #1619 Phase 1 — eval score tile. Click opens the rubric editor.
-         Phase 3 adds the ``eval-regression-line`` mini-line under the score,
-         populated by loadEvalRegressionSummary() — silent on a fresh install. -->
-    <div class="stats-footer-item" id="eval-card" style="cursor:pointer;" title="Click to edit the rubric" onclick="openEvalRubricModal()">
-      <span class="stats-footer-icon">⭐</span>
-      <div>
-        <div class="stats-footer-label">Eval score (24h)</div>
-        <div class="stats-footer-value" id="eval-avg-score">--</div>
-        <div id="eval-regression-line" style="font-size:10px;color:var(--text-muted);margin-top:2px;line-height:1.2;"></div>
-      </div>
-      <span class="stats-footer-sub" style="margin-left:auto;" id="eval-coverage"></span>
-    </div>
-  </div>
-
-  <!-- Issue #1619 Phase 1 — rubric editor modal. Loaded lazily; hidden by default. -->
-  <div id="eval-rubric-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
-    <div style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:12px;padding:20px;max-width:640px;width:90%;max-height:80vh;display:flex;flex-direction:column;gap:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <h3 style="margin:0;font-size:14px;font-weight:700;color:var(--text-primary);">Eval rubric</h3>
-        <button onclick="closeEvalRubricModal()" style="background:transparent;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;">&times;</button>
-      </div>
-      <div style="font-size:11px;color:var(--text-muted);">Edit the YAML rubric used by the local LLM judge. Saved to <code id="eval-rubric-path">~/.clawmetry/evals.yaml</code>. Disable scoring entirely with <code>CLAWMETRY_EVALS_ENABLED=0</code>.</div>
-      <textarea id="eval-rubric-yaml" style="font-family:monospace;font-size:12px;width:100%;min-height:280px;padding:10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:8px;resize:vertical;" spellcheck="false"></textarea>
-      <div id="eval-rubric-status" style="font-size:11px;color:var(--text-muted);min-height:14px;"></div>
-      <div style="display:flex;justify-content:flex-end;gap:8px;">
-        <button onclick="closeEvalRubricModal()" style="background:transparent;color:var(--text-muted);border:1px solid var(--border-primary);border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">Cancel</button>
-        <button onclick="saveEvalRubric()" style="background:var(--bg-accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Split Screen: Flow Left | Tasks Right -->
-  <div class="overview-split">
-    <!-- LEFT: Flow + System Health stacked -->
-    <div style="display:flex;flex-direction:column;">
-      <div class="overview-flow-pane" style="border-radius:8px 0 0 0;flex:3;min-height:0;">
-        <div class="grid-overlay"></div>
-        <div class="scanline-overlay"></div>
-        <div class="flow-container" id="overview-flow-container">
-          <!-- Flow SVG cloned here by JS -->
-          <div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px;">Loading flow...</div>
-        </div>
-      </div>
-
-      <!-- System Health Panel (below flow SVG) -->
-      <div id="system-health-panel" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-top:none;padding:16px;box-shadow:var(--card-shadow);">
-        <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 System Health</div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Services</div>
-        <div id="sh-services" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div>
-        <div id="sh-channels-wrap"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Channels</div>
-        <div id="sh-channels" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;"></div></div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Disk Usage</div>
-        <div id="sh-disks" style="margin-bottom:14px;"></div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Cron Jobs</div>
-        <div id="sh-crons" style="margin-bottom:14px;"></div>
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Sub-Agents (24h)</div>
-        <div id="sh-subagents" style="margin-bottom:14px;"></div>
-        <div id="delegation-chains-panel" style="margin-bottom:14px;"></div>
-        <div id="sh-heartbeat-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">Heartbeat</div>
-        <div id="sh-heartbeat" style="margin-bottom:14px;"></div></div>
-        <div id="sh-sandbox-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔒 Sandbox</div>
-        <div id="sh-sandbox" style="margin-bottom:14px;"></div></div>
-        <div id="sh-inference-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🤖 Inference Provider</div>
-        <div id="sh-inference" style="margin-bottom:14px;"></div></div>
-        <div id="sh-security-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🛡️ Security Posture</div>
-        <div id="sh-security" style="margin-bottom:14px;"></div></div>
-        <div id="sh-reliability-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">📊 Agent Reliability</div>
-        <div id="sh-reliability" style="margin-bottom:14px;"></div></div>
-        <div id="sh-mcp-wrap" style="display:none;"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;margin-bottom:6px;">🔌 MCP Tool Activity</div>
-        <div id="sh-mcp" style="margin-bottom:14px;"></div></div>
-        <!-- 🔍 Diagnostics Panel (GH#28) -->
-        <div id="sh-diagnostics-wrap">
-          <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 0;" onclick="var b=document.getElementById(\'sh-diagnostics-body\');b.style.display=b.style.display===\'none\'?\'block\':\'none\';this.querySelector(\'.diag-chevron\').textContent=b.style.display===\'none\'?\'▶\':\'▼\';">
-            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-muted);font-weight:600;">🔍 Configuration Diagnostics</div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <button id="sh-diagnostics-copy" onclick="event.stopPropagation();copyDiagnostics();" style="font-size:10px;padding:2px 8px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:4px;color:var(--text-muted);cursor:pointer;">📋 Copy</button>
-              <span class="diag-chevron" style="font-size:10px;color:var(--text-muted);">▼</span>
-            </div>
-          </div>
-          <div id="sh-diagnostics-body" style="margin-bottom:14px;">
-            <div id="sh-diagnostics" style="font-family:\'JetBrains Mono\',monospace;font-size:12px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;padding:10px 12px;line-height:1.9;">
-              <div style="color:var(--text-muted);">Loading diagnostics...</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- DIVIDER -->
-    <div class="overview-divider"></div>
-
-    <!-- RIGHT: Active Tasks + Brain stacked -->
-    <div class="overview-tasks-pane">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:15px;font-weight:700;color:var(--text-primary);">🐝 Active Tasks</span>
-          <span id="overview-tasks-count-badge" style="font-size:11px;color:var(--text-muted);"></span>
-        </div>
-        <span style="font-size:10px;color:var(--text-faint);letter-spacing:0.5px;">⟳ 30s</span>
-      </div>
-      <div class="tasks-panel-scroll" id="overview-tasks-list">
-        <div style="text-align:center;padding:32px;color:var(--text-muted);">
-          <div style="font-size:28px;margin-bottom:8px;" class="tasks-empty-icon">🐝</div>
-          <div style="font-size:13px;">Loading tasks...</div>
-        </div>
-      </div>
-      <!-- 🧠 Brain Panel: Main Agent Activity (below Active Tasks) -->
-      <div id="main-activity-panel" style="background:linear-gradient(180deg, var(--bg-secondary) 0%, #12121a 100%);border:1px solid var(--border-primary);border-radius:12px;padding:10px 14px 8px;min-height:80px;margin-top:14px;display:flex;flex-direction:column;overflow:hidden;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-          <div style="display:flex;align-items:center;gap:6px;">
-            <span id="main-activity-dot" style="width:8px;height:8px;border-radius:50%;background:#888;display:inline-block;"></span>
-            <span style="font-size:13px;font-weight:700;color:var(--text-primary);">🧠 <span id="main-activity-model">Claude Opus</span></span>
-            <span id="main-activity-status" style="font-size:10px;color:var(--text-muted);">
-              <span id="main-activity-label">...</span>
-            </span>
-          </div>
-        </div>
-        <div id="main-activity-list" style="overflow-y:auto;flex:1;font-size:11px;font-family:'JetBrains Mono','Fira Code',monospace;line-height:1.6;">
-          <div style="text-align:center;padding:8px;color:var(--text-muted);font-size:11px;">Waiting for activity...</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Hidden elements referenced by existing JS -->
-  <div style="display:none;">
-    <span id="tokens-peak">--</span>
-    <span id="subagents-count">--</span>
-    <span id="subagents-status">--</span>
-    <span id="subagents-preview"></span>
-    <span id="tools-active">--</span>
-    <span id="tools-recent">--</span>
-    <div id="tools-sparklines"><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div><div class="tool-spark"><span>--</span></div></div>
-    <div id="active-tasks-grid"></div>
-    <div id="activity-stream"></div>
-  </div>
-
-  <!-- old system health removed, now inside tasks pane -->
-
-  <!-- ❤️ Heartbeat Liveness Panel (#686) -->
-  <div id="heartbeat-panel" style="margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;box-shadow:var(--card-shadow);">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x2764;&#xfe0f; Heartbeat</span>
-      <span id="hb-status-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:rgba(107,114,128,0.2);color:var(--text-muted);">...</span>
-    </div>
-    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
-      <!-- Pulse indicator -->
-      <div style="display:flex;flex-direction:column;align-items:center;gap:4px;min-width:48px;">
-        <div id="hb-pulse-dot" style="width:20px;height:20px;border-radius:50%;background:#6b7280;animation:none;"></div>
-        <span id="hb-pulse-label" style="font-size:10px;color:var(--text-muted);">no data</span>
-      </div>
-      <!-- Stats -->
-      <div style="flex:1;display:flex;flex-direction:column;gap:5px;min-width:200px;">
-        <div style="font-size:12px;color:var(--text-primary);">Last beat: <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">--</span></div>
-        <div style="font-size:12px;color:var(--text-primary);">Cadence (24h): <span id="hb-cadence" style="font-weight:600;">-- / --</span> expected</div>
-        <div style="font-size:12px;color:var(--text-primary);">Idle replies: <span id="hb-ok-ratio" style="font-weight:600;color:var(--text-success);">--%</span> &middot; Action taken: <span id="hb-action-ratio" style="font-weight:600;">--%</span></div>
-      </div>
-      <!-- Recent beats sparkline -->
-      <div style="display:flex;flex-direction:column;gap:4px;align-items:center;">
-        <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;">Last 10 beats</div>
-        <div id="hb-sparkline" style="display:flex;align-items:center;gap:4px;height:20px;">
-          <span style="font-size:11px;color:var(--text-muted);">--</span>
-        </div>
-      </div>
-    </div>
-  </div>
-  <style>
-    @keyframes hb-pulse-healthy { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(1.15)} }
-    @keyframes hb-pulse-drifting { 0%,100%{opacity:1} 50%{opacity:.4} }
-    @keyframes hb-pulse-missed { 0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,.4)} 70%{opacity:.8;box-shadow:0 0 0 8px rgba(239,68,68,0)} }
-  </style>
-</div>
-
-<!-- USAGE -->
-<div class="page" id="page-usage">
-  <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadUsage()">↻ Refresh</button>
-    <button class="refresh-btn" onclick="exportUsageData()" style="margin-left: 8px;">📥 Export CSV</button>
-  </div>
-  
-  <!-- Cost Warnings -->
-  <div id="cost-warnings" style="display:none; margin-bottom: 16px;"></div>
-
-
-  <!-- One-time banner: token attribution upgrade announcement (issue #1430) -->
-  <!-- Gated on /api/install-age so fresh installs (post 0.12.230) never see -->
-  <!-- a fix-announcement for a bug they never experienced. Mirrors the -->
-  <!-- maybeShowBrainRestorationToast() pattern from PR #1467. -->
-  <div id="tokens-fix-banner" style="display:none;margin-bottom:16px;padding:10px 14px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:13px;color:#60ff80;align-items:center;justify-content:space-between;">
-    <span>&#128200; Token attribution upgraded. Your dashboard now tracks cache reads and writes for the full picture. <a href="https://github.com/vivekchand/clawmetry/issues/1394" target="_blank" rel="noopener" style="color:#60ff80;text-decoration:underline;">See issue #1394</a></span>
-    <button onclick="document.getElementById('tokens-fix-banner').style.display='none';localStorage.setItem('clawmetry_tokens_attribution_banner_shown_v1','1');" style="background:transparent;border:none;cursor:pointer;font-size:16px;color:#60ff80;padding:0 0 0 12px;">&times;</button>
-  </div>
-  <script>
-  (function(){
-    // Cutoff epoch: 2026-05-15 00:00 UTC, day 0.12.230 shipped.
-    var TOKENS_CUTOFF_EPOCH = 1778803200;
-    var FLAG = 'clawmetry_tokens_attribution_banner_shown_v1';
-    try {
-      if (typeof localStorage !== 'undefined' && localStorage.getItem(FLAG) === '1') return;
-    } catch (_e) { return; }
-    fetch('/api/install-age').then(function(r){ return r.json(); }).then(function(d){
-      try {
-        // No config (fresh install with no daemon) OR ctime newer than cutoff:
-        // never saw the buggy state, skip the banner entirely.
-        if (!d || !d.exists || !d.ctime) return;
-        if (d.ctime >= TOKENS_CUTOFF_EPOCH) return;
-        var b = document.getElementById('tokens-fix-banner');
-        if (b) b.style.display = 'flex';
-      } catch (_inner) {}
-    }).catch(function(){ /* fail closed: never show on endpoint error */ });
-  })();
-  </script>
-
-  <!-- Main Usage Stats -->
-  <div class="grid">
-    <div class="card">
-      <div class="card-title"><span class="icon">📊</span> Today</div>
-      <div class="card-value" id="usage-today">--</div>
-      <div class="card-sub" id="usage-today-cost"></div>
-    </div>
-    <div class="card">
-      <div class="card-title"><span class="icon">📅</span> This Week</div>
-      <div class="card-value" id="usage-week">--</div>
-      <div class="card-sub" id="usage-week-cost"></div>
-    </div>
-    <div class="card">
-      <div class="card-title"><span class="icon">📆</span> This Month</div>
-      <div class="card-value" id="usage-month">--</div>
-      <div class="card-sub" id="usage-month-cost"></div>
-    </div>
-    <div class="card" id="trend-card" style="display:none;">
-      <div class="card-title"><span class="icon">📈</span> Trend</div>
-      <div class="card-value" id="trend-direction">--</div>
-      <div class="card-sub" id="trend-prediction"></div>
-    </div>
-  </div>
-  <div class="section-title">📊 Token Usage (14 days)</div>
-  <div class="card">
-    <div class="usage-chart" id="usage-chart">Loading...</div>
-  </div>
-  <div class="section-title">💰 Cost Breakdown <span id="usage-cost-info-icon" class="tooltip-info-icon" style="display:none;">i</span></div>
-  <div class="card"><table class="usage-table" id="usage-cost-table"><tbody><tr><td colspan="3" style="color:#666;">Loading...</td></tr></tbody></table></div>
-  <div id="otel-extra-sections" style="display:none;">
-    <div class="grid" style="margin-top:16px;">
-      <div class="card">
-        <div class="card-title"><span class="icon">⏱️</span> Avg Run Duration</div>
-        <div class="card-value" id="usage-avg-run">--</div>
-        <div class="card-sub">from OTLP openclaw.run.duration_ms</div>
-      </div>
-      <div class="card">
-        <div class="card-title"><span class="icon">💬</span> Messages Processed</div>
-        <div class="card-value" id="usage-msg-count">--</div>
-        <div class="card-sub">from OTLP openclaw.message.processed</div>
-      </div>
-    </div>
-    <div class="section-title">🤖 Model Breakdown</div>
-    <div class="card"><table class="usage-table" id="usage-model-table"><tbody><tr><td colspan="2" style="color:#666;">No model data</td></tr></tbody></table></div>
-    <div style="margin-top:12px;padding:8px 12px;background:#1a3a2a;border:1px solid #2a5a3a;border-radius:8px;font-size:12px;color:#60ff80;">📡 Data source: OpenTelemetry OTLP - real-time metrics from OpenClaw</div>
-  </div>
-  <!-- Cost Comparison Panel (GH#554) -->
-  <div class="section-title" id="cost-comparison-section" style="display:flex;align-items:center;">💱 Cost Comparison <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">what same workload costs elsewhere · 30 days</span></div>
-  <div class="card" id="cost-comparison-card" style="display:none;">
-    <div id="cost-comparison-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
-  </div>
-  <!-- Prompt Cache Analytics (GH #979) -->
-  <div class="section-title" id="cache-perf-title" style="display:none;">⚡ Prompt Cache <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">hit rate · savings · per model · 14 days</span></div>
-  <div class="card" id="cache-perf-card" style="display:none;">
-    <div id="cache-perf-content" style="min-height:48px;color:var(--text-muted);"></div>
-  </div>
-  <!-- Cost Forecast (issue #1413) -->
-  <div class="section-title" id="cost-forecast-title" style="display:none;">📈 Cost Forecast <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">projected month-end · based on last 7 days</span></div>
-  <div class="card" id="cost-forecast-card" style="display:none;">
-    <div id="cost-forecast-content" style="min-height:48px;color:var(--text-muted);"></div>
-  </div>
-    <div class="section-title">🔮 Trace Clusters <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">auto-group sessions by behavior pattern</span></div>
-  <div class="card">
-    <div id="trace-clusters-content" style="min-height:60px;color:var(--text-muted);">Loading...</div>
-  </div>
-  <div class="section-title" style="display:flex;align-items:center;">📅 Activity Heatmap <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">hourly usage intensity</span>
-    <span style="margin-left:auto;display:flex;gap:6px;">
-      <button id="heatmap-btn-7d" class="time-btn active" onclick="loadHeatmap(7)" style="font-size:11px;padding:2px 8px;">7d</button>
-      <button id="heatmap-btn-30d" class="time-btn" onclick="loadHeatmap(30)" style="font-size:11px;padding:2px 8px;">30d</button>
-    </span>
-  </div>
-  <div class="card">
-    <div class="heatmap-wrap"><div id="heatmap-grid" class="heatmap-grid">Loading...</div></div>
-    <div id="heatmap-legend" class="heatmap-legend"></div>
-  </div>
-</div>
-
-<!-- CRONS -->
-<div class="page" id="page-crons">
-  <div class="refresh-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-    <button class="refresh-btn" onclick="loadCrons()">&#x21bb; Refresh</button>
-    <button class="refresh-btn cron-action-btn" onclick="cronCreateNew()" style="background:#6366f1;color:#fff;border-color:#6366f1;display:none;">+ New Job</button>
-    <button class="refresh-btn cron-action-btn" id="cron-kill-all-btn" onclick="cronKillAll()" style="background:#dc2626;color:#fff;border-color:#dc2626;display:none;">&#x1F6D1; Emergency Stop All</button>
-    <label class="modal-auto-refresh" style="margin-left:auto;">
-      <input type="checkbox" id="cron-auto-refresh" onchange="toggleCronAutoRefresh()" checked> Auto-refresh (30s)
-    </label>
-  </div>
-  <div id="cron-health-panel" style="margin-bottom:12px;"></div>
-  <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
-  <div class="cron-view-tabs" role="tablist">
-    <button class="cron-view-tab active" data-view="active" onclick="setCronView('active')">Active <span class="cron-view-count" id="crons-count-active"></span></button>
-    <button class="cron-view-tab" data-view="paused" onclick="setCronView('paused')">Paused <span class="cron-view-count" id="crons-count-paused"></span></button>
-    <button class="cron-view-tab" data-view="calendar" onclick="setCronView('calendar')">&#x1F4C5; Calendar</button>
-  </div>
-  <div class="card" id="crons-list">Loading...</div>
-  <!-- Cron Health Monitor (GH #302) -->
-  <div id="cron-health-anomaly-banner" style="display:none;margin-top:14px;padding:10px 14px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:8px;color:#ef4444;font-size:13px;font-weight:600;">&#x26A0;&#xFE0F; Anomalies detected in cron jobs — review health table below</div>
-  <div style="margin-top:16px;">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#x1F4CA; Cron Health Monitor</span>
-      <span style="font-size:11px;color:var(--text-muted);">Click row to expand run history</span>
-    </div>
-    <div id="cron-health-table" style="overflow-x:auto;">
-      <div style="color:var(--text-muted);font-size:13px;">Loading health data...</div>
-    </div>
-  </div>
-</div>
-
-<!-- Cron Edit/Create Modal -->
-<div id="cron-edit-modal" style="display:none;position:fixed;inset:0;z-index:1500;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;backdrop-filter:blur(4px);">
-  <div style="background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:12px;padding:24px;width:480px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,0.4);max-height:80vh;overflow-y:auto;margin:auto;">
-    <h3 id="cron-modal-title" style="margin:0 0 16px;color:var(--text-primary);font-size:16px;">Edit Cron Job</h3>
-    <input type="hidden" id="cron-edit-id">
-    <input type="hidden" id="cron-edit-mode" value="edit">
-    <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Name</label>
-      <input id="cron-edit-name" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="my-health-check">
-    </div>
-    <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Schedule (cron expression or interval like "every 30min")</label>
-      <input id="cron-edit-schedule" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;font-family:'SF Mono','Fira Code',monospace;box-sizing:border-box;" placeholder="*/30 * * * *  or  every 30min">
-    </div>
-    <div style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Timezone (for cron expressions)</label>
-      <input id="cron-edit-tz" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. Europe/Amsterdam">
-    </div>
-    <div id="cron-edit-prompt-section" style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Prompt / Message</label>
-      <textarea id="cron-edit-prompt" rows="3" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;" placeholder="What should the agent do when this cron fires?"></textarea>
-    </div>
-    <div id="cron-edit-channel-section" style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Channel (optional)</label>
-      <input id="cron-edit-channel" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. discord, telegram">
-    </div>
-    <div id="cron-edit-model-section" style="margin-bottom:12px;">
-      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px;">Model (optional)</label>
-      <input id="cron-edit-model" style="width:100%;padding:8px 12px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;color:var(--text-primary);font-size:13px;box-sizing:border-box;" placeholder="e.g. anthropic/claude-sonnet-4-20250514">
-    </div>
-    <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;">
-      <input type="checkbox" id="cron-edit-enabled" style="accent-color:#6366f1;" checked>
-      <label for="cron-edit-enabled" style="font-size:13px;color:var(--text-primary);">Enabled</label>
-    </div>
-    <div style="display:flex;gap:8px;justify-content:flex-end;">
-      <button onclick="closeCronEditModal()" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:var(--button-bg);color:var(--text-secondary);">Cancel</button>
-      <button onclick="saveCronEdit()" id="cron-save-btn" style="padding:8px 20px;border-radius:8px;border:none;font-size:13px;font-weight:600;cursor:pointer;background:#6366f1;color:#fff;">Save</button>
-    </div>
-  </div>
-</div>
-
-<!-- MEMORY -->
-<div class="page" id="page-memory">
-  <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadMemory()">↻ Refresh</button>
-  </div>
-  <div id="memory-analytics-panel" style="margin-bottom:12px"></div>
-  <div class="card" id="memory-list">Loading...</div>
-  <div class="file-viewer" id="file-viewer">
-    <div class="file-viewer-header">
-      <span class="file-viewer-title" id="file-viewer-title"></span>
-      <button class="file-viewer-close" onclick="closeFileViewer()">✕ Close</button>
-    </div>
-    <div class="file-viewer-content" id="file-viewer-content"></div>
-  </div>
-</div>
-
-<!-- TRANSCRIPTS -->
-<div class="page" id="page-transcripts">
-  <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadTranscripts()">↻ Refresh</button>
-    <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← Back to list</button>
-  </div>
-  <div class="card" id="transcript-list">Loading...</div>
-  <div id="transcript-viewer" style="display:none">
-    <div class="transcript-viewer-meta" id="transcript-meta"></div>
-    <div class="chat-messages" id="transcript-messages"></div>
-  </div>
-</div>
-
-
-<!-- UPGRADE IMPACT -->
-<div class="page" id="page-version-impact">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#128200; Upgrade Impact</h2>
-    <button class="refresh-btn" onclick="loadVersionImpact()">&#8635; Refresh</button>
-  </div>
-  <div id="version-impact-content" style="padding:8px 0;">
-    <div style="color:var(--text-muted);font-size:13px;">Loading...</div>
-  </div>
-</div>
-
-<!-- HISTORY -->
-
-<!-- RATE LIMITS -->
-<div class="page" id="page-limits">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#9889; API Rate Limit Monitor</h2>
-    <button class="refresh-btn" onclick="loadRateLimits()">&#8635; Refresh</button>
-  </div>
-  <p style="font-size:12px;color:var(--text-muted);margin:0 0 14px 0;">Rolling 1-minute window utilisation per provider. Red = &ge;90%, amber = &ge;70%. Data sourced from OTLP metrics.</p>
-  <div id="rate-limits-content">
-    <div class="card" style="padding:24px;text-align:center;color:var(--text-muted);">Loading rate limit data...</div>
-  </div>
-  <div id="rate-limits-hourly" style="margin-top:16px;"></div>
-</div>
-
-<!-- FLOW -->
-<div class="page" id="page-flow">
-  <!-- Flow sub-tabs: Live | Runs (#611) -->
-  <div id="flow-subtabs" style="display:flex;gap:4px;border-bottom:1px solid var(--border-primary);margin:0 0 12px 0;padding:0;font-size:12px;">
-    <div class="flow-subtab active" data-sub="live" onclick="switchFlowSubtab('live')" style="padding:8px 16px;cursor:pointer;border-bottom:2px solid var(--accent-primary,#3b82f6);font-weight:600;color:var(--text-primary);">Live</div>
-    <div class="flow-subtab" data-sub="runs" onclick="switchFlowSubtab('runs')" style="padding:8px 16px;cursor:pointer;border-bottom:2px solid transparent;font-weight:600;color:var(--text-muted);">Runs</div>
-  </div>
-
-  <div id="flow-live-pane">
-  <div class="flow-stats">
-    <div class="flow-stat"><span class="flow-stat-label">Messages / min</span><span class="flow-stat-value" id="flow-msg-rate">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Actions Taken</span><span class="flow-stat-value" id="flow-event-count">0</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Active Tools</span><span class="flow-stat-value" id="flow-active-tools">&mdash;</span></div>
-    <div class="flow-stat"><span class="flow-stat-label">Tokens Used</span><span class="flow-stat-value" id="flow-tokens">&mdash;</span></div>
-  </div>
-  <div class="flow-container">
-    <svg id="flow-svg" viewBox="0 0 980 550" preserveAspectRatio="xMidYMid meet">
-      <defs>
-        <pattern id="flow-grid" width="40" height="40" patternUnits="userSpaceOnUse">
-          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="var(--border-secondary)" stroke-width="0.5"/>
-        </pattern>
-        <filter id="dropShadow" x="-10%" y="-10%" width="130%" height="130%">
-          <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="rgba(0,0,0,0.25)" flood-opacity="0.4"/>
-        </filter>
-        <filter id="dropShadowLight" x="-10%" y="-10%" width="130%" height="130%">
-          <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="rgba(0,0,0,0.15)" flood-opacity="0.3"/>
-        </filter>
-      </defs>
-      <rect width="980" height="550" fill="var(--bg-primary)" rx="12"/>
-      <rect width="980" height="550" fill="url(#flow-grid)"/>
-
-      <!-- Human -> Channel paths -->
-      <path class="flow-path" id="path-human-tg"  d="M 60 56 C 60 70, 65 85, 75 100"/>
-      <path class="flow-path" id="path-human-sig" d="M 60 56 C 55 90, 60 140, 75 170"/>
-      <path class="flow-path" id="path-human-wa"  d="M 60 56 C 50 110, 55 200, 75 240"/>
-
-      <!-- Channel -> Gateway paths -->
-      <path class="flow-path" id="path-tg-gw"  d="M 130 120 C 150 120, 160 165, 180 170"/>
-      <path class="flow-path" id="path-sig-gw" d="M 130 190 C 150 190, 160 185, 180 183"/>
-      <path class="flow-path" id="path-wa-gw"  d="M 130 260 C 150 260, 160 200, 180 195"/>
-
-      <!-- Gateway -> Brain -->
-      <path class="flow-path" id="path-gw-brain" d="M 290 183 C 305 183, 315 175, 330 175"/>
-
-      <!-- Brain -> Tools -->
-      <path class="flow-path" id="path-brain-session" d="M 510 155 C 530 130, 545 95, 560 89"/>
-      <path class="flow-path" id="path-brain-exec"    d="M 510 160 C 530 150, 545 143, 560 139"/>
-      <path class="flow-path" id="path-brain-browser" d="M 510 175 C 530 175, 545 189, 560 189"/>
-      <path class="flow-path" id="path-brain-search"  d="M 510 185 C 530 200, 545 230, 560 239"/>
-      <path class="flow-path" id="path-brain-cron"    d="M 510 195 C 530 230, 545 275, 560 289"/>
-      <path class="flow-path" id="path-brain-tts"     d="M 510 205 C 530 260, 545 325, 560 339"/>
-      <path class="flow-path" id="path-brain-memory"  d="M 510 215 C 530 290, 545 370, 560 389"/>
-
-      <!-- Infrastructure paths (dashed) -->
-      <path class="flow-path flow-path-infra" id="path-gw-network"    d="M 235 205 C 235 350, 500 400, 590 450"/>
-      <path class="flow-path flow-path-infra" id="path-brain-runtime" d="M 380 220 C 300 350, 150 400, 95 450"/>
-      <path class="flow-path flow-path-infra" id="path-brain-machine" d="M 420 220 C 380 350, 300 400, 260 450"/>
-      <path class="flow-path flow-path-infra" id="path-memory-storage" d="M 615 408 C 550 420, 470 435, 425 450"/>
-
-      <!-- Human Origin -->
-      <g class="flow-node flow-node-human" id="node-human">
-        <circle cx="60" cy="30" r="22" fill="#7c3aed" stroke="#6a2ec0" stroke-width="2" filter="url(#dropShadow)"/>
-        <circle cx="60" cy="24" r="5" fill="#ffffff" opacity="0.6"/>
-        <path d="M 50 38 Q 50 45 60 45 Q 70 45 70 38" fill="#ffffff" opacity="0.4"/>
-        <text x="60" y="68" style="font-size:13px;fill:#7c3aed;font-weight:800;text-anchor:middle;" id="flow-human-name">You</text>
-      </g>
-
-      <!-- Channel Nodes -->
-      <g class="flow-node flow-node-channel" id="node-tui" style="display:none;">
-        <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#1f2937" stroke="#374151" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⌨️ TUI</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-telegram">
-        <rect x="20" y="100" width="110" height="40" rx="10" ry="10" fill="#2196F3" stroke="#1565C0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="125" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📱 TG</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-signal">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#2E8B7A" stroke="#1B6B5A" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📡 Signal</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-imessage" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#34C759" stroke="#248A3D" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 iMessage</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-whatsapp">
-        <rect x="20" y="240" width="110" height="40" rx="10" ry="10" fill="#43A047" stroke="#2E7D32" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="265" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 WA</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-discord" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#5865F2" stroke="#4752C4" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Discord</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-slack" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#4A154B" stroke="#350e36" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💼 Slack</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-irc" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#6B7280" stroke="#4B5563" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;"># IRC</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-webchat" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0EA5E9" stroke="#0369A1" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌐 WebChat</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-googlechat" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#1A73E8" stroke="#1557B0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 GChat</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-bluebubbles" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#1C6EF3" stroke="#1558C0" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🍎 BB</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-msteams" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#6264A7" stroke="#464775" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">👔 Teams</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-matrix" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0DBD8B" stroke="#0A9E74" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">[M] Matrix</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-mattermost" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0058CC" stroke="#0047A3" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚓ MM</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-line" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#00B900" stroke="#009900" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💚 LINE</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-nostr" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#8B5CF6" stroke="#6D28D9" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚡ Nostr</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-twitch" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#9146FF" stroke="#772CE8" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🎮 Twitch</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-feishu" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#3370FF" stroke="#2050CC" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌸 Feishu</text>
-      </g>
-      <g class="flow-node flow-node-channel" id="node-zalo" style="display:none;">
-        <rect x="20" y="170" width="110" height="40" rx="10" ry="10" fill="#0068FF" stroke="#0050CC" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="75" y="195" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">💬 Zalo</text>
-      </g>
-
-      <!-- Gateway -->
-      <g class="flow-node flow-node-gateway" id="node-gateway">
-        <rect x="180" y="160" width="110" height="45" rx="10" ry="10" fill="#37474F" stroke="#263238" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="235" y="188" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🔀 Gateway</text>
-      </g>
-
-      <!-- Brain -->
-      <g class="flow-node flow-node-brain brain-group" id="node-brain">
-        <rect x="330" y="130" width="180" height="90" rx="12" ry="12" fill="#C62828" stroke="#B71C1C" stroke-width="3" filter="url(#dropShadow)"/>
-        <text x="420" y="162" style="font-size:24px;text-anchor:middle;">&#x1F9E0;</text>
-        <text x="420" y="186" style="font-size:18px;font-weight:800;fill:#FFD54F;text-anchor:middle;" id="brain-model-label">AI Model</text>
-        <text x="420" y="203" style="font-size:10px;fill:#c7d2fe;text-anchor:middle;" id="brain-model-text">unknown</text>
-        <text x="420" y="214" style="font-size:8px;fill:#a5b4fc;text-anchor:middle;" id="brain-billing-text">Auth: unknown</text>
-        <circle cx="420" cy="225" r="4" fill="#FF8A65">
-          <animate attributeName="r" values="3;5;3" dur="1.1s" repeatCount="indefinite"/>
-          <animate attributeName="opacity" values="0.5;1;0.5" dur="1.1s" repeatCount="indefinite"/>
-        </circle>
-      </g>
-
-      <!-- Tool Nodes -->
-      <g class="flow-node flow-node-session" id="node-session">
-        <rect x="560" y="70" width="110" height="38" rx="10" ry="10" fill="#1565C0" stroke="#0D47A1" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="94" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📋 Sessions</text>
-        <circle class="tool-indicator" id="ind-session" cx="665" cy="78" r="5" fill="#42A5F5"/>
-      </g>
-      <g class="flow-node flow-node-tool" id="node-exec">
-        <rect x="560" y="120" width="110" height="38" rx="10" ry="10" fill="#E65100" stroke="#BF360C" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="144" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">⚡ Exec</text>
-        <circle class="tool-indicator" id="ind-exec" cx="665" cy="128" r="5" fill="#FF6E40"/>
-      </g>
-      <g class="flow-node flow-node-tool" id="node-browser">
-        <rect x="560" y="170" width="110" height="38" rx="10" ry="10" fill="#6A1B9A" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="194" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">🌐 Web</text>
-        <circle class="tool-indicator" id="ind-browser" cx="665" cy="178" r="5" fill="#CE93D8"/>
-      </g>
-      <g class="flow-node flow-node-tool" id="node-search">
-        <rect x="560" y="220" width="110" height="38" rx="10" ry="10" fill="#00695C" stroke="#004D40" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="244" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F50D; Search</text>
-        <circle class="tool-indicator" id="ind-search" cx="665" cy="228" r="5" fill="#4DB6AC"/>
-      </g>
-      <g class="flow-node flow-node-tool" id="node-cron">
-        <rect x="560" y="270" width="110" height="38" rx="10" ry="10" fill="#546E7A" stroke="#37474F" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="294" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">📅 Cron</text>
-        <circle class="tool-indicator" id="ind-cron" cx="665" cy="278" r="5" fill="#90A4AE"/>
-      </g>
-      <g class="flow-node flow-node-tool" id="node-tts">
-        <rect x="560" y="320" width="110" height="38" rx="10" ry="10" fill="#F9A825" stroke="#F57F17" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="344" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F5E3;&#xFE0F; TTS</text>
-        <circle class="tool-indicator" id="ind-tts" cx="665" cy="328" r="5" fill="#FFF176"/>
-      </g>
-      <g class="flow-node flow-node-tool" id="node-memory">
-        <rect x="560" y="370" width="110" height="38" rx="10" ry="10" fill="#283593" stroke="#1A237E" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="615" y="394" style="font-size:13px;font-weight:700;fill:#ffffff;text-anchor:middle;">&#x1F4BE; Memory</text>
-        <circle class="tool-indicator" id="ind-memory" cx="665" cy="378" r="5" fill="#7986CB"/>
-      </g>
-
-      <!-- Cost Optimizer -->
-      <g class="flow-node flow-node-optimizer" id="node-cost-optimizer">
-        <rect x="680" y="370" width="145" height="44" rx="12" ry="12" fill="#2E7D32" stroke="#1B5E20" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="752" y="389" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
-          <tspan x="752" dy="-5">&#x1F4B0; Cost</tspan>
-          <tspan x="752" dy="13">Optimizer</tspan>
-        </text>
-        <circle class="tool-indicator" id="ind-cost-optimizer" cx="817" cy="378" r="5" fill="#66BB6A"/>
-      </g>
-
-      <!-- Automation Advisor -->
-      <g class="flow-node flow-node-advisor" id="node-automation-advisor">
-        <rect x="835" y="370" width="145" height="44" rx="12" ry="12" fill="#7B1FA2" stroke="#4A148C" stroke-width="2" filter="url(#dropShadow)"/>
-        <text x="907" y="389" style="font-size:12px;font-weight:700;fill:#ffffff;text-anchor:middle;">
-          <tspan x="907" dy="-5">&#x1F9E0; Automation</tspan>
-          <tspan x="907" dy="13">Advisor</tspan>
-        </text>
-        <circle class="tool-indicator" id="ind-automation-advisor" cx="972" cy="378" r="5" fill="#BA68C8"/>
-      </g>
-
-      <!-- Infrastructure Layer -->
-      <line class="flow-ground" x1="20" y1="440" x2="970" y2="440"/>
-      <text class="flow-ground-label" x="400" y="438" style="text-anchor:middle;font-size:10px;">I N F R A S T R U C T U R E</text>
-
-      <g class="flow-node flow-node-infra flow-node-runtime" id="node-runtime">
-        <rect x="30" y="450" width="130" height="40" rx="8" ry="8" fill="#455A64" stroke="#37474F" filter="url(#dropShadowLight)"/>
-        <text x="95" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x2699;&#xFE0F; Runtime</text>
-        <text class="infra-sub" x="95" y="480" style="fill:#B0BEC5;font-size:8px;text-anchor:middle;" id="infra-runtime-text">Node.js - Linux</text>
-      </g>
-      <g class="flow-node flow-node-infra flow-node-machine" id="node-machine">
-        <rect x="195" y="450" width="130" height="40" rx="8" ry="8" fill="#4E342E" stroke="#3E2723" filter="url(#dropShadowLight)"/>
-        <text x="260" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F5A5;&#xFE0F; Machine</text>
-        <text class="infra-sub" x="260" y="480" style="fill:#BCAAA4;font-size:8px;text-anchor:middle;" id="infra-machine-text">Host</text>
-      </g>
-      <g class="flow-node flow-node-infra flow-node-storage" id="node-storage">
-        <rect x="360" y="450" width="130" height="40" rx="8" ry="8" fill="#5D4037" stroke="#4E342E" filter="url(#dropShadowLight)"/>
-        <text x="425" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F4BF; Storage</text>
-        <text class="infra-sub" x="425" y="480" style="fill:#BCAAA4;font-size:8px;text-anchor:middle;" id="infra-storage-text">Disk</text>
-      </g>
-      <g class="flow-node flow-node-infra flow-node-network" id="node-network">
-        <rect x="525" y="450" width="130" height="40" rx="8" ry="8" fill="#004D40" stroke="#00332E" filter="url(#dropShadowLight)"/>
-        <text x="590" y="466" style="font-size:13px;fill:#ffffff;font-weight:700;text-anchor:middle;">&#x1F310; Network</text>
-        <text class="infra-sub" x="590" y="480" style="fill:#80CBC4;font-size:8px;text-anchor:middle;" id="infra-network-text">LAN</text>
-      </g>
-
-      <!-- Legend -->
-      <g transform="translate(140, 510)">
-        <rect x="0" y="0" width="700" height="28" rx="14" ry="14" fill="var(--bg-tertiary)" stroke="var(--border-primary)" stroke-width="1" opacity="0.9"/>
-        <text x="350" y="18" style="font-size:12px;font-weight:600;fill:var(--text-secondary);letter-spacing:1px;text-anchor:middle;">&#x1F4E8; Channels  &#x27A1;&#xFE0F;  🔀 Gateway  &#x27A1;&#xFE0F;  &#x1F9E0; AI Brain  &#x27A1;&#xFE0F;  &#x1F6E0;&#xFE0F; Tools</text>
-      </g>
-
-      <!-- Flow direction labels -->
-      <text class="flow-label" x="120" y="155" style="font-size:9px;">messages in</text>
-      <text class="flow-label" x="300" y="155" style="font-size:9px;">routes to AI</text>
-      <text class="flow-label" x="520" y="155" style="font-size:9px;">uses tools</text>
-    </svg>
-  </div>
-
-  <!-- Live Tool Call Stream -->
-  <div style="margin-top:12px;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:12px 16px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
-      <span style="font-size:13px;font-weight:600;color:#aaa;">&#128295; Live Tool Call Stream</span>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <input id="tool-stream-filter" type="text" placeholder="Filter by tool&hellip;" oninput="applyToolStreamFilter()" style="font-size:11px;padding:3px 8px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;width:130px;outline:none;">
-        <button id="tool-stream-pause-btn" onclick="toggleToolStreamPause()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;cursor:pointer;">&#9646;&#9646; Pause</button>
-        <button onclick="clearToolStream()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:#aaa;cursor:pointer;">&#10005; Clear</button>
-        <span style="font-size:10px;color:#555;" id="flow-feed-count">0 events</span>
-      </div>
-    </div>
-    <div id="flow-live-feed" style="max-height:350px;overflow-y:auto;font-family:'SF Mono',monospace;font-size:11px;line-height:1.6;color:#777;">
-      <div style="color:#555;">Waiting for activity...</div>
-    </div>
-  </div>
-  </div><!-- end flow-live-pane -->
-
-  <!-- FLOW RUNS PANE (#611) — historical runs aggregated from DuckDB events -->
-  <div id="flow-runs-pane" style="display:none;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
-      <div style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128202; Flow Runs <span id="flow-runs-count" style="font-size:11px;color:var(--text-muted);font-weight:400;margin-left:6px;"></span></div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <label style="font-size:11px;color:var(--text-muted);">Limit:</label>
-        <select id="flow-runs-limit" onchange="loadFlowRuns()" style="font-size:11px;padding:3px 8px;background:var(--bg-primary,#0a0a1a);border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;color:var(--text-primary);">
-          <option value="10">10</option>
-          <option value="30" selected>30</option>
-          <option value="100">100</option>
-        </select>
-        <button onclick="loadFlowRuns()" style="font-size:11px;padding:3px 10px;border:1px solid var(--border-secondary,#2a2a4a);border-radius:6px;background:var(--bg-primary,#0a0a1a);color:var(--text-primary);cursor:pointer;">&#8635; Refresh</button>
-      </div>
-    </div>
-    <div style="background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;overflow:hidden;">
-      <table style="width:100%;border-collapse:collapse;font-size:12px;">
-        <thead>
-          <tr style="background:var(--bg-tertiary,#0d0d1f);color:var(--text-muted);text-align:left;">
-            <th style="padding:10px 14px;font-weight:600;">Session</th>
-            <th style="padding:10px 14px;font-weight:600;">Started</th>
-            <th style="padding:10px 14px;font-weight:600;text-align:right;">Duration</th>
-            <th style="padding:10px 14px;font-weight:600;">Channel</th>
-            <th style="padding:10px 14px;font-weight:600;text-align:right;">Models</th>
-            <th style="padding:10px 14px;font-weight:600;text-align:right;">Tools</th>
-            <th style="padding:10px 14px;font-weight:600;text-align:right;">Cost</th>
-            <th style="padding:10px 14px;font-weight:600;">Status</th>
-          </tr>
-        </thead>
-        <tbody id="flow-runs-tbody">
-          <tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">Loading flow runs&hellip;</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div id="flow-runs-detail" style="margin-top:16px;display:none;background:var(--bg-secondary,#111128);border:1px solid var(--border-secondary,#2a2a4a);border-radius:10px;padding:14px 18px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-        <div id="flow-runs-detail-title" style="font-size:13px;font-weight:700;color:var(--text-primary);"></div>
-        <button onclick="hideFlowRunDetail()" style="background:transparent;border:none;color:var(--text-muted);font-size:18px;cursor:pointer;">&times;</button>
-      </div>
-      <div id="flow-runs-detail-body" style="font-size:12px;color:var(--text-muted);line-height:1.7;"></div>
-    </div>
-  </div><!-- end flow-runs-pane -->
-</div><!-- end page-flow -->
-
-<!-- BRAIN -->
-<div class="page" id="page-brain">
-  <div style="padding:12px 0 8px 0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">🧠 Brain -- Unified Activity Stream</span>
-        <!-- Loop-signals badge (#1364): hidden until /api/loop-signals returns >0 rows. -->
-        <button id="brain-loops-badge" type="button" onclick="toggleLoopSignalsList()" style="display:none;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:10px;padding:2px 9px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;" title="LoopDetector signals from clawmetry/proxy.py">
-          <span id="brain-loops-badge-count">0</span> loops
-        </button>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <!-- MOAT #1364: surface OTel spans we already persist. Toggles the
-             #spans-panel below; defers fetch until first click so the
-             default Brain-tab paint stays unchanged for users with no
-             OTLP exporter wired up. -->
-        <button id="spans-toggle-btn" class="refresh-btn" onclick="toggleSpansPanel()" title="OpenTelemetry spans from local DuckDB">📐 Spans</button>
-        <button class="refresh-btn" onclick="loadBrainPage()">↻ Refresh</button>
-      </div>
-    </div>
-    <!-- Spans panel — hidden until the user clicks the toggle. Flat table
-         (Time | Name | Duration | Session | Kind), sorted newest-first
-         by the API. No charts, no tree — that's a follow-up surface. -->
-    <div id="spans-panel" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <span style="font-size:11px;color:var(--text-muted);">OTel spans (newest first) — <span id="spans-count">0</span></span>
-        <button class="refresh-btn" onclick="loadSpansPanel()" style="font-size:10px;padding:2px 8px;">↻</button>
-      </div>
-      <div id="spans-table-wrap" style="max-height:400px;overflow-y:auto;">
-        <div style="color:var(--text-muted);padding:20px;font-size:12px;">Loading spans...</div>
-      </div>
-    </div>
-    <!-- Loop signals list — collapsed until the badge is clicked.
-         OSS shows a 1-row teaser; Cloud-Pro sees the full table.
-         The /api/loop-signals response carries ``capped_pro_gated`` so
-         the JS knows to render the upgrade CTA below the table. -->
-    <div id="brain-loops-panel" style="display:none;background:var(--bg-secondary);border:1px solid rgba(239,68,68,0.4);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <span style="font-size:11px;font-weight:600;color:#ef4444;text-transform:uppercase;letter-spacing:1px;">Loops detected (proxy)</span>
-        <span style="font-size:10px;color:var(--text-muted);">From clawmetry proxy LoopDetector (last 60 min)</span>
-      </div>
-      <div id="brain-loops-table" style="font-size:11px;font-family:'JetBrains Mono','SF Mono',monospace;color:var(--text-secondary);"></div>
-    </div>
-    <!-- Context Window Anatomy (#566) -->
-    <div id="ctx-anatomy-wrap" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:none;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-        <span style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">Context window anatomy</span>
-        <span id="ctx-pct-label" style="font-size:11px;color:var(--text-muted);">--</span>
-      </div>
-      <div id="ctx-bar" style="display:flex;height:10px;border-radius:4px;overflow:hidden;background:var(--bg-primary);width:100%;margin-bottom:6px;"></div>
-      <div id="ctx-legend" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
-    </div>
-    <!-- Activity density chart -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;">
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">Activity density -- last 60 min (30s buckets)</div>
-      <canvas id="brain-density-chart" height="60" style="width:100%;display:block;"></canvas>
-    </div>
-    <div class="brain-view-toggle">
-      
-    </div>
-    <!-- Source filter chips -->
-    <div id="brain-filter-chips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
-      <button class="brain-chip active" data-source="all" onclick="setBrainFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
-    </div>
-    <!-- Type filter chips (separate container to prevent duplication) -->
-    <div id="brain-type-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px;"></div>
-    <!-- Event stream -->
-    <div id="brain-feed" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <span style="font-size:11px;color:var(--text-muted);">Live event stream (newest first)</span>
-        <span id="brain-new-pill" style="display:none;background:#a855f7;color:#fff;border-radius:10px;padding:1px 8px;font-size:10px;font-weight:700;cursor:pointer;" onclick="scrollBrainToTop()">↑ new events</span>
-      </div>
-      <div id="brain-stream" style="max-height:calc(100vh - 320px);overflow-y:auto;">
-        <div style="color:var(--text-muted);padding:20px">Loading...</div>
-      </div>
-    </div>
-    <div id="brain-graph-wrap" class="brain-graph-container" style="display:none;">
-      <canvas id="brain-graph-canvas"></canvas>
-    </div>
-  </div>
-</div><!-- end page-brain -->
-
-<!-- SECURITY -->
-<div class="page" id="page-security">
-  <div style="padding:12px 0 8px 0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <span style="font-size:14px;font-weight:700;color:var(--text-primary);">&#128737;&#65039; Security</span>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <span id="security-scan-time" style="font-size:11px;color:var(--text-muted);"></span>
-        <button class="refresh-btn" onclick="loadSecurityPage();loadSecurityPosture();">&#8635; Scan</button>
-      </div>
-    </div>
-    <!-- Security Posture Score -->
-    <div id="security-posture-panel" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:14px;">
-      <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
-        <div id="posture-score-badge" style="width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fff;background:#64748b;flex-shrink:0;">?</div>
-        <div style="flex:1;">
-          <div style="font-size:13px;font-weight:700;color:var(--text-primary);">Security Posture</div>
-          <div id="posture-score-label" style="font-size:11px;color:var(--text-muted);margin-top:2px;">Scanning configuration...</div>
-          <div style="margin-top:6px;background:var(--bg-primary);border-radius:4px;height:6px;overflow:hidden;">
-            <div id="posture-score-bar" style="height:100%;width:0%;background:#64748b;border-radius:4px;transition:width 0.5s ease;"></div>
-          </div>
-        </div>
-        <div style="display:flex;gap:12px;flex-shrink:0;">
-          <div style="text-align:center;"><div id="posture-passed" style="font-size:18px;font-weight:700;color:#22c55e;">-</div><div style="font-size:10px;color:var(--text-muted);">Passed</div></div>
-          <div style="text-align:center;"><div id="posture-warnings" style="font-size:18px;font-weight:700;color:#f59e0b;">-</div><div style="font-size:10px;color:var(--text-muted);">Warnings</div></div>
-          <div style="text-align:center;"><div id="posture-failed" style="font-size:18px;font-weight:700;color:#ef4444;">-</div><div style="font-size:10px;color:var(--text-muted);">Failed</div></div>
-        </div>
-      </div>
-      <div id="posture-checks-list" style="display:grid;gap:6px;"></div>
-    </div>
-    <!-- Threat Detection -->
-    <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:10px;">Threat Detection &amp; Anomaly Alerts</div>
-    <div id="security-summary" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#ef4444;" id="sec-critical-count">0</div>
-        <div style="font-size:11px;color:var(--text-muted);">Critical</div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#f59e0b;" id="sec-high-count">0</div>
-        <div style="font-size:11px;color:var(--text-muted);">High</div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#3b82f6;" id="sec-medium-count">0</div>
-        <div style="font-size:11px;color:var(--text-muted);">Medium</div>
-      </div>
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;font-weight:700;color:#22c55e;" id="sec-clean-count">0</div>
-        <div style="font-size:11px;color:var(--text-muted);">Clean Sessions</div>
-      </div>
-    </div>
-    <div id="security-filter-pills" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
-      <button class="brain-chip active" data-severity="all" onclick="setSecurityFilter('all',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:rgba(168,85,247,0.2);color:#a855f7;font-size:11px;cursor:pointer;font-weight:600;">All</button>
-      <button class="brain-chip" data-severity="critical" onclick="setSecurityFilter('critical',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #ef4444;background:transparent;color:#ef4444;font-size:11px;cursor:pointer;font-weight:600;">Critical</button>
-      <button class="brain-chip" data-severity="high" onclick="setSecurityFilter('high',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #f59e0b;background:transparent;color:#f59e0b;font-size:11px;cursor:pointer;font-weight:600;">High</button>
-      <button class="brain-chip" data-severity="medium" onclick="setSecurityFilter('medium',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #3b82f6;background:transparent;color:#3b82f6;font-size:11px;cursor:pointer;font-weight:600;">Medium</button>
-      <button class="brain-chip" data-severity="low" onclick="setSecurityFilter('low',this)" style="padding:3px 10px;border-radius:12px;border:1px solid #64748b;background:transparent;color:#64748b;font-size:11px;cursor:pointer;font-weight:600;">Low</button>
-    </div>
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-        <span style="font-size:11px;color:var(--text-muted);">Threat timeline (newest first)</span>
-        <span id="sec-total-label" style="font-size:11px;color:var(--text-muted);"></span>
-      </div>
-      <div id="security-threat-list" style="max-height:600px;overflow-y:auto;">
-        <div style="color:var(--text-muted);padding:20px">Scanning...</div>
-      </div>
-    </div>
-    <div style="margin-top:14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
-      <div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:8px;cursor:pointer;" onclick="toggleSecCatalog()">&#128203; Signature Catalog <span id="sec-catalog-arrow" style="font-size:10px;">&#9654;</span></div>
-      <div id="sec-catalog" style="display:none;"></div>
-    </div>
-  </div>
-</div><!-- end page-security -->
-
-<!-- MODEL ATTRIBUTION -->
-<div class="page" id="page-models">
-  <div class="refresh-bar">
-    <button class="refresh-btn" onclick="loadModelAttribution()">&#x21bb; Refresh</button>
-  </div>
-  <div class="grid" id="model-stats-grid">
-    <div class="card">
-      <div class="card-title"><span class="icon">🤖</span> Primary Model</div>
-      <div class="card-value" id="model-primary">--</div>
-      <div class="card-sub" id="model-primary-pct"></div>
-    </div>
-    <div class="card">
-      <div class="card-title"><span class="icon">🔄</span> Model Diversity</div>
-      <div class="card-value" id="model-count">--</div>
-      <div class="card-sub">distinct models used</div>
-    </div>
-    <div class="card">
-      <div class="card-title"><span class="icon">⚡</span> Fallback Rate</div>
-      <div class="card-value" id="model-fallback-rate">--</div>
-      <div class="card-sub" id="model-fallback-detail"></div>
-    </div>
-    <div class="card">
-      <div class="card-title"><span class="icon">💬</span> Total Turns</div>
-      <div class="card-value" id="model-total-turns">--</div>
-      <div class="card-sub">assistant responses tracked</div>
-    </div>
-  </div>
-  <div class="section-title">🤖 Model Mix</div>
-  <div class="card" id="model-mix-card">
-    <div id="model-mix-chart" style="padding:8px 0;">Loading...</div>
-  </div>
-  <div class="section-title">📊 Per-Session Breakdown</div>
-  <div class="card">
-    <table class="usage-table" id="model-sessions-table" style="width:100%;">
-      <thead><tr>
-        <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Model</th>
-        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Sessions</th>
-        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Turns</th>
-        <th style="text-align:right;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Share</th>
-      </tr></thead>
-      <tbody><tr><td colspan="4" style="color:#666;padding:8px;">Loading...</td></tr></tbody>
-    </table>
-  </div>
-  <div id="model-switches-section" style="display:none;">
-    <div class="section-title">🔀 Model Switches <span id="model-switches-count" style="font-size:13px;color:var(--text-muted);font-weight:400;"></span></div>
-    <div class="card">
-      <table class="usage-table" id="model-switches-table" style="width:100%;">
-        <thead><tr>
-          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">Session</th>
-          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">From</th>
-          <th style="text-align:left;padding:6px 8px;color:var(--text-secondary);font-size:12px;">To</th>
-        </tr></thead>
-        <tbody><tr><td colspan="3" style="color:#666;padding:8px;">Loading...</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-</div><!-- end page-models -->
-
-<!-- NEMOCLAW GOVERNANCE -->
-<div class="page" id="page-nemoclaw">
-  <div style="padding:12px 0 8px 0;">
-    <!-- Header row -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span id="nc-status-dot" style="font-size:18px;">🟢</span>
-        <span style="font-size:14px;font-weight:700;color:#76b900;">NemoClaw</span>
-        <span id="nc-sandbox-name" style="font-size:12px;background:rgba(118,185,0,0.15);color:#76b900;border:1px solid rgba(118,185,0,0.3);border-radius:12px;padding:2px 10px;font-weight:600;"></span>
-        <span id="nc-blueprint-ver" style="font-size:12px;background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border);border-radius:12px;padding:2px 10px;"></span>
-      </div>
-      <button class="refresh-btn" onclick="loadNemoClaw()">&#8635; Refresh</button>
-    </div>
-    <!-- Two-column info grid -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
-      <!-- Sandbox panel -->
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
-        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">SANDBOX</div>
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <tr><td style="color:var(--text-muted);padding:3px 0;width:45%;">Status</td><td id="nc-sandbox-status" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Blueprint</td><td id="nc-blueprint-ver2" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Last action</td><td id="nc-last-action" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Run ID</td><td id="nc-run-id" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
-        </table>
-      </div>
-      <!-- Inference panel -->
-      <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
-        <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">INFERENCE</div>
-        <table style="width:100%;border-collapse:collapse;font-size:12px;">
-          <tr><td style="color:var(--text-muted);padding:3px 0;width:45%;">Provider</td><td id="nc-provider" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Model</td><td id="nc-model" style="color:var(--text-primary);font-family:\'JetBrains Mono\',monospace;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Endpoint</td><td id="nc-endpoint" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">&#8212;</td></tr>
-          <tr><td style="color:var(--text-muted);padding:3px 0;">Onboarded</td><td id="nc-onboarded" style="color:var(--text-tertiary);font-family:\'JetBrains Mono\',monospace;font-size:11px;">&#8212;</td></tr>
-        </table>
-      </div>
-    </div>
-    <!-- Active Policy -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-        <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">ACTIVE POLICY</span>
-        <span id="nc-policy-hash" style="font-size:11px;color:var(--text-muted);font-family:\'JetBrains Mono\',monospace;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:4px;padding:1px 6px;"></span>
-        <span id="nc-drift-badge" style="font-size:11px;font-weight:600;"></span>
-      </div>
-      <!-- Drift alert -->
-      <div id="nc-drift-alert" style="display:none;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:10px;margin-bottom:10px;">
-        <div style="font-size:12px;font-weight:700;color:#ef4444;">&#9888;&#65039; Policy drift detected</div>
-        <div id="nc-drift-detail" style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:\'JetBrains Mono\',monospace;"></div>
-      </div>
-      <!-- Network policies table -->
-      <div id="nc-policy-table" style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.8;">
-        <div style="color:var(--text-muted);padding:8px 0;">Loading policy...</div>
-      </div>
-    </div>
-    <!-- Applied Presets -->
-    <div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
-      <div style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;margin-bottom:10px;">APPLIED PRESETS</div>
-      <div id="nc-presets" style="display:flex;flex-wrap:wrap;gap:6px;">
-        <span style="color:var(--text-muted);font-size:12px;">None detected</span>
-      </div>
-    </div>
-    <!-- Egress Approvals Panel -->
-    <div style="background:var(--bg-secondary);border:1px solid rgba(118,185,0,0.35);border-radius:8px;padding:14px;" id="nc-approvals-panel">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:11px;font-weight:700;color:#76b900;letter-spacing:1px;">PENDING EGRESS APPROVALS</span>
-          <span id="nc-approvals-count" style="display:none;font-size:11px;font-weight:700;background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);border-radius:10px;padding:1px 8px;"></span>
-        </div>
-        <button class="refresh-btn" onclick="loadNemoClawApprovals()" style="font-size:11px;">&#8635; Refresh</button>
-      </div>
-      <div id="nc-approvals-list">
-        <div style="color:var(--text-muted);font-size:12px;padding:8px 0;">Loading...</div>
-      </div>
-    </div>
-  </div>
-</div><!-- end page-nemoclaw -->
-
-<!-- SELF-CONFIG DIFF VIEWER -->
-<div class="page" id="page-selfconfig">
-  <div style="padding:12px 0 8px 0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <span style="font-size:14px;font-weight:700;color:var(--text-primary);">Self-Configuration History</span>
-        <span style="font-size:11px;color:var(--text-muted);background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;padding:2px 10px;">agent-managed files</span>
-      </div>
-      <button class="refresh-btn" onclick="loadSelfConfig()">&#8635; Refresh</button>
-    </div>
-    <!-- Two-column layout: file list + detail pane -->
-    <div style="display:grid;grid-template-columns:220px 1fr;gap:12px;min-height:400px;">
-      <!-- File list (left) -->
-      <div id="selfconfig-file-list" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:10px;">
-        <div style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:1px;margin-bottom:8px;">TRACKED FILES</div>
-        <div id="selfconfig-files-inner" style="color:var(--text-muted);font-size:12px;">Loading...</div>
-      </div>
-      <!-- Detail pane (right) -->
-      <div id="selfconfig-detail-pane" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:14px;">
-        <div id="selfconfig-empty-state" style="color:var(--text-muted);font-size:13px;padding:24px 0;text-align:center;">
-          Select a file on the left to view its revision history.
-        </div>
-        <div id="selfconfig-revisions-panel" style="display:none;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-            <div style="font-size:13px;font-weight:700;color:var(--text-primary);" id="selfconfig-filename-heading"></div>
-            <div id="selfconfig-values-badge" style="display:none;background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:10px;padding:2px 10px;font-size:11px;font-weight:700;">&#9888; VALUES FILE</div>
-          </div>
-          <div id="selfconfig-revisions-list" style="font-size:12px;"></div>
-        </div>
-        <div id="selfconfig-diff-panel" style="display:none;">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-            <button onclick="selfconfigBackToRevisions()" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;color:var(--text-secondary);">&#8592; Back</button>
-            <span style="font-size:12px;font-weight:700;color:var(--text-primary);" id="selfconfig-diff-heading"></span>
-            <span id="selfconfig-diff-stats" style="font-size:11px;color:var(--text-muted);"></span>
-          </div>
-          <div id="selfconfig-diff-content" style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:12px;line-height:1.6;overflow-x:auto;"></div>
-        </div>
-      </div>
-    </div>
-    <!-- Empty state when no edits ever detected -->
-    <div id="selfconfig-no-history-msg" style="display:none;margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:20px;text-align:center;">
-      <div style="font-size:13px;color:var(--text-muted);">No self-configuration edits yet. ClawMetry snapshots these files and shows diffs when your agent updates them.</div>
-    </div>
-  </div>
-</div><!-- end page-selfconfig -->
-
-<!-- SUB-AGENT TREE -->
-<div class="page" id="page-subagents">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#129313; Sub-Agent Tree</h2>
-    <button class="refresh-btn" onclick="loadSubagents()">&#8635; Refresh</button>
-  </div>
-  <div id="subagents-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
-</div><!-- end page-subagents -->
-
-<div class="page" id="page-skills">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#127381; Skills Fidelity</h2>
-    <button class="refresh-btn" onclick="loadSkills()">&#8635; Refresh</button>
-  </div>
-  <div id="skills-summary-row" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;"></div>
-  <div id="skills-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
-</div><!-- end page-skills -->
-
-<!-- Issue #1615: Review tab — sample 10 random sessions per day,
-     mark correct / wrong / borderline, watch accuracy trend over time. -->
-<div class="page" id="page-review">
-  <div class="refresh-bar">
-    <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;">&#10067; Did the agent make the right choice?</h2>
-    <button class="refresh-btn" onclick="loadReview()">&#8635; Refresh</button>
-    <button class="refresh-btn" onclick="sampleReviewNow()" title="Pick fresh sessions to review right now">Sample now</button>
-  </div>
-  <div style="display:grid;grid-template-columns:1fr 320px;gap:16px;align-items:start;">
-    <div id="review-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div></div>
-    <div id="review-accuracy" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:16px;">
-      <div style="color:var(--text-muted);font-size:13px;">Loading accuracy...</div>
-    </div>
-  </div>
-</div><!-- end page-review -->
-
-
-<script>
-
-// ═══ QUICK ACTIONS ═══════════════════════════════════════════════════════════
-var _qaCurrentAction = null;
-
-function qaConfirmAction(actionKey, title, body) {
-  _qaCurrentAction = actionKey;
-  document.getElementById('qa-confirm-title').textContent = title;
-  document.getElementById('qa-confirm-body').textContent = body;
-  var overlay = document.getElementById('qa-confirm-overlay');
-  overlay.style.display = 'flex';
-  document.getElementById('qa-confirm-ok').onclick = function() {
-    qaCloseConfirm();
-    qaRunAction(actionKey);
-  };
-}
-
-function qaCloseConfirm() {
-  var overlay = document.getElementById('qa-confirm-overlay');
-  if (overlay) overlay.style.display = 'none';
-  _qaCurrentAction = null;
-}
-
-async function qaRunAction(actionKey) {
-  var banner = document.getElementById('qa-result-banner');
-  if (banner) {
-    banner.style.display = 'block';
-    banner.style.background = 'rgba(96,165,250,0.1)';
-    banner.style.borderColor = 'rgba(96,165,250,0.3)';
-    banner.style.color = '#60a5fa';
-    banner.textContent = 'Running ' + actionKey + '...';
-  }
-  try {
-    var resp = await fetch('/api/actions/run', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({action: actionKey})
-    });
-    var data = await resp.json();
-    if (banner) {
-      if (data.ok) {
-        banner.style.background = 'rgba(34,197,94,0.1)';
-        banner.style.borderColor = 'rgba(34,197,94,0.3)';
-        banner.style.color = '#22c55e';
-        banner.textContent = '✓ ' + (data.output || actionKey + ' completed') + ' (' + (data.duration_ms || 0) + 'ms)';
-      } else {
-        banner.style.background = 'rgba(239,68,68,0.1)';
-        banner.style.borderColor = 'rgba(239,68,68,0.3)';
-        banner.style.color = '#ef4444';
-        banner.textContent = '✗ ' + (data.output || data.error || 'Action failed');
-      }
-    }
-    loadQAHistory();
-  } catch(e) {
-    if (banner) {
-      banner.style.background = 'rgba(239,68,68,0.1)';
-      banner.style.borderColor = 'rgba(239,68,68,0.3)';
-      banner.style.color = '#ef4444';
-      banner.textContent = '✗ ' + e.message;
-    }
-  }
-}
-
-async function loadQAHistory() {
-  var el = document.getElementById('qa-history-list');
-  if (!el) return;
-  try {
-    var resp = await fetch('/api/actions/history');
-    var data = await resp.json();
-    var actions = data.actions || [];
-    if (!actions.length) {
-      el.textContent = 'No actions run yet.';
-      return;
-    }
-    var html = '<table style="width:100%;border-collapse:collapse;">';
-    actions.slice().reverse().forEach(function(a) {
-      var color = a.ok ? '#22c55e' : '#ef4444';
-      var label = a.ok ? '✓' : '✗';
-      html += '<tr style="border-bottom:1px solid var(--border-color);">';
-      html += '<td style="padding:6px 8px;color:' + color + ';width:24px;">' + label + '</td>';
-      html += '<td style="padding:6px 8px;color:var(--text-secondary);width:130px;font-weight:600;">' + (a.action || '') + '</td>';
-      html += '<td style="padding:6px 8px;color:var(--text-muted);">' + (a.output || '').slice(0, 120) + '</td>';
-      html += '<td style="padding:6px 8px;color:var(--text-muted);text-align:right;width:65px;">' + (a.duration_ms || 0) + 'ms</td>';
-      html += '</tr>';
-    });
-    html += '</table>';
-    el.innerHTML = html;
-  } catch(e) {
-    el.textContent = 'Could not load action history.';
-  }
-}
-// ═══ END QUICK ACTIONS ═══════════════════════════════════════════════════════
-
-// === Budget & Alert Functions ===
-function openBudgetModal() {
-  document.getElementById('budget-modal').style.display = 'flex';
-  loadBudgetConfig();
-  loadBudgetStatus();
-  loadAgentBudgets();
-}
-
-function switchBudgetTab(tab, el) {
-  document.querySelectorAll('#budget-modal-tabs .modal-tab').forEach(function(t){t.classList.remove('active');});
-  if(el) el.classList.add('active');
-  ['limits','alerts','telegram','history'].forEach(function(t){
-    var d = document.getElementById('budget-tab-'+t);
-    if(d) d.style.display = t===tab ? 'block' : 'none';
-  });
-  if(tab==='alerts') { loadAlertRules(); loadWebhookConfig(); }
-  if(tab==='telegram') loadTelegramConfig();
-  if(tab==='history') loadAlertHistory();
-}
-
-// Per-agent budgets (issue #951)
-// Issue #1168: per-agent LIMITS are free in OSS, but Telegram dispatch
-// on per-agent thresholds is a Cloud-Pro feature. Server returns
-// `pro_dispatch_enabled` on /api/budget; render an inline upsell when
-// it's false so the user knows the bar will paint red but no message
-// will reach Telegram until they upgrade.
-async function loadAgentBudgets() {
-  try {
-    var data = await fetch('/api/budget').then(function(r){return r.json();});
-    var agents = (data && data.agents) || {};
-    var proEnabled = !!(data && data.pro_dispatch_enabled);
-    var upsellHtml = '';
-    if (!proEnabled) {
-      upsellHtml = '<div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:8px;font-size:12px;color:var(--text-secondary);">'
-        + '<span style="font-weight:600;color:var(--text-primary);">Limits are free.</span> '
-        + 'Telegram alerts on per-agent budgets are a Cloud Pro feature. '
-        + '<a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--bg-accent);text-decoration:underline;font-weight:600;">Upgrade to send alerts</a>'
-        + '</div>';
-    }
-    var ids = Object.keys(agents);
-    if (ids.length === 0) {
-      document.getElementById('agent-budget-list').innerHTML = upsellHtml +
-        '<div style="padding:20px;text-align:center;color:var(--text-muted);">No per-agent overrides yet.</div>';
-      return;
-    }
-    var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
-    html += '<tr style="border-bottom:1px solid var(--border-primary);">'
-         + '<th style="text-align:left;padding:6px;">Agent</th>'
-         + '<th style="text-align:right;padding:6px;">Daily</th>'
-         + '<th style="text-align:right;padding:6px;">Monthly</th>'
-         + '<th style="text-align:right;padding:6px;">Spend (MTD)</th>'
-         + '<th style="text-align:right;padding:6px;">Usage</th>'
-         + '<th style="padding:6px;"></th></tr>';
-    // Fetch live status for each agent (sequential is fine — tiny N).
-    var rows = await Promise.all(ids.map(async function(aid){
-      try {
-        var s = await fetch('/api/agents/'+encodeURIComponent(aid)+'/budget').then(function(r){return r.json();});
-        return [aid, agents[aid], s];
-      } catch(e) { return [aid, agents[aid], null]; }
-    }));
-    rows.forEach(function(t){
-      var aid = t[0], ov = t[1], s = t[2] || {};
-      var pct = Math.max(s.daily_pct||0, s.monthly_pct||0);
-      var barColor = pct >= 80 ? '#dc2626' : (pct >= 50 ? '#f59e0b' : '#16a34a');
-      html += '<tr style="border-bottom:1px solid var(--border-secondary);">';
-      html += '<td style="padding:6px;font-weight:600;">' + escHtml(aid) + '</td>';
-      html += '<td style="padding:6px;text-align:right;">' + (ov.daily_limit_usd != null ? '$' + (+ov.daily_limit_usd).toFixed(2) : '<span style="color:var(--text-muted);">global</span>') + '</td>';
-      html += '<td style="padding:6px;text-align:right;">' + (ov.monthly_limit_usd != null ? '$' + (+ov.monthly_limit_usd).toFixed(2) : '<span style="color:var(--text-muted);">global</span>') + '</td>';
-      html += '<td style="padding:6px;text-align:right;">$' + (+(s.mtd_spend||0)).toFixed(2) + '</td>';
-      html += '<td style="padding:6px;text-align:right;"><div style="display:inline-block;width:80px;height:8px;background:var(--bg-tertiary);border-radius:4px;overflow:hidden;"><div style="width:'+Math.min(100,pct)+'%;height:100%;background:'+barColor+';"></div></div> <span style="font-size:11px;color:var(--text-muted);">'+Math.round(pct)+'%</span></td>';
-      html += '<td style="padding:6px;text-align:right;"><span data-agent-id="'+escHtml(aid)+'" style="cursor:pointer;color:var(--text-error);font-size:14px;" onclick="deleteAgentBudget(this.dataset.agentId)" title="Remove override">&#x1f5d1;</span></td>';
-      html += '</tr>';
-    });
-    html += '</table>';
-    document.getElementById('agent-budget-list').innerHTML = upsellHtml + html;
-  } catch(e) {
-    document.getElementById('agent-budget-list').textContent = 'Failed to load';
-  }
-}
-
-async function saveAgentBudget() {
-  var aid = (document.getElementById('agent-budget-id').value || '').trim();
-  if (!aid) {
-    document.getElementById('agent-budget-status').textContent = 'Agent ID required';
-    return;
-  }
-  var d = document.getElementById('agent-budget-daily').value;
-  var m = document.getElementById('agent-budget-monthly').value;
-  var body = {};
-  if (d !== '' && d !== null) body.daily_limit_usd = parseFloat(d);
-  if (m !== '' && m !== null) body.monthly_limit_usd = parseFloat(m);
-  try {
-    var r = await fetch('/api/agents/'+encodeURIComponent(aid)+'/budget', {
-      method:'PUT',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(body),
-    });
-    var j = await r.json();
-    if (j && j.ok) {
-      document.getElementById('agent-budget-status').textContent = 'Saved';
-      document.getElementById('agent-budget-id').value = '';
-      document.getElementById('agent-budget-daily').value = '';
-      document.getElementById('agent-budget-monthly').value = '';
-      loadAgentBudgets();
-    } else {
-      document.getElementById('agent-budget-status').textContent = (j && j.error) || 'Save failed';
-    }
-  } catch(e) {
-    document.getElementById('agent-budget-status').textContent = 'Save failed';
-  }
-}
-
-async function deleteAgentBudget(aid) {
-  if (!aid) return;
-  await fetch('/api/agents/'+encodeURIComponent(aid)+'/budget', {method:'DELETE'});
-  loadAgentBudgets();
-}
-
-async function loadBudgetConfig() {
-  try {
-    var cfg = await fetch('/api/budget/config').then(function(r){return r.json();});
-    document.getElementById('budget-daily').value = cfg.daily_limit || 0;
-    document.getElementById('budget-weekly').value = cfg.weekly_limit || 0;
-    document.getElementById('budget-monthly').value = cfg.monthly_limit || 0;
-    document.getElementById('budget-warn-pct').value = cfg.warning_threshold_pct || 80;
-    var apEl = document.getElementById('budget-autopause');
-    if (apEl) {
-      apEl.checked = cfg.auto_pause_enabled || false;
-      // Issue #1169: auto-pause is a Cloud Pro feature; disable + upsell for Free users.
-      var proOk = !!cfg.auto_pause_pro_enabled;
-      apEl.disabled = !proOk;
-      var upsellId = 'budget-autopause-upsell';
-      var existing = document.getElementById(upsellId);
-      if (existing) existing.parentNode.removeChild(existing);
-      if (!proOk) {
-        apEl.checked = false;
-        var note = document.createElement('div');
-        note.id = upsellId;
-        note.style.cssText = 'margin-top:6px;padding:8px 10px;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:6px;font-size:12px;color:var(--text-secondary);';
-        note.innerHTML = '<span style="font-weight:600;color:var(--text-primary);">Auto-pause is a Cloud Pro feature.</span> '
-          + 'Budget warnings still fire here. To stop the gateway automatically at 100%, '
-          + '<a href="https://app.clawmetry.com/upgrade" target="_blank" rel="noopener" style="color:var(--bg-accent);text-decoration:underline;font-weight:600;">start a 7-day free trial</a>.';
-        if (apEl.parentNode) apEl.parentNode.appendChild(note);
-      }
-    }
-  } catch(e) {}
-}
-
-async function loadBudgetStatus() {
-  try {
-    var s = await fetch('/api/budget/status').then(function(r){return r.json();});
-    var html = '';
-    function row(label, spent, limit, pct) {
-      var color = pct > 90 ? 'var(--text-error)' : pct > 70 ? 'var(--text-warning)' : 'var(--text-success)';
-      html += '<div style="display:flex;justify-content:space-between;padding:4px 0;">';
-      html += '<span>' + label + '</span>';
-      html += '<span style="font-weight:600;color:' + color + ';">$' + spent.toFixed(2);
-      if(limit > 0) html += ' / $' + limit.toFixed(2) + ' (' + pct.toFixed(0) + '%)';
-      html += '</span></div>';
-    }
-    row('Today', s.daily_spent, s.daily_limit, s.daily_pct);
-    row('This Week', s.weekly_spent, s.weekly_limit, s.weekly_pct);
-    row('This Month', s.monthly_spent, s.monthly_limit, s.monthly_pct);
-    if(s.paused) {
-      html += '<div style="margin-top:8px;padding:8px;background:var(--bg-error);border-radius:6px;color:var(--text-error);font-weight:600;">&#9888;&#65039; Gateway PAUSED: ' + escHtml(s.paused_reason) + '</div>';
-    }
-    document.getElementById('budget-status-content').innerHTML = html;
-  } catch(e) {
-    document.getElementById('budget-status-content').textContent = 'Failed to load';
-  }
-}
-
-async function saveBudgetConfig() {
-  var data = {
-    daily_limit: parseFloat(document.getElementById('budget-daily').value) || 0,
-    weekly_limit: parseFloat(document.getElementById('budget-weekly').value) || 0,
-    monthly_limit: parseFloat(document.getElementById('budget-monthly').value) || 0,
-    warning_threshold_pct: parseInt(document.getElementById('budget-warn-pct').value) || 80,
-    auto_pause_enabled: document.getElementById('budget-autopause').checked,
-  };
-  try {
-    var resp = await fetch('/api/budget/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(function(r){return r.json();});
-    if (resp && resp.auto_pause_pro_required) {
-      // Issue #1169: server stripped auto-pause; re-render upsell.
-      loadBudgetConfig();
-    }
-  } catch(e) {}
-  loadBudgetStatus();
-}
-
-async function resumeGateway() {
-  // Issue #555: prefer the new /resume-gateway alias so the cap-banner
-  // path is unambiguous. Falls back to the legacy /resume on any error
-  // (older daemons that haven't picked up the new endpoint yet).
-  try {
-    var r = await fetch('/api/budget/resume-gateway', {method:'POST'});
-    if(!r.ok) throw new Error('resume-gateway failed');
-  } catch(e) {
-    try { await fetch('/api/budget/resume', {method:'POST'}); } catch(_) {}
-  }
-  document.getElementById('alert-banner').style.display = 'none';
-  document.getElementById('alert-resume-btn').style.display = 'none';
-  if(typeof loadBudgetStatus === 'function') loadBudgetStatus();
-}
-
-function showAddAlertForm() {
-  document.getElementById('add-alert-form').style.display = 'block';
-}
-
-async function createAlertRule() {
-  var channels = [];
-  if(document.getElementById('alert-ch-banner').checked) channels.push('banner');
-  if(document.getElementById('alert-ch-telegram').checked) channels.push('telegram');
-  var data = {
-    type: document.getElementById('alert-type').value,
-    threshold: parseFloat(document.getElementById('alert-threshold').value) || 0,
-    channels: channels,
-    cooldown_min: parseInt(document.getElementById('alert-cooldown').value) || 30,
-  };
-  await fetch('/api/alerts/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
-  document.getElementById('add-alert-form').style.display = 'none';
-  loadAlertRules();
-}
-
-async function loadAlertRules() {
-  try {
-    var data = await fetch('/api/alerts/rules').then(function(r){return r.json();});
-    var rules = data.rules || [];
-    // Issue #1419: PR #1410 comms envelope — banner + per-rule "Last fired" pill.
-    var comms = (data && data._comms) || {};
-    if(rules.length === 0) {
-      document.getElementById('alert-rules-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No alert rules configured</div>';
-      return;
-    }
-    var html = '';
-    if (comms.show_alerts_comms_banner) {
-      html += '<div id="alerts-comms-banner" style="padding:12px 14px;margin-bottom:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-left:3px solid #16a34a;border-radius:8px;font-size:13px;color:var(--text-primary);display:flex;align-items:flex-start;gap:10px;">';
-      html += '<span style="font-size:16px;line-height:1;">&#x2728;</span>';
-      html += '<div style="flex:1;">';
-      html += '<div style="font-weight:600;margin-bottom:2px;">Heads up: alert rules now fire on real OpenClaw spend.</div>';
-      html += '<div style="color:var(--text-secondary);font-size:12px;">Your previous rules should start triggering normally.';
-      if (comms.show_cloud_pro_cta) {
-        html += ' Want richer telemetry plus 90-day retention? <a href="/cloud/billing" style="color:var(--text-accent);text-decoration:underline;">Upgrade to Cloud-Pro.</a>';
-      }
-      html += '</div></div>';
-      html += '<span style="cursor:pointer;color:var(--text-muted);font-size:18px;line-height:1;" onclick="this.parentElement.style.display=\'none\';" title="Dismiss">&times;</span>';
-      html += '</div>';
-    }
-    rules.forEach(function(r) {
-      var channels = [];
-      try { channels = JSON.parse(r.channels); } catch(e) { channels = [r.channels]; }
-      html += '<div style="padding:10px;border-bottom:1px solid var(--border-secondary);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">';
-      html += '<span style="font-weight:600;">' + escHtml(r.type) + '</span>';
-      html += '<span style="color:var(--text-accent);">' + (r.type==='spike' ? r.threshold+'x' : (r.type==='token_spike' ? r.threshold.toLocaleString()+' tok/min' : '$'+r.threshold)) + '</span>';
-      html += '<span style="color:var(--text-muted);font-size:11px;">' + channels.join(', ') + '</span>';
-      html += '<span style="color:var(--text-muted);font-size:11px;">' + r.cooldown_min + 'min cooldown</span>';
-      if (r.last_fired_at) {
-        var _ago = Math.floor((Date.now()/1000 - r.last_fired_at));
-        var _label = _ago < 60 ? _ago + 's ago' : (_ago < 3600 ? Math.floor(_ago/60) + 'm ago' : (_ago < 86400 ? Math.floor(_ago/3600) + 'h ago' : Math.floor(_ago/86400) + 'd ago'));
-        html += '<span style="font-size:11px;padding:2px 6px;border-radius:10px;background:rgba(22,163,74,0.12);color:#16a34a;">Last fired: ' + _label + '</span>';
-      } else {
-        html += '<span style="font-size:11px;padding:2px 6px;border-radius:10px;background:var(--bg-tertiary);color:var(--text-muted);">Not yet fired</span>';
-      }
-      html += '<span style="margin-left:auto;cursor:pointer;color:var(--text-error);font-size:16px;" data-rule-id="'+r.id+'" onclick="deleteAlertRule(this.dataset.ruleId)" title="Delete">&#x1f5d1;</span>';
-      html += '</div>';
-    });
-    document.getElementById('alert-rules-list').innerHTML = html;
-  } catch(e) {
-    document.getElementById('alert-rules-list').textContent = 'Failed to load';
-  }
-}
-
-async function deleteAlertRule(id) {
-  await fetch('/api/alerts/rules/'+id, {method:'DELETE'});
-  loadAlertRules();
-}
-
-async function loadWebhookConfig() {
-  try {
-    var cfg = await fetch('/api/alert-channels').then(function(r){return r.json();});
-    document.getElementById('alert-webhook-url').value = cfg.webhook_url || '';
-    document.getElementById('alert-slack-url').value = cfg.slack_webhook_url || '';
-    document.getElementById('alert-discord-url').value = cfg.discord_webhook_url || '';
-    document.getElementById('alert-toggle-cost-spike').checked = cfg.cost_spike_alerts !== false;
-    document.getElementById('alert-toggle-agent-error').checked = cfg.agent_error_rate_alerts !== false;
-    document.getElementById('alert-toggle-security').checked = cfg.security_posture_changes !== false;
-    var minSevEl = document.getElementById('alert-min-severity');
-    if (minSevEl) minSevEl.value = cfg.min_severity || 'warning';
-    document.getElementById('alert-webhook-status').textContent = '';
-  } catch(e) {}
-}
-
-async function saveWebhookConfig() {
-  var status = document.getElementById('alert-webhook-status');
-  status.textContent = 'Saving...';
-  var minSevEl = document.getElementById('alert-min-severity');
-  var payload = {
-    webhook_url: document.getElementById('alert-webhook-url').value.trim(),
-    slack_webhook_url: document.getElementById('alert-slack-url').value.trim(),
-    discord_webhook_url: document.getElementById('alert-discord-url').value.trim(),
-    cost_spike_alerts: document.getElementById('alert-toggle-cost-spike').checked,
-    agent_error_rate_alerts: document.getElementById('alert-toggle-agent-error').checked,
-    security_posture_changes: document.getElementById('alert-toggle-security').checked,
-    min_severity: minSevEl ? minSevEl.value : 'warning',
-  };
-  try {
-    var r = await fetch('/api/alert-channels', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(payload)
-    });
-    if (!r.ok) throw new Error('Save failed');
-    status.style.color = 'var(--text-success)';
-    status.textContent = 'Saved';
-  } catch(e) {
-    status.style.color = 'var(--text-error)';
-    status.textContent = 'Save failed';
-  }
-}
-
-async function testWebhookConfig(target) {
-  var status = document.getElementById('alert-webhook-status');
-  status.style.color = 'var(--text-muted)';
-  status.textContent = 'Sending test...';
-  try {
-    var r = await fetch('/api/alert-channels/test', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({target: target || 'all', severity: 'warning'})
-    });
-    var data = await r.json();
-    if(data.ok) {
-      status.style.color = 'var(--text-success)';
-      status.textContent = 'Test sent to: ' + (data.sent || []).join(', ');
-    } else {
-      status.style.color = 'var(--text-error)';
-      status.textContent = data.error || 'No URL configured for ' + (target || 'all');
-    }
-  } catch(e) {
-    status.style.color = 'var(--text-error)';
-    status.textContent = 'Test failed';
-  }
-}
-
-async function loadAlertHistory() {
-  try {
-    var data = await fetch('/api/alerts/history?limit=50').then(function(r){return r.json();});
-    var alerts = data.alerts || [];
-    if(alerts.length === 0) {
-      document.getElementById('alert-history-list').innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">No alerts fired yet</div>';
-      return;
-    }
-    var html = '';
-    alerts.forEach(function(a) {
-      var ts = new Date(a.fired_at * 1000).toLocaleString();
-      var ack = a.acknowledged ? '<span style="color:var(--text-success);">&#10003;</span>' : '<span style="color:var(--text-warning);">&#x25cf;</span>';
-      html += '<div style="padding:8px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
-      html += ack + ' <span style="color:var(--text-muted);">' + ts + '</span> ';
-      html += '<span style="font-weight:600;">[' + escHtml(a.type) + ']</span> ';
-      html += escHtml(a.message);
-      html += '</div>';
-    });
-    document.getElementById('alert-history-list').innerHTML = html;
-  } catch(e) {
-    document.getElementById('alert-history-list').textContent = 'Failed to load';
-  }
-}
-
-async function checkActiveAlerts() {
-  try {
-    var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
-    var alerts = data.alerts || [];
-    var banner = document.getElementById('alert-banner');
-    var msgEl = document.getElementById('alert-banner-msg');
-    var resumeBtn = document.getElementById('alert-resume-btn');
-    // Issue #555 Phase 1: when the budget cap has paused the gateway,
-    // the banner shows a fixed cap-reached message and the resume CTA
-    // regardless of whether any alert_history rows exist. Without this
-    // an empty alerts table would hide the banner even though the
-    // gateway is paused, which is the dangerous state the cap exists
-    // to surface.
-    var status = await fetch('/api/budget/status').then(function(r){return r.json();});
-    if(status && status.paused) {
-      msgEl.textContent = 'Budget cap reached, gateway paused. Tap to resume.';
-      resumeBtn.style.display = '';
-      banner.style.display = 'flex';
-      return;
-    }
-    if(alerts.length === 0) {
-      banner.style.display = 'none';
-      resumeBtn.style.display = 'none';
-      return;
-    }
-    // Show most recent alert
-    var latest = alerts[0];
-    msgEl.textContent = latest.message;
-    banner.style.display = 'flex';
-    resumeBtn.style.display = 'none';
-  } catch(e) {}
-}
-
-async function ackAllAlerts() {
-  try {
-    var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
-    var alerts = data.alerts || [];
-    for(var i=0; i<alerts.length; i++) {
-      await fetch('/api/alerts/history/'+alerts[i].id+'/ack', {method:'POST'});
-    }
-    document.getElementById('alert-banner').style.display = 'none';
-  } catch(e) {}
-}
-
-// Issue #1233: sticky dismiss for the gateway-tap opt-in banner.
-function dismissGwTapBanner() {
-  try { localStorage.setItem('gw_tap_banner_dismissed', '1'); } catch(e) {}
-  var el = document.getElementById('gw-tap-banner');
-  if (el) el.style.display = 'none';
-}
-
-// Check alerts every 30s
-setInterval(checkActiveAlerts, 30000);
-setTimeout(checkActiveAlerts, 3000);
-
-// === Telegram Config Functions ===
-async function loadTelegramConfig() {
-  try {
-    var cfg = await fetch('/api/budget/config').then(function(r){return r.json();});
-    var tokenEl = document.getElementById('tg-bot-token');
-    var chatEl = document.getElementById('tg-chat-id');
-    if(cfg.telegram_bot_token) tokenEl.value = cfg.telegram_bot_token;
-    if(cfg.telegram_chat_id) chatEl.value = cfg.telegram_chat_id;
-    var statusEl = document.getElementById('tg-status');
-    if(cfg.telegram_bot_token && cfg.telegram_chat_id) {
-      statusEl.innerHTML = '<span style="color:var(--text-success);">Configured</span>';
-    } else {
-      statusEl.innerHTML = '<span style="color:var(--text-muted);">Not configured</span>';
-    }
-  } catch(e) {}
-}
-
-async function saveTelegramConfig() {
-  var token = document.getElementById('tg-bot-token').value.trim();
-  var chatId = document.getElementById('tg-chat-id').value.trim();
-  await fetch('/api/budget/config', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({telegram_bot_token: token, telegram_chat_id: chatId})
-  });
-  document.getElementById('tg-status').innerHTML = '<span style="color:var(--text-success);">Saved!</span>';
-}
-
-async function testTelegram() {
-  var statusEl = document.getElementById('tg-status');
-  statusEl.innerHTML = '<span style="color:var(--text-muted);">Sending...</span>';
-  try {
-    var r = await fetch('/api/budget/test-telegram', {method: 'POST'});
-    var data = await r.json();
-    if(data.ok) {
-      statusEl.innerHTML = '<span style="color:var(--text-success);">Test sent!</span>';
-    } else {
-      statusEl.innerHTML = '<span style="color:var(--text-error);">' + escHtml(data.error || 'Failed') + '</span>';
-    }
-  } catch(e) {
-    statusEl.innerHTML = '<span style="color:var(--text-error);">Request failed</span>';
-  }
-}
-
-// === Update Check Functions ===
-async function checkUpdateStatus() {
-  try {
-    var data = await fetch('/api/update-check/status').then(function(r){return r.json();});
-    var banner = document.getElementById('update-banner');
-    var msg = document.getElementById('update-banner-msg');
-    if (data.show_banner && banner && msg) {
-      var latest = data.latest_check && data.latest_check.latest || 'newer';
-      msg.innerHTML = 'Update available: v' + escHtml(latest) + ' is now available. You are running v' + escHtml(data.latest_check.current) + '.';
-      banner.style.display = 'flex';
-    }
-  } catch(e) {}
-}
-
-async function dismissUpdateBanner() {
-  try {
-    var data = await fetch('/api/update-check/status').then(function(r){return r.json();});
-    if (data.latest_check && data.latest_check.latest) {
-      await fetch('/api/update-check/dismiss', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({version: data.latest_check.latest})
-      });
-    }
-    var banner = document.getElementById('update-banner');
-    if (banner) banner.style.display = 'none';
-  } catch(e) {}
-}
-
-// Check for updates periodically
-setInterval(checkUpdateStatus, 3600000); // Check every hour
-setTimeout(checkUpdateStatus, 5000); // Check 5s after load
-
-function switchTab(name) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
-  var page = document.getElementById('page-' + name);
-  if (page) page.classList.add('active');
-  var tabs = document.querySelectorAll('.nav-tab');
-  tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
-  if (!document.querySelector('.nav-tab.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
-  // Stop cron auto-refresh when leaving crons tab
-  if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
-  if (name === 'overview') loadAll();
-  if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = setInterval(loadTokenVelocity, 30000); }
-  if (name === 'usage') loadUsage();
-  if (name === 'skills') loadSkills();
-  if (name === 'crons') loadCrons();
-  if (name === 'memory') loadMemory();
-  if (name === 'transcripts') loadTranscripts();
-  if (name === 'version-impact') loadVersionImpact();
-
-  if (name === 'limits') loadRateLimits();
-  if (name === 'flow') initFlow();
-  if (name === 'brain') { if (typeof loadBrainPage === 'function') loadBrainPage(); loadContextAnatomy(); }
-  if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
-  if (name === 'actions') loadQAHistory();
-  if (name === 'logs') { if (!logStream || logStream.readyState === EventSource.CLOSED) startLogStream(); loadLogs(); }
-  if (name === 'models') loadModelAttribution();
-  if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
-  if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
-  if (name === 'subagents') { loadSubagents(); if (!_subagentsTimer) _subagentsTimer = setInterval(loadSubagents, 5000); }
-  if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
-  if (name === 'selfconfig') loadSelfConfig();
-  if (name === 'review') loadReview();
-  // NOTE: this is the DEAD first DASHBOARD_HTML - it never renders. The Agent
-  // Graph wiring was mistakenly added here by #3315 (so the tab sat on
-  // "Loading..." forever); the live wiring lives in static/js/app.js
-  // switchTab. Do not add tab wiring here.
-}
-
-// ── Review tab (issue #1615) ─────────────────────────────────────────────
-function _reviewEscape(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, function(c) {
-    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-  });
-}
-function _reviewStatusLabel(s) {
-  return {
-    'pending':              'Pending',
-    'reviewed_correct':     'Correct',
-    'reviewed_wrong':       'Wrong',
-    'reviewed_borderline':  'Borderline'
-  }[s] || s;
-}
-function _reviewAccuracyHtml(data) {
-  var g = data.global || {};
-  var per = data.per_agent || [];
-  var fmtAcc = function(a, c, w) {
-    if (a == null) return '<span style="color:var(--text-muted);">Not enough reviews yet</span>';
-    var pct = Math.round(a * 100);
-    var color = pct >= 90 ? '#22c55e' : (pct >= 75 ? '#f59e0b' : '#ef4444');
-    return '<span style="color:' + color + ';font-weight:700;">' + pct + '%</span>' +
-           ' <span style="color:var(--text-muted);font-size:11px;">(' + c + '/' + (c + w) + ')</span>';
-  };
-  var html = '<h3 style="margin:0 0 12px 0;font-size:13px;color:var(--text-primary);">' +
-             (data.window_days || 30) + '-day accuracy</h3>';
-  html += '<div style="font-size:24px;margin-bottom:4px;">' +
-          fmtAcc(g.accuracy, g.correct || 0, g.wrong || 0) + '</div>';
-  html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:16px;">' +
-          'Global accuracy across all agents. Borderline reviews (' +
-          (g.borderline || 0) + ') excluded from the denominator.</div>';
-  if (per.length > 0) {
-    html += '<h4 style="margin:8px 0;font-size:12px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">Per agent</h4>';
-    per.forEach(function(p) {
-      html += '<div style="padding:8px 0;border-top:1px solid var(--border-primary);font-size:12px;">' +
-              '<div style="font-weight:600;color:var(--text-primary);">' + _reviewEscape(p.agent_id) + '</div>' +
-              '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' +
-              fmtAcc(p.accuracy, p.correct, p.wrong) +
-              '</div></div>';
-    });
-  }
-  return html;
-}
-async function loadReview() {
-  var listEl = document.getElementById('review-list');
-  var accEl = document.getElementById('review-accuracy');
-  if (!listEl || !accEl) return;
-  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
-  try {
-    var [queue, accuracy] = await Promise.all([
-      fetch('/api/review/queue').then(function(r){return r.json();}),
-      fetch('/api/review/accuracy?window=30').then(function(r){return r.json();})
-    ]);
-    accEl.innerHTML = _reviewAccuracyHtml(accuracy);
-    var rows = queue.rows || [];
-    if (rows.length === 0) {
-      listEl.innerHTML = '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">' +
-        '<div style="font-size:32px;margin-bottom:8px;">&#128064;</div>' +
-        '<div style="font-weight:600;color:var(--text-primary);margin-bottom:4px;">No sessions to review.</div>' +
-        '<div>Sampling fires nightly. Click <strong>Sample now</strong> to pull yesterday\'s sessions immediately.</div>' +
-        '</div>';
-      return;
-    }
-    var html = '';
-    rows.forEach(function(r) {
-      var s = r.session_summary || {};
-      var title = s.title || r.session_id;
-      var tokens = s.total_tokens || 0;
-      var msgs = s.message_count || 0;
-      var statusBadge = r.status === 'pending' ? '' :
-        '<span style="background:var(--bg-accent);color:#fff;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:600;margin-left:6px;">' +
-        _reviewStatusLabel(r.status) + '</span>';
-      var notes = r.reviewer_notes ?
-        '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);font-style:italic;">' +
-        _reviewEscape(r.reviewer_notes) + '</div>' : '';
-      html += '<div data-review-sid="' + _reviewEscape(r.session_id) + '" style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:14px;margin-bottom:10px;">' +
-        '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">' +
-          '<div style="flex:1;min-width:0;">' +
-            '<div style="font-weight:600;color:var(--text-primary);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-              _reviewEscape(title) + statusBadge +
-            '</div>' +
-            '<div style="color:var(--text-muted);font-size:11px;margin-top:2px;">' +
-              _reviewEscape(r.agent_id) + ' &middot; ' + tokens.toLocaleString() + ' tokens &middot; ' +
-              msgs + ' msgs &middot; sampled ' + _reviewEscape((r.sampled_at || '').slice(0, 10)) +
-            '</div>' +
-            notes +
-          '</div>' +
-          '<a href="#" onclick="switchTab(\'transcripts\');return false;" style="font-size:11px;color:var(--bg-accent);text-decoration:none;white-space:nowrap;">View transcript &rarr;</a>' +
-        '</div>' +
-        '<div style="display:flex;gap:6px;margin-top:10px;align-items:center;">' +
-          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_correct\')" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#9989; Correct</button>' +
-          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_wrong\')" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#10060; Wrong</button>' +
-          '<button onclick="submitReview(\'' + _reviewEscape(r.session_id) + '\',\'reviewed_borderline\')" style="background:#f59e0b;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;">&#129300; Borderline</button>' +
-          '<input type="text" id="review-notes-' + _reviewEscape(r.session_id) + '" placeholder="Optional note..." style="flex:1;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:6px;padding:6px 10px;font-size:12px;color:var(--text-primary);" />' +
-        '</div>' +
-      '</div>';
-    });
-    listEl.innerHTML = html;
-  } catch (err) {
-    listEl.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:16px;">Failed to load reviews: ' +
-                       _reviewEscape(err && err.message || err) + '</div>';
-  }
-}
-async function submitReview(sid, status) {
-  var noteEl = document.getElementById('review-notes-' + sid);
-  var notes = noteEl ? (noteEl.value || '').trim() : '';
-  try {
-    var resp = await fetch('/api/review/' + encodeURIComponent(sid), {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({status: status, notes: notes || null})
-    });
-    if (!resp.ok) {
-      var err = await resp.json().catch(function(){return {};});
-      alert('Could not save review: ' + (err.error || resp.status));
-      return;
-    }
-  } catch (err) {
-    alert('Could not save review: ' + (err && err.message || err));
-    return;
-  }
-  loadReview();
-}
-async function sampleReviewNow() {
-  try {
-    var resp = await fetch('/api/review/sample', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: '{}'
-    });
-    var data = await resp.json().catch(function(){return {};});
-    if (!resp.ok) {
-      alert('Sampler failed: ' + (data.error || resp.status));
-      return;
-    }
-  } catch (err) {
-    alert('Sampler failed: ' + (err && err.message || err));
-    return;
-  }
-  loadReview();
-}
-
-function exportUsageData() {
-  window.location.href = '/api/usage/export';
-}
-
-async function loadSkills() {
-  var summaryEl = document.getElementById('skills-summary-row');
-  var listEl = document.getElementById('skills-list');
-  if (!summaryEl || !listEl) return;
-  // /api/skills is cloud-disabled (410 Gone). Render an empty state instead
-  // of triggering a console-error-generating fetch on the cloud iframe.
-  if (window.CLOUD_MODE) {
-    listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Skills inspector is local-only. Open the dashboard on the host running OpenClaw to view installed skills.</div>';
-    summaryEl.innerHTML = '';
-    return;
-  }
-  listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">Loading...</div>';
-  try {
-    var data = await fetch('/api/skills').then(function(r){return r.json();});
-    var skills = data.skills || [];
-    var summary = data.summary || {};
-    var wastePct = summary.total_header_tokens > 0
-      ? Math.round(summary.wasted_header_tokens / summary.total_header_tokens * 100) : 0;
-    summaryEl.innerHTML =
-      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--text-primary);">' +
-        '<strong>' + (summary.total_installed||0) + '</strong> skills installed' +
-      '</div>' +
-      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:#ef4444;">' +
-        '<strong>' + (summary.dead_count||0) + '</strong> dead' +
-      '</div>' +
-      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:#f59e0b;">' +
-        '<strong>' + (summary.stuck_count||0) + '</strong> stuck' +
-      '</div>' +
-      '<div style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:10px 16px;font-size:13px;color:var(--text-muted);">' +
-        '<strong>' + (summary.wasted_header_tokens||0) + '</strong> tokens wasted on dead skills (' + wastePct + '%)' +
-      '</div>';
-    if (skills.length === 0) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">No skills installed.</div>';
-      return;
-    }
-    var _statusColor = {healthy:'#22c55e', unused:'#94a3b8', dead:'#ef4444', stuck:'#f59e0b'};
-    var html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
-      '<thead><tr style="color:var(--text-muted);text-align:left;border-bottom:1px solid var(--border-primary);">' +
-        '<th style="padding:8px 10px;">Name</th>' +
-        '<th style="padding:8px 10px;">Description</th>' +
-        '<th style="padding:8px 10px;">Status</th>' +
-        '<th style="padding:8px 10px;text-align:right;">Header Tokens</th>' +
-        '<th style="padding:8px 10px;text-align:right;">Body Fetches (7d)</th>' +
-        '<th style="padding:8px 10px;text-align:right;">Linked Reads (7d)</th>' +
-        '<th style="padding:8px 10px;">Last Used</th>' +
-      '</tr></thead><tbody>';
-    skills.forEach(function(sk, idx) {
-      var desc = (sk.description||'').length > 60 ? sk.description.slice(0,57)+'...' : (sk.description||'—');
-      var sc = _statusColor[sk.status] || '#94a3b8';
-      var badge = '<span style="background:' + sc + '22;color:' + sc + ';border:1px solid ' + sc + '44;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:600;">' + (sk.status||'?') + '</span>';
-      var lastUsed = sk.last_used_ts ? new Date(sk.last_used_ts * 1000).toLocaleDateString() : '—';
-      var rowBg = idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)';
-      var detailId = 'skill-detail-' + idx;
-      html += '<tr style="background:' + rowBg + ';cursor:pointer;border-bottom:1px solid var(--border-primary);" onclick="var d=document.getElementById(\'' + detailId + '\');d.style.display=d.style.display===\'none\'?\'table-row\':\'none\'">' +
-        '<td style="padding:8px 10px;font-weight:600;color:var(--text-primary);">' + escHtml(sk.name) + '</td>' +
-        '<td style="padding:8px 10px;color:var(--text-muted);">' + escHtml(desc) + '</td>' +
-        '<td style="padding:8px 10px;">' + badge + '</td>' +
-        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.header_tokens||0) + '</td>' +
-        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.body_fetch_count_7d||0) + '</td>' +
-        '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + (sk.linked_file_read_count_7d||0) + '</td>' +
-        '<td style="padding:8px 10px;color:var(--text-muted);">' + lastUsed + '</td>' +
-      '</tr>' +
-      '<tr id="' + detailId + '" style="display:none;background:var(--bg-tertiary);">' +
-        '<td colspan="7" style="padding:12px 20px;color:var(--text-muted);font-size:12px;">' +
-          '<strong>Description:</strong> ' + escHtml(sk.description||'(none)') + '<br>' +
-          '<strong>Has body:</strong> ' + (sk.has_body?'yes':'no') + ' &nbsp;|&nbsp; ' +
-          '<strong>Has linked files:</strong> ' + (sk.has_linked_files?'yes':'no') +
-        '</td>' +
-      '</tr>';
-    });
-    html += '</tbody></table>';
-    listEl.innerHTML = html;
-  } catch(e) {
-    if (listEl) listEl.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:16px;">Failed to load skills: ' + e + '</div>';
-  }
-}
-
-// ═══ SELF-CONFIG DIFF VIEWER ═════════════════════════════════════════════════
-
-var _selfconfigCurrentFile = null;
-var _selfconfigRevisions = [];
-
-async function loadSelfConfig() {
-  var inner = document.getElementById('selfconfig-files-inner');
-  if (!inner) return;
-  inner.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
-  // Reset detail pane
-  var detailEmpty = document.getElementById('selfconfig-empty-state');
-  var detailRevs = document.getElementById('selfconfig-revisions-panel');
-  var detailDiff = document.getElementById('selfconfig-diff-panel');
-  if (detailEmpty) { detailEmpty.style.display = 'block'; }
-  if (detailRevs) { detailRevs.style.display = 'none'; }
-  if (detailDiff) { detailDiff.style.display = 'none'; }
-  try {
-    var d = await fetchJsonWithTimeout('/api/selfconfig', 5000);
-    var files = d.files || [];
-    var hasAnyRevisions = files.some(function(f) { return f.revision_count > 0; });
-    var noHistMsg = document.getElementById('selfconfig-no-history-msg');
-    if (noHistMsg) noHistMsg.style.display = hasAnyRevisions ? 'none' : 'block';
-    if (!files.length) {
-      inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">No tracked files found.</span>';
-      return;
-    }
-    inner.innerHTML = files.map(function(f) {
-      var badge = f.is_values_file
-        ? ' <span style="background:rgba(251,146,60,0.15);color:#fb923c;border:1px solid rgba(251,146,60,0.4);border-radius:8px;padding:1px 6px;font-size:10px;font-weight:700;">VALUES</span>'
-        : '';
-      var revCount = f.revision_count > 0
-        ? ' <span style="color:var(--text-muted);font-size:10px;">(' + f.revision_count + ' rev' + (f.revision_count !== 1 ? 's' : '') + ')</span>'
-        : ' <span style="color:var(--text-muted);font-size:10px;">(no edits)</span>';
-      var existStyle = f.exists ? '' : 'opacity:0.5;';
-      return '<div onclick="loadSelfConfigHistory(\'' + f.name + '\')" style="cursor:pointer;padding:7px 8px;border-radius:6px;margin-bottom:4px;' + existStyle + 'border:1px solid transparent;transition:all 0.15s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'transparent\'">'
-        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + f.name + badge + '</div>'
-        + '<div style="font-size:11px;margin-top:2px;">' + revCount + '</div>'
-        + '</div>';
-    }).join('');
-  } catch(e) {
-    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading files.</span>';
-  }
-}
-
-async function loadSelfConfigHistory(filename) {
-  _selfconfigCurrentFile = filename;
-  var emptyEl = document.getElementById('selfconfig-empty-state');
-  var revsPanel = document.getElementById('selfconfig-revisions-panel');
-  var diffPanel = document.getElementById('selfconfig-diff-panel');
-  if (emptyEl) emptyEl.style.display = 'none';
-  if (diffPanel) diffPanel.style.display = 'none';
-  if (revsPanel) revsPanel.style.display = 'block';
-  var headEl = document.getElementById('selfconfig-filename-heading');
-  var badgeEl = document.getElementById('selfconfig-values-badge');
-  var listEl = document.getElementById('selfconfig-revisions-list');
-  if (headEl) headEl.textContent = filename;
-  if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);">Loading...</span>';
-  try {
-    var d = await fetchJsonWithTimeout('/api/selfconfig/' + encodeURIComponent(filename), 5000);
-    if (badgeEl) badgeEl.style.display = d.is_values_file ? 'block' : 'none';
-    _selfconfigRevisions = d.revisions || [];
-    if (!_selfconfigRevisions.length) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No revisions recorded yet. Edits will appear here automatically.</div>';
-      return;
-    }
-    listEl.innerHTML = _selfconfigRevisions.map(function(rev, idx) {
-      var dt = new Date(rev.ts * 1000).toLocaleString();
-      var delta = '';
-      if (idx < _selfconfigRevisions.length - 1) {
-        var prevSize = _selfconfigRevisions[idx + 1].size;
-        var diff = rev.size - prevSize;
-        delta = diff > 0
-          ? '<span style="color:#22c55e;font-weight:600;">+' + diff + '</span>'
-          : diff < 0
-            ? '<span style="color:#ef4444;font-weight:600;">' + diff + '</span>'
-            : '<span style="color:var(--text-muted);">±0</span>';
-      } else {
-        delta = '<span style="color:var(--text-muted);font-size:10px;">initial</span>';
-      }
-      var prevTs = idx < _selfconfigRevisions.length - 1 ? _selfconfigRevisions[idx + 1].ts : null;
-      var diffBtn = prevTs !== null
-        ? '<button onclick="loadSelfConfigDiff(\'' + filename + '\',' + prevTs + ',' + rev.ts + ')" style="background:var(--bg-primary);border:1px solid var(--border);border-radius:5px;padding:2px 8px;font-size:10px;cursor:pointer;color:var(--text-secondary);margin-left:8px;">View diff</button>'
-        : '';
-      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px;border-radius:6px;margin-bottom:4px;background:var(--bg-primary);border:1px solid var(--border-secondary);">'
-        + '<div>'
-        + '<div style="font-size:12px;font-weight:600;color:var(--text-primary);">' + dt + '</div>'
-        + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + rev.size.toLocaleString() + ' bytes &nbsp; ' + delta + '</div>'
-        + '</div>'
-        + diffBtn
-        + '</div>';
-    }).join('');
-  } catch(e) {
-    if (listEl) listEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading history.</span>';
-  }
-}
-
-async function loadSelfConfigDiff(filename, fromTs, toTs) {
-  var diffPanel = document.getElementById('selfconfig-diff-panel');
-  var revsPanel = document.getElementById('selfconfig-revisions-panel');
-  var emptyEl   = document.getElementById('selfconfig-empty-state');
-  if (emptyEl) emptyEl.style.display = 'none';
-  if (revsPanel) revsPanel.style.display = 'none';
-  if (diffPanel) diffPanel.style.display = 'block';
-  var headEl    = document.getElementById('selfconfig-diff-heading');
-  var statsEl   = document.getElementById('selfconfig-diff-stats');
-  var contentEl = document.getElementById('selfconfig-diff-content');
-  if (headEl) headEl.textContent = filename + ' diff';
-  if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);">Loading diff...</span>';
-  try {
-    var url = '/api/selfconfig/' + encodeURIComponent(filename) + '/diff?from=' + fromTs + '&to=' + toTs;
-    var d = await fetchJsonWithTimeout(url, 8000);
-    if (statsEl) {
-      statsEl.innerHTML = '<span style="color:#22c55e;">+' + d.added_chars + '</span> / <span style="color:#ef4444;">-' + d.removed_chars + '</span> chars'
-        + (d.truncated ? ' <span style="color:#f59e0b;">(truncated)</span>' : '');
-    }
-    var lines = d.diff_lines || [];
-    if (!lines.length) {
-      contentEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No changes detected between these two versions.</div>';
-      return;
-    }
-    contentEl.innerHTML = lines.map(function(line) {
-      var txt = (line.text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      if (line.type === 'added') {
-        return '<div style="background:rgba(34,197,94,0.12);color:#86efac;padding:1px 6px;white-space:pre;">' + txt + '</div>';
-      } else if (line.type === 'removed') {
-        return '<div style="background:rgba(239,68,68,0.12);color:#fca5a5;padding:1px 6px;white-space:pre;">' + txt + '</div>';
-      } else if (line.type === 'meta') {
-        return '<div style="color:var(--text-muted);padding:1px 6px;white-space:pre;font-size:11px;">' + txt + '</div>';
-      } else {
-        return '<div style="color:var(--text-secondary);padding:1px 6px;white-space:pre;">' + txt + '</div>';
-      }
-    }).join('');
-  } catch(e) {
-    if (contentEl) contentEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">Error loading diff.</span>';
-  }
-}
-
-function selfconfigBackToRevisions() {
-  var diffPanel = document.getElementById('selfconfig-diff-panel');
-  var revsPanel = document.getElementById('selfconfig-revisions-panel');
-  if (diffPanel) diffPanel.style.display = 'none';
-  if (revsPanel && _selfconfigCurrentFile) {
-    revsPanel.style.display = 'block';
-  }
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-
-var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
-var _moonSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-
-function toggleTheme() {
-  const body = document.body;
-  const toggle = document.getElementById('theme-toggle-btn');
-  const isLight = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') !== 'dark';
-  
-  if (isLight) {
-    body.setAttribute('data-theme', 'dark');
-    toggle.innerHTML = _sunSVG;
-    toggle.title = 'Switch to light theme';
-    localStorage.setItem('openclaw-theme', 'dark');
-  } else {
-    body.removeAttribute('data-theme');
-    toggle.innerHTML = _moonSVG;
-    toggle.title = 'Switch to dark theme';
-    localStorage.setItem('openclaw-theme', 'light');
-  }
-}
-
-function initTheme() {
-  const savedTheme = 'dark'; localStorage.setItem('openclaw-theme', 'dark');
-  const body = document.body;
-  const toggle = document.getElementById('theme-toggle-btn');
-  
-  if (savedTheme === 'dark') {
-    body.setAttribute('data-theme', 'dark');
-    if (toggle) { toggle.innerHTML = _sunSVG; toggle.title = 'Switch to light theme'; }
-  } else {
-    body.removeAttribute('data-theme');
-    if (toggle) { toggle.innerHTML = _moonSVG; toggle.title = 'Switch to dark theme'; }
-  }
-}
-
-// === Zoom Controls ===
-let currentZoom = 1.0;
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 2.0;
-const ZOOM_STEP = 0.1;
-
-function initZoom() {
-  const savedZoom = localStorage.getItem('openclaw-zoom');
-  if (savedZoom) {
-    currentZoom = parseFloat(savedZoom);
-  }
-  applyZoom();
-}
-
-function applyZoom() {
-  const wrapper = document.getElementById('zoom-wrapper');
-  const levelDisplay = document.getElementById('zoom-level');
-  
-  if (wrapper) {
-    wrapper.style.transform = `scale(${currentZoom})`;
-  }
-  if (levelDisplay) {
-    levelDisplay.textContent = Math.round(currentZoom * 100) + '%';
-  }
-  
-  // Save to localStorage
-  localStorage.setItem('openclaw-zoom', currentZoom.toString());
-}
-
-function zoomIn() {
-  if (currentZoom < MAX_ZOOM) {
-    currentZoom = Math.min(MAX_ZOOM, currentZoom + ZOOM_STEP);
-    applyZoom();
-  }
-}
-
-function zoomOut() {
-  if (currentZoom > MIN_ZOOM) {
-    currentZoom = Math.max(MIN_ZOOM, currentZoom - ZOOM_STEP);
-    applyZoom();
-  }
-}
-
-function resetZoom() {
-  currentZoom = 1.0;
-  applyZoom();
-}
-
-// Keyboard shortcuts for zoom
-document.addEventListener('keydown', function(e) {
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-    if (e.key === '=' || e.key === '+') {
-      e.preventDefault();
-      zoomIn();
-    } else if (e.key === '-') {
-      e.preventDefault();
-      zoomOut();
-    } else if (e.key === '0') {
-      e.preventDefault();
-      resetZoom();
-    }
-  }
-});
-
-function timeAgo(ms) {
-  if (!ms) return 'never';
-  var diff = Date.now() - ms;
-  if (diff < 60000) return Math.floor(diff/1000) + 's ago';
-  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
-  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
-  return Math.floor(diff/86400000) + 'd ago';
-}
-
-function formatTime(ms) {
-  if (!ms) return '--';
-  return new Date(ms).toLocaleString('en-GB', {hour:'2-digit',minute:'2-digit',day:'numeric',month:'short'});
-}
-
-async function fetchJsonWithTimeout(url, timeoutMs) {
-  var ctrl = new AbortController();
-  var to = setTimeout(function() { ctrl.abort('timeout'); }, timeoutMs);
-  try {
-    var r = await fetch(url, {signal: ctrl.signal});
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return await r.json();
-  } finally {
-    clearTimeout(to);
-  }
-}
-
-async function resolvePrimaryModelFallback() {
-  try {
-    var data = await fetchJsonWithTimeout('/api/component/brain?limit=25', 4000);
-    var model = (((data || {}).stats || {}).model || '').trim();
-    return model || 'unknown';
-  } catch (e) {
-    return 'unknown';
-  }
-}
-
-function applyBrainModelToAll(modelName) {
-  if (!modelName) return;
-  var modelText = fitFlowLabel(modelName, 20);
-  document.querySelectorAll('[id$="brain-model-text"]').forEach(function(el) {
-    el.textContent = modelText;
-  });
-  document.querySelectorAll('[id$="brain-model-label"]').forEach(function(label) {
-    var short = modelName.split('/').pop().split('-').slice(0, 2).join(' ');
-    if (!short) short = 'AI Model';
-    label.textContent = fitFlowLabel(short.charAt(0).toUpperCase() + short.slice(1), 14);
-  });
-}
-
-function fitFlowLabel(text, maxLen) {
-  var s = String(text || '').trim();
-  if (!s) return '';
-  if (s.length <= maxLen) return s;
-  return s.substring(0, Math.max(1, maxLen - 1)) + '…';
-}
-
-function applyBillingHintToFlow(billingSummary) {
-  var hint = 'Auth: ?';
-  if (billingSummary === 'likely_api_key') hint = 'Auth: API';
-  else if (billingSummary === 'likely_oauth_or_included') hint = 'Auth: OAuth';
-  else if (billingSummary === 'mixed') hint = 'Auth: mixed';
-
-  document.querySelectorAll('[id$="brain-billing-text"]').forEach(function(el) {
-    el.textContent = fitFlowLabel(hint, 14);
-  });
-}
-
-function setFlowTextAll(idSuffix, text, maxLen) {
-  var fitted = fitFlowLabel(text, maxLen);
-  document.querySelectorAll('[id$="' + idSuffix + '"]').forEach(function(el) {
-    el.textContent = fitted;
-  });
-}
-
-
-var _velocityPollTimer = null;
-
-async function loadTokenVelocity() {
-  try {
-    var d = await fetchJsonWithTimeout('/api/token-velocity', 5000);
-    var banner = document.getElementById('velocity-alert-banner');
-    var msgEl  = document.getElementById('velocity-alert-msg');
-    var listEl = document.getElementById('velocity-flagged-list');
-    if (!banner) return;
-
-    if (!d.alert || d.level === 'ok') {
-      banner.style.display = 'none';
-      return;
-    }
-
-    var vel = d.velocity_2min ? d.velocity_2min.toLocaleString() : '0';
-    var cpm = d.cost_per_min ? '$' + d.cost_per_min.toFixed(3) + '/min' : '';
-    msgEl.textContent = '\u26a0\ufe0f High token velocity \u2014 ' + vel + ' tokens/2min' + (cpm ? '  (' + cpm + ')' : '');
-
-    if (d.level === 'critical') {
-      banner.style.background = 'rgba(220,38,38,0.18)';
-      banner.style.border     = '1px solid rgba(239,68,68,0.5)';
-      banner.style.color      = '#fca5a5';
-    } else {
-      banner.style.background = 'rgba(217,119,6,0.18)';
-      banner.style.border     = '1px solid rgba(245,158,11,0.5)';
-      banner.style.color      = '#fcd34d';
-    }
-
-    // Render flagged sessions with Kill buttons
-    if (listEl && d.flagged_sessions && d.flagged_sessions.length > 0) {
-      listEl.innerHTML = d.flagged_sessions.map(function(s) {
-        var info = s.tokens_2min ? s.tokens_2min.toLocaleString() + ' tok/2min' : '';
-        if (s.tool_chain_len >= 20) info += (info ? ', ' : '') + s.tool_chain_len + ' tool chain';
-        return '<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.3);border-radius:6px;padding:3px 8px;font-size:11px;font-weight:400;">'
-          + '<code style="font-size:10px;color:inherit;opacity:0.8;">' + s.id + '</code>'
-          + '<span style="opacity:0.7;">' + info + '</span>'
-          + '<button onclick="killSession(\'' + s.id + '\')" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:1px 6px;font-size:10px;cursor:pointer;font-weight:600;">Kill</button>'
-          + '</span>';
-      }).join('');
-    } else if (listEl) {
-      listEl.innerHTML = '';
-    }
-
-    banner.style.display = 'block';
-  } catch(e) {
-    console.warn('token velocity check failed', e);
-  }
-}
-
-async function loadPromptErrors() {
-  try {
-    var d = await fetchJsonWithTimeout('/api/prompt-errors', 5000);
-    var banner = document.getElementById('prompt-error-banner');
-    var msgEl  = document.getElementById('prompt-error-msg');
-    var listEl = document.getElementById('prompt-error-list');
-    if (!banner) return;
-    if (!d.errors || d.errors.length === 0) { banner.style.display = 'none'; return; }
-
-    msgEl.textContent = '⚠️ ' + d.count + ' prompt error' + (d.count === 1 ? '' : 's') + ' detected';
-
-    if (listEl) {
-      listEl.innerHTML = d.errors.slice(0, 5).map(function(e) {
-        var when = e.ts ? new Date(e.ts).toLocaleTimeString() : '';
-        var who = [e.provider, e.model].filter(Boolean).join('/') || 'unknown provider';
-        var msg = e.error ? String(e.error).slice(0, 120) : 'unknown error';
-        return '<div style="background:rgba(0,0,0,0.25);border-radius:5px;padding:4px 8px;">'
-          + (when ? '<span style="opacity:0.6;">' + when + '</span> ' : '')
-          + '<span style="opacity:0.8;">' + who + '</span>'
-          + ' — ' + msg
-          + '</div>';
-      }).join('');
-    }
-
-    banner.style.display = 'block';
-  } catch(e) { /* non-critical */ }
-}
-
-async function killSession(sessionId) {
-  if (!confirm('Stop session ' + sessionId + '?')) return;
-  try {
-    var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/stop', {method: 'POST'});
-    if (resp.ok) { alert('Session stopped.'); loadTokenVelocity(); }
-    else alert('Failed to stop session: ' + resp.status);
-  } catch(e) { alert('Error: ' + e.message); }
-}
-
-// ---------------------------------------------------------------------------
-// Autonomy Score loader (#688)
-// ---------------------------------------------------------------------------
-async function loadAutonomy() {
-  var scoreEl = document.getElementById('autonomy-score-value');
-  var badgeEl = document.getElementById('autonomy-trend-badge');
-  var gapEl   = document.getElementById('autonomy-median-gap');
-  var trendEl = document.getElementById('autonomy-trend-pct');
-  var svgEl   = document.getElementById('autonomy-sparkline');
-  var sampEl  = document.getElementById('autonomy-samples');
-  if (!scoreEl) return;
-  try {
-    var d = await fetchJsonWithTimeout('/api/autonomy', 5000);
-
-    // Score
-    if (d.score == null) {
-      scoreEl.textContent = '--';
-      if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
-      if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; }
-      if (trendEl) trendEl.textContent = '';
-      if (sampEl) sampEl.textContent = '';
-      return;
-    }
-    scoreEl.textContent = d.score.toFixed(2);
-
-    // Median gap
-    if (gapEl && d.median_gap_seconds_7d != null) {
-      var secs = Math.round(d.median_gap_seconds_7d);
-      var hrs = Math.floor(secs / 3600);
-      var mins = Math.floor((secs % 3600) / 60);
-      var s = secs % 60;
-      var parts = [];
-      if (hrs > 0) parts.push(hrs + 'h');
-      if (mins > 0) parts.push(mins + 'm');
-      parts.push(s + 's');
-      gapEl.textContent = 'Median time between nudges: ' + parts.join(' ');
-    } else if (gapEl) {
-      gapEl.textContent = 'Median time between nudges: --';
-    }
-
-    // Trend badge
-    if (badgeEl) {
-      var dir = d.trend_direction || 'flat';
-      if (dir === 'improving') {
-        badgeEl.textContent = '\u2191 improving';
-        badgeEl.style.background = 'rgba(16,185,129,0.18)';
-        badgeEl.style.color = '#10b981';
-        badgeEl.style.border = '1px solid rgba(16,185,129,0.35)';
-      } else if (dir === 'declining') {
-        badgeEl.textContent = '\u2193 declining';
-        badgeEl.style.background = 'rgba(239,68,68,0.18)';
-        badgeEl.style.color = '#ef4444';
-        badgeEl.style.border = '1px solid rgba(239,68,68,0.35)';
-      } else {
-        badgeEl.textContent = '\u2015 steady';
-        badgeEl.style.background = 'rgba(100,116,139,0.18)';
-        badgeEl.style.color = 'var(--text-muted)';
-        badgeEl.style.border = '1px solid var(--border-primary)';
-      }
-    }
-
-    // Trend pct from slope
-    if (trendEl && d.trend_slope_7d != null) {
-      var pct = Math.round(d.trend_slope_7d * 100);
-      if (pct > 0) trendEl.textContent = '+' + pct + '% this week';
-      else if (pct < 0) trendEl.textContent = pct + '% this week';
-      else trendEl.textContent = '';
-    }
-
-    // Samples
-    if (sampEl && d.samples_7d != null) {
-      sampEl.textContent = d.samples_7d + ' user msg' + (d.samples_7d !== 1 ? 's' : '') + ' in 7d';
-    }
-
-    // Sparkline — inline SVG of daily autonomy_ratio
-    if (svgEl && d.series_daily && d.series_daily.length > 0) {
-      var ratios = d.series_daily.map(function(e){ return e.autonomy_ratio; });
-      var valid = ratios.filter(function(v){ return v != null; });
-      if (valid.length >= 2) {
-        var W = 160, H = 48, pad = 4;
-        var minV = 0, maxV = 1;
-        var n = ratios.length;
-        var step = (W - pad * 2) / Math.max(n - 1, 1);
-        var pts = ratios.map(function(v, i) {
-          var x = pad + i * step;
-          var y = v == null ? null : H - pad - (v - minV) / (maxV - minV) * (H - pad * 2);
-          return {x: x, y: y, v: v};
-        });
-        // Build polyline from non-null points
-        var pathD = '';
-        pts.forEach(function(p, i) {
-          if (p.y == null) return;
-          if (!pathD || pts.slice(0, i).every(function(q){ return q.y == null; })) {
-            pathD += 'M' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
-          } else {
-            pathD += ' L' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
-          }
-        });
-        var svgContent = '';
-        // Area fill
-        var firstP = pts.find(function(p){ return p.y != null; });
-        var lastP = null; pts.forEach(function(p){ if(p.y != null) lastP = p; });
-        if (firstP && lastP && pathD) {
-          var fillD = pathD + ' L' + lastP.x.toFixed(1) + ',' + (H - pad) + ' L' + firstP.x.toFixed(1) + ',' + (H - pad) + ' Z';
-          svgContent += '<path d="' + fillD + '" fill="rgba(99,102,241,0.15)" stroke="none"/>';
-          svgContent += '<path d="' + pathD + '" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>';
-        }
-        // Dots
-        pts.forEach(function(p) {
-          if (p.y == null) return;
-          svgContent += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="2.5" fill="#6366f1"/>';
-        });
-        svgEl.innerHTML = svgContent;
-      } else {
-        svgEl.innerHTML = '<text x="80" y="28" text-anchor="middle" fill="var(--text-muted)" font-size="10">Not enough data</text>';
-      }
-    }
-  } catch(e) {
-    console.warn('autonomy load failed', e);
-    if (scoreEl) scoreEl.textContent = '--';
-    if (gapEl) gapEl.textContent = 'No data yet \u2014 start using your agent to track autonomy';
-  }
-}
-
-async function loadAll() {
-  try {
-    // Render overview quickly; do not block on heavy usage aggregation.
-    var overview = await fetchJsonWithTimeout('/api/overview', 3000);
-
-    // Start secondary panels immediately.
-    startActiveTasksRefresh();
-    loadAutonomy().catch(function(e){console.warn('autonomy failed',e)});
-    loadActivityStream().catch(function(e){console.warn('activity stream failed',e)});
-    loadHealth().catch(function(e){console.warn('health failed',e)});
-    // /api/mc-tasks removed in commit 62e1fe7 — see issue #1127.
-    if (typeof loadReliabilityCard === 'function') loadReliabilityCard().catch(function(e){console.warn('reliability card failed',e)});
-    if (typeof loadAnomalyPanel === 'function') loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)});
-    if (typeof loadTokenVelocity === 'function') loadTokenVelocity().catch(function(e){console.warn('velocity check failed',e)});
-    if (typeof loadPromptErrors === 'function') loadPromptErrors().catch(function(e){console.warn('prompt errors failed',e)});
-    if (typeof loadDiagnostics === 'function') loadDiagnostics().catch(function(e){console.warn('diagnostics failed',e)});
-    if (typeof loadHeartbeat === 'function') loadHeartbeat().catch(function(e){console.warn('heartbeat panel failed',e)});
-    if (typeof loadMcpStats === 'function') loadMcpStats().catch(function(e){console.warn('mcp stats failed',e)});
-    document.getElementById('refresh-time').textContent = 'Updated ' + new Date().toLocaleTimeString();
-
-    if (overview.infra) {
-      var i = overview.infra;
-      if (i.runtime) setFlowTextAll('infra-runtime-text', i.runtime, 18);
-      if (i.machine) setFlowTextAll('infra-machine-text', i.machine, 18);
-      if (i.storage) setFlowTextAll('infra-storage-text', i.storage, 16);
-      if (i.network) setFlowTextAll('infra-network-text', 'LAN ' + i.network, 18);
-      if (i.userName) setFlowTextAll('flow-human-name', i.userName, 10);
-    }
-
-    // Issue #1233: surface the opt-in nudge for users impacted by PR #1228
-    // default-OFF flip of the gateway WS tap. Sticky dismiss via localStorage.
-    try {
-      var comms = (overview && overview._comms) || {};
-      var gwBanner = document.getElementById('gw-tap-banner');
-      if (gwBanner && comms.show_gateway_tap_banner && localStorage.getItem('gw_tap_banner_dismissed') !== '1') {
-        gwBanner.style.display = 'flex';
-        var proCta = document.getElementById('gw-tap-banner-pro');
-        if (proCta) proCta.style.display = comms.show_pro_cta ? 'inline-block' : 'none';
-      }
-    } catch(e) { /* never let banner code break overview */ }
-
-    // If overview cannot determine model yet, use brain endpoint fallback immediately.
-    if (!overview.model || overview.model === 'unknown') {
-      var fallbackModel = await resolvePrimaryModelFallback();
-      if (fallbackModel && fallbackModel !== 'unknown') {
-        overview.model = fallbackModel;
-      }
-    }
-    if (overview.model && overview.model !== 'unknown') {
-      applyBrainModelToAll(overview.model);
-    }
-
-    // Usage may be slow on first run; keep trying in background with timeout.
-    try {
-      var usage = await fetchJsonWithTimeout('/api/usage', 5000);
-      loadMiniWidgets(overview, usage);
-    } catch (e) {
-      // Keep UI responsive with placeholder values until next refresh.
-      loadMiniWidgets(overview, {todayCost:0, weekCost:0, monthCost:0, month:0, today:0});
-    }
-    return true;
-  } catch (e) {
-    console.error('Initial load failed', e);
-    document.getElementById('refresh-time').textContent = 'Load failed - retrying...';
-    return false;
-  }
-}
-
-async function loadReliabilityCard() {
-  try {
-    var r = await fetchJsonWithTimeout('/api/history/reliability', 5000);
-    var icons = {improving:'📈',degrading:'⚠️',stable:'✅',insufficient_data:'🔄'};
-    var icon = icons[r.direction] || '🔄';
-    var label = r.direction === 'insufficient_data' ? 'No data' : r.direction.charAt(0).toUpperCase() + r.direction.slice(1);
-    var el = document.getElementById('reliability-icon');
-    if (el) el.textContent = icon;
-    el = document.getElementById('reliability-direction');
-    if (el) el.textContent = label;
-    el = document.getElementById('reliability-detail');
-    if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
-    el = document.getElementById('reliability-icon-lt');
-    if (el) el.textContent = icon;
-    el = document.getElementById('reliability-direction-lt');
-    if (el) el.textContent = label;
-    el = document.getElementById('reliability-detail-lt');
-    if (el) el.textContent = r.session_count + ' sessions / ' + r.window_days + 'd';
-  } catch(e) { console.warn('reliability card load failed', e); }
-}
-
-async function loadMcpStats() {
-  try {
-    var d = await fetchJsonWithTimeout('/api/mcp-stats', 8000);
-    var wrap = document.getElementById('sh-mcp-wrap');
-    var el = document.getElementById('sh-mcp');
-    if (!wrap || !el) return;
-    if (!d.tools || d.tools.length === 0) {
-      wrap.style.display = 'block';
-      el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">No MCP tool calls detected in recent sessions.</div>';
-      return;
-    }
-    var rows = d.tools.map(function(t) {
-      var errCell = t.errors > 0
-        ? '<span style="color:#e05;">' + t.errors + ' (' + t.error_rate_pct + '%)</span>'
-        : '<span style="color:var(--text-muted);">0</span>';
-      var latCell = t.avg_latency_ms != null
-        ? (t.avg_latency_ms >= 1000
-            ? (t.avg_latency_ms / 1000).toFixed(1) + 's'
-            : t.avg_latency_ms + 'ms')
-        : '<span style="color:var(--text-faint);">—</span>';
-      return '<tr style="border-top:1px solid var(--border-secondary);">'
-        + '<td style="padding:4px 6px 4px 0;font-size:12px;font-family:\'JetBrains Mono\',monospace;color:var(--text-primary);">' + t.name + '</td>'
-        + '<td style="padding:4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + t.calls + '</td>'
-        + '<td style="padding:4px 6px;font-size:12px;text-align:right;">' + errCell + '</td>'
-        + '<td style="padding:4px 0 4px 6px;font-size:12px;color:var(--text-secondary);text-align:right;">' + latCell + '</td>'
-        + '</tr>';
-    }).join('');
-    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
-      + '<thead><tr>'
-      + '<th style="padding:0 6px 4px 0;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:left;font-weight:500;">Tool</th>'
-      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Calls</th>'
-      + '<th style="padding:0 6px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Errors</th>'
-      + '<th style="padding:0 0 4px 6px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-faint);text-align:right;font-weight:500;">Avg Latency</th>'
-      + '</tr></thead>'
-      + '<tbody>' + rows + '</tbody>'
-      + '</table>';
-    wrap.style.display = 'block';
-  } catch(e) { console.warn('mcp stats failed', e); }
-}
-
-async function loadHeartbeat() {
-  try {
-    var d = await fetchJsonWithTimeout('/api/heartbeat', 5000);
-    var dot = document.getElementById('hb-pulse-dot');
-    var label = document.getElementById('hb-pulse-label');
-    var badge = document.getElementById('hb-status-badge');
-    var lastBeat = document.getElementById('hb-last-beat');
-    var cadenceEl = document.getElementById('hb-cadence');
-    var okRatioEl = document.getElementById('hb-ok-ratio');
-    var actionRatioEl = document.getElementById('hb-action-ratio');
-    var sparkEl = document.getElementById('hb-sparkline');
-
-    if (!dot) return;
-
-    var status = d.status || 'never';
-    var colors = { healthy: '#22c55e', drifting: '#f59e0b', missed: '#ef4444', never: '#6b7280' };
-    var anims = {
-      healthy: 'hb-pulse-healthy 2s ease-in-out infinite',
-      drifting: 'hb-pulse-drifting 1.5s ease-in-out infinite',
-      missed: 'hb-pulse-missed 1.2s ease-in-out infinite',
-      never: 'none'
-    };
-    var badgeColors = {
-      healthy: { bg: 'rgba(34,197,94,0.15)', color: '#4ade80' },
-      drifting: { bg: 'rgba(245,158,11,0.15)', color: '#fbbf24' },
-      missed: { bg: 'rgba(239,68,68,0.15)', color: '#f87171' },
-      never: { bg: 'rgba(107,114,128,0.15)', color: '#9ca3af' }
-    };
-
-    dot.style.background = colors[status] || colors.never;
-    dot.style.animation = anims[status] || 'none';
-    if (label) label.textContent = status;
-
-    if (badge) {
-      var bc = badgeColors[status] || badgeColors.never;
-      badge.style.background = bc.bg;
-      badge.style.color = bc.color;
-      badge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
-    }
-
-    // Last beat age
-    if (lastBeat) {
-      if (d.last_heartbeat_age_seconds !== null && d.last_heartbeat_age_seconds !== undefined) {
-        var age = d.last_heartbeat_age_seconds;
-        var ageStr;
-        if (age < 60) ageStr = age + 's ago';
-        else if (age < 3600) ageStr = Math.floor(age / 60) + ' min ago';
-        else if (age < 86400) ageStr = Math.floor(age / 3600) + 'h ago';
-        else ageStr = Math.floor(age / 86400) + 'd ago';
-        lastBeat.textContent = ageStr;
-        lastBeat.style.color = colors[status] || '#9ca3af';
-      } else {
-        lastBeat.textContent = 'never';
-        lastBeat.style.color = '#9ca3af';
-      }
-    }
-
-    // Cadence
-    if (cadenceEl && d.cadence_24h) {
-      var c = d.cadence_24h;
-      var pct = c.expected_beats > 0 ? Math.round(c.on_time_ratio * 100) : 0;
-      cadenceEl.textContent = c.actual_beats + ' / ' + c.expected_beats + ' expected (' + pct + '%)';
-    }
-
-    // OK vs Action ratios
-    if (okRatioEl && d.ok_vs_action_24h) {
-      var oa = d.ok_vs_action_24h;
-      okRatioEl.textContent = Math.round(oa.ok_ratio * 100) + '%';
-      if (actionRatioEl) {
-        var actionPct = Math.round((1 - oa.ok_ratio) * 100);
-        actionRatioEl.textContent = actionPct + '%';
-        actionRatioEl.style.color = actionPct > 20 ? '#f87171' : '#fbbf24';
-      }
-    }
-
-    // Sparkline of last 10 beats
-    if (sparkEl && d.recent_beats && d.recent_beats.length > 0) {
-      sparkEl.innerHTML = d.recent_beats.map(function(b) {
-        var c = b.outcome === 'ok' ? '#22c55e' : '#f59e0b';
-        var title = b.outcome === 'ok' ? 'HEARTBEAT_OK' : 'Action taken';
-        return '<span title="' + title + '" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + c + ';"></span>';
-      }).join('');
-    } else if (sparkEl) {
-      sparkEl.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">no beats yet</span>';
-    }
-  } catch(e) { console.warn('heartbeat panel load failed', e); }
-}
-
-async function loadContextAnatomy() {
-  try {
-    var d = await fetchJsonWithTimeout('/api/context-anatomy', 4000);
-    if (!d || !d.buckets || !d.buckets.length) return;
-    var wrap = document.getElementById('ctx-anatomy-wrap');
-    if (!wrap) return;
-    wrap.style.display = '';
-    var pct = document.getElementById('ctx-pct-label');
-    if (pct) pct.textContent = (d.pct_used || 0) + '% of ' + Math.round((d.context_limit || 200000) / 1000) + 'K window';
-    var total = d.total_estimated || 1;
-    var bar = document.getElementById('ctx-bar');
-    if (bar) {
-      bar.innerHTML = d.buckets.map(function(b) {
-        var w = Math.max(0.5, b.tokens / total * 100).toFixed(1);
-        return '<div title="' + b.label + ': ~' + b.tokens.toLocaleString() + ' tok" style="width:' + w + '%;background:' + b.color + ';"></div>';
-      }).join('');
-    }
-    var legend = document.getElementById('ctx-legend');
-    if (legend) {
-      legend.innerHTML = d.buckets.map(function(b) {
-        var tok = b.tokens > 999 ? Math.round(b.tokens / 1000) + 'K' : b.tokens;
-        return '<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;color:var(--text-secondary);">' +
-          '<span style="width:8px;height:8px;border-radius:2px;flex-shrink:0;background:' + b.color + ';"></span>' +
-          b.label + ' ~' + tok + '</span>';
-      }).join('');
-    }
-  } catch(e) { /* silent — panel stays hidden when data unavailable */ }
-}
-
-async function loadMiniWidgets(overview, usage) {
-  // 💰 Cost Ticker 
-  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
-  document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
-  document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
-  document.getElementById('cost-month').textContent = fmtCost(usage.monthCost || 0);
-  
-  var trend = '';
-  if (usage.trend && usage.trend.trend) {
-    var trendIcon = usage.trend.trend === 'increasing' ? '📈' : usage.trend.trend === 'decreasing' ? '📉' : '➡️';
-    trend = trendIcon + ' ' + usage.trend.trend;
-  }
-  var isOauthLikely = (usage.billingSummary === 'likely_oauth_or_included');
-  var isMixed = (usage.billingSummary === 'mixed');
-  var trendEl = document.getElementById('cost-trend');
-  var badgeEl = document.getElementById('cost-billing-badge');
-  var infoIcon = document.getElementById('cost-info-icon');
-
-  if (isOauthLikely) {
-    if (badgeEl) {
-      badgeEl.style.display = '';
-      badgeEl.textContent = 'est. equivalent if billed - OAuth likely';
-    }
-    trendEl.style.display = 'none';
-  } else {
-    if (badgeEl) {
-      badgeEl.style.display = 'none';
-      badgeEl.textContent = '';
-    }
-    trendEl.textContent = trend || 'Today\'s running total';
-    trendEl.style.display = trend ? '' : 'none';
-  }
-
-  if (infoIcon) {
-    if (isOauthLikely || isMixed) {
-      infoIcon.style.display = '';
-      infoIcon.title = 'Equivalent if billed from token usage. OAuth/included models may be billed $0 at provider level.';
-    } else {
-      infoIcon.style.display = 'none';
-      infoIcon.title = '';
-    }
-  }
-
-  applyBillingHintToFlow(usage.billingSummary || 'unknown');
-
-  // Budget enforcement widget: hard-cap banner + burn rate + projected monthly cost.
-  try {
-    var status = await fetch('/api/budget/status').then(function(r){ return r.json(); });
-    var now = new Date();
-    var elapsedHours = now.getHours() + (now.getMinutes() / 60.0) + (now.getSeconds() / 3600.0);
-    elapsedHours = elapsedHours > 0 ? elapsedHours : 1 / 60.0;
-    var burnTokensHr = (usage.today || 0) / elapsedHours;
-    var burnCostHr = (usage.todayCost || 0) / elapsedHours;
-    var daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    var projectedMonthlyCost = burnCostHr * 24 * daysInMonth;
-
-    var burnEl = document.getElementById('budget-burn-rate');
-    var projEl = document.getElementById('budget-projected-month');
-    if (burnEl) burnEl.textContent = Math.round(burnTokensHr).toLocaleString() + ' tok/h';
-    if (projEl) projEl.textContent = fmtCost(projectedMonthlyCost);
-
-    var banner = document.getElementById('budget-cap-banner');
-    var bannerMsg = document.getElementById('budget-cap-banner-msg');
-    var dailyLimit = Number(status.daily_limit || 0);
-    var dailySpent = Number(status.daily_spent || 0);
-    if (banner && bannerMsg) {
-      if (dailyLimit > 0 && dailySpent > dailyLimit) {
-        bannerMsg.textContent = 'Daily hard cap exceeded: ' + fmtCost(dailySpent) + ' / ' + fmtCost(dailyLimit);
-        banner.style.display = 'flex';
-      } else {
-        banner.style.display = 'none';
-      }
-    }
-  } catch (e) {
-    var burnFallback = document.getElementById('budget-burn-rate');
-    var projFallback = document.getElementById('budget-projected-month');
-    if (burnFallback) burnFallback.textContent = '--';
-    if (projFallback) projFallback.textContent = '--';
-  }
-  
-  // ⚡ Tool Activity (load from logs)
-  loadToolActivity();
-  
-  // 📊 Token Burn Rate
-  function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
-  document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
-  document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
-  
-  // 🔥 Hot Sessions -- use /api/sessions for consistency with modal
-  fetch('/api/sessions').then(function(r){return r.json()}).then(function(sd) {
-    var sl = sd.sessions || sd || [];
-    if (!Array.isArray(sl)) sl = [];
-    document.getElementById('hot-sessions-count').textContent = sl.length;
-    // Build session-type breakdown subtitle (heartbeat / user / sub-agent)
-    var typeCounts = {};
-    sl.forEach(function(s) { var t = s.session_type || 'main'; typeCounts[t] = (typeCounts[t] || 0) + 1; });
-    var parts = [];
-    ['heartbeat', 'user', 'sub-agent'].forEach(function(t) {
-      if (typeCounts[t]) parts.push(typeCounts[t] + ' ' + t);
-    });
-    var sub = document.getElementById('hot-sessions-sub');
-    if (sub) sub.textContent = parts.length ? parts.join(' · ') : '';
-  }).catch(function() {
-    document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
-  });
-  
-  // 📈 Model Mix
-  document.getElementById('model-primary').textContent = overview.model || 'unknown';
-  var modelLabel = document.getElementById('main-activity-model');
-  if (modelLabel && overview.model) {
-    var m = overview.model;
-    if (m.indexOf('/') !== -1) m = m.split('/').pop();
-    m = m.replace(/-/g, ' ').replace(/\b\w/g, function(c){return c.toUpperCase();});
-    modelLabel.textContent = m;
-  }
-  var modelBreakdown = '';
-  if (usage.modelBreakdown && usage.modelBreakdown.length > 0) {
-    var primary = usage.modelBreakdown[0];
-    var others = usage.modelBreakdown.slice(1, 3);
-    modelBreakdown = fmtTokens(primary.tokens) + ' tokens';
-    if (others.length > 0) {
-      modelBreakdown += ' (+' + others.length + ' others)';
-    }
-  } else {
-    modelBreakdown = 'Primary model';
-  }
-  document.getElementById('model-breakdown').textContent = modelBreakdown;
-  
-  // 🐝 Worker Bees (Sub-Agents)
-  loadSubAgents();
-  
-}
-
-async function loadSubAgents() {
-  try {
-    var data = await fetch('/api/subagents').then(r => r.json());
-    var counts = data.counts;
-    var subagents = data.subagents;
-    
-    // Update main counter
-    document.getElementById('subagents-count').textContent = counts.total;
-    
-    // Update status text
-    var statusText = '';
-    if (counts.active > 0) {
-      statusText = counts.active + ' active';
-      if (counts.idle > 0) statusText += ', ' + counts.idle + ' idle';
-      if (counts.stale > 0) statusText += ', ' + counts.stale + ' stale';
-    } else if (counts.total === 0) {
-      statusText = 'No sub-agents spawned';
-    } else {
-      statusText = 'All idle/stale';
-    }
-    document.getElementById('subagents-status').textContent = statusText;
-    
-    // Update preview with top sub-agents (human-readable)
-    var previewHtml = '';
-    if (subagents.length === 0) {
-      previewHtml = '<div style="font-size:11px;color:#666;">No active tasks</div>';
-    } else {
-      // Show active ones first
-      var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
-      var topAgents = activeFirst.slice(0, 3);
-      topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '[ok]' : '⬜';
-        var name = cleanTaskName(agent.displayName);
-        if (name.length > 40) name = name.substring(0, 37) + '…';
-        previewHtml += '<div class="subagent-item">';
-        previewHtml += '<span style="font-size:10px;">' + icon + '</span>';
-        previewHtml += '<span class="subagent-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(name) + '</span>';
-        previewHtml += '<span class="subagent-runtime">' + agent.runtime + '</span>';
-        previewHtml += '</div>';
-      });
-      
-      if (subagents.length > 3) {
-        previewHtml += '<div style="font-size:9px;color:#555;margin-top:4px;">+' + (subagents.length - 3) + ' more</div>';
-      }
-    }
-    
-    document.getElementById('subagents-preview').innerHTML = previewHtml;
-    
-  } catch(e) {
-    document.getElementById('subagents-count').textContent = '?';
-    document.getElementById('subagents-status').textContent = 'Error loading sub-agents';
-    document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">Failed to load workforce</div>';
-  }
-}
-
-// === Active Tasks for Overview ===
-var _activeTasksTimer = null;
-function cleanTaskName(raw) {
-  // Strip timestamp prefixes like "[Sun 2026-02-08 18:22 GMT+1] "
-  var name = (raw || '').replace(/^\[.*?\]\s*/, '');
-  // Truncate to first sentence or 80 chars
-  var dot = name.indexOf('. ');
-  if (dot > 10 && dot < 80) name = name.substring(0, dot + 1);
-  if (name.length > 80) name = name.substring(0, 77) + '…';
-  return name || 'Background task';
-}
-
-function detectProjectBadge(text) {
-  var projects = {
-    'mockround': { label: 'MockRound', color: '#7c3aed' },
-    'vedicvoice': { label: 'VedicVoice', color: '#d97706' },
-    'openclaw': { label: 'OpenClaw', color: '#2563eb' },
-    'dashboard': { label: 'Dashboard', color: '#0891b2' },
-    'shopify': { label: 'Shopify', color: '#16a34a' },
-    'sanskrit': { label: 'Sanskrit', color: '#ea580c' },
-    'telegram': { label: 'Telegram', color: '#0088cc' },
-    'discord': { label: 'Discord', color: '#5865f2' },
-  };
-  var lower = (text || '').toLowerCase();
-  for (var key in projects) {
-    if (lower.includes(key)) return projects[key];
-  }
-  return null;
-}
-
-function humanTime(runtimeMs) {
-  if (!runtimeMs || runtimeMs === Infinity) return '';
-  var sec = Math.floor(runtimeMs / 1000);
-  if (sec < 60) return 'Started ' + sec + 's ago';
-  var min = Math.floor(sec / 60);
-  if (min < 60) return 'Started ' + min + ' min ago';
-  var hr = Math.floor(min / 60);
-  if (hr < 24) return 'Started ' + hr + 'h ago';
-  return 'Started ' + Math.floor(hr / 24) + 'd ago';
-}
-
-function humanTimeDone(runtimeMs) {
-  if (!runtimeMs || runtimeMs === Infinity) return '';
-  var sec = Math.floor(runtimeMs / 1000);
-  if (sec < 60) return 'Finished ' + sec + 's ago';
-  var min = Math.floor(sec / 60);
-  if (min < 60) return 'Finished ' + min + ' min ago';
-  var hr = Math.floor(min / 60);
-  if (hr < 24) return 'Finished ' + hr + 'h ago';
-  return 'Finished ' + Math.floor(hr / 24) + 'd ago';
-}
-
-async function loadActiveTasks() {
-  try {
-    var grid = document.getElementById('overview-tasks-list') || document.getElementById('active-tasks-grid');
-    if (!grid) return;
-
-    // Fetch active sub-agents
-    var saData = await fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; });
-
-    var agents = (saData.subagents || []).filter(function(a) {
-      return a.status === 'active';
-    });
-
-    if (agents.length === 0) {
-      grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
-        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
-        + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
-      var badge = document.getElementById('overview-tasks-count-badge');
-      if (badge) badge.textContent = '';
-      return;
-    }
-
-    var html = '';
-    var badge = document.getElementById('overview-tasks-count-badge');
-    if (badge) badge.textContent = agents.length + ' active';
-
-    // Render active sub-agents
-    agents.forEach(function(agent) {
-      var taskName = cleanTaskName(agent.displayName);
-      var badge2 = detectProjectBadge(agent.displayName);
-      var mins = Math.max(1, Math.floor((agent.runtimeMs || 0) / 60000));
-
-      html += '<div class="task-card running" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
-      html += '<div class="task-card-pulse active"></div>';
-      html += '<div class="task-card-header">';
-      html += '<div class="task-card-name">' + escHtml(taskName) + '</div>';
-      html += '<span class="task-card-badge running" style="font-size:10px;">🤖 ' + mins + ' min</span>';
-      html += '</div>';
-      html += '<div style="display:flex;align-items:center;gap:8px;">';
-      if (badge2) {
-        html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge2.color + '22;color:' + badge2.color + ';border:1px solid ' + badge2.color + '44;">' + badge2.label + '</span>';
-      }
-      html += '<span style="font-size:11px;color:var(--text-muted);">' + escHtml(humanTime(agent.runtimeMs)) + '</span>';
-      html += '</div>';
-      html += '</div>';
-    });
-
-    grid.innerHTML = html;
-  } catch(e) {
-    // silently fail
-  }
-}
-// Auto-refresh active tasks every 30s
-function startActiveTasksRefresh() {
-  loadActiveTasks();
-  if (_activeTasksTimer) clearInterval(_activeTasksTimer);
-  _activeTasksTimer = setInterval(loadActiveTasks, 30000);
-}
-
-async function loadToolActivity() {
-  try {
-    var logs = await fetch('/api/logs?lines=100').then(r => r.json());
-    var toolCounts = { exec: 0, browser: 0, search: 0, other: 0 };
-    var recentTools = [];
-    
-    logs.lines.forEach(function(line) {
-      var msg = line.toLowerCase();
-      if (msg.includes('tool') || msg.includes('invoke')) {
-        if (msg.includes('exec') || msg.includes('shell')) { 
-          toolCounts.exec++; recentTools.push('exec'); 
-        } else if (msg.includes('browser') || msg.includes('screenshot')) { 
-          toolCounts.browser++; recentTools.push('browser'); 
-        } else if (msg.includes('web_search') || msg.includes('web_fetch')) { 
-          toolCounts.search++; recentTools.push('search'); 
-        } else {
-          toolCounts.other++;
-        }
-      }
-    });
-    
-    document.getElementById('tools-active').textContent = recentTools.slice(0, 3).join(', ') || 'Idle';
-    document.getElementById('tools-recent').textContent = 'Last ' + Math.min(logs.lines.length, 100) + ' log entries';
-    
-    var sparks = document.querySelectorAll('.tool-spark span');
-    sparks[0].textContent = toolCounts.exec;
-    sparks[1].textContent = toolCounts.browser;  
-    sparks[2].textContent = toolCounts.search;
-  } catch(e) {
-    document.getElementById('tools-active').textContent = '--';
-  }
-}
-
-async function loadActivityStream() {
-  try {
-    var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
-    var activities = [];
-    
-    // Get the most recent transcript to parse for activity
-    if (transcripts.transcripts && transcripts.transcripts.length > 0) {
-      var recent = transcripts.transcripts[0];
-      try {
-        var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
-        var recentMessages = transcript.messages.slice(-10); // Last 10 messages
-        
-        recentMessages.forEach(function(msg) {
-          if (msg.role === 'assistant' && msg.content) {
-            var content = msg.content.toLowerCase();
-            var activity = '';
-            var time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
-            
-            if (content.includes('searching') || content.includes('search')) {
-              activity = time + ' [check] Searching web for information';
-            } else if (content.includes('reading') || content.includes('file')) {
-              activity = time + ' 📖 Reading files';
-            } else if (content.includes('writing') || content.includes('edit')) {
-              activity = time + ' ✏️ Editing files'; 
-            } else if (content.includes('exec') || content.includes('command')) {
-              activity = time + ' ⚡ Running commands';
-            } else if (content.includes('browser') || content.includes('screenshot')) {
-              activity = time + ' 🌐 Browser automation';
-            } else if (msg.content.length > 50) {
-              var preview = msg.content.substring(0, 80).replace(/[^\w\s]/g, ' ').trim();
-              activity = time + ' 💭 ' + preview + '...';
-            }
-            
-            if (activity) activities.push(activity);
-          }
-        });
-      } catch(e) {}
-    }
-    
-    if (activities.length === 0) {
-      activities = [
-        new Date().toLocaleTimeString() + ' 🤖 AI agent initialized',
-        new Date().toLocaleTimeString() + ' 📡 Monitoring for activity...'
-      ];
-    }
-    
-    var html = activities.slice(-8).map(function(a) {
-      return '<div style="padding:4px 0; border-bottom:1px solid #1a1a30; color:#ccc;">' + escHtml(a) + '</div>';
-    }).join('');
-    
-    document.getElementById('activity-stream').innerHTML = html;
-  } catch(e) {
-    document.getElementById('activity-stream').innerHTML = '<div style="color:#666;">Error loading activity stream</div>';
-  }
-}
-
-
-// ── Brain tab
-// ── Brain tab ─────────────────────────────────────────────────────────
-var _brainRefreshTimer = null;
-var _brainSourceColors = {};
-var _brainColorPalette = ['#2dd4bf','#f97316','#eab308','#ec4899','#3b82f6','#a78bfa','#f43f5e','#10b981'];
-var _brainColorIdx = 0;
-
-function brainSourceColor(source) {
-  if (source === 'main') return '#a855f7';
-  if (!_brainSourceColors[source]) {
-    _brainSourceColors[source] = _brainColorPalette[_brainColorIdx % _brainColorPalette.length];
-    _brainColorIdx++;
-  }
-  return _brainSourceColors[source];
-}
-
-function formatBrainTime(isoStr) {
-  try {
-    var d = new Date(isoStr);
-    var now = new Date();
-    var sameDay = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
-    var time = d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    var prefix = sameDay ? 'Today' : d.toLocaleDateString('en-GB', {day:'numeric',month:'short'});
-    return '<span style="opacity:0.45;font-size:10px;margin-right:3px;">' + prefix + '</span>' + time;
-  } catch(e) { return isoStr || ''; }
-}
-
-function renderBrainDetail(detail) {
-  if (!detail) return '';
-  var s = detail.trim();
-  // Try JSON rendering
-  var jsonMatch = s.match(/^```json\s*([\s\S]*?)```$/) || s.match(/^(\{[\s\S]*\}|\[[\s\S]*\])$/);
-  if (jsonMatch) {
-    try {
-      var obj = JSON.parse(jsonMatch[1] || jsonMatch[0]);
-      var pretty = JSON.stringify(obj, null, 2);
-      return '<pre style="background:var(--bg-tertiary,#1a1a2e);border:1px solid var(--border-primary,#333);border-radius:6px;padding:8px 10px;margin:4px 0 0;font-size:11px;color:var(--text-secondary);overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:180px;">' + escHtml(pretty) + '</pre>';
-    } catch(e) {}
-  }
-  // Inline markdown: **bold**, `code`, ```block```
-  var html = escHtml(s);
-  // Code blocks
-  html = html.replace(/```([\s\S]*?)```/g, '<pre style="background:var(--bg-tertiary,#1a1a2e);border:1px solid var(--border-primary,#333);border-radius:6px;padding:6px 10px;margin:4px 0 0;font-size:11px;overflow-x:auto;white-space:pre-wrap;max-height:180px;">$1</pre>');
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--bg-tertiary,#1a1a2e);padding:1px 5px;border-radius:3px;font-size:11px;">$1</code>');
-  // Bold
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  return '<span style="white-space:pre-wrap;word-break:break-word;">' + html + '</span>';
-}
-
-var _brainFilter = 'all';
-var _brainTypeFilter = 'all';
-var _brainAllEvents = [];
-var _brainViewMode = 'list';
-var _brainGraph = {
-  canvas: null,
-  ctx: null,
-  width: 0,
-  height: 500,
-  dpr: 1,
-  lastTs: 0,
-  rafId: 0,
-  animating: false,
-  agents: {},
-  agentOrder: [],
-  events: [],
-  lastPulseAt: 0
-};
-var _brainGraphResizeBound = false;
-
-function _brainGraphHash(str) {
-  var h = 2166136261;
-  str = String(str || '');
-  for (var i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
-  }
-  return h >>> 0;
-}
-
-function _brainGraphEnsureCanvas() {
-  var canvas = document.getElementById('brain-graph-canvas');
-  if (!canvas) return false;
-  if (!_brainGraph.canvas) {
-    _brainGraph.canvas = canvas;
-    _brainGraph.ctx = canvas.getContext('2d');
-  }
-  var rect = canvas.getBoundingClientRect();
-  var dpr = Math.max(1, window.devicePixelRatio || 1);
-  var w = Math.max(320, Math.floor(rect.width || canvas.clientWidth || 800));
-  var h = 500;
-  if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
-    canvas.width = Math.floor(w * dpr);
-    canvas.height = Math.floor(h * dpr);
-  }
-  _brainGraph.dpr = dpr;
-  _brainGraph.width = w;
-  _brainGraph.height = h;
-  return true;
-}
-
-function setBrainViewMode(mode, btn) {
-  _brainViewMode = 'list';
-}
-
-function syncBrainGraph(events) {
-  events = Array.isArray(events) ? events : [];
-  var oldAgents = _brainGraph.agents || {};
-  var oldEvents = {};
-  (_brainGraph.events || []).forEach(function(node) { oldEvents[node.id] = node; });
-  var now = Date.now();
-  var centerX = (_brainGraph.width || 900) / 2;
-  var centerY = (_brainGraph.height || 500) / 2;
-  var recent = events.slice(0, 200);
-  var agentMap = {};
-  recent.forEach(function(ev) {
-    var source = ev && ev.source ? ev.source : 'main';
-    if (!agentMap[source]) {
-      agentMap[source] = {
-        id: source,
-        label: ev && ev.sourceLabel ? ev.sourceLabel : source,
-        lastSeen: 0,
-        count: 0
-      };
-    }
-    var ts = ev && ev.time ? (new Date(ev.time).getTime() || 0) : 0;
-    if (ts > agentMap[source].lastSeen) agentMap[source].lastSeen = ts;
-    agentMap[source].count++;
-  });
-  if (!agentMap.main && recent.length) {
-    agentMap.main = {id: 'main', label: 'main', lastSeen: now, count: 1};
-  }
-  var agentIds = Object.keys(agentMap).sort(function(a, b) {
-    var da = agentMap[a], db = agentMap[b];
-    if (db.lastSeen !== da.lastSeen) return db.lastSeen - da.lastSeen;
-    return db.count - da.count;
-  }).slice(0, 20);
-  var chosen = {};
-  agentIds.forEach(function(id) { chosen[id] = true; });
-  var nextAgents = {};
-  var ringR = Math.max(90, Math.min(180, Math.min(centerX, centerY) - 40));
-  agentIds.forEach(function(id, i) {
-    var baseAngle = (Math.PI * 2 * i) / Math.max(1, agentIds.length);
-    var prev = oldAgents[id];
-    nextAgents[id] = {
-      id: id,
-      label: agentMap[id].label || id,
-      lastSeen: agentMap[id].lastSeen || 0,
-      x: prev ? prev.x : centerX + Math.cos(baseAngle) * ringR,
-      y: prev ? prev.y : centerY + Math.sin(baseAngle) * ringR,
-      vx: prev ? prev.vx : 0,
-      vy: prev ? prev.vy : 0,
-      r: 14
-    };
-  });
-  var nextEvents = [];
-  for (var ei = 0; ei < events.length && nextEvents.length < 50; ei++) {
-    var ev = events[ei];
-    var source = ev && ev.source ? ev.source : 'main';
-    if (!chosen[source]) continue;
-    var key = (ev.time || '') + '|' + source + '|' + (ev.type || '') + '|' + (ev.detail || '');
-    var id = 'ev:' + _brainGraphHash(key).toString(16);
-    var prevNode = oldEvents[id];
-    var agent = nextAgents[source];
-    var seed = _brainGraphHash(id);
-    var angle = ((seed % 6283) / 1000);
-    nextEvents.push({
-      id: id,
-      source: source,
-      type: ev.type || 'TOOL',
-      color: ev.color || brainSourceColor(source),
-      x: prevNode ? prevNode.x : (agent.x + Math.cos(angle) * 42),
-      y: prevNode ? prevNode.y : (agent.y + Math.sin(angle) * 42),
-      vx: prevNode ? prevNode.vx : 0,
-      vy: prevNode ? prevNode.vy : 0,
-      orbitR: 34 + (seed % 24),
-      orbitSpeed: 0.00025 + ((seed % 100) / 500000),
-      orbitPhase: angle,
-      r: 4
-    });
-  }
-  _brainGraph.agents = nextAgents;
-  _brainGraph.agentOrder = agentIds;
-  _brainGraph.events = nextEvents;
-}
-
-function _startBrainGraphLoop() {
-  if (_brainGraph.animating) return;
-  _brainGraph.animating = true;
-  _brainGraph.lastTs = 0;
-  _brainGraph.rafId = requestAnimationFrame(_brainGraphTick);
-}
-
-function _brainGraphTick(ts) {
-  _brainGraph.rafId = requestAnimationFrame(_brainGraphTick);
-  if (_brainViewMode !== 'graph') return;
-  if (!document.getElementById('page-brain') || !document.getElementById('page-brain').classList.contains('active')) return;
-  if (!_brainGraphEnsureCanvas()) return;
-  var dt = _brainGraph.lastTs ? Math.min(33, ts - _brainGraph.lastTs) / 16.67 : 1;
-  _brainGraph.lastTs = ts;
-  var now = Date.now();
-  var agents = _brainGraph.agentOrder.map(function(id) { return _brainGraph.agents[id]; }).filter(Boolean);
-  var events = _brainGraph.events;
-  var W = _brainGraph.width;
-  var H = _brainGraph.height;
-  var cx = W / 2;
-  var cy = H / 2;
-  agents.forEach(function(a) {
-    var dx = cx - a.x;
-    var dy = cy - a.y;
-    a.vx += dx * 0.0007 * dt;
-    a.vy += dy * 0.0007 * dt;
-  });
-  for (var i = 0; i < agents.length; i++) {
-    for (var j = i + 1; j < agents.length; j++) {
-      var a = agents[i], b = agents[j];
-      var dx = b.x - a.x, dy = b.y - a.y;
-      var d2 = dx * dx + dy * dy + 0.01;
-      var d = Math.sqrt(d2);
-      var force = Math.min(6, 900 / d2);
-      var fx = (dx / d) * force;
-      var fy = (dy / d) * force;
-      a.vx -= fx * dt; a.vy -= fy * dt;
-      b.vx += fx * dt; b.vy += fy * dt;
-    }
-  }
-  if (ts - _brainGraph.lastPulseAt > 2000) {
-    agents.forEach(function(a) {
-      if (now - a.lastSeen < 90000) {
-        if (!a.pulses) a.pulses = [];
-        a.pulses.push({start: ts});
-      }
-    });
-    _brainGraph.lastPulseAt = ts;
-  }
-  agents.forEach(function(a) {
-    a.vx *= 0.9; a.vy *= 0.9;
-    a.x += a.vx * dt;
-    a.y += a.vy * dt;
-    a.x = Math.max(24, Math.min(W - 24, a.x));
-    a.y = Math.max(24, Math.min(H - 24, a.y));
-  });
-  events.forEach(function(ev, idx) {
-    var agent = _brainGraph.agents[ev.source];
-    if (!agent) return;
-    var orbitA = ev.orbitPhase + ts * ev.orbitSpeed;
-    var tx = agent.x + Math.cos(orbitA) * ev.orbitR;
-    var ty = agent.y + Math.sin(orbitA) * ev.orbitR;
-    ev.vx += (tx - ev.x) * 0.04 * dt;
-    ev.vy += (ty - ev.y) * 0.04 * dt;
-    for (var k = idx + 1; k < events.length; k++) {
-      var other = events[k];
-      if (other.source !== ev.source) continue;
-      var rx = other.x - ev.x;
-      var ry = other.y - ev.y;
-      var rd2 = rx * rx + ry * ry + 0.01;
-      if (rd2 > 1200) continue;
-      var rf = 20 / rd2;
-      ev.vx -= rx * rf * dt;
-      ev.vy -= ry * rf * dt;
-      other.vx += rx * rf * dt;
-      other.vy += ry * rf * dt;
-    }
-    ev.vx *= 0.88; ev.vy *= 0.88;
-    ev.x += ev.vx * dt;
-    ev.y += ev.vy * dt;
-    ev.x = Math.max(8, Math.min(W - 8, ev.x));
-    ev.y = Math.max(8, Math.min(H - 8, ev.y));
-  });
-  _drawBrainGraph(ts, now);
-}
-
-function _drawBrainGraph(ts, now) {
-  var ctx = _brainGraph.ctx;
-  if (!ctx) return;
-  var dpr = _brainGraph.dpr || 1;
-  var W = _brainGraph.width;
-  var H = _brainGraph.height;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = 'rgba(20,23,34,0.35)';
-  ctx.fillRect(0, 0, W, H);
-  _brainGraph.events.forEach(function(ev) {
-    var a = _brainGraph.agents[ev.source];
-    if (!a) return;
-    ctx.strokeStyle = 'rgba(148,163,184,0.22)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(ev.x, ev.y);
-    ctx.stroke();
-  });
-  _brainGraph.events.forEach(function(ev) {
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = ev.color || '#60a5fa';
-    ctx.fillStyle = ev.color || '#60a5fa';
-    ctx.beginPath();
-    ctx.arc(ev.x, ev.y, ev.r, 0, Math.PI * 2);
-    ctx.fill();
-  });
-  _brainGraph.agentOrder.forEach(function(id) {
-    var a = _brainGraph.agents[id];
-    if (!a) return;
-    var active = now - a.lastSeen < 90000;
-    var color = active ? '#a855f7' : '#f59e0b';
-    if (!a.pulses) a.pulses = [];
-    a.pulses = a.pulses.filter(function(p) { return ts - p.start < 1200; });
-    a.pulses.forEach(function(p) {
-      var age = ts - p.start;
-      var t = age / 1200;
-      var radius = a.r + (44 * t);
-      var alpha = Math.max(0, 0.35 * (1 - t));
-      ctx.strokeStyle = active ? 'rgba(168,85,247,' + alpha + ')' : 'rgba(245,158,11,' + alpha + ')';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(a.x, a.y, radius, 0, Math.PI * 2);
-      ctx.stroke();
-    });
-    ctx.shadowBlur = 20;
-    ctx.shadowColor = color;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = 'rgba(230,234,244,0.92)';
-    ctx.font = '11px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText((a.label || a.id || 'agent').slice(0, 20), a.x, a.y + 28);
-  });
-  ctx.shadowBlur = 0;
-}
-
-var _brainTypeIcons = {
-  'EXEC': '⚙️', 'SHELL': '⚙️', 'READ': '📖', 'WRITE': '✏️',
-  'BROWSER': '🌐', 'MSG': '📨', 'SEARCH': '🔍', 'SPAWN': '🚀',
-  'DONE': '✅', 'ERROR': '❌', 'TOOL': '🔧',
-  'USER': '💬', 'THINK': '🧠', 'AGENT': '🤖'
-};
-
-
-function setBrainTypeFilter(type, btn) {
-  _brainTypeFilter = type;
-  document.querySelectorAll('.brain-type-chip').forEach(function(b) {
-    var isActive = b.dataset.type === type;
-    b.style.background = isActive ? 'rgba(168,85,247,0.2)' : 'transparent';
-    b.style.fontWeight = isActive ? '600' : '400';
-  });
-  renderBrainFeed();
-}
-function setBrainFilter(source, btn) {
-  _brainFilter = source;
-  // Reset all pills
-  document.querySelectorAll('.brain-chip').forEach(function(b) {
-    b.classList.remove('active');
-    b.style.background = 'transparent';
-    b.style.fontWeight = '400';
-    b.style.boxShadow = 'none';
-    b.style.opacity = '0.45';
-  });
-  // Highlight selected pill with fill + glow
-  btn.classList.add('active');
-  var col = btn.style.color || '#a855f7';
-  btn.style.background = col;
-  btn.style.color = '#0d1117';
-  btn.style.fontWeight = '700';
-  btn.style.boxShadow = '0 0 8px ' + col;
-  btn.style.opacity = '1';
-  // Fade others slightly but keep visible
-  document.querySelectorAll('.brain-chip:not(.active)').forEach(function(b) {
-    b.style.opacity = '0.4';
-  });
-  var streamEl = document.getElementById('brain-stream');
-  var chartEl = document.getElementById('brain-density-chart');
-  if (streamEl) streamEl.innerHTML = '<div style="padding:40px;text-align:center;color:#a855f7;font-size:14px;font-weight:500;">● Filtering...</div>';
-  if (chartEl) { var ctx2=chartEl.getContext('2d'); ctx2.clearRect(0,0,chartEl.width,chartEl.height); }
-  setTimeout(function() {
-    renderBrainChart(_brainAllEvents);
-    renderBrainStream(_brainAllEvents);
-  }, 80);
-}
-
-function scrollBrainToTop() {
-  var el = document.getElementById('brain-stream');
-  if (el) el.scrollTop = 0;
-  var pill = document.getElementById('brain-new-pill');
-  if (pill) pill.style.display = 'none';
-}
-
-function renderBrainFilterChips(sources) {
-  var container = document.getElementById('brain-filter-chips');
-  if (!container || !sources) return;
-  var html = '<button class="brain-chip' + (_brainFilter === 'all' ? ' active' : '') + '" data-source="all" onclick="setBrainFilter(&apos;all&apos;,this)" style="padding:3px 10px;border-radius:12px;border:1px solid #a855f7;background:' + (_brainFilter === 'all' ? 'rgba(168,85,247,0.2)' : 'transparent') + ';color:#a855f7;font-size:11px;cursor:pointer;font-weight:' + (_brainFilter === 'all' ? '600' : '400') + ';">All</button>';
-    clawmetry --workspace ~/bot           # Custom workspace
-    OPENCLAW_HOME=~/bot clawmetry
-
-https://github.com/vivekchand/clawmetry
-MIT License
-"""
 
 import os
 import sys
@@ -8634,6 +3943,14 @@ app = Flask(
     template_folder=os.path.join(os.path.dirname(__file__), 'clawmetry', 'templates'),
 )
 
+# Plugins (e.g. ``clawmetry-pro``) register their Blueprints on ``app`` HERE —
+# this must stay immediately after the one-and-only Flask() construction (see
+# the note near the top of this module: a second construction once orphaned
+# every plugin route). Older plugins with ``register_all()`` (no args) keep
+# working unchanged: the loader inspects the signature and only passes
+# ``app`` when accepted.
+_ext_load(app)
+
 # Cap request body size (DoS guard). OTLP/JSON batches and config posts are
 # small; a 32 MB ceiling lets Flask reject oversized bodies (413) before they
 # are read into memory. Override with CLAWMETRY_MAX_REQUEST_MB for large OTLP
@@ -8666,7 +3983,11 @@ SESSIONS_DIR = None
 USER_NAME = None
 GATEWAY_URL = None  # e.g. http://localhost:18789
 GATEWAY_TOKEN = None  # Bearer token for /tools/invoke
-CET = timezone(timedelta(hours=1))
+# Removed: a fixed UTC+1 with no DST handling. It was wrong for Europe half
+# the year and for everyone else all year, and it made this file's cost
+# windows disagree with every other cost surface. Use
+# clawmetry.cost_windows.now_local() for windows and .astimezone() for
+# display. Guarded by tests/test_cost_windows_one_definition.py.
 # SSE_MAX_SECONDS moved to helpers/streams.py (re-exported above)
 # Stream-slot caps + state moved to helpers/streams.py (re-exported above)
 EXTRA_SERVICES = []  # List of {'name': str, 'port': int} from --monitor-service flags
@@ -8855,14 +4176,17 @@ def _get_heartbeat_status():
     }
 
 
-# ── Agent-presence detection (no-agent empty-state, sibling of #1604) ──
+# ── Agent-presence detection (sibling of #1604) ──
 # Distinct from ``_get_heartbeat_status``:
 #   * heartbeat-status answers "has THIS install's daemon checked in yet?"
 #     (transient race, resolves in ~30s — drives #1631's onboarding banner)
 #   * detect_agent_install() answers "is there any underlying agent at
-#     all?" (persistent until the user installs one — drives the
-#     "No OpenClaw or NemoClaw detected" page-level empty-state).
-# Cached 60s so every tab switch doesn't re-stat 4+ paths and shell out
+#     all?" — served at /api/agent-presence and mirrored into heartbeats
+#     (sync.py) for the cloud's install-state aggregation. The dashboard
+#     banner this used to drive ("No OpenClaw or NVIDIA NemoClaw
+#     detected") was removed once ClawMetry grew past two runtimes; the
+#     detection API stays for cloud consumers.
+# Cached 60s so polling consumers don't re-stat 4+ paths and shell out
 # to ``shutil.which``.
 _agent_presence_cache = {"ts": 0.0, "value": None}
 _AGENT_PRESENCE_TTL_SEC = 60
@@ -9216,7 +4540,18 @@ def _fleet_db_path():
     if FLEET_DB_PATH:
         return FLEET_DB_PATH
     if WORKSPACE:
-        return os.path.join(WORKSPACE, ".clawmetry-fleet.db")
+        _ws_db = os.path.join(WORKSPACE, ".clawmetry-fleet.db")
+        # Only honour the workspace-relative path when we can actually write
+        # there. Under launchd the process starts with cwd="/", and the
+        # workspace auto-detect below falls back to os.getcwd(), so WORKSPACE
+        # becomes "/" on any machine with no detectable OpenClaw workspace.
+        # That resolved to "/.clawmetry-fleet.db" -- unwritable on macOS -- and
+        # the dashboard exited(1) on every launchd boot instead of falling
+        # through to the ~/.clawmetry path this function documents as
+        # authoritative. A dev-mode workspace stays honoured; only an
+        # unwritable one is skipped.
+        if os.access(os.path.dirname(_ws_db) or ".", os.W_OK):
+            return _ws_db
     # Always use ~/.clawmetry/fleet.db -- create the dir if the installer
     # has not run yet or this is a fresh pip install without curl | bash.
     preferred_dir = os.path.expanduser("~/.clawmetry")
@@ -9492,6 +4827,7 @@ def _budget_init_db():
             channels TEXT NOT NULL,
             cooldown_min INTEGER DEFAULT 30,
             enabled INTEGER DEFAULT 1,
+            runtime TEXT DEFAULT 'all',
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
@@ -9511,6 +4847,23 @@ def _budget_init_db():
         CREATE INDEX IF NOT EXISTS idx_alert_history_rule
             ON alert_history(rule_id, fired_at DESC);
     """)
+    try:
+        # Pre-0.12.639 DBs lack the per-runtime scope column. SQLite has no
+        # IF-NOT-EXISTS for columns; the duplicate-column error is the no-op.
+        db.execute("ALTER TABLE alert_rules ADD COLUMN runtime TEXT DEFAULT 'all'")
+        db.commit()
+    except Exception:
+        pass
+    try:
+        # Pre-0.12.711 DBs drop the cloud-vocabulary ``alert_type`` the
+        # Alerts tab POSTed, keeping only the mapped local ``type``. That
+        # made a rule un-round-trippable: on update we could no longer tell
+        # WHICH cloud type an ``anomaly`` row came from, so the DuckDB mirror
+        # could not be rebuilt and the daemon evaluator stayed blind to it.
+        db.execute("ALTER TABLE alert_rules ADD COLUMN alert_type TEXT DEFAULT ''")
+        db.commit()
+    except Exception:
+        pass
     db.close()
 
 
@@ -9590,6 +4943,35 @@ def _default_alerts_webhook_config():
         "opsgenie_api_key": "",
         # Optional EU host override for OpsGenie ("https://api.eu.opsgenie.com").
         "opsgenie_api_url": "",
+        # Telegram bot delivery (self-hosted Notifications tab). Both keys
+        # required for a send. The /api/alert-channels ROUTE accepted these
+        # since the notifications-local work, but this schema (and the save
+        # allowlist below) silently dropped them — a "saved" Telegram channel
+        # never persisted, so its card stayed on "Connect" forever.
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
+        # WhatsApp — Meta Cloud API (token + phone_id) or Twilio's WhatsApp
+        # channel (twilio_* below). ``whatsapp_template`` is the fallback
+        # used when Meta's 24-hour service window has closed.
+        "whatsapp_to": "",
+        "whatsapp_token": "",
+        "whatsapp_phone_id": "",
+        "whatsapp_template": "",
+        "whatsapp_lang": "",
+        # Twilio — voice calls for approvals, and the WhatsApp sender when
+        # Meta isn't configured.
+        "twilio_account_sid": "",
+        "twilio_auth_token": "",
+        "twilio_from": "",
+        "twilio_whatsapp_from": "",
+        "phone_number": "",
+        # Local SMTP so a self-hosted (nocloud) node can still email.
+        "email_address": "",
+        "smtp_host": "",
+        "smtp_port": 587,
+        "smtp_user": "",
+        "smtp_password": "",
+        "smtp_from": "",
         "cost_spike_alerts": True,
         "agent_error_rate_alerts": True,
         "security_posture_changes": True,
@@ -9619,6 +5001,16 @@ def _save_alerts_webhook_config(updates):
     allowed = {
         "webhook_url", "slack_webhook_url", "discord_webhook_url",
         "pagerduty_routing_key", "opsgenie_api_key", "opsgenie_api_url",
+        "telegram_bot_token", "telegram_chat_id",
+        # Keep in lockstep with _default_alerts_webhook_config above — a key
+        # in the schema but not here saves as a no-op (the exact bug the
+        # telegram comment there documents).
+        "whatsapp_to", "whatsapp_token", "whatsapp_phone_id",
+        "whatsapp_template", "whatsapp_lang",
+        "twilio_account_sid", "twilio_auth_token", "twilio_from",
+        "twilio_whatsapp_from", "phone_number",
+        "email_address", "smtp_host", "smtp_port", "smtp_user",
+        "smtp_password", "smtp_from",
         "cost_spike_alerts", "agent_error_rate_alerts", "security_posture_changes",
         "min_severity",
     }
@@ -9708,11 +5100,14 @@ def _send_discord_alert(message, severity="warning", title="ClawMetry Alert"):
     _send_webhook_alert(url, payload, payload_type="generic")
 
 
-def _dispatch_alert(title, message, severity="warning", alert_type=None):
+def _dispatch_alert(title, message, severity="warning", alert_type=None, only=None):
     """Dispatch an alert to all configured channels (Slack, Discord, generic webhook).
 
     Respects the global min_severity filter and per-type toggles.
     Called automatically from _fire_alert() so all alerts reach webhook channels.
+    ``only`` (a set of channel ids) restricts the fan-out to those sinks —
+    built-in monitors pass their resolved channel set so the Alerts tab's
+    pills and the actual delivery are the same list.
     """
     if not _severity_passes_filter(severity):
         return
@@ -9722,6 +5117,13 @@ def _dispatch_alert(title, message, severity="warning", alert_type=None):
     generic_url = str(cfg.get("webhook_url", "")).strip()
     slack_url = str(cfg.get("slack_webhook_url", "")).strip()
     discord_url = str(cfg.get("discord_webhook_url", "")).strip()
+    if only is not None:
+        if "webhook" not in only:
+            generic_url = ""
+        if "slack" not in only:
+            slack_url = ""
+        if "discord" not in only:
+            discord_url = ""
 
     if generic_url:
         payload = {
@@ -9753,10 +5155,161 @@ def _dispatch_configured_webhooks(alert_type, payload):
         _send_webhook_alert(discord_url, payload, payload_type="discord")
 
 
-def _fire_alert(rule_id, alert_type, message, channels=None, severity="warning"):
-    """Fire an alert with cooldown check and dispatch to configured webhook channels."""
+# ── Built-in monitor delivery ──────────────────────────────────────────────
+#
+# Founder 2026-08-17: the Alerts tab showed every always-on monitor with an
+# "In-app · telegram" pill on a node where Telegram was never configured.
+# The pills came from a hardcoded ``channels=["banner", "telegram"]`` on each
+# ``_fire_alert`` call site; delivery then read Telegram creds from a store
+# the Notifications tab never writes and fell back to an undefined gateway
+# helper — so "telegram" delivered nothing and the pill was a fabrication.
+#
+# One resolver now answers "where does this monitor deliver?" for BOTH the
+# Alerts tab (``/api/alerts/builtins``) and ``_fire_alert``. A channel is
+# offered only when this process can actually deliver to it right now, so
+# what the tab shows and what fires cannot drift. Operators can also mute a
+# monitor or pin its channels; prefs live in ~/.clawmetry so they survive
+# upgrades and are not tied to an OpenClaw install.
+_BUILTIN_MONITOR_PREFS_FILE = os.path.expanduser("~/.clawmetry/builtin_monitors.json")
+_BUILTIN_CHANNEL_META = {
+    # In-app is the floor: it is always deliverable and never removable
+    # (to silence a monitor you disable it, not strip its last channel).
+    "banner":   ("In-app",   "Red banner + bell in this dashboard"),
+    "telegram": ("Telegram", "Direct Bot API message"),
+    "slack":    ("Slack",    "Incoming webhook"),
+    "discord":  ("Discord",  "Channel webhook"),
+    "webhook":  ("Webhook",  "POST JSON to your endpoint"),
+}
+
+
+def _builtin_alert_types():
+    try:
+        from routes.alerts import BUILTIN_MONITORS
+        return {m["alert_type"] for m in BUILTIN_MONITORS}
+    except Exception:
+        return set()
+
+
+def _telegram_creds():
+    """(bot_token, chat_id) from either store.
+
+    Legacy budget config (SQLite) came first; the Notifications tab writes
+    the alert-channels file. Delivery must honour both or a user who
+    "connected" Telegram in the tab still gets nothing.
+    """
+    for loader in (_load_alerts_webhook_config, _get_budget_config):
+        try:
+            cfg = loader()
+            tok = str(cfg.get("telegram_bot_token", "") or "").strip()
+            cid = str(cfg.get("telegram_chat_id", "") or "").strip()
+            if tok and cid:
+                return tok, cid
+        except Exception:
+            continue
+    return "", ""
+
+
+def _builtin_channels_available():
+    """Channels a built-in monitor CAN deliver to from this process right now.
+
+    Never advertises a destination that has no working sender behind it:
+    email / phone / WhatsApp are cloud-delivered and have no local sender,
+    so they are absent here even when creds are saved.
+    """
+    out = [{"id": "banner", "label": "In-app",
+            "detail": _BUILTIN_CHANNEL_META["banner"][1], "configured": True}]
+    tok, cid = _telegram_creds()
+    if tok and cid:
+        out.append({"id": "telegram", "label": "Telegram",
+                    "detail": f"Bot API to chat {cid[-4:].rjust(len(cid), '*')}",
+                    "configured": True})
+    try:
+        cfg = _load_alerts_webhook_config()
+    except Exception:
+        cfg = {}
+    for cid_, key in (("slack", "slack_webhook_url"),
+                      ("discord", "discord_webhook_url"),
+                      ("webhook", "webhook_url")):
+        if str(cfg.get(key, "") or "").strip():
+            lbl, det = _BUILTIN_CHANNEL_META[cid_]
+            out.append({"id": cid_, "label": lbl, "detail": det, "configured": True})
+    return out
+
+
+def _load_builtin_monitor_prefs():
+    try:
+        with open(_BUILTIN_MONITOR_PREFS_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_builtin_monitor_pref(alert_type, enabled=None, channels=None):
+    """Persist one monitor's prefs. ``channels=None`` keeps the current
+    value; ``channels=[]`` or a list pins them; the string ``"auto"`` clears
+    the pin (back to every available channel)."""
+    prefs = _load_builtin_monitor_prefs()
+    cur = dict(prefs.get(alert_type) or {})
+    if enabled is not None:
+        cur["enabled"] = bool(enabled)
+    if channels == "auto":
+        cur.pop("channels", None)
+    elif isinstance(channels, list):
+        known = set(_BUILTIN_CHANNEL_META)
+        cur["channels"] = sorted({str(c) for c in channels if str(c) in known} | {"banner"})
+    prefs[alert_type] = cur
+    os.makedirs(os.path.dirname(_BUILTIN_MONITOR_PREFS_FILE), exist_ok=True)
+    tmp = _BUILTIN_MONITOR_PREFS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(prefs, f, indent=2)
+    os.replace(tmp, _BUILTIN_MONITOR_PREFS_FILE)
+    return cur
+
+
+def _resolve_builtin_delivery(alert_type):
+    """The single answer for "is this monitor on, and where does it go?".
+
+    Returns ``{"enabled", "channels", "mode"}`` where ``channels`` is the
+    exact list ``_fire_alert`` will deliver to: pinned channels intersected
+    with what is deliverable now (a pinned-but-unconfigured channel is
+    dropped, not shown), or every available channel in ``auto`` mode.
+    """
+    prefs = _load_builtin_monitor_prefs().get(alert_type) or {}
+    available = [c["id"] for c in _builtin_channels_available()]
+    pinned = prefs.get("channels")
+    if isinstance(pinned, list):
+        chans = [c for c in available if c in pinned or c == "banner"]
+        mode = "custom"
+    else:
+        chans, mode = list(available), "auto"
+    return {"enabled": bool(prefs.get("enabled", True)),
+            "channels": chans, "mode": mode}
+
+
+def _fire_alert(rule_id, alert_type, message, channels=None, severity="warning",
+                builtin=None):
+    """Fire an alert with cooldown check and dispatch to configured webhook channels.
+
+    ``builtin`` — True: route through the built-in monitor resolver (mute +
+    channel prefs); False: a user rule, deliver exactly ``channels``; None:
+    auto — built-in iff ``alert_type`` is one of the always-on monitors.
+    """
     global _budget_alert_cooldowns
     now = time.time()
+
+    if builtin is None:
+        builtin = alert_type in _builtin_alert_types()
+    only_sinks = None
+    if builtin:
+        try:
+            resolved = _resolve_builtin_delivery(alert_type)
+        except Exception:
+            resolved = {"enabled": True, "channels": ["banner"], "mode": "auto"}
+        if not resolved["enabled"]:
+            return  # muted by the operator — no history, no banner, no fan-out
+        channels = resolved["channels"]
+        only_sinks = set(channels)
 
     # Check cooldown (default 30 min for budget alerts)
     cooldown_sec = 1800
@@ -9805,51 +5358,47 @@ def _fire_alert(rule_id, alert_type, message, channels=None, severity="warning")
     except Exception:
         pass
 
-    # Always dispatch to configured alert channels (Slack / Discord / generic webhook)
+    # Dispatch to configured alert channels (Slack / Discord / generic webhook).
+    # Built-in monitors pass their resolved channel set so a sink the operator
+    # unpinned is not fanned out to; user rules keep the legacy fan-out.
     _dispatch_alert(
         title=f"ClawMetry Alert [{alert_type}]",
         message=message,
         severity=severity,
         alert_type=alert_type,
+        only=only_sinks,
     )
 
 
 def _send_telegram_alert(message):
-    """Send alert via direct Telegram API (preferred) or gateway fallback."""
-    try:
-        cfg = _get_budget_config()
-        token = str(cfg.get("telegram_bot_token", "")).strip()
-        chat_id = str(cfg.get("telegram_chat_id", "")).strip()
-        if token and chat_id:
-            import urllib.request
+    """Send alert via the direct Telegram Bot API.
 
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload = json.dumps(
-                {
-                    "chat_id": chat_id,
-                    "text": f"[ClawMetry Alert] {message}",
-                    "parse_mode": "Markdown",
-                }
-            ).encode()
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            urllib.request.urlopen(req, timeout=10)
-            return
+    Creds come from either store (see ``_telegram_creds``). With none
+    configured this is a no-op — the old "gateway fallback" called a helper
+    that was never defined, so it silently delivered nothing anyway.
+    """
+    token, chat_id = _telegram_creds()
+    if not (token and chat_id):
+        return
+    try:
+        import urllib.request
+
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = json.dumps(
+            {
+                "chat_id": chat_id,
+                "text": f"[ClawMetry Alert] {message}",
+                "parse_mode": "Markdown",
+            }
+        ).encode()
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        urllib.request.urlopen(req, timeout=10)
     except Exception as e:
         print(f"Warning: Direct Telegram alert failed: {e}")
-    try:
-        _gw_invoke(
-            "message",
-            {
-                "action": "send",
-                "message": f"[ClawMetry Alert] {message}",
-            },
-        )
-    except Exception:
-        pass
 
 
 # PagerDuty and OpsGenie integration constants. The actual payload
@@ -10064,6 +5613,54 @@ def _dispatch_alert_to_all_sinks(alert_data: dict) -> list[str]:
         )
         sent.append("opsgenie")
     return sent
+
+
+
+
+def _session_runtime_of(sid):
+    """Runtime id for a namespaced session id ('copilot:...' -> 'copilot');
+    anything without a known family prefix is OpenClaw."""
+    sid = str(sid or "")
+    if ":" in sid:
+        head = sid.split(":", 1)[0]
+        try:
+            from clawmetry.entitlements import ALL_RUNTIMES
+            if head in ALL_RUNTIMES:
+                return head
+        except ImportError:
+            pass
+    return "openclaw"
+
+
+def _runtime_daily_spend(runtime):
+    """Today's spend (USD) for ONE runtime from the per-(day, runtime)
+    DuckDB rollup, via the daemon proxy. None on any failure so a scoped
+    rule silently skips a tick rather than firing on a node-wide number."""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        from routes.local_query import local_store_via_daemon
+        today = _dt.now(_tz.utc).strftime("%Y-%m-%d")
+        rows = local_store_via_daemon(
+            "query_rollup_runtime_daily", since=today) or []
+        return float(sum(
+            (r.get("cost_usd") or 0) for r in rows
+            if r.get("day") == today and r.get("runtime") == runtime))
+    except Exception:
+        return None
+
+
+def _runtime_tokens_per_min(runtime):
+    """Tokens/min over the last 2 minutes for ONE runtime (DuckDB events
+    filtered by session-id prefix via the daemon proxy). None on failure."""
+    try:
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        from routes.local_query import local_store_via_daemon
+        since = (_dt.now(_tz.utc) - _td(minutes=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = local_store_via_daemon(
+            "query_events", since=since, runtime=runtime, limit=20000) or []
+        return sum(int(r.get("token_count") or 0) for r in rows) / 2.0
+    except Exception:
+        return None
 
 
 def _get_alert_rules():
@@ -10425,6 +6022,10 @@ def _budget_monitor_loop():
                 threshold = rule["threshold"]
                 channels = json.loads(rule.get("channels", '["banner"]'))
                 cooldown = rule.get("cooldown_min", 30) * 60
+                # Per-runtime scope: 'all' (node-wide) or one runtime id.
+                # Scoped rules read per-runtime slices from DuckDB via the
+                # daemon proxy; node-wide rules keep the legacy aggregates.
+                rt_scope = str(rule.get("runtime") or "all").lower()
 
                 last_fired = _budget_alert_cooldowns.get(rule_id, 0)
                 if now - last_fired < cooldown:
@@ -10434,8 +6035,12 @@ def _budget_monitor_loop():
                 msg = ""
 
                 if rtype == "threshold":
-                    if status["daily_spent"] >= threshold:
-                        msg = f"Daily spending ${status['daily_spent']:.2f} exceeded threshold ${threshold:.2f}"
+                    _spent = status["daily_spent"]
+                    if rt_scope != "all":
+                        _spent = _runtime_daily_spend(rt_scope)
+                    if _spent is not None and _spent >= threshold:
+                        _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
+                        msg = f"Daily spending{_scope_lbl} ${_spent:.2f} exceeded threshold ${threshold:.2f}"
                         fired = True
                 elif rtype == "spike":
                     # Spike: cost in last hour > threshold x average hourly rate
@@ -10459,20 +6064,112 @@ def _budget_monitor_loop():
                         msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
                         fired = True
                 elif rtype == "token_spike":
-                    try:
-                        vel = _compute_velocity_status()
-                    except Exception:
-                        vel = None
-                    if vel:
-                        tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
-                        if tokens_per_min >= threshold:
-                            sid = vel.get("triggeringSession") or ""
-                            sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                    if rt_scope != "all":
+                        _tpm = _runtime_tokens_per_min(rt_scope)
+                        if _tpm is not None and _tpm >= threshold:
                             msg = (
-                                f"Token spike: {int(tokens_per_min):,} tokens/min "
-                                f"(threshold: {int(threshold):,}/min){sid_hint}"
+                                f"Token spike [{rt_scope}]: {int(_tpm):,} tokens/min "
+                                f"(threshold: {int(threshold):,}/min)"
                             )
                             fired = True
+                    else:
+                        try:
+                            vel = _compute_velocity_status()
+                        except Exception:
+                            vel = None
+                        if vel:
+                            tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
+                            if tokens_per_min >= threshold:
+                                sid = vel.get("triggeringSession") or ""
+                                sid_hint = f" (session: {sid[:12]}...)" if sid else ""
+                                msg = (
+                                    f"Token spike: {int(tokens_per_min):,} tokens/min "
+                                    f"(threshold: {int(threshold):,}/min){sid_hint}"
+                                )
+                                fired = True
+                elif rtype == "agent_down":
+                    # "Agent offline > N min" (UI alert_type ``node_offline``).
+                    # Founder 2026-08-15: this rtype has been accepted by the
+                    # POST validator since the self-hosted bridge landed but
+                    # never had a branch here, so every rule created from the
+                    # tab's "Agent offline" row was a silent no-op.
+                    #
+                    # Signal is the most recent REAL agent event in DuckDB —
+                    # not OTLP (the hardcoded ``agent_down`` monitor above
+                    # keys off ``_otel_last_received``, which stays 0 on the
+                    # many installs without ``[otel]``, so it never fires
+                    # there either). ``exclude_daemon`` keeps ClawMetry's own
+                    # diagnostics from masking a dead agent as "alive".
+                    try:
+                        from datetime import datetime as _dt2, timezone as _tz2
+                        from routes.local_query import local_store_via_daemon
+                        _rows = local_store_via_daemon(
+                            "query_events", limit=1, exclude_daemon=True,
+                            **({"runtime": rt_scope} if rt_scope != "all" else {}),
+                        ) or []
+                        _last_iso = (_rows[0].get("ts") or "") if _rows else ""
+                        if _last_iso:
+                            _last = _dt2.fromisoformat(
+                                str(_last_iso).replace("Z", "+00:00")
+                            )
+                            if _last.tzinfo is None:
+                                _last = _last.replace(tzinfo=_tz2.utc)
+                            _idle_min = (
+                                _dt2.now(_tz2.utc) - _last
+                            ).total_seconds() / 60.0
+                            if _idle_min >= threshold:
+                                _scope_lbl = (
+                                    "" if rt_scope == "all" else f" [{rt_scope}]"
+                                )
+                                msg = (
+                                    f"Agent offline{_scope_lbl}: no activity for "
+                                    f"{int(_idle_min)} min "
+                                    f"(threshold: {int(threshold)} min)"
+                                )
+                                fired = True
+                    except Exception:
+                        pass
+                elif rtype == "session_cost":
+                    # "Session cost > $N" (UI alert_type ``session_cost``).
+                    # Previously mapped onto ``threshold``, which evaluates
+                    # DAILY spend — so a $5 per-session rule actually fired on
+                    # the whole day's total. This checks the costliest single
+                    # session in the last 24h, which is what the row promises.
+                    #
+                    # Cost is API-equivalent (token split x API rates), never
+                    # the user's invoice — say so, per the cost-copy honesty
+                    # pass (a Max-plan subscriber pays $0 incremental).
+                    try:
+                        from datetime import datetime as _dt3, timedelta as _td3, timezone as _tz3
+                        from routes.local_query import local_store_via_daemon
+                        _since = (_dt3.now(_tz3.utc) - _td3(hours=24)).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        _sessions = local_store_via_daemon(
+                            "query_sessions", since=_since, limit=500,
+                        ) or []
+                        _worst = None
+                        for _s in _sessions:
+                            _sid = _s.get("session_id") or ""
+                            if rt_scope != "all" and _session_runtime_of(_sid) != rt_scope:
+                                continue
+                            try:
+                                _c = float(_s.get("cost_usd") or 0)
+                            except (TypeError, ValueError):
+                                continue
+                            if _c >= threshold and (_worst is None or _c > _worst[1]):
+                                _worst = (_sid, _c)
+                        if _worst:
+                            _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
+                            msg = (
+                                f"Session cost{_scope_lbl}: session "
+                                f"{_worst[0][:12]} reached ${_worst[1]:.2f} "
+                                f"(threshold: ${threshold:.2f}) - API-equivalent, "
+                                f"not a billed amount"
+                            )
+                            fired = True
+                    except Exception:
+                        pass
                 elif rtype == "unproductive_burn":
                     # Issue #1707 — forward-progress signal. Fires when any
                     # session burns >= ``threshold`` tokens per state delta
@@ -10490,6 +6187,9 @@ def _budget_monitor_loop():
                         worst = None
                         for r in rows:
                             try:
+                                if rt_scope != "all" and _session_runtime_of(
+                                        r.get("session_id") or "") != rt_scope:
+                                    continue
                                 if float(r.get("ratio") or 0) >= float(threshold):
                                     if worst is None or r["ratio"] > worst["ratio"]:
                                         worst = r
@@ -10621,14 +6321,160 @@ def _get_dp_attrs(dp):
     return attrs
 
 
+# ── Runtime-profile metrics (WO-57) ─────────────────────────────────────────
+#
+# The receiver knows OpenTelemetry, not vendors. What a runtime calls its
+# counters (and which of them may touch a tile) arrives as an
+# ``OtelRuntimeProfile`` (clawmetry/otel_profiles.py): free runtimes register
+# from this repo, paid ones from clawmetry-pro. With no profile registered a
+# ``<vendor>.*`` metric is ignored exactly as before.
+#
+# Cost and input/output tokens for these runtimes ALSO arrive on the request
+# log record, which the logs path already turns into cost/usage tiles and
+# ``llm_call`` events. Feeding the same dollars in from a metric would double
+# the tile, so a profile's metrics are ledger-only, with one exception: the
+# ``tile_token_metric``'s typed points (cache reads / cache writes, which the
+# log record does not carry per type) reach the tokens cache.
+_OTEL_CUMULATIVE = 2  # AggregationTemporality.AGGREGATION_TEMPORALITY_CUMULATIVE
+
+
+def _otel_profile_for_resource(resource_attrs):
+    """The registered profile for this emitter, or None."""
+    try:
+        from clawmetry import otel_profiles
+        return otel_profiles.by_service_name(
+            (resource_attrs or {}).get("service.name") or "")
+    except Exception:
+        return None
+
+
+def _dp_value_or_none(dp):
+    """The data point's number, or ``None`` when it carried none. Never turn
+    "absent" into ``0``: a zero that was sent is a fact, a zero we invented
+    is not (blueprint: no fabricated figures)."""
+    # protobuf NumberDataPoint: the number is a oneof; HasField on a name
+    # the message does not define RAISES, so ask the oneof by name first.
+    which = getattr(dp, "WhichOneof", None)
+    if callable(which):
+        try:
+            field = which("value")
+            if field == "as_int":
+                return int(dp.as_int)
+            if field == "as_double":
+                return float(dp.as_double)
+        except Exception:
+            pass
+    has = getattr(dp, "HasField", None)
+    if callable(has):
+        for name, cast in (("as_int", int), ("as_double", float),
+                           ("sum", float), ("count", int)):
+            try:
+                if has(name):
+                    return cast(getattr(dp, name))
+            except Exception:
+                continue
+        return None
+    try:
+        return _get_dp_value(dp)
+    except Exception:
+        return None
+
+
+def _metric_is_cumulative(metric):
+    try:
+        if metric.HasField("sum"):
+            t = getattr(metric.sum, "aggregation_temporality", 0)
+            return int(t or 0) == _OTEL_CUMULATIVE
+    except Exception:
+        pass
+    return False
+
+
+def _profile_metric_record_id(service_name, session_id, name, ts_ns, attrs, value):
+    import hashlib as _hl
+    parts = [str(service_name or ""), str(session_id or ""), str(name or ""),
+             str(ts_ns or 0), repr(value)]
+    for k in sorted(attrs):
+        parts.append("%s=%s" % (k, attrs[k]))
+    return _hl.sha256("\x1f".join(parts).encode("utf-8", "replace")).hexdigest()
+
+
+def _profile_metric(prof, name, metric, resource_attrs, rows):
+    """Map one profile-owned metric into tiles (typed token points only)
+    and ledger rows (every data point). Appends to ``rows``; a bad data
+    point is skipped, never raised."""
+    service_name = resource_attrs.get("service.name") or (prof.service_names or ("",))[0]
+    received_at = time.time()
+    # A CUMULATIVE sum re-sends the running total every interval; adding it
+    # to a tile would grow without bound. Anything cumulative is ledger-only.
+    cumulative = _metric_is_cumulative(metric)
+    for dp in _get_data_points(metric):
+        try:
+            attrs = _get_dp_attrs(dp)
+            value = _dp_value_or_none(dp)
+            ts_ns = int(getattr(dp, "time_unix_nano", 0) or 0)
+            ts = ts_ns / 1e9 if ts_ns > 0 else received_at
+            # Ledger rows keep the id as sent (REQ-OBS-006); nothing here
+            # writes events, so no prefixed form is needed.
+            session_id = (attrs.get("session.id")
+                          or resource_attrs.get("session.id") or None)
+            model = attrs.get("model") or resource_attrs.get("model") or ""
+            mtype = str(attrs.get("type") or "").strip().lower()
+            cache_field = (prof.token_type_fields or {}).get(mtype)
+            # The id first: the tile push below must be as idempotent as the
+            # ledger write, or a retried batch doubles the cache tokens.
+            rid = _profile_metric_record_id(
+                service_name, session_id, name, ts_ns, attrs, value)
+            if (prof.tile_token_metric and name == prof.tile_token_metric
+                    and cache_field and value is not None and not cumulative):
+                try:
+                    n = int(value)
+                except (TypeError, ValueError):
+                    n = 0
+                if n and not _otlp_seen(rid):
+                    # ``total`` stays 0: cache tokens are not fresh tokens
+                    # and must not inflate the tokens tile.
+                    _add_metric("tokens", {
+                        "timestamp": ts, "input": 0, "output": 0, "total": 0,
+                        cache_field: n, "model": model,
+                        "channel": "", "provider": "",
+                        "_source": name,
+                    })
+            rows.append({
+                "record_id": rid, "ts": ts, "received_at": received_at,
+                "event_name": name, "session_id": session_id,
+                "user_id": attrs.get("user.id") or resource_attrs.get("user.id"),
+                "user_email": (attrs.get("user.email")
+                               or resource_attrs.get("user.email")),
+                "org_id": (attrs.get("organization.id")
+                           or resource_attrs.get("organization.id")),
+                "team": (attrs.get("team.id") or resource_attrs.get("team.id")
+                         or resource_attrs.get("department")),
+                "repo": _otlp_repo_key(attrs.get("repository")
+                                       or resource_attrs.get("repository")),
+                "node_id": (resource_attrs.get("node.id")
+                            or resource_attrs.get("host.name") or "otlp"),
+                "agent_type": prof.runtime, "service_name": service_name,
+                "model": model or None, "provider": None,
+                # Cost / token COLUMNS stay empty on metric rows: the rollup
+                # sums those columns and the request log row already
+                # carries the same dollars. The value rides in attributes.
+                "cost_usd": None, "tokens_input": None, "tokens_output": None,
+                "token_count": None, "duration_ms": None,
+                "tool_name": attrs.get("tool_name"),
+                "decision": attrs.get("decision"),
+                "success": None,
+                "attributes": {"resource": resource_attrs, "record": attrs,
+                               "value": value, "metric": name},
+            })
+        except Exception:
+            continue
+
+
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP metrics protobuf/JSON and store relevant data."""
-    req = _otlp_decode(
-        pb_data,
-        metrics_service_pb2.ExportMetricsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
+    _prof_rows = []  # profile-owned ledger rows, one put_otlp_batch per POST
 
     for resource_metrics in req.resource_metrics:
         resource_attrs = {}
@@ -10641,6 +6487,15 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                 name = metric.name
                 ts = time.time()
 
+                _prof = None
+                try:
+                    from clawmetry import otel_profiles as _op
+                    _prof = _op.for_metric(name)
+                except Exception:
+                    _prof = None
+                if _prof is not None:
+                    _profile_metric(_prof, name, metric, resource_attrs, _prof_rows)
+                    continue
                 if name == "openclaw.tokens":
                     for dp in _get_data_points(metric):
                         attrs = _get_dp_attrs(dp)
@@ -10823,6 +6678,22 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                             },
                         )
 
+    if _prof_rows:
+        try:
+            from clawmetry import local_store as _ls
+            _st = _ls.get_store()
+            if _st is not None:
+                # Keyword args: the dashboard's _ProxyStore forwards **kwargs
+                # only (same foot-gun as put_span / put_otlp_batch below).
+                _st.put_otlp_batch(records=_prof_rows, events=[])
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "profile metrics ledger write failed: %s", e)
+            except Exception:
+                pass
+
 
 _OTEL_SPAN_KIND_NAMES = {
     0: "UNSPECIFIED",
@@ -10897,6 +6768,18 @@ def _otel_to_row(span, resource_attrs):
     for attr in span.attributes:
         attrs[attr.key] = _otel_attr_value(attr.value)
 
+    # deployment.environment is a RESOURCE attribute (deployment.environment
+    # .name since semconv 1.27; the bare key before that), so it used to be
+    # dropped with the rest of the resource. Keep it on the span's attribute
+    # blob so a dev/tst/prod fleet (AgentCore's normal shape) stays separable
+    # after ingest; the session materializer lifts it onto session metadata.
+    if "deployment.environment" not in attrs:
+        for _env_key in ("deployment.environment.name", "deployment.environment"):
+            _env_val = attrs.get(_env_key) or resource_attrs.get(_env_key)
+            if _env_val not in (None, ""):
+                attrs["deployment.environment"] = str(_env_val)
+                break
+
     # Time columns. OTel proto carries unix-nano; we store unix-seconds in
     # ``start_ts`` / ``end_ts`` (DOUBLE) so chart libs can format them
     # without converting twice.
@@ -10955,8 +6838,14 @@ def _otel_to_row(span, resource_attrs):
     # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
     # stored as typed columns — they ride the attributes blob — but read here
     # so the derived cost below is cache-aware (matches the #2049 event path).
-    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
-    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    # A registered runtime profile may name these differently on its own
+    # spans (WO-57); the aliases are data, the mapping stays generic.
+    _prof = _otel_profile_for_resource(resource_attrs)
+    _al = (_prof.span_attr_aliases if _prof is not None else {}) or {}
+    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens",
+                           *(_al.get("cache_read") or ())) or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens",
+                            *(_al.get("cache_write") or ())) or 0
     # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
     provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
     cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
@@ -10982,7 +6871,8 @@ def _otel_to_row(span, resource_attrs):
         except Exception:
             pass
     # tool.name: OTel GenAI semconv uses gen_ai.tool.name on execute_tool spans.
-    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
+    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function",
+                      *(_al.get("tool_name") or ()))
     # session/conversation: semconv uses gen_ai.conversation.id.
     session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
     agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
@@ -10998,6 +6888,11 @@ def _otel_to_row(span, resource_attrs):
         derived = _otlp_service_name_to_agent_type(service_name)
         agent_type = derived or "openclaw"
     node_id = _pick("node.id", "openclaw.node_id", "host.name")
+    if _prof is not None and session_id and _prof.session_key_prefix:
+        # The daemon's key for this runtime's sessions (``<runtime>:<id>``),
+        # so the span joins the transcript session (WO-57). No profile: the
+        # span keeps the bare id, as before.
+        session_id = _prof.session_key(session_id)
 
     # Span events: array of {time_unix_nano, name, attributes}.
     events = []
@@ -11136,12 +7031,17 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     query historical traces. The DuckDB write is best-effort wrapped in
     try/except — a write failure must NOT break the metrics cache path.
     """
-    req = _otlp_decode(
-        pb_data,
-        trace_service_pb2.ExportTraceServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    req = _otlp_request(pb_data, "traces", content_encoding, content_type)
+
+    # session_id -> deployment.environment (or None) for every non-OpenClaw
+    # span in this batch. Feeds ONE materialize_otlp_sessions call at the end
+    # so span-only apps (AgentCore, OpenLLMetry) get a sessions row (WO-55).
+    _otlp_sessions_seen = {}
+    # WO-57: a runtime profile may name a span that means "blocked on a
+    # human" (``wait_span_suffix``). Those become ``waiting_on_user`` events
+    # on the session so turn anatomy can sum them.
+    _otlp_wait_events = []
+    _wait_tool_by_span = {}  # span_id -> tool_name, to name a wait by its parent
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -11262,7 +7162,60 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         # real install). put_span is allowlisted in
                         # routes/local_query._DAEMON_METHODS so the daemon
                         # executes the real write.
-                        _store.put_span(span=_otel_to_row(span, resource_attrs))
+                        _row = _otel_to_row(span, resource_attrs)
+                        _store.put_span(span=_row)
+                        # Track for session materialization (WO-55). OpenClaw
+                        # sessions come from transcripts; only foreign apps
+                        # need a span-derived sessions row.
+                        _sid = _row.get("session_id")
+                        _atype = _row.get("agent_type") or ""
+                        _wprof = _otel_profile_for_resource(resource_attrs)
+                        _wsuf = (_wprof.wait_span_suffix if _wprof is not None else "") or ""
+                        if _wprof is not None and _row.get("tool_name"):
+                            _wait_tool_by_span[str(_hex(span.span_id))] = _row.get("tool_name")
+                        if (_wsuf and _sid
+                                and span.name.lower().endswith(_wsuf.lower())):
+                            try:
+                                _dur_ms = max(0.0, (span.end_time_unix_nano
+                                                    - span.start_time_unix_nano) / 1e6)
+                                _st_s = (span.start_time_unix_nano or 0) / 1e9 or time.time()
+                                _otlp_wait_events.append({
+                                    "id": "otlp:span:" + str(_hex(span.span_id)),
+                                    "node_id": _row.get("node_id") or "otlp",
+                                    "agent_type": _wprof.runtime,
+                                    "agent_id": _row.get("agent_id") or "main",
+                                    "session_id": str(_sid),
+                                    "ts": datetime.fromtimestamp(
+                                        _st_s, timezone.utc).isoformat(),
+                                    "runtime_kind": _wprof.runtime,
+                                    "event_type": "waiting_on_user",
+                                    "data": {
+                                        "tool": _row.get("tool_name")
+                                        or attrs.get("tool_name"),
+                                        "duration_ms": _dur_ms,
+                                        "_otlp": True,
+                                    },
+                                    "_parent_span": str(_hex(span.parent_span_id)),
+                                })
+                            except Exception:
+                                pass
+                        # Claude Code spans go through the materializer too:
+                        # on a daemon machine the transcript row already
+                        # exists under the same ``claude_code:<uuid>`` key
+                        # and is left alone (its source is not otlp_spans);
+                        # on a daemon-free machine this is the only way the
+                        # session reaches the Sessions tab (WO-57 ADR-003).
+                        # A profiled runtime's spans go through the
+                        # materializer like any other app: on a daemon machine
+                        # the transcript row already exists under the same
+                        # ``<runtime>:<id>`` key and is left alone (its source
+                        # is not otlp_spans); on a daemon-free machine this is
+                        # the only way the session reaches the Sessions tab.
+                        if _sid and _atype != "openclaw":
+                            _env = (_row.get("attributes") or {}).get(
+                                "deployment.environment")
+                            if _env or str(_sid) not in _otlp_sessions_seen:
+                                _otlp_sessions_seen[str(_sid)] = _env
                     except Exception as e:
                         try:
                             import logging as _lg
@@ -11272,24 +7225,334 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         except Exception:
                             pass
 
+    if _store is not None and _otlp_wait_events:
+        # A wait span may carry no tool name of its own (measured live); its
+        # parent tool span does.
+        for _wev in _otlp_wait_events:
+            _parent = _wev.pop("_parent_span", None)
+            if _wev["data"].get("tool") or not _parent:
+                continue
+            if _parent in _wait_tool_by_span:
+                _wev["data"]["tool"] = _wait_tool_by_span[_parent]
+                continue
+            # The wait ends before its parent tool span does, so a batching
+            # exporter routinely ships them in different POSTs. Events are
+            # insert-or-ignore and cannot be back-filled, so ask the store
+            # for the parent (one read per unresolved wait, rare).
+            try:
+                _prow = _store.query_spans(span_id=_parent, limit=1)
+                if isinstance(_prow, dict):
+                    _prow = _prow.get("result") or _prow.get("rows") or []
+                if _prow and (_prow[0].get("tool_name")):
+                    _wev["data"]["tool"] = _prow[0]["tool_name"]
+                    _wait_tool_by_span[_parent] = _prow[0]["tool_name"]
+            except Exception:
+                pass
+        try:
+            _store.put_otlp_batch(records=[], events=_otlp_wait_events)
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "waiting_on_user events write failed: %s", e)
+            except Exception:
+                pass
+
+    # One materialization call per export batch (not per span — get_store()
+    # here can be an HTTP proxy to the daemon; FLYWHEEL 1e). Recomputes the
+    # touched sessions from their spans and upserts sessions rows so the
+    # Sessions tab and runtime switcher show a span-only OTLP app (WO-55).
+    if _store is not None and _otlp_sessions_seen:
+        try:
+            _store.materialize_otlp_sessions(
+                session_ids=sorted(_otlp_sessions_seen),
+                environments={k: v for k, v in _otlp_sessions_seen.items() if v},
+            )
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "materialize_otlp_sessions failed: %s", e
+                )
+            except Exception:
+                pass
+
+
+# ── Daemon-free OTLP intake (WO-7) ───────────────────────────────────────────
+#
+# Everything below serves one deployment shape: an org that does NOT install a
+# per-machine daemon and instead sets OTEL_EXPORTER_OTLP_ENDPOINT (one config
+# value, pushed by MDM) at a ClawMetry the org already runs. That is the only
+# path a 500-developer security review approves in an afternoon.
+#
+# HONESTY BOUNDARIES on this path, which the docs repeat and nothing here may
+# quietly widen:
+#   * Only runtimes that emit OTel natively arrive here — Claude Code and
+#     Codex today. This is NOT a 26-runtime intake path.
+#   * Records arrive in PLAINTEXT. The runtime encrypts nothing, so the
+#     daemon's end-to-end encryption guarantee does not cover this path; the
+#     honest answer for a customer who needs it is the self-hosted VPC
+#     receiver, where the plaintext never leaves their network.
+
+# Log-record event names, matched on the suffix after the runtime prefix
+# ("claude_code.tool_decision" -> "tool_decision").
+_OTLP_TOOL_CALL_EVENTS = frozenset(
+    {"tool_decision", "tool_use", "tool_call"}
+)
+_OTLP_TOOL_RESULT_EVENTS = frozenset(
+    {"tool_result", "tool_use_result"}
+)
+
+# WO-57: events a runtime's exporter sends that the transcript never
+# carries (permission-mode changes, refusals, MCP health, ...). WHICH names
+# and WHICH fields come from the runtime's registered profile; each becomes
+# an ``events`` row of the same suffix, fields copied by name, never
+# invented. Free text (``prompt`` / ``response``) is capped and tagged.
+_OTLP_TEXT_CAP = 4000
+
+
+def _otlp_typed_event_data(prof, suffix, attrs, pick):
+    out = {}
+    text_fields = tuple(getattr(prof, "text_fields", ()) or ())
+    for k in (prof.typed_events or {}).get(suffix, ()):
+        v = pick(attrs, k)
+        if v is None:
+            continue
+        if k in text_fields:
+            # Only present when the user opted into content export. Capped,
+            # and tagged so a reader (cloud sync, Brain) can exclude it.
+            txt = str(v)
+            if txt == "<REDACTED>":
+                continue
+            out[k] = txt[:_OTLP_TEXT_CAP]
+            out["has_content"] = True
+            if len(txt) > _OTLP_TEXT_CAP:
+                out[k + "_truncated"] = True
+            continue
+        out[k.replace(".", "_")] = v
+    return out
+
+
+# Record ids the live metrics cache has already counted. OTLP delivery is
+# at-least-once, so a retried batch used to add its cost to the tiles a second
+# time — the DuckDB ledger dedups on the primary key, but the tile a person
+# actually looks at showed double. Bounded: this is a cache guard, not a
+# ledger, and it must never grow without limit on a busy receiver. Old ids
+# fall out; a retry that arrives after ~20k records is vanishingly rare and
+# costs one duplicated tile entry, not a duplicated stored row.
+_OTLP_SEEN_MAX = 20000
+_otlp_seen_ids = set()
+_otlp_seen_order = deque()
+_otlp_seen_lock = threading.Lock()
+
+
+def _otlp_seen(record_id):
+    """True if this record already reached the metrics cache. Records it
+    otherwise. Thread-safe: waitress serves OTLP posts on many threads."""
+    if not record_id:
+        return False
+    with _otlp_seen_lock:
+        if record_id in _otlp_seen_ids:
+            return True
+        _otlp_seen_ids.add(record_id)
+        _otlp_seen_order.append(record_id)
+        while len(_otlp_seen_order) > _OTLP_SEEN_MAX:
+            _otlp_seen_ids.discard(_otlp_seen_order.popleft())
+    return False
+
+
+def _otlp_event_suffix(event_name):
+    """``claude_code.tool_decision`` -> ``tool_decision``. Lower-cased."""
+    name = (event_name or "").strip().lower()
+    return name.rsplit(".", 1)[-1] if "." in name else name
+
+
+def _otlp_record_ts(rec, received_at):
+    """Seconds for ONE OTLP log record, from the record's own clock.
+
+    The prototype stamped ``time.time()`` on every record, so a batched or
+    backfilled delivery — the normal case for OTLP, whose exporters buffer and
+    retry — was misdated as "now". Any daily or per-sprint rollup built on that
+    is wrong, and wrong in a way nobody notices until they compare it to a bill.
+
+    Precedence is the OTel spec's: ``time_unix_nano`` (when the event happened)
+    beats ``observed_time_unix_nano`` (when the collector saw it), and receipt
+    time is the last resort for an exporter that sends neither.
+    """
+    for field in ("time_unix_nano", "observed_time_unix_nano"):
+        try:
+            nanos = int(getattr(rec, field, 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if nanos > 0:
+            return nanos / 1e9
+    return received_at
+
+
+def _otlp_repo_key(value):
+    """Normalise a repository attribute into a groupable key.
+
+    An org sends its repo as whatever its tooling has: an https clone URL, an
+    ssh remote, or a checkout path. Rolling up cost by repo means those three
+    have to land on one key, so we take the last path segment without ``.git``
+    (``git@github.com:acme/api.git`` and ``/Users/x/src/api`` both -> ``api``).
+    The raw value stays in the attributes blob, so nothing is lost.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    raw = raw.rstrip("/")
+    if raw.endswith(".git"):
+        raw = raw[:-4]
+    for sep in ("/", "\\", ":"):
+        if sep in raw:
+            raw = raw.rsplit(sep, 1)[-1]
+    return raw or None
+
+
+def _otlp_record_id(service_name, session_id, event_name, rec, attrs):
+    """Deterministic id for one log record, so a retried batch REPLACEs
+    instead of double-counting.
+
+    OTLP delivery is at-least-once by specification: an exporter that does not
+    see our 200 resends the whole batch. Without a stable key the second
+    delivery is a second $4.10, and spend that inflates on a network blip is
+    worse than no spend number at all. The record carries no id of its own, so
+    we hash what identifies it: emitter, session, event name, its own
+    nanosecond timestamp, body, and every attribute.
+    """
+    # Two decoders reach here: the protobuf message (``HasField``) and the
+    # OTLP/JSON shim (a plain object with a ``body`` attribute and no
+    # ``HasField``). Read the body without assuming either.
+    body = ""
+    try:
+        raw_body = getattr(rec, "body", None)
+        has_field = getattr(rec, "HasField", None)
+        if callable(has_field):
+            raw_body = rec.body if has_field("body") else None
+        if raw_body is not None:
+            try:
+                body = _otel_attr_value(raw_body)
+            except Exception:
+                body = str(raw_body)
+    except Exception:
+        body = ""
+    parts = [
+        str(service_name or ""), str(session_id or ""), str(event_name or ""),
+        str(getattr(rec, "time_unix_nano", 0) or 0),
+        str(getattr(rec, "observed_time_unix_nano", 0) or 0),
+        str(body),
+    ]
+    try:
+        for k in sorted(attrs):
+            parts.append("%s=%s" % (k, attrs[k]))
+    except Exception:
+        pass
+    joined = "\x1f".join(parts).encode("utf-8", "replace")
+    return hashlib.sha256(joined).hexdigest()[:32]
+
+
+def _delegated_is_agent_id(value) -> bool:
+    """True when an OTLP conversation id is a delegated vendor agent id.
+
+    Import is late and failure is False: the delegated-usage module is part of
+    the OSS package, but an ingest path must not start refusing records because
+    an optional import moved.
+    """
+    try:
+        from clawmetry.delegated_usage import is_delegated_agent_id
+        return is_delegated_agent_id(value)
+    except Exception:
+        return False
+
+
+def _delegated_record_otel(agent_id, tin, tout, cache_read, cache_write,
+                           model="", ts=0.0) -> bool:
+    """File one Cursor cloud-agent OTel record against its agent id.
+
+    ``require_observed`` stays ON: a team's export carries every agent on the
+    Cursor team, and only the ones a transcript on THIS machine actually named
+    may be attributed here. Without that bound a colleague's agent would appear
+    on your session.
+    """
+    try:
+        from clawmetry.delegated_usage import (
+            SOURCE_OTEL, CURSOR, DelegatedUsage, get_store,
+        )
+
+        def _n(v):
+            try:
+                return int(v) if v is not None else 0
+            except (TypeError, ValueError):
+                return 0
+
+        usage = DelegatedUsage(
+            agent_id=str(agent_id),
+            vendor=CURSOR,
+            source=SOURCE_OTEL,
+            input_tokens=_n(tin),
+            output_tokens=_n(tout),
+            cache_read_tokens=_n(cache_read),
+            cache_write_tokens=_n(cache_write),
+            model=str(model or ""),
+            updated_at=float(ts or 0.0) or 0.0,
+        )
+        if usage.total_tokens <= 0:
+            return False
+        return get_store().record(usage)
+    except Exception:
+        return False
+
 
 def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
+    """Decode OTLP logs protobuf and ingest agent EVENT records (#2596, WO-7).
 
-    Claude Code (and other runtimes) export their per-turn event stream as OTel
-    *logs* — ``event_name`` like ``claude_code.api_request`` / ``tool_decision``
-    with cost/token/model attributes — not just metrics/traces, so an OTel-
-    configured install gives signal we previously dropped. We map any log record
-    carrying cost or token attributes into the same metrics cache categories as
-    /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
-    Best-effort: a bad record never breaks the batch.
+    Claude Code and Codex export their per-turn event stream as OTel *logs* —
+    ``event_name`` like ``claude_code.api_request`` / ``tool_decision`` with
+    cost/token/model attributes. This handler is the daemon-free intake path:
+    an org points OTEL_EXPORTER_OTLP_ENDPOINT here and gets observability with
+    nothing installed per machine.
+
+    Three destinations, in order of durability:
+
+    1. **DuckDB ``otlp_records``** — the durable ledger. One row per record
+       with the identity the runtime already sends (``user.id``,
+       ``user.email``, ``organization.id``, ``session.id``) plus the rollup
+       dimensions an org adds through ``OTEL_RESOURCE_ATTRIBUTES``
+       (``team.id``, repository). Without these there is no per-team or
+       per-repo answer, which is the whole reason an org buys this.
+    2. **DuckDB ``events``** — ``tool_decision`` / ``tool_result`` records
+       become ``tool_call`` / ``tool_result`` events, so the trajectory
+       detectors (stuck_loop, no_progress, repeated_tool_failure) work on this
+       path exactly as they do on the daemon path.
+    3. **The in-memory metrics cache** — unchanged, because it is what the
+       live tiles read on the same request. It is a cache, not storage: before
+       WO-7 it was the ONLY destination, so a restart erased the deployment's
+       entire history.
+
+    Writes go through ``local_store.get_store()``, which in this process is a
+    ``_ProxyStore`` forwarding to the daemon that owns the writer lock — the
+    request handler never takes it. Best-effort throughout: a bad record never
+    breaks the batch, and a failed DuckDB write never breaks the tiles.
     """
-    req = _otlp_decode(
-        pb_data,
-        logs_service_pb2.ExportLogsServiceRequest(),
-        content_encoding,
-        content_type,
-    )
+    received_at = time.time()
+    req = _otlp_request(pb_data, "logs", content_encoding, content_type)
+
+    # Resolve the store lazily (same contract as the traces path): tests that
+    # monkeypatch the singleton, and installs without DuckDB, both keep working.
+    _store = None
+    try:
+        from clawmetry import local_store as _ls
+        _store = _ls.get_store()
+    except Exception:
+        _store = None
+
+    # Accumulated across the WHOLE export batch and written in one call. An
+    # exporter ships hundreds of records per POST and get_store() here is an
+    # HTTP proxy to the daemon, so per-record writes would be per-record round
+    # trips (FLYWHEEL 1e, the daemon's CPU budget).
+    out_records = []
+    out_events = []
 
     def _f(attrs, *keys):
         for k in keys:
@@ -11303,48 +7566,361 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
             for attr in resource_logs.resource.attributes:
                 resource_attrs[attr.key] = _otel_attr_value(attr.value)
 
+        service_name = resource_attrs.get("service.name") or ""
+        agent_type = (
+            _otlp_service_name_to_agent_type(service_name) or "openclaw"
+        )
+        node_id = (
+            resource_attrs.get("node.id")
+            or resource_attrs.get("host.name")
+            or resource_attrs.get("host.id")
+            or "otlp"
+        )
+
         for scope_logs in resource_logs.scope_logs:
             for rec in scope_logs.log_records:
                 attrs = {}
                 for attr in rec.attributes:
                     attrs[attr.key] = _otel_attr_value(attr.value)
-                ts = time.time()
-                model = _f(attrs, "model") or resource_attrs.get("model", "")
-                channel = _f(attrs, "channel") or resource_attrs.get("channel", "")
-                provider = _f(attrs, "provider") or resource_attrs.get("provider", "")
+
+                def _pick(*keys):
+                    """Record attributes win over resource attributes — the
+                    precedence the OTel spec uses."""
+                    v = _f(attrs, *keys)
+                    if v is not None:
+                        return v
+                    return _f(resource_attrs, *keys)
+
+                # ── Fix 1: the record's own timestamp, not receipt time ──
+                ts = _otlp_record_ts(rec, received_at)
+
+                # ── Fix 2: identity ──────────────────────────────────────
+                # Claude Code sets user.id / user.email / organization.id /
+                # session.id on every record; team and repository come from
+                # the org's own OTEL_RESOURCE_ATTRIBUTES.
+                session_id = _pick(
+                    "session.id", "session_id", "gen_ai.conversation.id",
+                    "conversation.id",
+                    # Cursor's OTel export keys every log record with
+                    # cursor.conversation.id, which for a CLOUD agent is the
+                    # customer-visible bc-... id -- the same id a Grok Bot
+                    # transcript records when it delegates. That attribute is
+                    # therefore the join between two vendors' telemetry.
+                    "cursor.conversation.id",
+                )
+                # The LEDGER keeps the session id exactly as sent (REQ-OBS-006:
+                # retain identity, derive nothing). EVENTS use the daemon's
+                # key, ``claude_code:<uuid>``, so they join the transcript
+                # session and bucket under the right runtime (WO-57).
+                ledger_session_id = session_id
+                _prof = _otel_profile_for_resource(resource_attrs)
+                if _prof is not None and session_id and _prof.session_key_prefix:
+                    session_id = _prof.session_key(session_id)
+                user_id = _pick(
+                    "user.id", "user.account_uuid", "enduser.id", "user_id",
+                )
+                user_email = _pick("user.email", "enduser.email", "user_email")
+                org_id = _pick(
+                    "organization.id", "organization.uuid", "org.id",
+                    "organization_id", "tenant.id",
+                )
+                team = _pick(
+                    "team.id", "team", "department", "cost_center",
+                    "cost.center", "squad", "group.id",
+                )
+                repo_raw = _pick(
+                    "vcs.repository.url.full", "vcs.repository.url",
+                    "repository", "repo", "git.repository", "git.repo",
+                    "code.repository", "project.name", "workspace",
+                )
+                repo = _otlp_repo_key(repo_raw)
+
+                model = _pick("model", "gen_ai.request.model",
+                              "gen_ai.response.model") or ""
+                channel = _pick("channel") or ""
+                provider = _pick("provider", "gen_ai.provider.name",
+                                 "gen_ai.system") or ""
+
+                event_name = (getattr(rec, "event_name", "") or "").strip()
+                if not event_name:
+                    event_name = str(_f(attrs, "event.name") or "")
+                suffix = _otlp_event_suffix(event_name)
+
+                record_id = _otlp_record_id(
+                    service_name, ledger_session_id, event_name, rec, attrs
+                )
+                # The tiles must not count a retried batch twice. The DuckDB
+                # write below is idempotent on record_id; this is the same
+                # guarantee for the in-memory cache the live tiles read.
+                fresh = not _otlp_seen(record_id)
 
                 cost = _f(attrs, "cost_usd", "cost.usd", "cost")
+                cost_val = None
                 if cost is not None:
                     try:
-                        _add_metric("cost", {
-                            "timestamp": ts, "usd": float(cost),
-                            "model": model, "channel": channel, "provider": provider,
-                        })
+                        cost_val = float(cost)
                     except (TypeError, ValueError):
-                        pass
+                        cost_val = None
+                if cost_val is not None and fresh:
+                    _add_metric("cost", {
+                        "timestamp": ts, "usd": cost_val,
+                        "model": model, "channel": channel, "provider": provider,
+                    })
 
-                itok = _f(attrs, "input_tokens", "tokens.input", "prompt_tokens")
-                otok = _f(attrs, "output_tokens", "tokens.output", "completion_tokens")
+                itok = _f(attrs, "input_tokens", "tokens.input", "prompt_tokens",
+                          "gen_ai.usage.input_tokens")
+                otok = _f(attrs, "output_tokens", "tokens.output",
+                          "completion_tokens", "gen_ai.usage.output_tokens")
+                tin = tout = None
                 if itok is not None or otok is not None:
                     try:
-                        i, o = int(itok or 0), int(otok or 0)
-                        _add_metric("tokens", {
-                            "timestamp": ts, "input": i, "output": o, "total": i + o,
-                            "model": model, "channel": channel, "provider": provider,
-                        })
+                        tin, tout = int(itok or 0), int(otok or 0)
                     except (TypeError, ValueError):
+                        tin = tout = None
+                if tin is not None and fresh:
+                    _add_metric("tokens", {
+                        "timestamp": ts, "input": tin, "output": tout,
+                        "total": tin + tout,
+                        "model": model, "channel": channel, "provider": provider,
+                    })
+
+                # ── Delegated usage: Cursor cloud agents (push lane) ─────
+                # Cursor Enterprise can point its OTel export straight at this
+                # receiver -- the only lane needing no credential and no
+                # outbound call from us. A record whose conversation id is a
+                # bc-... cloud agent is work some LOCAL runtime delegated, so
+                # it is filed against that agent rather than counted as a
+                # session of our own.
+                #
+                # The per-log token attribute names are NOT in Cursor's public
+                # docs (they live in a Wire Reference that is not reachable),
+                # so this reads a candidate list and a miss records NOTHING.
+                # A wrong guess must yield silence, never a fabricated figure.
+                if _delegated_is_agent_id(session_id):
+                    try:
+                        c_in = _f(
+                            attrs, "cursor.api.request.input_tokens",
+                            "cursor.input_tokens", "input_tokens",
+                            "gen_ai.usage.input_tokens",
+                        )
+                        c_out = _f(
+                            attrs, "cursor.api.request.output_tokens",
+                            "cursor.output_tokens", "output_tokens",
+                            "gen_ai.usage.output_tokens",
+                        )
+                        c_cr = _f(
+                            attrs, "cursor.api.request.cache_read_tokens",
+                            "cursor.cache_read_tokens", "cache_read_tokens",
+                        )
+                        c_cw = _f(
+                            attrs, "cursor.api.request.cache_creation_tokens",
+                            "cursor.cache_write_tokens", "cache_creation_tokens",
+                        )
+                        if any(v is not None for v in (c_in, c_out, c_cr, c_cw)):
+                            _delegated_record_otel(
+                                session_id, c_in, c_out, c_cr, c_cw, model, ts,
+                            )
+                    except Exception:
                         pass
 
                 dur = _f(attrs, "duration_ms", "duration.ms")
-                ev = (getattr(rec, "event_name", "") or "").lower()
-                if dur is not None and any(k in ev for k in ("request", "run", "completion")):
+                dur_val = None
+                if dur is not None:
                     try:
-                        _add_metric("runs", {
-                            "timestamp": ts, "duration_ms": float(dur),
-                            "model": model, "channel": channel,
-                        })
+                        dur_val = float(dur)
                     except (TypeError, ValueError):
-                        pass
+                        dur_val = None
+                if dur_val is not None and fresh and any(
+                    k in suffix for k in ("request", "run", "completion")
+                ):
+                    _add_metric("runs", {
+                        "timestamp": ts, "duration_ms": dur_val,
+                        "model": model, "channel": channel,
+                    })
+
+                # ── Fix 4: tool records become tool events ───────────────
+                tool_name = _f(
+                    attrs, "tool_name", "tool.name", "name",
+                    "gen_ai.tool.name",
+                )
+                decision = _f(attrs, "decision", "tool.decision")
+                success_attr = _f(attrs, "success", "tool.success")
+                success = None
+                if success_attr is not None:
+                    success = str(success_attr).strip().lower() not in (
+                        "false", "0", "no", "failure", "error",
+                    )
+
+                # ── Fix 3: persist, rather than only caching in memory ───
+                out_records.append({
+                    "record_id": record_id,
+                    "ts": ts,
+                    "received_at": received_at,
+                    "event_name": event_name or suffix or "log",
+                    "session_id": ledger_session_id,
+                    "user_id": user_id,
+                    "user_email": user_email,
+                    "org_id": org_id,
+                    "team": team,
+                    "repo": repo,
+                    "node_id": node_id,
+                    "agent_type": agent_type,
+                    "service_name": service_name,
+                    "model": model or None,
+                    "provider": provider or None,
+                    "cost_usd": cost_val,
+                    "tokens_input": tin,
+                    "tokens_output": tout,
+                    "token_count": (
+                        (tin or 0) + (tout or 0) if tin is not None else None
+                    ),
+                    "duration_ms": dur_val,
+                    "tool_name": tool_name,
+                    "decision": decision,
+                    "success": success,
+                    "attributes": {
+                        "resource": resource_attrs,
+                        "record": attrs,
+                        "repo_raw": repo_raw,
+                    },
+                })
+
+                if not session_id:
+                    # Every downstream reader keys on session_id; a record
+                    # without one can still be rolled up by team/user above,
+                    # but it cannot join a trajectory.
+                    continue
+
+                ev_common = {
+                    "node_id": node_id,
+                    "agent_type": agent_type,
+                    "agent_id": "main",
+                    "session_id": str(session_id),
+                    "workspace_id": repo,
+                    "ts": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+                    "runtime_kind": agent_type,
+                }
+
+                if suffix in _OTLP_TOOL_CALL_EVENTS and tool_name:
+                    # A rejected permission prompt is not a tool CALL — the
+                    # tool never ran. Recording it as one would tell the
+                    # no-progress detector the agent acted when it was
+                    # actually blocked waiting for a human.
+                    if str(decision or "").strip().lower() in (
+                        "reject", "rejected", "deny", "denied",
+                    ):
+                        # WO-57: keep the fact that a human (or a hook, or
+                        # config) said no, as its own event. Still never a
+                        # tool CALL: the tool did not run.
+                        if _prof is None:
+                            continue
+                        ev = dict(ev_common)
+                        ev["id"] = "otlp:" + record_id
+                        ev["event_type"] = "tool_decision"
+                        ev["data"] = {
+                            "tool": str(tool_name), "decision": decision,
+                            "source": _f(attrs, "source", "tool.source",
+                                         "decision_source"),
+                            "tool_source": _f(attrs, "tool_source"),
+                            "_otlp": True,
+                        }
+                        out_events.append(ev)
+                        continue
+                    args = _f(attrs, "tool_parameters", "tool.parameters",
+                              "arguments", "input")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except (ValueError, TypeError):
+                            pass
+                    if args in (None, ""):
+                        # This path usually carries no arguments, and the
+                        # stuck_loop detector trips on K consecutive
+                        # IDENTICAL (tool, args) calls. Hashing "no args" to
+                        # one constant would make five Reads of five
+                        # different files look like a loop, so we say what is
+                        # true instead: the arguments are unknown here, and
+                        # unknown is not evidence of identical. The cycle
+                        # branch (tool NAMES only) still works untouched.
+                        args = {"_otlp_args_unknown": record_id}
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = "tool_call"
+                    ev["data"] = {
+                        "tool": str(tool_name),
+                        "tool_name": str(tool_name),
+                        "args": args,
+                        "decision": decision,
+                        "source": _f(attrs, "source", "tool.source"),
+                        "_otlp": True,
+                    }
+                    out_events.append(ev)
+                elif suffix in _OTLP_TOOL_RESULT_EVENTS and tool_name:
+                    err_text = _f(attrs, "error", "error.message") or ""
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = "tool_result"
+                    ev["data"] = {
+                        "tool": str(tool_name),
+                        "tool_name": str(tool_name),
+                        "is_error": (success is False) or bool(err_text),
+                        "error": err_text,
+                        "duration_ms": dur_val,
+                        "_otlp": True,
+                    }
+                    out_events.append(ev)
+                elif _prof is not None and suffix in (_prof.typed_events or {}):
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = suffix
+                    ev["data"] = _otlp_typed_event_data(_prof, suffix, attrs, _f)
+                    ev["data"]["_otlp"] = True
+                    if model:
+                        ev["model"] = model
+                    out_events.append(ev)
+                elif cost_val is not None or tin is not None:
+                    # The money records (api_request). Landing them in events
+                    # is what makes the usage + cost surfaces survive a
+                    # restart on a daemon-free deployment.
+                    ev = dict(ev_common)
+                    ev["id"] = "otlp:" + record_id
+                    ev["event_type"] = "llm_call"
+                    ev["cost_usd"] = cost_val
+                    ev["token_count"] = (
+                        (tin or 0) + (tout or 0) if tin is not None else None
+                    )
+                    ev["model"] = model or None
+                    ev["data"] = {
+                        "model": model,
+                        "provider": provider,
+                        "input_tokens": tin,
+                        "output_tokens": tout,
+                        "cost_usd": cost_val,
+                        "duration_ms": dur_val,
+                        "_otlp": True,
+                    }
+                    for _k, _dk in ((_prof.llm_extra_fields or ()) if _prof is not None else ()):
+                        _v = _f(attrs, _k)
+                        if _v is not None:
+                            ev["data"][_dk] = _v
+                    out_events.append(ev)
+
+    if _store is not None and (out_records or out_events):
+        try:
+            # Keyword args are REQUIRED: the dashboard's _ProxyStore forwards
+            # **kwargs only, so a positional call silently writes nothing
+            # whenever the daemon owns the writer lock — i.e. every real
+            # install. put_otlp_batch is allowlisted in
+            # routes/local_query._DAEMON_METHODS so the daemon runs the write.
+            _store.put_otlp_batch(records=out_records, events=out_events)
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "local_store.put_otlp_batch failed: %s", e
+                )
+            except Exception:
+                pass
 
 
 def _get_otel_usage_data():
@@ -11364,6 +7940,8 @@ def _get_otel_usage_data():
     daily_cost = {}
     model_usage = {}
 
+    cache_read_total = 0
+    cache_write_total = 0
     with _metrics_lock:
         for entry in metrics_store["tokens"]:
             ts = entry.get("timestamp", 0)
@@ -11372,6 +7950,10 @@ def _get_otel_usage_data():
             daily_tokens[day] = daily_tokens.get(day, 0) + total
             model = entry.get("model", "unknown") or "unknown"
             model_usage[model] = model_usage.get(model, 0) + total
+            # Prompt-cache tokens by kind (Claude Code metrics, WO-57); same
+            # field names as the transcript path.
+            cache_read_total += int(entry.get("cache_read_tokens") or 0)
+            cache_write_total += int(entry.get("cache_write_tokens") or 0)
 
         for entry in metrics_store["cost"]:
             ts = entry.get("timestamp", 0)
@@ -11430,6 +8012,8 @@ def _get_otel_usage_data():
         "today": today_tok,
         "week": week_tok,
         "month": month_tok,
+        "cacheReadTokens": cache_read_total,
+        "cacheWriteTokens": cache_write_total,
         "todayCost": round(today_cost_val, 4),
         "weekCost": round(week_cost_val, 4),
         "monthCost": round(month_cost_val, 4),
@@ -11460,11 +8044,45 @@ def _safe_date_ts(date_str):
         return 0
 
 
+def _detected_runtimes():
+    """Presence-probe every supported runtime. [] when the probe is unavailable."""
+    try:
+        from clawmetry.runtime_probe import probe_runtimes
+        return [p for p in probe_runtimes() if p.get("found")]
+    except Exception:
+        return []
+
+
 def validate_configuration():
-    """Validate the detected configuration and provide helpful feedback for new users."""
+    """Validate the detected configuration and provide helpful feedback for new users.
+
+    ClawMetry watches every supported runtime, so the OpenClaw-specific checks
+    below only run when OpenClaw (or NemoClaw, which shares its layout) is the
+    runtime on this machine. A Claude Code / Codex / Cursor user got a wall of
+    "install OpenClaw" warnings about a runtime they never asked for.
+    """
     warnings = []
     tips = []
-    
+
+    detected = _detected_runtimes()
+    detected_ids = {p["id"] for p in detected}
+    openclaw_family = bool({"openclaw", "nemoclaw"} & detected_ids)
+
+    if detected:
+        shown = [p["label"] for p in detected[:6]]
+        if len(detected) > len(shown):
+            shown.append(f"+{len(detected) - len(shown)} more")
+        plural = "runtime" if len(detected) == 1 else "runtimes"
+        tips.append(f"[ok] Detected {len(detected)} agent {plural}: {', '.join(shown)}")
+    else:
+        warnings.append("[warn]  No agent runtime detected on this machine")
+        tips.append("[tip] Start an agent (OpenClaw, Claude Code, Codex, Cursor, ...) and the dashboard fills in")
+
+    if not openclaw_family:
+        # Nothing below applies: the other runtimes keep their own session
+        # stores, which the adapters read directly.
+        return warnings, tips
+
     # Check if workspace looks like a real OpenClaw setup
     workspace_files = ['SOUL.md', 'AGENTS.md', 'MEMORY.md', 'memory']
     found_files = []
@@ -11472,36 +8090,29 @@ def validate_configuration():
         path = os.path.join(WORKSPACE, f)
         if os.path.exists(path):
             found_files.append(f)
-    
+
     if not found_files:
         warnings.append(f"[warn]  No OpenClaw workspace files found in {WORKSPACE}")
         tips.append("[tip] Create SOUL.md, AGENTS.md, or MEMORY.md to set up your agent workspace")
-    
+
     # Check if log directory exists and has recent logs
     if not os.path.exists(LOG_DIR):
         warnings.append(f"[warn]  Log directory doesn't exist: {LOG_DIR}")
-        tips.append("[tip] Make sure OpenClaw/Moltbot is running to generate logs")
+        tips.append("[tip] Make sure OpenClaw is running to generate logs")
     else:
         # Check for recent log files
         log_pattern = os.path.join(LOG_DIR, "*claw*.log")
-        recent_logs = [f for f in glob.glob(log_pattern) 
+        recent_logs = [f for f in glob.glob(log_pattern)
                       if os.path.getmtime(f) > time.time() - 86400]  # Last 24h
         if not recent_logs:
             warnings.append(f"[warn]  No recent log files found in {LOG_DIR}")
             tips.append("[tip] Start your OpenClaw agent to see real-time data")
-    
+
     # Check if sessions directory exists
     if not SESSIONS_DIR or not os.path.exists(SESSIONS_DIR):
         warnings.append(f"[warn]  Sessions directory not found: {SESSIONS_DIR}")
         tips.append("[tip] Sessions will appear when your agent starts conversations")
-    
-    # Check if OpenClaw binary is available
-    try:
-        subprocess.run(['openclaw', '--version'], capture_output=True, timeout=10)
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        warnings.append("[warn]  OpenClaw binary not found in PATH")
-        tips.append("[tip] Install OpenClaw: https://github.com/openclaw/openclaw")
-    
+
     return warnings, tips
 
 
@@ -11579,13 +8190,14 @@ def detect_config(args=None):
     else:
         # Auto-detect: check common locations including Docker volumes
         data_dir = _auto_detect_data_dir()
-    
+
     if data_dir and os.path.isdir(data_dir):
         # Auto-set workspace, sessions, crons from data dir
         ws = os.path.join(data_dir, 'workspace')
         if os.path.isdir(ws) and not (args and args.workspace):
             if not args:
-                import argparse; args = argparse.Namespace()
+                import argparse
+                args = argparse.Namespace()
             args.workspace = ws
         sess = os.path.join(data_dir, 'agents', 'main', 'sessions')
         if os.path.isdir(sess) and not (args and getattr(args, 'sessions_dir', None)):
@@ -11618,7 +8230,11 @@ def detect_config(args=None):
                 WORKSPACE = c
                 break
         if not WORKSPACE:
-            WORKSPACE = os.getcwd()
+            # "/" is not a workspace. launchd starts agents with cwd="/", so
+            # this last-resort guess silently poisoned every workspace-relative
+            # state path (see _fleet_db_path) on an auto-started install.
+            _cwd = os.getcwd()
+            WORKSPACE = _cwd if _cwd not in ("/", "") else os.path.expanduser("~")
 
     MEMORY_DIR = os.path.join(WORKSPACE, "memory")
 
@@ -11689,6 +8305,11 @@ def detect_config(args=None):
     app.register_blueprint(bp_fleet)
     app.register_blueprint(bp_gateway)
     app.register_blueprint(bp_harness)
+    app.register_blueprint(bp_delegated)
+    app.register_blueprint(bp_readiness)
+    app.register_blueprint(bp_guard)
+    app.register_blueprint(bp_signals)
+    app.register_blueprint(bp_selfdiag)
     app.register_blueprint(bp_health)
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)
@@ -11709,10 +8330,13 @@ def detect_config(args=None):
         app.register_blueprint(bp_runtime_ingest)
     app.register_blueprint(bp_otlp_traces)
     app.register_blueprint(bp_overview)
+    app.register_blueprint(bp_trial)
+    app.register_blueprint(bp_onboarding)
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_sla)
     app.register_blueprint(bp_tracing)
+    app.register_blueprint(bp_trail)
     app.register_blueprint(bp_usage)
     app.register_blueprint(bp_version)
     app.register_blueprint(bp_version_impact)
@@ -11726,25 +8350,119 @@ def detect_config(args=None):
     # the OSS stub registers and returns HTTP 402 ``upgrade_required``.
     if not _pro_loaded:
         app.register_blueprint(bp_nemoclaw)
+        app.register_blueprint(bp_compliance)
+        app.register_blueprint(bp_org_analytics)
     app.register_blueprint(bp_skills)
+    app.register_blueprint(bp_runtime_memory)
     app.register_blueprint(bp_heartbeat)
     app.register_blueprint(bp_selfconfig)
     app.register_blueprint(bp_agents)
     app.register_blueprint(bp_inventory)
+    app.register_blueprint(bp_govern)
     if not _pro_loaded:
         app.register_blueprint(bp_assets)
     app.register_blueprint(bp_reasoning)
     app.register_blueprint(bp_plugins)
     app.register_blueprint(bp_local_query)
+    # ClawMetry Enterprise self-hosted server mode: one process serves the
+    # dashboard AND the ingest API the node daemons push to. Gated hard on
+    # SELF_HOSTED=true — never registered for normal local/cloud installs.
+    try:
+        from clawmetry.selfhosted import is_self_hosted as _is_self_hosted
+        if _is_self_hosted():
+            from routes.selfhosted_ingest import bp_selfhosted
+            app.register_blueprint(bp_selfhosted)
+            from clawmetry.selfhosted import maybe_start_license_ping
+            if maybe_start_license_ping():
+                print("  SelfHosted: [ok] license/version ping enabled (daily)")
+            print("  SelfHosted: [ok] ingest API registered (/auth, /ingest/*)")
+    except Exception as _sh_exc:
+        print(f"  SelfHosted: [warn] not registered: {_sh_exc}")
     app.register_blueprint(bp_dives)
     app.register_blueprint(bp_reports)
     app.register_blueprint(bp_scheduler)
     app.register_blueprint(bp_policy)
+    # Local pre-tool hook receiver (Claude Code PreToolUse gate) —
+    # routes/hooks.py. Its record_once hook also persists this
+    # dashboard's port to ~/.clawmetry/server.json for the gate
+    # installer's base-URL discovery.
+    from routes.hooks import bp_hooks
+    app.register_blueprint(bp_hooks)
+    # Per-runtime approval routing (/api/approvals/routing) + the phone
+    # decision page (/a/<id>) the notification links point at. Paid
+    # delivery layer: when clawmetry-pro is installed its blueprint was
+    # already registered by ``_ext_load(app)`` above and won these URLs, so
+    # skip the OSS registration to avoid a blueprint-name collision. The
+    # OSS module is the impl today and becomes a 402 stub once the impl
+    # moves — the switch is identical either way.
+    try:
+        import clawmetry_pro as _pro_ar
+        _pro_ar_loaded = bool(getattr(_pro_ar, "is_loaded", lambda: False)())
+    except Exception:
+        _pro_ar_loaded = False
+    if not _pro_ar_loaded:
+        from routes.approval_routing import bp_approval_routing
+        app.register_blueprint(bp_approval_routing)
     app.register_blueprint(bp_turn_anatomy)
     app.register_blueprint(bp_tool_catalog)
     app.register_blueprint(bp_context_economics)
+    app.register_blueprint(bp_spend_flow)
     app.register_blueprint(bp_entitlement)
     app.register_blueprint(bp_extensions)
+
+    # ── Trial-end hard-block gate ───────────────────────────────────────────
+    # When the resolver reports an unpaid / expired entitlement, every non-
+    # allowlisted request 402s with a machine-readable body carrying
+    # ``hard_blocked=True`` and the upgrade URL. Default-ON as of 0.12.x;
+    # opt out with ``CLAWMETRY_HARD_BLOCK=0``. The gate honours a per-request
+    # ``runtime`` scope hint so an operator who chose the "continue with free
+    # runtimes only" fallback (POST /api/trial/continue-free) still gets the
+    # OpenClaw / NanoClaw surface while paid runtimes stay blocked. See
+    # ``clawmetry/trial_enforcement.py`` for the full policy + allowlist.
+    from clawmetry import trial_enforcement as _te_gate
+
+    @app.before_request
+    def _trial_hard_block_gate():
+        try:
+            path = request.path or ""
+            if _te_gate.allowlisted_path(path):
+                return None
+            # Runtime hint sources, in preference order:
+            #   1. ?runtime=<name> (canonical UI param)
+            #   2. ?scope=<name>   (older alias some routes still emit)
+            #   3. X-Clawmetry-Runtime header (used by CLI + adapters)
+            rt_hint = None
+            try:
+                rt_hint = (
+                    (request.args.get("runtime") or "").strip()
+                    or (request.args.get("scope") or "").strip()
+                    or (request.headers.get("X-Clawmetry-Runtime") or "").strip()
+                    or None
+                )
+            except Exception:
+                rt_hint = None
+            if not _te_gate.is_hard_blocked(path=path, runtime=rt_hint):
+                return None
+            payload = _te_gate.block_payload()
+            resp = jsonify(payload)
+            resp.status_code = 402
+            resp.headers["X-Clawmetry-Trial-Blocked"] = "1"
+            resp.headers["Cache-Control"] = "no-store"
+            return resp
+        except Exception as exc:
+            # Fail-open. A bug in the gate must never brick a paying customer;
+            # let the request through and log at warning so operators can spot
+            # it in the daemon log rather than in a "why is nothing loading?"
+            # support ticket.
+            try:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "trial_hard_block_gate: %s", exc
+                )
+            except Exception:
+                pass
+            return None
+
     app.register_blueprint(bp_audit)
     app.register_blueprint(bp_device)
 
@@ -11760,7 +8478,12 @@ def detect_config(args=None):
     app.register_blueprint(bp_insights)
     app.register_blueprint(bp_review)
     app.register_blueprint(bp_evals)
+    app.register_blueprint(bp_bench)
+    app.register_blueprint(bp_cohort)
+    app.register_blueprint(bp_quality)
     app.register_blueprint(bp_hitl)
+    app.register_blueprint(bp_rules)
+    app.register_blueprint(bp_attention)
 
     # ── v2 React SPA (opt-in) ───────────────────────────────────────────────
     # Default OFF so existing v1 users notice nothing. Enabled when the user
@@ -11863,15 +8586,22 @@ def detect_config(args=None):
     # vivekchand/clawmetry#748 — Initial-sync progress for the dashboard
     # banner. The sync daemon writes ~/.clawmetry/sync_progress.json after
     # each phase; we just stream it through. Local-only, no auth.
+    # `runtimes` is added here (not by the daemon) so the banner can NAME what
+    # it is syncing instead of hardcoding "your OpenClaw workspace" on a
+    # machine that may only run Claude Code / Codex / Cursor.
     @app.route("/api/sync-progress", endpoint="sync_progress")
     def _sync_progress():
         from flask import jsonify as _jsonify
         progress_path = os.path.expanduser("~/.clawmetry/sync_progress.json")
         if not os.path.isfile(progress_path):
-            return _jsonify({"error": "no sync progress yet"}), 404
+            return _jsonify({"error": "no sync progress yet",
+                             "runtimes": _sync_scope_runtimes()}), 404
         try:
             with open(progress_path) as _f:
-                return _jsonify(json.load(_f))
+                _payload = json.load(_f)
+            if isinstance(_payload, dict):
+                _payload["runtimes"] = _sync_scope_runtimes()
+            return _jsonify(_payload)
         except Exception as _e:
             return _jsonify({"error": f"unreadable: {_e}"}), 500
 
@@ -11900,6 +8630,83 @@ def detect_config(args=None):
             "marker_path": NOCLOUD_MARKER_PATH,
             "env_optout": bool(os.environ.get("CLAWMETRY_NO_CLOUD", "").strip()),
         })
+
+    # E2E encryption key — Settings surface for the secret that decrypts
+    # cloud-synced snapshots client-side in the browser. Deliberately a bare
+    # @app.route in this OSS-only section (like /api/cloud-status above),
+    # NOT a Blueprint: the hosted cloud app never calls this route-registration
+    # code path (it imports only bp_sessions/bp_overview/bp_health + specific
+    # helpers from this module via importlib — see clawmetry-cloud/CLAUDE.md),
+    # so this endpoint architecturally does not exist on app.clawmetry.com.
+    # Belt-and-braces: cloud's own container also has no ~/.clawmetry/config.json
+    # for a user's node in the first place, since the key never leaves this
+    # machine except E2E-encrypted. Auth follows the normal /api/* rule in
+    # _check_auth() (loopback trusted; remote needs the gateway token).
+    def _read_local_config():
+        cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+        try:
+            with open(cfg_path) as _f:
+                return json.load(_f) or {}
+        except Exception:
+            return {}
+
+    @app.route("/api/local/e2e-key", endpoint="e2e_key_get")
+    def _e2e_key_get():
+        """Whether a key is set — never the key itself.
+
+        SECURITY (2026-08-24 review, finding 8): this used to return the
+        plaintext key in a GET body. Loopback callers skip authentication, so
+        every local process on the machine could read it, and a GET is exactly
+        the shape a hostile page can trigger. Revealing the real value now
+        requires the POST below, which the cross-origin write guard covers.
+        """
+        from flask import jsonify as _jsonify
+        cfg = _read_local_config()
+        return _jsonify({
+            "configured": bool(cfg.get("encryption_key", "")),
+            "node_id": cfg.get("node_id", ""),
+        })
+
+    @app.route("/api/local/e2e-key/reveal", methods=["POST"], endpoint="e2e_key_reveal")
+    def _e2e_key_reveal():
+        """Return the key for the Settings pane's reveal/copy control.
+
+        A POST so the Origin guard in ``_check_auth`` applies: a page on
+        another origin can still cause this request, but it cannot make the
+        browser send an Origin we accept, and it could never read the reply
+        anyway.
+        """
+        from flask import jsonify as _jsonify
+        cfg = _read_local_config()
+        key = cfg.get("encryption_key", "") or ""
+        if not key:
+            return _jsonify({"configured": False, "key": None}), 404
+        return _jsonify({"configured": True, "key": key})
+
+    @app.route("/api/local/e2e-key/regenerate", methods=["POST"], endpoint="e2e_key_regenerate")
+    def _e2e_key_regenerate():
+        from flask import jsonify as _jsonify
+        from clawmetry.sync import generate_encryption_key, save_config
+        cfg_path = os.path.expanduser("~/.clawmetry/config.json")
+        try:
+            with open(cfg_path) as _f:
+                cfg = json.load(_f) or {}
+        except Exception:
+            cfg = {}
+        if not cfg.get("api_key"):
+            return _jsonify({
+                "error": "Cloud sync isn't set up on this node yet. Run "
+                         "\"clawmetry connect\" first.",
+            }), 400
+        new_key = generate_encryption_key()
+        cfg["encryption_key"] = new_key
+        save_config(cfg)
+        # Restart so the daemon encrypts everything from now on with the new
+        # key. Anything already synced under the old key stays readable by
+        # anyone who has that old key — regenerating protects data going
+        # forward, it does not retroactively re-encrypt history.
+        _restart_sync_daemon()
+        return _jsonify({"key": new_key})
 
     # ────────────────────────────────────────────────────────────────────────
 
@@ -12042,8 +8849,33 @@ def _detect_disk_mounts():
     return mounts
 
 
+def _egress_suppressed():
+    """Whether discretionary outbound calls are disabled for this install.
+
+    Thin wrapper so a missing/older clawmetry package can never break startup.
+    Fails CLOSED: if the check itself errors we suppress the call, because the
+    cost of a missing banner line is nothing and the cost of an unexpected
+    third-party request in a customer network is a failed security review.
+    """
+    try:
+        from clawmetry.endpoints import egress_suppressed
+        return egress_suppressed()
+    except Exception:
+        return True
+
+
 def get_public_ip():
-    """Get the machine's public IP address (useful for cloud/VPS users)."""
+    """The machine's public IP, for the "reachable at" startup banner line.
+
+    Returns None instead of calling out when this deployment is not supposed
+    to talk to the internet. api.ipify.org is a third party nobody in an
+    enterprise deployment agreed to, and the request itself discloses that
+    this network runs ClawMetry -- a poor trade for one cosmetic banner line.
+    Suppressed for self-hosted, offline/air-gapped, and repointed-endpoint
+    installs; see docs/EGRESS.md, which documents this as opt-out.
+    """
+    if _egress_suppressed():
+        return None
     try:
         import urllib.request
         return urllib.request.urlopen("https://api.ipify.org", timeout=2).read().decode().strip()
@@ -12070,6 +8902,14 @@ def get_local_ip():
 
 # ── HTML Template ───────────────────────────────────────────────────────
 
+# NOTE (2026-09-08): there used to be a SECOND, earlier `DASHBOARD_HTML`
+# defined above this point — 5,036 lines of inline HTML/CSS/JS that never
+# rendered, because this assignment overwrote it at import time. It was
+# deleted. Four separate documents (FLYWHEEL.md, ARCHITECTURE.md,
+# AGENTS.md, CLAUDE.md) each carried a warning about the duplicate, and a
+# reader or tool grepping for a symbol found the dead copy first. There is
+# now exactly one DASHBOARD_HTML; tests/test_dashboard_html_defined_once.py
+# keeps it that way.
 DASHBOARD_HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -12079,25 +8919,32 @@ DASHBOARD_HTML = r"""
 <title>ClawMetry</title>
 <link rel="icon" href="/favicon.ico" type="image/x-icon">
 <link rel="icon" href="/static/img/logo.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Self-hosted webfonts. A page load must never contact a third party: an
+     air-gapped install has no route to Google, and in the EU an embedded
+     Google Fonts request discloses the viewer's IP to a US processor with
+     no legal basis. Regenerate with scripts/vendor_fonts.py. -->
+<link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=version) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
-<script src="{{ url_for('static', filename='js/dives.js', v=version) }}" defer></script>
+<script src="{{ url_for('static', filename='js/trail.js', v=version) }}" defer></script>
 <!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
      transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
-     See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly. -->
+     See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly.
+     chart.js + its date adapter are vendored on the same rule. Every file here is
+     byte-compared against its npm registry tarball by scripts/verify_vendor.py,
+     and scripts/verify_no_external_assets.py fails CI on any absolute http(s)
+     asset reference. The dashboard must render fully with zero egress. -->
 <script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js', v=version) }}"></script>
 </head>
-<body data-theme="dark" class="booting">
+<body data-theme="dark" class="booting has-profile-menu">
 {% include 'partials/overlays.html' %}
 <div class="zoom-wrapper" id="zoom-wrapper">
 <div class="nav">
-  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:#ffffff">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
+  <h1><a href="https://clawmetry.com" style="display:flex;align-items:center;gap:7px;text-decoration:none;color:inherit"><img src="/static/img/logo.svg" width="22" height="22" style="border-radius:4px;vertical-align:middle;flex-shrink:0" alt="ClawMetry"><span><span style="color:var(--text-primary)">Claw</span><span style="color:#E5443A">Metry</span></span></a></h1>
   <span id="version-badge" class="version-badge" title="ClawMetry version">v{{ version }}</span>
   <div id="workspace-switcher" style="display:none;position:relative;margin-left:8px;">
     <button id="workspace-switcher-btn" onclick="toggleWorkspaceSwitcher(event)" title="Switch profile (this machine). Local OpenClaw profiles only. For fleet view across multiple machines, upgrade to Pro." style="background:var(--button-bg);color:var(--text-tertiary);border:none;border-radius:8px;padding:8px 12px;cursor:pointer;display:flex;align-items:center;box-shadow:var(--card-shadow);transition:all 0.15s;">
@@ -12113,8 +8960,31 @@ DASHBOARD_HTML = r"""
     <span style="font-size:11px;color:var(--text-muted);font-weight:600;">Runtime</span>
     <select id="cm-global-runtime" onchange="_cmOnGlobalRuntimeChange(this)" title="Scope session views to a single agent runtime" style="font-size:12px;font-weight:600;padding:7px 10px;border:1px solid var(--border-color,rgba(255,255,255,0.22));border-radius:8px;background:var(--button-bg,transparent);color:var(--text-tertiary,#cbd5e1);cursor:pointer;"></select>
   </div>
-  <div class="theme-toggle" onclick="var o=document.getElementById('gw-setup-overlay');o.dataset.mandatory='false';document.getElementById('gw-setup-close').style.display='';o.style.display='flex'" data-i18n-title="topbar.gateway_settings" title="Gateway settings" style="cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+  <!-- Refresh / reconnect. Always visible, because the desktop shell has no
+       browser chrome: no address bar, no reload button, and pywebview's Cocoa
+       backend swallows Cmd-R. Without this the only way out of a wedged page
+       was to quit the app. cmReconnect() probes the backend first and only
+       reloads when something is there to reload into -- reloading against a
+       dead port would replace the page with a blank error page. Turns amber
+       (.cm-attention) once the backend is known unreachable. -->
+  <div class="theme-toggle" id="cm-reconnect-btn" onclick="window.cmReconnect && window.cmReconnect()" role="button" tabindex="0" data-i18n-title="topbar.refresh" title="Refresh (Cmd/Ctrl + R)" style="cursor:pointer;">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+  </div>
   <div class="theme-toggle" id="alerts-bell-btn" onclick="switchTab('alerts')" data-i18n-title="topbar.active_alerts" title="Active alerts" style="cursor:pointer;position:relative;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span id="alerts-bell-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;border-radius:10px;padding:0 4px;font-size:9px;font-weight:700;min-width:14px;line-height:14px;text-align:center;">0</span></div>
+  {# Light/dark toggle REMOVED (header cleanup 2026-09): the light palette
+     never got the polish the dark one has, so the toggle only ever led
+     somewhere uglier. The dashboard is dark-only; <body data-theme="dark">
+     above is the whole story and app.js no longer ships initTheme(). #}
+
+  <!-- Cloud sync toggle chip. Included in every ClawMetry plan (Self-Hosted
+       through Enterprise), so it's a one-click UX toggle here rather than a
+       plan-tier decision. Hidden until the initial /api/cloud-cta/status
+       poll resolves so it doesn't flash the wrong state on first paint.
+       Refresh cadence: on load, on click, and after any focus event. -->
+  <div class="theme-toggle" id="sync-toggle-btn" onclick="clawmetryToggleSync()" title="Cloud sync" style="display:none;cursor:pointer;padding:6px 10px;gap:6px;align-items:center;">
+    <svg id="sync-toggle-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9"/><polyline points="17 5 21 5 21 9"/></svg>
+    <span id="sync-toggle-label" style="font-size:11px;font-weight:600;letter-spacing:0.2px;">Sync</span>
+  </div>
 
   <div class="theme-toggle" id="logout-btn" onclick="clawmetryLogout()" data-i18n-title="topbar.logout" title="Logout" style="display:none;cursor:pointer;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></div>
   <div class="i18n-switcher" id="i18n-switcher" style="position:relative;">
@@ -12125,11 +8995,11 @@ DASHBOARD_HTML = r"""
     </div>
     <div id="i18n-switcher-menu" role="menu" style="display:none;position:absolute;top:calc(100% + 6px);right:0;min-width:180px;max-height:360px;overflow-y:auto;background:var(--bg-card,#1c2333);border:1px solid var(--border-color,rgba(255,255,255,0.1));border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.35);z-index:200;padding:4px;"></div>
   </div>
-  <div class="zoom-controls">
-    <button class="zoom-btn" onclick="zoomOut()" data-i18n-title="topbar.zoom_out" title="Zoom out (Ctrl/Cmd + -)">−</button>
-    <span class="zoom-level" id="zoom-level" data-i18n-title="topbar.zoom_level" title="Current zoom level. Ctrl/Cmd + 0 to reset">100%</span>
-    <button class="zoom-btn" onclick="zoomIn()" data-i18n-title="topbar.zoom_in" title="Zoom in (Ctrl/Cmd + +)">+</button>
-  </div>
+  {# In-page zoom controls REMOVED (header cleanup 2026-09): the browser's
+     own zoom already does this, and applyZoom() used to put a
+     `transform: scale()` on #zoom-wrapper even at 100%, which made the
+     wrapper a containing block for every `position: fixed` descendant
+     (issue #1717). #}
   {% if legacy_nav %}
   <div class="nav-tabs">
     <div class="nav-tab" onclick="switchTab('flow')">Flow</div>
@@ -12138,7 +9008,7 @@ DASHBOARD_HTML = r"""
     <div class="nav-tab" onclick="switchTab('approvals')" title="Cloud-mediated approval queue">Approvals <span id="nav-approvals-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('alerts')" title="Get notified when something goes wrong">Alerts <span id="nav-alerts-badge" style="display:none;background:#ef4444;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">0</span></div>
     <div class="nav-tab" onclick="switchTab('notifications')" title="Slack / Email / PagerDuty / Telegram channels">Notifications</div>
-    <div class="nav-tab" onclick="switchTab('context')" title="See what context the LLM receives each turn">Context</div>
+    <div class="nav-tab" onclick="switchTab('context-economics')" title="Context-window usage from real per-turn readings">Context</div>
     <div class="nav-tab" onclick="switchTab('usage')">Tokens</div>
     <div class="nav-tab" id="crons-tab" onclick="switchTab('crons')">Crons</div>
     <div class="nav-tab" onclick="switchTab('memory')">Memory</div>
@@ -12165,13 +9035,28 @@ DASHBOARD_HTML = r"""
     <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com/cloud','_blank')" style="display:none;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>
   </div>
   {% endif %}
+  <!-- Trial pill + green Upgrade button. Deliberately OUTSIDE the legacy_nav
+       if/else so both navs get exactly one instance, sitting immediately left
+       of the account avatar (plan state belongs next to identity).
+       Populated by static/js/trial-pill.js, which keeps it empty and
+       display:none on every paid install — a paying customer must never be
+       shown a countdown. Before this, a trialing user's only warning was a
+       line two clicks deep in the avatar dropdown, and the only in-app path
+       to a card form was the paywall that appears AFTER expiry. -->
+  <div id="cm-trial-pill-slot"></div>
+  <!-- Account menu: self-hosted installs sign in (trial/license) just like
+       Cloud, so they get the same top-right profile affordance — identity,
+       billing/plan management, and an always-visible sign-out. Rendered by
+       cmProfileInit() in gw-setup.js; supersedes the bare #logout-btn icon
+       (hidden via body.has-profile-menu in dashboard.css). -->
+  <div id="cm-profile-wrap" style="position:relative;margin-left:8px;flex-shrink:0;">
+    <button id="cm-profile-btn" onclick="cmProfileToggle(event)" data-i18n-title="profile.account" title="Account" aria-haspopup="menu" aria-expanded="false" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--border-color,rgba(255,255,255,0.22));background:var(--button-bg,transparent);color:var(--text-tertiary,#cbd5e1);font-size:13px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;box-shadow:var(--card-shadow);transition:all 0.15s;">
+      <span id="cm-profile-initial" style="display:flex;align-items:center;justify-content:center;line-height:1;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+    </button>
+    <div id="cm-profile-menu" role="menu" style="display:none;position:absolute;top:calc(100% + 8px);right:0;min-width:250px;background:var(--bg-card,#1c2333);border:1px solid var(--border-color,rgba(255,255,255,0.1));border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.45);z-index:210;padding:6px;"></div>
+  </div>
 </div>
-{% include 'partials/cloud-modal.html' %}
-
-
 {% include 'partials/banners.html' %}
-
-{% include 'partials/budget-modal.html' %}
 
 {% if not legacy_nav %}
 {# Phase-1 IA refactor (issue #1659): 220px left sidebar + content grid.
@@ -12186,43 +9071,94 @@ DASHBOARD_HTML = r"""
          Tier-1 items, every expert view inside the default-collapsed Developer
          group below, config-ish tabs under Advanced. data-tab ids are STABLE -
          only labels and grouping changed. #}
-      <div class="left-nav-item active" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
-        <span class="left-nav-icon" aria-hidden="true">&#8962;</span>
+      {# Reskin 2026-09: entity-glyph icons became 16px stroke SVGs and the
+         Tier-1 list gained labeled sections (Observe / Analyze / Govern),
+         Future-AGI-console style. data-tab ids, tooltips and i18n keys are
+         UNCHANGED; only icons, ordering and section labels moved. The
+         Approvals/Alerts/Notifications adjacency (founder request
+         2026-07-29) is preserved inside Govern. #}
+      <div class="left-nav-item active" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.session_replay">Sessions</span>
+      </div>
+
+      {# Session-first IA (Trail, 2026-09): the product opens on the decision
+         trail. Sessions is the landing item; the KPI board (Home) and the
+         other raw-signal views sit under a "Monitoring" label. data-tab ids
+         are unchanged; only order, labels and grouping moved. #}
+      <div class="left-nav-section-label" data-i18n="nav.section_monitoring">Monitoring</div>
+      <div class="left-nav-item" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.home">Home</span>
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
+
       <div class="left-nav-item" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
-        <span class="left-nav-icon" aria-hidden="true">&#9783;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
       </div>
       <div class="left-nav-item" data-tab="brain" onclick="switchTab('brain')" data-i18n-title="nav.activity_tooltip" title="What your agents are doing right now, step by step">
-        <span class="left-nav-icon" aria-hidden="true">&#9679;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.brain">Activity</span>
       </div>
+
       <div class="left-nav-item" data-tab="usage" onclick="switchTab('usage')" data-i18n-title="nav.cost_tooltip" title="Token spend &amp; cost analytics">
-        <span class="left-nav-icon" aria-hidden="true">&#36;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.cost">Cost</span>
       </div>
-      <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Conversations across channels (Telegram, Signal, WhatsApp, &hellip;)">
-        <span class="left-nav-icon" aria-hidden="true">&#9787;</span>
-        <span class="left-nav-label"><span data-i18n="nav.session_replay">Conversations</span> <span class="left-nav-beta" data-i18n="nav.beta">(beta)</span></span>
+      <div class="left-nav-item" data-tab="models" onclick="switchTab('models')" data-i18n-title="nav.models_tooltip" title="Which models your agents used, and what each one cost">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M9 2v2M15 20v2M9 20v2M2 15h2M2 9h2M20 15h2M20 9h2"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.models">Models</span>
       </div>
+      <div class="left-nav-item" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="How full each agent's memory window gets, and when it had to forget">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M12 7v5l3 3"/><path d="M17 3l4 4-4 4"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.context_usage">Context usage</span>
+      </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_analyze">Analyze</div>
+      <div class="left-nav-item" data-tab="evals" onclick="switchTab('evals')" data-i18n-title="nav.quality_tooltip" title="Is your agent doing good work? See this week's report card and the runs that need attention.">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.quality">Quality</span>
+      </div>
+      <div class="left-nav-item" data-tab="bench" onclick="switchTab('bench')" data-i18n-title="nav.bench_tooltip" title="Which harness is engineered better for your work? Verdicts, cost per finished job, and what to route where.">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.bench">Harness Engineering</span>
+      </div>
+
+      <div class="left-nav-section-label" data-i18n="nav.section_govern">Govern</div>
       <div class="left-nav-item" data-tab="approvals" onclick="switchTab('approvals')" data-i18n-title="nav.approvals_tooltip" title="Cloud-mediated approval queue">
-        <span class="left-nav-icon" aria-hidden="true">&#10003;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.approvals">Approvals</span>
         <span id="nav-approvals-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
+      <div class="left-nav-item" data-tab="guard" onclick="switchTab('guard')" data-i18n-title="nav.guard_tooltip" title="See what is running, detect agents that go off track, and stop them">
+        <span class="left-nav-icon" aria-hidden="true">&#128737;</span>
+        <span class="left-nav-label" data-i18n="nav.guard">Guard</span>
+        <span id="nav-guard-badge" class="left-nav-badge" style="display:none;">0</span>
+      </div>
+      <div class="left-nav-item" data-tab="signals" onclick="switchTab('signals')" data-i18n-title="nav.signals_tooltip" title="What people and agents say about a run: frustration, praise, refusals, giving up">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="8" y1="9" x2="16" y2="9"/><line x1="8" y1="13" x2="13" y2="13"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.signals">Signals</span>
+      </div>
       <div class="left-nav-item" data-tab="alerts" onclick="switchTab('alerts')" data-i18n-title="nav.alerts_tooltip" title="Get notified when something goes wrong with your agents">
-        <span class="left-nav-icon" aria-hidden="true">&#9873;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.alerts">Alerts</span>
         <span id="nav-alerts-badge" class="left-nav-badge" style="display:none;">0</span>
+      </div>
+      {# Notifications sits directly under its two consumers (Approvals,
+         Alerts) - founder request 2026-07-29: buried in the Advanced drawer,
+         nobody could find where to connect a delivery channel, so enabled
+         alert rules dead-ended at "no channels". #}
+      <div class="left-nav-item" data-tab="notifications" onclick="switchTab('notifications')" data-i18n-title="nav.notifications_tooltip" title="Where Alerts and Approvals get delivered: Slack / Telegram / PagerDuty / Email">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
       </div>
 
       {# Developer drawer: the deep-dive views. Pure toggle (no data-tab: the
          header must not steal the overview highlight from Home). Collapsed by
          default; a stored cm_live_open=1 re-opens it. #}
       <div class="left-nav-item left-nav-item-group" onclick="toggleLiveDrawer()" data-i18n-title="nav.developer_tooltip" title="Deep-dive views for debugging your agents">
-        <span class="left-nav-icon" aria-hidden="true">&#9881;</span>
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.developer">Developer</span>
         <button type="button" class="left-nav-group-chevron" id="left-nav-live-toggle" aria-expanded="false" aria-controls="left-nav-live-list" aria-label="Toggle Developer sub-items" onclick="event.stopPropagation(); toggleLiveDrawer();">&#9662;</button>
       </div>
@@ -12230,31 +9166,30 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" data-tab="flow" onclick="switchTab('flow')">
           <span class="left-nav-label" data-i18n="nav.flow">Flow</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="models" onclick="switchTab('models')">
-          <span class="left-nav-label" data-i18n="nav.models">Models</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="context" onclick="switchTab('context')" data-i18n-title="nav.llm_context_tooltip" title="What the LLM sees on each turn">
-          <span class="left-nav-label" data-i18n="nav.llm_context">LLM Context</span>
-        </div>
-        {# Phase B (UX_AUDIT.md): Tracing, Turn timing and Compare sessions are
-           SESSION-scoped, so they left the global nav and are reached from a
+        {# "LLM Context" merged into Context usage (2026-08-01): the old tab
+           mixed hardcoded token estimates with a node-wide gauge. Context
+           usage (context-economics) shows the same story from real per-turn
+           readings, session + runtime scoped. switchTab('context') aliases
+           there so old deep links keep working. #}
+        {# Phase B (UX_AUDIT.md) removed Tracing, Turn timing and Compare
+           sessions from the global nav as SESSION-scoped views, reached from a
            session drill-down (openSessionDeepDive in app.js, wired into the
-           Conversations viewer). Their pages + data-tab ids stay: deep links
-           and switchTab('tracing'|'turn-anatomy'|'swimlane') still work. #}
+           Sessions viewer). Turn timing and Compare sessions still are.
+           TRACING IS BACK (#4782): a bring-your-own-agent app that speaks OTLP
+           has no session at all -- its traces are keyed by OTel trace_id and
+           never appear in the Sessions viewer -- so a drill-down-only entry
+           point left those traces reachable by deep link only. #}
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-tracing" data-tab="tracing" onclick="switchTab('tracing')" title="Every run as a trace: the span waterfall, the span tree and the agent graph. Includes apps that send OpenTelemetry.">
+          <span class="left-nav-label" data-i18n="nav.tracing">Tracing</span>
+        </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-agents" data-tab="agents" onclick="switchTab('agents')" title="Cross-session agent spawn topology from span data">
           <span class="left-nav-label" data-i18n="nav.agent_graph">Agent Graph</span>
         </div>
         <div class="left-nav-item left-nav-item-sub" id="left-nav-tool-catalog" data-tab="tool-catalog" onclick="switchTab('tool-catalog')" title="Every tool the agent uses by provenance, with call count and p50/p95 latency">
           <span class="left-nav-label" data-i18n="nav.tools">Tools</span>
         </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-context-economics" data-tab="context-economics" onclick="switchTab('context-economics')" title="Context-window utilization over time, compaction triggers and tokens reclaimed">
-          <span class="left-nav-label" data-i18n="nav.context_usage">Context usage</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What the selected runtime uniquely exposes — beyond the generic tabs" style="display:none">
-          <span class="left-nav-label" data-i18n="nav.runtime_extras">Runtime extras</span>
-        </div>
-        <div class="left-nav-item left-nav-item-sub" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
-          <span class="left-nav-label" data-i18n="nav.ask">Ask</span>
+        <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What a harness is, part by part, and where to watch each part live">
+          <span class="left-nav-label" data-i18n="nav.harness">Harness</span>
         </div>
       </div>
     </div>
@@ -12267,13 +9202,17 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="crons" id="crons-tab" onclick="switchTab('crons')" data-i18n-title="nav.crons_tooltip" title="Scheduled agent jobs">
         <span class="left-nav-label" data-i18n="nav.crons">Schedules</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Persistent memory files the agent reads on boot">
+      {# Memory + Skills stay under Advanced while the multi-runtime file
+         browser matures (founder call 2026-08-14): known gaps — redundant
+         runtime chips, file click not loading content, Skills rendering the
+         Memory catalog. Promote to Tier-1 once those are fixed. #}
+      <div class="left-nav-item left-nav-item-sub" data-tab="memory" onclick="switchTab('memory')" data-i18n-title="nav.memory_tooltip" title="Every runtime's on-disk memory files (CLAUDE.md, AGENTS.md, GEMINI.md, …) in one browser">
         <span class="left-nav-label" data-i18n="nav.memory">Memory</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="notifications" onclick="switchTab('notifications')">
-        <span class="left-nav-label" data-i18n="nav.notifications">Notifications</span>
+      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')" title="Every runtime's installed skills / commands / agents / hooks">
+        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')" title="Live OpenClaw log stream">
+      <div class="left-nav-item left-nav-item-sub" data-tab="logs" onclick="switchTab('logs')" title="Live runtime log stream">
         <span class="left-nav-label">Logs</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="security" onclick="switchTab('security')">
@@ -12281,9 +9220,6 @@ DASHBOARD_HTML = r"""
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="policy" onclick="switchTab('policy')" title="Which tools each agent can run, where they run, and what got approved or blocked">
         <span class="left-nav-label" data-i18n="nav.tool_policy">Tool permissions</span>
-      </div>
-      <div class="left-nav-item left-nav-item-sub" data-tab="skills" onclick="switchTab('skills')">
-        <span class="left-nav-label" data-i18n="nav.skills">Skills</span>
       </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
         <span class="left-nav-label" data-i18n="nav.self_evolve">Self-Evolve</span>
@@ -12313,13 +9249,20 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/inventory.html' %}
 
 <!-- ALERTS (Cloud-Pro feature) -->
+{% include 'tabs/guard.html' %}
+{% include 'tabs/signals.html' %}
 {% include 'tabs/alerts.html' %}
+
+<!-- EVALS (LLM-as-judge scores + named evaluator library + golden suites) -->
+{% include 'tabs/evals.html' %}
+
+<!-- BENCH (Harness Engineering: verdict stamps, $/done, flow deep dive, context lanes) -->
+{% include 'tabs/bench.html' %}
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}
 
 <!-- DIVES (NL-to-SQL-to-chart over local DuckDB) -->
-{% include 'tabs/dives.html' %}
 
 <!-- CRONS -->
 {% include 'tabs/crons.html' %}
@@ -12329,6 +9272,9 @@ DASHBOARD_HTML = r"""
 
 <!-- TRANSCRIPTS -->
 {% include 'tabs/transcripts.html' %}
+
+<!-- TRAIL: one session as What it was asked / What it did / How it ended (session-first IA) -->
+{% include 'tabs/trail.html' %}
 
 
 <!-- UPGRADE IMPACT -->
@@ -12356,7 +9302,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/notifications.html' %}
 
 <!-- CONTEXT INSPECTOR -->
-{% include 'tabs/context.html' %}
 
 <!-- TRACING (Phoenix/Arize-style: span waterfall + tree + agent graph) -->
 {% include 'tabs/tracing.html' %}
@@ -12396,7 +9341,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/nemoclaw.html' %}
 
 <!-- SUB-AGENT TREE (theme 2) -->
-{% include 'tabs/subagents.html' %}
 
 <!-- SKILLS FIDELITY (#687) -->
 {% include 'tabs/skills.html' %}
@@ -12408,8 +9352,24 @@ DASHBOARD_HTML = r"""
 {% endif %}
 <script src="{{ url_for('static', filename='js/i18n.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/runtime-logos.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/time-range-picker.js', v=version) }}"></script>
+<!-- Provenance badges: the shared "measured / derived / estimated" component
+     every dollar amount and score renders through. Loaded BEFORE app.js so
+     window.cmMoney / cmProvBadge exist by the time a tab paints. -->
+<script src="{{ url_for('static', filename='js/provenance.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
+
+{# position:fixed overlays must live OUTSIDE #zoom-wrapper: its zoom
+   transform makes it the containing block for fixed descendants, which
+   stretches an inset:0 overlay to document height and pushes the centered
+   card below the fold (users saw only the blur backdrop, issue: blank
+   blurred dashboard on first run). #}
+{% include 'partials/cloud-modal.html' %}
+{% include 'partials/e2e-key-modal.html' %}
+{% include 'partials/onboarding-modal.html' %}
+{% include 'partials/selfhost-modal.html' %}
+{% include 'partials/budget-modal.html' %}
 
 <!-- Component Detail Modal -->
 <div class="comp-modal-overlay" id="comp-modal-overlay" onclick="if(event.target===this)closeCompModal()">
@@ -12468,36 +9428,13 @@ DASHBOARD_HTML = r"""
   </div>
 </div>
 
-<!-- Gateway Setup Wizard -->
-<div id="gw-setup-overlay" data-mandatory="false" onclick="if(event.target===this && this.dataset.mandatory!=='true'){this.style.display='none'}" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.85); z-index:10000; align-items:center; justify-content:center; font-family:Manrope,sans-serif;">
-  <div style="background:var(--bg-secondary, #1a1a2e); border:1px solid var(--border-primary, #333); border-radius:16px; padding:40px; max-width:440px; width:90%; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,0.5); position:relative;">
-    <button id="gw-setup-close" onclick="document.getElementById('gw-setup-overlay').style.display='none'" style="display:none; position:absolute; top:12px; right:16px; background:none; border:none; color:var(--text-muted, #888); font-size:22px; cursor:pointer; padding:4px 8px; line-height:1;">✕</button>
-    <img src="/static/img/logo.svg" style="width:64px;height:64px;margin-bottom:16px;display:block;margin-left:auto;margin-right:auto;" alt="ClawMetry">
-    <h2 style="color:var(--text-primary, #fff); margin:0 0 8px; font-size:24px; font-weight:700;">ClawMetry Setup</h2>
-    <p style="color:var(--text-muted, #888); margin:0 0 24px; font-size:14px;">Enter your OpenClaw gateway token to connect.</p>
-    <input id="gw-token-input" type="password" placeholder="Paste your gateway token" 
-      style="width:100%; padding:12px 16px; border:1px solid var(--border-primary, #444); border-radius:8px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:14px; font-family:monospace; box-sizing:border-box; outline:none; margin-bottom:8px;"
-      onkeydown="if(event.key==='Enter')gwSetupConnect()">
-    <div id="gw-setup-hint" style="color:var(--text-muted, #888); font-size:12px; margin:0 0 4px; text-align:left;">
-      <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:6px 0 4px;">Local install (pip / brew / install.sh)</div>
-      <code style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">cat ~/.openclaw/openclaw.json | python3 -c "import json,sys;print(json.load(sys.stdin)['gateway']['auth']['token'])"</code>
-      <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:8px 0 4px;">Docker install</div>
-      <code style="display:block;color:var(--text-accent, #0af); background:rgba(0,170,255,0.1); padding:6px 8px; border-radius:4px; font-size:11px; word-break:break-all;">docker exec $(docker ps -q) env | grep TOKEN</code>
-      <div style="font-weight:600;color:var(--text-secondary, #aaa);margin:8px 0 4px;">Remote / Docker / reverse-proxy</div>
-      <span style="color:var(--text-muted, #888);">Set <code style="color:var(--text-accent, #0af);">OPENCLAW_GATEWAY_URL=http://&lt;host&gt;:18789</code> env var, or enter the URL below.</span>
-    </div>
-    <p id="gw-url-hint" style="color:var(--text-muted, #666); font-size:11px; margin:0 0 16px; text-align:left;"><span style="color:var(--text-secondary,#aaa);">Gateway URL</span> <span style="color:var(--text-faint,#555);">(auto-detected for local; required for remote / Docker / reverse-proxy)</span><br><input id="gw-url-input" type="text" placeholder="http://localhost:18789" style="width:100%; margin-top:4px; padding:4px 8px; border:1px solid var(--border-primary, #444); border-radius:4px; background:var(--bg-primary, #111); color:var(--text-primary, #fff); font-size:11px; font-family:monospace; box-sizing:border-box;"></p>
-    <div id="gw-setup-error" style="color:#ff4444; font-size:13px; margin-bottom:12px; display:none;"></div>
-    <div id="gw-setup-status" style="color:var(--text-accent, #0af); font-size:13px; margin-bottom:12px; display:none;"></div>
-    <button onclick="gwSetupConnect()" id="gw-connect-btn"
-      style="width:100%; padding:12px; border:none; border-radius:8px; background:var(--bg-accent, #0f6fff); color:#fff; font-size:15px; font-weight:600; cursor:pointer; font-family:Manrope,sans-serif;">
-      Connect
-    </button>
-    <p style="color:var(--text-faint, #555); font-size:11px; margin:16px 0 0;">Token is stored locally on this ClawMetry instance.</p>
-  </div>
-</div>
-
 <script src="{{ url_for('static', filename='js/gw-setup.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/onboarding.js', v=version) }}"></script>
+<!-- Loaded LAST: trial-pill.js reads window.CM_PLANS (published by app.js) as
+     its price ladder and exposes window.cmOpenUpgradeModal, which gw-setup.js's
+     profile menu calls. Both are looked up at call time, so load order only
+     needs app.js to have run first. -->
+<script src="{{ url_for('static', filename='js/trial-pill.js', v=version) }}"></script>
 
 </body>
 </html>
@@ -12795,8 +9732,8 @@ def _auto_discover_gateway(token):
                 "id": "discover",
                 "method": "connect",
                 "params": {
-                    "minProtocol": 3,
-                    "maxProtocol": 3,
+                    "minProtocol": _GW_MIN_PROTO,
+                    "maxProtocol": _GW_MAX_PROTO,
                     "client": {
                         "id": "cli",
                         "version": __version__,
@@ -12882,9 +9819,71 @@ def _latency_probe_record(response):
     return response
 
 
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+
+
+def _cross_origin_write_blocked() -> bool:
+    """True when this request is a browser-driven WRITE from another site.
+
+    Loopback callers skip authentication entirely (``_check_auth`` below) —
+    that is the right posture for a local tool, but on its own it means any
+    page the user happens to have open in another tab can drive this API. A
+    cross-origin ``<form method=post>`` needs no CORS permission to *arrive*;
+    the browser only stops the attacker reading the reply. The side effect
+    still lands, so the endpoints that need no request body were reachable
+    from any website: rotate the E2E key (making everything already synced
+    undecryptable to its owner), emergency-stop the agents, kill every cron,
+    deactivate the licence.
+
+    The check is deliberately narrow so nothing legitimate breaks:
+
+    * Safe methods are never blocked — this is CSRF defence, not CORS.
+    * A request with **no** ``Origin`` is allowed. Browsers always attach one
+      to a non-GET fetch, same-origin included; curl, the CLI, the desktop
+      shell and OTLP exporters do not. So absence means "not a browser",
+      which is exactly the traffic that must keep working.
+    * An ``Origin`` that matches the host this request was addressed to is
+      the dashboard talking to itself.
+
+    Everything else is a page on another origin writing to your dashboard.
+    ``CLAWMETRY_ALLOW_CROSS_ORIGIN_WRITES=1`` opts out for an embedder that
+    genuinely needs it; see docs/EGRESS.md.
+    """
+    if request.method in _SAFE_METHODS:
+        return False
+    if str(
+        os.environ.get("CLAWMETRY_ALLOW_CROSS_ORIGIN_WRITES", "")
+    ).strip().lower() in ("1", "true", "yes"):
+        return False
+    origin = (request.headers.get("Origin") or "").strip()
+    if not origin:
+        return False
+    try:
+        from urllib.parse import urlparse as _urlparse
+
+        netloc = _urlparse(origin).netloc
+    except Exception:
+        return True  # unparseable Origin — fail closed
+    return netloc.lower() != (request.host or "").lower()
+
+
 @app.before_request
 def _check_auth():
     """Require valid gateway token for all /api/* routes when GATEWAY_TOKEN is set."""
+    # CSRF guard first: it applies to EVERY state-changing request, including
+    # the loopback callers that skip the token check below and the paths
+    # (auth-check, gateway config, fleet API) that return early from it.
+    if request.path.startswith("/api/") or request.path.startswith("/v1/"):
+        if _cross_origin_write_blocked():
+            return jsonify(
+                {
+                    "error": (
+                        "Cross-origin write refused. This endpoint changes state "
+                        "and may only be called from the dashboard itself."
+                    ),
+                    "crossOriginBlocked": True,
+                }
+            ), 403
     if request.path == "/api/auth/check":
         return  # Auth check endpoint is always accessible
     if request.path == "/api/gw/config":
@@ -13080,7 +10079,7 @@ FLEET_HTML = r"""
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ClawMetry Fleet</title>
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Noto+Sans+Arabic:wght@400;500;700&family=Noto+Sans+Hebrew:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/fonts.css">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Manrope', sans-serif; background: #0f1117; color: #e0e0e0; padding: 24px; }
@@ -13350,6 +10349,95 @@ def _build_model_billing(model_usage):
         summary = "likely_oauth_or_included"
 
     return model_billing, summary
+
+
+def _get_billing_coverage(model_billing, today_cost, week_cost, month_cost,
+                          fallback_all_covered_when_no_models=False):
+    """Detect the user's active subscription plan and split reported
+    API-equivalent cost into ``covered_usd`` (paid for by the plan → $0
+    out-of-pocket) vs ``out_of_pocket_usd`` (actual incremental spend).
+
+    Users on Claude Max / ChatGPT Plus / Cursor Pro etc. see alarming
+    "$X.YZ" cost numbers on the Cost tab even though their subscription
+    already covers those calls — the incremental cost is $0. This helper
+    is what lets the UI paint a green "Covered by <plan>" badge and stop
+    the panic. Same detection path the fleet heartbeat uses on-device
+    (`clawmetry.sync._build_billing_payload`), so device and dashboard
+    agree on the plan label.
+
+    Split heuristic: proportional to token share of models the per-model
+    billing pass classified as OAuth/included (`apiKeyConfigured=False`).
+    When the caller has no per-model tokens (local_store fast path),
+    ``fallback_all_covered_when_no_models`` treats a detected subscription
+    as covering the full amount — coarse but honest to the device UX.
+
+    Always returns a dict; never raises. Cost fields are floats in USD.
+    """
+    try:
+        from clawmetry.sync import _build_billing_payload  # noqa: WPS433
+        payload = _build_billing_payload({}) or {}
+    except Exception:
+        payload = {}
+
+    account_plan = payload.get("account_plan") if isinstance(payload, dict) else None
+    runtimes_bm = payload.get("runtimes") or {} if isinstance(payload, dict) else {}
+
+    total_tokens = sum(int(m.get("tokens") or 0) for m in (model_billing or []))
+    covered_tokens = sum(
+        int(m.get("tokens") or 0)
+        for m in (model_billing or [])
+        if not m.get("apiKeyConfigured")
+    )
+    any_sub_now = any((rt or {}).get("mode") == "subscription" for rt in runtimes_bm.values())
+    any_metered_now = any((rt or {}).get("mode") == "metered" for rt in runtimes_bm.values())
+    if total_tokens > 0:
+        ratio = covered_tokens / total_tokens
+    elif (fallback_all_covered_when_no_models or (any_sub_now and not any_metered_now)) and any_sub_now:
+        # No per-model token activity yet, but we've detected a subscription
+        # and no metered runtime — treat as fully covered so the "you're
+        # covered by <plan>" banner still paints on a quiet day/fresh install.
+        ratio = 1.0
+    else:
+        ratio = 0.0
+
+    def _split(total):
+        t = float(total or 0.0)
+        c = round(t * ratio, 6)
+        return {
+            "covered_usd": c,
+            "out_of_pocket_usd": round(max(0.0, t - c), 6),
+        }
+
+    any_sub = any((rt or {}).get("mode") == "subscription" for rt in runtimes_bm.values())
+    any_metered = any((rt or {}).get("mode") == "metered" for rt in runtimes_bm.values())
+    sub_labels = [
+        (rt or {}).get("label")
+        for rt in runtimes_bm.values()
+        if (rt or {}).get("mode") == "subscription" and (rt or {}).get("label")
+    ]
+    metered_labels = [
+        (rt or {}).get("label")
+        for rt in runtimes_bm.values()
+        if (rt or {}).get("mode") == "metered" and (rt or {}).get("label")
+    ]
+
+    return {
+        "detected": bool(account_plan) or any_sub,
+        "account_plan": account_plan,
+        "runtimes": runtimes_bm,
+        "subscription_labels": sub_labels,
+        "metered_labels": metered_labels,
+        "any_subscription": any_sub,
+        "any_metered": any_metered,
+        # True when we're confident every dollar shown is covered by a
+        # subscription (no metered runtime detected AND every model with
+        # token usage looks OAuth/included).
+        "all_covered": bool(any_sub) and not any_metered and ratio > 0.999,
+        "covered_token_share": round(ratio, 4),
+        "today": _split(today_cost),
+        "week": _split(week_cost),
+        "month": _split(month_cost),
+    }
 
 
 # ── Enhanced Cost Tracking Utilities ─────────────────────────────────────
@@ -15115,22 +12203,134 @@ for _sig in _THREAT_SIGNATURES:
     ]
 
 
-def _scan_events_for_threats(events):
-    """Scan brain-history events against threat signatures. Returns list of threat matches."""
+# Action labels a signature's ``tool_types`` may declare. These come from the
+# LEGACY JSONL parser's ``tool_to_type()`` (routes/brain.py) and predate the
+# DuckDB-first read path.
+_THREAT_ACTION_TYPES = frozenset(
+    {"EXEC", "READ", "WRITE", "BROWSER", "SEARCH", "MSG", "SPAWN", "TOOL"}
+)
+
+# Rows that are agent *speech*, not agent *action*. Running action signatures
+# over these is how you flag the model for merely discussing ``~/.ssh/id_rsa``.
+# Content-borne risk (PII, injection, leaked keys) is the content scanners'
+# job — see ``_scan_content_for_policy_events``.
+_THREAT_NON_ACTION_TYPES = frozenset(
+    {"MESSAGE", "THINKING", "USER", "ASSISTANT", "SUMMARY", "COMPACT", "SYSTEM"}
+)
+
+# Tool-CALL rows as the DuckDB fast path emits them (routes/brain.py's
+# ``evt_type = event_type.upper()``). Only the call is an agent ACTION.
+#
+# TOOL_RESULT is deliberately absent, and so is ERROR (which routes/brain.py
+# derives from a failed TOOL_RESULT). A result is data the agent RECEIVED, not
+# something it did, and results are big free-text blobs — a page of docs, web
+# search output, a source file. Scanning them for action patterns produced
+# nothing but noise: live on a real node, all four hits were TOOL_RESULT rows
+# and all four were false positives (a Devin CLI docs page and a geocoding
+# result matched "browser reaching an admin panel"; a Python source file
+# matched "credential file access" at CRITICAL). Content-borne risk in results
+# is the policy scanners' job — see ``_scan_content_for_policy_events``.
+_THREAT_TOOL_TYPES = frozenset({"TOOL_CALL", "TOOL.CALL", "TOOL_USE"})
+
+# Returned data, not agent action. Excluded for the reason above.
+_THREAT_RESULT_TYPES = frozenset({"TOOL_RESULT", "TOOL.RESULT", "ERROR"})
+
+
+def _threat_tool_name_to_action(name):
+    """Map a tool NAME to a legacy action label. Mirrors routes/brain.py's
+    ``tool_to_type`` so both taxonomies agree on what 'EXEC' means."""
+    tn = str(name or "").lower()
+    if tn == "exec" or "shell" in tn or "bash" in tn or tn == "process":
+        return "EXEC"
+    if "read" in tn or "grep" in tn or "glob" in tn:
+        return "READ"
+    if "write" in tn or "edit" in tn:
+        return "WRITE"
+    if "browser" in tn or "canvas" in tn or "image" in tn:
+        return "BROWSER"
+    if "web_search" in tn or "web_fetch" in tn or "search" in tn or "fetch" in tn:
+        return "SEARCH"
+    if "subagent" in tn or "spawn" in tn or "task" in tn:
+        return "SPAWN"
+    return "TOOL"
+
+
+def _threat_action_types(ev):
+    """Which action labels an event should be matched against.
+
+    The signature table gates on the legacy ``EXEC/READ/WRITE/...`` vocabulary,
+    but since the DuckDB-first migration brain rows arrive as
+    ``TOOL_CALL/TOOL_RESULT/MESSAGE/THINKING/ERROR``. The two vocabularies do
+    not intersect, so every event fell through every signature and the scanner
+    could never report a threat (it was structurally pinned at 0). This bridges
+    them: legacy labels pass through, speech rows are excluded, and a tool row
+    with no tool NAME is matched against every signature — the store keeps the
+    tool INPUT in ``detail`` but not which tool produced it, and the signature
+    regexes are specific enough (``/dev/tcp/``, ``.ssh/id_rsa``) to carry the
+    precision on their own.
+    """
+    ev_type = str(ev.get("type") or "").upper()
+    if not ev_type:
+        return frozenset()
+    if ev_type in _THREAT_ACTION_TYPES:
+        return frozenset({ev_type})
+    if ev_type in _THREAT_NON_ACTION_TYPES or ev_type in _THREAT_RESULT_TYPES:
+        return frozenset()
+    if ev_type in _THREAT_TOOL_TYPES:
+        name = ev.get("tool") or ev.get("toolName") or ev.get("name")
+        if name:
+            return frozenset({_threat_tool_name_to_action(name)})
+        return _THREAT_ACTION_TYPES
+    # CHANNEL.*, NUMBAT_FINDING, daemon rows, anything else we don't recognise
+    # as an agent action: leave alone rather than guess.
+    return frozenset()
+
+
+def _threat_event_session(ev):
+    """Session id for a brain event across both read paths.
+
+    The legacy parser used ``source``; the DuckDB fast path emits ``sessionId``
+    (full) plus ``src`` (truncated to 32 chars). Reading only ``source`` meant
+    every event reported the empty string, so a node with five active sessions
+    reported ``sessions_scanned: 1``.
+    """
+    return str(
+        ev.get("sessionId") or ev.get("source") or ev.get("src") or ""
+    )
+
+
+def _threat_session_runtime(session_id):
+    """``claude_code:1bfbb30f-...`` → ``claude_code``. Bare ids → ""."""
+    sid = str(session_id or "")
+    return sid.split(":", 1)[0] if ":" in sid else ""
+
+
+def _scan_events_for_threats(events, runtime=None):
+    """Scan brain-history events against threat signatures. Returns list of threat matches.
+
+    ``runtime`` scopes the scan to one agent runtime (per FLYWHEEL §1c —
+    a number shown under the runtime switcher must belong to that runtime).
+    """
     threats = []
     sessions_seen = set()
     sessions_with_threats = set()
+    want_runtime = str(runtime or "").strip().lower()
 
     for ev in events:
-        source = ev.get("source", "")
+        source = _threat_event_session(ev)
+        if want_runtime and _threat_session_runtime(source).lower() != want_runtime:
+            continue
         sessions_seen.add(source)
-        ev_type = ev.get("type", "")
+        action_types = _threat_action_types(ev)
+        if not action_types:
+            continue
+        ev_type = str(ev.get("type") or "")
         detail = ev.get("detail", "")
         if not detail:
             continue
 
         for sig in _THREAT_SIGNATURES:
-            if ev_type not in sig["tool_types"]:
+            if not action_types.intersection(sig["tool_types"]):
                 continue
             for compiled in sig["_compiled"]:
                 if compiled.search(detail):
@@ -15145,6 +12345,8 @@ def _scan_events_for_threats(events):
                             "session": ev.get("sourceLabel", source),
                             "source": source,
                             "event_type": ev_type,
+                            "engine": "builtin",
+                            "runtime": _threat_session_runtime(source),
                         }
                     )
                     break  # One match per signature per event
@@ -15174,592 +12376,17 @@ def _scan_events_for_threats(events):
 
 
 def _scan_security_posture():
-    """Scan OpenClaw configuration for security misconfigurations.
+    """Thin delegate — the OpenClaw posture scan moved to
+    :mod:`clawmetry.security_posture` (runtime-aware posture registry).
 
-    Returns a list of checks with pass/fail/warn status, remediation hints,
-    and an overall A-F security score.
-
-    Supports three config detection strategies:
-    1. Local filesystem (native install)
-    2. Docker container (reads config via docker exec/cp)
-    3. Live gateway API (works for any deployment, including Hostinger/VPS Docker)
+    Kept as a function on this module so existing callers keep working:
+    routes/infra.py's legacy path, clawmetry/sync.py's shadow scan
+    (``getattr(dashboard, "_scan_security_posture")``), and tests.
+    Behaviour is identical: this returns the openclaw provider's result.
     """
-    checks = []
-    is_docker = False
+    from clawmetry.security_posture import get_posture
 
-    # --- Locate openclaw.json config ---
-    config_data = None
-    config_path = None
-
-    # Strategy 1: Local filesystem
-    for cf in [
-        os.path.expanduser("~/.openclaw/openclaw.json"),
-        os.path.expanduser("~/.clawdbot/openclaw.json"),
-        os.path.expanduser("~/.clawdbot/clawdbot.json"),
-    ]:
-        try:
-            with open(cf) as f:
-                config_data = json.load(f)
-                config_path = cf
-                break
-        except Exception:
-            continue
-
-    # Strategy 2: Docker container (if not found locally)
-    if config_data is None:
-        try:
-            import subprocess as _sp
-
-            # Find OpenClaw containers
-            out = _sp.run(
-                ["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if out.returncode == 0:
-                for line in out.stdout.strip().splitlines():
-                    parts = line.split("\t")
-                    if len(parts) < 3:
-                        continue
-                    cid, name, image = parts[0], parts[1], parts[2]
-                    if not any(
-                        k in (name + image).lower()
-                        for k in ["openclaw", "clawd", "claw"]
-                    ):
-                        continue
-                    # Try to read config from inside container
-                    for container_path in [
-                        "/root/.openclaw/openclaw.json",
-                        "/home/node/.openclaw/openclaw.json",
-                        "/data/openclaw.json",
-                        "/app/openclaw.json",
-                    ]:
-                        try:
-                            cat_out = _sp.run(
-                                ["docker", "exec", cid, "cat", container_path],
-                                capture_output=True,
-                                text=True,
-                                timeout=8,
-                            )
-                            if cat_out.returncode == 0 and cat_out.stdout.strip():
-                                config_data = json.loads(cat_out.stdout)
-                                config_path = f"docker:{cid[:12]}:{container_path}"
-                                is_docker = True
-                                break
-                        except Exception:
-                            continue
-                    if config_data:
-                        break
-        except (FileNotFoundError, Exception):
-            pass  # Docker not available
-
-    # Strategy 3: Live gateway API (works for any deployment including remote Docker)
-    if config_data is None:
-        try:
-            gw_cfg = _load_gw_config()
-            gw_url = gw_cfg.get("url", GATEWAY_URL)
-            gw_token = gw_cfg.get("token", GATEWAY_TOKEN)
-            if gw_url and gw_token:
-                import urllib.request
-
-                req = urllib.request.Request(
-                    f"{gw_url}/api/config",
-                    headers={
-                        "Authorization": f"Bearer {gw_token}",
-                        "Accept": "application/json",
-                    },
-                )
-                with urllib.request.urlopen(req, timeout=8) as resp:
-                    if resp.status == 200:
-                        config_data = json.loads(resp.read().decode())
-                        config_path = f"gateway:{gw_url}"
-                        # Check if gateway reports Docker environment
-                        runtime = config_data.get("runtime", {})
-                        if runtime.get("container") or os.path.exists("/.dockerenv"):
-                            is_docker = True
-        except Exception:
-            pass
-
-    if config_data is None:
-        return {
-            "score": "U",
-            "score_label": "Unknown",
-            "score_color": "#64748b",
-            "checks": [
-                {
-                    "id": "config_found",
-                    "label": "Configuration file",
-                    "status": "fail",
-                    "detail": "No openclaw.json found (checked local files, Docker containers, and gateway API)",
-                    "remediation": "Ensure OpenClaw is installed and configured. For Docker: verify the container is running. For remote: configure GATEWAY_URL and GATEWAY_TOKEN.",
-                    "severity": "critical",
-                    "weight": 20,
-                }
-            ],
-            "passed": 0,
-            "failed": 1,
-            "warnings": 0,
-            "total": 1,
-        }
-
-    # Config found — add pass check with source info
-    source_label = (
-        "local file"
-        if not config_path.startswith(("docker:", "gateway:"))
-        else (
-            "Docker container" if config_path.startswith("docker:") else "gateway API"
-        )
-    )
-    checks.append(
-        {
-            "id": "config_found",
-            "label": "Configuration file",
-            "status": "pass",
-            "detail": f"Config loaded from {source_label} ({config_path})",
-            "remediation": None,
-            "severity": "critical",
-            "weight": 20,
-        }
-    )
-
-    # Docker-specific checks
-    if is_docker:
-        checks.append(
-            {
-                "id": "docker_isolation",
-                "label": "Container isolation",
-                "status": "pass",
-                "detail": "OpenClaw is running inside a Docker container (network/filesystem isolation).",
-                "remediation": None,
-                "severity": "high",
-                "weight": 5,
-            }
-        )
-
-    gateway = config_data.get("gateway", {})
-    plugins = config_data.get("plugins", {})
-
-    # Check 1: Gateway auth token configured
-    auth_token = (
-        gateway.get("auth", {}).get("token")
-        or gateway.get("authToken")
-        or os.environ.get("OPENCLAW_AUTH_TOKEN")
-    )
-    if auth_token and len(str(auth_token)) >= 8:
-        checks.append(
-            {
-                "id": "auth_enabled",
-                "label": "Gateway authentication",
-                "status": "pass",
-                "detail": "Auth token is configured (length: {})".format(
-                    len(str(auth_token))
-                ),
-                "remediation": None,
-                "severity": "critical",
-                "weight": 25,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "id": "auth_enabled",
-                "label": "Gateway authentication",
-                "status": "fail",
-                "detail": "No auth token configured. Anyone on the network can control your agent.",
-                "remediation": "Set gateway.auth.token in openclaw.json to a strong random string (32+ chars).",
-                "severity": "critical",
-                "weight": 25,
-            }
-        )
-
-    # Check 2: Auth token strength (not default/weak)
-    weak_tokens = {
-        "test",
-        "password",
-        "12345678",
-        "changeme",
-        "openclaw",
-        "clawdbot",
-        "default",
-        "admin",
-    }
-    if auth_token:
-        token_str = str(auth_token).lower()
-        if token_str in weak_tokens or len(token_str) < 16:
-            checks.append(
-                {
-                    "id": "auth_strength",
-                    "label": "Auth token strength",
-                    "status": "warn",
-                    "detail": "Token is too short or uses a common/default value.",
-                    "remediation": "Use a cryptographically random token: openssl rand -hex 32",
-                    "severity": "high",
-                    "weight": 15,
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "id": "auth_strength",
-                    "label": "Auth token strength",
-                    "status": "pass",
-                    "detail": "Token appears strong ({} chars)".format(len(token_str)),
-                    "remediation": None,
-                    "severity": "high",
-                    "weight": 15,
-                }
-            )
-
-    # Check 3: Gateway bind address (should be localhost, not 0.0.0.0)
-    # In Docker, binding to 0.0.0.0 is expected (Docker manages port exposure)
-    bind_host = gateway.get("host") or gateway.get("bind") or "127.0.0.1"
-    if bind_host in ("0.0.0.0", "::") and is_docker:
-        checks.append(
-            {
-                "id": "bind_address",
-                "label": "Gateway bind address",
-                "status": "pass",
-                "detail": "Gateway binds to {} inside Docker container (Docker manages network exposure via port mapping).".format(
-                    bind_host
-                ),
-                "remediation": None,
-                "severity": "critical",
-                "weight": 20,
-            }
-        )
-    elif bind_host in ("0.0.0.0", "::"):
-        checks.append(
-            {
-                "id": "bind_address",
-                "label": "Gateway bind address",
-                "status": "fail",
-                "detail": "Gateway binds to {} (all interfaces). Exposed to the network.".format(
-                    bind_host
-                ),
-                "remediation": 'Set gateway.host to "127.0.0.1" unless you need remote access. Use a reverse proxy with TLS for remote.',
-                "severity": "critical",
-                "weight": 20,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "id": "bind_address",
-                "label": "Gateway bind address",
-                "status": "pass",
-                "detail": "Gateway binds to {} (local only)".format(bind_host),
-                "remediation": None,
-                "severity": "critical",
-                "weight": 20,
-            }
-        )
-
-    # Check 4: Exec tool permissions
-    tools_config = config_data.get("tools", {})
-    exec_policy = tools_config.get("exec", {})
-    exec_security = exec_policy.get("security") or exec_policy.get("mode") or "full"
-    if exec_security == "full":
-        checks.append(
-            {
-                "id": "exec_permissions",
-                "label": "Exec tool permissions",
-                "status": "warn",
-                "detail": 'Exec security is "full" (unrestricted shell access).',
-                "remediation": 'Consider "allowlist" mode with specific commands, or "deny" for high-risk environments.',
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-    elif exec_security == "deny":
-        checks.append(
-            {
-                "id": "exec_permissions",
-                "label": "Exec tool permissions",
-                "status": "pass",
-                "detail": "Exec tool is disabled (deny mode).",
-                "remediation": None,
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "id": "exec_permissions",
-                "label": "Exec tool permissions",
-                "status": "pass",
-                "detail": "Exec security mode: {}".format(exec_security),
-                "remediation": None,
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-
-    # Check 5: TLS / HTTPS for gateway
-    gw_port = gateway.get("port", 18789)
-    gw_tls = gateway.get("tls", {})
-    has_tls = bool(gw_tls.get("cert") or gw_tls.get("key") or gw_tls.get("enabled"))
-    if has_tls:
-        checks.append(
-            {
-                "id": "tls_enabled",
-                "label": "TLS encryption",
-                "status": "pass",
-                "detail": "TLS is configured for the gateway.",
-                "remediation": None,
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-    elif bind_host in ("0.0.0.0", "::") and is_docker:
-        checks.append(
-            {
-                "id": "tls_enabled",
-                "label": "TLS encryption",
-                "status": "warn",
-                "detail": "No TLS configured on gateway (Docker). TLS is typically handled by the hosting provider or reverse proxy.",
-                "remediation": "Verify your hosting provider (Hostinger, etc.) or reverse proxy terminates TLS before reaching the container.",
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-    elif bind_host in ("0.0.0.0", "::"):
-        checks.append(
-            {
-                "id": "tls_enabled",
-                "label": "TLS encryption",
-                "status": "fail",
-                "detail": "No TLS configured and gateway is network-exposed. Traffic is unencrypted.",
-                "remediation": "Configure gateway.tls.cert and gateway.tls.key, or use a reverse proxy (nginx/caddy) with TLS.",
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "id": "tls_enabled",
-                "label": "TLS encryption",
-                "status": "pass",
-                "detail": "TLS not needed (gateway is localhost only).",
-                "remediation": None,
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-
-    # Check 6: Plugin/channel security (telegram/discord tokens not in plaintext env)
-    plugin_entries = plugins.get("entries", {})
-    exposed_secrets = []
-    for pname, pconf in plugin_entries.items():
-        if isinstance(pconf, dict):
-            for key in ["token", "apiKey", "api_key", "secret", "webhook_secret"]:
-                val = pconf.get(key)
-                if (
-                    val
-                    and isinstance(val, str)
-                    and not val.startswith("$")
-                    and not val.startswith("env:")
-                ):
-                    exposed_secrets.append("{}.{}".format(pname, key))
-    if exposed_secrets:
-        checks.append(
-            {
-                "id": "secrets_in_config",
-                "label": "Secrets in config file",
-                "status": "warn",
-                "detail": "{} secret(s) stored as plaintext in config: {}".format(
-                    len(exposed_secrets), ", ".join(exposed_secrets[:3])
-                ),
-                "remediation": 'Use environment variables instead. E.g., set TELEGRAM_TOKEN env var and reference as "$TELEGRAM_TOKEN" in config.',
-                "severity": "medium",
-                "weight": 5,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "id": "secrets_in_config",
-                "label": "Secrets in config file",
-                "status": "pass",
-                "detail": "No plaintext secrets detected in plugin config.",
-                "remediation": None,
-                "severity": "medium",
-                "weight": 5,
-            }
-        )
-
-    # Check 7: Workspace permissions (AGENTS.md, SOUL.md not world-readable)
-    oc_home = os.path.expanduser("~/.openclaw")
-    if os.name == "nt":
-        # POSIX mode bits are meaningless on Windows: st_mode reports 0o777
-        # for every normal directory, so the world-readable branch below
-        # would warn (and dock the score) on every Windows install with a
-        # chmod remediation that cannot be run. Access there is governed by
-        # NTFS ACLs, and the user-profile dir is owner-scoped by default.
-        if os.path.isdir(oc_home):
-            checks.append(
-                {
-                    "id": "workspace_perms",
-                    "label": "Workspace permissions",
-                    "status": "pass",
-                    "detail": "Access to the OpenClaw home directory is governed by Windows ACLs (user-profile scoped).",
-                    "remediation": None,
-                    "severity": "medium",
-                    "weight": 5,
-                }
-            )
-    elif os.path.isdir(oc_home):
-        try:
-            mode = oct(os.stat(oc_home).st_mode)[-3:]
-            if mode[-1] != "0":  # world-readable
-                checks.append(
-                    {
-                        "id": "workspace_perms",
-                        "label": "Workspace permissions",
-                        "status": "warn",
-                        "detail": "OpenClaw home directory is world-readable (mode: {})".format(
-                            mode
-                        ),
-                        "remediation": "Run: chmod 700 ~/.openclaw",
-                        "severity": "medium",
-                        "weight": 5,
-                    }
-                )
-            else:
-                checks.append(
-                    {
-                        "id": "workspace_perms",
-                        "label": "Workspace permissions",
-                        "status": "pass",
-                        "detail": "Workspace directory permissions are restrictive (mode: {})".format(
-                            mode
-                        ),
-                        "remediation": None,
-                        "severity": "medium",
-                        "weight": 5,
-                    }
-                )
-        except Exception:
-            checks.append(
-                {
-                    "id": "workspace_perms",
-                    "label": "Workspace permissions",
-                    "status": "warn",
-                    "detail": "Could not check workspace permissions.",
-                    "remediation": "Run: chmod 700 ~/.openclaw",
-                    "severity": "medium",
-                    "weight": 5,
-                }
-            )
-    else:
-        checks.append(
-            {
-                "id": "workspace_perms",
-                "label": "Workspace permissions",
-                "status": "pass",
-                "detail": "Default workspace directory not found (custom location or containerized).",
-                "remediation": None,
-                "severity": "medium",
-                "weight": 5,
-            }
-        )
-
-    # Check 8: Node/remote access configuration
-    nodes_config = config_data.get("nodes", {})
-    auto_approve = nodes_config.get("autoApprove", False)
-    if auto_approve:
-        checks.append(
-            {
-                "id": "node_auto_approve",
-                "label": "Node auto-approve",
-                "status": "warn",
-                "detail": "Nodes are auto-approved without manual review.",
-                "remediation": "Set nodes.autoApprove to false so you review each device before granting access.",
-                "severity": "medium",
-                "weight": 5,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "id": "node_auto_approve",
-                "label": "Node auto-approve",
-                "status": "pass",
-                "detail": "Node pairing requires manual approval.",
-                "remediation": None,
-                "severity": "medium",
-                "weight": 5,
-            }
-        )
-
-    # Check 9: Elevated exec permissions
-    elevated = tools_config.get("elevated", {}) or exec_policy.get("elevated", {})
-    elevated_enabled = (
-        elevated.get("enabled", False) if isinstance(elevated, dict) else bool(elevated)
-    )
-    if elevated_enabled:
-        checks.append(
-            {
-                "id": "elevated_exec",
-                "label": "Elevated (sudo) exec",
-                "status": "warn",
-                "detail": "Elevated/sudo exec is enabled. Agent can run commands as root.",
-                "remediation": "Disable unless absolutely necessary. Use specific sudoers rules instead of blanket elevation.",
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "id": "elevated_exec",
-                "label": "Elevated (sudo) exec",
-                "status": "pass",
-                "detail": "Elevated exec is disabled.",
-                "remediation": None,
-                "severity": "high",
-                "weight": 10,
-            }
-        )
-
-    # --- Calculate score ---
-    total_weight = sum(c["weight"] for c in checks)
-    earned = sum(c["weight"] for c in checks if c["status"] == "pass")
-    # warnings get half credit
-    earned += sum(c["weight"] * 0.5 for c in checks if c["status"] == "warn")
-    pct = (earned / total_weight * 100) if total_weight > 0 else 0
-
-    if pct >= 90:
-        score, label, color = "A", "Excellent", "#22c55e"
-    elif pct >= 75:
-        score, label, color = "B", "Good", "#84cc16"
-    elif pct >= 60:
-        score, label, color = "C", "Fair", "#f59e0b"
-    elif pct >= 40:
-        score, label, color = "D", "Poor", "#f97316"
-    else:
-        score, label, color = "F", "Critical", "#ef4444"
-
-    passed = sum(1 for c in checks if c["status"] == "pass")
-    failed = sum(1 for c in checks if c["status"] == "fail")
-    warnings = sum(1 for c in checks if c["status"] == "warn")
-
-    return {
-        "score": score,
-        "score_label": label,
-        "score_color": color,
-        "score_pct": round(pct, 1),
-        "checks": checks,
-        "passed": passed,
-        "failed": failed,
-        "warnings": warnings,
-        "total": len(checks),
-        "config_path": config_path,
-        "is_docker": is_docker,
-        "scanned_at": datetime.now().isoformat(),
-    }
+    return get_posture("openclaw")
 
 
 # (bp_security /api/security/posture moved to routes/infra.py)
@@ -17238,18 +13865,29 @@ def _generate_savings_opportunities():
 
 
 def _get_cost_summary():
-    """Calculate cost summary from metrics store."""
-    now = datetime.now(CET)
-    today = now.strftime("%Y-%m-%d")
-    week_start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    month_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    """Calculate cost summary from metrics store.
+
+    Windows come from ``clawmetry.cost_windows`` so this panel agrees with
+    the budget panel, the cost-optimization route and the cloud snapshot.
+    It used to compute its own: a fixed ``UTC+1`` "today" (no DST, wrong for
+    every non-European user) plus ROLLING 7/30-day weeks and months, while
+    every other cost surface used calendar windows. On a Saturday that alone
+    made this panel's "week" span 8 calendar days against the cloud's 6.
+    """
+    from clawmetry.cost_windows import now_local, window_start_days
+
+    now = now_local()
+    today, week_start, month_start = window_start_days(now)
 
     costs = {"today": 0, "week": 0, "month": 0, "projected": 0}
 
     with _metrics_lock:
         for entry in metrics_store.get("cost", []):
+            # Same timezone as the window boundaries above, or entries near
+            # midnight land in a different day than the window they are being
+            # compared against.
             entry_date = datetime.fromtimestamp(
-                entry.get("timestamp", 0) / 1000, CET
+                entry.get("timestamp", 0) / 1000, now.tzinfo
             ).strftime("%Y-%m-%d")
             entry_cost = entry.get("usd", 0)
 
@@ -17262,13 +13900,15 @@ def _get_cost_summary():
 
     # Project monthly cost based on current daily average
     if costs["month"] > 0:
-        days_in_period = min(
-            30,
-            (now - datetime.strptime(month_start, "%Y-%m-%d").replace(tzinfo=CET)).days
-            + 1,
-        )
+        # Project from month-to-date over the days actually elapsed in THIS
+        # calendar month, then scale to the month's real length. The old form
+        # divided by a rolling-30 window and multiplied by a flat 30.
+        from calendar import monthrange
+        from clawmetry.cost_windows import days_elapsed_in_month
+
+        days_in_period = days_elapsed_in_month(now)
         daily_avg = costs["month"] / days_in_period
-        costs["projected"] = daily_avg * 30
+        costs["projected"] = daily_avg * monthrange(now.year, now.month)[1]
 
     return costs
 
@@ -17437,7 +14077,7 @@ def _get_expensive_operations():
                             break
 
                 tokens = token_entry.get("total", 0) if token_entry else 0
-                time_ago = datetime.fromtimestamp(timestamp / 1000, CET).strftime(
+                time_ago = datetime.fromtimestamp(timestamp / 1000).astimezone().strftime(
                     "%H:%M"
                 )
 
@@ -17777,6 +14417,105 @@ def _get_recent_log_files(days=7):
     return log_files
 
 
+# ── OTLP compatibility listener (issue #4780) ────────────────────────────
+#
+# The receiver has always been reachable at /v1/* on the dashboard port, but
+# every OpenTelemetry SDK and collector defaults to http://localhost:4318. That
+# gap meant an already-instrumented app could not be observed until someone
+# discovered OTEL_EXPORTER_OTLP_ENDPOINT and pointed it at :8900 -- an env var
+# between the user and "it just works".
+#
+# So we also listen on 4318, serving ONLY the receiver blueprint. A span
+# arriving there takes the identical handler / decoder / store path as one
+# arriving on the dashboard port; nothing about the mapping is duplicated.
+
+# Conventional OTLP/HTTP port. Override with CLAWMETRY_OTLP_PORT (0 = pick an
+# ephemeral port, which the tests use). CLAWMETRY_OTLP_PORT_DISABLE=1 turns the
+# listener off for anyone who wants the port left alone.
+_OTLP_COMPAT_DEFAULT_PORT = 4318
+_otlp_compat_server = None
+
+
+def _build_otlp_compat_app():
+    """A minimal Flask app exposing the OTLP receiver and nothing else.
+
+    Deliberately NOT the dashboard app: a second surface serving the UI and
+    /api/* would widen what is reachable for no gain. Everything except /v1/*
+    (and the small /api/otel-status probe on the same blueprint) 404s here.
+
+    The main app's auth guard is registered too, so the loopback-trusted /
+    token-required rule is one rule, not two: binding this listener somewhere
+    other than loopback cannot silently open an unauthenticated ingest.
+    """
+    from flask import Flask as _Flask
+    from routes.meta import bp_otel as _bp_otel
+
+    otlp_app = _Flask("clawmetry_otlp_compat")
+    otlp_app.register_blueprint(_bp_otel)
+    otlp_app.before_request(_check_auth)
+    return otlp_app
+
+
+def _start_otlp_compat_listener(host=None, port=None, debug=False):
+    """Serve the OTLP receiver on the conventional port in a daemon thread.
+
+    Returns the waitress server (for tests) or ``None`` when the listener is
+    disabled, unavailable, or the port is already held. Never raises: a machine
+    already running an OTel Collector keeps its collector, and ClawMetry says so
+    once rather than failing to boot.
+    """
+    global _otlp_compat_server
+    if str(os.environ.get("CLAWMETRY_OTLP_PORT_DISABLE", "")).strip().lower() in (
+        "1", "true", "yes",
+    ):
+        return None
+    # Flask's debug reloader runs main() in BOTH the supervisor and the child.
+    # Only the child serves the dashboard, so let it own the port; otherwise the
+    # supervisor grabs 4318 and the child logs "already in use" on every reload.
+    if debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return None
+    if port is None:
+        try:
+            port = int(os.environ.get("CLAWMETRY_OTLP_PORT", _OTLP_COMPAT_DEFAULT_PORT))
+        except (TypeError, ValueError):
+            port = _OTLP_COMPAT_DEFAULT_PORT
+    # Loopback by default even when the dashboard binds 0.0.0.0. Widening the
+    # ingest surface has to be a deliberate act, not a side effect of the
+    # dashboard's --host.
+    host = host or os.environ.get("CLAWMETRY_OTLP_HOST", "127.0.0.1")
+
+    import logging as _logging
+    log = _logging.getLogger("clawmetry.dashboard")
+    try:
+        from waitress import create_server as _create_server
+    except ImportError:
+        log.debug("waitress missing; OTLP compat listener not started")
+        return None
+    try:
+        server = _create_server(
+            _build_otlp_compat_app(), host=host, port=port,
+            threads=4, channel_timeout=60,
+        )
+    except OSError as e:
+        # Port in use is the common, expected case: the user already runs an
+        # OTel Collector. Not an error -- the dashboard port still serves /v1/*.
+        log.info(
+            "OTLP port %s:%s is already in use (%s); ClawMetry is still "
+            "receiving OTLP on the dashboard port", host, port, e,
+        )
+        return None
+    except Exception as e:
+        log.warning("OTLP compat listener failed to start: %s", e)
+        return None
+
+    threading.Thread(
+        target=server.run, name="clawmetry-otlp-4318", daemon=True,
+    ).start()
+    _otlp_compat_server = server
+    log.info("OTLP receiver listening on http://%s:%s/v1/traces", host, port)
+    return server
+
+
 # ── CLI Entry Point ─────────────────────────────────────────────────────
 
 BANNER = r"""
@@ -17800,14 +14539,14 @@ ARCHITECTURE_OVERVIEW = """\
 
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
-  │  Your OpenClaw      │ ──────────->  │                     │ ──────────->  │                     │
-  │  agents             │              │  ClawMetry          │              │  Your browser       │
+  │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
+  │  Any of 30 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
   │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
   │  Nothing changes.   │              │  Serves dashboard.  │              │                     │
   └─────────────────────┘              └─────────────────────┘              └─────────────────────┘
 
-  Runs locally on the same machine as OpenClaw. Your data never leaves your box.
+  Runs locally on the same machine as your agents. Your data never leaves your box.
   Docs: https://clawmetry.com/how-it-works
 """
 
@@ -17822,6 +14561,16 @@ Commands:
   restart        Restart the background service
   status         Show service status, port, and uptime
   uninstall      Remove the background service
+
+Cloud:
+  login                  Log in / sign up for ClawMetry Cloud (email or Google/GitHub)
+  connect                Activate cloud sync with an API key (scripted/advanced)
+  disconnect             Stop cloud sync and remove the account key
+  doctor                 Diagnose cloud connectivity (DNS/proxy/TLS, detects
+                         corporate TLS interception)
+  --turn-on-cloud-sync   Resume cloud sync (keeps your login)
+  --turn-off-cloud-sync  Pause cloud sync — nothing leaves this machine;
+                         the local dashboard keeps working
 
 Options:
   --port <port>        Port to listen on (default: 8900)
@@ -17840,7 +14589,17 @@ Examples:
 Docs: https://docs.clawmetry.com
 """
 
-PID_FILE = "/tmp/clawmetry.pid"
+# Windows has no /tmp, so the literal path resolved to C:\tmp and every read
+# failed into the bare except below — _read_pid() always returned None, which
+# is what silently disabled the stale-instance reclaim at startup (two dev
+# servers could then bind the same port and requests would land on whichever
+# Windows picked). tempfile.gettempdir() honours %TEMP% there; POSIX keeps the
+# exact path it has always used so existing pid files stay discoverable.
+PID_FILE = (
+    os.path.join(_tempfile.gettempdir(), "clawmetry.pid")
+    if os.name == "nt"
+    else "/tmp/clawmetry.pid"
+)
 LAUNCHD_LABEL = "com.clawmetry.dashboard"
 LAUNCHD_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{LAUNCHD_LABEL}.plist")
 SYSTEMD_SERVICE = os.path.expanduser(
@@ -18046,25 +14805,142 @@ def _write_cloud_token(token):
         json.dump(data, f, indent=2)
 
 
+# In-memory account-email cache for /api/cloud-cta/status. `fail_at` throttles
+# cloud lookups on offline machines (retry at most once a minute) so opening
+# the profile menu never blocks on a dead network for every click.
+_ACCOUNT_EMAIL_CACHE = {"token": "", "email": "", "fail_at": 0.0}
+
+
+def _account_email_for_token(token):
+    """Resolve the sign-in email behind a cm_ key, '' if unknowable.
+
+    The profile menu needs a "who am I" for cloud-OAuth accounts that hold
+    no local license (license `sub` is empty there) — without this the
+    header says "Not signed in" on a fully signed-in, cloud-connected node
+    (founder report 2026-08-09). Resolution order:
+
+      1. ``~/.clawmetry/config.json`` → ``account_email`` (written at
+         connect time and by the claim watcher in clawmetry/sync.py).
+      2. Cloud ``/api/cloud/account?token=`` (best-effort, cached; the
+         result is persisted back into config.json when that file exists
+         so restarts skip the network hop).
+
+    Placeholder identities (``agent+<hash>@clawmetry.auto`` / ``.linked``)
+    are reported as '' — they are internal pre-claim accounts, not
+    something to show a human. Never raises.
+    """
+    if not token:
+        return ""
+
+    def _real(email):
+        e = (email or "").strip()
+        low = e.lower()
+        if low.endswith("@clawmetry.auto") or low.endswith("@clawmetry.linked"):
+            return ""
+        return e
+
+    daemon_cfg = os.path.expanduser("~/.clawmetry/config.json")
+    try:
+        with open(daemon_cfg) as f:
+            cfg = json.load(f)
+        # Only trust the stored email when it belongs to THIS key — after a
+        # reconnect under a different account the old email would be stale.
+        if cfg.get("api_key") == token:
+            e = _real(cfg.get("account_email"))
+            if e:
+                return e
+    except Exception:
+        cfg = None
+
+    if _ACCOUNT_EMAIL_CACHE["token"] == token:
+        if _ACCOUNT_EMAIL_CACHE["email"]:
+            return _ACCOUNT_EMAIL_CACHE["email"]
+        if time.time() - _ACCOUNT_EMAIL_CACHE["fail_at"] < 60:
+            return ""
+
+    email = ""
+    try:
+        import urllib.parse as _up
+        import urllib.request as _ur
+        from clawmetry.endpoints import app_url as _app_url
+
+        url = _app_url() + "/api/cloud/account?token=" + _up.quote(token)
+        with _ur.urlopen(url, timeout=3) as resp:
+            body = json.loads(resp.read() or b"{}")
+        email = _real(body.get("email") if isinstance(body, dict) else "")
+    except Exception:
+        email = ""
+
+    _ACCOUNT_EMAIL_CACHE.update(
+        {"token": token, "email": email,
+         "fail_at": 0.0 if email else time.time()}
+    )
+    if email and isinstance(cfg, dict) and cfg.get("api_key") == token:
+        # Best-effort persist so the daemon and future dashboards see it
+        # without a network hop; config.json stays 0o600 via save_config.
+        try:
+            from clawmetry.sync import save_config
+
+            cfg["account_email"] = email
+            save_config(cfg)
+        except Exception:
+            pass
+    return email
+
+
+def _selfhost_intent():
+    """True when this install's recorded intent is self-host (local-only).
+
+    Two signals, either wins: the nocloud marker (the daemon-facing egress
+    switch), or a recorded selfhost_* choice in ~/.clawmetry/onboarding.json
+    (survives even if some flow clears the marker). Used to pick the
+    default rail for sign-in flows that did not explicitly choose one:
+    founder report 2026-08-09 — a self-host install that signed back in
+    via the profile menu rode the managed rail, which called
+    enable_cloud() and silently started pushing snapshots. Identity and
+    egress are separate choices; sign-in alone must never flip egress on.
+    Never raises.
+    """
+    try:
+        from clawmetry.config import is_cloud_disabled
+
+        if is_cloud_disabled():
+            return True
+    except Exception:
+        pass
+    try:
+        from routes.onboarding import _read_choice_file
+
+        choice = str(_read_choice_file().get("choice", "")).strip().lower()
+        return choice.startswith("selfhost")
+    except Exception:
+        return False
+
+
 # ── One-click cloud connect via GitHub/Google OAuth (dashboard CTA) ────────────
 # The local "Enable Cloud Sync" modal can sign the user up AND connect this node
 # in one click. We reuse the same loopback browser-bridge as `clawmetry connect`:
 # start a one-shot 127.0.0.1 listener, hand the cloud OAuth flow our port via
 # cli_port=<port>, and the cloud callback redirects the freshly-minted cm_ key
-# back to loopback. The key only ever travels over 127.0.0.1. On capture we run
-# the full connect (register node -> ~/.clawmetry/config.json -> start daemon).
-# The dashboard polls _OAUTH_BRIDGE for status.
-_OAUTH_BRIDGE = {"status": "idle", "provider": "", "node_id": "", "enc_key": "", "error": ""}
+# back to loopback. The key only ever travels over 127.0.0.1. What happens on
+# capture depends on the bridge mode: "managed" runs the full connect (register
+# node -> ~/.clawmetry/config.json -> enable cloud -> start daemon); "selfhost"
+# (the onboarding gate's self-host card) keeps egress off and rides the trial
+# rail instead. The dashboard polls _OAUTH_BRIDGE for status.
+_OAUTH_BRIDGE = {"status": "idle", "provider": "", "mode": "", "node_id": "",
+                 "enc_key": "", "trial": "", "error": ""}
 
 
-def _full_connect_with_key(api_key):
-    """Register this node with a verified cm_ key and start syncing.
+def _persist_identity_with_key(api_key):
+    """Register the account/node for a verified cm_ key and persist it.
 
-    Mirrors the non-interactive parts of `clawmetry connect`: validate/register
-    the node, preserve or auto-generate the E2E encryption key, write
-    ~/.clawmetry/config.json, mirror the token into openclaw.json (so the
-    dashboard cloud-proxy works), and ensure the sync daemon is running.
-    Returns (node_id, enc_key). Never raises for non-fatal issues.
+    The shared identity half of both connect flavours: validate/register the
+    node (best-effort — network hiccups still save config so it syncs once
+    reachable), preserve or auto-generate the E2E encryption key, write
+    ~/.clawmetry/config.json, and mirror the token into openclaw.json (so
+    the dashboard cloud-proxy works). Deliberately does NOT touch the
+    nocloud marker or the daemon — callers own the egress decision.
+    Returns (node_id, enc_key).
     """
     import platform
     import socket
@@ -18085,7 +14961,6 @@ def _full_connect_with_key(api_key):
         result = validate_key(api_key, hostname=hostname, existing_node_id=saved_node_id)
         node_id = result.get("node_id") or saved_node_id or hostname
     except Exception:
-        # Network/server hiccup: save config anyway so it syncs once reachable.
         node_id = saved_node_id or hostname
 
     enc_key = saved_enc or generate_encryption_key()
@@ -18096,11 +14971,89 @@ def _full_connect_with_key(api_key):
         "connected_at": __import__("datetime").datetime.now().isoformat(),
         "encryption_key": enc_key,
     }
+    # Resolve + store the sign-in email now, while we know the network is up
+    # (we just OAuth'd through it) — the profile menu reads it via
+    # /api/cloud-cta/status and must not show "Not signed in" on a
+    # signed-in node (founder report 2026-08-09).
+    try:
+        _ACCOUNT_EMAIL_CACHE.update({"token": "", "email": "", "fail_at": 0.0})
+        acct_email = _account_email_for_token(api_key)
+        if acct_email:
+            config["account_email"] = acct_email
+    except Exception:
+        pass
     save_config(config)
     try:
         _write_cloud_token(api_key)
     except Exception:
         pass
+    return node_id, enc_key
+
+
+def _activate_trial_for_key(api_key) -> str:
+    """Mint-or-reuse the account's 7-day Pro trial for ``api_key``.
+
+    Mirrors ``clawmetry.cli._activate_signup_trial`` — same
+    ``/api/license/trial/signup`` endpoint, same idempotent server
+    semantics — but takes the key as an argument so in-process pairing
+    paths (dashboard cloud modal OTP, OAuth loopback bridge) can call it
+    without having to first round-trip through
+    ``~/.clawmetry/config.json``. Returns
+    ``'active' | 'expired' | 'unavailable'`` for the caller to surface;
+    every failure path returns ``'unavailable'`` (never raises).
+
+    Founder ask 2026-08-12: cloud users MUST get the same 7-day Pro
+    trial that self-host users get on sign-in, so they can experience
+    the full product before deciding to pay. Previously the cloud rail
+    only enabled sync and left the account on FREE.
+    """
+    if not (api_key or "").startswith("cm_"):
+        return "unavailable"
+    try:
+        import urllib.request as _ur
+        from clawmetry import license as _lic
+
+        req = _ur.Request(
+            _lic._cloud_base() + "/api/license/trial/signup",
+            data=json.dumps({"api_key": api_key}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read().decode())
+        if not (isinstance(body, dict) and body.get("ok")):
+            return "unavailable"
+        if body.get("expired"):
+            return "expired"
+        if not body.get("key"):
+            return "unavailable"
+        ok, _msg = _lic.activate(body["key"], node_id=_lic._node_id())
+        return "active" if ok else "unavailable"
+    except Exception:
+        return "unavailable"
+
+
+def _full_connect_with_key(api_key):
+    """Register this node with a verified cm_ key and start syncing.
+
+    Mirrors the non-interactive parts of `clawmetry connect`: persist the
+    identity (_persist_identity_with_key), mint-or-reuse the account's
+    7-day Pro trial (same rail as the CLI's ``_activate_signup_trial``
+    and as ``_selfhost_signin_with_key``), opt into egress, and ensure
+    the sync daemon is running. Returns (node_id, enc_key, trial) where
+    trial is ``'active' | 'expired' | 'unavailable'``. Never raises for
+    non-fatal issues.
+    """
+    node_id, enc_key = _persist_identity_with_key(api_key)
+
+    # Mint-or-reuse the 7-day Pro trial so cloud users get the same
+    # "unlock every runtime for 7 days" onboarding self-host already
+    # gets. Founder ask 2026-08-12 — without this the cloud rail was
+    # asymmetric: self-host signup started the trial, cloud signup did
+    # not, so cloud users couldn't experience the full product before
+    # the paywall. Runs BEFORE _restart_sync_daemon so the daemon sees
+    # the freshly activated license on its first poll.
+    trial = _activate_trial_for_key(api_key)
 
     # Clear the local-only marker so the daemon actually pushes to cloud. A
     # local-only install writes ~/.clawmetry/nocloud; without this the connect
@@ -18115,6 +15068,20 @@ def _full_connect_with_key(api_key):
     # (Re)start the sync daemon so it re-reads the new key AND re-evaluates
     # cloud mode. If it is already running in local-only mode, merely "starting
     # if absent" would leave it local-only forever, so we restart unconditionally.
+    _restart_sync_daemon()
+
+    return node_id, enc_key, trial
+
+
+def _restart_sync_daemon():
+    """Restart the sync daemon so it re-reads ~/.clawmetry/config.json.
+
+    Cross-platform: launchctl kickstart on macOS, systemctl restart on
+    Linux, kill+relaunch elsewhere. Best-effort, never raises — callers
+    (cloud connect, E2E key regenerate) proceed either way since the config
+    file write already succeeded and a stale in-memory daemon just means
+    the next natural restart picks up the change.
+    """
     try:
         if _is_macos():
             if os.path.exists(SYNC_LAUNCHD_PLIST):
@@ -18133,15 +15100,57 @@ def _full_connect_with_key(api_key):
     except Exception:
         pass
 
-    return node_id, enc_key
+
+def _selfhost_signin_with_key(api_key):
+    """Self-host sign-in: identity without egress, then the trial rail.
+
+    Mirrors `clawmetry connect` answered with keep-local (identity is what
+    unlocks runtimes; egress is a separate choice): touch the nocloud
+    marker BEFORE persisting the key — the daemon must never observe a
+    cm_ key without the marker, or it would happily start pushing — then
+    register the identity and mint-or-reuse the account's 7-day trial via
+    /api/license/trial/signup (idempotent server-side, same rail as the
+    CLI) and activate it locally. Returns (node_id, trial) where trial is
+    'active' | 'expired' | 'unavailable'.
+    """
+    try:
+        from clawmetry.config import NOCLOUD_MARKER_PATH as _marker
+        import pathlib as _pl
+
+        _p = _pl.Path(str(_marker))
+        _p.parent.mkdir(parents=True, exist_ok=True)
+        _p.touch(exist_ok=True)
+    except Exception:
+        pass
+
+    node_id, _enc = _persist_identity_with_key(api_key)
+
+    # Same trial rail as _full_connect_with_key (cloud) and
+    # clawmetry.cli._activate_signup_trial — mint-or-reuse the 7-day
+    # Pro trial. Delegated to the shared helper so cloud + self-host
+    # never drift on trial semantics again (founder ask 2026-08-12).
+    trial = _activate_trial_for_key(api_key)
+
+    # Same as the email-OTP trial path: make sure the local ingest daemon is
+    # running (it stays local-only under the marker written above).
+    try:
+        from routes.trial import _ensure_local_daemon
+
+        _ensure_local_daemon()
+    except Exception:
+        pass
+    return node_id, trial
 
 
-def _start_oauth_bridge(provider):
+def _start_oauth_bridge(provider, mode="managed"):
     """Start the loopback OAuth bridge and return the cloud start URL (or None).
 
     The caller (dashboard JS) opens the returned URL in a new browser tab. A
-    background thread captures the loopback callback, runs _full_connect_with_key,
-    and updates the module-level _OAUTH_BRIDGE the status route reports.
+    background thread captures the loopback callback and updates the
+    module-level _OAUTH_BRIDGE the status route reports. mode picks what
+    happens with the captured key: "managed" runs _full_connect_with_key
+    (register node + enable cloud sync); "selfhost" runs
+    _selfhost_signin_with_key (identity + local trial, egress stays off).
     """
     import http.server
     import threading
@@ -18150,12 +15159,15 @@ def _start_oauth_bridge(provider):
 
     global _OAUTH_BRIDGE
     provider = (provider or "").lower()
+    mode = "selfhost" if (mode or "").lower() == "selfhost" else "managed"
     if provider not in ("github", "google"):
-        _OAUTH_BRIDGE = {"status": "error", "provider": provider,
-                         "node_id": "", "enc_key": "", "error": "Unsupported provider"}
+        _OAUTH_BRIDGE = {"status": "error", "provider": provider, "mode": mode,
+                         "node_id": "", "enc_key": "", "trial": "",
+                         "error": "Unsupported provider"}
         return None
 
-    app_base = os.environ.get("CLAWMETRY_APP_BASE", "https://app.clawmetry.com").rstrip("/")
+    from clawmetry.endpoints import app_url as _resolve_app_url
+    app_base = _resolve_app_url()
     captured = {}
 
     class _Handler(http.server.BaseHTTPRequestHandler):
@@ -18182,13 +15194,14 @@ def _start_oauth_bridge(provider):
     try:
         srv = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
     except OSError:
-        _OAUTH_BRIDGE = {"status": "error", "provider": provider,
-                         "node_id": "", "enc_key": "", "error": "Could not start local listener"}
+        _OAUTH_BRIDGE = {"status": "error", "provider": provider, "mode": mode,
+                         "node_id": "", "enc_key": "", "trial": "",
+                         "error": "Could not start local listener"}
         return None
 
     port = srv.server_address[1]
-    _OAUTH_BRIDGE = {"status": "waiting", "provider": provider,
-                     "node_id": "", "enc_key": "", "error": ""}
+    _OAUTH_BRIDGE = {"status": "waiting", "provider": provider, "mode": mode,
+                     "node_id": "", "enc_key": "", "trial": "", "error": ""}
 
     def _run():
         global _OAUTH_BRIDGE
@@ -18201,16 +15214,25 @@ def _start_oauth_bridge(provider):
             srv.server_close()
         tok = captured.get("token", "")
         if not tok.startswith("cm_"):
-            _OAUTH_BRIDGE = {"status": "error", "provider": provider, "node_id": "",
-                             "enc_key": "", "error": "Sign-in was not completed."}
+            _OAUTH_BRIDGE = {"status": "error", "provider": provider, "mode": mode,
+                             "node_id": "", "enc_key": "", "trial": "",
+                             "error": "Sign-in was not completed."}
             return
         try:
-            node_id, enc_key = _full_connect_with_key(tok)
-            _OAUTH_BRIDGE = {"status": "connected", "provider": provider,
-                             "node_id": node_id, "enc_key": enc_key, "error": ""}
+            if mode == "selfhost":
+                node_id, trial = _selfhost_signin_with_key(tok)
+                _OAUTH_BRIDGE = {"status": "connected", "provider": provider,
+                                 "mode": mode, "node_id": node_id, "enc_key": "",
+                                 "trial": trial, "error": ""}
+            else:
+                node_id, enc_key, trial = _full_connect_with_key(tok)
+                _OAUTH_BRIDGE = {"status": "connected", "provider": provider,
+                                 "mode": mode, "node_id": node_id,
+                                 "enc_key": enc_key, "trial": trial, "error": ""}
         except Exception as e:  # pragma: no cover - defensive
-            _OAUTH_BRIDGE = {"status": "error", "provider": provider, "node_id": "",
-                             "enc_key": "", "error": str(e)[:200]}
+            _OAUTH_BRIDGE = {"status": "error", "provider": provider, "mode": mode,
+                             "node_id": "", "enc_key": "", "trial": "",
+                             "error": str(e)[:200]}
 
     threading.Thread(target=_run, daemon=True).start()
     return f"{app_base}/api/oauth/{provider}/start?cli_port={port}"
@@ -18545,11 +15567,31 @@ def _start_daemon_background():
     import subprocess
     import pathlib as _pl
 
+    # Without a config the spawned daemon crash-loops (load_config raises)
+    # and the local store never fills; and `python -m` puts the CWD on
+    # sys.path, so a dashboard launched from a source checkout would spawn
+    # the repo's (possibly stale) sync.py instead of the installed wheel.
+    try:
+        from clawmetry.sync import ensure_local_config
+        ensure_local_config()
+    except Exception:
+        pass
+    spawn_kwargs = {"cwd": os.path.expanduser("~")}
+    if os.name == "nt":
+        # start_new_session is POSIX-only and silently no-ops on Windows:
+        # the daemon stayed tied to this console (killed when it closes)
+        # and, when the dashboard itself runs hidden, python.exe popped a
+        # visible console window. Mirror cli.py _start_subprocess.
+        spawn_kwargs["creationflags"] = (
+            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
+    else:
+        spawn_kwargs["start_new_session"] = True
     proc = subprocess.Popen(
         [sys.executable, "-m", "clawmetry.sync"],
         stdout=open(os.devnull, "w"),
         stderr=open(os.devnull, "w"),
-        start_new_session=True,
+        **spawn_kwargs,
     )
     pid_file = _pl.Path.home() / ".clawmetry" / "sync.pid"
     pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -18942,6 +15984,11 @@ def _run_server(args):
     except (ValueError, OSError):
         pass  # stdout may be closed/redirected on Windows
 
+    # Start the OTLP compatibility listener BEFORE the banner so the banner can
+    # report the port it actually bound (or stay quiet when it stepped aside for
+    # an existing collector). Issue #4780.
+    _otlp_listener = _start_otlp_compat_listener(debug=args.debug)
+
     try:
         local_ip = get_local_ip()
         public_ip = get_public_ip()
@@ -18952,8 +15999,17 @@ def _run_server(args):
             print(
                 f"  -> http://{public_ip}:{args.port}  (Public - ensure port is open)"
             )
-        if _HAS_OTEL_PROTO:
-            print(f"  -> OTLP endpoint: http://{local_ip}:{args.port}/v1/metrics")
+        # OTLP ingest is always on now: OTLP/JSON needs no extra (#4781), and
+        # the receiver also listens on the conventional 4318 (#4780). Print the
+        # endpoint an OTel SDK would use with no configuration at all.
+        if _otlp_listener is not None:
+            print(
+                f"  -> OTLP endpoint: http://localhost:{_otlp_listener.effective_port}"
+                "  (OTEL_EXPORTER_OTLP_ENDPOINT)"
+            )
+        else:
+            print(f"  -> OTLP endpoint: http://localhost:{args.port}"
+                  "  (OTEL_EXPORTER_OTLP_ENDPOINT)")
         # One-click login URL when gateway token was detected (#1356 PR-D).
         # Defense against shoulder-surfing screenshots: only the framed URL is
         # printed (never the bare token), and only on the interactive startup
@@ -19043,6 +16099,19 @@ def _init_data_provider():
 
 
 def main():
+    # Enterprise TLS/proxy bootstrap (idempotent; also runs in cli.main).
+    # Covers direct `python3 dashboard.py` runs so telemetry/cloud-proxy
+    # POSTs work behind corporate TLS-intercepting proxies.
+    try:
+        from clawmetry.net import configure_outbound_network
+        configure_outbound_network(role="dashboard")
+    except Exception:
+        pass
+    try:
+        from clawmetry.winconsole import hide_child_console_windows
+        hide_child_console_windows()
+    except Exception:
+        pass
     # -----------------------------------------------------------------------
     # Build a shared parent parser for options that apply to all subcommands
     # (and to foreground mode when no subcommand is given).

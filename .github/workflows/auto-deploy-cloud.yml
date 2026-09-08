@@ -8,7 +8,43 @@ on:
       - 'clawmetry/**'
       - 'setup.py'
       - 'CHANGELOG.md'
+  # The push trigger alone CANNOT pin a release. A `[RELEASE]` merge fires it
+  # while PyPI still serves the PREVIOUS version, so it re-pins the old one and
+  # goes green; the `chore: bump to vX [skip ci]` commit that actually creates
+  # the new version is skip-ci and can never re-trigger it. Net effect: the
+  # cloud silently stays a version behind until someone dispatches this by hand
+  # (2026-08-22: 0.12.755 shipped and cloud sat on 0.12.754).
+  #
+  # The workflow_run trigger below DOES NOT FIRE, and is kept only as
+  # belt-and-braces. It is the identical declaration release-canary.yml carried
+  # when it produced ZERO runs for 0.12.757: activity driven by GITHUB_TOKEN
+  # does not cascade into new workflow runs. Believing it worked is why the
+  # cloud still silently sat a release behind on 0.12.829 (2026-09-08) despite
+  # a guard that asserted this trigger existed.
+  #
+  # The path that ACTUALLY works is the explicit `gh workflow run` dispatch at
+  # the end of release-on-merge.yml, after the upload — the only moment when
+  # PyPI's "latest" is the release that just published.
+  workflow_run:
+    workflows: ["Auto-release on [RELEASE] merge"]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Exact version to pin. release-on-merge passes the version it just
+          published; leave blank on a manual run to use PyPI's latest.
+        required: false
+        type: string
+
+# Every cross-repo action below (checkout of clawmetry-cloud, branch push, PR
+# create/close/merge) authenticates as `secrets.CLOUD_REPO_PAT`, which this
+# block does not govern — a PAT carries its own scopes. The only thing that
+# rides on GITHUB_TOKEN is the checkout of THIS repo, which needs `contents:
+# read` and nothing more. Deliberately kept read-only so a future step cannot
+# quietly acquire write on clawmetry via the ambient token.
+permissions:
+  contents: read
 
 jobs:
   pin-version:
@@ -16,14 +52,52 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout OSS repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nothing in this job pushes from the OSS working copy -- every git
+          # command below runs after `cd clawmetry-cloud`, against the second
+          # checkout and its CLOUD_REPO_PAT. So this credential has no consumer
+          # and only stands in .git/config for the rest of the job. Do NOT copy
+          # this to the checkout below: that one's credential is the one the
+          # force-push uses.
+          persist-credentials: false
 
       - name: Get OSS version
         id: oss_version
+        # Source of truth is the LATEST PUBLISHED PyPI version, not the
+        # checkout's __version__: release-on-merge publishes the bump to
+        # PyPI without committing it back to dashboard.py, so the file is
+        # permanently one-or-more releases stale. Reading it here was the
+        # root cause of the 2026-07-31 stale-pin rollbacks (with the
+        # no-downgrade guard below, a stale source would instead mean the
+        # pin never advances at all). The Dockerfile installs from PyPI,
+        # so the published version is exactly what a pin means.
         run: |
-          VERSION=$(python3 -c "import re; m=re.search(r'__version__ = \"([^\"]+)\"', open('dashboard.py').read()); print(m.group(1))")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "OSS version: $VERSION"
+          # An explicit input always wins. release-on-merge passes the version
+          # it just published, which removes the last timing hazard here:
+          # dispatching AFTER the upload is still not late enough, because
+          # PyPI's `info.version` metadata endpoint lags the upload by minutes.
+          # Measured 2026-09-08 on 0.12.831 — the post-upload dispatch fired
+          # correctly at 04:19:08 and this step read "0.12.830" eight minutes
+          # after the release job started, so the no-downgrade guard skipped and
+          # the cloud stayed a release behind, which is the exact symptom the
+          # dispatch was added to cure. The publisher knows its own version;
+          # asking a lagging index to re-derive it is what created the race.
+          VERSION="${{ inputs.version }}"
+          if [ -n "$VERSION" ]; then
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "Pinning the version passed by the publisher: $VERSION"
+          else
+            # Manual or push-triggered run: fall back to the latest published
+            # version. Downloaded to a file and then parsed, rather than piped
+            # straight into an interpreter. The payload is data either way, but
+            # `curl | python3` is indistinguishable from piping remote code into
+            # a shell to any reader or scanner looking at this line.
+            curl -fsSL https://pypi.org/pypi/clawmetry/json -o /tmp/pypi-clawmetry.json
+            VERSION=$(python3 -c "import json; print(json.load(open('/tmp/pypi-clawmetry.json'))['info']['version'])")
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "Latest published OSS version: $VERSION"
+          fi
 
       # The cloud Dockerfile does `pip install clawmetry==<version>`, and the
       # cloud PR's CI also installs it to audit routes. On a release commit this
@@ -33,22 +107,71 @@ jobs:
       - name: Wait for version on PyPI
         run: |
           V="${{ steps.oss_version.outputs.version }}"
+          # Poll what PIP reads, not the JSON API. pypi.org/pypi/<v>/json goes
+          # live minutes BEFORE the simple index that pip resolves against, so
+          # this wait used to pass while `pip install clawmetry==$V` still
+          # failed with "No matching distribution found" -- which is exactly
+          # how the cloud pin PR for 0.12.755 went red on the MOAT roundtrip
+          # and API v1 E2E jobs and had to be re-run by hand (2026-08-22).
+          # `pip index versions` resolves through the same index pip installs
+          # from, so a pass here means the pin PR's CI can actually install it.
           for i in $(seq 1 30); do
-            if curl -fsSL "https://pypi.org/pypi/clawmetry/$V/json" >/dev/null 2>&1; then
-              echo "clawmetry==$V is on PyPI"; exit 0
+            # Prove installability the same way the cloud PR's CI will, so a
+            # pass here cannot mean anything weaker. A substring grep would
+            # also match 0.12.75 inside 0.12.755.
+            if pip download "clawmetry==$V" --no-deps --dest /tmp/_pinwait >/dev/null 2>&1; then
+              echo "clawmetry==$V is installable from the index"; exit 0
             fi
-            echo "waiting for clawmetry==$V on PyPI (attempt $i)..."; sleep 20
+            echo "waiting for clawmetry==$V on the pip index (attempt $i)..."; sleep 20
           done
           echo "::warning::clawmetry==$V not on PyPI after wait; continuing (cloud CI will gate the merge)"
 
       - name: Checkout cloud repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: vivekchand/clawmetry-cloud
           token: ${{ secrets.CLOUD_REPO_PAT }}
           path: clawmetry-cloud
 
+      # NEVER pin downwards. This job's target can be BEHIND what is already
+      # deployed, and the pin PR it opens can auto-merge MINUTES AFTER a newer
+      # pin, silently rolling prod back. Two ways that happens: historically
+      # the version came from __version__ at the triggering commit (stale by
+      # construction — see "Get OSS version" above, which now reads PyPI); and
+      # still today, the push trigger fires on a [RELEASE] merge BEFORE
+      # release-on-merge uploads, so PyPI's "latest" here is the PREVIOUS
+      # release. release-on-merge dispatches this workflow again after the
+      # upload, so the correct pin follows; this guard is what makes the early,
+      # already-stale run harmless.
+      # (Burned 2026-07-31: #1842 pinned 0.12.605 at 13:01Z; the stale
+      # auto/pin-clawmetry-0.12.597 PR #1843 merged at 13:07Z and reverted
+      # the enterprise release off prod.) Belt: exit here when the target
+      # is not strictly newer than cloud main's current pin, and close any
+      # stale open pin PR for this version. Braces: the cloud repo's
+      # pin-no-downgrade CI check red-blocks stale pin PRs at merge time.
+      - name: Skip unless strictly newer than cloud's current pin
+        env:
+          GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
+        run: |
+          V="${{ steps.oss_version.outputs.version }}"
+          CURRENT=$(grep -oE 'clawmetry==[0-9.]+' clawmetry-cloud/Dockerfile | head -1 | cut -d= -f3)
+          echo "target=$V cloud-main-pin=$CURRENT"
+          newer=$(python3 -c "
+          v=tuple(map(int,'$V'.split('.'))); c=tuple(map(int,'$CURRENT'.split('.')))
+          print('yes' if v>c else 'no')")
+          if [ "$newer" != "yes" ]; then
+            echo "Target $V is not newer than the current pin $CURRENT — refusing to pin downwards."
+            BRANCH="auto/pin-clawmetry-$V"
+            PR=$(gh pr list --repo vivekchand/clawmetry-cloud --head "$BRANCH" --state open --json number -q '.[0].number' || true)
+            if [ -n "$PR" ]; then
+              gh pr close "$PR" --repo vivekchand/clawmetry-cloud \
+                --comment "Stale pin: $V <= current main pin $CURRENT. Closed by the no-downgrade guard." || true
+            fi
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Pin clawmetry version in cloud Dockerfile
+        if: env.SKIP != '1'
         run: |
           cd clawmetry-cloud
           sed -i "s/clawmetry==[0-9.]*/clawmetry==${{ steps.oss_version.outputs.version }}/" Dockerfile
@@ -57,6 +180,7 @@ jobs:
           echo "Dockerfile:"; grep clawmetry Dockerfile
 
       - name: Commit and open PR
+        if: env.SKIP != '1'
         run: |
           cd clawmetry-cloud
           git config user.email "diya-bot@clawmetry.com"
@@ -96,6 +220,7 @@ jobs:
       # PR with a failing or still-pending check. A failed/!pin-only PR is left
       # open for review rather than force-merged.
       - name: Auto-merge pin PR when cloud CI is green
+        if: env.SKIP != '1'
         env:
           GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
           REPO: vivekchand/clawmetry-cloud

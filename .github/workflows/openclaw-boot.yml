@@ -31,6 +31,11 @@ concurrency:
   group: openclaw-boot-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Least privilege: these jobs only read the repo. Any job needing more
+# must elevate with its own job-level `permissions:` block.
+permissions:
+  contents: read
+
 jobs:
   boot:
     name: Install + boot + health-check
@@ -38,13 +43,14 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup OpenClaw
         id: openclaw
         uses: ./.github/actions/setup-openclaw
         with:
-          version: latest
           gateway-token: ci-openclaw-token
 
       - name: Start gateway in background
@@ -131,7 +137,7 @@ jobs:
 
       - name: Upload gateway logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: openclaw-gateway-logs
           path: /tmp/openclaw-logs/

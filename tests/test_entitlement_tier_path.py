@@ -218,9 +218,11 @@ def test_ascending_path_unlocks_enterprise_at_top(ent):
     path = ent.tier_path(ent.TIER_OSS, ent.TIER_ENTERPRISE)
     final = path[-1]
     assert final["to"] == ent.TIER_ENTERPRISE
-    # enterprise-only features land at the terminal rung
+    # enterprise-only features land at the terminal rung. audit_logs moved to
+    # Pro on 2026-08-25, so it is added EARLIER in the walk, not here.
     assert "sso" in final["added_features"]
-    assert "audit_logs" in final["added_features"]
+    assert "siem_export" in final["added_features"]
+    assert "audit_logs" not in final["added_features"]
 
 
 def test_descending_path_loses_paid_runtimes_at_floor(ent):

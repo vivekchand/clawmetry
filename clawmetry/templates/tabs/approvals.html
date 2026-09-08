@@ -68,6 +68,11 @@
     <div id="approvals-presets-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:12px;">
     </div>
 
+    <!-- Custom (non-preset) rules — OSS-local mode lists them here so a
+         rule saved via "+ New Rule" is visible and removable, not a
+         write-only YAML entry. -->
+    <div id="approvals-custom-rules" style="margin-bottom:12px;"></div>
+
     <!-- Create custom rule form (hidden by default) -->
     <div id="create-rule-form" style="display:none;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px;">
       <div style="font-size:13px;font-weight:700;color:var(--text-primary);margin-bottom:12px;" data-i18n="approvals.create_custom_rule">Create Custom Rule</div>
@@ -92,13 +97,26 @@
           <div style="font-size:10px;color:var(--text-faint);margin-top:3px;" data-i18n="approvals.keywords_hint">Enter keywords separated by commas. The agent will be paused when any of these are detected.</div>
         </div>
         <div>
+          <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.min_risk_label">Minimum risk level</label>
+          <select id="rule-min-risk" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+            <option value="" selected data-i18n="approvals.min_risk_any">Any (match on keywords only)</option>
+            <option value="medium" data-i18n="approvals.min_risk_medium">Medium or above</option>
+            <option value="high" data-i18n="approvals.min_risk_high">High or above</option>
+            <option value="critical" data-i18n="approvals.min_risk_critical">Critical only</option>
+          </select>
+          <div style="font-size:10px;color:var(--text-faint);margin-top:3px;" data-i18n="approvals.min_risk_hint">ClawMetry scores every tool call (recursive deletes, sudo, credential access...). Set this to gate by risk with or without keywords.</div>
+        </div>
+        <div>
           <label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;" data-i18n="approvals.approval_timeout">Approval timeout</label>
           <select id="rule-timeout" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
             <option value="30" data-i18n="approvals.timeout_30s">30 seconds</option>
-            <option value="60" selected data-i18n="approvals.timeout_1m">1 minute</option>
+            <option value="60" data-i18n="approvals.timeout_1m">1 minute</option>
             <option value="120" data-i18n="approvals.timeout_2m">2 minutes</option>
             <option value="300" data-i18n="approvals.timeout_5m">5 minutes</option>
             <option value="600" data-i18n="approvals.timeout_10m">10 minutes</option>
+            <option value="3600" data-i18n="approvals.timeout_1h">1 hour</option>
+            <option value="86400" data-i18n="approvals.timeout_24h">24 hours</option>
+            <option value="604800" selected data-i18n="approvals.timeout_7d">7 days</option>
           </select>
         </div>
         <div>
@@ -116,20 +134,19 @@
     </div>
   </div>
 
-  <!-- ═══ SECTION 3: Notification Channels ═══
-       Channels are managed in the dedicated Notifications tab now —
-       duplicating the cards here just made the same decision live in two
-       places. One short link keeps the affordance discoverable. -->
+  <!-- ═══ SECTION 3: Where approvals go (per-runtime routing) ═══
+       Credentials still live in the Notifications tab (one place to set a
+       channel up); this decides which runtime's approvals reach which of
+       those channels, and whether Claude Code's own permission prompts get
+       mirrored to your phone. -->
   <div style="margin-bottom:16px;">
-    <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;" data-i18n="approvals.get_notified">Get Notified</div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--bg-secondary,#131929);border:1px solid var(--border,#1e293b);border-radius:10px;padding:12px 14px;">
-      <div style="font-size:12px;color:var(--text-secondary,#cbd5e1);" data-i18n="approvals.delivered_via">
-        Approvals are delivered via your Notifications channels (Email, Slack, Phone, PagerDuty, Telegram).
-      </div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;" data-i18n="approvals.where_they_go">Where approvals go</div>
       <button onclick="if(typeof switchTab==='function')switchTab('notifications')"
-        style="flex-shrink:0;padding:7px 14px;border:1px solid #3b82f6;background:transparent;color:#60a5fa;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;" data-i18n="approvals.configure_notifications">
-        Configure notifications →
-      </button>
+        style="background:transparent;color:#60a5fa;border:1px solid #3b82f6;padding:5px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;" data-i18n="approvals.configure_channels">Set up channels →</button>
+    </div>
+    <div id="approvals-routing-panel">
+      <div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;" data-i18n="app.loading">Loading...</div>
     </div>
   </div>
 
@@ -232,37 +249,41 @@
 
   /* ── Preset policies ── */
   var PRESETS = [
+    {key:'risk_high', name:'Require approval for high-risk actions', icon:'\ud83d\udee1\ufe0f',
+     desc:'Pauses any call ClawMetry classifies high or critical risk: recursive deletes, force pushes, sudo, credential access, cloud metadata probes. One rule, every runtime.',
+     tool:'', min_risk:'high', timeout:604800, on_timeout:'deny',
+     color:'#e11d48'},
     {key:'rm_rf', name:'Block destructive deletes', icon:'🗑',
      desc:'Stops rm -rf, shred, unlink on important paths',
-     tool:'exec', pattern:'rm\\s+-rf|shred\\s|unlink\\s+/', timeout:60, on_timeout:'deny',
+     tool:'exec', pattern:'rm\\s+-rf|shred\\s|unlink\\s+/', timeout:604800, on_timeout:'deny',
      color:'#ef4444'},
     {key:'force_push', name:'Block force pushes', icon:'⚠️',
      desc:'Requires approval before git push --force',
-     tool:'exec', pattern:'git\\s+push.*--force|git\\s+push.*-f\\b', timeout:300, on_timeout:'deny',
+     tool:'exec', pattern:'git\\s+push.*--force|git\\s+push.*-f\\b', timeout:604800, on_timeout:'deny',
      color:'#f59e0b'},
     {key:'db_mutation', name:'Block database mutations', icon:'🗃',
      desc:'Catches DROP TABLE, TRUNCATE, DELETE without WHERE',
-     tool:'exec', pattern:'DROP\\s+TABLE|TRUNCATE\\s|DELETE\\s+FROM.*(?!WHERE)', timeout:120, on_timeout:'deny',
+     tool:'exec', pattern:'DROP\\s+TABLE|TRUNCATE\\s|DELETE\\s+FROM.*(?!WHERE)', timeout:604800, on_timeout:'deny',
      color:'#f97316'},
     {key:'sudo', name:'Block sudo / root commands', icon:'🔒',
      desc:'Prevents privilege escalation via sudo or su',
-     tool:'exec', pattern:'\\bsudo\\s|\\bsu\\s+-|\\bsu\\s+root', timeout:60, on_timeout:'deny',
+     tool:'exec', pattern:'\\bsudo\\s|\\bsu\\s+-|\\bsu\\s+root', timeout:604800, on_timeout:'deny',
      color:'#dc2626'},
     {key:'secrets', name:'Protect secrets & credentials', icon:'🔑',
      desc:'Blocks access to .env, credentials, private keys',
-     tool:'', pattern:'\\.env\\b|credentials|private_key|secret_key|api_key|AWS_SECRET', timeout:60, on_timeout:'deny',
+     tool:'', pattern:'\\.env\\b|credentials|private_key|secret_key|api_key|AWS_SECRET', timeout:604800, on_timeout:'deny',
      color:'#8b5cf6'},
     {key:'pkg_install', name:'Block package installs', icon:'📦',
      desc:'Requires approval for pip install, npm install, apt install',
-     tool:'exec', pattern:'pip\\s+install|npm\\s+install|apt\\s+install|brew\\s+install', timeout:120, on_timeout:'deny',
+     tool:'exec', pattern:'pip\\s+install|npm\\s+install|apt\\s+install|brew\\s+install', timeout:604800, on_timeout:'deny',
      color:'#6366f1'},
     {key:'network', name:'Block outbound network calls', icon:'🌐',
      desc:'Catches curl, wget, fetch to external URLs',
-     tool:'exec', pattern:'\\bcurl\\s|\\bwget\\s|\\bfetch\\(|requests\\.get|httpx\\.', timeout:60, on_timeout:'deny',
+     tool:'exec', pattern:'\\bcurl\\s|\\bwget\\s|\\bfetch\\(|requests\\.get|httpx\\.', timeout:604800, on_timeout:'deny',
      color:'#0ea5e9'},
     {key:'sys_config', name:'Block system config changes', icon:'⚙️',
      desc:'Prevents writes to /etc, systemctl, crontab edits',
-     tool:'exec', pattern:'/etc/|systemctl|crontab|chmod\\s+777|chown\\s+root', timeout:60, on_timeout:'deny',
+     tool:'exec', pattern:'/etc/|systemctl|crontab|chmod\\s+777|chown\\s+root', timeout:604800, on_timeout:'deny',
      color:'#64748b'}
   ];
 
@@ -418,6 +439,78 @@
     } catch(e) { alert('Failed: ' + e); }
   };
 
+  /* ── Question-set approvals (WO-52 phase 1) ──
+   * A row whose args carry _cm_questions (served as `questions` by
+   * /api/approvals) is a structured question from the runtime — Claude
+   * Code's AskUserQuestion tool first. Render it full-fidelity and post
+   * decision='answer' with an answers map keyed by question text; the
+   * blocked PreToolUse hook resumes the session with those answers.
+   */
+  var _questionSets = {};   // approval id -> question set (rebuilt per render)
+
+  function _escAttr(s) { return escHtml(s).replace(/"/g, '&quot;'); }
+
+  function _renderQuestion(id, q, qi) {
+    var name = 'qa-' + escHtml(id) + '-' + qi;
+    var html = '<div style="margin-top:8px;padding:10px 12px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:8px;">';
+    html += '<div style="font-size:12px;font-weight:700;color:var(--text-primary);margin-bottom:6px;">'
+      + (q.header ? '<span style="background:rgba(59,130,246,0.15);color:#60a5fa;border-radius:4px;padding:1px 6px;font-size:10px;margin-right:6px;">' + escHtml(q.header) + '</span>' : '')
+      + escHtml(q.question)
+      + (q.multiSelect ? ' <span style="font-size:10px;color:var(--text-muted);font-weight:400;">(select all that apply)</span>' : '')
+      + '</div>';
+    var type = q.multiSelect ? 'checkbox' : 'radio';
+    (q.options || []).forEach(function(o) {
+      html += '<label style="display:flex;align-items:flex-start;gap:8px;margin:4px 0;cursor:pointer;">'
+        + '<input type="' + type + '" name="' + name + '" value="' + _escAttr(o.label) + '" style="margin-top:3px;cursor:pointer;">'
+        + '<span><span style="font-size:12px;color:var(--text-primary);">' + escHtml(o.label) + '</span>'
+        + (o.description ? '<span style="display:block;font-size:11px;color:var(--text-muted);">' + escHtml(o.description) + '</span>' : '')
+        + '</span></label>';
+    });
+    if (q.allow_free_text) {
+      html += '<input type="text" id="qa-ft-' + escHtml(id) + '-' + qi + '" placeholder="Or type your own answer…" style="width:100%;box-sizing:border-box;margin-top:6px;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-secondary);color:var(--text-primary);font-size:12px;">';
+    }
+    return html + '</div>';
+  }
+
+  window.sendQuestionAnswers = async function(id) {
+    var qs = _questionSets[id] || [];
+    if (!qs.length) { alert('Question set is no longer available — refresh.'); return; }
+    var answers = {};
+    for (var qi = 0; qi < qs.length; qi++) {
+      var q = qs[qi];
+      var name = 'qa-' + id + '-' + qi;
+      var ft = document.getElementById('qa-ft-' + id + '-' + qi);
+      var ftVal = ft && ft.value ? ft.value.trim() : '';
+      if (q.multiSelect) {
+        var picked = [].slice.call(document.querySelectorAll('input[name="' + name + '"]:checked'))
+          .map(function(el){ return el.value; });
+        if (ftVal) picked.push(ftVal);
+        if (!picked.length) { alert('Please answer: ' + q.question); return; }
+        answers[q.question] = picked;
+      } else {
+        var sel = document.querySelector('input[name="' + name + '"]:checked');
+        var val = sel ? sel.value : ftVal;
+        if (!val) { alert('Please answer: ' + q.question); return; }
+        answers[q.question] = val;
+      }
+    }
+    var reasonEl = document.getElementById('dec-reason-' + id);
+    var reason = reasonEl && reasonEl.value ? reasonEl.value.trim() : '';
+    try {
+      var body = {decision: 'answer', answers: answers};
+      if (reason) body.reason = reason;
+      var r = await fetch('/api/approvals/' + encodeURIComponent(id) + '/decide', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      var d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      loadApprovalsTab();
+    } catch (e) {
+      alert('Sending answers failed: ' + e);
+    }
+  };
+
   /* ── Approval row renderer ──
    * Phase 1.2 (#1343): richer per-row context.
    *   - Pretty-printed args (2-space indent, capped at 800 chars vs old 200)
@@ -426,12 +519,23 @@
    */
   function _renderRow(r, pending) {
     var statusColors = {pending:'#f59e0b', approved:'#22c55e', denied:'#ef4444',
-                        timeout:'#6b7280', expired:'#6b7280'};
+                        answered:'#3b82f6', timeout:'#6b7280', expired:'#6b7280'};
     var c = statusColors[r.status] || '#6b7280';
+    // Question-set rows (WO-52): the runtime asked a structured question;
+    // pending ones render the actual options + a "Send answers" submit.
+    var qSet = (r.questions && r.questions.length) ? r.questions : null;
+    var isQuestionRow = !!(qSet && pending);
+    if (isQuestionRow) _questionSets[r.id] = qSet;
     var argsPretty = '';
     try {
-      argsPretty = JSON.stringify(r.args || {}, null, 2);
-      if (argsPretty.length > 800) argsPretty = argsPretty.slice(0, 800) + '\n…';
+      if (r.args === undefined && r.args_preview) {
+        // Local-queue rows carry a compact preview string, not the full
+        // args blob — show it as-is instead of a misleading empty "{}".
+        argsPretty = String(r.args_preview).slice(0, 800);
+      } else {
+        argsPretty = JSON.stringify(r.args || {}, null, 2);
+        if (argsPretty.length > 800) argsPretty = argsPretty.slice(0, 800) + '\n…';
+      }
     } catch(e) {
       try { argsPretty = JSON.stringify(r.args || {}).slice(0, 800); } catch(e2) {}
     }
@@ -445,6 +549,23 @@
     }
     html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;" data-i18n="app.eschtml_r_tool_name">' + escHtml(r.tool_name || '?') + '</span>';
     html += '<span style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;" data-i18n="app.eschtml_r_status">' + escHtml(r.status) + '</span>';
+    if (r.kind === 'permission_prompt') {
+      // Not one of the user's rules: the runtime itself stopped to ask.
+      html += '<span style="background:rgba(139,92,246,0.15);color:#a78bfa;border:1px solid rgba(139,92,246,0.35);padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;">asked by the agent</span>';
+    }
+    if (qSet) {
+      // Pending chip: question count + headers, so the queue scans well.
+      var qHeads = qSet.map(function(q){return q.header || '';}).filter(Boolean).join(' · ');
+      html += '<span style="background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.35);padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;">'
+        + qSet.length + (qSet.length === 1 ? ' question' : ' questions')
+        + (qHeads ? ' · ' + escHtml(qHeads).slice(0, 60) : '') + '</span>';
+    }
+    if (r.risk && r.risk.level) {
+      var riskColors = {low:'#6b7280', medium:'#f59e0b', high:'#f97316', critical:'#ef4444'};
+      var rc = riskColors[r.risk.level] || '#6b7280';
+      var rTitle = (r.risk.reasons || []).join('; ');
+      html += '<span title="' + escHtml(rTitle) + '" style="background:' + rc + '22;color:' + rc + ';border:1px solid ' + rc + '44;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(r.risk.level) + ' risk</span>';
+    }
     if (r.policy_name) {
       html += '<span style="color:var(--text-muted);font-size:11px;" data-i18n="app.rule_eschtml_r_policy_name">rule: ' + escHtml(r.policy_name) + '</span>';
     }
@@ -459,15 +580,39 @@
     if (r.context) {
       html += '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;" data-i18n="app.eschtml_r_context">' + escHtml(r.context) + '</div>';
     }
-    html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:200px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word;">' + escHtml(argsPretty) + '</pre>';
-    if (pending) {
+    if (isQuestionRow) {
+      // Full-fidelity question form: radios for single-choice, checkboxes
+      // for multiSelect, a free-text input when the question set says so.
+      html += qSet.map(function(q, qi){ return _renderQuestion(r.id, q, qi); }).join('');
+    } else {
+      html += '<pre style="margin:0;padding:8px 10px;font-size:11px;background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:6px;overflow:auto;max-height:200px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word;">' + escHtml(argsPretty) + '</pre>';
+    }
+    if (pending && isQuestionRow) {
+      html += '<div style="margin-top:10px;">';
+      html += '<input type="text" id="dec-reason-' + escHtml(r.id) + '" placeholder="Note (optional — recorded in audit log)" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">';
+      html += '</div>';
+      html += '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">';
+      html += '<button onclick="sendQuestionAnswers(\'' + escHtml(r.id) + '\')" style="background:#3b82f6;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Send answers</button>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" title="Skip answering here — the question appears in the terminal instead" style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:7px 12px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;">Answer in terminal</button>';
+      html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:transparent;color:#ef4444;border:1px solid #ef444444;padding:7px 12px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.deny">Deny</button>';
+      if (r.expires_at) {
+        html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
+      }
+      html += '</div>';
+    } else if (pending) {
       html += '<div style="margin-top:10px;">';
       html += '<input type="text" id="dec-reason-' + escHtml(r.id) + '" placeholder="Reason (optional — recorded in audit log)" style="width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border-secondary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">';
       html += '</div>';
       html += '<div style="display:flex;gap:8px;margin-top:8px;">';
       html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\')" style="background:#22c55e;color:#062614;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.approve_2">Approve</button>';
       html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'deny\')" style="background:#ef4444;color:#fff;border:0;padding:7px 16px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.deny">Deny</button>';
-      html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;" data-i18n="app.expires_eschtml_r_expires_at_slice_11_19">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
+      if (_isOssMode()) {
+        html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\',{remember:\'session\'})" title="Approve, and skip the prompt for this exact command for the rest of this session" style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:7px 12px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.approve_for_session">Approve for session</button>';
+        html += '<button onclick="decideApproval(\'' + escHtml(r.id) + '\',\'approve\',{remember:\'always\'})" title="Approve, and create a visible always-allow rule for this exact command" style="background:var(--bg-primary);color:var(--text-secondary);border:1px solid var(--border-secondary);padding:7px 12px;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;" data-i18n="app.always_allow">Always allow</button>';
+      }
+      if (r.expires_at) {
+        html += '<span style="color:var(--text-muted);font-size:11px;align-self:center;margin-left:6px;" data-i18n="app.expires_eschtml_r_expires_at_slice_11_19">expires ' + escHtml((r.expires_at||'').slice(11,19)) + '</span>';
+      }
       html += '</div>';
     } else if (r.decided_by) {
       html += '<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Decided by ' + escHtml(r.decided_by) + ' at ' + escHtml((r.decided_at||'').slice(11,19));
@@ -480,31 +625,98 @@
     return html;
   }
 
+  /* ── OSS-local row mapping ──
+   * The local queue (routes/policy.py, backed by the DuckDB approvals
+   * table the policy watcher + pre-tool hooks write) uses different field
+   * names than the cloud API. Normalise to what _renderRow expects.
+   * `action` is "tool_name: command preview". */
+  function _mapLocalPending(r) {
+    var action = r.action || '';
+    var i = action.indexOf(':');
+    return {
+      id: r.id,
+      tool_name: i > 0 ? action.slice(0, i) : (action || '?'),
+      context: i > 0 ? action.slice(i + 1).trim() : '',
+      status: r.status || 'pending',
+      requested_at: r.created_at,
+      session_id: r.requestor_session_id,
+      args_preview: r.args_preview,
+      risk: r.risk,
+      kind: r.kind,
+      questions: r.questions
+    };
+  }
+  function _mapLocalDecision(r) {
+    var m = _mapLocalPending(r);
+    m.decided_by = r.resolver || 'local';
+    m.decided_at = r.resolved_at || '';
+    m.decision_reason = r.decision_reason;
+    return m;
+  }
+
   /* ── Main loader ── */
   window.loadApprovalsTab = async function() {
     try {
       var ossMode = _isOssMode();
       var [pending, history, policies, integrations] = await Promise.all([
+        // OSS-local: the REAL local queue — the same approvals table the
+        // policy watcher and pre-tool hooks (Claude Code PreToolUse,
+        // OpenClaw exec preset) block on. Deciding here unblocks them.
         fetchJsonWithTimeout(
-          ossMode ? '/api/nemoclaw/pending-approvals'
+          ossMode ? '/api/approvals?status=pending&limit=50'
                   : '/api/cloud/approvals?status=pending&limit=50' + _q(),
           6000).catch(function(){return {approvals:[]};}),
-        ossMode ? Promise.resolve({approvals:[]})
+        ossMode ? fetchJsonWithTimeout('/api/approvals-audit?limit=50', 6000).catch(function(){return {decisions:[]};})
                 : fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
         fetchJsonWithTimeout(
-          ossMode ? '/api/nemoclaw/rules'
+          ossMode ? '/api/approvals/policies'
                   : '/api/cloud/policies?' + _q().replace(/^&/,''),
           6000).catch(function(){return {policies:[]};}),
         ossMode ? Promise.resolve({integrations:[]})
                 : fetchJsonWithTimeout('/api/cloud/integrations?' + _q().replace(/^&/,''), 6000).catch(function(){return {integrations:[]};})
       ]);
-      var p = (pending.approvals || []).filter(function(r){return r.status==='pending';});
-      var h = ossMode ? [] : (history.approvals || []).filter(function(r){return r.status!=='pending';});
+      var p, h;
+      if (ossMode) {
+        p = (pending.approvals || []).filter(function(r){return (r.status||'pending')==='pending';}).map(_mapLocalPending);
+        h = (history.decisions || []).filter(function(r){return r.status!=='pending';}).map(_mapLocalDecision);
+        _ossPolicies = policies.policies || [];
+      } else {
+        p = (pending.approvals || []).filter(function(r){return r.status==='pending';});
+        h = (history.approvals || []).filter(function(r){return r.status!=='pending';});
+      }
+      // Runtime scope (founder 2026-08-03): approvals are per-runtime by
+      // default — rows carry the requesting session id, whose prefix names
+      // the runtime. BOTH renders (pending + history) filter identically.
+      var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+      var _rtLbl = (_rt && _rt !== 'all' && typeof _cmRuntimeLabel === 'function') ? _cmRuntimeLabel(_rt) : '';
+      if (_rt && _rt !== 'all' && typeof _cmRuntimeOf === 'function') {
+        var _match = function(r){
+          return _cmRuntimeOf({session_id: r.session_id || r.requestor_session_id}) === _rt;
+        };
+        p = p.filter(_match);
+        h = h.filter(_match);
+      }
 
       // Pending
       var pe = document.getElementById('approvals-pending-list');
       if (p.length === 0) {
-        pe.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;" data-i18n="app.no_pending_approvals_right_now">No pending approvals right now.</div>';
+        // Empty state: one line, scoped to the runtime the operator is
+        // looking at. Founder 2026-08-19: the previous paragraph explained
+        // every runtime's gate (and named OpenClaw) under a Claude Code
+        // filter — approvals are per-runtime, so the copy must be too.
+        var _gateHint = { claude_code: 'pause before they run (PreToolUse hook)',
+                          openclaw: 'pause before they run (exec-policy preset)' }[_rt]
+                        || (_rtLbl ? 'are caught as they happen' : '');
+        var _emptyTitle = _rtLbl ? 'No pending approvals for ' + escHtml(_rtLbl) + '.' : 'No pending approvals.';
+        var _emptyHint = _rtLbl
+          ? ('Turn on a protection rule on the right and risky ' + escHtml(_rtLbl) + ' calls ' + _gateHint + ', then land here for a decision.')
+          : 'Turn on a protection rule on the right and risky calls from your agents land here for a decision.';
+        pe.innerHTML = ossMode
+          ? '<div style="padding:14px 16px;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;line-height:1.5;">'
+            + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:2px;">' + _emptyTitle + '</div>'
+            + '<span>' + _emptyHint + '</span>'
+            + '</div>'
+          : '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;">' + _emptyTitle.replace(/\.$/, '') + ' right now.</div>';
         // Drop selections for IDs that are no longer pending (decided
         // elsewhere, expired, etc.) so the bulk header doesn't lie.
         _approvalsBulkSelected.clear();
@@ -529,13 +741,20 @@
 
       // Policies
       renderPresets(policies.policies || []);
+      if (ossMode) renderCustomRules(policies.policies || []);
 
       // Integrations
       renderIntegrations(integrations.integrations || []);
 
+      // Where approvals go (per-runtime routing + mirror toggle)
+      loadApprovalRouting();
+
       // History
       var he = document.getElementById('approvals-history-list');
-      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('') : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;" data-i18n="app.no_decisions_yet_enable_a_protection_rule_above_to">No decisions yet. Enable a protection rule above to get started.</div>';
+      he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('')
+        : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">'
+          + (_rtLbl ? 'No ' + escHtml(_rtLbl) + ' decisions yet.' : 'No decisions yet. Enable a protection rule above to get started.')
+          + '</div>';
 
       // Counts + badge
       document.getElementById('approvals-pending-count').textContent = p.length ? '(' + p.length + ' pending)' : '';
@@ -548,6 +767,282 @@
     } catch(e) {
       document.getElementById('approvals-pending-list').innerHTML = '<div style="padding:14px;color:var(--text-error);font-size:12px;" data-i18n="app.failed_to_load_eschtml_string_e">Failed to load: ' + escHtml(String(e)) + '</div>';
     }
+  };
+
+  /* ── Where approvals go: per-runtime channel routing ──
+   * Credentials live in the Notifications tab; this decides which
+   * runtime's approvals reach which of those channels. A runtime with no
+   * row of its own follows "Default". An empty channel list means "every
+   * channel that's set up" — so nobody has to configure twice to get
+   * paged at all.
+   *
+   * The Claude Code row carries the mirror switch: intercept Claude
+   * Code's OWN permission prompts (its PermissionRequest hook) and answer
+   * them from the phone. If nobody answers inside the window, the prompt
+   * appears in the terminal exactly as it does today. */
+  var _routing = null, _routingMeta = null;
+
+  var _CH_ICON = {telegram:'✈️', slack:'💬', discord:'🎮', webhook:'🔗',
+                  pagerduty:'📟', whatsapp:'🟢', email:'✉️', phone:'📞'};
+
+  window.loadApprovalRouting = async function() {
+    var el = document.getElementById('approvals-routing-panel');
+    if (!el) return;
+    // Cloud parity: routing is a per-NODE setting (the channels live in the
+    // node's own config and the mirror hook is installed into the runtime
+    // on that machine), so the hosted dashboard says so instead of
+    // rendering a control that would write nowhere.
+    if (!_isOssMode()) {
+      el.innerHTML = '<div style="background:var(--bg-secondary,#131929);border:1px solid var(--border,#1e293b);border-radius:10px;padding:14px;font-size:12px;color:var(--text-muted);line-height:1.7;">'
+        + 'ClawMetry Cloud delivers these approvals to the channels on your <b>Notifications</b> tab, with one-tap approve or deny.<br>'
+        + 'Per-runtime routing and answering a runtime\'s own permission prompts from your phone are configured on each node, in that node\'s local dashboard.'
+        + '</div>';
+      return;
+    }
+    try {
+      var d = await fetchJsonWithTimeout('/api/approvals/routing', 6000);
+      if (!d || !d.ok) throw new Error((d && d.error) || 'unavailable');
+      _routing = d.routing; _routingMeta = d;
+      el.innerHTML = _renderRouting(d);
+    } catch (e) {
+      el.innerHTML = '<div style="padding:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:10px;font-size:12px;color:var(--text-muted);">'
+        + 'Routing unavailable: ' + escHtml(String(e)) + '</div>';
+    }
+  };
+
+  function _rowFor(runtimeId) {
+    if (runtimeId === 'default') return _routing.default || {channels:[]};
+    return (_routing.runtimes || {})[runtimeId] || null;
+  }
+
+  function _renderRouting(d) {
+    var chans = d.channels || [];
+    var anyConfigured = chans.some(function(c){return c.configured;});
+    var html = '<div style="background:var(--bg-secondary,#131929);border:1px solid var(--border,#1e293b);border-radius:10px;padding:14px;">';
+
+    if (!anyConfigured) {
+      html += '<div style="font-size:12px;color:var(--text-muted);line-height:1.6;margin-bottom:12px;">'
+        + 'No channel is set up yet, so approvals only appear here in the dashboard. '
+        + 'Add Telegram, Slack, WhatsApp, email or a phone number in <b>Notifications</b> and they show up below.'
+        + '</div>';
+    }
+
+    // Default row + any runtime-specific rows.
+    html += _renderRoutingRow('default', 'Default (all runtimes)', d);
+    Object.keys(_routing.runtimes || {}).sort().forEach(function(rt) {
+      var label = (d.runtimes.filter(function(r){return r.id===rt;})[0]||{}).label || rt;
+      html += _renderRoutingRow(rt, label, d);
+    });
+
+    // Add-a-runtime picker.
+    var missing = (d.runtimes || []).filter(function(r){
+      return !(_routing.runtimes || {})[r.id];
+    });
+    if (missing.length) {
+      html += '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;">'
+        + '<select id="routing-add-runtime" style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">'
+        + '<option value="">Send a specific runtime somewhere else…</option>'
+        + missing.map(function(r){
+            return '<option value="' + escHtml(r.id) + '">' + escHtml(r.label) + '</option>';
+          }).join('')
+        + '</select>'
+        + '<button onclick="addRoutingRuntime()" style="padding:6px 12px;border:1px solid var(--border-secondary);background:transparent;color:var(--text-secondary);border-radius:6px;font-size:12px;cursor:pointer;">Add</button>'
+        + '</div>';
+    }
+
+    // Link base — the decision link that Slack/WhatsApp/email carry.
+    html += '<div style="margin-top:12px;font-size:11px;color:var(--text-faint);line-height:1.6;">'
+      + 'Decision links point at <code>' + escHtml(d.link_base || '') + '</code> — reachable from your phone on the same network. '
+      + 'Set <code>CLAWMETRY_PUBLIC_BASE</code> for a Tailscale or public hostname.'
+      + '</div>';
+
+    var tg = d.telegram_poller || {};
+    if (tg.last_error) {
+      html += '<div style="margin-top:8px;font-size:11px;color:#f59e0b;">Telegram buttons: ' + escHtml(tg.last_error) + '</div>';
+    } else if (tg.running) {
+      html += '<div style="margin-top:8px;font-size:11px;color:#22c55e;">Telegram buttons live'
+        + (tg.decisions ? ' · ' + tg.decisions + ' decided from chat' : '') + '</div>';
+    }
+    return html + '</div>';
+  }
+
+  function _renderRoutingRow(id, label, d) {
+    var row = _rowFor(id) || {channels: []};
+    var chosen = row.channels || [];
+    var resolved = ((d.runtimes || []).filter(function(r){return r.id===id;})[0] || {}).resolved;
+    var html = '<div style="padding:10px 0;border-top:1px solid var(--border,#1e293b);">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">'
+      + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
+      + '<span style="display:flex;gap:6px;">'
+      + '<button onclick="testRouting(\'' + escHtml(id) + '\')" style="background:transparent;border:1px solid var(--border-secondary);color:var(--text-muted);padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Test</button>'
+      + (id === 'default' ? ''
+         : '<button onclick="removeRoutingRuntime(\'' + escHtml(id) + '\')" style="background:transparent;border:1px solid var(--border-secondary);color:var(--text-faint);padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Remove</button>')
+      + '</span></div>'
+      + '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+
+    (d.channels || []).forEach(function(c) {
+      var on = chosen.indexOf(c.key) >= 0;
+      var usable = c.configured;
+      var bg = on ? 'rgba(59,130,246,0.18)' : 'transparent';
+      var bd = on ? '#3b82f6' : 'var(--border-secondary,#1e293b)';
+      var fg = usable ? (on ? '#93c5fd' : 'var(--text-muted)') : 'var(--text-faint)';
+      var title = usable ? (c.note || '') : 'Not set up yet — add it in Notifications';
+      html += '<button title="' + escHtml(title) + '" onclick="toggleRoutingChannel(\'' + escHtml(id) + '\',\'' + escHtml(c.key) + '\')"'
+        + ' style="background:' + bg + ';border:1px solid ' + bd + ';color:' + fg + ';padding:4px 10px;border-radius:999px;font-size:11px;cursor:pointer;'
+        + (usable ? '' : 'opacity:0.55;') + '">'
+        + (_CH_ICON[c.key] || '•') + ' ' + escHtml(c.key)
+        + (c.decide ? ' <span style="color:#22c55e;">·2-way</span>' : '')
+        + '</button>';
+    });
+    html += '</div>';
+
+    if (!chosen.length) {
+      html += '<div style="margin-top:6px;font-size:11px;color:var(--text-faint);">'
+        + (resolved && resolved.length
+            ? 'Everything set up: ' + resolved.map(escHtml).join(', ')
+            : 'Nothing selected — every configured channel gets it')
+        + '</div>';
+    }
+
+    // Mirror switch — Claude Code is the only runtime with a native
+    // permission-prompt hook today, so it's the only row that shows it.
+    if (id === 'claude_code' || (id === 'default' && !(_routing.runtimes||{}).claude_code)) {
+      var on = !!row.mirror_permission_prompts;
+      var secs = row.mirror_timeout_s || 180;
+      html += '<div style="margin-top:10px;padding:10px;background:var(--bg-primary,#0B0F1A);border:1px solid ' + (on ? 'rgba(34,197,94,0.35)' : 'var(--border,#1e293b)') + ';border-radius:8px;">'
+        + '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">'
+        + '<input type="checkbox" ' + (on ? 'checked' : '') + ' onchange="toggleMirror(\'' + escHtml(id) + '\', this.checked)" style="margin-top:2px;cursor:pointer;">'
+        + '<span><span style="font-size:12px;font-weight:700;color:var(--text-primary);">Answer Claude Code\'s own permission prompts from your phone</span>'
+        + '<span style="display:block;font-size:11px;color:var(--text-muted);line-height:1.5;margin-top:3px;">'
+        + 'When Claude Code would stop and ask you in the terminal, it pauses here instead and pages you. '
+        + 'No answer within <select onchange="setMirrorWindow(\'' + escHtml(id) + '\', this.value)" onclick="event.preventDefault();event.stopPropagation();" style="background:var(--bg-secondary);color:var(--text-secondary);border:1px solid var(--border-secondary);border-radius:4px;font-size:11px;padding:1px 4px;">'
+        + [60,180,300,900,3600].map(function(s){
+            return '<option value="' + s + '"' + (s===secs?' selected':'') + '>' + (s>=3600? '1 hour' : (s>=60 ? (s/60)+' min' : s+'s')) + '</option>';
+          }).join('')
+        + '</select> and the terminal prompt takes over, exactly as it does today.'
+        + '</span></span></label></div>';
+    }
+    return html + '</div>';
+  }
+
+  async function _saveRouting() {
+    var r = await fetch('/api/approvals/routing', {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(_routing)
+    });
+    var d = await r.json().catch(function(){return {};});
+    if (!r.ok || !d.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    _routing = d.routing;
+    await loadApprovalRouting();
+  }
+
+  window.toggleRoutingChannel = async function(id, channel) {
+    var row = _rowFor(id);
+    if (!row) { row = {channels: []}; _routing.runtimes[id] = row; }
+    var chosen = row.channels || [];
+    var i = chosen.indexOf(channel);
+    if (i >= 0) chosen.splice(i, 1); else chosen.push(channel);
+    row.channels = chosen;
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.toggleMirror = async function(id, on) {
+    var row = _rowFor(id);
+    if (!row) { row = {channels: []}; _routing.runtimes[id] = row; }
+    row.mirror_permission_prompts = !!on;
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.setMirrorWindow = async function(id, secs) {
+    var row = _rowFor(id);
+    if (!row) return;
+    row.mirror_timeout_s = parseInt(secs, 10) || 180;
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.addRoutingRuntime = async function() {
+    var sel = document.getElementById('routing-add-runtime');
+    if (!sel || !sel.value) return;
+    _routing.runtimes = _routing.runtimes || {};
+    _routing.runtimes[sel.value] = {channels: (_routing.default||{}).channels || []};
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.removeRoutingRuntime = async function(id) {
+    if (!(_routing.runtimes || {})[id]) return;
+    delete _routing.runtimes[id];
+    try { await _saveRouting(); } catch (e) { alert('Could not save: ' + e); }
+  };
+
+  window.testRouting = async function(id) {
+    var runtime = id === 'default' ? 'openclaw' : id;
+    try {
+      var r = await fetch('/api/approvals/routing/test', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({runtime: runtime})
+      });
+      var d = await r.json();
+      alert(d.sent && d.sent.length
+        ? 'Sent a test approval to: ' + d.sent.join(', ')
+        : (d.hint || 'Nothing was delivered — check the channel credentials in Notifications.'));
+    } catch (e) { alert('Test failed: ' + e); }
+  };
+
+  /* ── OSS-local rules state + writer ──
+   * The whole rule list lives in ~/.clawmetry/policies.yml; the server
+   * validates and rewrites it atomically on PUT (routes/policy.py). The
+   * daemon watcher re-reads it within ~2 s, including installing/removing
+   * runtime pre-tool gates (Claude Code hook, OpenClaw exec preset). */
+  var _ossPolicies = [];
+
+  async function _putOssPolicies(newList) {
+    var r = await fetch('/api/approvals/policies', {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({policies: newList})
+    });
+    if (!r.ok) {
+      var d = await r.json().catch(function(){return {};});
+      var msg = d.error || ('HTTP ' + r.status);
+      if (d.errors && d.errors.length) msg += ': ' + d.errors.join('; ');
+      throw new Error(msg);
+    }
+    _ossPolicies = newList;
+    return r;
+  }
+
+  function _isPresetRow(p) {
+    if (p.preset_key) return PRESETS.some(function(x){return x.key === p.preset_key;});
+    return PRESETS.some(function(x){return x.name === p.name;});
+  }
+
+  /* ── Render custom (non-preset) rules — OSS mode only ── */
+  function renderCustomRules(savedPolicies) {
+    var el = document.getElementById('approvals-custom-rules');
+    if (!el) return;
+    var custom = (savedPolicies || []).filter(function(p){return !_isPresetRow(p);});
+    if (!custom.length) { el.innerHTML = ''; return; }
+    var html = '<div style="font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin:2px 0 6px 2px;">Custom rules</div>';
+    html += custom.map(function(p, idx) {
+      var scope = (p.tool ? p.tool : 'any tool') + (p.runtime ? ' · ' + p.runtime : '');
+      return '<div style="display:flex;align-items:center;gap:10px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:6px;">'
+        + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + escHtml(p.name || '(unnamed)') + '</span>'
+        + '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(scope) + '</span>'
+        + (p.pattern ? '<code style="font-size:10px;color:var(--text-secondary);background:var(--bg-primary);border:1px solid var(--border-secondary);border-radius:4px;padding:1px 6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(p.pattern) + '</code>' : '')
+        + '<button onclick="removeCustomRule(' + idx + ')" style="margin-left:auto;background:transparent;color:#ef4444;border:1px solid #ef444444;padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;">Remove</button>'
+        + '</div>';
+    }).join('');
+    el.innerHTML = html;
+  }
+
+  window.removeCustomRule = async function(customIdx) {
+    var custom = (_ossPolicies || []).filter(function(p){return !_isPresetRow(p);});
+    var target = custom[customIdx];
+    if (!target) return;
+    if (!confirm('Remove rule "' + (target.name || '(unnamed)') + '"? The daemon stops enforcing it within seconds.')) return;
+    try {
+      await _putOssPolicies(_ossPolicies.filter(function(p){return p !== target;}));
+      loadApprovalsTab();
+    } catch(e) { alert('Failed to remove rule: ' + e); }
   };
 
   /* ── Toggle preset policy ── */
@@ -572,34 +1067,33 @@
     try {
       var r;
       if (ossMode) {
+        // ~/.clawmetry/policies.yml is the single source of truth: PUT the
+        // whole validated list (routes/policy.py writes it atomically; the
+        // daemon watcher — and any pre-tool gates — pick it up in ~2 s).
+        var next = (_ossPolicies || []).filter(function(p) {
+          return !(p.preset_key === presetKey || (!p.preset_key && p.name === preset.name));
+        });
         if (enabled) {
-          // Enable: upsert into ~/.clawmetry/policies.yml
-          r = await fetch('/api/nemoclaw/rules', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-              name: preset.name, tool: preset.tool,
-              pattern_type: 'command_regex', pattern: preset.pattern,
-              action: 'require_approval', timeout: preset.timeout,
-              on_timeout: preset.on_timeout, preset_key: preset.key
-            })
-          });
-        } else {
-          // Disable: remove from YAML so the local daemon stops enforcing it.
-          // (The daemon enforces all YAML entries regardless of enabled flag.)
-          r = await fetch('/api/nemoclaw/rules/' + encodeURIComponent(presetKey), {
-            method: 'DELETE', headers: {'Content-Type': 'application/json'}
-          });
+          var row = {
+            name: preset.name, tool: preset.tool,
+            action: 'require_approval', timeout: preset.timeout,
+            on_timeout: preset.on_timeout, preset_key: preset.key
+          };
+          if (preset.min_risk) { row.min_risk = preset.min_risk; }
+          else { row.pattern_type = 'command_regex'; row.pattern = preset.pattern; }
+          next.push(row);
         }
+        r = await _putOssPolicies(next);
       } else {
         r = await fetch('/api/cloud/policies', {
           method: 'POST', headers: _authHeaders(),
-          body: JSON.stringify({
+          body: JSON.stringify(Object.assign({
             name: preset.name, tool: preset.tool,
-            pattern_type: 'command_regex', pattern: preset.pattern,
             action: 'require_approval', timeout: preset.timeout,
             on_timeout: preset.on_timeout, enabled: enabled,
             preset_key: preset.key
-          })
+          }, preset.min_risk ? {min_risk: preset.min_risk}
+             : {pattern_type: 'command_regex', pattern: preset.pattern}))
         });
         if (!r.ok && r.status === 402) { showUpgradeModal(); loadApprovalsTab(); return; }
       }
@@ -625,24 +1119,34 @@
     var patternRaw = (document.getElementById('rule-pattern').value || '').trim();
     var timeout = parseInt(document.getElementById('rule-timeout').value) || 60;
     var onTimeout = document.getElementById('rule-on-timeout').value || 'deny';
+    var minRiskEl = document.getElementById('rule-min-risk');
+    var minRisk = minRiskEl ? (minRiskEl.value || '') : '';
     if (!name) { alert('Please enter a rule name.'); return; }
-    if (!patternRaw) { alert('Please enter at least one keyword to match.'); return; }
-    // Convert comma-separated keywords to regex alternation
-    var pattern = patternRaw.split(',').map(function(s){return s.trim();}).filter(Boolean).join('|');
+    if (!patternRaw && !minRisk) { alert('Enter keywords to match, or pick a minimum risk level.'); return; }
+    var rule = {
+      name: name, tool: tool, action: 'require_approval',
+      timeout: timeout, on_timeout: onTimeout
+    };
+    if (patternRaw) {
+      // Convert comma-separated keywords to regex alternation
+      rule.pattern_type = 'command_regex';
+      rule.pattern = patternRaw.split(',').map(function(s){return s.trim();}).filter(Boolean).join('|');
+    }
+    if (minRisk) rule.min_risk = minRisk;
     try {
-      var url = ossMode ? '/api/nemoclaw/rules' : '/api/cloud/policies';
-      var headers = ossMode ? {'Content-Type': 'application/json'} : _authHeaders();
-      var r = await fetch(url, {
-        method: 'POST', headers: headers,
-        body: JSON.stringify({
-          name: name, tool: tool, pattern_type: 'command_regex',
-          pattern: pattern, action: 'require_approval',
-          timeout: timeout, on_timeout: onTimeout
-        })
-      });
-      if (!r.ok) {
-        var d = await r.json().catch(function(){return {};});
-        throw new Error(d.error || ('HTTP ' + r.status));
+      if (ossMode) {
+        // Append to the local YAML rule list (replace same-name rule).
+        await _putOssPolicies(
+          (_ossPolicies || []).filter(function(p){return p.name !== name;}).concat([rule]));
+      } else {
+        var r = await fetch('/api/cloud/policies', {
+          method: 'POST', headers: _authHeaders(),
+          body: JSON.stringify(rule)
+        });
+        if (!r.ok) {
+          var d = await r.json().catch(function(){return {};});
+          throw new Error(d.error || ('HTTP ' + r.status));
+        }
       }
       document.getElementById('rule-name').value = '';
       document.getElementById('rule-pattern').value = '';
@@ -702,13 +1206,26 @@
       var reasonEl = document.getElementById('dec-reason-' + id);
       reason = reasonEl && reasonEl.value ? reasonEl.value.trim() : '';
     }
-    var body = {action: action};
-    if (reason) body.decision_reason = reason;
     try {
-      var r = await fetch('/api/cloud/approvals/' + encodeURIComponent(id) + '/decide', {
-        method: 'POST', headers: _authHeaders(),
-        body: JSON.stringify(body)
-      });
+      var r;
+      if (_isOssMode()) {
+        // Local queue decision — flips the DuckDB row; the blocked watcher
+        // thread / pre-tool hook long-poll sees it within ~3 s.
+        var localBody = {decision: action};
+        if (reason) localBody.reason = reason;
+        if (opts.remember) localBody.remember = opts.remember;
+        r = await fetch('/api/approvals/' + encodeURIComponent(id) + '/decide', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(localBody)
+        });
+      } else {
+        var body = {action: action};
+        if (reason) body.decision_reason = reason;
+        r = await fetch('/api/cloud/approvals/' + encodeURIComponent(id) + '/decide', {
+          method: 'POST', headers: _authHeaders(),
+          body: JSON.stringify(body)
+        });
+      }
       var d = await r.json();
       if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
       if (!opts.skipReload) loadApprovalsTab();
@@ -790,7 +1307,9 @@
     if (typeof document !== 'undefined' && document.hidden) return;
     var pg = document.getElementById('page-approvals');
     if (pg && pg.classList.contains('active')) return;
-    fetchJsonWithTimeout('/api/cloud/approvals?status=pending&limit=10' + _q(), 4000)
+    fetchJsonWithTimeout(_isOssMode()
+        ? '/api/approvals?status=pending&limit=10'
+        : '/api/cloud/approvals?status=pending&limit=10' + _q(), 4000)
       .then(function(d){
         var n = (d.approvals || []).length;
         var nav = document.getElementById('nav-approvals-badge');

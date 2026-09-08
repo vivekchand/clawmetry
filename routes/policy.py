@@ -58,6 +58,9 @@ def _arg_preview(args) -> str:
     """Short single-line preview of tool-call arguments — never the full body."""
     if args is None:
         return ""
+    if isinstance(args, dict) and isinstance(args.get("tool_input"), dict) \
+            and str(args.get("source") or "").endswith("-hook"):
+        args = args["tool_input"]
     if isinstance(args, dict):
         for k in ("command", "cmd", "tool", "path", "url"):
             v = args.get(k)
@@ -65,10 +68,68 @@ def _arg_preview(args) -> str:
                 return str(v)[:160]
         try:
             import json as _json
-            return _json.dumps(args, separators=(",", ":"))[:160]
+            slim = {k: v for k, v in args.items()
+                    if k not in ("_cm_risk", "_cm_ctx")}
+            if not slim:
+                return ""
+            return _json.dumps(slim, separators=(",", ":"))[:160]
         except Exception:
             return str(args)[:160]
     return str(args)[:160]
+
+
+def _row_context(r) -> dict:
+    """WHO / WHERE / WHY for one approval row, from the namespaced keys the
+    producers stamp into ``args``.
+
+    Both producers are covered: the watcher writes ``_cm_ctx``; the pre-tool
+    hook receiver has always written ``runtime`` / ``cwd`` / ``policy`` /
+    ``tool_name`` at the top of its args blob. Missing fields are omitted, not
+    guessed -- a card that cannot say where a command would run must say
+    nothing rather than imply the wrong directory.
+    """
+    args = r.get("args")
+    if not isinstance(args, dict):
+        return {}
+    ctx = args.get("_cm_ctx")
+    if not isinstance(ctx, dict):
+        ctx = {}
+    sid = str(r.get("requestor_session_id") or ctx.get("session_id") or "")
+    runtime = str(ctx.get("runtime") or args.get("runtime") or "")
+    if not runtime and ":" in sid:
+        runtime = sid.split(":", 1)[0].lower()
+    out = {
+        "tool":    str(ctx.get("tool") or args.get("tool_name") or ""),
+        "runtime": runtime,
+        "policy":  str(ctx.get("policy") or args.get("policy") or ""),
+        "cwd":     str(ctx.get("cwd") or args.get("cwd") or ""),
+    }
+    return {k: v for k, v in out.items() if v}
+
+
+def _row_risk(r) -> "dict | None":
+    """Risk verdict for an approval row.
+
+    Prefers the ``_cm_risk`` verdict stamped at write time (watcher / hook
+    receiver); rows written before the classifier shipped are classified
+    at read time from their recorded tool + args so the whole audit
+    history carries chips, not just new rows. Never raises; None only
+    when there is nothing to classify."""
+    args = r.get("args")
+    if isinstance(args, dict):
+        risk = args.get("_cm_risk")
+        if isinstance(risk, dict) and risk.get("level"):
+            return {"level": str(risk.get("level")),
+                    "reasons": [str(x) for x in (risk.get("reasons") or [])][:4]}
+    try:
+        from clawmetry.tool_risk import classify_tool_call
+        tool, raw = _row_tool_and_args(r)
+        if not tool:
+            return None
+        v = classify_tool_call(tool, raw)
+        return {"level": v["level"], "reasons": v["reasons"][:4]}
+    except Exception:
+        return None
 
 
 @bp_policy.route("/api/tool-policy")
@@ -141,7 +202,51 @@ def api_approvals_audit():
         limit = 100
     status = (request.args.get("status") or "").strip() or None
 
-    return jsonify(_approvals_audit_payload(status=status, limit=limit))
+    return jsonify(_approvals_audit_payload(
+        status=status, limit=limit, runtime=request.args.get("runtime")))
+
+
+def _session_runtime(sid):
+    """Runtime id from a namespaced session id; no known prefix -> openclaw."""
+    sid = str(sid or "")
+    if ":" in sid:
+        head = sid.split(":", 1)[0]
+        try:
+            from clawmetry.entitlements import ALL_RUNTIMES
+            if head in ALL_RUNTIMES:
+                return head
+        except ImportError:
+            return head
+    return "openclaw"
+
+
+def _filter_rows_by_runtime(rows, runtime):
+    """Scope approval rows to one runtime via requestor_session_id prefix.
+    runtime in (None, '', 'all') -> unfiltered."""
+    rt = (runtime or "").strip().lower()
+    if not rt or rt == "all":
+        return rows
+    return [r for r in rows
+            if _session_runtime(r.get("requestor_session_id")) == rt]
+
+
+def _approval_kind(row) -> str:
+    args = row.get("args")
+    if isinstance(args, dict):
+        return str(args.get("kind") or "policy")
+    return "policy"
+
+
+def _row_questions(row) -> "list | None":
+    """The question set stored on a question-set approval row (WO-52),
+    full-fidelity — the dashboard renders the actual options, not a
+    preview. None on binary rows so their rendering is untouched."""
+    args = row.get("args")
+    if isinstance(args, dict):
+        q = args.get("_cm_questions")
+        if isinstance(q, list) and q:
+            return q
+    return None
 
 
 @bp_policy.route("/api/approvals")
@@ -160,6 +265,7 @@ def api_approvals_queue():
     except (TypeError, ValueError):
         limit = 50
     rows = _coerce_rows(_ls_call("query_approvals", status="pending", limit=limit))
+    rows = _filter_rows_by_runtime(rows, request.args.get("runtime"))
     approvals = [
         {
             "id":                   r.get("id"),
@@ -169,20 +275,34 @@ def api_approvals_queue():
             "created_at":           r.get("created_at"),
             "requestor_session_id": r.get("requestor_session_id"),
             "args_preview":         _arg_preview(r.get("args")),
+            "risk":                 _row_risk(r),
+            # WHO / WHERE / WHY. Without these a queue row could only be
+            # printed as a tool name and the tail of a session id, which is
+            # not enough for anyone to decide with.
+            "context":              _row_context(r),
+            # "policy" (a protection rule fired) vs "permission_prompt"
+            # (the runtime itself stopped to ask) — the UI says which,
+            # because they mean different things to the person deciding.
+            "kind":                 _approval_kind(r),
+            # Question-set rows (WO-52) carry the full set so the UI can
+            # render radios/checkboxes and post decision='answer'.
+            "questions":            _row_questions(r),
         }
         for r in rows
     ]
     return jsonify({"approvals": approvals, "count": len(approvals), "_source": "local_store"})
 
 
-def _approvals_audit_payload(status=None, limit=100):
+def _approvals_audit_payload(status=None, limit=100, runtime=None):
     """Exec-approval decision audit payload, shared by the HTTP route and the
     cloud snapshot builder (trial-bug #22: the Policy tab audit was blank on the
-    hosted dashboard). Returns {decisions, summary, _source}."""
+    hosted dashboard). Returns {decisions, summary, _source}. ``runtime``
+    scopes rows to one runtime via the session-id prefix (None/'all' = node)."""
     rows = _coerce_rows(_ls_call("query_approvals", status=status, limit=limit))
+    rows = _filter_rows_by_runtime(rows, runtime)
 
     decisions = []
-    pending = approved = denied = simulated = 0
+    pending = approved = denied = simulated = answered = 0
     for r in rows:
         st = (r.get("status") or "pending")
         dec = (r.get("decision") or "")
@@ -191,6 +311,10 @@ def _approvals_audit_payload(status=None, limit=100):
             simulated += 1
         elif st == "pending":
             pending += 1
+        elif st == "answered" or dec == "answered":
+            # Question-set decision (WO-52): the human answered with
+            # structured options — neither an approve nor a deny.
+            answered += 1
         elif st in ("approved", "allow", "allowed") or dec in ("approve", "allow"):
             approved += 1
         elif st in ("denied", "deny", "blocked", "rejected") or dec in ("deny", "block"):
@@ -199,6 +323,7 @@ def _approvals_audit_payload(status=None, limit=100):
             "id": r.get("id"),
             "action": r.get("action"),
             "args_preview": _arg_preview(r.get("args")),
+            "risk": _row_risk(r),
             "status": st,
             "decision": dec or None,
             "decision_reason": (str(r.get("decision_reason"))[:300]
@@ -214,9 +339,235 @@ def _approvals_audit_payload(status=None, limit=100):
         "pending": pending,
         "approved": approved,
         "denied": denied,
+        "answered": answered,
         "simulated": simulated,
     }
     return {"decisions": decisions, "summary": summary, "_source": "local_store"}
+
+
+def _policy_summary(compiled: dict) -> dict:
+    """JSON-safe summary of one compiled policy (regexes → pattern strings)."""
+    def _pat(rx):
+        return getattr(rx, "pattern", None)
+    return {
+        "name": compiled.get("name"),
+        "tool": compiled.get("tool"),
+        "runtime": compiled.get("runtime") or "",
+        "action": compiled.get("action"),
+        "timeout": compiled.get("timeout"),
+        "on_timeout": compiled.get("on_timeout"),
+        "command_regex": _pat(compiled.get("command_regex")),
+        "command_not_regex": _pat(compiled.get("command_not_regex")),
+        "args_regex": _pat(compiled.get("args_regex")),
+        "min_risk": compiled.get("min_risk"),
+    }
+
+
+_VALID_ACTIONS = ("require_approval", "approve", "monitor")
+_VALID_ON_TIMEOUT = ("deny", "kill", "approve", "allow", "ask")
+# Keys we serialise back to policies.yml (whitelist keeps junk out of the
+# file). ``match`` is handled separately (nested block).
+_POLICY_SCALAR_KEYS = ("name", "tool", "runtime", "pattern_type", "pattern",
+                       "action", "timeout", "on_timeout", "preset_key",
+                       "enabled", "min_risk")
+_MATCH_SCALAR_KEYS = ("tool", "command_regex", "command_not_regex",
+                      "args_regex", "runtime", "min_risk")
+
+
+def _yaml_quote(value):
+    """Serialise one scalar for the policies.yml subset. Returns the string
+    to write, or raises ValueError for values the subset can't round-trip
+    (newlines, or strings containing BOTH quote kinds)."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    s = str(value)
+    if "\n" in s or "\r" in s:
+        raise ValueError("newlines are not allowed in policy values")
+    if "'" not in s:
+        return f"'{s}'"
+    if '"' not in s:
+        return f'"{s}"'
+    raise ValueError("a policy value may not contain both ' and \" quotes")
+
+
+def _serialize_policies_yaml(policies: list[dict]) -> str:
+    """Emit the exact YAML subset ``approvals._load_yaml`` documents (flat
+    keys + one optional nested ``match`` block), so the file round-trips
+    through BOTH the pyyaml path and the hand-rolled fallback parser."""
+    lines: list[str] = [
+        "# ClawMetry approval policies — managed by the Approvals tab.",
+        "# Docs: README 'Approval policies'. Hand edits are preserved on",
+        "# the next dashboard save only if they use this same flat format.",
+    ]
+    for p in policies:
+        first = True
+        for k in _POLICY_SCALAR_KEYS:
+            if k not in p or p[k] is None:
+                continue
+            prefix = "- " if first else "  "
+            lines.append(f"{prefix}{k}: {_yaml_quote(p[k])}")
+            first = False
+        match = p.get("match")
+        if isinstance(match, dict) and match:
+            if first:
+                lines.append("- match:")
+                first = False
+            else:
+                lines.append("  match:")
+            for mk in _MATCH_SCALAR_KEYS:
+                if mk in match and match[mk] is not None:
+                    lines.append(f"    {mk}: {_yaml_quote(match[mk])}")
+        if first:
+            # Nothing serialisable — shouldn't happen post-validation.
+            raise ValueError("policy has no serialisable fields")
+    return "\n".join(lines) + "\n"
+
+
+def _validate_policies(policies) -> "tuple[list[dict], list[str]]":
+    """Validate a candidate policy list. Returns (normalised, errors)."""
+    from clawmetry import approvals as ap
+    errors: list[str] = []
+    normalised: list[dict] = []
+    if not isinstance(policies, list):
+        return [], ["'policies' must be a list"]
+    for i, p in enumerate(policies):
+        label = f"policies[{i}]"
+        if not isinstance(p, dict):
+            errors.append(f"{label}: must be an object")
+            continue
+        if p.get("name"):
+            label = f"policy '{p['name']}'"
+        action = str(p.get("action") or "require_approval").strip()
+        if action not in _VALID_ACTIONS:
+            errors.append(f"{label}: action must be one of "
+                          f"{', '.join(_VALID_ACTIONS)} (got '{action}')")
+        on_timeout = str(p.get("on_timeout") or "deny").strip()
+        if on_timeout not in _VALID_ON_TIMEOUT:
+            errors.append(f"{label}: on_timeout must be one of "
+                          f"{', '.join(_VALID_ON_TIMEOUT)} "
+                          f"(got '{on_timeout}')")
+        mr = p.get("min_risk") or (p.get("match") or {}).get("min_risk")
+        if mr is not None and str(mr).strip().lower() not in (
+                "low", "medium", "high", "critical"):
+            errors.append(f"{label}: min_risk must be one of "
+                          f"low, medium, high, critical (got '{mr}')")
+        if p.get("timeout") is not None:
+            try:
+                if int(p["timeout"]) <= 0:
+                    errors.append(f"{label}: timeout must be > 0 seconds")
+            except (TypeError, ValueError):
+                errors.append(f"{label}: timeout must be an integer "
+                              "(seconds)")
+        compiled = None
+        try:
+            compiled = ap._compile_policy(p)
+        except Exception as e:
+            errors.append(f"{label}: {e}")
+        if compiled is None:
+            errors.append(f"{label}: invalid policy (bad regex or shape)")
+        # Serialisability check (quotes/newlines) before we promise a write.
+        try:
+            _serialize_policies_yaml([p])
+        except ValueError as e:
+            errors.append(f"{label}: {e}")
+        normalised.append(p)
+    return normalised, errors
+
+
+@bp_policy.route("/api/approvals/policies", methods=["GET"])
+@gate("approval_queue")
+def api_approvals_policies_get():
+    """The local approval-policy list (``~/.clawmetry/policies.yml``) as the
+    Approvals tab consumes it: the raw rows plus a compiled summary (regex
+    patterns as strings, defaults resolved) so the UI can render toggles
+    without re-implementing the engine's parsing rules.
+
+    Returns ``{policies: [...], compiled: [...], path, exists}``. A missing
+    or unreadable file is an empty list, never a 500 — the daemon treats it
+    the same way."""
+    from clawmetry import approvals as ap
+    path = ap.POLICIES_PATH
+    raw_list: list[dict] = []
+    exists = False
+    try:
+        if path.exists():
+            exists = True
+            for p in ap._load_yaml(path.read_text(errors="replace")):
+                if isinstance(p, dict):
+                    raw_list.append(p)
+    except Exception:
+        raw_list = []
+    compiled = []
+    for p in raw_list:
+        c = ap._compile_policy(p)
+        if c:
+            compiled.append(_policy_summary(c))
+    return jsonify({"policies": raw_list, "compiled": compiled,
+                    "path": str(path), "exists": exists})
+
+
+@bp_policy.route("/api/approvals/policies", methods=["PUT"])
+@gate("approval_queue")
+def api_approvals_policies_put():
+    """Replace the local policy file with the submitted list, atomically,
+    after validating EVERY row (action/on_timeout/timeout/regexes and
+    YAML-subset serialisability). Any error → 400 with per-policy messages
+    and NO write, so a fat-fingered regex can't silently disable the file's
+    other rules.
+
+    Body: ``{"policies": [ {name, tool, pattern_type, pattern, action,
+    timeout, on_timeout, runtime?, preset_key?, match?{...}}, ... ]}``.
+    The daemon's watcher re-reads the file every iteration (~2 s), so a
+    successful PUT is live within seconds — including pre-tool gate
+    install/removal via ``approvals.sync_runtime_gates``.
+
+    Returns ``{ok, count, compiled}`` (the same compiled summary shape as
+    GET, post-write ground truth)."""
+    from clawmetry import approvals as ap
+    body = request.get_json(silent=True) or {}
+    if "policies" not in body:
+        return jsonify({"ok": False,
+                        "error": "body must include 'policies' (list)"}), 400
+    normalised, errors = _validate_policies(body.get("policies"))
+    if errors:
+        return jsonify({"ok": False, "error": "validation failed",
+                        "errors": errors}), 400
+
+    text = _serialize_policies_yaml(normalised) if normalised else (
+        "# ClawMetry approval policies — none configured.\n")
+    path = ap.POLICIES_PATH
+    try:
+        import os as _os
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(text)
+        _os.replace(tmp, path)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"write failed: {e}"}), 500
+
+    # Post-write ground truth: parse + compile what actually landed.
+    compiled = []
+    try:
+        for p in ap._load_yaml(path.read_text(errors="replace")):
+            if isinstance(p, dict):
+                c = ap._compile_policy(p)
+                if c:
+                    compiled.append(_policy_summary(c))
+    except Exception:
+        pass
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event("approvals.policies_updated", actor="local",
+                           target=str(path), result="ok", source="dashboard",
+                           metadata={"count": len(normalised)})
+    except Exception:
+        pass
+    return jsonify({"ok": True, "count": len(normalised),
+                    "compiled": compiled, "path": str(path)})
 
 
 @bp_policy.route("/api/policy/replay", methods=["POST"])
@@ -275,6 +626,84 @@ def api_policy_replay():
     return jsonify(result), (200 if result.get("ok") else 400)
 
 
+
+def _row_tool_and_args(row) -> "tuple[str, dict]":
+    """Recover (tool_name, raw tool args) from an approval row.
+
+    Hook-gate rows wrap everything in a meta blob (``source:
+    "pretooluse-hook"`` with ``tool_name`` + ``tool_input``); watcher rows
+    store the raw tool args directly (plus the stamped ``_cm_risk``) and
+    carry the tool name as the ``action`` string prefix ("Bash: rm -rf x").
+    """
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    if args.get("source") == "pretooluse-hook":
+        raw = args.get("tool_input")
+        return (str(args.get("tool_name") or ""),
+                raw if isinstance(raw, dict) else {})
+    # ``_cm_ctx`` records the tool name outright; fall back to the action
+    # prefix for rows written before it existed.
+    ctx = args.get("_cm_ctx") if isinstance(args.get("_cm_ctx"), dict) else {}
+    tool = str(ctx.get("tool") or "").strip() or \
+        str(row.get("action") or "").split(": ", 1)[0].strip()
+    raw = {k: v for k, v in args.items()
+           if k not in ("_cm_risk", "_cm_ctx")}
+    return tool, raw
+
+
+def _apply_remember(row, scope: str) -> "tuple[str | None, str | None]":
+    """Persist an approve-and-remember choice. Returns (remembered, error).
+
+    ``session`` → TTL-bound entry in approvals_session_allow.json (honored
+    by both the watcher and the hook gate). ``always`` → an ``action:
+    approve`` policy row appended to policies.yml, so it is visible and
+    revocable in the Approvals tab like any user-authored rule. A failed
+    "always" write degrades to session scope rather than silently
+    forgetting the choice.
+    """
+    import re as _re
+    from clawmetry import approvals as ap
+    tool, raw = _row_tool_and_args(row)
+    sid = str(row.get("requestor_session_id") or "")
+    if not tool:
+        return None, "row carries no tool name to remember"
+    if scope == "session":
+        ap.add_session_allow(sid, tool, raw)
+        return "session", None
+    # scope == "always"
+    cmd = ap._extract_command(tool, raw)
+    if not cmd:
+        return None, "cannot derive a command to pin an always-allow rule to"
+    name = f"Always allow {tool}: {cmd}"[:80]
+    name = name.replace("\n", " ").replace("'", "").replace('"', "")
+    candidate = {
+        "name": name,
+        "action": "approve",
+        "match": {"tool": ap._canonical_tool(tool),
+                  "command_regex": "^" + _re.escape(cmd) + "$"},
+    }
+    try:
+        existing = []
+        if ap.POLICIES_PATH.exists():
+            existing = [p_ for p_ in
+                        ap._load_yaml(ap.POLICIES_PATH.read_text(
+                            errors="replace"))
+                        if isinstance(p_, dict)]
+        merged, errors = _validate_policies(existing + [candidate])
+        if errors:
+            raise ValueError("; ".join(errors[:2]))
+        text = _serialize_policies_yaml(merged)
+        import os as _os
+        ap.POLICIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ap.POLICIES_PATH.with_suffix(".yml.tmp")
+        tmp.write_text(text)
+        _os.replace(tmp, ap.POLICIES_PATH)
+        return "always", None
+    except Exception as e:
+        ap.add_session_allow(sid, tool, raw)
+        return "session", f"always-allow rule not writable ({e}); " \
+                          "remembered for this session instead"
+
+
 @bp_policy.route("/api/approvals/<approval_id>/decide", methods=["POST"])
 @gate("approval_queue")
 def api_approval_decide(approval_id: str):
@@ -299,14 +728,20 @@ def api_approval_decide(approval_id: str):
     (grace mode preserves today's behaviour for free users)."""
     body = request.get_json(silent=True) or {}
     decision = str(body.get("decision") or "").strip().lower()
-    if decision not in ("approve", "deny"):
+    if decision not in ("approve", "deny", "answer"):
         return jsonify({
             "ok":    False,
-            "error": "decision must be 'approve' or 'deny'",
+            "error": "decision must be 'approve', 'deny' or 'answer'",
         }), 400
     reason = body.get("reason")
     if reason is not None:
         reason = str(reason)[:300]
+    remember = str(body.get("remember") or "").strip().lower() or None
+    if remember is not None and remember not in ("session", "always"):
+        return jsonify({
+            "ok":    False,
+            "error": "remember must be 'session' or 'always'",
+        }), 400
 
     aid = (approval_id or "").strip()
     if not aid:
@@ -320,10 +755,41 @@ def api_approval_decide(approval_id: str):
     if row is None:
         return jsonify({"ok": False, "error": "unknown approval id"}), 404
     existing = str(row.get("status") or "pending").strip()
-    if existing in ("approved", "denied", "timeout", "expired"):
+    if existing in ("approved", "denied", "answered", "timeout", "expired"):
         # Already decided — return the frozen status (idempotent). This is
         # the same "first click wins" the store method enforces.
         return jsonify({"ok": True, "status": existing, "already": True})
+
+    # ── question-set answers (WO-52 phase 1) ─────────────────────────────
+    # decision='answer' carries a structured ``answers`` map validated
+    # against the question set stored in the row's args (unknown question
+    # or unknown option label → 400). The shared core merges the answers
+    # into args BEFORE flipping the row to 'answered', so the hook waiting
+    # on it never sees the status without the answers.
+    if decision == "answer":
+        from clawmetry import question_sets as qsets
+        from routes.hooks import _ls_write as _writer
+        reason = body.get("reason")
+        ok, msg, code = qsets.apply_answer_decision(
+            aid, row, body.get("answers"), resolver="local",
+            reason=(str(reason)[:300] if reason else None), write=_writer)
+        if not ok:
+            return jsonify({"ok": False, "error": msg}), code
+        # First-click-wins: the flip only ever transitions a pending row —
+        # re-read to report what actually stands (a racing binary decision
+        # keeps its result).
+        rows2 = _coerce_rows(_ls_call("query_approvals", limit=500))
+        row2 = next((r for r in rows2 if r.get("id") == aid), None)
+        final = str((row2 or {}).get("status") or "answered").strip()
+        try:
+            from clawmetry import approval_events as _ae
+            _ae.notify_resolved(aid, "answered", "dashboard")
+        except Exception:
+            pass
+        resp = {"ok": True, "status": final}
+        if final != "answered":
+            resp["already"] = True
+        return jsonify(resp)
 
     # Flip the row. Prefer the daemon proxy (owns the DuckDB writer lock
     # — same pattern the cloud-relay decision path uses); fall back to a
@@ -349,5 +815,22 @@ def api_approval_decide(approval_id: str):
             return jsonify({"ok": False,
                             "error": f"decision write failed: {e}"}), 500
 
+    # Close the loop on channels that can be edited: if this approval was
+    # also pushed to a phone, swap its live Approve/Deny buttons for the
+    # verdict so two people can't race the same call from two surfaces.
+    try:
+        from clawmetry import approval_events as _ae
+        _ae.notify_resolved(aid, decision, "dashboard")
+    except Exception:
+        pass
+
     new_status = "approved" if decision == "approve" else "denied"
-    return jsonify({"ok": True, "status": new_status})
+    remembered = remember_error = None
+    if decision == "approve" and remember:
+        remembered, remember_error = _apply_remember(row, remember)
+    resp = {"ok": True, "status": new_status}
+    if remember:
+        resp["remembered"] = remembered
+        if remember_error:
+            resp["remember_error"] = remember_error
+    return jsonify(resp)

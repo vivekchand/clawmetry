@@ -481,9 +481,19 @@ def _evaluate_one(
     if judge_call is None:
         from clawmetry.eval_runner import _call_judge as judge_call  # type: ignore
     try:
-        from clawmetry.eval_runner import DEFAULT_RUBRIC, parse_score
+        from clawmetry.eval_runner import DEFAULT_RUBRIC, load_rubric, parse_score
+        # The USER'S rubric, not the shipped default: an operator who tuned
+        # ~/.clawmetry/evals.yaml expects the golden suites to grade with the
+        # same prompt the production judge uses (load_rubric merges user
+        # fields over DEFAULT_RUBRIC and falls back to it entirely on any
+        # parse problem, so this can only widen behavior, never lose it).
+        try:
+            rubric_prompt = str(load_rubric("default").get("prompt")
+                                or DEFAULT_RUBRIC["prompt"])
+        except Exception:
+            rubric_prompt = str(DEFAULT_RUBRIC["prompt"])
         prompt = (
-            str(DEFAULT_RUBRIC["prompt"])
+            rubric_prompt
             + "\n\n---\nTRANSCRIPT:\nUSER: "
             + test.input.strip()
             + "\n\nASSISTANT: "

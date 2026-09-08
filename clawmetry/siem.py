@@ -17,18 +17,43 @@ pre-move behavior when ``CLAWMETRY_SIEM_HOST`` was unset).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger("clawmetry.siem")
 
+# Memoized clawmetry-pro lookup. A FAILED import is NOT cached by Python's
+# import system — every retry pays a full sys.path scan (~4ms), and this shim
+# is called from LocalStore.ingest on EVERY event, which alone throttled
+# fresh-install backfills. A successful import is cached forever; a miss is
+# re-checked at most every ``_PRO_RECHECK_SECS`` so a pro wheel installed at
+# runtime is still picked up without a daemon restart.
+_PRO_RECHECK_SECS = 30.0
+_pro_cache: tuple[float, Any] | None = None
+
 
 def _pro():
     """Return ``clawmetry_pro.lib.siem`` when importable, else ``None``."""
+    global _pro_cache
+    now = time.monotonic()
+    if _pro_cache is not None:
+        ts, mod = _pro_cache
+        if mod is not None or now - ts < _PRO_RECHECK_SECS:
+            return mod
     try:
         from clawmetry_pro.lib import siem as _s
-        return _s
+        mod = _s
     except Exception:
-        return None
+        mod = None
+    _pro_cache = (now, mod)
+    return mod
+
+
+def enabled() -> bool:
+    """Cheap per-batch check: is a real (clawmetry-pro) exporter available?
+    Used by ``LocalStore.ingest_many`` to skip the per-event hook entirely
+    when SIEM export can't possibly be active."""
+    return _pro() is not None
 
 
 # ── public surface ─────────────────────────────────────────────────────────────
@@ -63,7 +88,10 @@ def get_default_exporter() -> Optional[Any]:
 
 
 def reset_for_tests() -> None:
-    """Test-only helper. No-op when clawmetry-pro is not installed."""
+    """Test-only helper. Clears the pro-module memo; no-op when
+    clawmetry-pro is not installed."""
+    global _pro_cache
+    _pro_cache = None
     pro = _pro()
     if pro is None:
         return

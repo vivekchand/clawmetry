@@ -89,7 +89,19 @@ def test_switcher_change_handler_intercepts_locked_clicks(app_js):
 def test_runtime_paywall_overlay_present(app_js):
     """``_cmShowRuntimePaywall`` builds the overlay with the upgrade CTA and
     a paywall_view telemetry beacon — pins the contract the runtime-switcher
-    click interception depends on."""
+    click interception depends on.
+
+    Founder spec (2026-07-30): a locked runtime must lead to sign-in -> trial
+    license -> unlocked runtimes right here, never a pricing tab or an
+    external cloud redirect (a self-hosted user choosing a trial must not be
+    bounced to a cloud account page — that's the whole point of self-host).
+    This test used to assert the OLD `app.clawmetry.com/upgrade` redirect,
+    which had already been replaced by the local email+code trial flow below
+    without the test being updated (live-hit 2026-08-06: an actual redirect
+    regression on the separate bottom-right runtime-chip menu went unnoticed
+    because this file only pinned the (correct) header dropdown's overlay,
+    not the second switch point — see test_runtime_switcher_gating.py's
+    chip-menu test)."""
     pattern = re.compile(
         r"function\s+_cmShowRuntimePaywall\s*\([^)]*\)\s*\{(.*?)\nfunction\s",
         re.DOTALL,
@@ -100,9 +112,45 @@ def test_runtime_paywall_overlay_present(app_js):
     # Telemetry: paywall_view event for funnel attribution.
     assert "paywall_view" in body
     assert "/api/paywall/event" in body
-    # Upgrade CTA points at the cloud upgrade flow with the harness attached.
-    assert "app.clawmetry.com/upgrade" in body
-    assert "source=runtime-switcher" in body
+    # The CTA drives a local sign-in -> trial flow, not an external redirect.
+    assert "/api/cloud-cta/send-otp" in body
+    assert "/api/trial/activate" in body
+    assert "app.clawmetry.com/upgrade" not in body, (
+        "the in-dashboard paywall must not bounce a self-hosted user to the "
+        "cloud account page — it activates the trial locally"
+    )
     # Both buttons present: dismiss + start trial.
     assert "_cmRtPaywallCancel" in body
-    assert "Start free trial" in body
+    assert "Start 7-day free trial" in body
+
+
+def test_runtime_chip_locked_click_opens_local_paywall_not_cloud_redirect(app_js):
+    """The bottom-right runtime chip (a second, self-described 'mirror' of
+    the header switcher) must intercept a locked-runtime click the same way
+    the header switcher does: open the local ``_cmShowRuntimePaywall`` modal,
+    not bounce straight to the cloud account site.
+
+    Live-hit 2026-08-06 (self-hosted trial user, reported directly): clicking
+    a locked runtime in this chip's menu opened
+    ``app.clawmetry.com/upgrade?source=runtime_chip`` in a new tab instead —
+    a self-hosted user trying to start a local trial got redirected to a
+    cloud account page with no bearing on their local install. The header
+    dropdown's onChange handler (``_cmOnGlobalRuntimeChange``, tested above
+    in ``test_switcher_change_handler_intercepts_locked_clicks``) already
+    did this correctly; the chip's own click handler diverged."""
+    pattern = re.compile(
+        r"m\.addEventListener\('click',\s*function\s*\(ev\)\s*\{(.*?)\n\s*\}\);",
+        re.DOTALL,
+    )
+    m = pattern.search(app_js)
+    assert m, "runtime-chip menu click handler not found"
+    body = m.group(1)
+    assert "data-locked" in body, "locked-item branch missing from chip click handler"
+    assert "_cmShowRuntimePaywall" in body, (
+        "chip's locked-click branch must open the local paywall modal, "
+        "same as the header switcher"
+    )
+    assert "window.open" not in body and "app.clawmetry.com" not in body, (
+        "chip must not redirect a locked click to the cloud site — that "
+        "strands a self-hosted user trying to start a local trial"
+    )

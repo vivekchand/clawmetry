@@ -12,6 +12,12 @@ on:
     - cron: "0 6 * * *"   # nightly PyPI-release run
   workflow_dispatch:
 
+# Least privilege: this workflow only builds a wheel and probes a local
+# dashboard. It never writes to the repository or any GitHub API surface.
+# Any job needing more must elevate with its own job-level `permissions:`.
+permissions:
+  contents: read
+
 concurrency:
   group: api-latency-smoke-${{ github.ref }}
   cancel-in-progress: true
@@ -32,8 +38,10 @@ jobs:
       OPENCLAW_GATEWAY_TOKEN: ci-smoke-token
       CLAWMETRY_LOCAL_STORE_PATH: ${{ github.workspace }}/.smoke/clawmetry.duckdb
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -44,10 +52,19 @@ jobs:
           python -m build --wheel
 
       - name: Install into isolated venv
+        # `matrix.source` is bound to an env var rather than expanded into the
+        # script. GitHub substitutes `${{ }}` textually before bash parses the
+        # line, so an expression in a run: block is script source, not data --
+        # the surrounding quotes give no protection. This matrix is closed
+        # (both fromJSON arrays above are literals), so nothing here is
+        # reachable today; binding it keeps that true if the matrix ever
+        # starts deriving a value from an input or event payload.
+        env:
+          SOURCE: ${{ matrix.source }}
         run: |
           python -m venv /tmp/vsmoke
           /tmp/vsmoke/bin/pip install --upgrade pip
-          if [ "${{ matrix.source }}" = "pypi" ]; then
+          if [ "$SOURCE" = "pypi" ]; then
             /tmp/vsmoke/bin/pip install --no-cache-dir clawmetry flask waitress cryptography duckdb requests
           else
             /tmp/vsmoke/bin/pip install dist/clawmetry-*.whl flask waitress cryptography duckdb requests

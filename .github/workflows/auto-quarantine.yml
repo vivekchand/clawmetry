@@ -26,21 +26,23 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  pull-requests: write
-  actions: read
+  contents: read
 
 jobs:
   detect-and-quarantine:
     name: Detect flaky tests and quarantine within 24h
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: read
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
@@ -50,13 +52,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_OWNER: vivekchand
           REPO_NAME: clawmetry
+          # Dispatch inputs are untrusted text. Bind them to env vars and read
+          # them as quoted shell variables so the runner never expands them as
+          # code. Never interpolate an input into a `run:` block.
+          DRY_RUN: ${{ inputs.dry_run }}
+          LOOKBACK: ${{ inputs.lookback }}
         run: |
-          ARGS=""
-          if [ "${{ inputs.dry_run }}" = "true" ] && [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            ARGS="--dry-run"
+          ARGS=()
+          if [ "$DRY_RUN" = "true" ] && [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ARGS=(--dry-run)
           fi
-          if [ -n "${{ inputs.lookback }}" ]; then
-            ARGS="$ARGS --lookback ${{ inputs.lookback }}"
+          if [ -n "$LOOKBACK" ]; then
+            ARGS+=(--lookback "$LOOKBACK")
           fi
           # GitHub Actions uses set -eo pipefail by default. Without set +e,
           # bash exits the run block immediately when auto_quarantine.py exits
@@ -65,7 +72,7 @@ jobs:
           # Fix: disable exit-on-error for the python call, capture the exit
           # code in SCRIPT_EXIT, then re-enable.
           set +e
-          python3 scripts/auto_quarantine.py $ARGS
+          python3 scripts/auto_quarantine.py "${ARGS[@]}"
           SCRIPT_EXIT=$?
           set -e
           echo "exit_code=${SCRIPT_EXIT}" >> "$GITHUB_OUTPUT"

@@ -1,7 +1,40 @@
 version: 2
+
+# Every ecosystem below carries `cooldown: default-days: 7`.
+#
+# A version update that lands the hour a release is published is the window
+# a compromised package is published INTO. Registry takeovers are
+# opportunistic and short-lived: the malicious version is typically yanked
+# within a day or two, so the whole attack depends on somebody pulling it
+# before that happens. Waiting a week means an automated bump adopts a
+# release the rest of the ecosystem has already had time to look at. It
+# also keeps ordinary regressions out of the tree.
+#
+# This does NOT delay security fixes. Cooldown applies to version updates
+# only; a Dependabot SECURITY update opens immediately regardless of what
+# is configured here, so an advisory fix still arrives the day it exists.
+# That distinction is the reason the value can be this conservative --
+# nothing on the advisory path is slowed by it.
+#
+# Seven days rather than the built-in three: three is GitHub's default, and
+# it is inside the window where a compromised release is often still up.
 updates:
   # Python (pip) dependencies
   - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+
+  # Docker base images. Required because the Dockerfile pins its base image by
+  # sha256 digest: a digest never moves on its own, so without an updater the
+  # image would stay on whatever CVEs it shipped with on the day it was pinned.
+  - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
@@ -19,3 +52,134 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - "dependencies"
+    cooldown:
+      default-days: 7
+
+  # npm — the React SPA. This is the repo's largest JS dependency tree and
+  # the only one with a committed lockfile that ships into clawmetry/static/.
+  # Minor/patch updates are grouped so a routine week is one PR, not twenty.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    groups:
+      frontend-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    cooldown:
+      default-days: 7
+
+  # npm — Playwright E2E harness. Runs in CI on every PR, so its
+  # dependencies are part of the CI supply chain.
+  - package-ecosystem: "npm"
+    directory: "/tests/e2e"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    groups:
+      e2e-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    cooldown:
+      default-days: 7
+
+  # npm — the Claude Code CLI that CI workflows shell out to
+  # (harness-observability-audit, i18n-autotranslate, i18n-docs-autotranslate).
+  # Those jobs install it with `npm ci` from a committed lockfile, so without an
+  # updater here the pin would simply freeze. This is the same pin/updater
+  # pairing described above for the SHA pins: the lock makes an upgrade
+  # deliberate, this entry keeps it from going stale.
+  - package-ecosystem: "npm"
+    directory: "/.github/claude-cli"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+
+  # npm — the Playwright the Auth Bootstrap Guard workflow's smoke test runs
+  # on. It is the other half of that pin: the lockfile makes the install
+  # reproducible and integrity-checked, and this entry is what keeps it
+  # moving. Kept in step with /tests/e2e, which pins the same Playwright
+  # line; bumping one without the other means CI downloads two browser
+  # builds for no reason.
+  - package-ecosystem: "npm"
+    directory: "/.github/ci-node/auth-bootstrap"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+
+  # npm — the OpenClaw CLI the setup-openclaw composite action installs. It is
+  # the other half of that pin: the lockfile makes the install reproducible and
+  # integrity-checked, and this entry is what keeps it moving. Without it, every
+  # E2E and screenshot job would sit on one OpenClaw release indefinitely, which
+  # is a worse place to be than the moving dist-tag it replaced.
+  #
+  # READ BEFORE MERGING A BUMP HERE. This is not a routine dependency. OpenClaw
+  # stopped writing per-session `<sid>.jsonl` transcripts somewhere after
+  # 2026.5.12: on 2026.9.2 there is no `agents/<id>/sessions/` directory at all,
+  # and the transcript lives in `agents/<id>/agent/openclaw-agent.sqlite`
+  # (tables `transcript_events`, `session_transcript_active_events`). The OSS
+  # daemon only globs `agents/main/sessions/*.jsonl`
+  # (clawmetry/sync.py), so a bump past that boundary takes the live E2E suites
+  # red and does not go green again by editing the tests. It needs a real
+  # OpenClaw SQLite reader in the daemon first. Expect the bump PR to fail; that
+  # failure is the signal, not a flake.
+  - package-ecosystem: "npm"
+    directory: "/.github/actions/setup-openclaw"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+
+  # npm — the ClawHub/OpenClaw plugin, which is published to npm
+  # (openclaw.release.publishToNpm). No lockfile, so Dependabot updates the
+  # manifest ranges.
+  - package-ecosystem: "npm"
+    directory: "/clawhub-plugin"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+
+  # npm — the PR visual-diff bot's Playwright/pixelmatch/pngjs
+  # (.github/scripts/, driven by pr-screenshots.yml). The other half of that
+  # pin: the lockfile makes the install reproducible and integrity-checked,
+  # and this entry is what keeps it moving. Without it the bot would sit on
+  # one Playwright forever, which is the frozen end of the same problem the
+  # unpinned install was at the other end of.
+  - package-ecosystem: "npm"
+    directory: "/.github/scripts"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7

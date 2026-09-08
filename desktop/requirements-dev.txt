@@ -1,16 +1,48 @@
 # Extra deps for the desktop wrapper only. Not required to run
 # clawmetry itself; only needed when running `python -m desktop.tray`
 # or building the .app / .exe bundles.
-pystray>=0.19
-Pillow>=10.0
+pystray>=0.19.5
+Pillow>=12.3.0
 # Native window (WKWebView on macOS, EdgeWebView2 on Windows, GTK
 # webkit2 on Linux). Uses the OS's own webview engine, so the bundle
 # stays small — no Chromium ships inside the .app.
-pywebview>=5.0
-# macOS bundler. py2app<=0.28 still imports pkg_resources at load time,
-# which setuptools>=70 dropped from the default install. Pin setuptools
-# under 70 whenever py2app is in the build set.
-py2app>=0.28; sys_platform == "darwin"
-setuptools<70; sys_platform == "darwin"
-# Windows / Linux bundler
-pyinstaller>=6.0; sys_platform != "darwin"
+pywebview>=6.2.1
+# Linux only. pywebview's GTK backend does `import gi`; without this,
+# PyInstaller falls back to bundling whatever `gi` your SYSTEM python3
+# has (usually apt's python3-gi), which is compiled for the system's
+# python3 ABI (e.g. cp312 on Ubuntu 24.04). actions/setup-python's
+# isolated 3.11 can't import a cp312 `_gi.so` at all, so the frozen
+# binary crashed on launch with "cannot import name '_gi'" - the Linux
+# tray build has never actually been verified to open a window (2026-08-08
+# discovery, desktop#... AppImage work).
+#
+# This pin previously carried a note blaming 3.56.3 for the
+# `TypeError: Must be number, not method` crash in pywebview's
+# on_load_finish, and said it was pinned to 3.48.2 while actually
+# pinning 3.56.3. Both halves were wrong. The version is not the
+# problem: PyInstaller was dropping PyGObject's gi/overrides/*.py from
+# the bundle, so the frozen app got the raw girepository API. 3.56.3
+# with the overrides collected is verified working on Ubuntu 24.04 —
+# see the long comment in build_linux.spec. Do not downgrade to chase
+# that TypeError; desktop/smoke_test.py now fails the build if the
+# overrides ever go missing again.
+#
+# Needs libgirepository1.0-dev + libcairo2-dev + pkg-config at build time
+# (see the Linux job's "Install system deps" step in desktop-artifacts.yml).
+PyGObject==3.58.0; sys_platform == "linux"
+# Bundler for all three OSes. build_mac.spec / build_windows.spec /
+# build_linux.spec are all PyInstaller specs. py2app is intentionally
+# NOT the mac shipping path: py2app 0.28.x has a broken macOS version
+# check on Tahoe / macOS 26 and refuses to build. setup_py2app.py is
+# kept in-tree only for the day py2app catches up.
+pyinstaller>=6.22.0
+# TLS trust for the frozen shell's outbound HTTPS (onboarding OTP,
+# OAuth exchange). certifi ships Mozilla's CA bundle and is the
+# guaranteed fallback; truststore hooks the OS-native trust store
+# (Security framework / Schannel / ca-certificates) and is preferred
+# at runtime — it honours user-added and enterprise CAs — but is
+# Python 3.10+ only. Without either, the bundled Python's OpenSSL
+# has NO configured CA bundle and every HTTPS POST from the shell
+# fails CERTIFICATE_VERIFY_FAILED (support 2026-08-12 "Send code").
+certifi>=2026.7.22
+truststore>=0.10; python_version >= "3.10"

@@ -1,14 +1,16 @@
 # 🦞 ClawMetry
 
-[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![PyPI Downloads/week](https://static.pepy.tech/badge/clawmetry/week)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
+[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
+[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**See your agent think.** Real-time observability for **14 AI agent runtimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 10 more. One dashboard for your whole agent fleet.
+**See your agent think.** Real-time observability for **30 AI agent runtimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 more. One dashboard for your whole agent fleet.
 
 > 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
 
@@ -18,374 +20,248 @@ One command. Zero config. Auto-detects everything.
 pip install clawmetry && clawmetry
 ```
 
-Opens at **http://localhost:8900** and you're done.
+Opens at **http://localhost:8900**. Zero config: it finds the agent runtimes
+you already have, reads them read-only, and changes nothing about how they run.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## Works with 14 agent runtimes
+## Works with 30 agent runtimes
 
-ClawMetry started as observability for OpenClaw, and now meters your **whole agent fleet** in one dashboard, auto-detecting each runtime on your machine:
+**Free in the open source app:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
+**On a paid plan:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-OpenClaw and NemoClaw are free in the open-source app; the other runtimes light up with ClawMetry Cloud or a self-hosted Pro license. Switch runtimes from the header and every tab — cost, tokens, tools, traces — re-scopes to that runtime. See **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** for the exact free/paid split, tier matrix, `/api/entitlement` shape, and the `clawmetry license` CLI.
+Every runtime gets the same dashboard. Run several at once and the header
+switcher re-scopes every tab to one of them.
 
-## What You Get
+Built your own agent on an SDK instead? The interceptor tracks its LLM calls
+too. See [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 
-- **Flow** — Live animated diagram showing messages flowing through channels, brain, tools, and back
-- **Overview** — Health checks, activity heatmap, session counts, model info
-- **Usage** — Token and cost tracking with daily/weekly/monthly breakdowns
-- **Sessions** — Active agent sessions with model, tokens, last activity
-- **Crons** — Scheduled jobs with status, next run, duration
-- **Logs** — Color-coded real-time log streaming
-- **Memory** — Browse SOUL.md, MEMORY.md, AGENTS.md, daily notes
-- **Transcripts** — Chat-bubble UI for reading session histories
-- **Alerts** — Budget caps, error-rate triggers, agent-offline detection; routes to Slack, Discord, PagerDuty, Telegram, Email
-- **Approvals** — Gate destructive deletes, force pushes, DB mutations, sudo, package installs, network calls behind one-click sign-off
+## What you get
 
-## Screenshots
+- **Sessions & transcripts**: what each agent did, turn by turn, with replay
+- **Cost & tokens**: per runtime, model, session and day, with anomaly flags
+- **Flow**: live diagram of messages moving through channels, models and tools
+- **Brain**: the reasoning and tool-call event stream as it happens
+- **Context blowout**: window utilization sized per provider, compaction vs forced overflow, plus a per-runtime map of what we *can't* see ([how](docs/CONTEXT_BLOWOUT.md))
+- **Memory & skills**: the files and skills each runtime actually loaded
+- **Health & logs**: disk, memory, error rates, rate limits, live log stream
+- **Alerts**: budget caps, error spikes, agent-offline, routed to Slack, Discord, PagerDuty, Telegram, Email
+- **Approvals**: pause risky tool calls *before* they run and approve from your phone ([how](docs/APPROVALS.md))
 
-### 🧠 Brain — Live agent event stream
-![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
+## Context blowout, and what watching costs
 
-### 📊 Overview — Token usage & session summary
-![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+Two questions worth answering before you trust any agent-comparison tool.
 
-### ⚡ Flow — Real-time tool call feed
-![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+**How does it handle context-window blowout across runtimes?**
 
-### 💰 Tokens — Cost breakdown by model & session
-![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
+A utilization percentage is only as honest as what it divides by. ClawMetry
+sizes the window per provider from [a table you can read and
+PR](clawmetry/context_windows.py), covering Anthropic, OpenAI, Google, xAI,
+DeepSeek, Kimi, Qwen, Mistral, Llama and GLM. It does not measure all 30
+runtimes with one vendor's ruler. That matters: a 300K GPT-5 turn scored
+against Anthropic's 200K reads ">100%, blown" when it is really at 75% of
+GPT-5's 400K. The same ruler hides a genuinely overflowed 130K DeepSeek turn
+as a comfortable 65%.
 
-### 🧬 Memory — Workspace file browser
-![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
+Every window ships with its provenance: `model_table`, `explicit_marker`,
+`observed_floor`, or an honest `default` when we don't know the model. A
+gauge built on a guess never renders with the same authority as one built on
+a lookup.
 
-### 🔐 Security — Posture & audit log
-![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
+ClawMetry can only see compaction events on some runtimes. So
+`GET /api/context-coverage` reports, per runtime, whether a **zero means
+"ran clean" or "we're blind"**. A `0` that actually means blind says so.
+[Full detail](docs/CONTEXT_BLOWOUT.md)
 
-### 🚨 Alerts — Budget caps, error-rate triggers, webhooks to Slack / Discord / PagerDuty / Email
-![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+**What does the instrumentation cost?**
 
-### ✋ Approvals — Gate risky tool calls behind manual sign-off; policy-backed protection rules
-![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+| Path | Added to your agent | Default? |
+|---|---|---|
+| Session-file tailing (all 30 runtimes) | **0**. Separate process, no ClawMetry code in your agent | on |
+| HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** per LLM call, or 0.009% of a 5s call | off |
+| Pre-tool hook gate (warm cache) | **+44 ms** per gated tool call, over a 36 ms interpreter floor | off |
+| Enforcement proxy | **+9.7 ms** per LLM call | off |
+
+Daemon host cost: **2,762 events/sec** ingest, **710 bytes/event** on disk
+(67.7 MB per 100k events), and **~12% of one core** sustained on a busy
+install. That last number is over our own stated 5-10% budget, so it is
+published as a bug to chase rather than left off the page.
+
+Measured on an Apple M2 Pro with `benchmarks/overhead.py`. The harness runs
+each condition in a separate process, alternates their order, and **refuses
+to print a number when the rounds disagree on its sign**. Run it on your own
+machine in a minute:
+
+```bash
+pip install clawmetry && python -m benchmarks.overhead
+```
+
+Every path is measured, including the hook gates and the enforcement proxy,
+and the harness runs on Linux, macOS and Windows in CI. Two results worth
+knowing: the proxy costs about seven times more on Windows than on Linux, and
+the daemon currently sustains about 12% of one core, over our own 5-10%
+budget. The raw JSON, the method, and what is still unmeasured are in
+[docs/OVERHEAD.md](docs/OVERHEAD.md).
+
+## Pricing
+
+| Plan | What it covers | Price |
+|---|---|---|
+| **Free** | OpenClaw + NVIDIA NemoClaw + Goose, full dashboard, local only | $0 |
+| **Starter** | Every other runtime above, fleet view, cloud sync | $9 per node / month |
+| **Pro** | Starter + control and evaluation: approvals, tool-risk policies, evals, anomaly detection, cost optimizer, OTel export, tamper-evident audit log | $19 per node / month |
+
+Annual plans, Enterprise and the current numbers live at
+**[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Self-hosted license
+keys work without the cloud (`clawmetry license`). The exact free/paid split is
+in [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
+
+## Your data stays on your machine
+
+ClawMetry reads local session files and logs. **No session data leaves your box
+unless you run `clawmetry connect`** — no prompts, replies, tool arguments, file
+contents or log lines. When you do connect, the snapshot is end-to-end encrypted
+with a key that never leaves your machine, and decrypted in your browser. If a
+node has no key, the upload is skipped rather than sent in the clear, and no
+server response can turn that off.
+
+Two things do run by default before you connect, both opt-out and neither
+carrying session data: an anonymous install ping and a version check against
+PyPI. A default install also looks up your public IP once for a startup banner
+line. Every destination, what it carries and how to switch it off is listed in
+[docs/EGRESS.md](docs/EGRESS.md); self-hosted, repointed and air-gapped installs
+make no discretionary outbound calls at all.
+
+The decryption happens in your browser, in code we serve you. That used to be
+a promise; it is now something you can check. Every line that touches your key
+lives in one readable file, [`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js),
+which ships inside the wheel and is served verbatim, pinned with a Subresource
+Integrity hash. To confirm the browser runs what we published:
+
+```bash
+curl -s https://app.clawmetry.com/static/js/cm-e2e.js -o served.js
+pip download --no-deps clawmetry==$(clawmetry --version | tr -d 'a-z ') -d /tmp/cm
+unzip -p /tmp/cm/clawmetry-*.whl clawmetry/static/js/cm-e2e.js > published.js
+diff served.js published.js && echo identical
+```
+
+What that does not prove: we serve the page that loads the file, so we could
+serve a different page. Integrity hashes protect you from a compromised CDN,
+not from the vendor. What you gain is that any substitution has to be
+deliberate, visible in the page source, and different from an artifact on PyPI
+that anyone can fetch. Self-hosting or staying local-only removes the
+dependency entirely.
 
 ## Install
 
-**One-liner (recommended):**
 ```bash
-curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
+pip install clawmetry     # then: clawmetry
 ```
 
-**pip:**
-```bash
-pip install clawmetry
-clawmetry
-```
+Or the one-liner: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-**From source:**
-```bash
-git clone https://github.com/vivekchand/clawmetry.git
-cd clawmetry && pip install flask && python3 dashboard.py
-```
+Needs Python 3.8+ on macOS, Linux or Windows, and at least one agent runtime on
+the same machine. Docker instructions: [docs/DOCKER.md](docs/DOCKER.md).
 
-## v2 Frontend Development
-
-The v2 React app lives in `frontend/` and is served at `/v2` when the Flask
-server is started with v2 enabled.
-
-Use two terminals while developing:
+Or let the agent set it up for you. The [`agent-kill-switch`](skills/agent-kill-switch/SKILL.md)
+skill teaches Claude Code, Codex, Cursor, Gemini CLI, Copilot or OpenCode to
+install ClawMetry, report what the agents on the machine are doing and spending,
+stop one session on request, and hold risky tool calls for approval:
 
 ```bash
-# Terminal 1: Flask API/server on :8900
-CLAWMETRY_V2=1 python3 dashboard.py
+npx skills add vivekchand/clawmetry --skill agent-kill-switch
 ```
 
-```bash
-# Terminal 2: Vite dev server on :5173
-cd frontend
-nvm use
-npm ci
-npm run dev
-```
-
-Open `http://localhost:5173/v2/`. Vite proxies `/api` requests to
-`http://localhost:8900`, so the React app can talk to the local Flask server
-without extra CORS setup.
-
-To build the bundle that ships with the Python package:
-
-```bash
-cd frontend
-npm run build
-```
-
-The production bundle is written to `clawmetry/static/v2/dist/`.
-
-## Runtime / Agent Compatibility
-
-ClawMetry observes many AI-agent runtimes, not just OpenClaw. Each non-OpenClaw runtime ships a dedicated reader adapter that translates its native session format into ClawMetry's unified shapes; the daemon ingests them into the same DuckDB store + cloud snapshot, tagged with the runtime, and the Session replay tab shows a **runtime switcher** when more than one is present. See [`docs/compatibility.md`](docs/compatibility.md) for the full matrix + a guide to adding runtimes, and [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) for the OpenClaw-family primer.
-
-| Runtime / Agent | Status | Notes |
-|---|---|---|
-| **OpenClaw** | Native | Reference runtime, auto-detected |
-| **PicoClaw** | Beta adapter | Flat `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). Transcripts, model, tool calls. |
-| **NanoClaw** | Beta adapter | Per-session SQLite (`data/v2-sessions`). Transcripts + message counts. |
-| **Hermes** | Beta adapter | SQLite `~/.hermes/state.db`. Transcripts, model, tokens/cost. |
-| **Claude Code** | Beta adapter | JSONL `~/.claude/projects/.../<id>.jsonl`. Transcripts, model, tool calls + thinking, token usage. |
-| **Codex** | Beta adapter | Rollout JSONL `~/.codex/sessions/...`. Transcripts, model, tool calls, token usage. |
-| **Cursor** | Beta adapter | SQLite `state.vscdb`. Chat/composer transcripts, model. |
-| **Aider** | Beta adapter | `.aider.chat.history.md` per project. Transcripts, model, token counts. |
-| **Goose** | Beta adapter | SQLite `~/.local/share/goose`. Transcripts, model, tool calls, token totals. |
-| **opencode** | Beta adapter | SQLite `~/.local/share/opencode`. Transcripts, model, tool calls, tokens + cost. |
-| **Qwen Code** | Beta adapter | JSONL `~/.qwen/projects/.../chats`. Transcripts, model, tool calls, token usage. |
-| **Pi** | Beta adapter | JSONL `~/.pi/agent/sessions`. Transcripts, model, tool calls, tokens + cost. |
-| **Deep Agents** | Beta adapter | SQLite `~/.deepagents/.state/sessions.db`. Transcripts, model, tool calls, tokens + cost. |
-
-"Beta adapter" means ClawMetry ships a reader for that runtime's real on-disk format, each built + verified against a real install on a real machine (see `tests/fixtures/runtimes/<rt>/`). Adapters are read-only; each is honest about what its runtime actually stores (e.g. PicoClaw/NanoClaw/Cursor don't write token cost to disk). When several runtimes run on one node, the runtime switcher scopes the sessions view to one for a clean deep-dive.
-
-## Track any SDK agent — out-loop cost attribution
-
-The runtimes above all write sessions to disk. Your own **production agent** — the one you built on the OpenAI Agents SDK, LangChain, the Vercel AI SDK, LlamaIndex, E2B, or a plain `httpx` loop — doesn't. ClawMetry's zero-config interceptor still captures its LLM calls (cost, tokens, latency, errors) by monkey-patching `httpx`/`requests`:
-
-```python
-import clawmetry.track            # activate the interceptor
-clawmetry.track.set_source("support-agent")   # name this product
-
-# ...your agent runs as normal; every LLM call is now tracked + attributed.
-```
-
-`set_source()` (or the `CLAWMETRY_SOURCE=support-agent` env var) tags each call with a **named source**, so every product you run shows up as its own first-class, cost-attributable line in the dashboard's **🔌 Out-loop sources** card on Overview — calls, providers, latency, error rate per agent. No source set? The calls are still tracked; the card just stays hidden.
-
-```bash
-CLAWMETRY_SOURCE=billing-agent python my_agent.py
-```
-
-This is the same data layer the runtime adapters feed (DuckDB → cloud snapshot), so out-loop sources sync to the cloud dashboard the same as everything else, E2E-encrypted.
-
-## OpenTelemetry — vendor-neutral, send your traces anywhere
-
-ClawMetry speaks **OpenTelemetry** in both directions, using the **GenAI semantic conventions**, so your agent traces are never locked into one tool.
-
-**Export** every session — LLM calls, tools, sub-agents, tokens, cost — as OTLP/HTTP GenAI spans to any collector (Datadog, Grafana, Honeycomb, or your own OTel Collector):
-
-```bash
-clawmetry --otel-export http://localhost:4318/v1/traces
-# equivalently:
-CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
-```
-
-Auth headers and poll interval are optional env vars:
-
-```bash
-CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
-CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
-```
-
-**Ingest** — the built-in OTLP receiver accepts traces and metrics from anything else at `/v1/traces` and `/v1/metrics` (`pip install clawmetry[otel]` for protobuf ingest).
-
-You get the zero-config, local-first ClawMetry dashboard **and** your data in whatever backend your team already runs — no lock-in, no second agent to install.
-
-## Configuration
-
-Most people don't need any config. ClawMetry auto-detects your workspace, logs, sessions, and crons.
-
-If you do need to customize:
-
-```bash
-clawmetry --port 9000              # Custom port (default: 8900)
-clawmetry --host 127.0.0.1         # Bind to localhost only
-clawmetry --workspace ~/mybot      # Custom workspace path
-clawmetry --name "Alice"           # Your name in Flow visualization
-```
-
-All options: `clawmetry --help`
-
-## Supported Channels
-
-ClawMetry shows live activity for every OpenClaw channel you have configured. Only channels that are actually set up in your `openclaw.json` appear in the Flow diagram — unconfigured ones are automatically hidden.
-
-Click any channel node in the Flow to see a live chat bubble view with incoming/outgoing message counts.
-
-| Channel | Status | Live Popup | Notes |
-|---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ Full | ✅ | Messages, stats, 10s refresh |
-| 💬 **iMessage** | ✅ Full | ✅ | Reads `~/Library/Messages/chat.db` directly |
-| 💚 **WhatsApp** | ✅ Full | ✅ | Via WhatsApp Web (Baileys) |
-| 🔵 **Signal** | ✅ Full | ✅ | Via signal-cli |
-| 🟣 **Discord** | ✅ Full | ✅ | Guild + channel detection |
-| 🟪 **Slack** | ✅ Full | ✅ | Workspace + channel detection |
-| 🌐 **Webchat** | ✅ Full | ✅ | Built-in web UI sessions |
-| 📡 **IRC** | ✅ Full | ✅ | Terminal-style bubble UI |
-| 🍏 **BlueBubbles** | ✅ Full | ✅ | iMessage via BlueBubbles REST API |
-| 🔵 **Google Chat** | ✅ Full | ✅ | Via Chat API webhooks |
-| 🟣 **MS Teams** | ✅ Full | ✅ | Via Teams bot plugin |
-| 🔷 **Mattermost** | ✅ Full | ✅ | Self-hosted team chat |
-| 🟩 **Matrix** | ✅ Full | ✅ | Decentralized, E2EE support |
-| 🟢 **LINE** | ✅ Full | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ Full | ✅ | Decentralized NIP-04 DMs |
-| 🟣 **Twitch** | ✅ Full | ✅ | Chat via IRC connection |
-| 🔷 **Feishu/Lark** | ✅ Full | ✅ | WebSocket event subscription |
-| 🔵 **Zalo** | ✅ Full | ✅ | Zalo Bot API |
-
-> **Auto-detection:** ClawMetry reads your `~/.openclaw/openclaw.json` and only renders the channels you've actually configured. No manual setup required.
-
-## Docker Deployment
-
-Want to run ClawMetry in a container? No problem! 🐳
-
-**Quick start with Docker:**
-
-```bash
-# Build the image
-docker build -t clawmetry .
-
-# Run with default settings
-docker run -p 8900:8900 clawmetry
-
-# Or mount your agent's data dir (shown: OpenClaw's ~/.openclaw)
-docker run -p 8900:8900 \
-  -v ~/.openclaw:/root/.openclaw \
-  -v /tmp/moltbot:/tmp/moltbot \
-  clawmetry
-```
-
-**Docker Compose example:**
-
-```yaml
-version: '3.8'
-services:
-  clawmetry:
-    build: .
-    ports:
-      - "8900:8900"
-    volumes:
-      - ~/.openclaw:/root/.openclaw:ro
-      - /tmp/moltbot:/tmp/moltbot:ro
-    restart: unless-stopped
-```
-
-> **Note:** When running in Docker, mount your agent's data + log directories (e.g. `~/.openclaw`, `~/.claude`, `~/.codex`) so ClawMetry can auto-detect your setup.
-
-## Requirements
-
-- Python 3.8+
-- Flask (installed automatically via pip)
-- An AI agent runtime on the same machine: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, or Deep Agents (or mounted volumes for Docker)
-- Linux or macOS
-
-## NemoClaw / OpenShell Support
-
-ClawMetry automatically detects [NemoClaw](https://github.com/NVIDIA/NemoClaw) — NVIDIA's enterprise security wrapper for OpenClaw that runs agents inside sandboxed OpenShell containers.
-
-No extra configuration is needed in most cases. The sync daemon auto-discovers session files whether they live in `~/.openclaw/` on the host or inside an OpenShell container.
-
-### How it works
-
-ClawMetry detects NemoClaw in two ways:
-
-1. **Binary detection** — checks for the `nemoclaw` CLI and runs `nemoclaw status` to get sandbox info
-2. **Container detection** — scans running Docker containers for `openshell`, `nemoclaw`, or `ghcr.io/nvidia/` images, then reads sessions via volume mounts or `docker cp`
-
-Session files synced from NemoClaw containers are tagged with `runtime=nemoclaw` and `container_id` metadata in the cloud dashboard, so you can tell them apart from standard OpenClaw sessions at a glance.
-
-### Recommended setup: sync daemon on the HOST
-
-For the best experience, run ClawMetry's sync daemon on the **host machine** (not inside the sandbox). This avoids NemoClaw network policy restrictions.
-
-```bash
-# On the host (outside the sandbox)
-pip install clawmetry
-clawmetry connect
-clawmetry sync
-```
-
-The sync daemon will automatically find sessions inside any running OpenShell containers.
-
-### Optional: explicit sandbox name
-
-If auto-detection doesn't work, point ClawMetry at the right sandbox:
-
-```bash
-export NEMOCLAW_SANDBOX=my-sandbox-name
-clawmetry sync
-```
-
-### Running inside the sandbox (advanced)
-
-If you must run the sync daemon **inside** the OpenShell sandbox, add this egress rule to your NemoClaw network policy so it can reach the ClawMetry ingest API:
-
-```yaml
-# nemoclaw-policy.yaml
-network:
-  egress:
-    - host: ingest.clawmetry.com
-      port: 443
-      protocol: https
-```
-
-Apply with:
-
-```bash
-nemoclaw policy apply --file nemoclaw-policy.yaml
-```
-
-### Ports and endpoints
-
-| Endpoint | Port | Protocol | Required |
-|---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | Yes (sync daemon → cloud) |
-| `localhost:8900` | 8900 | HTTP | Yes (local dashboard UI) |
-| Docker socket (`/var/run/docker.sock`) | — | Unix socket | For container session discovery |
-
-The sync daemon only makes outbound HTTPS calls to `ingest.clawmetry.com`. No inbound ports are required.
-
----
-
-## Cloud Deployment
-
-See the **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** for SSH tunnels, reverse proxy, and Docker.
-
-## Testing
-
-This project is tested with BrowserStack.
-
-[![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
-
-## Telemetry
-
-ClawMetry sends a single anonymous "first run" ping to
-`https://app.clawmetry.com/api/install` the first time you run the
-`clawmetry` CLI on a new machine. We use this to count installs (the
-only marketing metric we have for an OSS project) and to learn which
-agent frameworks our users have installed.
-
-**Exactly one POST per install**, containing:
-
-| Field | Example | Why |
-|---|---|---|
-| `install_id` | random UUID stored at `~/.clawmetry/install_id` | dedup; not linked to your email or api_key |
-| `version` | `0.12.167` | what versions are in the wild |
-| `os` / `os_version` | `Darwin` / `25.3.0` | platform support priorities |
-| `python` | `3.11.15` | Python version support matrix |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | which agents we should integrate with next |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | separate human installs from CI noise |
-
-**What we do NOT send**: IP (cloud derives the country code server-side
-from the request, then discards the IP), hostname, username, workspace
-path, file contents, your api_key, your email, anything PII or
-workspace-specific. The wire payload is auditable in
-[`clawmetry/telemetry.py`](clawmetry/telemetry.py).
-
-**Opt out** (any one of these disables it permanently):
-
-```bash
-export CLAWMETRY_NO_TELEMETRY=1                # per-shell
-export DO_NOT_TRACK=1                          # W3C cross-tool standard
-touch ~/.clawmetry/notelemetry                 # persistent file marker
-```
-
-A network failure here never blocks `clawmetry` from running — the
-ping is fire-and-forget on a daemon thread with a 3 s timeout.
+## Docs
+
+| | |
+|---|---|
+| [Runtime compatibility](docs/compatibility.md) | What each adapter reads, and how to add a runtime |
+| [Context blowout](docs/CONTEXT_BLOWOUT.md) | Per-provider windows, compaction vs overflow, per-runtime coverage |
+| [Overhead](docs/OVERHEAD.md) | What instrumentation costs, measured, with the harness to reproduce it |
+| [Entitlements](docs/ENTITLEMENTS.md) | Free vs paid, tier matrix, license CLI |
+| [Approvals & policies](docs/APPROVALS.md) | Pre-execution gating, risk scoring, phone approvals |
+| [OpenTelemetry](docs/OPENTELEMETRY.md) | Export traces anywhere, ingest OTLP from anything |
+| [Bring your own agent](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore, Pydantic AI, LangChain end to end, with runnable examples |
+| [SDK tracking](docs/SDK_TRACKING.md) | Cost attribution for agents you built yourself |
+| [Chat channels](docs/CHANNELS.md) | The chat adapters shown in Flow |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Sandboxed NVIDIA NemoClaw setups |
+| [Docker](docs/DOCKER.md) | Image, compose, volume mounts |
+| [Architecture](ARCHITECTURE.md) · [Development](docs/DEVELOPMENT.md) | How it works inside; running from source |
+| [Telemetry](docs/TELEMETRY.md) | The anonymous install and desktop-open pings, and how to turn them off |
+
+## Screenshots
+
+Every number below is from one real machine, read-only, with nothing seeded.
+
+**It tells you when something is wrong, not just what happened.**
+Two anomaly banners at the top: spend running 7x the daily average, and a
+4.2x cost spike. Below them, 324 of 667 recent sessions carrying a waste
+signal, itemised by cause.
+
+![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+
+**It shows you where the money went, in every window.**
+$252.47 today, $513.15 this week, $1,312.92 this month, each with the tokens
+behind it and how much of it your subscription already covers. Below that,
+about $1,128/mo itemised as recoverable and $17,256/mo already saved by
+cache reuse.
+
+![Cost: today, this week and this month, with an efficiency grade and itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
+
+**It draws how a message becomes an answer.**
+The live flow diagram: you, the channel it arrived on, the gateway, the model
+answering right now, and every tool it reached for. Nodes light up as work
+moves through them.
+
+![Flow: live diagram from you through the gateway to the model and its tools](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+
+**Every agent on the machine, in one table.**
+What it runs, what it costs in the last 24 hours and over its lifetime, when
+it was last seen, who owns it, and whether a subscription is covering the
+bill. 14 agents here, 3 sessions working, 13 quiet.
+
+![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
+
+**It shows where a turn's time and money went, tool by tool.**
+One turn of a real session: 11 tools in 11.2 minutes for $1.16. Every Bash
+call and model call gets its own bar on the timeline, so the command that ran
+for 4.1 minutes and the one that ran for 226ms are told apart at a glance.
+
+![Sessions: one agent turn on a timeline, every tool call with its own duration and the turn's cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/sessions.png)
+
+**It grades the work, not just the spend.**
+An A this week: 54 tasks came back clean, 2 rough ones cost $48.57, and the
+runs with too little activity to judge are left out of the grade instead of
+being counted as wins. Each rough run links to its trace.
+
+![Quality: this week's report card with the rough runs and what they cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/quality.png)
+
+**It shows why the context window keeps filling up.**
+715K of a 1M-token window on the latest turn, an 83.3% peak, 4 compactions
+that all fired proactively rather than on an overflow, and the utilisation of
+every turn behind it.
+
+![Context usage: window utilisation per turn, compaction events and tokens reclaimed](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/context.png)
+
+**Detection runs without you configuring anything.**
+The built-in detectors are on from install: agent went quiet, telemetry feed
+stopped, cost spike, token burst, errors climbing, error spike, budget
+threshold, threat signature matched, security tool finding, security posture
+changed. Your own rules are optional on top.
+
+![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+
+**Holding a risky call is opt-in, and ships off.**
+Recursive deletes, force pushes, sudo, secrets, package installs and outbound
+calls each get a rule you can turn on. Until you do, ClawMetry watches and
+changes nothing. Once one is on, matching calls wait here (or on your phone)
+for an approve or a deny.
+
+![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+
+More, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
 ## Star History
 
@@ -399,11 +275,6 @@ ping is fire-and-forget on a daemon thread with a 3 s timeout.
 
 ## License
 
-MIT
+MIT · Built by [@vivekchand](https://github.com/vivekchand) · [clawmetry.com](https://clawmetry.com)
 
----
-
-<p align="center">
-  <strong>🦞 See your agent think</strong><br>
-  <sub>Built by <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · Part of the <a href="https://github.com/openclaw/openclaw">OpenClaw</a> ecosystem</sub>
-</p>
+<!-- osai-verify: f3ac716d40002c1ad6dd -->

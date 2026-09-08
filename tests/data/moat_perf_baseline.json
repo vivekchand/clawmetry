@@ -60,9 +60,9 @@
     "url": "/api/skills/fidelity"
   },
   "subagents": {
-    "captured_at": "2026-05-20",
-    "captured_sha": "e77c721",
-    "fast_path_ms_p50": 2.38,
+    "captured_at": "2026-09-02",
+    "captured_sha": "ed86308",
+    "fast_path_ms_p50": 4.97,
     "url": "/api/subagents"
   },
   "task_runs": {

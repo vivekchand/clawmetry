@@ -1,0 +1,74 @@
+<!-- E2E encryption key — Settings surface (local dashboard only, never shown
+     on the hosted cloud dashboard: see the /api/local/e2e-key comment in
+     dashboard.py for why the route itself cannot exist there). -->
+<div id="e2e-key-modal-overlay" onclick="if(event.target===this)closeE2eKeyModal()" style="
+  display:none;
+  position:fixed;
+  inset:0;
+  z-index:2000;
+  background:rgba(0,0,0,0.6);
+  backdrop-filter:blur(4px);
+  align-items:center;
+  justify-content:center;
+  ">
+  <div style="
+    background:#0f1623;
+    border:1px solid rgba(96,165,250,0.2);
+    border-radius:16px;
+    width:90%;
+    max-width:440px;
+    padding:32px;
+    box-shadow:0 25px 60px rgba(0,0,0,0.5);
+    position:relative;
+    margin:auto;
+    ">
+    <button onclick="closeE2eKeyModal()" style="
+      position:absolute;
+      top:16px;
+      right:16px;
+      background:rgba(255,255,255,0.05);
+      border:none;
+      border-radius:8px;
+      width:32px;
+      height:32px;
+      cursor:pointer;
+      font-size:18px;
+      color:#888;
+      ">×</button>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <span style="font-size:18px;font-weight:700;color:#fff;" data-i18n="e2e_key.title">Cloud sync key</span>
+    </div>
+    <p style="color:#94a3b8;font-size:13px;margin:0 0 20px;line-height:1.5;" data-i18n="e2e_key.tagline">This key decrypts your synced data in the browser. It never leaves this machine except end-to-end encrypted, and it is never shown on the hosted cloud dashboard.</p>
+
+    <div id="e2e-key-empty" style="display:none;text-align:center;padding:12px 0 4px;">
+      <p style="color:#94a3b8;font-size:13px;margin:0 0 14px;" data-i18n="e2e_key.not_configured">Cloud sync isn't set up on this node yet.</p>
+      <button onclick="closeE2eKeyModal();if(typeof openCloudModal==='function')openCloudModal()" style="padding:10px 18px;background:#E5443A;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;" data-i18n="e2e_key.enable_cloud_sync">Enable cloud sync</button>
+    </div>
+
+    <div id="e2e-key-body" style="display:none;">
+      <label style="font-size:12px;font-weight:600;color:#94a3b8;display:block;margin-bottom:6px;" data-i18n="e2e_key.secret_key">SECRET KEY</label>
+      <div style="display:flex;gap:8px;align-items:stretch;">
+        <code id="e2e-key-value" style="flex:1;color:#e2e8f0;font-size:12px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);padding:8px 10px;border-radius:8px;word-break:break-all;letter-spacing:0.3px;"></code>
+        <button id="e2e-key-reveal-btn" onclick="e2eKeyToggleReveal()" title="Show / hide" style="padding:8px 10px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#94a3b8;cursor:pointer;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+        <button onclick="e2eKeyCopy()" style="padding:8px 12px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:#94a3b8;font-size:12px;cursor:pointer;white-space:nowrap;" data-i18n="cloud.copy">Copy</button>
+      </div>
+      <p id="e2e-key-copied" style="color:#22c55e;font-size:12px;margin:6px 0 0;display:none;" data-i18n="e2e_key.copied">Copied.</p>
+
+      <div style="margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,255,255,0.06);">
+        <p style="color:#94a3b8;font-size:12px;margin:0 0 10px;line-height:1.5;" data-i18n="e2e_key.regen_hint">Think this key leaked? Regenerate it. New data syncs under the new key right away; anything already synced stays readable by anyone who has the old key.</p>
+        <div id="e2e-key-regen-confirm" style="display:none;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:12px;margin-bottom:10px;">
+          <p style="color:#f59e0b;font-size:12px;margin:0 0 10px;font-weight:600;" data-i18n="e2e_key.regen_confirm_text">Regenerate now? Any browser tab still using the old key will stop being able to unlock new data until you paste the new key in.</p>
+          <div style="display:flex;gap:8px;">
+            <button onclick="e2eKeyRegenerate()" style="flex:1;padding:8px 12px;background:#f59e0b;color:#1a1206;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;" data-i18n="e2e_key.regen_yes">Yes, regenerate</button>
+            <button onclick="document.getElementById('e2e-key-regen-confirm').style.display='none'" style="flex:1;padding:8px 12px;background:#1a2235;border:1px solid rgba(255,255,255,0.1);color:#94a3b8;border-radius:8px;font-size:12px;cursor:pointer;" data-i18n="e2e_key.regen_cancel">Cancel</button>
+          </div>
+        </div>
+        <button id="e2e-key-regen-btn" onclick="document.getElementById('e2e-key-regen-confirm').style.display='';this.style.display='none'" style="width:100%;padding:9px 14px;background:transparent;border:1px solid rgba(245,158,11,0.4);color:#f59e0b;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;" data-i18n="e2e_key.regenerate">Regenerate key</button>
+        <p id="e2e-key-error" style="color:#E5443A;font-size:12px;margin:8px 0 0;display:none;"></p>
+      </div>
+    </div>
+  </div>
+</div>

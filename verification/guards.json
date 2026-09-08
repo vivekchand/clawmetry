@@ -1,0 +1,155 @@
+{
+  "_comment": [
+    "The guard census: the verification surface, recorded so it cannot shrink quietly.",
+    "",
+    "Every entry here exists because a specific regression reached real users.",
+    "Deleting one, or emptying it out, re-opens that door -- and line coverage",
+    "will not notice, because a guard weakened into a tautology still executes.",
+    "",
+    "RATCHET RULE: the numbers in 'ratchets' may only ever increase. CI fails when",
+    "a live value drops below its recorded baseline. Raising a baseline is a normal",
+    "commit; LOWERING one is a deliberate, reviewable act that must state why in the",
+    "PR description. That is the point -- the goal is not to make weakening",
+    "impossible, it is to make it impossible to do SILENTLY.",
+    "",
+    "Adding a new guard: add its path here in the same PR. tests/test_guard_census.py",
+    "fails if a file listed here is missing, and the ratchets keep the rest honest."
+  ],
+  "guard_files": [
+    {
+      "path": "scripts/e2e_gate.py",
+      "why": "IS the merge gate. The single required context aggregates whatever this file lists.",
+      "min_bytes": 4000
+    },
+    {
+      "path": "scripts/check_py39_annotations.py",
+      "why": "0.12.753 shipped a PEP 604 union at module scope; every CLI subcommand died at import on Python 3.9, including 'clawmetry uninstall'.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "scripts/sync_runtime_count.py",
+      "why": "Runtime count drifted to 20/14/12 across README, PyPI and FLYWHEEL while the catalogue said something else.",
+      "min_bytes": 1000
+    },
+    {
+      "path": "scripts/c6_required_checks_status.py",
+      "why": "Watchdog for required-check configuration. Its predecessor was unparseable YAML and never ran.",
+      "min_bytes": 2000
+    },
+    {
+      "path": "scripts/verification_matrix.py",
+      "why": "Declares every product x platform x python x runtime cell that must work, so holes cannot open silently.",
+      "min_bytes": 2000
+    },
+    {
+      "path": "scripts/mutation_ratchet.py",
+      "why": "Measures whether the guards actually catch bugs. Without it, a test weakened into a tautology is invisible -- line coverage cannot see it.",
+      "min_bytes": 4000
+    },
+    {
+      "path": "verification/matrix.json",
+      "why": "The declared product surface. Deleting it makes every coverage claim unverifiable.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "verification/mutation_targets.json",
+      "why": "Mutation-score baselines. Removing it silently disables the ratchet.",
+      "min_bytes": 800
+    },
+    {
+      "path": "tests/test_verification_matrix.py",
+      "why": "Proves the matrix checker actually catches drift, rather than rubber-stamping it.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_store_invariants.py",
+      "why": "Property tests over the DuckDB store: idempotent ingest, no loss under interleaved flush (issue #1590), clean rejection of torn records.",
+      "min_bytes": 6000
+    },
+    {
+      "path": "tests/test_workflow_yaml_valid.py",
+      "why": "c6-schedule-heal.yml had two YAML faults and failed at startup on every run for months.",
+      "min_bytes": 1500
+    },
+    {
+      "path": "tests/test_e2e_gate.py",
+      "why": "Proves the merge gate actually blocks what it claims to block.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_guard_census.py",
+      "why": "This census. Listed here so removing the enforcement is itself caught.",
+      "min_bytes": 2000
+    },
+    {
+      "path": "scripts/check_action_refs.py",
+      "why": "ossf/scorecard-action@v2 does not exist, so the OpenSSF Scorecard job failed at 'Set up job' on every run since it was written. An unresolvable action never executes a step, so the workflow reads as ran-and-failed rather than never-started.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_gate_needs_no_secrets.py",
+      "why": "A merge-blocking check that REQUIRES a privileged secret leaves forks, outside contributors, and everyone affected by a credential rotation with no path to green. Exceptions are listed with evidence rather than exempted wholesale.",
+      "min_bytes": 4000
+    },
+    {
+      "path": "tests/test_vendor_fonts_degrades.py",
+      "why": "The Google Fonts API is outside any contributor's control, so an outage or an API-shape change must read as unverified rather than as drift, or every PR goes red with no path to green. Equally important in the other direction: a real difference must still fail, so the tolerance cannot become a way to hide bugs.",
+      "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_mutation_ratchet_is_deterministic.py",
+      "why": "A ratchet that moves on its own fails PRs that changed nothing relevant, and the only escapes are lowering the baseline or re-running until it passes. The score really did move (53/50/47 on one commit) because a same-length mutation could execute stale .pyc bytecode.",
+      "min_bytes": 3500
+    },
+    {
+      "path": "scripts/check_ac_coverage.py",
+      "why": "AC-OBS-CEA-001.2 forbade a $0.00 cost window before #5079 shipped one; the criterion existed and nothing could fail on it. This file is what makes an acceptance criterion failable.",
+      "min_bytes": 5000
+    },
+    {
+      "path": "docs/acceptance_criteria.json",
+      "why": "The mirror of the 77 acceptance criteria this repo implements. Emptying it makes the AC gate pass vacuously: zero criteria means zero uncovered, and the ratchet reports success while enforcing nothing.",
+      "min_bytes": 12000
+    },
+    {
+      "path": "docs/ac_coverage_baseline.json",
+      "why": "The AC ratchet itself. Repopulating it with every criterion re-opens every door the gate closed, silently, because the gate would still report OK.",
+      "min_bytes": 1500
+    },
+    {
+      "path": "tests/test_ac_coverage_guard.py",
+      "why": "Pins the AC gate's declaration rule. Without it the first draft's loophole returns, where a file naming a criterion it does NOT cover marks that criterion covered.",
+      "min_bytes": 3000
+    }
+  ],
+  "ratchets": {
+    "e2e_gate_required_specs": {
+      "value": 12,
+      "why": "Number of checks aggregated by the merge gate. Was 4 before L0, which let a red CI merge. Raised to 12 when drift-bot joined: it is a commit status, not a check run, so the gate had to learn to read both surfaces before it could block on it. Adding checks is good; removing them re-opens the hole."
+    },
+    "pip_install_matrix_legs": {
+      "value": 4,
+      "why": "3 OS on 3.11 plus the ubuntu 3.9 leg. Dropping the 3.9 leg is exactly how 0.12.753 escaped."
+    },
+    "workflow_files_parsed": {
+      "value": 32,
+      "why": "Workflows under .github/workflows that must parse. Guards against quietly deleting a workflow to make CI green."
+    },
+    "declared_matrix_cells": {
+      "value": 19,
+      "why": "Cells declared in verification/matrix.json. Deleting a cell is how you make a coverage problem disappear without fixing it."
+    },
+    "gated_matrix_cells": {
+      "value": 9,
+      "why": "Cells whose failure blocks a merge. The number that actually protects main."
+    },
+    "mutation_targets": {
+      "value": 2,
+      "why": "Modules under mutation testing. Dropping a target removes the only measurement that can see a weakened assertion."
+    },
+    "acceptance_criteria_covered": {
+      "value": 9,
+      "why": "Acceptance criteria (of 77) declared by at least one test. Was 0 across 964 test files. A criterion no test references is prose, not a guard: that is how #5079 shipped a $0.00 cost window that AC-OBS-CEA-001.2 had forbidden for months."
+    }
+  }
+}

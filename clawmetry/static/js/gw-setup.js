@@ -1,4 +1,13 @@
-// Gateway setup wizard
+// Gateway connection — headless only. Every manual gateway-token UI is gone:
+// the auto-popping "ClawMetry Setup" wizard (v0.1-era UX from when ClawMetry
+// only watched the OpenClaw gateway) and the opt-in Developer > Gateway form
+// that replaced it. The product detects 30+ runtimes automatically and the
+// gateway token itself is auto-detected server-side from
+// ~/.openclaw/openclaw.json, so there is nothing left for a user to fill in.
+// What remains keeps an already-configured connection alive: a ?token=XXX URL
+// (used by remote/Docker links) and a localStorage-remembered token are still
+// posted to /api/gw/config on load. First-run onboarding lives in
+// onboarding.js; remote sign-in with a raw token lives in the login overlay.
 async function checkGwConfig() {
   // Support ?token=XXX in URL — auto-configure and strip from address bar
   try {
@@ -14,7 +23,6 @@ async function checkGwConfig() {
         body: JSON.stringify({token: urlToken})
       });
       var td = await tr.json();
-      if (td.ok) { updateGwStatus(true, td.url); }
       // Strip token from URL (keep it out of browser history)
       urlParams.delete('token');
       var clean = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '');
@@ -26,90 +34,17 @@ async function checkGwConfig() {
     const r = await fetch('/api/gw/config');
     const d = await r.json();
     if (!d.configured) {
-      // Check localStorage first
+      // Not configured server-side — try a token this browser remembers.
       const saved = localStorage.getItem('clawmetry-gw-token');
       if (saved) {
-        // Try auto-connecting with saved token
-        const r2 = await fetch('/api/gw/config', {
+        await fetch('/api/gw/config', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({token: saved})
         });
-        const d2 = await r2.json();
-        if (d2.ok) { updateGwStatus(true, d2.url); return; }
       }
-      // Bug #1127: don't z-stack the gw-setup overlay on top of an already-
-      // open cloud modal — the two share the same backdrop and confuse the
-      // user. Defer until the cloud modal closes.
-      if (_isCloudModalOpen()) return;
-      document.getElementById('gw-setup-overlay').style.display = 'flex';
-    } else {
-      updateGwStatus(true, d.url);
     }
   } catch(e) {}
-}
-
-function _isCloudModalOpen() {
-  var cm = document.getElementById('cloud-modal-overlay');
-  if (cm && cm.style.display && cm.style.display !== 'none') return true;
-  // Defensive: also honour a generic .cloud-modal.active marker if present.
-  if (document.querySelector && document.querySelector('.cloud-modal.active')) return true;
-  return false;
-}
-
-function updateGwStatus(connected, url) {
-  const dot = document.getElementById('gw-status-dot');
-  if (!dot) return;
-  dot.style.color = connected ? '#4ade80' : '#f87171';
-  dot.title = connected ? 'Gateway: connected' + (url ? ' (' + url + ')' : '') : 'Gateway: disconnected';
-}
-
-async function gwSetupConnect() {
-  const btn = document.getElementById('gw-connect-btn');
-  const errEl = document.getElementById('gw-setup-error');
-  const statusEl = document.getElementById('gw-setup-status');
-  const token = document.getElementById('gw-token-input').value.trim();
-  const url = document.getElementById('gw-url-input').value.trim();
-  
-  errEl.style.display = 'none';
-  if (!token) { errEl.textContent = 'Please enter a token'; errEl.style.display = 'block'; return; }
-  
-  btn.textContent = 'Scanning for gateway...';
-  btn.disabled = true;
-  statusEl.textContent = 'Scanning ports to find your OpenClaw gateway...';
-  statusEl.style.display = 'block';
-  
-  try {
-    const r = await fetch('/api/gw/config', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({token, url})
-    });
-    const d = await r.json();
-    if (d.ok) {
-      statusEl.textContent = 'Connected to ' + d.url;
-      btn.textContent = 'Connected!';
-      localStorage.setItem('clawmetry-gw-token', token);
-      localStorage.setItem('clawmetry-token', token);
-      updateGwStatus(true, d.url);
-      setTimeout(() => {
-        document.getElementById('gw-setup-overlay').style.display = 'none';
-        location.reload();
-      }, 800);
-    } else {
-      errEl.textContent = d.error || 'Connection failed';
-      errEl.style.display = 'block';
-      btn.textContent = 'Connect';
-      btn.disabled = false;
-      statusEl.style.display = 'none';
-    }
-  } catch(e) {
-    errEl.textContent = 'Network error: ' + e.message;
-    errEl.style.display = 'block';
-    btn.textContent = 'Connect';
-    btn.disabled = false;
-    statusEl.style.display = 'none';
-  }
 }
 
 // Check on load
@@ -117,11 +52,16 @@ document.addEventListener('DOMContentLoaded', checkGwConfig);
 
 // ClawMetry Cloud CTA
 var _cloudEmail = '';
-function openCloudModal() {
-  // Bug #1127: suppress the gateway-setup overlay so the user doesn't see two
-  // stacked modals (cloud CTA on top, gw-setup peeking behind it).
-  var gw = document.getElementById('gw-setup-overlay');
-  if (gw && gw.dataset.mandatory !== 'true') gw.style.display = 'none';
+// How the modal was reached decides the OAuth rail. 'managed' (the default:
+// the "Enable Cloud Sync" CTA, the onboarding cloud card, alert sign-up CTAs)
+// sends mode=managed explicitly — clicking those IS the egress opt-in.
+// 'signin' (the profile menu's "Sign in / Create account") omits mode so the
+// backend picks the rail from the install's recorded intent: a self-host
+// machine signing back in stays local-only (founder report 2026-08-09:
+// profile-menu sign-in silently enabled cloud sync on a self-host install).
+var _cloudModalIntent = 'managed';
+function openCloudModal(intent) {
+  _cloudModalIntent = (intent === 'signin') ? 'signin' : 'managed';
   var _cmo = document.getElementById('cloud-modal-overlay');
   document.body.appendChild(_cmo);
   _cmo.style.display = 'flex';
@@ -146,7 +86,9 @@ document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeClou
 var _cloudOauthTimer = null;
 function _cloudStopOauthPoll() { if (_cloudOauthTimer) { clearInterval(_cloudOauthTimer); _cloudOauthTimer = null; } }
 function cloudOauth(provider) {
-  fetch('/api/cloud-cta/oauth-start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({provider: provider})})
+  var payload = {provider: provider};
+  if (_cloudModalIntent !== 'signin') payload.mode = 'managed';
+  fetch('/api/cloud-cta/oauth-start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)})
     .then(function(r){ return r.json(); })
     .then(function(d){
       if (d.ok && d.url) {
@@ -248,13 +190,46 @@ function cloudVerifyOtp() {
     err.style.display = '';
     return;
   }
-  fetch('https://app.clawmetry.com/api/otp/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email: _cloudEmail, code: code})})
+  // Route through the LOCAL dashboard endpoint (not app.clawmetry.com
+  // directly): /api/cloud-cta/verify-otp proxies to cloud AND persists the
+  // returned cm_ key via _write_cloud_token(). Bypassing this seam — as the
+  // previous direct fetch to https://app.clawmetry.com/api/otp/verify did —
+  // set the browser cookie but left the local machine with no token, so
+  // /api/cloud-cta/status kept reporting connected=false, the onboarding
+  // gate stayed required=true, and the modal reappeared on every launch
+  // (founder report 2026-08-12).
+  // Same rail selection cloudOauth makes: "Enable Cloud Sync" IS the egress
+  // opt-in and sends mode=managed, while the profile menu's "Sign in" leaves
+  // mode off so verify-otp follows the install's recorded intent. Without
+  // this a self-hosted machine signing back in by email got enable_cloud().
+  var _verifyBody = {email: _cloudEmail, code: code};
+  if (_cloudModalIntent !== 'signin') _verifyBody.mode = 'managed';
+  fetch('/api/cloud-cta/verify-otp', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(_verifyBody),
+  })
     .then(function(r){ return r.json(); })
     .then(function(d){
-      if (d.ok && (d.token || d.api_key)) {
+      if (d.ok && d.token) {
+        // Record the choice in the dashboard's onboarding gate so the
+        // hard-gate modal never re-fires. _apply_marker_semantics() there
+        // also runs enable_cloud() + registers a persistent daemon.
+        fetch('/api/onboarding/complete', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({choice: 'managed'}),
+        }).catch(function(){ /* best-effort — the token write above is what actually pairs */ });
         document.getElementById('cloud-step-otp').style.display = 'none';
         document.getElementById('cloud-step-done').style.display = '';
-        setTimeout(function(){ window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token || d.api_key), '_blank'); closeCloudModal(); _updateCloudStatus(); }, 1800);
+        setTimeout(function(){
+          try { window.open('https://app.clawmetry.com/auth?token=' + encodeURIComponent(d.token), '_blank'); } catch (e) {}
+          closeCloudModal();
+          _updateCloudStatus();
+          // Reload so /api/onboarding/state re-reads the freshly written
+          // gate file and the dashboard boots without the modal.
+          try { location.reload(); } catch (e) {}
+        }, 1800);
       } else {
         var err = document.getElementById('cloud-otp-error');
         err.textContent = d.error || 'Invalid code. Try again.';
@@ -263,13 +238,354 @@ function cloudVerifyOtp() {
     })
     .catch(function(){ var err = document.getElementById('cloud-otp-error'); err.textContent = 'Network error. Try again.'; err.style.display = ''; });
 }
+// ── E2E encryption key modal (Settings) ─────────────────────────────────────
+// Local dashboard only — the /api/local/e2e-key route this reads does not
+// exist on the hosted cloud dashboard (see dashboard.py for why).
+var _e2eKeyValue = '';
+var _e2eKeyRevealed = false;
+
+function openE2eKeyModal() {
+  var overlay = document.getElementById('e2e-key-modal-overlay');
+  if (!overlay) return;
+  document.body.appendChild(overlay);
+  overlay.style.display = 'flex';
+  document.getElementById('e2e-key-empty').style.display = 'none';
+  document.getElementById('e2e-key-body').style.display = 'none';
+  document.getElementById('e2e-key-error').style.display = 'none';
+  document.getElementById('e2e-key-regen-confirm').style.display = 'none';
+  document.getElementById('e2e-key-regen-btn').style.display = '';
+  _e2eKeyRevealed = false;
+  _e2eKeyValue = '';
+  // The GET only reports whether a key exists — it never carries the key.
+  // The real value is fetched on demand by _e2eKeyFetch() when the user
+  // reveals or copies it.
+  fetch('/api/local/e2e-key').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.configured) {
+      document.getElementById('e2e-key-empty').style.display = '';
+      return;
+    }
+    document.getElementById('e2e-key-body').style.display = '';
+    _e2eKeyRender();
+  }).catch(function () {
+    document.getElementById('e2e-key-empty').style.display = '';
+  });
+}
+function closeE2eKeyModal() {
+  var overlay = document.getElementById('e2e-key-modal-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+function _e2eKeyMask(k) {
+  if (!k || k.length < 10) return '••••••••';
+  return k.slice(0, 6) + '…' + k.slice(-4);
+}
+
+// Fetch the real key on demand. POST (not GET) so the dashboard's
+// cross-origin write guard applies — see dashboard.py:_cross_origin_write_blocked.
+function _e2eKeyFetch() {
+  if (_e2eKeyValue) return Promise.resolve(_e2eKeyValue);
+  return fetch('/api/local/e2e-key/reveal', { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { _e2eKeyValue = (d && d.key) || ''; return _e2eKeyValue; });
+}
+function _e2eKeyRender() {
+  var el = document.getElementById('e2e-key-value');
+  if (!el) return;
+  if (_e2eKeyRevealed && _e2eKeyValue) { el.textContent = _e2eKeyValue; return; }
+  el.textContent = _e2eKeyMask(_e2eKeyValue || '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022');
+}
+function e2eKeyToggleReveal() {
+  if (!_e2eKeyRevealed) {
+    _e2eKeyFetch().then(function () { _e2eKeyRevealed = true; _e2eKeyRender(); })
+      .catch(function () {
+        var errEl = document.getElementById('e2e-key-error');
+        if (errEl) { errEl.textContent = 'Could not read the key. Try again.'; errEl.style.display = ''; }
+      });
+    return;
+  }
+  _e2eKeyRevealed = false;
+  _e2eKeyRender();
+}
+function e2eKeyCopy() {
+  if (!_e2eKeyValue) { _e2eKeyFetch().then(function (k) { if (k) e2eKeyCopy(); }); return; }
+  var done = function () {
+    var msg = document.getElementById('e2e-key-copied');
+    if (msg) { msg.style.display = ''; setTimeout(function () { msg.style.display = 'none'; }, 2000); }
+  };
+  try {
+    navigator.clipboard.writeText(_e2eKeyValue).then(done);
+  } catch (e) {
+    var el = document.getElementById('e2e-key-value');
+    var wasRevealed = _e2eKeyRevealed;
+    _e2eKeyRevealed = true; _e2eKeyRender();
+    var r = document.createRange(); r.selectNode(el);
+    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    try { document.execCommand('copy'); done(); } catch (e2) {}
+    sel.removeAllRanges();
+    _e2eKeyRevealed = wasRevealed; _e2eKeyRender();
+  }
+}
+function e2eKeyRegenerate() {
+  var btn = document.querySelector('#e2e-key-regen-confirm button');
+  var errEl = document.getElementById('e2e-key-error');
+  errEl.style.display = 'none';
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  fetch('/api/local/e2e-key/regenerate', { method: 'POST' }).then(function (r) {
+    return r.json().then(function (d) { return { ok: r.ok, body: d }; });
+  }).then(function (res) {
+    if (!res.ok || !res.body.key) {
+      errEl.textContent = (res.body && res.body.error) || 'Could not regenerate the key. Try again.';
+      errEl.style.display = '';
+      if (btn) { btn.disabled = false; btn.textContent = t('e2e_key.regen_yes', null, 'Yes, regenerate'); }
+      return;
+    }
+    _e2eKeyValue = res.body.key;
+    _e2eKeyRevealed = true;
+    _e2eKeyRender();
+    document.getElementById('e2e-key-regen-confirm').style.display = 'none';
+    document.getElementById('e2e-key-regen-btn').style.display = '';
+  }).catch(function () {
+    errEl.textContent = 'Network error. Try again.';
+    errEl.style.display = '';
+    if (btn) { btn.disabled = false; btn.textContent = t('e2e_key.regen_yes', null, 'Yes, regenerate'); }
+  });
+}
+
 function _updateCloudStatus() {
   fetch('/api/cloud-cta/status').then(function(r){ return r.json(); }).then(function(d){
-    document.getElementById('cloud-cta-btn').style.display = d.connected ? 'none' : '';
-    document.getElementById('cloud-connected-badge').style.display = d.connected ? '' : 'none';
+    var cta = document.getElementById('cloud-cta-btn');
+    var badge = document.getElementById('cloud-connected-badge');
+    if (d.connected) {
+      cta.style.display = 'none';
+      badge.style.display = '';
+    } else if (d.local_only && d.account_linked) {
+      // Signed-in Self-Hosted: honest amber "Local-only" — NOT the green
+      // cloud badge, and no click-through to app.clawmetry.com (founder
+      // report 2026-07-30: the node syncs nothing by choice).
+      cta.style.display = 'none';
+      badge.style.display = '';
+      badge.innerHTML = '&#9679; Local-only';
+      badge.style.color = '#f59e0b';
+      badge.style.borderColor = 'rgba(245,158,11,0.4)';
+      badge.title = 'Signed in; your data stays on this machine. Enable cloud sync: clawmetry connect';
+      badge.onclick = null;
+      badge.style.cursor = 'default';
+    } else {
+      cta.style.display = '';
+      badge.style.display = 'none';
+    }
   }).catch(function(){
     document.getElementById('cloud-cta-btn').style.display = '';
     document.getElementById('cloud-connected-badge').style.display = 'none';
   });
 }
 _updateCloudStatus();
+
+// ── Account menu (top-right avatar) ─────────────────────────────────────────
+// Self-hosted requires sign-in now, so the header gets the same profile
+// affordance as app.clawmetry.com: who you are, plan state, billing/account
+// management, and sign-out. Identity comes from the trial/paid license
+// (/api/license/status: sub + tier + days_left) — the only identity a
+// local-only node has; /api/cloud-cta/status distinguishes signed-out.
+var _cmProfile = { state: null };
+
+function _cmProfileEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function _cmProfileFetchState() {
+  return Promise.all([
+    fetch('/api/license/status').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+    fetch('/api/cloud-cta/status').then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; })
+  ]).then(function (res) {
+    var lic = res[0] || {};
+    var cta = res[1] || {};
+    var signedIn = !!(lic.valid || cta.account_linked);
+    _cmProfile.state = {
+      signedIn: signedIn,
+      // license `sub` is the account the key was issued to (the sign-in
+      // email); a cloud-OAuth account with no local license has no sub, so
+      // fall back to the cloud account email resolved by the backend.
+      who: lic.sub || cta.account_email || '',
+      tier: (lic.tier || '').toLowerCase(),
+      daysLeft: (typeof lic.days_left === 'number') ? lic.days_left : null,
+      licenseValid: !!lic.valid,
+      // Cloud links (billing/settings on app.clawmetry.com) only make sense
+      // when this node is actually linked to a cloud account — a license-only
+      // self-hosted install has no account there to manage.
+      accountLinked: !!cta.account_linked
+    };
+    return _cmProfile.state;
+  });
+}
+
+function _cmProfileApplyAvatar(st) {
+  var btn = document.getElementById('cm-profile-btn');
+  var initial = document.getElementById('cm-profile-initial');
+  if (!btn || !initial) return;
+  if (st.signedIn) {
+    btn.dataset.signedIn = '1';
+    initial.textContent = st.who ? st.who.charAt(0).toUpperCase() : '';
+    btn.title = st.who || t('profile.signed_in', null, 'Signed in');
+  } else {
+    delete btn.dataset.signedIn;
+    btn.title = t('profile.account', null, 'Account');
+  }
+}
+
+function _cmProfilePlanLine(st) {
+  if (!st.licenseValid) return '';
+  if (st.tier === 'trial') {
+    var d = (st.daysLeft == null) ? '?' : st.daysLeft;
+    return t('profile.trial_days_left', { days: d }, 'Trial · ' + d + ' days left');
+  }
+  var label = st.tier ? st.tier.charAt(0).toUpperCase() + st.tier.slice(1) : '';
+  return t('profile.plan', { tier: label }, label + ' plan');
+}
+
+function _cmProfileRender(st) {
+  var menu = document.getElementById('cm-profile-menu');
+  if (!menu) return;
+  var h = '';
+  // Identity header
+  h += '<div style="padding:10px 10px 8px;border-bottom:1px solid var(--border-color,rgba(255,255,255,0.08));margin-bottom:4px;">';
+  if (st.signedIn) {
+    // Signed in but the email is unresolvable (offline, pre-claim account):
+    // still say "Signed in" — a signed-in menu that opens with "Not signed
+    // in" above Billing/Sign out is a contradiction (founder report
+    // 2026-08-09, GitHub-OAuth node with no local license).
+    var whoLine = st.who ? _cmProfileEsc(st.who) : t('profile.signed_in', null, 'Signed in');
+    h += '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);word-break:break-all;">' + whoLine + '</div>';
+    var plan = _cmProfilePlanLine(st);
+    if (plan) h += '<div style="font-size:11px;color:var(--text-muted,#94a3b8);margin-top:2px;">' + _cmProfileEsc(plan) + '</div>';
+  } else {
+    h += '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e2e8f0);" data-i18n="profile.not_signed_in">' + t('profile.not_signed_in', null, 'Not signed in') + '</div>';
+  }
+  h += '</div>';
+  if (st.signedIn) {
+    // "Billing & plan" lives on app.clawmetry.com, so it is only offered when
+    // a cloud account is actually linked; a license-only self-hosted node has
+    // nothing to manage there (founder report 2026-08-04).
+    if (st.accountLinked) {
+      h += '<button class="cm-profile-item" onclick="cmProfileClose();window.open(\'https://app.clawmetry.com/settings?utm_source=oss-dashboard&utm_medium=profile-menu\',\'_blank\')">'
+        + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>'
+        + t('profile.billing', null, 'Billing & plan') + '</button>';
+    }
+    if (st.tier === 'trial') {
+      // Prefer the in-app chooser (static/js/trial-pill.js): it POSTs to
+      // /api/trial/checkout, which mints a Stripe Checkout Session against
+      // the account THIS node is already linked to, so the license lands on
+      // the next daemon heartbeat with no key to copy-paste.
+      // The pricing page stays the fallback for a cached page where
+      // trial-pill.js did not load. Note it must be clawmetry.com/pricing
+      // (?deploy=self preselects the self-hosted buy modal), never the cloud
+      // app's /upgrade route — that is the CLOUD-account funnel, and for a
+      // self-hosted trial it either bounces through a login wall or silently
+      // starts a cloud trial.
+      h += '<button class="cm-profile-item" onclick="cmProfileClose();'
+        + 'if(typeof window.cmOpenUpgradeModal===\'function\'){window.cmOpenUpgradeModal(\'profile-menu\');}'
+        + 'else{window.open(\'https://clawmetry.com/pricing?deploy=self&utm_source=oss-dashboard&utm_medium=profile-menu\',\'_blank\');}">'
+        + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>'
+        + t('profile.upgrade', null, 'Upgrade plan') + '</button>';
+    }
+    // Local-only surface: reveal/regenerate the E2E key used to decrypt
+    // cloud-synced data in the browser. Never rendered on the hosted cloud
+    // dashboard (this whole menu only exists in the OSS local dashboard),
+    // and the modal itself falls back to an "enable cloud sync" prompt when
+    // no key is configured yet, so it is safe to always offer here.
+    h += '<button class="cm-profile-item" onclick="cmProfileClose();openE2eKeyModal()">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+      + t('profile.e2e_key', null, 'Cloud sync key') + '</button>';
+  } else {
+    h += '<button class="cm-profile-item" onclick="cmProfileClose();if(typeof openCloudModal===\'function\')openCloudModal(\'signin\')">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>'
+      + t('profile.sign_in', null, 'Sign in / Create account') + '</button>';
+  }
+  if (st.signedIn) {
+    // Switch account. Distinct from the "Sign out" below it, which only ever
+    // clears THIS BROWSER's dashboard session token: this one forgets the
+    // ClawMetry account on the machine (licence + cm_ key + onboarding
+    // stamps) so the gate can be answered with a different email. Until it
+    // existed the only way off a wrong account was the CLI, which stranded
+    // anyone whose licence lives on another address (founder report
+    // 2026-08-18). Two clicks — the first arms, the second commits.
+    h += '<button class="cm-profile-item" onclick="cmAccountSignOut(this)">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><polyline points="17 11 19 13 23 9"/></svg>'
+      + t('profile.switch_account', null, 'Switch account') + '</button>';
+  }
+  // No "Gateway settings" item: the gw-setup overlay is a first-run wizard
+  // for the OpenClaw gateway token, not an ongoing settings surface — it
+  // auto-opens whenever the gateway is unconfigured, which is the only time
+  // it has anything to offer (founder call 2026-08-04, removed everywhere).
+  // Sign out clears this browser's dashboard session (the gateway token in
+  // localStorage) — mirror the #logout-btn visibility contract set by
+  // auth-bootstrap.js: only shown when token auth is actually active.
+  var lb = document.getElementById('logout-btn');
+  if (lb && lb.style.display !== 'none') {
+    h += '<div style="border-top:1px solid var(--border-color,rgba(255,255,255,0.08));margin:4px 0;"></div>';
+    h += '<button class="cm-profile-item cm-profile-danger" onclick="cmProfileClose();clawmetryLogout()">'
+      + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>'
+      + t('profile.sign_out', null, 'Sign out') + '</button>';
+  }
+  menu.innerHTML = h;
+}
+
+// Two-step so a stray click never signs anybody out. The first click swaps
+// the row's label (the menu stays open); the second calls the endpoint, which
+// clears the licence, the cm_ key and both onboarding stamps, then kicks the
+// sync daemon so it drops the old account's key from memory. Local DuckDB
+// data is untouched — this is an identity change, not a wipe.
+function cmAccountSignOut(btn) {
+  if (!btn) return;
+  if (btn.dataset.armed !== '1') {
+    btn.dataset.armed = '1';
+    btn.textContent = t('profile.switch_account_confirm', null,
+      'Confirm sign out of this account');
+    btn.style.color = '#ef4444';
+    return;
+  }
+  btn.textContent = t('profile.signing_out', null, 'Signing out');
+  fetch('/api/account/signout', { method: 'POST' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d && d.ok) { location.reload(); return; }
+      btn.textContent = (d && d.error)
+        || t('profile.switch_account_failed', null, 'Could not sign out');
+    })
+    .catch(function () {
+      btn.textContent = t('profile.switch_account_failed', null, 'Could not sign out');
+    });
+}
+
+function cmProfileClose() {
+  var menu = document.getElementById('cm-profile-menu');
+  var btn = document.getElementById('cm-profile-btn');
+  if (menu) menu.style.display = 'none';
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
+function cmProfileToggle(e) {
+  if (e) e.stopPropagation();
+  var menu = document.getElementById('cm-profile-menu');
+  var btn = document.getElementById('cm-profile-btn');
+  if (!menu) return;
+  if (menu.style.display !== 'none') { cmProfileClose(); return; }
+  // Open immediately with the cached (or empty) state, then re-fetch so
+  // plan/days-left/sign-in state is never stale.
+  var open = function (st) { _cmProfileApplyAvatar(st); _cmProfileRender(st); menu.style.display = 'block'; if (btn) btn.setAttribute('aria-expanded', 'true'); };
+  open(_cmProfile.state || { signedIn: false, who: '', tier: '', daysLeft: null, licenseValid: false });
+  _cmProfileFetchState().then(function (st) {
+    if (menu.style.display !== 'none') open(st);
+  });
+}
+
+function cmProfileInit() {
+  if (!document.getElementById('cm-profile-btn')) return;
+  _cmProfileFetchState().then(_cmProfileApplyAvatar);
+  document.addEventListener('click', function (ev) {
+    if (!ev.target.closest || !ev.target.closest('#cm-profile-wrap')) cmProfileClose();
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') cmProfileClose();
+  });
+}
+cmProfileInit();

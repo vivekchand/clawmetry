@@ -85,6 +85,37 @@ def _hx(n: int) -> str:
     return f"{n:016x}"
 
 
+def _otlp_json_body(req) -> str:
+    """Serialise an OTLP request as spec-compliant OTLP/JSON.
+
+    ``json_format.MessageToJson`` is NOT OTLP/JSON: protobuf-JSON encodes every
+    ``bytes`` field as base64, but the OTLP/JSON spec overrides that for
+    ``traceId`` / ``spanId`` / ``parentSpanId``, which are lowercase HEX. Real
+    exporters send hex, and ``clawmetry.otlp_json`` decodes hex, so a test that
+    posts base64 is testing a wire format nothing speaks — and it only ran at
+    all when opentelemetry-proto happened to be installed, which CI never did.
+    """
+    import base64 as _b64
+    doc = _json.loads(_json_format.MessageToJson(req))
+
+    def _fix(node):
+        if isinstance(node, dict):
+            for k, v in list(node.items()):
+                if k in ("traceId", "spanId", "parentSpanId") and isinstance(v, str):
+                    try:
+                        node[k] = _b64.b64decode(v).hex()
+                    except Exception:
+                        pass
+                else:
+                    _fix(v)
+        elif isinstance(node, list):
+            for item in node:
+                _fix(item)
+
+    _fix(doc)
+    return _json.dumps(doc)
+
+
 def _build_req(specs, *, n_resource_spans=1, service_name="openclaw"):
     """Build the OTLP request PROTO object (not yet serialized) so callers can
     pick the wire encoding (binary / JSON / gzip). ``specs`` is a list of span
@@ -334,7 +365,7 @@ def test_otlp_json_accepted_and_parsed_identically(app):
                                      "gen_ai.request.model": "claude-3-5-haiku-20241022"},
                        "int_attrs": {"gen_ai.usage.input_tokens": 10,
                                      "gen_ai.usage.output_tokens": 5}}])
-    body = _json_format.MessageToJson(req)
+    body = _otlp_json_body(req)
     r = c.post("/v1/traces", data=body, content_type="application/json")
     assert r.status_code == 200, r.get_data(as_text=True)[:200]
     _drain(ls)
@@ -648,7 +679,7 @@ def test_openllmetry_openai_chat_shape_end_to_end(app):
     _iattr("llm.usage.prompt_tokens", 850)
     _iattr("llm.usage.completion_tokens", 120)
 
-    body = _json_format.MessageToJson(req)
+    body = _otlp_json_body(req)
     r = c.post("/v1/traces", data=body, content_type="application/json")
     assert r.status_code == 200, r.get_data(as_text=True)[:200]
     _drain(ls)

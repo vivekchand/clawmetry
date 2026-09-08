@@ -56,11 +56,13 @@ from typing import Any
 from _lib import (  # noqa: E402  (script entry-point, sys.path tweaked below)
     DEFAULT_DASHBOARD_PORTS,
     GH_REPO,
+    OPENCLAW_AVAILABLE,
     OPENCLAW_BIN,
     daemon_event_count,
     discover_daemon,
     discover_dashboard_url,
     drive_openclaw_message,
+    exit_skip,
     extract_openclaw_usage,
     file_drift_issue_per_endpoint,
     http_get_json,
@@ -73,7 +75,7 @@ FLUSH_TIMEOUT_S = 30
 FLUSH_POLL_INTERVAL_S = 1.0
 
 
-# ─── Data classes ───────────────────────────────────────────────────────────
+# ─── Data classes ──────────────────────────────────────────────────────────────
 
 @dataclass
 class GroundTruth:
@@ -119,7 +121,7 @@ class CheckResult:
         return self.actual - self.ground
 
 
-# ─── Endpoint scrapers ──────────────────────────────────────────────────────
+# ─── Endpoint scrapers ────────────────────────────────────────────────────────
 
 def fetch_api_usage(dashboard_url: str) -> dict:
     # /api/usage carries today/week/month + per-day breakdown. There is NO
@@ -131,7 +133,7 @@ def fetch_context_anatomy(dashboard_url: str) -> dict:
     return http_get_json(f"{dashboard_url}/api/context-anatomy", timeout=10.0)
 
 
-# ─── Window math ────────────────────────────────────────────────────────────
+# ─── Window math ──────────────────────────────────────────────────────────────
 
 def today_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d")
@@ -419,7 +421,7 @@ def _format_tokens_issue_body(
     return "\n".join(lines)
 
 
-# ─── CLI ────────────────────────────────────────────────────────────────────
+# ─── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -438,6 +440,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    if not OPENCLAW_AVAILABLE:
+        exit_skip("tokens",
+                  "openclaw binary not on PATH; set OPENCLAW_BIN_AVAILABLE=1 "
+                  "with the binary available to run this harness")
     args = parse_args()
     try:
         return run_harness(args)

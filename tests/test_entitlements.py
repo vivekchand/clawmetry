@@ -89,13 +89,29 @@ def test_is_enforced_env_parsing(ent, monkeypatch):
 # ── catalogue invariants ────────────────────────────────────────────────────────
 
 
-def test_free_runtimes_is_openclaw_and_nemoclaw(ent):
+def test_free_runtimes_is_openclaw_nemoclaw_and_goose(ent):
     # NVIDIA NemoClaw is a free-tier agent runtime alongside OpenClaw
     # (issue #2289). NeMo *governance* is a separate free feature.
-    assert ent.FREE_RUNTIMES == frozenset({"openclaw", "nemoclaw"})
+    # Goose (block/goose) joined 2026-08-19 under the open-source-runtime
+    # rule; the commercial vendor products stay paid.
+    assert ent.FREE_RUNTIMES == frozenset({"openclaw", "nemoclaw", "goose"})
     assert "claude_code" in ent.PAID_RUNTIMES
     assert "nemoclaw" not in ent.PAID_RUNTIMES
+    assert "goose" not in ent.PAID_RUNTIMES
     assert ent.FREE_RUNTIMES.isdisjoint(ent.PAID_RUNTIMES)
+
+
+def test_commercial_vendor_runtimes_stay_paid(ent):
+    """The paid side of the open-source-runtime rule.
+
+    Freeing the OSS runtimes is a distribution move, not a decision to stop
+    charging. Whoever pays a vendor for the agent will pay to observe it, so
+    these six must never drift into FREE_RUNTIMES without a deliberate
+    pricing change.
+    """
+    for rt in ("claude_code", "codex", "copilot", "cursor", "antigravity", "grok"):
+        assert rt in ent.PAID_RUNTIMES, rt
+        assert rt not in ent.FREE_RUNTIMES, rt
 
 
 def test_nemo_governance_is_a_free_feature(ent):
@@ -135,6 +151,61 @@ def test_corrupt_cloud_plan_falls_back_to_oss(ent, tmp_path):
     cache.write_text("{not valid json")
     en = ent.get_entitlement(force=True)
     assert en.tier == ent.TIER_OSS  # never raises, falls through
+
+
+def test_get_entitlement_fails_open_on_resolver_exception(ent, monkeypatch):
+    """Contract: an unexpected exception inside get_entitlement must return a
+    fail-open verdict -- ``grace`` forced ``True`` so every ``allows_*`` check
+    still passes even when :func:`is_enforced` is ``True``. Enforces the
+    "fail open on entitlement, closed on policy" rule from ``CLAUDE.md``:
+    a billing/resolver bug must never paywall a paying customer's agent."""
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("synthetic resolver failure")
+
+    # Detonate the primary resolver path so the outer try/except takes over.
+    monkeypatch.setattr(ent, "_read_local_license", boom)
+    monkeypatch.setattr(ent, "_read_cloud_plan", boom)
+
+    en = ent.get_entitlement(force=True)
+
+    assert en.grace is True, "resolver failure must not flip an install into enforce mode"
+    assert en.source == "resolver_error", "distinct source so telemetry can spot the fallback"
+    assert en.tier == ent.TIER_OSS
+    # The whole point: paid runtimes and paid features stay unlocked even when
+    # CLAWMETRY_ENFORCE is on, because the resolver couldn't answer.
+    assert en.allows_runtime("claude_code") is True
+    assert en.allows_runtime("openclaw") is True
+    assert en.allows_feature("custom_alerts") is True
+    assert en.allows_feature("multi_node") is True
+    assert en.allows_feature("otel_export") is True
+
+
+def test_get_entitlement_fail_open_does_not_poison_cache(ent, monkeypatch):
+    """A fail-open verdict must not be cached as if it were the real entitlement:
+    once the resolver recovers, the next call must reflect reality."""
+    monkeypatch.setenv("CLAWMETRY_ENFORCE", "1")
+
+    calls = {"n": 0}
+
+    def flaky(*_a, **_kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient")
+        return None  # recovered -- no license present
+
+    monkeypatch.setattr(ent, "_read_local_license", flaky)
+
+    first = ent.get_entitlement(force=True)
+    assert first.source == "resolver_error"
+
+    # A subsequent call must re-resolve rather than serve the fail-open verdict
+    # from cache. Without force=True the cache-fresh check would short-circuit
+    # to whatever is cached; verify the fail-open path did not populate it.
+    second = ent.get_entitlement()
+    assert second.source == "oss", "fail-open verdict must not be cached"
+    assert second.grace is False, "real enforce-mode verdict returns after recovery"
 
 
 def test_to_dict_shape(ent):
@@ -238,7 +309,7 @@ def test_runtime_label_falls_back_to_id(ent):
 
 
 def test_paid_runtimes_exact_membership(ent):
-    # Asserts the exact 12-entry PAID_RUNTIMES set so any accidental add/remove
+    # Asserts the exact PAID_RUNTIMES set so any accidental add/remove
     # breaks loudly instead of silently skipping gate coverage.
     expected = frozenset(
         {
@@ -246,7 +317,6 @@ def test_paid_runtimes_exact_membership(ent):
             "codex",
             "cursor",
             "aider",
-            "goose",
             "opencode",
             "qwen_code",
             "hermes",
@@ -254,10 +324,27 @@ def test_paid_runtimes_exact_membership(ent):
             "nanoclaw",
             "pi",
             "deepagents",
+            "n8n",
+            "antigravity",
+            "copilot",
+            "grok",
+            "qm",
+            "deepseek_harness",
+            "exo",
+            "kimi",
+            "devin",
+            "gemini_cli",
+            "cline",
+            "openhands",
+            "openworker",
+    "grok_bot",
+            "lovable",
+            "replit",
         }
     )
     assert ent.PAID_RUNTIMES == expected
-    assert len(ent.PAID_RUNTIMES) == 12
+    assert len(ent.PAID_RUNTIMES) == 27
+    assert len(ent.ALL_RUNTIMES) == 30
 
 
 def test_all_paid_runtimes_blocked_on_oss_enforced(ent, monkeypatch):

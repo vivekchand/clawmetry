@@ -1005,12 +1005,234 @@ def _read_onboard_trace_timing() -> dict:
     return {}
 
 
+def _read_onboard_otel_trace() -> dict:
+    """Read the NemoClaw onboarding OTel-format trace artifact (#5411).
+
+    The harness (``src/lib/trace.ts``) writes this artifact when
+    ``NEMOCLAW_TRACE=1``. Path resolution order:
+    1. ``NEMOCLAW_TRACE_FILE`` env var (absolute or relative path).
+    2. Most-recently-modified ``*.json`` under ``NEMOCLAW_TRACE_DIR`` env var.
+    3. Most-recently-modified ``*.json`` under ``~/.nemoclaw/.e2e/traces/``.
+
+    Surfaces these keys into the adapter ``meta`` dict:
+    - ``onboardOtelTraceId``      (str)  — top-level ``trace_id``
+    - ``onboardOtelTotalMs``      (int)  — top-level ``total_duration_ms``
+    - ``onboardOtelSlowestSpans`` (list) — top-level ``slowest_spans`` list
+    - ``onboardOtelHasError``     (bool) — True if any span carries
+                                           ``status.code == "ERROR"``
+
+    Returns ``{}`` when no file is found, the JSON is malformed, or any
+    other error occurs — never raises.
+    """
+    import os as _os
+    import json as _json
+    from pathlib import Path
+
+    def _find_latest_json(directory: Path):
+        if not directory.is_dir():
+            return None
+        candidates = sorted(directory.glob("*.json"),
+                            key=lambda p: p.stat().st_mtime,
+                            reverse=True)
+        return candidates[0] if candidates else None
+
+    artifact_path = None
+    env_file = _os.environ.get("NEMOCLAW_TRACE_FILE", "")
+    if env_file:
+        p = Path(env_file)
+        if p.exists():
+            artifact_path = p
+
+    if artifact_path is None:
+        env_dir = _os.environ.get("NEMOCLAW_TRACE_DIR", "")
+        if env_dir:
+            artifact_path = _find_latest_json(Path(env_dir))
+
+    if artifact_path is None:
+        artifact_path = _find_latest_json(Path.home() / ".nemoclaw" / ".e2e" / "traces")
+
+    if artifact_path is None:
+        return {}
+
+    try:
+        raw = _json.loads(artifact_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.debug("nemoclaw otel trace read failed (%s): %s", artifact_path, exc)
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    out: dict = {}
+    if isinstance(raw.get("trace_id"), str) and raw["trace_id"]:
+        out["onboardOtelTraceId"] = raw["trace_id"]
+    total = raw.get("total_duration_ms")
+    if isinstance(total, (int, float)) and total >= 0:
+        out["onboardOtelTotalMs"] = int(total)
+    if isinstance(raw.get("slowest_spans"), list):
+        out["onboardOtelSlowestSpans"] = raw["slowest_spans"]
+
+    has_error = False
+    for rs in raw.get("resource_spans", []):
+        if not isinstance(rs, dict):
+            continue
+        for ss in rs.get("scope_spans", []):
+            if not isinstance(ss, dict):
+                continue
+            for span in ss.get("spans", []):
+                if not isinstance(span, dict):
+                    continue
+                status = span.get("status")
+                code = (status.get("code") if isinstance(status, dict)
+                        else status)
+                if code == "ERROR":
+                    has_error = True
+                    break
+    out["onboardOtelHasError"] = has_error
+
+    return out
+
+
+# Orchestration capture (nemoclaw leg) ---------------------------------------
+# A sandboxed OpenClaw child is "running" only while the registry row shows
+# no endedAt AND recent activity — a child killed with the sandbox never gets
+# a terminal write, so recency is the honest liveness signal (same window the
+# hermes/claude_code legs use).
+_NEMO_CHILD_RUNNING_WINDOW_S = 180.0
+
+
+def _nemoclaw_subagent_rows() -> list[dict]:
+    """``subagents`` rows for ``agent_type='nemoclaw'``. -> [].
+
+    Goes through ``query_subagents`` (daemon-proxy allowlisted, see
+    ``routes/local_query.py``) instead of raw ``_fetch`` SQL so the dashboard
+    process — where ``get_store()`` returns the ``_ProxyStore`` and ``_fetch``
+    is deliberately not proxyable — still sees the delegation rows."""
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store(read_only=True)
+        rows = store.query_subagents(agent_type="nemoclaw", limit=500)
+        return rows if isinstance(rows, list) else []
+    except Exception as exc:
+        logger.debug("nemoclaw subagent rows read failed: %s", exc)
+        return []
+
+
+def _nemoclaw_child_texts(store, session_id: str) -> tuple[str, str]:
+    """(prompt, reply) for a sandboxed child from its OWN DuckDB events.
+
+    The sandbox jsonl is OpenClaw v3, so ``_parse_v3_event`` lands the
+    child's first user turn as ``prompt.submitted`` (``data.finalPromptText``
+    — for a spawn this IS the task text the parent handed over) and its final
+    answer as ``model.completed`` (``data.completionText``). Returns ('', '')
+    when the child has no such events (e.g. a spawn that failed before
+    writing a transcript) — never invented. Uses ``_fetch``, which is
+    unavailable through the daemon proxy; the enrichment then degrades to
+    the registry facts only, which is the honest floor."""
+    prompt = reply = ""
+
+    def _text(rows, key: str) -> str:
+        for r in rows or []:
+            raw = r[0]
+            try:
+                if isinstance(raw, (bytes, bytearray)):
+                    raw = bytes(raw).decode("utf-8", "replace")
+                obj = json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(obj, dict):
+                    val = obj.get(key) or (obj.get("data") or {}).get(key)
+                    if val:
+                        return str(val)[:400]
+            except Exception:
+                continue
+        return ""
+
+    try:
+        rows = store._fetch(
+            "SELECT data FROM events WHERE agent_type = ? AND session_id = ? "
+            "AND event_type = 'prompt.submitted' ORDER BY ts ASC LIMIT 1",
+            ["nemoclaw", str(session_id)],
+        )
+        prompt = _text(rows, "finalPromptText")
+        rows = store._fetch(
+            "SELECT data FROM events WHERE agent_type = ? AND session_id = ? "
+            "AND event_type = 'model.completed' ORDER BY ts DESC LIMIT 3",
+            ["nemoclaw", str(session_id)],
+        )
+        reply = _text(rows, "completionText")
+    except Exception as exc:
+        logger.debug("nemoclaw child text read failed: %s", exc)
+    return prompt, reply
+
+
+def _nemoclaw_apply_subagent_row(session: Session, row: dict, store) -> None:
+    """Enrich one child Session in place from its ``subagents`` row.
+
+    parent_id is set ONLY when the sandbox registry resolved a real spawner
+    (``spawnedBy`` -> parent transcript uuid) — advisor-dir sessions and
+    orphan children keep parent_id None rather than getting a guessed edge."""
+    data = row.get("data") if isinstance(row.get("data"), dict) else {}
+    parent = row.get("parent_session_id")
+    if parent:
+        session.parent_id = str(parent)
+    session.extra["kind"] = "subagent"
+    session.extra["isSubagent"] = True
+    session.extra["depth"] = int(data.get("depth") or 1)
+    # OpenClaw spawns carry no named persona — subagentRole ('leaf' /
+    # 'coordinator') is the closest on-disk fact; never invent one.
+    session.extra["agentType"] = data.get("subagentRole") or "subagent"
+    label = str(data.get("label") or "")
+    if label:
+        session.extra["label"] = label
+        if not session.title or session.title.startswith("NemoClaw session"):
+            session.title = label
+    if data.get("sandbox"):
+        session.extra["sandbox"] = data["sandbox"]
+    prompt, reply = _nemoclaw_child_texts(store, session.id)
+    # The registry task (parent-declared) wins as prompt; the child's first
+    # user turn is the same text when the transcript exists.
+    task = str(row.get("task") or "")
+    if task:
+        session.extra["prompt"] = task[:400]
+    elif prompt:
+        session.extra["prompt"] = prompt
+    if reply:
+        session.extra["reply"] = reply
+    status = str(row.get("status") or "").lower()
+    raw_status = str(data.get("rawStatus") or status).lower()
+    if any(b in raw_status for b in ("error", "fail", "kill", "cancel", "timeout")):
+        session.end_reason = "error"
+    ended_ms = int(data.get("endedAtMs") or 0)
+    updated_ms = int(data.get("updatedAtMs") or 0)
+    if not ended_ms and updated_ms:
+        if (time.time() - updated_ms / 1000.0) <= _NEMO_CHILD_RUNNING_WINDOW_S:
+            session.cost_status = "running"
+    if ended_ms and session.ended_at is None:
+        session.ended_at = ended_ms / 1000.0
+    started_ms = int(data.get("startedAtMs") or 0)
+    if started_ms and not session.started_at:
+        session.started_at = started_ms / 1000.0
+
+
 class NemoClawAdapter(AgentAdapter):
     """Read-side adapter for the NemoClaw Free runtime.
 
     Reads events tagged ``agent_type='nemoclaw'`` from DuckDB. Detection
     is "any nemoclaw-tagged events present" so an OSS install with no
     NemoClaw data does not clutter the chip bar.
+
+    Orchestration capture: a NemoClaw sandbox hosts a full OpenClaw
+    workspace, so a sandboxed agent can spawn sub-agents exactly like host
+    OpenClaw (``agent:main:subagent:<uuid>`` entries in the sandbox's own
+    ``sessions.json``). The sync daemon reads that index per sandbox
+    (``sync.py::sync_sandbox_sessions_openshell`` +
+    ``_parse_openclaw_subagent_index``) and upserts ``subagents`` rows with
+    ``agent_type='nemoclaw'``; ``list_sessions`` joins those rows back so a
+    child appears as a Session with ``parent_id`` + ``extra.kind='subagent'``
+    and its prompt/reply lifted from its OWN transcript events. Advisor-dir
+    sessions are sibling agents, not delegations — they never get a parent
+    edge. NOT recoverable: per-child token splits when the sandboxed
+    OpenClaw predates per-subagent usage stamping, and any child whose
+    sandbox was deleted before a sync tick ran.
     """
 
     name = "nemoclaw"
@@ -1021,12 +1243,14 @@ class NemoClawAdapter(AgentAdapter):
         try:
             from clawmetry import local_store as _ls
             store = _ls.get_store(read_only=True)
-            rows = store._fetch(
-                "SELECT COUNT(*) FROM events WHERE agent_type = ?",
-                ["nemoclaw"],
-            )
-            if rows:
-                n = int(rows[0][0])
+            # MUST be a query_* shape, not ``_fetch``. Outside the daemon
+            # process this is a ``_ProxyStore``, which refuses private helpers
+            # and returns None, so the raw-SQL form made ``detected`` False on
+            # every standard install (the daemon holds the writer lock) while
+            # logging a warning into ``clawmetry status``. NemoClaw is one of
+            # the two FREE runtimes, so it silently vanished from the runtime
+            # list for anyone not running single-process.
+            n = int(store.query_event_count(runtime="nemoclaw") or 0)
         except Exception as exc:
             logger.debug("nemoclaw detect read failed: %s", exc)
         meta: dict = {"event_count": n}
@@ -1035,6 +1259,7 @@ class NemoClawAdapter(AgentAdapter):
         meta.update(_read_nemoclaw_sandbox_lifecycle())
         meta["ollama_inference"] = _read_nemoclaw_ollama_inference()
         meta.update(_read_onboard_trace_timing())
+        meta.update(_read_onboard_otel_trace())
         return DetectResult(
             name=self.name,
             display_name=self.display_name,
@@ -1094,6 +1319,50 @@ class NemoClawAdapter(AgentAdapter):
                 ))
         except Exception as exc:
             logger.debug("nemoclaw list_sessions read failed: %s", exc)
+
+        # Orchestration capture: join the sandbox registry's delegation rows
+        # back onto the event-derived sessions. Children whose transcript
+        # events already landed (session_id == subagent uuid, or the legacy
+        # pre-capture file uuid via data.sessionId) are enriched in place;
+        # a child the registry knows but that never wrote a transcript
+        # (observed live: a 55 ms 'failed' spawn) is synthesised from the
+        # registry row alone — with NO prompt/reply invented for it.
+        try:
+            sa_rows = _nemoclaw_subagent_rows()
+            if sa_rows:
+                from clawmetry import local_store as _ls
+                store = _ls.get_store(read_only=True)
+                by_id: dict[str, dict] = {}
+                for row in sa_rows:
+                    said = str(row.get("subagent_id") or "")
+                    if not said:
+                        continue
+                    by_id[said] = row
+                    d = row.get("data") if isinstance(row.get("data"), dict) else {}
+                    if d.get("sessionId"):
+                        by_id.setdefault(str(d["sessionId"]), row)
+                seen: set[str] = set()
+                for s in sessions:
+                    row = by_id.get(s.id)
+                    if row is not None:
+                        _nemoclaw_apply_subagent_row(s, row, store)
+                        seen.add(str(row.get("subagent_id") or ""))
+                for row in sa_rows:
+                    said = str(row.get("subagent_id") or "")
+                    if not said or said in seen:
+                        continue
+                    child = Session(
+                        agent=self.name,
+                        id=said,
+                        title=f"NemoClaw session {said[:8]}",
+                        message_count=0,
+                        total_tokens=int(row.get("token_count") or 0),
+                        cost_usd=float(row.get("cost_usd") or 0.0),
+                    )
+                    _nemoclaw_apply_subagent_row(child, row, store)
+                    sessions.append(child)
+        except Exception as exc:
+            logger.debug("nemoclaw subagent enrichment failed: %s", exc)
         return sessions
 
     def list_events(self, session_id: str, limit: int = 500) -> list[Event]:
@@ -1202,6 +1471,37 @@ class NemoClawAdapter(AgentAdapter):
             Capability.COST,
             Capability.SKILLS,
             Capability.LOGS,
+            # Genuinely emitted: list_sessions joins the sandbox registry's
+            # subagents rows and sets parent_id + extra.kind='subagent' on
+            # every persisted delegation (orchestration capture, nemoclaw leg).
+            Capability.SUBAGENTS,
+            # Same transcript format as OpenClaw (the sandboxed agent writes
+            # OpenClaw session JSONL): thinking blocks survive when set.
+            Capability.REASONING,
+        }
+
+    def trail_coverage(self) -> dict:
+        """NemoClaw runs OpenClaw inside the sandbox, so the session rows it
+        ingests carry the same assistant ``message.content[]`` ``thinking``
+        blocks OpenClaw writes, under the same condition (a thinking level
+        set for the session). The guardrail audit log adds decisions but no
+        model reasoning of its own.
+
+        Inputs are ``none``: the sandbox hosts a full OpenClaw workspace, so
+        the trajectory sidecar with context.compiled EXISTS inside the
+        sandbox, but the sandbox sync (sync.py, openshell ls/cat) pulls the
+        transcript only and skips ".trajectory." files. Until that reader is
+        extended the honest answer is none: nothing is captured, not
+        "partially"."""
+        return {
+            "inputs": "none",
+            "reasoning": "partial",
+            "note": ("OpenClaw-format assistant message.content[] thinking "
+                     "blocks, present only while a thinking level is set; "
+                     "sandbox.audit_log rows carry guardrail decisions, not "
+                     "model reasoning. Sandbox sync reads <sid>.jsonl only; the "
+                     ".trajectory.jsonl sidecar that carries context.compiled is "
+                     "not pulled from the sandbox yet."),
         }
 
 

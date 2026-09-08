@@ -10,21 +10,58 @@ on:
         description: 'Version to publish (e.g. 0.10.0)'
         required: true
 
+# Least-privilege default. The publish job below declares its own
+# permissions block (contents: read + id-token: write + attestations:
+# write), which replaces this default wholesale -- provenance minting and
+# PyPI Trusted Publishing are unaffected.
+permissions:
+  contents: read
+
 jobs:
   publish:
     name: Build & Publish to PyPI
     runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v7
+    permissions:
+      # write (not read) so the step below can attach the wheel, sdist and
+      # provenance to the GitHub release for this tag.
+      contents: write
+      # Mints the short-lived OIDC token used for build provenance and, once
+      # enabled, PyPI Trusted Publishing. Both are no-ops without it.
+      id-token: write
+      # Records the provenance attestation against the repo.
+      attestations: write
 
-      - uses: actions/setup-python@v7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
+          # This job builds the frontend bundle that is packaged into the
+          # wheel and uploaded to PyPI, so anything restored into the
+          # workspace before `python3 -m build` ends up inside a published,
+          # provenanced artifact. A GitHub Actions cache is not trusted
+          # input: an entry seeded from a less-trusted context on this repo
+          # can be restored by a later release run. zizmor reports the
+          # combination as `cache-poisoning` (High).
+          #
+          # setup-node's `package-manager-cache` defaults to true, but only
+          # actually caches when package.json declares `devEngines
+          # .packageManager` or a top-level `packageManager`. Neither is
+          # declared here, so nothing is cached TODAY -- the exposure is
+          # latent, and adding a `packageManager` field (an ordinary edit
+          # that looks harmless) would switch it on silently, on the two
+          # workflows where it matters most. Pinning it false keeps that
+          # decision out of package.json. Nothing is lost: `npm ci` in the
+          # next step installs from the committed lockfile either way.
+          package-manager-cache: false
 
       - name: Install build tools
         run: pip install build twine
@@ -76,7 +113,70 @@ jobs:
           print("v2 bundle is present in wheel")
           PY
 
-      - name: Publish to PyPI
+      # Build provenance: a signed, publicly verifiable statement binding these
+      # exact artifacts to this workflow run, commit and repo. Free, and
+      # independent of PyPI — `gh attestation verify dist/clawmetry-*.whl
+      # --repo vivekchand/clawmetry` works for anyone, including an auditor who
+      # has no reason to take our word for what produced a wheel.
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: "dist/*"
+
+      # Attach the artifacts and their provenance to the GitHub release, so a
+      # release download can be verified without trusting this log. Mirrors
+      # the same block in release-on-merge.yml, which is the workflow that
+      # actually runs for auto-releases; this path covers a hand-pushed tag.
+      - name: Attach artifacts and provenance to the release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release upload "$TAG" dist/*.whl dist/*.tar.gz \
+            --clobber || echo "⚠ dist upload failed (non-blocking)"
+
+          BUNDLE="${{ steps.attest.outputs.bundle-path }}"
+          if [ -n "$BUNDLE" ] && [ -f "$BUNDLE" ]; then
+            PROV="dist/clawmetry-${TAG#v}.intoto.jsonl"
+            cp "$BUNDLE" "$PROV"
+            gh release upload "$TAG" "$PROV" \
+              --clobber || echo "⚠ provenance upload failed (non-blocking)"
+          else
+            echo "⚠ no attestation bundle at '$BUNDLE' — release has no provenance"
+          fi
+
+      # ── Publishing: two mutually exclusive paths ───────────────────────────
+      #
+      # Trusted Publishing (OIDC) is the target state. It removes the
+      # long-lived PYPI_API_TOKEN secret entirely — a standing credential that
+      # can publish to PyPI is precisely what a supply-chain reviewer asks
+      # about — and it is the only way to get PEP 740 attestations, which put
+      # a verifiable "Provenance" badge on every release file linking back to
+      # the workflow run that built it.
+      #
+      # Gated on a repo variable rather than switched outright, because it
+      # CANNOT work until the Trusted Publisher is configured on PyPI, and
+      # this repo auto-publishes on merge. Flipping it without the PyPI-side
+      # setup would break releases.
+      #
+      # To switch (one time, ~2 minutes):
+      #   1. https://pypi.org/manage/project/clawmetry/settings/publishing/
+      #      Add a GitHub publisher: owner=vivekchand, repo=clawmetry,
+      #      workflow=publish.yml, environment=(blank)
+      #   2. Set repo variable PYPI_TRUSTED_PUBLISHING=true
+      #      (Settings > Secrets and variables > Actions > Variables)
+      #   3. Confirm the next release shows a Provenance badge on PyPI, then
+      #      delete the PYPI_API_TOKEN secret and this fallback step.
+      - name: Publish to PyPI (Trusted Publishing, attested)
+        if: vars.PYPI_TRUSTED_PUBLISHING == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          attestations: true
+
+      - name: Publish to PyPI (API token — legacy fallback)
+        if: vars.PYPI_TRUSTED_PUBLISHING != 'true'
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}

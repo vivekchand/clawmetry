@@ -1,392 +1,263 @@
-<!-- i18n-src:8f42d460a973 -->
+<!-- i18n-src:88be2deff5d5 -->
 > العربية translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
 
-[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![PyPI Downloads/week](https://static.pepy.tech/badge/clawmetry/week)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
+[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
+[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**شاهد وكيلك وهو يفكر.** مراقبة فورية لـ **14 بيئة تشغيل لوكلاء الذكاء الاصطناعي**: [OpenClaw](https://github.com/openclaw/openclaw)، [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)، Claude Code، OpenAI Codex و10 أخرى. لوحة تحكم واحدة لأسطول وكلائك بالكامل.
+**شاهد وكيلك وهو يفكّر.** رصد فوري لأداء **30 بيئة تشغيل لوكلاء الذكاء الاصطناعي**: [OpenClaw](https://github.com/openclaw/openclaw)، [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)، Claude Code، OpenAI Codex و26 أخرى. لوحة تحكّم واحدة لكامل أسطول وكلائك.
 
-> 🌐 **اقرأ هذا بلغة:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [المزيد ←](docs/i18n/)
+> 🌐 **اقرأ هذا بلغة:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [أكثر →](docs/i18n/)
 
-أمر واحد. بلا إعداد. يكتشف كل شيء تلقائياً.
+أمر واحد. بلا إعداد. يكتشف كل شيء تلقائيًا.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-يفتح على **http://localhost:8900** وانتهى الأمر.
+يفتح على **http://localhost:8900**. بلا إعداد: يجد بيئات تشغيل الوكلاء الموجودة لديك مسبقًا،
+يقرأها للقراءة فقط، ولا يغيّر شيئًا في طريقة تشغيلها.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## يعمل مع 14 بيئة تشغيل للوكلاء
+## يعمل مع 30 بيئة تشغيل للوكلاء
 
-بدأ ClawMetry كأداة مراقبة لـ OpenClaw، والآن يقيس **أسطول وكلائك بالكامل** في لوحة تحكم واحدة، مع اكتشاف تلقائي لكل بيئة تشغيل على جهازك:
+**مجاني في التطبيق مفتوح المصدر:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
+**في خطة مدفوعة:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-بيئتا OpenClaw وNemoClaw مجانيتان في التطبيق مفتوح المصدر؛ أما بيئات التشغيل الأخرى فتُفعَّل عبر ClawMetry Cloud أو ترخيص Pro ذاتي الاستضافة. بدّل بيئات التشغيل من الرأسية وستُعاد تهيئة كل تبويب - التكلفة، الرموز (tokens)، الأدوات، التتبعات - ليتوافق مع تلك البيئة. راجع **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** للتفاصيل الدقيقة حول التقسيم المجاني/المدفوع، ومصفوفة المستويات، وشكل `/api/entitlement`، وأداة سطر الأوامر `clawmetry license`.
+كل بيئة تشغيل تحصل على نفس لوحة التحكّم. شغّل عدة بيئات في آنٍ واحد، ومُبدّل الرأس
+يعيد تحديد نطاق كل تبويب على واحدة منها.
 
-## ما الذي ستحصل عليه
+بنيت وكيلك الخاص على SDK بدلًا من ذلك؟ المُعترِض (interceptor) يتتبّع استدعاءات نموذج
+اللغة الخاصة به أيضًا. راجع [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 
-- **التدفق (Flow)** - رسم متحرك حي يُظهر الرسائل وهي تتدفق عبر القنوات، والدماغ، والأدوات، ثم العودة
-- **نظرة عامة (Overview)** - فحوصات الصحة، خريطة حرارية للنشاط، عدد الجلسات، معلومات النموذج
-- **الاستخدام (Usage)** - تتبع الرموز (tokens) والتكلفة مع تفصيل يومي/أسبوعي/شهري
-- **الجلسات (Sessions)** - جلسات الوكيل النشطة مع النموذج، والرموز، وآخر نشاط
-- **المهام المجدولة (Crons)** - المهام المجدولة مع الحالة، والتشغيل التالي، والمدة
-- **السجلات (Logs)** - بث سجلات فوري مُلوَّن
-- **الذاكرة (Memory)** - تصفح SOUL.md وMEMORY.md وAGENTS.md والملاحظات اليومية
-- **النصوص (Transcripts)** - واجهة فقاعات محادثة لقراءة سجلات الجلسات
-- **التنبيهات (Alerts)** - حدود الميزانية، محفزات معدل الأخطاء، كشف انقطاع الوكيل؛ يوجّه إلى Slack وDiscord وPagerDuty وTelegram والبريد الإلكتروني
-- **الموافقات (Approvals)** - حجب عمليات الحذف المدمرة، والدفع القسري (force pushes)، وتعديلات قواعد البيانات، وsudo، وتثبيت الحزم، والاتصالات الشبكية خلف موافقة بضغطة واحدة
+## ما الذي تحصل عليه
 
-## لقطات شاشة
+- **الجلسات والنصوص الكاملة**: ما قام به كل وكيل، دورة بدورة، مع إعادة تشغيل (replay)
+- **التكلفة والرموز (tokens)**: لكل بيئة تشغيل، ونموذج، وجلسة، ويوم، مع إشارات الشذوذ
+- **التدفّق (Flow)**: رسم بياني حي لحركة الرسائل عبر القنوات والنماذج والأدوات
+- **العقل (Brain)**: تيار أحداث الاستدلال واستدعاء الأدوات لحظة حدوثه
+- **انفجار السياق**: استخدام نافذة السياق مُحجّم حسب المزوّد، الضغط (compaction) مقابل الفائض القسري، إضافة إلى خريطة لكل بيئة تشغيل توضّح ما *لا* يمكننا رؤيته ([كيف](docs/CONTEXT_BLOWOUT.md))
+- **الذاكرة والمهارات**: الملفات والمهارات التي حمّلتها كل بيئة تشغيل فعليًا
+- **الصحة والسجلات**: القرص، الذاكرة، معدلات الأخطاء، حدود المعدل (rate limits)، تيار سجلات حي
+- **التنبيهات**: حدود الموازنة، ارتفاعات الأخطاء، انقطاع الوكيل عن الاتصال، موجّهة إلى Slack أو Discord أو PagerDuty أو Telegram أو البريد الإلكتروني
+- **الموافقات**: إيقاف استدعاءات الأدوات الخطرة *قبل* تنفيذها والموافقة عليها من هاتفك ([كيف](docs/APPROVALS.md))
 
-### 🧠 الدماغ (Brain) - بث أحداث الوكيل الحي
-![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
+## انفجار السياق، وتكلفة الرصد
 
-### 📊 نظرة عامة (Overview) - استخدام الرموز وملخص الجلسة
-![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+سؤالان يستحقّان الإجابة قبل أن تثق بأي أداة لمقارنة الوكلاء.
 
-### ⚡ التدفق (Flow) - تغذية استدعاءات الأدوات الفورية
-![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+**كيف يتعامل مع انفجار نافذة السياق عبر بيئات التشغيل المختلفة؟**
 
-### 💰 الرموز (Tokens) - تفصيل التكلفة حسب النموذج والجلسة
-![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
+نسبة استخدام لا تكون صادقة إلا بمقدار صدق ما تُقسَم عليه. يُحدّد ClawMetry حجم النافذة
+لكل مزوّد من [جدول يمكنك قراءته وتقديم طلب سحب (PR) بشأنه](clawmetry/context_windows.py)،
+يشمل Anthropic وOpenAI وGoogle وxAI وDeepSeek وKimi وQwen وMistral وLlama وGLM. فهو لا
+يقيس كل بيئات التشغيل الثلاثين بمقياس مزوّد واحد. وهذا مهم: دورة بـ 300 ألف رمز على GPT‑5،
+عند قياسها بمقياس Anthropic البالغ 200 ألف، تُقرَأ على أنها ">100%، منفجرة" بينما هي في
+الواقع عند 75% من نافذة GPT‑5 البالغة 400 ألف. وذلك المقياس نفسه يُخفي دورة DeepSeek
+منفجرة فعليًا عند 130 ألف رمز على أنها 65% مريحة.
 
-### 🧬 الذاكرة (Memory) - متصفح ملفات مساحة العمل
-![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
+كل نافذة تأتي مع مصدرها: `model_table`، أو `explicit_marker`، أو `observed_floor`، أو
+`default` صادق عندما لا نعرف النموذج. مقياس (gauge) مبني على تخمين لا يُعرَض أبدًا
+بنفس مصداقية مقياس مبني على بحث في جدول.
 
-### 🔐 الأمان (Security) - الوضعية الأمنية وسجل التدقيق
-![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
+لا يستطيع ClawMetry رؤية أحداث الضغط (compaction) إلا في بعض بيئات التشغيل. لذلك يُقدّم
+`GET /api/context-coverage` تقريرًا، لكل بيئة تشغيل، عن كون **الصفر يعني "عمل بلا مشاكل"
+أم "نحن عمياء"**. الصفر الذي يعني في الواقع "عمياء" يقول ذلك بصراحة.
+[التفصيل الكامل](docs/CONTEXT_BLOWOUT.md)
 
-### 🚨 التنبيهات (Alerts) - حدود الميزانية، محفزات معدل الأخطاء، ووِبهوكس إلى Slack / Discord / PagerDuty / البريد الإلكتروني
-![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+**ما الذي تكلّفه الأداة القياسية (instrumentation)؟**
 
-### ✋ الموافقات (Approvals) - حجب استدعاءات الأدوات الخطرة خلف موافقة يدوية؛ قواعد حماية مدعومة بسياسات
-![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+| المسار | ما يُضاف إلى وكيلك | مفعّل افتراضيًا؟ |
+|---|---|---|
+| تتبّع ملف الجلسة (tailing، كل الـ30 بيئة تشغيل) | **0**. عملية منفصلة، لا كود ClawMetry داخل وكيلك | نعم |
+| المُعترِض عبر HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0.44 مللي ثانية** لكل استدعاء نموذج لغة، أو 0.009% من استدعاء مدته 5 ثوان | لا |
+| بوابة الخطّاف السابق للأداة (ذاكرة تخزين دافئة) | **+44 مللي ثانية** لكل استدعاء أداة مُراقَب، فوق حد أدنى للمُفسِّر (interpreter) قدره 36 مللي ثانية | لا |
+| بروكسي التطبيق (enforcement proxy) | **+9.7 مللي ثانية** لكل استدعاء نموذج لغة | لا |
+
+تكلفة استضافة الخادم الخلفي (daemon): استيعاب **2,762 حدثًا/ثانية**، **710 بايت/حدث**
+على القرص (67.7 ميجابايت لكل 100 ألف حدث)، و**نحو 12% من نواة واحدة** بشكل مستمر على
+تثبيت نشط. هذا الرقم الأخير يتجاوز موازنتنا المُعلَنة البالغة 5-10%، لذا نُنشره كخطأ
+يجب تعقّبه بدلًا من إخفائه عن الصفحة.
+
+قِيست على Apple M2 Pro باستخدام `benchmarks/overhead.py`. يشغّل الأداة كل حالة في
+عملية منفصلة، ويُبدّل ترتيبها، و**يرفض طباعة رقم عندما تختلف الجولات في إشارته**.
+شغّلها على جهازك الخاص في دقيقة واحدة:
+
+```bash
+pip install clawmetry && python -m benchmarks.overhead
+```
+
+كل مسار مُقاس، بما في ذلك بوابات الخطّاف وبروكسي التطبيق، والأداة تعمل على Linux
+وmacOS وWindows في CI. نتيجتان تستحقّان المعرفة: البروكسي يكلّف نحو سبع مرات أكثر على
+Windows مقارنة بـ Linux، والخادم الخلفي يستهلك حاليًا نحو 12% من نواة واحدة، متجاوزًا
+موازنتنا الخاصة البالغة 5-10%. البيانات الخام بصيغة JSON، والمنهجية، وما لا يزال غير
+مقاس، موجودة في [docs/OVERHEAD.md](docs/OVERHEAD.md).
+
+## التسعير
+
+| الخطة | ما تشمله | السعر |
+|---|---|---|
+| **مجانية** | OpenClaw + NVIDIA NemoClaw + Goose، لوحة تحكّم كاملة، محلية فقط | 0$ |
+| **Starter** | كل بيئة تشغيل أخرى مذكورة أعلاه، عرض الأسطول (fleet view)، مزامنة سحابية | 9$ لكل عقدة / شهريًا |
+| **Pro** | Starter + التحكّم والتقييم: الموافقات، سياسات خطورة الأدوات، التقييمات (evals)، اكتشاف الشذوذ، مُحسّن التكلفة، تصدير OTel، سجل تدقيق مقاوم للعبث | 19$ لكل عقدة / شهريًا |
+
+الخطط السنوية، خطة Enterprise، والأرقام الحالية موجودة في
+**[clawmetry.com/pricing](https://clawmetry.com/pricing)**. مفاتيح الترخيص للاستضافة
+الذاتية تعمل بدون السحابة (`clawmetry license`). التقسيم الدقيق بين المجاني والمدفوع
+موجود في [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
+
+## بياناتك تبقى على جهازك
+
+يقرأ ClawMetry ملفات الجلسات والسجلات محليًا. **لا تُغادر أي بيانات جلسة جهازك إطلاقًا
+إلا إذا شغّلت `clawmetry connect`** — لا مطالبات (prompts)، ولا ردود، ولا مُعطيات
+استدعاء الأدوات، ولا محتوى الملفات، ولا سطور السجلات. وعند الاتصال، تكون اللقطة
+(snapshot) مشفّرة من طرف إلى طرف بمفتاح لا يُغادر جهازك مطلقًا، ويتم فكّ تشفيرها في
+متصفحك. إذا لم تملك عقدة ما مفتاحًا، يُتخطّى الرفع بدلًا من إرساله بشكل غير مشفّر،
+ولا يمكن لأي استجابة من الخادم تعطيل ذلك.
+
+هناك أمران يعملان افتراضيًا قبل الاتصال، وكلاهما اختياري الإلغاء ولا يحمل أي منهما
+بيانات جلسة: نبضة تثبيت مجهولة الهوية وفحص إصدار مقابل PyPI. كما يبحث التثبيت
+الافتراضي عن عنوان IP العام لديك مرة واحدة لعرضه في سطر لافتة عند بدء التشغيل. كل
+وجهة، وما تحمله، وكيفية إيقافها، مُدرَجة في [docs/EGRESS.md](docs/EGRESS.md)؛ التثبيتات
+المُستضافة ذاتيًا، أو المُعاد توجيهها، أو المعزولة تمامًا عن الشبكة، لا تقوم بأي
+استدعاءات صادرة اختيارية على الإطلاق.
+
+يحدث فكّ التشفير في متصفحك، بكود نقدّمه لك. كان ذلك في السابق مجرّد وعد؛ أما الآن
+فهو أمر يمكنك التحقّق منه. كل سطر يلامس مفتاحك موجود في ملف واحد قابل للقراءة،
+[`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js)، والذي يُشحَن ضمن الحزمة
+(wheel) ويُقدَّم حرفيًا، مثبّتًا بتجزئة سلامة المصدر الفرعي (Subresource Integrity).
+للتأكّد من أن المتصفح يشغّل ما نشرناه:
+
+```bash
+curl -s https://app.clawmetry.com/static/js/cm-e2e.js -o served.js
+pip download --no-deps clawmetry==$(clawmetry --version | tr -d 'a-z ') -d /tmp/cm
+unzip -p /tmp/cm/clawmetry-*.whl clawmetry/static/js/cm-e2e.js > published.js
+diff served.js published.js && echo identical
+```
+
+ما لا يُثبته ذلك: نحن الذين نقدّم الصفحة التي تحمّل الملف، فيمكننا نظريًا تقديم صفحة
+مختلفة. تجزئات السلامة تحميك من شبكة توصيل محتوى مخترقة، لا من المزوّد نفسه. ما تحصل
+عليه هو أن أي استبدال يجب أن يكون متعمّدًا، ومرئيًا في مصدر الصفحة، ومختلفًا عن أداة
+منشورة على PyPI يمكن لأي شخص جلبها. الاستضافة الذاتية أو البقاء محليًا بالكامل يزيل
+هذا الاعتماد كليًا.
 
 ## التثبيت
 
-**سطر واحد (موصى به):**
 ```bash
-curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
+pip install clawmetry     # ثم: clawmetry
 ```
 
-**pip:**
-```bash
-pip install clawmetry
-clawmetry
-```
+أو السطر الواحد: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-**من المصدر:**
-```bash
-git clone https://github.com/vivekchand/clawmetry.git
-cd clawmetry && pip install flask && python3 dashboard.py
-```
+يحتاج Python 3.8+ على macOS أو Linux أو Windows، وعلى الأقل بيئة تشغيل وكيل واحدة
+على نفس الجهاز. تعليمات Docker: [docs/DOCKER.md](docs/DOCKER.md).
 
-## تطوير الواجهة الأمامية v2
-
-يعيش تطبيق React الخاص بالإصدار v2 في `frontend/` ويُقدَّم على المسار `/v2` عند
-تشغيل خادم Flask مع تفعيل v2.
-
-استخدم طرفيتين (terminals) أثناء التطوير:
+أو اجعل الوكيل يُهيّئه لك. مهارة [`agent-kill-switch`](skills/agent-kill-switch/SKILL.md)
+تُعلّم Claude Code أو Codex أو Cursor أو Gemini CLI أو Copilot أو OpenCode كيفية
+تثبيت ClawMetry، والإبلاغ عن ما تقوم به الوكلاء على الجهاز وما تنفقه، وإيقاف جلسة واحدة
+عند الطلب، وتعليق استدعاءات الأدوات الخطرة للموافقة عليها:
 
 ```bash
-# الطرفية 1: خادم Flask API على المنفذ :8900
-CLAWMETRY_V2=1 python3 dashboard.py
+npx skills add vivekchand/clawmetry --skill agent-kill-switch
 ```
 
-```bash
-# الطرفية 2: خادم Vite للتطوير على المنفذ :5173
-cd frontend
-nvm use
-npm ci
-npm run dev
-```
+## الوثائق
 
-افتح `http://localhost:5173/v2/`. يمرر Vite طلبات `/api` عبر بروكسي إلى
-`http://localhost:8900`، بحيث يمكن لتطبيق React التواصل مع خادم Flask المحلي
-دون إعداد CORS إضافي.
+| | |
+|---|---|
+| [توافق بيئات التشغيل](docs/compatibility.md) | ما يقرأه كل محوّل (adapter)، وكيفية إضافة بيئة تشغيل |
+| [انفجار السياق](docs/CONTEXT_BLOWOUT.md) | نوافذ خاصة بكل مزوّد، الضغط مقابل الفائض، تغطية لكل بيئة تشغيل |
+| [الحمل الزائد (Overhead)](docs/OVERHEAD.md) | ما تكلّفه الأداة القياسية، مقاسة، مع الأداة اللازمة لإعادة إنتاجها |
+| [الاستحقاقات (Entitlements)](docs/ENTITLEMENTS.md) | المجاني مقابل المدفوع، مصفوفة الفئات، أداة سطر الأوامر للترخيص |
+| [الموافقات والسياسات](docs/APPROVALS.md) | التحقّق قبل التنفيذ، تقييم الخطورة، الموافقات من الهاتف |
+| [OpenTelemetry](docs/OPENTELEMETRY.md) | تصدير التتبّعات (traces) إلى أي مكان، واستيعاب OTLP من أي مصدر |
+| [أحضر وكيلك الخاص](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore، وPydantic AI، وLangChain من طرف إلى طرف، مع أمثلة قابلة للتشغيل |
+| [تتبّع SDK](docs/SDK_TRACKING.md) | نسب التكلفة للوكلاء الذين بنيتهم بنفسك |
+| [قنوات الدردشة](docs/CHANNELS.md) | محوّلات الدردشة المعروضة في التدفّق (Flow) |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | إعدادات NVIDIA NemoClaw المعزولة (sandboxed) |
+| [Docker](docs/DOCKER.md) | الصورة، compose، تركيبات الحجوم (volume mounts) |
+| [البنية المعمارية](ARCHITECTURE.md) · [التطوير](docs/DEVELOPMENT.md) | كيفية عمله من الداخل؛ التشغيل من المصدر |
+| [القياس عن بُعد (Telemetry)](docs/TELEMETRY.md) | نبضات التثبيت المجهولة الهوية ونبضات فتح تطبيق سطح المكتب، وكيفية إيقافها |
 
-لبناء الحزمة (bundle) التي تُشحن مع حزمة Python:
+## لقطات شاشة
 
-```bash
-cd frontend
-npm run build
-```
+كل رقم أدناه من جهاز حقيقي واحد، للقراءة فقط، بدون أي بيانات مُلقّنة مسبقًا.
 
-تُكتب حزمة الإنتاج إلى `clawmetry/static/v2/dist/`.
+**يُنبّهك عندما يكون هناك خطأ ما، وليس فقط ما حدث.**
+لافتتا شذوذ في الأعلى: إنفاق يسير بمعدّل 7 أضعاف المتوسط اليومي، وارتفاع تكلفة بمعدّل
+4.2x. تحتها، 324 من أصل 667 جلسة أخيرة تحمل إشارة هدر، مُصنّفة بحسب السبب.
 
-## توافق بيئات التشغيل / الوكلاء
+![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
-يراقب ClawMetry العديد من بيئات تشغيل وكلاء الذكاء الاصطناعي، وليس OpenClaw فقط. تشحن كل بيئة تشغيل غير OpenClaw مع مهايئ قراءة (reader adapter) مخصص يترجم صيغة الجلسة الأصلية الخاصة بها إلى أشكال ClawMetry الموحدة؛ ويستوعبها الشيطان (daemon) في نفس مخزن DuckDB + لقطة السحابة (cloud snapshot)، موسومة ببيئة التشغيل، ويعرض تبويب إعادة تشغيل الجلسة **مبدّل بيئة تشغيل** عند وجود أكثر من واحدة. راجع [`docs/compatibility.md`](docs/compatibility.md) للاطلاع على المصفوفة الكاملة + دليل لإضافة بيئات تشغيل، و[`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) لمقدمة عن عائلة OpenClaw.
+**يُظهر لك إلى أين ذهب المال، في كل نافذة زمنية.**
+252.47$ اليوم، و513.15$ هذا الأسبوع، و1,312.92$ هذا الشهر، كلٌ مع الرموز خلفه ومقدار
+ما تُغطّيه اشتراكك من ذلك مسبقًا. تحت ذلك، نحو 1,128$/شهريًا مُصنّفة كقابلة للاستعادة
+و17,256$/شهريًا تم توفيرها فعليًا بإعادة استخدام الذاكرة المؤقتة (cache).
 
-| بيئة التشغيل / الوكيل | الحالة | ملاحظات |
-|---|---|---|
-| **OpenClaw** | أصلية | بيئة التشغيل المرجعية، تُكتشف تلقائياً |
-| **PicoClaw** | مهايئ تجريبي (Beta) | JSONL مسطح بصيغة `providers.Message‏` (`~/.picoclaw/workspace/sessions`). النصوص، النموذج، استدعاءات الأدوات. |
-| **NanoClaw** | مهايئ تجريبي (Beta) | SQLite لكل جلسة (`data/v2-sessions`). النصوص + عدد الرسائل. |
-| **Hermes** | مهايئ تجريبي (Beta) | SQLite ‏`~/.hermes/state.db`. النصوص، النموذج، الرموز/التكلفة. |
-| **Claude Code** | مهايئ تجريبي (Beta) | JSONL ‏`~/.claude/projects/.../<id>.jsonl`. النصوص، النموذج، استدعاءات الأدوات + التفكير، استخدام الرموز. |
-| **Codex** | مهايئ تجريبي (Beta) | JSONL للتشغيل (Rollout) ‏`~/.codex/sessions/...`. النصوص، النموذج، استدعاءات الأدوات، استخدام الرموز. |
-| **Cursor** | مهايئ تجريبي (Beta) | SQLite ‏`state.vscdb`. نصوص الدردشة/المُركِّب (composer)، النموذج. |
-| **Aider** | مهايئ تجريبي (Beta) | ملف `.aider.chat.history.md` لكل مشروع. النصوص، النموذج، عدد الرموز. |
-| **Goose** | مهايئ تجريبي (Beta) | SQLite ‏`~/.local/share/goose`. النصوص، النموذج، استدعاءات الأدوات، إجمالي الرموز. |
-| **opencode** | مهايئ تجريبي (Beta) | SQLite ‏`~/.local/share/opencode`. النصوص، النموذج، استدعاءات الأدوات، الرموز + التكلفة. |
-| **Qwen Code** | مهايئ تجريبي (Beta) | JSONL ‏`~/.qwen/projects/.../chats`. النصوص، النموذج، استدعاءات الأدوات، استخدام الرموز. |
-| **Pi** | مهايئ تجريبي (Beta) | JSONL ‏`~/.pi/agent/sessions`. النصوص، النموذج، استدعاءات الأدوات، الرموز + التكلفة. |
-| **Deep Agents** | مهايئ تجريبي (Beta) | SQLite ‏`~/.deepagents/.state/sessions.db`. النصوص، النموذج، استدعاءات الأدوات، الرموز + التكلفة. |
+![Cost: today, this week and this month, with an efficiency grade and itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
 
-"مهايئ تجريبي (Beta adapter)" تعني أن ClawMetry يشحن قارئاً لصيغة بيئة التشغيل الفعلية على القرص، مبنياً ومُتحقَّقاً منه مقابل تثبيت حقيقي على جهاز حقيقي (راجع `tests/fixtures/runtimes/<rt>/`). المهايئات للقراءة فقط؛ وكل واحدة منها صريحة بشأن ما تخزّنه بيئة التشغيل فعلياً (مثلاً PicoClaw/NanoClaw/Cursor لا تكتب تكلفة الرموز على القرص). عند تشغيل عدة بيئات تشغيل على عقدة واحدة، يقوم مبدّل بيئة التشغيل بحصر عرض الجلسات على واحدة للتعمق النظيف.
+**يرسم كيف تتحوّل رسالة إلى إجابة.**
+رسم التدفّق الحي: أنت، والقناة التي وصلت عبرها، والبوابة (gateway)، والنموذج الذي
+يجيب الآن، وكل أداة استخدمها. تُضيء العُقَد بينما يتحرّك العمل خلالها.
 
-## تتبّع أي وكيل SDK - إسناد التكلفة خارج الحلقة (out-loop)
+![Flow: live diagram from you through the gateway to the model and its tools](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-بيئات التشغيل أعلاه جميعها تكتب الجلسات إلى القرص. أما **وكيلك الإنتاجي** الخاص بك - ذلك الذي بنيته على OpenAI Agents SDK، أو LangChain، أو Vercel AI SDK، أو LlamaIndex، أو E2B، أو حلقة `httpx` بسيطة - فلا يفعل ذلك. لا يزال معترض ClawMetry بلا إعداد يلتقط استدعاءات LLM الخاصة به (التكلفة، الرموز، زمن الاستجابة، الأخطاء) عبر تصحيح `httpx`/`requests` بشكل ديناميكي (monkey-patching):
+**كل وكيل على الجهاز، في جدول واحد.**
+ما الذي يُشغّله، وما تكلفته في آخر 24 ساعة وعلى مدى عمره الكامل، وآخر مرّة شُوهد فيها،
+ومن يملكه، وهل يُغطّي اشتراك ما هذه الفاتورة. 14 وكيلًا هنا، 3 جلسات تعمل، و13 صامتة.
 
-```python
-import clawmetry.track            # تفعيل المعترض
-clawmetry.track.set_source("support-agent")   # تسمية هذا المنتج
+![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
-# ...يعمل وكيلك بشكل طبيعي؛ كل استدعاء LLM يُتتبَّع ويُسنَد الآن.
-```
+**يُظهر أين ذهب وقت الدورة ومالها، أداةً بأداة.**
+دورة واحدة من جلسة حقيقية: 11 أداة في 11.2 دقيقة بتكلفة 1.16$. كل استدعاء Bash
+واستدعاء نموذج يحصل على شريطه الخاص على الخط الزمني، بحيث يُفرَّق بنظرة واحدة بين
+الأمر الذي استغرق 4.1 دقائق والآخر الذي استغرق 226 مللي ثانية.
 
-تُسمي `set_source()` (أو متغير البيئة `CLAWMETRY_SOURCE=support-agent`) كل استدعاء بـ**مصدر مُسمّى**، بحيث يظهر كل منتج تشغّله كخط مستقل قابل لإسناد التكلفة من الدرجة الأولى في بطاقة **🔌 المصادر خارج الحلقة (Out-loop sources)** الخاصة بلوحة التحكم في تبويب نظرة عامة - الاستدعاءات، والمزودون، وزمن الاستجابة، ومعدل الأخطاء لكل وكيل. لم تُحدّد مصدراً؟ لا تزال الاستدعاءات مُتتبَّعة؛ تبقى البطاقة مخفية فقط.
+![Sessions: one agent turn on a timeline, every tool call with its own duration and the turn's cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/sessions.png)
 
-```bash
-CLAWMETRY_SOURCE=billing-agent python my_agent.py
-```
+**يُقيّم العمل، وليس مجرّد الإنفاق.**
+تقدير A هذا الأسبوع: 54 مهمة عادت نظيفة، ومهمّتان صعبتان كلّفتا 48.57$، والدورات
+التي لا تحتوي على نشاط كافٍ للحكم عليها تُستثنى من التقدير بدلًا من عدّها كنجاحات.
+كل دورة صعبة ترتبط بتتبّعها (trace).
 
-هذه هي طبقة البيانات نفسها التي تغذيها مهايئات بيئة التشغيل (DuckDB ← لقطة السحابة)، لذا تتزامن المصادر خارج الحلقة مع لوحة تحكم السحابة تماماً كأي شيء آخر، مع تشفير من طرف إلى طرف (E2E).
+![Quality: this week's report card with the rough runs and what they cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/quality.png)
 
-## OpenTelemetry - محايد تجاه المزود، أرسل تتبعاتك إلى أي مكان
+**يُظهر لماذا تستمرّ نافذة السياق في الامتلاء.**
+715 ألف رمز من نافذة مقدارها مليون رمز في آخر دورة، وقمة عند 83.3%، و4 عمليات ضغط
+(compaction) أُطلِقت جميعها بشكل استباقي وليس عند حدوث فائض، مع نسبة استخدام كل دورة
+سابقة.
 
-يتحدث ClawMetry بلغة **OpenTelemetry** في كلا الاتجاهين، مستخدماً **اصطلاحات GenAI الدلالية**، بحيث لا تُحبس تتبعات وكيلك أبداً داخل أداة واحدة.
+![Context usage: window utilisation per turn, compaction events and tokens reclaimed](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/context.png)
 
-**التصدير** لكل جلسة - استدعاءات LLM، الأدوات، الوكلاء الفرعيون، الرموز، التكلفة - كتتبعات OTLP/HTTP GenAI إلى أي مُجمِّع (Datadog، أو Grafana، أو Honeycomb، أو مُجمِّع OTel الخاص بك):
+**الاكتشاف يعمل دون أن تُهيّئ أي شيء.**
+أدوات الاكتشاف المدمجة مفعّلة منذ التثبيت: الوكيل توقّف عن الاستجابة، انقطاع تيار
+القياس عن بُعد، ارتفاع مفاجئ في التكلفة، دفعة رموز مفاجئة، تصاعد في الأخطاء، ارتفاع
+مفاجئ في الأخطاء، تجاوز حدّ الموازنة، تطابق توقيع تهديد، اكتشاف من أداة أمنية، تغيّر
+في وضع الأمان. قواعدك الخاصة اختيارية فوق ذلك.
 
-```bash
-clawmetry --otel-export http://localhost:4318/v1/traces
-# بشكل مكافئ:
-CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
-```
+![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-رؤوس المصادقة وفترة الاستطلاع هي متغيرات بيئة اختيارية:
+**تعليق استدعاء خطر هو اختياري بالانضمام، ويُشحن مُعطّلًا.**
+الحذف المتكرّر (recursive deletes)، والدفع القسري (force pushes)، وsudo، والأسرار،
+وتثبيتات الحزم، والاستدعاءات الصادرة، كلٌّ منها يحصل على قاعدة يمكنك تفعيلها. حتى
+تفعّلها، يرصد ClawMetry فقط ولا يغيّر شيئًا. وبعد تفعيل قاعدة، تنتظر الاستدعاءات
+المطابقة هنا (أو على هاتفك) للموافقة أو الرفض.
 
-```bash
-CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # رؤوس HTTP إضافية
-CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # ثوانٍ (الافتراضي 60)
-```
+![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
-**الاستيعاب (Ingest)** - يقبل مستقبل OTLP المدمج التتبعات والمقاييس من أي مصدر آخر على `/v1/traces` و`/v1/metrics` (`pip install clawmetry[otel]` لاستيعاب protobuf).
+المزيد، لكل بيئة تشغيل: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
-تحصل على لوحة تحكم ClawMetry بلا إعداد ومحلية أولاً **و**بياناتك في أي خلفية يستخدمها فريقك بالفعل - بلا حبس (lock-in)، وبلا وكيل ثانٍ يجب تثبيته.
-
-## الإعداد
-
-معظم الناس لا يحتاجون إلى أي إعداد. يكتشف ClawMetry تلقائياً مساحة عملك، وسجلاتك، وجلساتك، ومهامك المجدولة.
-
-إذا احتجت إلى التخصيص:
-
-```bash
-clawmetry --port 9000              # منفذ مخصص (الافتراضي: 8900)
-clawmetry --host 127.0.0.1         # الربط بالمضيف المحلي فقط
-clawmetry --workspace ~/mybot      # مسار مساحة عمل مخصص
-clawmetry --name "Alice"           # اسمك في رسم التدفق (Flow)
-```
-
-جميع الخيارات: `clawmetry --help`
-
-## القنوات المدعومة
-
-يعرض ClawMetry النشاط الحي لكل قناة OpenClaw مُعدَّة لديك. تظهر في رسم التدفق فقط القنوات المُعدَّة فعلياً في ملف `openclaw.json` الخاص بك - أما غير المُعدَّة فتُخفى تلقائياً.
-
-انقر على أي عقدة قناة في التدفق لرؤية عرض فقاعات محادثة حي مع عدد الرسائل الواردة/الصادرة.
-
-| القناة | الحالة | نافذة منبثقة حية | ملاحظات |
-|---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ كاملة | ✅ | الرسائل، الإحصائيات، تحديث كل 10 ثوانٍ |
-| 💬 **iMessage** | ✅ كاملة | ✅ | يقرأ `~/Library/Messages/chat.db` مباشرة |
-| 💚 **WhatsApp** | ✅ كاملة | ✅ | عبر WhatsApp Web (Baileys) |
-| 🔵 **Signal** | ✅ كاملة | ✅ | عبر signal-cli |
-| 🟣 **Discord** | ✅ كاملة | ✅ | اكتشاف السيرفر (Guild) والقناة |
-| 🟪 **Slack** | ✅ كاملة | ✅ | اكتشاف مساحة العمل والقناة |
-| 🌐 **Webchat** | ✅ كاملة | ✅ | جلسات واجهة الويب المدمجة |
-| 📡 **IRC** | ✅ كاملة | ✅ | واجهة فقاعات بأسلوب الطرفية |
-| 🍏 **BlueBubbles** | ✅ كاملة | ✅ | iMessage عبر واجهة BlueBubbles REST API |
-| 🔵 **Google Chat** | ✅ كاملة | ✅ | عبر وِبهوكس Chat API |
-| 🟣 **MS Teams** | ✅ كاملة | ✅ | عبر إضافة بوت Teams |
-| 🔷 **Mattermost** | ✅ كاملة | ✅ | دردشة فريق ذاتية الاستضافة |
-| 🟩 **Matrix** | ✅ كاملة | ✅ | لامركزية، دعم E2EE |
-| 🟢 **LINE** | ✅ كاملة | ✅ | واجهة LINE Messaging API |
-| ⚡ **Nostr** | ✅ كاملة | ✅ | رسائل مباشرة لامركزية NIP-04 |
-| 🟣 **Twitch** | ✅ كاملة | ✅ | دردشة عبر اتصال IRC |
-| 🔷 **Feishu/Lark** | ✅ كاملة | ✅ | اشتراك أحداث WebSocket |
-| 🔵 **Zalo** | ✅ كاملة | ✅ | واجهة Zalo Bot API |
-
-> **الاكتشاف التلقائي:** يقرأ ClawMetry ملف `~/.openclaw/openclaw.json` الخاص بك ولا يعرض سوى القنوات التي أعددتها فعلياً. لا حاجة لإعداد يدوي.
-
-## نشر Docker
-
-تريد تشغيل ClawMetry داخل حاوية؟ لا مشكلة! 🐳
-
-**بداية سريعة مع Docker:**
-
-```bash
-# بناء الصورة
-docker build -t clawmetry .
-
-# التشغيل بالإعدادات الافتراضية
-docker run -p 8900:8900 clawmetry
-
-# أو تركيب مجلد بيانات وكيلك (مُوضَّح: مجلد OpenClaw ‏~/.openclaw)
-docker run -p 8900:8900 \
-  -v ~/.openclaw:/root/.openclaw \
-  -v /tmp/moltbot:/tmp/moltbot \
-  clawmetry
-```
-
-**مثال Docker Compose:**
-
-```yaml
-version: '3.8'
-services:
-  clawmetry:
-    build: .
-    ports:
-      - "8900:8900"
-    volumes:
-      - ~/.openclaw:/root/.openclaw:ro
-      - /tmp/moltbot:/tmp/moltbot:ro
-    restart: unless-stopped
-```
-
-> **ملاحظة:** عند التشغيل داخل Docker، ركّب مجلدات بيانات + سجلات وكيلك (مثل `~/.openclaw`، `~/.claude`، `~/.codex`) حتى يتمكن ClawMetry من اكتشاف إعدادك تلقائياً.
-
-## المتطلبات
-
-- Python 3.8+
-- Flask (يُثبَّت تلقائياً عبر pip)
-- بيئة تشغيل وكيل ذكاء اصطناعي على نفس الجهاز: OpenClaw، أو NVIDIA NemoClaw، أو Claude Code، أو Codex، أو Cursor، أو Goose، أو Hermes، أو opencode، أو Qwen Code، أو Aider، أو NanoClaw، أو PicoClaw، أو Pi، أو Deep Agents (أو أحجام تخزين مُركَّبة (mounted volumes) لـDocker)
-- Linux أو macOS
-
-## دعم NemoClaw / OpenShell
-
-يكتشف ClawMetry تلقائياً [NemoClaw](https://github.com/NVIDIA/NemoClaw) - غلاف الأمان المؤسسي من NVIDIA لـOpenClaw الذي يُشغِّل الوكلاء داخل حاويات OpenShell المعزولة (sandboxed).
-
-لا حاجة إلى إعداد إضافي في معظم الحالات. يكتشف شيطان المزامنة (sync daemon) تلقائياً ملفات الجلسات سواء كانت موجودة في `~/.openclaw/` على المضيف أو داخل حاوية OpenShell.
-
-### كيف يعمل
-
-يكتشف ClawMetry NemoClaw بطريقتين:
-
-1. **اكتشاف ثنائي (Binary detection)** - يتحقق من وجود واجهة سطر الأوامر `nemoclaw` ويشغّل `nemoclaw status` للحصول على معلومات الصندوق الرملي (sandbox)
-2. **اكتشاف الحاوية** - يفحص حاويات Docker قيد التشغيل بحثاً عن صور `openshell`، أو `nemoclaw`، أو `ghcr.io/nvidia/`، ثم يقرأ الجلسات عبر أحجام تخزين مُركَّبة أو `docker cp`
-
-تُوسَم ملفات الجلسات المُزامَنة من حاويات NemoClaw بـ `runtime=nemoclaw` وبيانات وصفية `container_id` في لوحة تحكم السحابة، حتى تتمكن من تمييزها عن جلسات OpenClaw القياسية بنظرة سريعة.
-
-### الإعداد الموصى به: شيطان المزامنة على المضيف
-
-للحصول على أفضل تجربة، شغّل شيطان المزامنة الخاص بـClawMetry على **الجهاز المضيف** (وليس داخل الصندوق الرملي). هذا يتجنب قيود سياسة شبكة NemoClaw.
-
-```bash
-# على المضيف (خارج الصندوق الرملي)
-pip install clawmetry
-clawmetry connect
-clawmetry sync
-```
-
-سيجد شيطان المزامنة تلقائياً الجلسات داخل أي حاويات OpenShell قيد التشغيل.
-
-### اختياري: اسم صندوق رملي صريح
-
-إذا لم يعمل الاكتشاف التلقائي، وجّه ClawMetry إلى الصندوق الرملي الصحيح:
-
-```bash
-export NEMOCLAW_SANDBOX=my-sandbox-name
-clawmetry sync
-```
-
-### التشغيل داخل الصندوق الرملي (متقدم)
-
-إذا اضطررت إلى تشغيل شيطان المزامنة **داخل** الصندوق الرملي OpenShell، أضف قاعدة الخروج (egress) هذه إلى سياسة شبكة NemoClaw حتى يتمكن من الوصول إلى واجهة استيعاب ClawMetry:
-
-```yaml
-# nemoclaw-policy.yaml
-network:
-  egress:
-    - host: ingest.clawmetry.com
-      port: 443
-      protocol: https
-```
-
-طبّق بالأمر:
-
-```bash
-nemoclaw policy apply --file nemoclaw-policy.yaml
-```
-
-### المنافذ والنقاط الطرفية
-
-| النقطة الطرفية | المنفذ | البروتوكول | مطلوب |
-|---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | نعم (شيطان المزامنة ← السحابة) |
-| `localhost:8900` | 8900 | HTTP | نعم (واجهة لوحة التحكم المحلية) |
-| مقبس Docker (`/var/run/docker.sock`) | — | مقبس Unix | لاكتشاف جلسات الحاوية |
-
-يقوم شيطان المزامنة بإجراء استدعاءات HTTPS صادرة فقط إلى `ingest.clawmetry.com`. لا حاجة لأي منافذ واردة.
-
----
-
-## النشر على السحابة
-
-راجع **[دليل اختبار السحابة](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** لأنفاق SSH، والبروكسي العكسي، وDocker.
-
-## الاختبار
-
-هذا المشروع مُختبَر باستخدام BrowserStack.
-
-[![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
-
-## القياس عن بُعد (Telemetry)
-
-يرسل ClawMetry نبضة "تشغيل أول" مجهولة واحدة إلى
-`https://app.clawmetry.com/api/install` في المرة الأولى التي تُشغِّل فيها واجهة سطر الأوامر
-`clawmetry` على جهاز جديد. نستخدم هذا لإحصاء عمليات التثبيت (المقياس التسويقي
-الوحيد الذي نملكه لمشروع مفتوح المصدر) ولمعرفة أطر عمل الوكلاء التي ثبّتها مستخدمونا.
-
-**طلب POST واحد بالضبط لكل تثبيت**، يحتوي على:
-
-| الحقل | مثال | السبب |
-|---|---|---|
-| `install_id` | UUID عشوائي مُخزَّن في `~/.clawmetry/install_id` | لمنع التكرار؛ غير مرتبط ببريدك الإلكتروني أو مفتاح API |
-| `version` | `0.12.167` | ما هي الإصدارات المنتشرة |
-| `os` / `os_version` | `Darwin` / `25.3.0` | أولويات دعم المنصات |
-| `python` | `3.11.15` | مصفوفة دعم إصدارات Python |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | ما هي الوكلاء التي يجب أن نتكامل معها لاحقاً |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | فصل عمليات التثبيت البشرية عن ضوضاء CI |
-
-**ما لا نرسله**: عنوان IP (تشتق السحابة رمز البلد من جانب الخادم من الطلب، ثم تتخلص من عنوان IP)، اسم المضيف، اسم المستخدم، مسار مساحة العمل، محتويات الملفات، مفتاح API الخاص بك، بريدك الإلكتروني، أو أي شيء يتعلق بالهوية الشخصية أو خاص بمساحة العمل. حمولة النقل قابلة للتدقيق في
-[`clawmetry/telemetry.py`](clawmetry/telemetry.py).
-
-**إلغاء الاشتراك** (أي واحد من هذه يعطّله بشكل دائم):
-
-```bash
-export CLAWMETRY_NO_TELEMETRY=1                # لكل جلسة طرفية
-export DO_NOT_TRACK=1                          # معيار W3C المشترك بين الأدوات
-touch ~/.clawmetry/notelemetry                 # علامة ملف دائمة
-```
-
-فشل الشبكة هنا لا يمنع أبداً تشغيل `clawmetry` - فالنبضة تُرسَل وتُنسى (fire-and-forget)
-على خيط (thread) شيطاني بمهلة 3 ثوانٍ.
-
-## تاريخ النجوم
+## تاريخ النجوم (Star History)
 
 <a href="https://www.star-history.com/?repos=vivekchand%2Fclawmetry&type=date&legend=top-left">
  <picture>
@@ -398,11 +269,6 @@ touch ~/.clawmetry/notelemetry                 # علامة ملف دائمة
 
 ## الترخيص
 
-MIT
+MIT · بناه [@vivekchand](https://github.com/vivekchand) · [clawmetry.com](https://clawmetry.com)
 
----
-
-<p align="center">
-  <strong>🦞 شاهد وكيلك وهو يفكر</strong><br>
-  <sub>بُني بواسطة <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · جزء من منظومة <a href="https://github.com/openclaw/openclaw">OpenClaw</a></sub>
-</p>
+<!-- osai-verify: f3ac716d40002c1ad6dd -->

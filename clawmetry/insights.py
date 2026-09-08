@@ -32,6 +32,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from clawmetry.endpoints import ingest_url as _resolve_ingest_url
+
 log = logging.getLogger("clawmetry.insights")
 
 # ── Config / paths ─────────────────────────────────────────────────────────
@@ -72,9 +74,13 @@ class WeeklyDigest:
     summary: str = ""
     cost_usd: float = 0.0
     tokens_used: int = 0
+    #: Whether an LLM was called at all. A digest written without one costs
+    #: nothing, and that zero is a fact rather than a missing number.
+    synthesized: bool = True
 
     def to_dict(self) -> dict:
-        return {
+        from clawmetry import provenance
+        out = {
             "generated_at": self.generated_at,
             "week_start": self.week_start,
             "week_end": self.week_end,
@@ -83,6 +89,27 @@ class WeeklyDigest:
             "tokens_used": self.tokens_used,
             "insights": [asdict(i) for i in self.insights],
         }
+        # What the digest cost to write. A digest nobody paid for really did
+        # cost $0.00, and that zero is a measurement; the badge should say so
+        # rather than hide a true zero behind "not available". The estimate is
+        # the OTHER case, and it names the two assumptions inside it.
+        if self.tokens_used > 0:
+            entry = provenance.estimated(
+                "the tokens the synthesis reported, split evenly between "
+                "input and output and priced at Sonnet's published rate. The "
+                "split is an assumption and the model may not have been the "
+                "one priced",
+                "clawmetry.providers_pricing (Sonnet rate card)",
+                inputs={"tokens_used": self.tokens_used})
+        else:
+            entry = provenance.measured(
+                ("no model was called to write this digest, so nothing was "
+                 "spent on it")
+                if not self.synthesized else
+                ("no synthesis call reported any token usage, so nothing was "
+                 "billed for this digest"),
+                "clawmetry.insights.WeeklyDigestGenerator")
+        return provenance.stamp(out, {"cost_usd": entry})
 
     def to_text(self) -> str:
         """Plain-text form for email / Slack / Telegram bodies."""
@@ -256,6 +283,70 @@ _INSIGHT_TEMPLATES: list[tuple[str, str, str, str]] = [
         """,
         "Rank channels by inbound volume; call out any new provider not seen before.",
     ),
+    # ── Improve loop: outcome + eval-score aware templates ──────────────────
+    # The digest used to read cost and volume only; the outcome classifier
+    # and the LLM judge wrote to ``sessions`` and nothing ever read them
+    # back. These three close that loop in plain words a newcomer can act on.
+    (
+        "top_failure_reasons",
+        "Why sessions failed this week",
+        """
+        SELECT CASE WHEN position(':' IN session_id) > 0
+                    THEN split_part(session_id, ':', 1)
+                    ELSE 'openclaw' END AS runtime,
+               outcome,
+               COUNT(*) AS sessions,
+               ROUND(COALESCE(SUM(cost_usd), 0), 2) AS cost
+        FROM sessions
+        WHERE last_active_at >= $since
+          AND outcome IS NOT NULL
+          AND outcome NOT IN ('success', 'ongoing', 'unknown', '')
+        GROUP BY runtime, outcome
+        ORDER BY sessions DESC, cost DESC
+        LIMIT 10
+        """,
+        "For each runtime, name the failure label and how many sessions it "
+        "explains, in plain words (failed = it ended badly, tool_call_stuck = "
+        "it got stuck on a step, cognitive_loop = it went in circles, "
+        "escalated = it needed a person). Say what to try first.",
+    ),
+    (
+        "intent_unmet",
+        "Where the agent missed what you asked",
+        """
+        SELECT session_id,
+               ROUND(eval_score, 1) AS score,
+               eval_reason AS why,
+               COALESCE(title, '') AS asked
+        FROM sessions
+        WHERE eval_scored_at >= $since_ms
+          AND eval_score IS NOT NULL
+          AND eval_score <= 2
+          AND eval_reason IS NOT NULL
+        ORDER BY eval_score ASC, eval_scored_at DESC
+        LIMIT 8
+        """,
+        "These sessions scored 2 or lower out of 5. Summarise the common "
+        "reasons the judge gave, then one concrete fix per reason (a clearer "
+        "prompt, a missing tool, a smaller task). Truncate session_id to 8 chars.",
+    ),
+    (
+        "eval_score_trend",
+        "Answer quality, week by week",
+        """
+        SELECT strftime(date_trunc('week', to_timestamp(eval_scored_at / 1000)), '%Y-%m-%d') AS week,
+               ROUND(AVG(eval_score), 2) AS mean_score,
+               COUNT(*) AS scored_sessions
+        FROM sessions
+        WHERE eval_scored_at >= $trend_since_ms
+          AND eval_score IS NOT NULL
+        GROUP BY week
+        ORDER BY week ASC
+        """,
+        "Weekly mean of the 0 to 5 judge score over the last 8 weeks. Say "
+        "whether quality is rising, flat, or falling and by how much; note "
+        "weeks with very few scored sessions as low-confidence.",
+    ),
     (
         "trend_summary",
         "The week in 30 seconds",
@@ -291,6 +382,8 @@ def _validate_templates_once() -> None:
                .replace("$prior_window_start", "'2025-12-01T00:00:00Z'")
                .replace("$now_ts", "'2026-01-08T00:00:00Z'")
                .replace("$since_str", "'2026-01-01T00:00:00Z'")
+               .replace("$trend_since_ms", "1700000000000")
+               .replace("$since_ms", "1700000000000")
         )
         ok, reason = validate_sql(sanitized)
         if not ok:
@@ -403,6 +496,10 @@ def _bind_params(now: datetime.datetime) -> dict:
         # ``approvals`` and ``alert_rules`` store created_at as a string
         # (varchar), no Z suffix — keep an alt-format binding for them.
         "since_str": week_ago.strftime("%Y-%m-%d %H:%M:%S"),
+        # ``sessions.eval_scored_at`` is BIGINT epoch milliseconds.
+        "since_ms": int(week_ago.replace(tzinfo=datetime.timezone.utc).timestamp() * 1000),
+        "trend_since_ms": int((now - datetime.timedelta(weeks=8)).replace(
+            tzinfo=datetime.timezone.utc).timestamp() * 1000),
     }
 
 
@@ -429,10 +526,10 @@ def _bind_params(now: datetime.datetime) -> dict:
 # error) we fall back to the same "<n> rows" stub that the no-key path
 # already produces. No new failure modes introduced.
 
-# Cloud-relay endpoint. Env override mirrors clawmetry/sync.py + cli.py.
-INGEST_URL = os.environ.get(
-    "CLAWMETRY_INGEST_URL", "https://ingest.clawmetry.com"
-)
+# Cloud-relay endpoint. Resolved via clawmetry.endpoints (CLAWMETRY_ENDPOINT >
+# CLAWMETRY_INGEST_URL > config "endpoint" > managed cloud), snapshotted at
+# import time like clawmetry/sync.py.
+INGEST_URL = _resolve_ingest_url()
 RELAY_SYNTHESIZE_URL = INGEST_URL.rstrip("/") + "/api/insights/synthesize"
 
 
@@ -578,7 +675,13 @@ def _synthesize_narrative(
 
 
 def _estimate_cost(tokens_used: int) -> float:
-    """Sonnet $3/$15 per 1M (providers_pricing.py); split 50/50 in/out."""
+    """Sonnet $3/$15 per 1M (providers_pricing.py); split 50/50 in/out.
+
+    An estimate, and ``WeeklyDigest.to_dict`` labels it as one. The 50/50
+    split is a guess (a synthesis call is input-heavy in practice) and the
+    relay path may not run Sonnet at all, so this is the right order of
+    magnitude and not a bill.
+    """
     half = tokens_used / 2
     return round((half / 1_000_000) * 3.0 + (half / 1_000_000) * 15.0, 4)
 
@@ -638,15 +741,23 @@ class WeeklyDigestGenerator:
         trend = next((i for i in digest.insights if i.key == "trend_summary"), None)
         if trend and trend.rows:
             r = trend.rows[0]
+            # ``or 0`` on the cost would turn a row that carries no cost at
+            # all into "$0.00 spent", which reads as a week that cost
+            # nothing. A missing cost says it is missing.
+            raw_cost = r.get("cost")
+            cost_text = (f"${float(raw_cost):.2f} spent"
+                         if isinstance(raw_cost, (int, float))
+                         else "cost not recorded")
             digest.summary = (
                 f"{r.get('events') or 0:,} events across "
                 f"{r.get('sessions') or 0} sessions; "
-                f"${r.get('cost') or 0:.2f} spent; "
+                f"{cost_text}; "
                 f"{r.get('tokens') or 0:,} tokens."
             )
         else:
             digest.summary = "Quiet week — no events recorded in the local store."
 
+        digest.synthesized = bool(mode != "none" and secret)
         digest.cost_usd = _estimate_cost(digest.tokens_used)
         return digest
 

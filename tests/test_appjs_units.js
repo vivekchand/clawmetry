@@ -656,6 +656,7 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
     const gwOverlayState = { display: '', dataset: {} };
     const gwCloseState = { display: '' };
     const logoutBtnState = { display: 'none' };
+    const localSigninBtnState = { display: 'none' };
     let reloadCount = 0;
 
     const elements = {
@@ -663,6 +664,7 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
       'gw-setup-overlay': { style: gwOverlayState, dataset: gwOverlayState.dataset },
       'gw-setup-close': { style: gwCloseState },
       'logout-btn': { style: logoutBtnState },
+      'login-local-btn': { style: localSigninBtnState },
     };
 
     const sandbox = {
@@ -721,6 +723,7 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
               overlayDisplay: overlayState.display,
               gwOverlayDisplay: gwOverlayState.display,
               logoutDisplay: logoutBtnState.display,
+              localSigninDisplay: localSigninBtnState.display,
               reloadCount: reloadCount,
             });
           });
@@ -801,9 +804,15 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
 
   // ── Scenario C: detected-token returns 404 (server has no GATEWAY_TOKEN) ──
   //
-  // Same as B but exercising the "no token detected" branch. Server should
-  // surface needsSetup via /api/auth/check, and the bootstrap must promote
-  // the gateway-setup overlay (not the login overlay).
+  // Same as B but exercising the "no token detected" branch. Server
+  // surfaces needsSetup via /api/auth/check. The bootstrap used to promote
+  // a mandatory "ClawMetry Setup" gateway-token overlay here (close button
+  // hidden) on EVERY page load, regardless of whether the machine had ever
+  // run OpenClaw. That overlay was retired outright (2026-08-06): needsSetup
+  // is now informational only, the dashboard opens straight through, and
+  // first-run choice is onboarding.js's job (gated on
+  // /api/onboarding/state, which — unlike this needsSetup check — actually
+  // remembers a completed choice).
   (async function scenarioC() {
     const result = await runBootstrap({
       initialLocalStorage: {},
@@ -821,9 +830,9 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
     eq(result.calls[0], '/api/auth/detected-token',
        'C: detected-token attempted even when server has no token');
     eq(result.overlayDisplay, 'none',
-       'C: login overlay is hidden (gateway-setup overlay takes over)');
-    eq(result.gwOverlayDisplay, 'flex',
-       'C: gateway-setup overlay is shown when needsSetup=true');
+       'C: login overlay is hidden — the dashboard opens straight through');
+    eq(result.gwOverlayDisplay, '',
+       'C: needsSetup no longer promotes any gateway-setup overlay (retired)');
     eq(result.reloadCount, 0,
        'C: no location.reload() during bootstrap (E2E-fixture-safe)');
   })();
@@ -884,6 +893,90 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
        'E: overlay shown when network error prevents auto-detect');
     eq(result.reloadCount, 0,
        'E: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario F: explicit sign-out sticks — no zero-click re-login ──
+  //
+  // Profile-menu Sign out sets cm-signed-out=1 and wipes the token. On the
+  // next load the bootstrap MUST NOT silently re-login via detected-token
+  // (that would make Sign out a no-op on localhost). It goes straight to
+  // /api/auth/check with no token, shows the wall, and — because loopback
+  // still answers the detected-token PROBE — reveals the one-click
+  // "Sign back in (this machine)" button WITHOUT storing the token.
+  (async function scenarioF() {
+    const result = await runBootstrap({
+      initialLocalStorage: { 'cm-signed-out': '1' },
+      fetchHandler: function(url) {
+        if (url === '/api/auth/detected-token') {
+          return { ok: true, json: function() { return Promise.resolve({ token: 'feedface'.repeat(6), source: 'openclaw.json' }); } };
+        }
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: false }); } };
+        }
+        throw new Error('unexpected fetch: ' + url);
+      },
+    });
+
+    eq(result.calls[0], '/api/auth/check',
+       'F: signed-out marker routes straight to /api/auth/check (no token)');
+    truthy(!result.lsStore['clawmetry-token'],
+       'F: detected token is NEVER stored while signed out (probe only)');
+    eq(result.lsStore['cm-signed-out'], '1',
+       'F: marker survives the bootstrap — only a real sign-in clears it');
+    eq(result.overlayDisplay, 'flex',
+       'F: login wall is shown after explicit sign-out');
+    eq(result.localSigninDisplay, '',
+       'F: one-click local sign-in button revealed (loopback probe answered)');
+    eq(result.reloadCount, 0,
+       'F: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario G: signed-out marker + non-loopback — wall only, no button ──
+  (async function scenarioG() {
+    const result = await runBootstrap({
+      initialLocalStorage: { 'cm-signed-out': '1' },
+      fetchHandler: function(url) {
+        if (url === '/api/auth/detected-token') {
+          return { ok: false, status: 403, json: function() { return Promise.resolve({ error: 'localhost only' }); } };
+        }
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: false }); } };
+        }
+        throw new Error('unexpected fetch: ' + url);
+      },
+    });
+
+    eq(result.overlayDisplay, 'flex',
+       'G: wall shown for signed-out remote viewer');
+    eq(result.localSigninDisplay, 'none',
+       'G: local sign-in button stays hidden when the loopback probe 403s');
+    eq(result.reloadCount, 0,
+       'G: no location.reload() during bootstrap (E2E-fixture-safe)');
+  })();
+
+  // ── Scenario H: token stored AFTER sign-out (one-click /auth?token= URL,
+  // manual login on another tab) — the marker self-clears and the stored
+  // token wins. Sign-out must never wall a user who explicitly signed back in.
+  (async function scenarioH() {
+    const STORED = 'cafebabe'.repeat(6);
+    const result = await runBootstrap({
+      initialLocalStorage: { 'cm-signed-out': '1', 'clawmetry-token': STORED },
+      fetchHandler: function(url) {
+        if (url.indexOf('/api/auth/check') === 0) {
+          return { ok: true, json: function() { return Promise.resolve({ authRequired: true, valid: true }); } };
+        }
+        return { ok: false, status: 500, json: function() { return Promise.resolve({}); } };
+      },
+    });
+
+    eq(result.calls[0], '/api/auth/check?token=' + STORED,
+       'H: stored token wins over a stale signed-out marker');
+    truthy(!result.lsStore['cm-signed-out'],
+       'H: marker self-clears when a token was stored after sign-out');
+    eq(result.overlayDisplay, 'none',
+       'H: no wall — user explicitly signed back in');
+    eq(result.reloadCount, 0,
+       'H: no location.reload() during bootstrap (E2E-fixture-safe)');
   })();
 }
 
@@ -1182,13 +1275,25 @@ console.log('_cmApplyRuntimeScopeNote (honest note on aggregate / node-wide tabs
   vm.createContext(sandbox);
   vm.runInContext(maps + '\n' + fnSrc + '\nthis._note = _cmApplyRuntimeScopeNote;', sandbox);
 
-  // aggregate tab (LLM Context) → "all runtimes" note mentioning the runtime.
-  // (usage/Cost moved to real per-runtime filtering; LLM Context is the
-  // remaining aggregate tab in _CM_RT_AGGREGATE.)
-  thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-context' ? (thePage = thePage || makePage()) : null; };
-  sandbox._note('context');
-  truthy(thePage && thePage._html.indexOf('all runtimes') !== -1, 'aggregate tab → "all runtimes" note');
-  truthy(thePage._html.indexOf('Qwen Code') !== -1, 'aggregate note names the selected runtime');
+  // NO aggregate tabs remain: the last one (LLM Context, fabricated
+  // node-wide estimates) merged into Context usage (real per-turn readings,
+  // session + runtime scoped) on 2026-08-01. Guard the merge: an entry
+  // reappearing in _CM_RT_AGGREGATE means someone shipped a view that
+  // silently aggregates across runtimes — do per-runtime slicing instead.
+  truthy(/var _CM_RT_AGGREGATE = \{\};/.test(src), '_CM_RT_AGGREGATE stays empty (no silently-aggregating tabs)');
+  truthy(src.indexOf('loadContextInspector') === -1, 'fake LLM Context Inspector loader stays deleted');
+  truthy(src.indexOf("name === 'context') name = 'context-economics'") !== -1, "switchTab('context') aliases to context-economics");
+
+  // JSON.stringify inside a double-quoted inline handler emits raw double
+  // quotes that TERMINATE the attribute — the handler silently truncates and
+  // every click throws (Context usage session chips + swimlane shipped broken
+  // this way). Builders must use attrJsStr() instead.
+  const badAttrLines = src.split('\n').filter(function(l) {
+    return l.indexOf('onclick="') !== -1 && /\+ JSON\.stringify\(/.test(l) && l.indexOf('&quot;') === -1;
+  });
+  truthy(badAttrLines.length === 0,
+    'no raw JSON.stringify inside double-quoted onclick attributes (use attrJsStr): '
+    + badAttrLines.slice(0, 3).join(' | '));
 
   // models is NO LONGER aggregate (it filters for real now) → no note
   thePage = null; sandbox.document.getElementById = function(id) { return id === 'page-models' ? (thePage = thePage || makePage()) : null; };
@@ -1369,6 +1474,48 @@ console.log('\ncmRuntimeIcon (runtime pixel logos, runtime-logos.js)');
   truthy(win.cmRuntimeBrand('claude_code') === '#d97757', 'cmRuntimeBrand(claude_code) -> manifest hex');
   truthy(win.cmRuntimeBrand('nope') === '#8b97ad', 'cmRuntimeBrand(unknown) -> neutral fallback hue');
   truthy(win.cmRuntimeKnown('codex') === true && win.cmRuntimeKnown('nope') === false, 'cmRuntimeKnown known/unknown');
+}
+
+// ── Runtime file tree: every row names a file ─────────────────────────────
+console.log('_cmRtDisplayName (disambiguate generic filenames, never drop them)');
+{
+  const maps = src.match(/var _CM_RT_GENERIC_FILE = \{[\s\S]*?\};/)[0]
+    + '\n' + src.match(/var _CM_RT_GENERIC_DIR = \{[\s\S]*?\};/)[0];
+  const sandbox = { String: String };
+  vm.createContext(sandbox);
+  vm.runInContext(maps + '\n' + extractFunction('_cmRtDisplayName')
+    + '\nthis.dn = _cmRtDisplayName;', sandbox);
+  const dn = sandbox.dn;
+
+  // A distinctive filename is already the answer.
+  eq(dn('no-em-dashes.md'), 'no-em-dashes.md', 'distinctive basename passes through');
+  eq(dn('a/b/vivek-clawmetry-founder.md'), 'vivek-clawmetry-founder.md',
+     'distinctive basename wins over any nesting');
+
+  // Generic container filenames get a disambiguating PREFIX — the filename
+  // itself must survive. Live regression on 0.12.706: rows rendered as a bare
+  // "-Users-vivek--openclaw-workspace" with no MEMORY.md on them, right next
+  // to sibling rows that did show their filename.
+  eq(dn('-Users-vivek--openclaw-workspace/memory/MEMORY.md'),
+     '-Users-vivek--openclaw-workspace/MEMORY.md',
+     'generic name keeps its filename, prefixed by the identifying folder');
+  eq(dn('.claude/skills/pdf-tools/SKILL.md'), 'pdf-tools/SKILL.md',
+     'structural dirs dropped, skill folder + filename kept');
+
+  // Nothing to disambiguate with -> the bare name is still correct.
+  eq(dn('MEMORY.md'), 'MEMORY.md', 'top-level generic file keeps its name');
+  eq(dn('memory/MEMORY.md'), 'MEMORY.md',
+     'an all-structural path falls back to the bare filename');
+  eq(dn('', 'Global CLAUDE.md'), 'Global CLAUDE.md',
+     'empty rel falls back to the group label');
+
+  // Whatever the rule, a row must never render empty or as a stray slash.
+  ['SKILL.md', 'a/SKILL.md', 'x/y/z/settings.json', '', 'memory/AGENTS.md']
+    .forEach(function (p) {
+      const out = dn(p, 'fallback');
+      truthy(out && out !== '/' && out.indexOf('//') === -1,
+        'row label is never empty or a stray slash for ' + JSON.stringify(p));
+    });
 }
 
 // Auth-bootstrap scenarios above are async — wait for the microtask /

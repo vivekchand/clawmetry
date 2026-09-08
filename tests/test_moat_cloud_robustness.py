@@ -285,13 +285,48 @@ def test_dlq_replay_drains_post_failures_after_outage():
     if not parked:
         pytest.skip("could not park rows in DLQ")
 
-    # Now the cloud is healthy: every POST returns 200.
+    # Now the cloud is healthy: every POST returns 200. Replay needs a key —
+    # a keyless node parks the rows instead of replaying them in the clear
+    # (2026-08-24 security review, finding 3); see the test below.
+    enc_key = sync.generate_encryption_key()
     with mock.patch.object(sync.urllib.request, "urlopen",
                             return_value=_ok_response()):
-        replayed = sync._dlq_replay(api_key="tok", enc_key=None)
+        replayed = sync._dlq_replay(api_key="tok", enc_key=enc_key)
     assert replayed >= len(parked), (
         f"expected to replay at least {len(parked)} rows, got {replayed}"
     )
+
+
+def test_dlq_replay_parks_rows_rather_than_replaying_them_unencrypted():
+    """A parked batch is session content. With no key it stays on this machine.
+
+    Before 2026-08-24 the no-key branch replayed it as a plain POST, so an
+    outage plus a missing key turned into a cleartext upload of everything
+    that had been queued.
+    """
+    from clawmetry import sync
+    try:
+        from clawmetry import local_store
+        local_store.get_store()
+    except Exception as e:
+        pytest.skip(f"local_store DLQ not available in test env: {e}")
+
+    try:
+        sync._dlq_enqueue_encryption_failure(
+            kind="post_failure",
+            endpoint="/ingest/events",
+            payload={"node_id": "n1", "events": [{"id": "ev-nokey"}]},
+            fname="sess-nokey.jsonl",
+            node_id="n1",
+            error="cloud 503",
+        )
+    except Exception as e:
+        pytest.skip(f"local_store DLQ enqueue failed in test env: {e}")
+
+    with mock.patch.object(sync.urllib.request, "urlopen") as urlopen:
+        replayed = sync._dlq_replay(api_key="tok", enc_key=None)
+    assert replayed == 0
+    urlopen.assert_not_called()
 
 
 def test_daemon_crash_mid_flush_no_event_loss(tmp_path, monkeypatch):

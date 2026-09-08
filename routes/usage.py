@@ -24,12 +24,16 @@ Owns the 12 routes registered on bp_usage:
   GET  /api/usage/cache-trends            — prompt-cache hit-rate analytics
   GET  /api/skills/fidelity              — dead-skill detector + body/linked-file stats
   GET  /api/efficiency                    — efficiency grade + measured savings
+  GET  /api/usage/outcomes                — cost per merged change, rework rate,
+                                            abandoned spend (REQ-OBS-CEA-022)
 
 Module-level helpers (``_usage_cache``, ``_compute_transcript_analytics``,
 ``_detect_and_store_anomalies``, ``_get_anomaly_db``, ``SESSIONS_DIR`` etc.)
 stay in ``dashboard.py`` and are reached via late ``import dashboard as _d``.
 Pure mechanical move — zero behaviour change.
 """
+
+from __future__ import annotations
 
 import json
 import os
@@ -40,6 +44,7 @@ from typing import Optional
 
 from flask import Blueprint, jsonify, make_response, request
 from clawmetry._gate import gate
+from clawmetry import provenance as _prov
 from clawmetry.config import is_local_store_read_enabled
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
@@ -56,7 +61,19 @@ bp_usage = Blueprint('usage', __name__)
 _NON_OPENCLAW_RT_SET = frozenset((
     "picoclaw", "nanoclaw", "hermes",
     "claude_code", "codex", "cursor", "aider", "goose", "opencode", "qwen_code",
-    "pi", "deepagents",
+    "pi", "deepagents", "n8n", "antigravity", "copilot", "grok", "qm",
+    "deepseek_harness",
+    "exo",
+    "kimi",
+    "devin",
+    "gemini_cli",
+    "cline",
+    "openhands",
+    "openworker",
+    "grok_bot",
+    "lovable",
+    "replit",
+
 ))
 
 def _event_runtime(ev) -> str:
@@ -145,10 +162,22 @@ def _ls_get_store():
 
 
 def _ls_iso_day(ts_str):
-    """Pull YYYY-MM-DD off an ISO timestamp. Tolerates None / short strings."""
+    """Node-local calendar day for an ISO timestamp. ``""`` when undecidable.
+
+    This used to be ``ts_str[:10]``, which is the timestamp's day in whatever
+    timezone the runtime wrote. Every caller compares the result against a day
+    axis built from ``date.today()`` — a LOCAL axis — so a runtime stamping
+    UTC dropped a user's evening activity into a bucket the axis did not
+    contain, and the row silently vanished from the chart. Same clock on both
+    sides now (ADR-046, clawmetry/cost_windows).
+    """
     if not ts_str or not isinstance(ts_str, str) or len(ts_str) < 10:
         return ""
-    return ts_str[:10]
+    try:
+        from clawmetry.cost_windows import local_day
+        return local_day(ts_str) or ""
+    except Exception:
+        return ts_str[:10]
 
 
 def _ls_event_plugin(ev):
@@ -216,6 +245,161 @@ def _ls_call(method_name, **kwargs):
         return None
 
 
+def _scan_events_slim(**kwargs):
+    """The Cost roll-ups' event scan: slim shape, full shape as the fallback.
+
+    ``query_events_slim`` is what keeps a Cost page load from marshalling
+    ~38 MB per scan across the daemon RPC (see ``LocalStore.query_events_slim``).
+    It is a newer shape than the daemon allowlist of any previous release,
+    and the dashboard and the sync daemon are separate processes that restart
+    independently — so during an upgrade there is a real window where an
+    upgraded dashboard asks a not-yet-restarted daemon for it. The proxy
+    answers 400, the caller gets ``None``, and these roll-ups would render
+    that as a confident EMPTY Cost tab.
+
+    Falling back to the full shape makes that skew cost bytes, not
+    correctness: the numbers are identical either way (the slim projection
+    only drops keys no roll-up reads), the page is merely heavier until the
+    daemon catches up.
+    """
+    rows = _ls_call("query_events_slim", **kwargs)
+    if rows is None:
+        rows = _ls_call("query_events", **kwargs)
+    return rows
+
+
+def _runtime_coverage(runtime, *, has_data):
+    """Coverage block for a runtime-scoped cost/usage payload.
+
+    A call-event-driven surface cannot tell "this runtime was idle" apart
+    from "this runtime never writes per-call cost", and both render as
+    $0.00. For a token-blind runtime that zero is a false statement about
+    the user's spend. ``clawmetry.runtime_records`` knows which is which;
+    this attaches the answer so the UI can say so.
+
+    Returns ``None`` for an unscoped (node-wide) request — a node mixes
+    runtimes, so there is no single honest verdict to attach.
+    """
+    rt = (runtime or "").strip().lower()
+    if not rt or rt == "all":
+        return None
+    try:
+        from clawmetry.runtime_records import coverage_payload
+        return coverage_payload(rt, has_data=bool(has_data))
+    except Exception:
+        return None
+
+
+# ── Provenance: how every figure on the Cost tab was obtained ────────────────
+#
+# The Cost tab is the surface a reader is most likely to quote at somebody
+# else, so it is the one that has to be able to show its working. See
+# ``clawmetry/provenance.py`` for the vocabulary; the short version is that a
+# figure is measured (read from a record), derived (an exact rule over
+# measured inputs), estimated (a model with an assumption in it), or unknown
+# (and then it is None, never 0.0).
+#
+# Cost is DERIVED, not measured, and saying so is the point of this work: a
+# runtime that reports its own dollar figure is rare, so almost every cost on
+# this tab is measured token counts priced against the provider's published
+# rate card. That is a good number and it is not a receipt.
+
+_COST_FORMULA = (
+    "the runtime's own cost when it reported one, otherwise measured input, "
+    "output and cache token counts priced against the provider's published "
+    "rate card"
+)
+_TOKEN_FORMULA = "sum of token counts on deduped call events in the window"
+
+# The windows are ``clawmetry.cost_windows``' calendar definitions, in the
+# node's local timezone. Naming them here means the tooltip and the SQL agree
+# by construction rather than by memory.
+_WINDOW_TEXT = {
+    "today": "today, the local calendar day",
+    "week": "this week, the local calendar week starting Monday",
+    "month": "this month, the local calendar month from the 1st",
+}
+
+
+def _usage_provenance(source: str, *, runtime=None, coverage=None):
+    """Provenance entries for an ``/api/usage`` payload.
+
+    ``source`` is the store the numbers were read out of, so a reader can
+    tell the DuckDB fast path from the transcript-scan fallback: they can
+    disagree, and when they do, which one you are looking at is the first
+    question worth asking.
+
+    ``coverage`` is ``_runtime_coverage``'s verdict, and it already knows the
+    thing that matters here: ``not_recorded`` means this runtime keeps no
+    per-call cost record and ``unverified`` means we have never confirmed
+    whether it does. Under either, a $0 is a statement about our coverage and
+    not about the user's spend, so the cost figures come back unknown instead
+    of as a confident zero.
+    """
+    scope = ("runtime %s" % runtime) if runtime else "every runtime on this node"
+    cov_status = str((coverage or {}).get("status") or "")
+    blind_reason = {
+        "not_recorded": ("this runtime keeps no per-call cost record, so a "
+                         "zero here would describe our coverage, not your "
+                         "spend"),
+        "unverified": ("we have not confirmed whether this runtime records "
+                       "per-call cost, so a zero here would be a claim we "
+                       "cannot back"),
+    }.get(cov_status)
+    entries = {}
+    for window in ("today", "week", "month"):
+        cost_key = window + "Cost"
+        if blind_reason:
+            entries[cost_key] = _prov.unknown(
+                blind_reason, source=source, window=_WINDOW_TEXT[window])
+        else:
+            entries[cost_key] = _prov.derived(
+                _COST_FORMULA, source, window=_WINDOW_TEXT[window],
+                inputs={"scope": scope})
+        entries[window] = _prov.measured(
+            _TOKEN_FORMULA, source, window=_WINDOW_TEXT[window],
+            inputs={"scope": scope})
+    entries["days[].cost"] = _prov.derived(
+        _COST_FORMULA, source, window="one local calendar day per bucket")
+    entries["sessions[].total_cost_usd"] = _prov.derived(
+        _COST_FORMULA, source, window="the whole session")
+    entries["sessionCosts"] = _prov.derived(
+        _COST_FORMULA, source, window="the whole session")
+    entries["billingCoverage.covered_usd"] = _prov.estimated(
+        "the API-equivalent cost of the models a detected subscription "
+        "covers, which assumes the detected plan is the one actually billed",
+        "clawmetry subscription detection")
+    entries["billingCoverage.out_of_pocket_usd"] = _prov.estimated(
+        "API-equivalent cost minus the covered share, on the same assumption",
+        "clawmetry subscription detection")
+    entries["covered_usd"] = entries["billingCoverage.covered_usd"]
+    entries["out_of_pocket_usd"] = entries["billingCoverage.out_of_pocket_usd"]
+    entries["cost_usd"] = _prov.derived(
+        _COST_FORMULA, source, window="the row's own window")
+    entries["total_cost_usd"] = entries["cost_usd"]
+    return entries
+
+
+def _stamp_usage(result, source, *, runtime=None):
+    """Attach the Cost tab's provenance to a built payload. Never raises."""
+    try:
+        entries = _usage_provenance(
+            source, runtime=runtime, coverage=result.get("coverage"))
+        if "routing_savings_usd" in result:
+            entries["routing_savings_usd"] = _prov.estimated(
+                "for each substitution the enforcement proxy made, the price "
+                "of the model that was asked for minus the price of the model "
+                "that ran, at the measured token count. It is a "
+                "counterfactual: nobody was billed the larger number",
+                "duckdb:events(auto_downgraded).estimated_saved_usd",
+                window="the last 30 days")
+            entries["saved_usd"] = entries["routing_savings_usd"]
+        _prov.stamp(result, entries)
+    except Exception:
+        pass
+    return result
+
+
 def _try_local_store_usage(runtime: Optional[str] = None):
     """Fast path for /api/usage. Builds the daily token/cost chart by
     aggregating ``daily_aggregates`` (with a ``query_events`` fallback if
@@ -251,7 +435,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
             daily_tokens[day] = daily_tokens.get(day, 0) + int(r.get("token_count") or 0)
             daily_cost[day] = daily_cost.get(day, 0.0) + float(r.get("cost_usd") or 0.0)
     else:
-        evs = _ls_call("query_events", limit=10000)
+        evs = _scan_events_slim(limit=10000)
         if not evs:
             return None
         # query_events has no SQL runtime filter; apply the same prefix logic
@@ -343,7 +527,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
 
     # Per-model breakdown: scan recent events and group.
     model_usage = {}
-    recent = _ls_call("query_events", limit=5000) or []
+    recent = _scan_events_slim(limit=5000) or []
     recent = _filter_evs_by_runtime(recent, runtime)
     for ev in recent:
         m = ev.get("model") or "unknown"
@@ -359,7 +543,15 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     # usage tab can show "X substitutions saved $Y this month."
     routing_data = _ls_call("query_routing_savings") or {}
 
-    return {
+    # Issue #5289: Fish Audio TTS cost attribution — per-provider rollup.
+    # TTS costs ARE included in the daily cost totals (query_aggregates sums
+    # all event_type values), but they're invisible in modelBreakdown because
+    # that section is token-based only. Surface them as a dedicated ttsBreakdown.
+    tts_breakdown = _ls_call("query_tts_provider_rollup", runtime=runtime) or []
+
+    import dashboard as _d  # late import — same pattern as other paths
+
+    return _stamp_usage({
         "source": "local_store",
         "_source": "local_store",
         "days": days,
@@ -370,8 +562,16 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "weekCost": round(week_cost, 4),
         "monthCost": round(month_cost, 4),
         "modelBreakdown": model_breakdown,
+        "ttsBreakdown": tts_breakdown,
         "modelBilling": [],
         "billingSummary": {},
+        # Fast-path has no per-model tokens; fall back to "detected sub
+        # covers everything" so the Cost tab still paints the coverage
+        # banner (matches the device UX).
+        "billingCoverage": _d._get_billing_coverage(
+            [], today_cost, week_cost, month_cost,
+            fallback_all_covered_when_no_models=True,
+        ),
         "sessionCosts": {},
         "sessions": _ls_top_sessions_by_cost(limit=20, runtime=runtime),
         "anomalies": [],
@@ -380,7 +580,14 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "warnings": [],
         "routing_savings_usd": round(float(routing_data.get("total_savings_usd") or 0.0), 6),
         "routing_substitutions": routing_data.get("by_pair") or [],
-    }
+        # Runtime-scoped honesty: says whether a $0 here means "idle" or
+        # "this runtime keeps no cost record". None when unscoped.
+        "coverage": _runtime_coverage(
+            runtime,
+            has_data=bool(month_tok or month_cost or today_tok or today_cost),
+        ),
+    }, "DuckDB local store (daily_aggregates, rolled by the sync daemon)",
+        runtime=runtime)
 
 
 def _ls_top_sessions_by_cost(limit=20, runtime=None):
@@ -450,8 +657,10 @@ def _ls_compute_anomalies():
     """Shared rolling-baseline anomaly detection over events. Used by both
     /api/usage/anomalies and /api/anomalies. Buckets recent (24h) sessions
     and flags any whose cost exceeds 2x the 7-day rolling session-cost
-    baseline. Returns ``(anomalies, baseline_avg)`` or ``(None, None)`` to
-    defer."""
+    baseline. Returns ``(anomalies, baselines_dict)`` or ``(None, None)`` to
+    defer. The dict carries the same baseline keys the fallback emits, because
+    the Overview card reads those names and renders a permanent "Collecting
+    baseline data..." placeholder when they are missing."""
     store = _ls_get_store()
     if store is None:
         return None, None
@@ -477,6 +686,8 @@ def _ls_compute_anomalies():
         enriched.append({
             "session_id": s.get("session_id"),
             "cost_usd": float(s.get("cost_usd") or 0.0),
+            # Needed for the tokens baseline the Overview card renders.
+            "token_count": int(s.get("token_count") or 0),
             "start_ts": _to_epoch(s.get("started_at")),
         })
 
@@ -514,20 +725,55 @@ def _ls_compute_anomalies():
             })
 
     anomalies.sort(key=lambda a: a.get("ratio", 0), reverse=True)
-    baseline_costs = [s["cost_usd"] for s in enriched
-                      if s["start_ts"] >= week_ago and s["cost_usd"] > 0]
+
+    # The BASELINES the Overview "Anomaly Detection" card renders. This used to
+    # return the cost average alone, surfaced under the key ``cost_7d_avg_usd``
+    # — a name the frontend never reads. app.js checks ``baseline_cost_7d``,
+    # ``baseline_tokens_7d`` and ``baseline_sessions_per_day_7d``, so with this
+    # fast path serving (which it does whenever the local store is enabled)
+    # every one was undefined and the card fell through to its placeholder:
+    # "Collecting baseline data..." FOREVER, however much data the node had.
+    # Founder screenshot 2026-09-07 shows exactly that, beside an "all clear"
+    # badge.
+    #
+    # Same class as the false-empty-tab burn: a store fast path returning a
+    # NARROWER shape than the fallback it replaced. These are the fallback's own
+    # key names (dashboard.py::_detect_and_store_anomalies), computed for real
+    # from the same session rows.
+    week_sessions = [s for s in enriched if s["start_ts"] >= week_ago]
+    baseline_costs = [s["cost_usd"] for s in week_sessions if s["cost_usd"] > 0]
     baseline_avg = (sum(baseline_costs) / float(len(baseline_costs))) if baseline_costs else 0.0
-    return anomalies, baseline_avg
+    token_vals = [s["token_count"] for s in week_sessions if s["token_count"] > 0]
+    tokens_avg = (sum(token_vals) / float(len(token_vals))) if token_vals else 0.0
+    # Days actually covered, not a flat 7: on a node three days old, dividing by
+    # 7 would under-report sessions/day by more than half.
+    if week_sessions:
+        span_days = max(now_ts - min(s["start_ts"] for s in week_sessions), 86400.0) / 86400.0
+    else:
+        span_days = 1.0
+    baselines = {
+        "baseline_cost_7d": round(baseline_avg, 6),
+        "baseline_tokens_7d": round(tokens_avg, 2),
+        "baseline_sessions_per_day_7d": round(len(week_sessions) / span_days, 2),
+        "session_count_7d": len(week_sessions),
+        # Kept so anything written against the old fast-path key still works.
+        "cost_7d_avg_usd": round(baseline_avg, 6),
+        # NOT emitted: baseline_error_rate_7d / recent_error_rate_24h. The
+        # fallback derives those from stored error events, which this path does
+        # not read. Returning 0.0 would render as "0% errors" — a claim, not a
+        # gap. Absent is the honest answer until this path can measure it.
+    }
+    return anomalies, baselines
 
 
 def _try_local_store_usage_anomalies():
     """Fast path for /api/usage/anomalies."""
-    anomalies, baseline_avg = _ls_compute_anomalies()
+    anomalies, baselines = _ls_compute_anomalies()
     if anomalies is None:
         return None
     return {
         "anomalies": anomalies,
-        "baseline_7d_avg_usd": round(baseline_avg or 0.0, 6),
+        "baseline_7d_avg_usd": round((baselines or {}).get("baseline_cost_7d") or 0.0, 6),
         "threshold_multiplier": 2.0,
         "_source": "local_store",
     }
@@ -536,7 +782,7 @@ def _try_local_store_usage_anomalies():
 def _try_local_store_anomalies():
     """Fast path for /api/anomalies. The legacy handler stores acks in a
     sqlite db so we mirror its empty/no-ack defaults."""
-    anomalies, baseline_avg = _ls_compute_anomalies()
+    anomalies, baselines = _ls_compute_anomalies()
     if anomalies is None:
         return None
     # Match the legacy response shape (anomaly id + ack + severity), even
@@ -562,7 +808,7 @@ def _try_local_store_anomalies():
         "anomalies": out,
         "active_count": len(active),
         "has_active": bool(active),
-        "baselines": {"cost_7d_avg_usd": round(baseline_avg or 0.0, 6)},
+        "baselines": baselines or {},
         "threshold_cost_multiplier": 2.0,
         "threshold_token_multiplier": 2.0,
         "threshold_error_multiplier": 3.0,
@@ -578,7 +824,7 @@ def _try_local_store_usage_by_plugin(threshold_pct, runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -638,7 +884,7 @@ def _try_local_store_usage_by_plugin_trend(days_back):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -708,7 +954,7 @@ def _try_local_store_cost_comparison():
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=50000)
+        evs = _scan_events_slim(limit=50000)
     except Exception:
         return None
     if not evs:
@@ -890,7 +1136,11 @@ def _try_local_store_usage_forecast():
         remaining_budget = effective_budget - cost_this_month
         days_to_budget = max(0.0, remaining_budget / daily_rate)
 
-    return {
+    # "Projected month-end $147.00" is the single most confident-looking
+    # number on the Cost tab and it is a forecast: it assumes the next N days
+    # look like the last 7. A quiet week or a holiday breaks it, which is
+    # exactly the case where somebody would quote it. Labelled as an estimate.
+    return _prov.stamp({
         "available": True,
         "daily_rate_usd": round(daily_rate, 4),
         "cost_this_month_usd": round(cost_this_month, 4),
@@ -902,14 +1152,45 @@ def _try_local_store_usage_forecast():
         "window_days": window_days,
         "daily_window": [round(c, 4) for c in reversed(window)],
         "_source": "local_store",
-    }
+    }, {
+        "projected_month_usd": _prov.estimated(
+            "spend so far this month, plus the average of the last 7 days "
+            "times the days left. It assumes the rest of the month looks "
+            "like the last week",
+            "DuckDB daily rollups on this node",
+            window="the calendar month",
+            inputs={"spent_so_far_usd": round(cost_this_month, 4),
+                    "daily_rate_usd": round(daily_rate, 4),
+                    "days_remaining": days_remaining}),
+        "cost_this_month_usd": _prov.derived(
+            "sum of the priced cost of every call this month",
+            "DuckDB daily rollups on this node",
+            window="this month, the local calendar month from the 1st"),
+        "daily_rate_usd": _prov.derived(
+            "the priced cost of the last 7 days divided by 7",
+            "DuckDB daily rollups on this node",
+            window="the last 7 days"),
+        "monthly_budget_usd": _prov.measured(
+            "the monthly limit you set",
+            "clawmetry budget config"),
+    })
 
 
 # Known non-OpenClaw runtime prefixes (session-id prefix = runtime; agent_type
 # is always "openclaw"). Mirrors the frontend `_cmRuntimeOf` / `_CM_RT_LABEL`.
 _RUNTIME_PREFIXES = frozenset({
     "picoclaw", "nanoclaw", "hermes", "claude_code", "codex", "cursor",
-    "aider", "goose", "opencode", "qwen_code", "pi", "deepagents",
+    "aider", "goose", "opencode", "qwen_code", "pi", "deepagents", "n8n",
+    "antigravity", "copilot", "grok", "qm", "deepseek_harness", "exo",
+    "kimi",
+    "devin",
+    "gemini_cli",
+    "cline",
+    "openhands",
+    "openworker",
+    "grok_bot",
+    "lovable",
+    "replit",
 })
 
 
@@ -933,7 +1214,7 @@ def _try_local_store_model_attribution(runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -1075,7 +1356,7 @@ def _try_local_store_usage_by_model(runtime=None):
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=20000)
+        evs = _scan_events_slim(limit=20000)
     except Exception:
         return None
     if not evs:
@@ -1138,7 +1419,7 @@ def _try_local_store_skill_attribution():
     if store is None:
         return None
     try:
-        evs = store.query_events(limit=50000)
+        evs = _scan_events_slim(limit=50000)
     except Exception:
         return None
     if not evs:
@@ -1409,20 +1690,37 @@ def _apply_oss_24h_cap(result):
     capped = dict(result)
     days = list(capped.get("days") or [])
     # 24h window = today's bucket + yesterday's bucket (covers any clock
-    # crossing midnight). Keep the trailing 2 entries, zero the rest so
+    # crossing midnight). Keep the trailing 2 entries and WITHHOLD the rest so
     # the bar chart still renders 14 slots without leaking history.
+    #
+    # Withheld is not zero. These buckets used to be zeroed, which rendered as
+    # twelve days on which the user spent nothing: a plan boundary shown as a
+    # measurement. They now carry ``withheld: True`` and a null cost, and the
+    # chart paints them as held back rather than as $0.00 (the same rule
+    # ``provenance.stamp`` applies to a top-level unknown figure).
     if days:
         head = max(0, len(days) - 2)
         for i in range(head):
             d = dict(days[i])
             d["tokens"] = 0
-            d["cost"] = 0
+            d["cost"] = None
+            d["withheld"] = True
             d["inputTokens"] = 0
             d["outputTokens"] = 0
             d["cacheReadTokens"] = 0
             d["cacheWriteTokens"] = 0
             days[i] = d
         capped["days"] = days
+        # Copy before editing: the un-capped payload is the long-lived cache
+        # entry, and a shared provenance dict would carry this note back into
+        # the Pro rendering of the same numbers.
+        prov = dict(capped.get(_prov.PROVENANCE_KEY) or {})
+        if "days[].cost" in prov:
+            entry = dict(prov["days[].cost"])
+            entry["note"] = ("buckets older than 24 hours are withheld on "
+                             "this plan and carry no value")
+            prov["days[].cost"] = entry
+            capped[_prov.PROVENANCE_KEY] = prov
     capped["capped_at_24h"] = True
     return capped
 
@@ -1650,6 +1948,16 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
     except Exception:
         return None
 
+    try:
+        from clawmetry.providers_pricing import provider_for_model as _pfm
+    except Exception:
+        _pfm = None
+
+    # Tracks the true input-context denominator for cache_hit_ratio_pct.
+    # For Anthropic (additive schema) each row contributes input + cache_read;
+    # for OpenAI (inclusive schema) cache_read is already in input_tokens.
+    _real_input_context = 0
+
     for r in rows:
         if not isinstance(r, dict):
             continue
@@ -1671,7 +1979,16 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
         output_tok = int(splits.get("output_tokens", 0) or 0)
         cache_read = int(splits.get("cache_read_tokens", 0) or 0)
         cache_write = int(splits.get("cache_write_tokens", 0) or 0)
-        total_tok = input_tok + output_tok + cache_read + cache_write
+        _row_prov = _pfm(r.get("model") or "") if _pfm else ""
+        if _row_prov == "openai":
+            # OpenAI inclusive schema: cache_read_tokens are already counted in
+            # input_tokens (total prompt tokens), so adding them again inflates total.
+            total_tok = input_tok + output_tok + cache_write
+            _real_input_context += input_tok
+        else:
+            # Anthropic (and others) additive schema: cache_read is additional context.
+            total_tok = input_tok + output_tok + cache_read + cache_write
+            _real_input_context += input_tok + cache_read
 
         # Fall back to the daemon-stamped scalar column when the data
         # blob splits are empty (e.g. slim ``model.completed`` rows that
@@ -1739,10 +2056,13 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
 
         sid = r.get("session_id") or ""
         ts = r.get("ts") or ""
-        cache_hit_pct = (
-            round(cache_read / (input_tok + cache_read) * 100, 1)
-            if (input_tok + cache_read) > 0 else 0.0
-        )
+        if _row_prov == "openai":
+            cache_hit_pct = round(cache_read / input_tok * 100, 1) if input_tok > 0 else 0.0
+        else:
+            cache_hit_pct = (
+                round(cache_read / (input_tok + cache_read) * 100, 1)
+                if (input_tok + cache_read) > 0 else 0.0
+            )
         messages.append({
             "session_id": sid,
             "timestamp": ts,
@@ -1788,10 +2108,9 @@ def _try_local_store_token_attribution(wanted_sid: str = "", limit: int = 100):
     messages.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
     messages = messages[:limit]
 
-    input_plus_cache = totals["input_tokens"] + totals["cache_read_tokens"]
     totals["cache_hit_ratio_pct"] = (
-        round(totals["cache_read_tokens"] / input_plus_cache * 100, 1)
-        if input_plus_cache else 0.0
+        round(totals["cache_read_tokens"] / _real_input_context * 100, 1)
+        if _real_input_context else 0.0
     )
 
     return {
@@ -1833,6 +2152,7 @@ def api_usage():
     # Prefer OTLP data when available
     if _d._has_otel_data():
         result = _d._get_otel_usage_data()
+        _stamp_usage(result, "OpenTelemetry metrics received on /v1/metrics")
         _d._usage_cache["data"] = result
         _d._usage_cache["ts"] = now
         try:
@@ -1940,6 +2260,9 @@ def api_usage():
         "modelBreakdown": model_breakdown,
         "modelBilling": model_billing,
         "billingSummary": billing_summary,
+        "billingCoverage": _d._get_billing_coverage(
+            model_billing, today_cost, week_cost, month_cost
+        ),
         "sessionCosts": session_costs,
         "sessions": top_sessions_rows,
         "anomalies": anomalies,
@@ -1947,6 +2270,7 @@ def api_usage():
         "trend": trend_data,
         "warnings": warnings,
     }
+    _stamp_usage(result, "transcript scan (the local store was unavailable)")
     import time as _time
 
     _d._usage_cache["data"] = result
@@ -2303,6 +2627,9 @@ def _try_local_store_sessions_clusters(days: int):
     if not sessions:
         return None
     # One bulk events fetch; group by session_id (avoids N+1 daemon hops).
+    # Must use the full event shape (not _scan_events_slim) because the cluster
+    # analysis reads data.tool_calls via _extract_tool_plugins — a key stripped
+    # by the slim projection — and blob-searches data for cron/subagent signals.
     events = _ls_call("query_events", since=cutoff_iso, limit=20000) or []
     # Issue #1451: sibling-dedupe so the per-session token fallback below
     # doesn't double-count assistant + model.completed pairs on v3 installs.
@@ -2945,15 +3272,24 @@ def api_runtime_summary():
     out = {}
     if store is not None:
         try:
-            evs = store.query_events(limit=20000) or []
+            evs = _scan_events_slim(limit=20000) or []
             agg = {}
             for ev in evs:
                 rt = _runtime_of(ev.get("session_id"))
                 a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
-                                        "models": {}, "sessions": set()})
+                                        "models": {}, "sessions": set(),
+                                        "last_ms": 0})
                 sid = ev.get("session_id") or ""
                 if sid:
                     a["sessions"].add(sid)
+                ts = str(ev.get("ts") or "")
+                if ts:
+                    try:
+                        _p = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        a["last_ms"] = max(a["last_ms"],
+                                           int(_p.timestamp() * 1000))
+                    except (ValueError, OSError, OverflowError):
+                        pass
                 try:
                     a["tokens"] += int(ev.get("token_count") or 0)
                 except (TypeError, ValueError):
@@ -2975,6 +3311,9 @@ def api_runtime_summary():
                     "cost_usd": round(a["cost"], 4),
                     "primary_model": sorted_models[0][0] if sorted_models else "",
                     "total_turns": sum(a["models"].values()),
+                    # Epoch-ms recency for the Overview hero alive-state (main
+                    # sessions don't appear in /api/subagents).
+                    "last_activity_ms": a["last_ms"],
                 }
         except Exception:
             out = {}
@@ -3556,11 +3895,14 @@ def _empty_cache_bucket():
     }
 
 
-def _summarise_cache_bucket(label, b, key):
-    in_plus_cache = b["input_tokens"] + b["cache_read_tokens"]
+def _summarise_cache_bucket(label, b, key, *, openai_schema=False):
+    # OpenAI inclusive schema: cache_read is already counted inside input_tokens,
+    # so the effective context denominator is input_tokens alone.
+    # Anthropic (and others) additive schema: cache_read is on top of input_tokens.
+    in_context = b["input_tokens"] if openai_schema else b["input_tokens"] + b["cache_read_tokens"]
     cache_hit_pct = (
-        round(b["cache_read_tokens"] / in_plus_cache * 100, 1)
-        if in_plus_cache
+        round(b["cache_read_tokens"] / in_context * 100, 1)
+        if in_context
         else 0.0
     )
     # Anthropic prompt-cache reads cost ~10% of fresh input tokens, so the
@@ -3613,6 +3955,11 @@ def _try_local_store_cache_trends(days: int):
     if rows is None:
         return None
 
+    try:
+        from clawmetry.providers_pricing import provider_for_model as _pfm_ct
+    except Exception:
+        _pfm_ct = None
+
     daily: dict = {}
     by_model: dict = {}
     for r in rows:
@@ -3642,7 +3989,10 @@ def _try_local_store_cache_trends(days: int):
         )
 
     by_model_out = [
-        _summarise_cache_bucket(m, b, key="model")
+        _summarise_cache_bucket(
+            m, b, key="model",
+            openai_schema=(_pfm_ct(m) == "openai" if _pfm_ct else False),
+        )
         for m, b in sorted(by_model.items(), key=lambda kv: -kv[1]["total_cost"])
     ]
 
@@ -4415,13 +4765,35 @@ def _try_local_store_spend_optimization():
     recs = recs[:5]
     total_save = sum(r["projected_savings_usd_30d"] for r in recs)
     total_cost = sum(r["current_cost_usd_30d"] for r in recs)
-    return {
+    # The loudest number on this card is a counterfactual: what the last 30
+    # days WOULD have cost on a cheaper tier. It rests on a static price-ratio
+    # table and on the assumption that the cheaper model does the same job.
+    # Both can be wrong, and the badge says so rather than letting a green
+    # 22px "Projected 30-day savings" read as money already in the bank.
+    saving_entry = _prov.estimated(
+        "the measured cost of these tool calls over the window, times the "
+        "published price gap between the model they ran on and the cheaper "
+        "tier suggested. It assumes the cheaper model would have produced an "
+        "equivalent result, which is the part that can be wrong",
+        "duckdb spans, priced with the static model-tier ratio table",
+        window="the last 30 days",
+        inputs={"tools_analysed": len(recs)})
+    return _prov.stamp({
         "recommendations":               recs,
         "total_projected_savings_usd_30d": round(total_save, 4),
         "total_analyzed_cost_usd_30d":   round(total_cost, 4),
         "window_days":                   30,
         "_source":                       "local_store",
-    }
+    }, {
+        "total_projected_savings_usd_30d": saving_entry,
+        "recommendations[].projected_savings_usd_30d": saving_entry,
+        "total_analyzed_cost_usd_30d": _prov.derived(
+            "sum of the measured cost of the analysed tool calls",
+            "duckdb spans", window="the last 30 days"),
+        "recommendations[].current_cost_usd_30d": _prov.derived(
+            "sum of the measured cost of this tool's calls",
+            "duckdb spans", window="the last 30 days"),
+    })
 
 
 @bp_usage.route("/api/usage/optimization-recommendations")
@@ -4436,13 +4808,23 @@ def api_usage_optimization_recommendations():
         fast = _try_local_store_spend_optimization()
         if fast is not None:
             return jsonify(fast)
-    return jsonify({
+    # Not "you could save $0.00". Nothing was analysed, so there is no
+    # number here at all, and stamp() nulls the ones that pretended there was.
+    return jsonify(_prov.stamp({
         "recommendations":               [],
         "total_projected_savings_usd_30d": 0,
         "total_analyzed_cost_usd_30d":   0,
         "window_days":                   30,
         "note": "Enable clawmetry connect to see recommendations.",
-    })
+    }, {
+        "total_projected_savings_usd_30d": _prov.unknown(
+            "no spans were available to analyse, so there is nothing to "
+            "compare a cheaper tier against",
+            source="/api/usage/optimization-recommendations"),
+        "total_analyzed_cost_usd_30d": _prov.unknown(
+            "no spans were available to analyse",
+            source="/api/usage/optimization-recommendations"),
+    }))
 
 
 @bp_usage.route("/api/efficiency")
@@ -4475,6 +4857,18 @@ def api_efficiency():
                "cache_saved_monthly_usd": 0.0,
                "projected_monthly_cost_usd": 0.0,
                "actions": [], "byRuntime": {}}
+    # feat/spend-actions: fold in the spend-flow-derived savings ideas
+    # (thinking_trim) node-wide AND per-runtime, BEFORE the runtime branch
+    # below so a scoped request sees only its own runtime's actions. Uses
+    # the same cached 7d walk as the Cost-tab flow chart (no extra scan).
+    try:
+        from clawmetry.spend_flow import merge_spend_actions
+        _sf = _ls_call("query_spend_flow", days=7)
+        if isinstance(_sf, dict) and isinstance(_sf.get("result"), dict):
+            _sf = _sf["result"]
+        out = merge_spend_actions(out, _sf)
+    except Exception:
+        pass
     if runtime and runtime != "all":
         entry = (out.get("byRuntime") or {}).get(runtime)
         if entry is None:
@@ -4491,8 +4885,185 @@ def api_efficiency():
                          "projected_monthly_cost_usd": 0.0, "actions": []}
         entry = dict(entry)
         entry["runtime"] = runtime
+        # ``insufficient_data`` alone conflates two opposite messages: a
+        # runtime that was idle, and a runtime that never writes the
+        # per-call cost this grade is computed from. The second one can
+        # never produce a grade no matter how long the user waits, so
+        # "not enough data yet" is a lie that costs them a support ticket.
+        entry["coverage"] = _runtime_coverage(
+            runtime, has_data=not entry.get("insufficient_data")
+        )
         return jsonify(entry)
     return jsonify(out)
+
+
+# ---------------------------------------------------------------------------
+# Efficiency companion endpoints — Cache-Hit Rate + Routing Advisor.
+# Public API surface (v1 consumers, mobile). The dashboard tab derives both
+# card contents client-side from the shared /api/efficiency cache so they
+# work on cloud through the existing cm-cloud-efficiency interceptor without
+# needing per-endpoint interceptors. These handlers stay for external readers.
+# Both never 500 and reconcile with /api/efficiency by construction.
+# ---------------------------------------------------------------------------
+
+# "$ left on the table" is deliberately conservative: only a fraction of a
+# miss's input tokens is realistically cacheable, so the caller-visible number
+# is flagged as an estimate rather than a hard claim.
+_CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION = 0.5
+# Cache multiplier for Anthropic reads (mirror of providers_pricing._CACHE_READ_MULT;
+# inlined to avoid a routes<->core round-trip for one float).
+_CACHE_READ_MULT_FOR_ESTIMATE = 0.1
+
+
+def _cache_hit_shape(slice_dict, days):
+    """Reduce a build_efficiency_slice() scope to the Cache-Hit tile payload."""
+    metrics = (slice_dict or {}).get("metrics") or {}
+    tokens_in = int(metrics.get("tokens_in") or 0)
+    cache_read = int(metrics.get("cache_read") or 0)
+    denom = tokens_in + cache_read
+    hit_rate = round(cache_read / denom * 100.0, 2) if denom > 0 else None
+    saved_monthly = float((slice_dict or {}).get("cache_saved_monthly_usd") or 0.0)
+    window_cost = float(metrics.get("window_cost_usd") or 0.0)
+    projected = float((slice_dict or {}).get("projected_monthly_cost_usd") or 0.0)
+    left_on_table_monthly = 0.0
+    if hit_rate is not None and hit_rate < 100.0 and projected > 0 and tokens_in > 0:
+        cache_write = int(metrics.get("cache_write") or 0)
+        weight = (
+            tokens_in / (tokens_in + cache_read + cache_write)
+            if (tokens_in + cache_read + cache_write) > 0 else 0.0
+        )
+        monthly_input_cost = projected * weight
+        left_on_table_monthly = round(
+            monthly_input_cost
+            * _CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION
+            * (1.0 - _CACHE_READ_MULT_FOR_ESTIMATE),
+            4,
+        )
+    return {
+        "cache_hit_rate_pct":        hit_rate,
+        "tokens_in":                 tokens_in,
+        "cache_read":                cache_read,
+        "cache_saved_monthly_usd":   round(saved_monthly, 4),
+        "left_on_table_monthly_usd": left_on_table_monthly,
+        "left_on_table_estimate":    True,
+        "cacheable_fraction_used":   _CACHE_LEFT_ON_TABLE_CACHEABLE_FRACTION,
+        "window_cost_usd":           round(window_cost, 4),
+        "insufficient_data":         bool((slice_dict or {}).get("insufficient_data")),
+        "window_days":               days,
+    }
+
+
+@bp_usage.route("/api/efficiency/cache-hit-rate")
+def api_efficiency_cache_hit_rate():
+    """Prompt cache hit rate, $ saved, and conservative $ left on the table.
+
+    Reuses ``build_efficiency_slice`` so the node-wide number reconciles with
+    ``/api/efficiency`` by construction. Returns a node total plus a
+    ``byRuntime`` map. ``left_on_table_monthly_usd`` is flagged as an estimate
+    (underlying cacheable fraction exposed in the payload). Never 500s.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(90, days))
+    empty_scope = _cache_hit_shape({"insufficient_data": True}, days)
+    try:
+        from clawmetry.efficiency import build_efficiency_slice
+        rows = _ls_call("query_efficiency_rollup", days=days) or []
+        slice_all = build_efficiency_slice(rows, days=days)
+    except Exception:
+        return jsonify({"schema": 1, "window_days": days,
+                        "node": empty_scope, "byRuntime": {}})
+    node = _cache_hit_shape(slice_all, days)
+    by_rt = {}
+    for rt, entry in (slice_all.get("byRuntime") or {}).items():
+        by_rt[rt] = _cache_hit_shape(entry, days)
+    return jsonify({"schema": 1, "window_days": days,
+                    "node": node, "byRuntime": by_rt})
+
+
+def _extract_downgrade_suggestions(slice_dict):
+    """Pull the model_downgrade actions out of a scope, with target model + $."""
+    out = []
+    for a in ((slice_dict or {}).get("actions") or []):
+        if a.get("id") != "model_downgrade":
+            continue
+        data = a.get("data") or {}
+        savings = float(a.get("savings_monthly_usd") or 0.0)
+        if savings <= 0:
+            continue
+        out.append({
+            "current_model":                a.get("model") or "",
+            "suggested_model":              data.get("target_model") or "",
+            "calls":                        int(data.get("calls") or 0),
+            "avg_tokens_out":               float(data.get("avg_tokens_out") or 0.0),
+            "window_cost_usd":              float(data.get("window_cost_usd") or 0.0),
+            "target_window_cost_usd":       float(data.get("target_window_cost_usd") or 0.0),
+            "potential_savings_monthly_usd": round(savings, 4),
+        })
+    out.sort(key=lambda r: -r["potential_savings_monthly_usd"])
+    return out
+
+
+@bp_usage.route("/api/efficiency/routing-advisor")
+def api_efficiency_routing_advisor():
+    """Model-routing recommendations + already-realised routing savings.
+
+    Two numbers side by side from the same DuckDB store:
+      * ``potential`` — build_efficiency_slice's ``model_downgrade`` actions
+        (safe same-provider swaps only; the resolver in
+        ``providers_pricing.downgrade_model_name`` is guarded) reshaped as a
+        per-model advisor list.
+      * ``realised`` — the aggregate over ``auto_downgraded`` events that
+        actually ran (``query_routing_savings``).
+    Node total + ``byRuntime`` map. Never 500s.
+    """
+    try:
+        days = int(request.args.get("days") or 30)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(7, min(90, days))
+    empty = {"schema": 1, "window_days": days,
+             "node": {"suggestions": [], "potential_monthly_usd": 0.0,
+                      "realised": {"total_savings_usd": 0.0,
+                                   "total_substitutions": 0, "by_pair": []},
+                      "insufficient_data": True},
+             "byRuntime": {}}
+    try:
+        from clawmetry.efficiency import build_efficiency_slice
+        rows = _ls_call("query_efficiency_rollup", days=days) or []
+        slice_all = build_efficiency_slice(rows, days=days)
+    except Exception:
+        return jsonify(empty)
+    try:
+        realised = _ls_call("query_routing_savings", days=days) or {}
+    except Exception:
+        realised = {}
+    realised_shape = {
+        "total_savings_usd":   round(float(realised.get("total_savings_usd") or 0.0), 4),
+        "total_substitutions": int(realised.get("total_substitutions") or 0),
+        "by_pair":             realised.get("by_pair") or [],
+    }
+    node_sugg = _extract_downgrade_suggestions(slice_all)
+    node = {
+        "suggestions":           node_sugg,
+        "potential_monthly_usd": round(sum(s["potential_savings_monthly_usd"]
+                                           for s in node_sugg), 4),
+        "realised":              realised_shape,
+        "insufficient_data":     bool(slice_all.get("insufficient_data")),
+    }
+    by_rt = {}
+    for rt, entry in (slice_all.get("byRuntime") or {}).items():
+        sugg = _extract_downgrade_suggestions(entry)
+        by_rt[rt] = {
+            "suggestions":           sugg,
+            "potential_monthly_usd": round(sum(s["potential_savings_monthly_usd"]
+                                               for s in sugg), 4),
+            "insufficient_data":     bool(entry.get("insufficient_data")),
+        }
+    return jsonify({"schema": 1, "window_days": days,
+                    "node": node, "byRuntime": by_rt})
 
 
 # ---------------------------------------------------------------------------
@@ -4554,3 +5125,82 @@ def api_usage_compression():
         return jsonify(_agg_compression(rows))
     except Exception:
         return jsonify({})
+
+
+# ── Git outcome join (REQ-OBS-CEA-022) ─────────────────────────────────────
+#
+# Every other endpoint in this module measures an input. This one measures
+# whether the input produced anything: what shipped work cost, how much of it
+# was written twice, and how much money went to work that reached nothing.
+#
+# The join itself lives in ``clawmetry/local_store.py:query_git_outcomes`` and
+# the repository reading in ``clawmetry/git_outcomes.py``. This handler does
+# window resolution and shape, and nothing else — a handler that re-derived
+# the join would be a second definition of the same numbers.
+
+#: The only windows this surface accepts. ADR-046 gave the product ONE
+#: definition of today / this week / this month and it is not this module's
+#: place to invent a second: a rolling-7-day option here would report a
+#: different weekly figure from every other cost card on a Saturday, both
+#: "correct", and read to the user as the product being broken.
+_OUTCOME_WINDOWS = ("today", "week", "month")
+
+
+@bp_usage.route("/api/usage/outcomes")
+def api_usage_outcomes():
+    """Cost per merged change, rework rate and abandoned spend.
+
+    Query parameters: ``window`` (``today``/``week``/``month``, default
+    ``month``), ``repo`` (a repository root, default all), ``runtime``
+    (default all) and ``min_confidence`` (``high``/``medium``/``low``,
+    default ``medium``).
+
+    Never 500s, and never fabricates. A figure that cannot be derived comes
+    back with ``available: false`` and a reason; the coverage block says how
+    many sessions were considered and how many could not be attributed, so a
+    small answer is distinguishable from a wrong one.
+    """
+    window = (request.args.get("window") or "month").strip().lower()
+    if window not in _OUTCOME_WINDOWS:
+        return jsonify({
+            "error": "unknown window",
+            "allowed": list(_OUTCOME_WINDOWS),
+        }), 400
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    repo = (request.args.get("repo") or "").strip()
+    min_conf = (request.args.get("min_confidence") or "medium").strip().lower()
+    if min_conf not in ("high", "medium", "low"):
+        min_conf = "medium"
+
+    try:
+        from clawmetry.cost_windows import window_start_days
+        today, week, month = window_start_days()
+        since_day = {"today": today, "week": week, "month": month}[window]
+    except Exception:
+        since_day = ""
+
+    payload = _ls_call(
+        "query_git_outcomes",
+        since_day=since_day, repo=repo,
+        runtime=("" if runtime in ("", "all") else runtime),
+        min_confidence=min_conf,
+    )
+    if not isinstance(payload, dict):
+        # No store, no daemon, or the read failed. Reporting less beats
+        # reporting something untrue, and beats a 500 on a dashboard tab.
+        payload = {
+            "available": False,
+            "reason": "local_store_unavailable",
+            "repos": [], "metrics": {}, "coverage": {},
+        }
+    payload["window"] = window
+    payload["window_start"] = since_day
+    payload["runtime"] = runtime or "all"
+    payload["generated_at"] = int(time.time())
+    if not payload.get("available") and "enabled" not in payload:
+        try:
+            from clawmetry.git_outcomes import is_enabled as _git_enabled
+            payload["enabled"] = bool(_git_enabled())
+        except Exception:
+            payload["enabled"] = None
+    return jsonify(payload)

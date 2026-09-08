@@ -73,7 +73,77 @@ PROVIDER_MAP: dict[str, dict] = {
         "input_per_1m": 2.50,
         "output_per_1m": 10.00,
     },
+    "api.x.ai": {
+        "name": "xai",
+        # grok-4 baseline; overrides below cover the mini / code-fast tiers
+        "input_per_1m": 3.00,
+        "output_per_1m": 15.00,
+    },
+    "api.kimi.com": {
+        "name": "moonshot",
+        # kimi-k2.6 baseline (cache-MISS input), per
+        # platform.kimi.ai/docs/pricing/* (2026-08-18); overrides below cover
+        # the k3 / k2.7-code / k2.5 / moonshot-v1 tiers. Cache-hit input is
+        # ~6x cheaper and is not billed here — callers pass uncached input, so
+        # a cached-heavy session is under-, never over-charged.
+        "input_per_1m": 0.95,
+        "output_per_1m": 4.00,
+    },
+    "api.moonshot.ai": {
+        "name": "moonshot",
+        "input_per_1m": 0.95,
+        "output_per_1m": 4.00,
+    },
+    "api.moonshot.cn": {
+        "name": "moonshot",
+        "input_per_1m": 0.95,
+        "output_per_1m": 4.00,
+    },
+    "api.deepseek.com": {
+        "name": "deepseek",
+        # deepseek-v4-flash baseline, per api-docs.deepseek.com/quick_start/
+        # pricing (2026-08-14); overrides below cover the pro tier
+        "input_per_1m": 0.14,
+        "output_per_1m": 0.28,
+    },
 }
+
+# OpenAI standard text-token rates, USD per million: input, output, cache read,
+# cache write. None means no published rate for that cache operation.
+# Verified 2026-09-07 against https://developers.openai.com/api/docs/models/<id>
+# and https://developers.openai.com/api/docs/guides/prompt-caching.
+# These are short-context estimates, not historical or service-tier invoices.
+# GPT-5.6 is the Sol alias; its promotional rates last at least to 2026-11-21.
+_OPENAI_PRICES = {
+    "gpt-4o": (2.50, 10.00, 1.25, None),
+    "gpt-4o-mini": (0.15, 0.60, 0.075, None),
+    "gpt-4.1": (2.00, 8.00, 0.50, None),
+    "gpt-4.1-mini": (0.40, 1.60, 0.10, None),
+    "gpt-4.1-nano": (0.10, 0.40, 0.025, None),
+    "gpt-5": (1.25, 10.00, 0.125, None),
+    "gpt-5-mini": (0.25, 2.00, 0.025, None),
+    "gpt-5-nano": (0.05, 0.40, 0.005, None),
+    "gpt-5.1": (1.25, 10.00, 0.125, None),
+    "gpt-5.2": (1.75, 14.00, 0.175, None),
+    "gpt-5.3-codex": (1.75, 14.00, 0.175, None),
+    "gpt-5.4": (2.50, 15.00, 0.25, None),
+    "gpt-5.4-mini": (0.75, 4.50, 0.075, None),
+    "gpt-5.4-nano": (0.20, 1.25, 0.02, None),
+    "gpt-5.4-pro": (30.00, 180.00, None, None),
+    "gpt-5.5": (5.00, 30.00, 0.50, None),
+    "gpt-5.6": (4.00, 20.00, 0.40, 5.00),
+    "gpt-5.6-sol": (4.00, 20.00, 0.40, 5.00),
+    "gpt-5.6-terra": (2.00, 12.00, 0.20, 2.50),
+    "gpt-5.6-luna": (0.20, 1.20, 0.02, 0.25),
+}
+
+
+def _openai_prices(model: str):
+    """Match a documented model or dated snapshot, never an invented variant."""
+    name = (model or "").lower().split("/", 1)[-1]
+    name = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", name)
+    return _OPENAI_PRICES.get(name)
+
 
 # Model-specific overrides (provider, model_prefix) -> (input_per_1m, output_per_1m)
 MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
@@ -109,11 +179,6 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("openai", "o1-mini"): (3.00, 12.00),
     ("openai", "o1"): (15.00, 60.00),
     ("openai", "o3-mini"): (1.10, 4.40),
-    # GPT-5 family (gpt-5.4, gpt-5.6, …). Official prices not yet published —
-    # $10/$40 per 1M is a best-effort estimate; update once OpenAI confirms.
-    # gpt-5.6 entry beats the broad prefix via longest-prefix matching in _get_rates.
-    ("openai", "gpt-5"): (10.00, 40.00),
-    ("openai", "gpt-5.6"): (10.00, 40.00),
     ("gemini", "gemini-2.0-flash"): (0.10, 0.40),
     ("gemini", "gemini-1.5-pro"): (1.25, 5.00),
     ("gemini", "gemini-1.5-flash"): (0.075, 0.30),
@@ -121,6 +186,44 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("mistral", "mistral-medium"): (0.70, 2.10),
     ("mistral", "mistral-large"): (2.00, 6.00),
     ("mistral", "codestral"): (0.20, 0.60),
+    # xAI Grok family, per x.ai/pricing (2026-08). Longest-prefix wins in
+    # _get_rates so "grok-4-latest" hits "grok-4"; "grok-code-fast-1" hits
+    # its own dedicated entry rather than falling through to the grok-4 rate.
+    ("xai", "grok-4"): (3.00, 15.00),
+    ("xai", "grok-4-heavy"): (3.00, 15.00),
+    ("xai", "grok-4-latest"): (3.00, 15.00),
+    ("xai", "grok-3"): (3.00, 15.00),
+    ("xai", "grok-3-latest"): (3.00, 15.00),
+    ("xai", "grok-3-mini"): (0.30, 0.50),
+    ("xai", "grok-code-fast-1"): (0.20, 1.50),
+    ("xai", "grok-2"): (2.00, 10.00),
+    ("xai", "grok-2-vision"): (2.00, 10.00),
+    ("xai", "grok-2-latest"): (2.00, 10.00),
+    # DeepSeek official API, per api-docs.deepseek.com/quick_start/pricing
+    # (2026-08-14; cache-miss input rates — cache-hit input is ~50x cheaper,
+    # so callers that pass uncached input only slightly underbill). Note the
+    # docs announce peak/off-peak billing from 2026-08-16 (off-peak = half);
+    # these are the peak rates.
+    # Moonshot / Kimi, per platform.kimi.ai/docs/pricing/chat-* (2026-08-18;
+    # cache-MISS input rates — cache-hit input is $0.30 / $0.19 / $0.16 / $0.10
+    # respectively). _get_rates picks the LONGEST matching prefix, so
+    # "kimi-k2.7-code-highspeed" beats "kimi-k2.7-code".
+    ("moonshot", "kimi-k3"): (3.00, 15.00),
+    ("moonshot", "kimi-k2.7-code"): (0.95, 4.00),
+    ("moonshot", "kimi-k2.7-code-highspeed"): (1.90, 8.00),
+    ("moonshot", "kimi-k2.6"): (0.95, 4.00),
+    ("moonshot", "kimi-k2.5"): (0.60, 3.00),
+    ("moonshot", "moonshot-v1-8k"): (0.20, 2.00),
+    ("moonshot", "moonshot-v1-32k"): (1.00, 3.00),
+    ("moonshot", "moonshot-v1-128k"): (2.00, 5.00),
+    ("deepseek", "deepseek-v4-flash"): (0.14, 0.28),
+    ("deepseek", "deepseek-v4-pro"): (0.435, 0.87),
+    # Meta muse-spark (ClawHub/npm standalone distribution), per-token rates not
+    # yet officially published — $1.00/$3.00 per 1M is a best-effort placeholder.
+    # Update once Meta publishes official pricing. Encrypted reasoning-replay
+    # turns are counted as regular output tokens (no separate rate known).
+    ("meta", "muse-spark-1.1"): (1.00, 3.00),
+    ("meta", "muse-spark"): (1.00, 3.00),
 }
 
 
@@ -170,6 +273,11 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
     # the lookup matches. Compare case-insensitively too (callers vary).
     if prov_lower == "google":
         prov_lower = "gemini"
+
+    if prov_lower == "openai":
+        prices = _openai_prices(model)
+        if prices is not None:
+            return prices[0], prices[1]
 
     if model:
         # Strip a leading provider namespace so OpenRouter ids
@@ -236,7 +344,7 @@ def provider_for_model(model: str) -> str:
     m = (model or "").lower()
     if not m:
         return ""
-    for prov in ("openai", "anthropic", "google", "openrouter", "xai"):
+    for prov in ("openai", "anthropic", "google", "openrouter", "xai", "meta"):
         if m.startswith(prov + "/"):
             return prov
     if any(m.startswith(p + "/") for p in _LOCAL_PROVIDERS) or any(
@@ -261,6 +369,8 @@ def provider_for_model(model: str) -> str:
     # slash is a strong signal that the model is running locally on Ollama.
     if ":" in m and "/" not in m:
         return "local"
+    if "muse-spark" in m:
+        return "meta"
     return ""
 
 
@@ -373,6 +483,9 @@ TTS_PROVIDER_RATES: dict[str, float] = {
     "azure":      0.016,   # Azure Cognitive Services Neural TTS
     "amazon":     0.016,   # Amazon Polly Neural voices
     "polly":      0.016,
+    "fish-audio": 0.015,   # Fish Audio S2.1 hosted streaming TTS (~$0.015/1K chars, #4429)
+    "fish":       0.015,   # Short alias
+    "fish-s2-pro": 0.0,    # Fish S2 Pro local reference-voice (self-hosted, no per-call API cost)
 }
 
 
@@ -410,13 +523,14 @@ def estimate_event_cost_usd(
 
     Infers the provider from the model when not supplied — important because
     ``_get_rates`` needs the right provider (an empty provider falls through to
-    the conservative unknown default and mis-prices). Prices prompt-cache read
-    and write on top of input+output using Anthropic's documented multipliers
-    (only applied for the anthropic provider, where the split is well-defined).
+    the conservative unknown default and mis-prices). Anthropic cache counts
+    are additional to input_tokens. OpenAI cache counts are INCLUDED in total
+    input_tokens, so replace their ordinary input charge with the published
+    cache rate. Unknown OpenAI models retain the provider baseline estimate.
     Local / self-hosted models resolve to 0. Never raises.
     """
     try:
-        prov = provider or provider_for_model(model)
+        prov = (provider or provider_for_model(model)).lower()
         input_rate, output_rate = _get_rates(prov, model)
         if input_rate == 0 and output_rate == 0:
             return 0.0
@@ -427,6 +541,16 @@ def estimate_event_cost_usd(
         if prov == "anthropic":
             cost += (max(0, int(cache_read_tokens)) / 1_000_000) * input_rate * _CACHE_READ_MULT
             cost += (max(0, int(cache_write_tokens)) / 1_000_000) * input_rate * _CACHE_WRITE_MULT
+        elif prov == "openai":
+            prices = _openai_prices(model)
+            if prices is not None:
+                total_input = max(0, int(input_tokens))
+                cached = min(total_input, max(0, int(cache_read_tokens)))
+                written = min(total_input - cached, max(0, int(cache_write_tokens)))
+                if prices[2] is not None:
+                    cost += cached / 1_000_000 * (prices[2] - input_rate)
+                if prices[3] is not None:
+                    cost += written / 1_000_000 * (prices[3] - input_rate)
         return round(cost, 8)
     except Exception:
         return 0.0

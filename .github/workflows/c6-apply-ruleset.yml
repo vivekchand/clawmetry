@@ -1,0 +1,391 @@
+name: Apply E2E required checks via Rulesets API (C6)
+
+# Uses POST /repos/{owner}/{repo}/rulesets to upsert a ruleset that
+# enforces the required E2E status check on clawmetry/main.
+#
+# WHY RULESETS INSTEAD OF BRANCH PROTECTION:
+#   Branch protection requires an admin PAT -- GITHUB_TOKEN cannot write it.
+#   The Rulesets API (GA since 2023-10) accepts GITHUB_TOKEN with
+#   administration:write; the github-actions[bot] is treated as a repo
+#   admin on its own repository for ruleset management.
+#
+# On first success this closes C6 automatically -- no PAT, no local setup,
+#   no browser Settings UI required.
+#
+# Idempotent: upserts by name so repeated runs are safe.
+# Runs on every push to main so the ruleset self-heals if deleted.
+# On 403 (token lacks ruleset-write rights): falls back to reading the
+# branch protection via the public branch endpoint to give an honest
+# exit code -- exits 0 if 'E2E Gate (required)' is already present,
+# exits 1 (::error::, actionable) if the check is still missing.
+#
+# PERMISSIONS NOTE:
+#   administration:write is NOT declared at any level. Both workflow-level
+#   and job-level administration:write cause GitHub to kill the run with
+#   0 jobs on personal repos (confirmed: runs #30243855242 and #32833015913).
+#   The Rulesets API will 403; the fallback reads branch protection state
+#   and exits 0 if 'E2E Gate (required)' is already present, exits 1 with
+#   actionable Settings UI instructions if still missing.
+#   C6 must be closed via: github.com/vivekchand/clawmetry/settings/branches
+#   (60 seconds) or by setting E2E_ADMIN_PAT secret for c6-schedule-heal.yml.
+#
+# Tracking: vivekchand/clawmetry#3970 (C6)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least-privilege default. The apply-ruleset job below declares its own
+# permissions block (contents: read + issues: write), which replaces this
+# default wholesale, so the tracking-issue comment still works.
+permissions:
+  contents: read
+
+jobs:
+  apply-ruleset:
+    name: Upsert E2E required-checks ruleset on main (C6)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Upsert repository ruleset via API
+        id: upsert
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          TOKEN = os.environ["GITHUB_TOKEN"]
+          OWNER = "vivekchand"
+          REPO = "clawmetry"
+          RULESET_NAME = "E2E Required Status Checks (C6)"
+          C6_CHECK = "E2E Gate (required)"
+
+          # Single aggregator check -- PR #4111 (merged 2026-07-27) replaced the
+          # 4 individual OSS E2E checks with one "E2E Gate (required)" job in
+          # e2e-gate.yml. Keep in sync with apply_required_status_checks.py and
+          # c6-health.yml. One branch-protection entry closes C6 for clawmetry.
+          REQUIRED_CHECKS = [
+              "E2E Gate (required)",
+          ]
+
+          HEADERS = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+              "User-Agent": "clawmetry-c6-ruleset/1.0",
+          }
+
+          # Helper to write a step output to GITHUB_OUTPUT.
+          def set_output(key, value):
+              path = os.environ.get("GITHUB_OUTPUT", "")
+              if path:
+                  with open(path, "a") as f:
+                      f.write(f"{key}={value}\n")
+
+          def api(method, path, body=None):
+              url = f"https://api.github.com{path}"
+              data = json.dumps(body).encode() if body is not None else None
+              req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      return json.loads(r.read()), None
+              except urllib.error.HTTPError as exc:
+                  raw = exc.read().decode(errors="replace")
+                  return None, (exc.code, raw)
+
+          def branch_has_c6_check():
+              """Return True if E2E Gate (required) is in branch protection.
+
+              Uses GET /branches/main -- public endpoint, works with GITHUB_TOKEN.
+              Reads both 'contexts' (legacy) and 'checks' (Settings UI) arrays.
+              """
+              data, err = api("GET", f"/repos/{OWNER}/{REPO}/branches/main")
+              if err or not data:
+                  return False
+              prot = data.get("protection") or {}
+              rsc = prot.get("required_status_checks") or {}
+              ctx = set(rsc.get("contexts") or [])
+              for item in (rsc.get("checks") or []):
+                  if isinstance(item, dict) and item.get("context"):
+                      ctx.add(item["context"])
+              return C6_CHECK in ctx
+
+          # Fetch existing rulesets to check for an upsert target.
+          rulesets, err = api("GET", f"/repos/{OWNER}/{REPO}/rulesets")
+          if err:
+              code, body = err
+              if code == 403:
+                  # Rulesets API 403s on this personal-repo plan. Fall back to
+                  # reading the branch protection directly to give an honest exit
+                  # code: exit 0 if C6 is already configured, exit 1 if missing.
+                  if branch_has_c6_check():
+                      print(
+                          "[C6] Rulesets API 403 but 'E2E Gate (required)' is "
+                          "present in branch protection -- C6 OK."
+                      )
+                      set_output("created", "false")
+                      sys.exit(0)
+                  print(
+                      "::error title=C6 gap -- action needed::"
+                      "Rulesets API 403 AND 'E2E Gate (required)' is MISSING from "
+                      "branch protection. Fastest fix (60 s): "
+                      "github.com/vivekchand/clawmetry/settings/branches > "
+                      "Edit main > Require status checks > add 'E2E Gate (required)'. "
+                      "Or: bash scripts/close-c6.sh. "
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
+                  )
+                  set_output("created", "false")
+                  sys.exit(1)
+              else:
+                  print(f"::error::GET /rulesets failed: {code} {body[:400]}")
+                  set_output("created", "false")
+                  sys.exit(1)
+
+          existing_id = None
+          for rs in (rulesets or []):
+              if rs.get("name") == RULESET_NAME:
+                  existing_id = rs["id"]
+                  break
+
+          ruleset_body = {
+              "name": RULESET_NAME,
+              "target": "branch",
+              "enforcement": "active",
+              "conditions": {
+                  "ref_name": {
+                      "include": ["refs/heads/main"],
+                      "exclude": [],
+                  }
+              },
+              "rules": [
+                  {
+                      "type": "required_status_checks",
+                      "parameters": {
+                          "strict_required_status_checks_policy": False,
+                          "required_status_checks": [
+                              {"context": c} for c in REQUIRED_CHECKS
+                          ],
+                      },
+                  }
+              ],
+          }
+
+          if existing_id:
+              result, err = api(
+                  "PUT",
+                  f"/repos/{OWNER}/{REPO}/rulesets/{existing_id}",
+                  ruleset_body,
+              )
+              verb = "Updated"
+          else:
+              result, err = api(
+                  "POST",
+                  f"/repos/{OWNER}/{REPO}/rulesets",
+                  ruleset_body,
+              )
+              verb = "Created"
+
+          if err:
+              code, body = err
+              if code == 403:
+                  # Mirror the GET-403 fallback: if the check is already enforced
+                  # via branch protection (e.g. the admin added it via Settings UI
+                  # or close-c6.sh), C6 is satisfied and there is nothing to fix.
+                  if branch_has_c6_check():
+                      print(
+                          f"[C6] Rulesets API {verb} 403 but 'E2E Gate (required)' is "
+                          "present in branch protection -- C6 OK."
+                      )
+                      set_output("created", "false")
+                      sys.exit(0)
+                  print(
+                      f"::error title=C6 Rulesets write denied::"
+                      f"Rulesets API {verb} returned 403 -- GITHUB_TOKEN cannot write rulesets "
+                      "AND 'E2E Gate (required)' is MISSING from branch protection. "
+                      "Fastest fix (60 s): github.com/vivekchand/clawmetry/settings/branches "
+                      "> Edit main > Require status checks > add 'E2E Gate (required)'. "
+                      "Or: bash scripts/close-c6.sh. "
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
+                  )
+                  set_output("created", "false")
+                  sys.exit(1)
+              else:
+                  print(f"::error::{verb} ruleset failed: {code} {body[:400]}")
+                  set_output("created", "false")
+                  sys.exit(1)
+
+          rs_id = (result or {}).get("id", "?")
+          rs_url = (result or {}).get("html_url", "")
+          print(f"[C6] {verb} ruleset id={rs_id}")
+          if rs_url:
+              print(f"[C6] {rs_url}")
+          print(f"[C6] Enforcing {len(REQUIRED_CHECKS)} checks on {OWNER}/{REPO}/main:")
+          for c in REQUIRED_CHECKS:
+              print(f"  - {c}")
+          set_output("created", "true")
+          PYEOF
+
+      # Only verify if the upsert step actually created/updated a ruleset.
+      # Skipped when upsert exits 0 (403 + check already present) or exits 1.
+      - name: Verify ruleset is active
+        if: success() && steps.upsert.outputs.created == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.error
+
+          TOKEN = os.environ["GITHUB_TOKEN"]
+          OWNER = "vivekchand"
+          REPO = "clawmetry"
+          RULESET_NAME = "E2E Required Status Checks (C6)"
+          REQUIRED = {
+              "E2E Gate (required)",
+          }
+          HEADERS = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "clawmetry-c6-ruleset/1.0",
+          }
+
+          def get(path):
+              req = urllib.request.Request(
+                  f"https://api.github.com{path}", headers=HEADERS
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
+          rulesets = get(f"/repos/{OWNER}/{REPO}/rulesets")
+          rs = next(
+              (x for x in rulesets if x.get("name") == RULESET_NAME), None
+          )
+          if not rs:
+              print(
+                  "::error::Ruleset not found after upsert. "
+                  "The upsert step may have silently no-oped."
+              )
+              sys.exit(1)
+
+          detail = get(f"/repos/{OWNER}/{REPO}/rulesets/{rs['id']}")
+          sc_rule = next(
+              (ru for ru in detail.get("rules", [])
+               if ru.get("type") == "required_status_checks"),
+              None,
+          )
+          if not sc_rule:
+              print("::error::No required_status_checks rule found in ruleset")
+              sys.exit(1)
+
+          actual = {
+              c["context"]
+              for c in sc_rule["parameters"]["required_status_checks"]
+          }
+          missing = REQUIRED - actual
+          if missing:
+              print(f"::error::Ruleset missing checks: {sorted(missing)}")
+              sys.exit(1)
+
+          enforcement = rs.get("enforcement", "?")
+          if enforcement != "active":
+              print(
+                  f"::error::Ruleset enforcement={enforcement} (expected active)"
+              )
+              sys.exit(1)
+
+          print(
+              f"[C6] Verify PASSED: ruleset id={rs['id']} "
+              f"enforcement={enforcement}"
+          )
+          print(f"[C6] All {len(REQUIRED)} required checks confirmed present.")
+          print("[C6] C6 criterion is now GREEN -- PRs cannot merge without E2E passing.")
+          PYEOF
+
+      # Only post the success comment if a ruleset was actually created/updated.
+      # Skipped on 403 (no ruleset created) and on re-runs where already posted.
+      - name: Comment on tracking issue on first-success
+        if: success() && steps.upsert.outputs.created == 'true' && github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys, urllib.request, urllib.error
+          TOKEN = os.environ["GITHUB_TOKEN"]
+          OWNER = "vivekchand"
+          REPO = "clawmetry"
+          TRACKING_ISSUE = 3970
+          MARKER = "<!-- c6-ruleset-applied -->"
+          RUN_URL = (
+              f"https://github.com/{OWNER}/{REPO}/actions/runs/"
+              + os.environ.get("GITHUB_RUN_ID", "")
+          )
+          HEADERS = {
+              "Authorization": f"Bearer {TOKEN}",
+              "Accept": "application/vnd.github+json",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+              "User-Agent": "clawmetry-c6-ruleset/1.0",
+          }
+
+          def get_comments():
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{OWNER}/clawmetry"
+                  f"/issues/{TRACKING_ISSUE}/comments?per_page=20",
+                  headers=HEADERS,
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
+          def post_comment(body):
+              data = json.dumps({"body": body}).encode()
+              req = urllib.request.Request(
+                  f"https://api.github.com/repos/{OWNER}/clawmetry"
+                  f"/issues/{TRACKING_ISSUE}/comments",
+                  data=data,
+                  headers=HEADERS,
+                  method="POST",
+              )
+              with urllib.request.urlopen(req) as r:
+                  return json.loads(r.read())
+
+          try:
+              comments = get_comments()
+          except Exception:
+              comments = []
+
+          # Only post once -- skip if already posted.
+          already = any(
+              MARKER in (c.get("body") or "") for c in comments
+          )
+          if already:
+              print("C6-applied comment already posted. Skipping.")
+              sys.exit(0)
+
+          body = (
+              f"{MARKER}\n"
+              "**C6 auto-closed via Rulesets API (job-level administration:write).**\n\n"
+              "The `c6-apply-ruleset.yml` workflow successfully created the "
+              "`E2E Required Status Checks (C6)` repository ruleset on "
+              f"`clawmetry/main` -- no admin PAT required.\n\n"
+              "Required checks now enforced:\n"
+              "- `E2E Gate (required)` (aggregates OSS golden path, cross-repo handoff, "
+              "MOAT keystone, E2E browser tests -- PR #4111)\n\n"
+              f"[Workflow run]({RUN_URL})\n\n"
+              "**C6 is now GREEN.** The 7-day stop-condition countdown is running "
+              "(all 7 criteria must hold green for 7 consecutive days).\n\n"
+              "_Next step_: verify clawmetry-cloud and clawmetry-landing also "
+              "have their required checks (C6-cloud and C6-landing) -- those still "
+              "need the admin PAT or GitHub Settings UI for cross-repo rulesets."
+          )
+          result = post_comment(body)
+          print(f"Posted: {result['html_url']}")
+          PYEOF

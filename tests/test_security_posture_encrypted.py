@@ -7,7 +7,7 @@ heartbeat payload (the cloud stored that in cleartext).
 """
 import pathlib
 
-SYNC = (pathlib.Path(__file__).resolve().parents[1] / "clawmetry" / "sync.py").read_text()
+SYNC = (pathlib.Path(__file__).resolve().parents[1] / "clawmetry" / "sync.py").read_text(encoding="utf-8")
 
 
 def test_security_posture_in_encrypted_snapshot():

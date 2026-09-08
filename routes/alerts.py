@@ -107,7 +107,444 @@ def _try_local_store_alert_rules():
     # the handler fall through to the legacy fleet-DB path, which hangs
     # ~3 s on this user's box. Return [] tagged with the local_store
     # source instead — the dashboard JS handles an empty list cleanly.
-    return {"rules": rows or [], "_source": "local_store"}
+    #
+    # DuckDB keeps the rule body (alert_type / threshold_value / channel_ids
+    # / runtime) inside ``condition_json``; the top level is id / name /
+    # enabled / timestamps. Promote body keys the top level lacks so the
+    # evaluator-provenance stamp below, the mirror repair, and the Alerts
+    # tab all see ``alert_type`` where they read it. Without this every
+    # DuckDB-backed rule was an "unrecognized" orphan with no evaluator,
+    # even a valid daily_spend rule. ``condition_json`` stays intact.
+    flat = []
+    for r in rows or []:
+        if isinstance(r, dict):
+            body = r.get("condition_json")
+            if isinstance(body, dict) and body:
+                merged = dict(body)
+                merged.update(r)
+                r = merged
+        flat.append(r)
+    return {"rules": flat, "_source": "local_store"}
+
+
+def _mirror_rule_to_duckdb(rule_id, *, alert_type, threshold, runtime,
+                           channels, cooldown_min, enabled, name="",
+                           extra=None):
+    """Mirror a locally-created alert rule into the DuckDB ``alert_rules``
+    table so the sync daemon's evaluator can actually see it.
+
+    The dashboard's POST writes the fleet SQLite DB; the daemon's
+    ``_evaluate_alerts_local`` reads DuckDB via ``query_alert_rules``. Before
+    this, nothing bridged the two — ``ingest_alert_rule`` was only ever called
+    from the cloud pending-action path — so a rule created from the Alerts tab
+    on a no-cloud node was never evaluated by anything.
+
+    ``condition_json`` keeps the CLOUD vocabulary (alert_type /
+    threshold_value / runtime), which is what ``clawmetry.alert_evaluator``
+    parses via its ``_LEGACY_ALERT_TYPE_MAP``.
+
+    Best-effort: the daemon may be down (dashboard-only boot) and the rule
+    still has to save. Returns True when the mirror landed.
+    """
+    payload = {
+        "id": str(rule_id),
+        "name": name or alert_type,
+        "enabled": bool(enabled),
+        "condition_json": {
+            "alert_type":      alert_type,
+            "threshold_value": threshold,
+            "runtime":         runtime,
+            "channel_ids":     list(channels or []),
+            "cooldown_min":    cooldown_min,
+        },
+    }
+    # Type-specific fields (a signal_rate_above rule's signal / window /
+    # min_turns) live only in the mirror. On create the caller passes them;
+    # on a re-mirror (toggle, edit, repair) they come from the existing row.
+    if alert_type == "signal_rate_above":
+        carried = extra if isinstance(extra, dict) else {}
+        if not carried.get("signal"):
+            prev = _duckdb_rule_condition(rule_id)
+            carried = {k: prev.get(k) for k in _SIGNAL_RULE_EXTRA_KEYS
+                       if prev.get(k) is not None}
+        for k in _SIGNAL_RULE_EXTRA_KEYS:
+            if carried.get(k) is not None:
+                payload["condition_json"][k] = carried[k]
+    if not _write_via_store("ingest_alert_rule", rule=payload):
+        return False
+    # Read back before claiming success. ``ingest_alert_rule`` returns None,
+    # and ``local_store_via_daemon`` also returns None when the proxy call
+    # FAILED — the two are indistinguishable at the call site, so a bare
+    # "no exception" check reports a mirror that never happened. That matters
+    # most on exactly the install this bridges: a daemon running an older
+    # wheel does not allowlist the method, the call 400s, and the operator
+    # would be told their rule is armed on an evaluator that cannot see it.
+    return _rule_in_duckdb(rule_id)
+
+
+def _duckdb_rule_ids():
+    """Ids currently in the DuckDB alert_rules table, or None if unreadable."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_alert_rules", limit=500)
+        if rows is None:
+            from clawmetry import local_server as _ls_srv
+            if not _ls_srv.is_running():
+                return None
+            from clawmetry import local_store as _ls_mod
+            rows = _ls_mod.get_store().query_alert_rules(limit=500)
+        return {str(r.get("id")) for r in (rows or [])}
+    except Exception:
+        return None
+
+
+def _duckdb_rule_condition(rule_id):
+    """The DuckDB mirror's ``condition_json`` for ``rule_id``, or ``{}``.
+
+    The fleet SQLite row has no column for rule-type-specific fields (the
+    behaviour signal a ``signal_rate_above`` rule watches, its window, its
+    minimum sample), so a re-mirror from that row would drop them. Reading
+    the current mirror lets a PUT carry them across."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        rows = local_store_via_daemon("query_alert_rules", limit=500)
+        if rows is None:
+            from clawmetry import local_server as _ls_srv
+            if not _ls_srv.is_running():
+                return {}
+            from clawmetry import local_store as _ls_mod
+            rows = _ls_mod.get_store().query_alert_rules(limit=500)
+        for r in (rows or []):
+            if str(r.get("id")) != str(rule_id):
+                continue
+            cond = r.get("condition_json")
+            if isinstance(cond, str):
+                cond = json.loads(cond)
+            return cond if isinstance(cond, dict) else {}
+    except Exception:
+        return {}
+    return {}
+
+
+#: Rule-type-specific condition fields the SQLite row cannot hold; carried
+#: across re-mirrors from the existing DuckDB row.
+_SIGNAL_RULE_EXTRA_KEYS = ("signal", "window_minutes", "min_turns")
+
+
+def _rule_in_duckdb(rule_id):
+    """True when ``rule_id`` is present in the DuckDB alert_rules table."""
+    ids = _duckdb_rule_ids()
+    return bool(ids) and str(rule_id) in ids
+
+
+# Rules whose mirror we've already reconciled this process. Bounds the repair
+# below to one attempt per rule per boot — it exists to close an upgrade-skew
+# window, not to run on every page load forever.
+_MIRROR_REPAIRED = set()
+
+
+def _repair_missing_mirrors(rules):
+    """Re-mirror evaluator-owned rules that never reached DuckDB.
+
+    The dashboard and daemon ship in one wheel but restart independently, so
+    there is a window where a NEW dashboard writes a rule that an OLD daemon
+    cannot accept (its method allowlist predates the bridge). Without repair
+    that rule stays stranded after the daemon upgrades: the create path is
+    long over, and nothing else would ever mirror it — the same permanently
+    inert rule this whole change exists to eliminate, just arriving by a
+    different route.
+
+    One DuckDB read, and only when an evaluator-owned rule exists at all.
+    Idempotent upsert, at most one attempt per rule per process.
+    """
+    candidates = [
+        r for r in rules
+        if (r.get("alert_type") or "") in _EVALUATOR_ONLY
+        and str(r.get("id")) not in _MIRROR_REPAIRED
+    ]
+    if not candidates:
+        return
+    present = _duckdb_rule_ids()
+    if present is None:
+        return  # store unreadable; try again next boot rather than guess
+    for r in candidates:
+        rid = str(r.get("id"))
+        _MIRROR_REPAIRED.add(rid)
+        if rid in present:
+            continue
+        try:
+            _chans = json.loads(r.get("channels") or "[]")
+        except (TypeError, ValueError):
+            _chans = []
+        _mirror_rule_to_duckdb(
+            rid, alert_type=r.get("alert_type"),
+            threshold=(r.get("threshold_value")
+                       if r.get("threshold_value") is not None
+                       else r.get("threshold")),
+            runtime=r.get("runtime") or "all", channels=_chans,
+            cooldown_min=r.get("cooldown_min"),
+            enabled=bool(r.get("enabled")), name=r.get("name") or "",
+        )
+
+
+def _write_via_store(method, **kwargs):
+    """Run a LocalStore write, through the daemon proxy where one exists.
+
+    Returns False rather than raising. Only touches the store directly when
+    ``local_server`` is hosted in THIS process — i.e. we are the daemon and
+    already hold the writer lock. Opening a writer from the dashboard process
+    while the daemon holds the lock is the documented brick-lock hazard, and
+    where DuckDB allows it the write lands somewhere the daemon never reads,
+    which is worse than not writing at all.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        local_store_via_daemon(method, **kwargs)
+        return True
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_server as _ls_srv
+        if not _ls_srv.is_running():
+            return False
+        from clawmetry import local_store as _ls_mod
+        getattr(_ls_mod.get_store(), method)(**kwargs)
+        return True
+    except Exception:
+        return False
+
+
+def _unmirror_rule_from_duckdb(rule_id):
+    """Drop a mirrored rule from DuckDB. Best-effort, never raises.
+
+    Unlike the create path this does not verify: a rule that was never
+    mirrored (older daemon, or a type the local loop owns) is simply absent,
+    and reporting that as a failed delete would be noise.
+    """
+    return _write_via_store("delete_alert_rule", rule_id=str(rule_id))
+
+
+# ── Cloud alert_type -> local evaluator routing ────────────────────────────
+#
+# The Alerts tab speaks the cloud vocabulary (``alert_type``); a self-hosted
+# node has two evaluators, and every type must be routed to one of them or
+# rejected. Silently storing an unroutable type is what produced the zombie
+# rules fixed on 2026-08-15 (see the block comment in ``api_alert_rules``).
+#
+# _CLOUD_TO_LOCAL: has a real ``rtype`` branch in dashboard.py's
+# ``_budget_monitor_loop``. Keep this in lockstep with the ``rtype ==``
+# branches there — a key here with no branch there is a zombie rule.
+_CLOUD_TO_LOCAL = {
+    "daily_spend":    "threshold",
+    "cost_daily":     "threshold",      # legacy alias, pre-0.12.711 clients
+    "session_cost":   "session_cost",
+    "token_velocity": "token_spike",
+    "node_offline":   "agent_down",
+    "agent_offline":  "agent_down",     # legacy alias, pre-0.12.711 clients
+}
+
+# _EVALUATOR_ONLY: no in-process branch, but ``clawmetry.alert_evaluator``
+# genuinely implements these over the DuckDB event/quality slices. Rules of
+# these types are mirrored into DuckDB on write so the daemon evaluates them.
+_EVALUATOR_ONLY = frozenset({
+    "error_rate",
+    "eval_score_below",
+    "outcome_failure_rate",
+    # Harness Engineering "Watch $/done": cost per finished job for a
+    # runtime crossed a dollar threshold (clawmetry/alert_evaluator.py
+    # _eval_dollars_per_done, quality-window fed).
+    "dollars_per_done_above",
+    # Behaviour Signals (WO-58): a named signal's rate (frustration,
+    # refusals, ...) over a window crossed a threshold with a minimum sample
+    # (clawmetry/alert_evaluator.py _eval_signal_rate_above, fed by the
+    # daemon's signal_turns / signal_matches tables).
+    "signal_rate_above",
+})
+
+# Local ``type`` values with a real ``rtype ==`` branch in dashboard.py's
+# ``_budget_monitor_loop``. Anything stored outside this set is evaluated by
+# the daemon (if mirrored) or by nobody. Note the deliberate absence of
+# "anomaly": it has no branch and never had one — it was the silent
+# dumping ground for unmapped cloud types.
+_LOCAL_EVALUABLE_TYPES = frozenset({
+    "threshold",
+    "spike",
+    "token_spike",
+    "agent_down",
+    "session_cost",
+    "unproductive_burn",
+})
+
+# Types the UI can offer but nothing can evaluate on a self-hosted node yet.
+# Surfaced (not hidden) so the tab can render an honest "cloud only" state
+# instead of a green toggle that never fires. ``cron_failure`` maps to
+# alert_evaluator's ``count_over_threshold`` TODO stub, which under-fires by
+# design — that is a no-op, not an evaluator.
+UNSUPPORTED_ALERT_TYPES = frozenset({
+    "cron_failure",
+    "session_duration",
+    "subagent_depth",
+})
+
+
+# ── Always-on monitors ─────────────────────────────────────────────────────
+#
+# Founder-reported 2026-08-15, looking at two red banners above an Alerts tab
+# with every rule switched off: "how did it alert when all of the alerts are
+# disabled?? are those default alerts??"
+#
+# Fair question, and the tab gave no answer. These monitors are hardcoded in
+# ``dashboard.py``'s ``_budget_monitor_loop`` and in ingest handlers. They
+# call ``_fire_alert`` directly — no rule lookup, no enabled check — so they
+# fire regardless of what the Alerts tab shows, and the tab listed none of
+# them. An alert the operator cannot find, explain, or silence is not
+# governance; it is noise with a red background.
+#
+# Surfaced via /api/alerts/builtins. ``alert_type`` values must match the
+# ``_fire_alert(alert_type=...)`` call sites — tests/test_builtin_monitors.py
+# greps for drift.
+BUILTIN_MONITORS = [
+    {
+        # Guard detector incidents delivered to a human (clawmetry/
+        # incident_alerts.py). Free on every plan for in-app + Telegram, the
+        # same pair the budget monitor has always used; Slack/Discord/webhook
+        # ride the alert_webhooks entitlement. The daemon fires it, so this
+        # row is what lets the Alerts tab explain a banner nobody configured.
+        "alert_type": "agent_attention",
+        "label": "Agent needs attention",
+        "watches": "Stuck, rate limited, crashed, or waiting on you (Guard detectors)",
+        "source": "daemon",
+    },
+    {
+        "alert_type": "heartbeat_silent",
+        "label": "Agent went quiet",
+        "watches": "No heartbeat for 1.5x the expected interval",
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "agent_down",
+        "label": "Telemetry feed stopped",
+        "watches": "No OTLP data received for the agent-down window",
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "anomaly",
+        "label": "Cost spike",
+        "watches": "Today's spend above 2x the 7-day average",
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "token_velocity",
+        "label": "Token burst",
+        "watches": "Sustained tokens/min above the built-in ceiling",
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "agent_error_rate",
+        "label": "Errors climbing",
+        "watches": "A runtime's error rate over its recent baseline",
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "error_spike",
+        "label": "Error spike",
+        "watches": "A burst of errors in a short window",
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "security_threat",
+        "label": "Threat signature matched",
+        "watches": "Built-in signatures matching recent agent activity",
+        "source": "security-scan",
+    },
+    {
+        "alert_type": "numbat_finding",
+        "label": "Security tool finding",
+        "watches": "A critical or high finding from a connected scanner",
+        "source": "numbat-ingest",
+    },
+    {
+        "alert_type": "security",
+        "label": "Security posture changed",
+        "watches": "A drop in the node's security posture score",
+        "source": "dashboard",
+    },
+    {
+        "alert_type": "threshold",
+        "label": "Budget threshold",
+        "watches": "Daily spend crossing the budget you configured",
+        "source": "dashboard",
+    },
+]
+
+
+def _builtin_monitor_view(m, _d):
+    """One monitor as the Alerts tab renders it: the STATIC catalog entry
+    plus the LIVE delivery answer from the same resolver ``_fire_alert``
+    uses. ``channels`` is what will actually deliver; the hardcoded catalog
+    value is deliberately not exposed (founder 2026-08-17: it advertised
+    Telegram on nodes that never configured it)."""
+    view = {k: v for k, v in m.items() if k != "channels"}
+    try:
+        r = _d._resolve_builtin_delivery(m["alert_type"])
+    except Exception:
+        r = {"enabled": True, "channels": ["banner"], "mode": "auto"}
+    view["enabled"] = r["enabled"]
+    view["channels"] = r["channels"]
+    view["channels_mode"] = r["mode"]
+    return view
+
+
+@bp_alerts.route("/api/alerts/builtins")
+def api_alerts_builtins():
+    """The always-on monitors that fire without an alert rule.
+
+    Read by the Alerts tab so the operator can see WHY a banner appeared
+    when every rule on the page is switched off. No ``@gate``: knowing what
+    is watching you is not a paid feature.
+
+    ``channels`` on each monitor is the live delivery list (in-app plus any
+    channel this node can actually deliver to right now, minus anything
+    the operator unpinned); ``channels_available`` is the picker menu.
+    """
+    import dashboard as _d
+    monitors = [_builtin_monitor_view(m, _d) for m in BUILTIN_MONITORS]
+    try:
+        available = _d._builtin_channels_available()
+    except Exception:
+        available = [{"id": "banner", "label": "In-app", "configured": True}]
+    return jsonify({"monitors": monitors,
+                    "count": len(monitors),
+                    "channels_available": available})
+
+
+@bp_alerts.route("/api/alerts/builtins/<alert_type>", methods=["PATCH"])
+def api_alerts_builtin_update(alert_type):
+    """Mute/unmute a built-in monitor or pin its channels.
+
+    Body: ``{"enabled": bool}`` and/or ``{"channels": [...] | "auto"}``.
+    In-app is always kept; to silence a monitor set ``enabled: false``.
+    Local prefs, no ``@gate`` — silencing noise on your own node is not
+    a paid feature.
+    """
+    import dashboard as _d
+    known = {m["alert_type"]: m for m in BUILTIN_MONITORS}
+    if alert_type not in known:
+        return jsonify({"error": "unknown built-in monitor",
+                        "alert_type": alert_type}), 404
+    data = request.get_json(silent=True) or {}
+    enabled = data.get("enabled")
+    channels = data.get("channels", None)
+    if channels is not None and channels != "auto" and not isinstance(channels, list):
+        return jsonify({"error": "channels must be a list or \"auto\""}), 400
+    if enabled is None and channels is None:
+        return jsonify({"error": "nothing to update"}), 400
+    try:
+        _d._save_builtin_monitor_pref(alert_type, enabled=enabled, channels=channels)
+    except Exception as e:
+        return jsonify({"error": f"could not save: {e}"}), 500
+    return jsonify({"ok": True,
+                    "monitor": _builtin_monitor_view(known[alert_type], _d)})
 
 
 # ── Default alert-rule seed list (issue #1707) ─────────────────────────────
@@ -119,6 +556,32 @@ def _try_local_store_alert_rules():
 # and installs any missing rules via the standard POST path.
 
 DEFAULT_ALERT_RULES = [
+    # Silent failure -> human. The rule form of the always-on
+    # ``agent_attention`` built-in monitor above. On a Free install the
+    # built-in monitor already delivers (banner + Telegram) with no rule at
+    # all, because custom alert RULES are a paid feature
+    # (entitlements.PRO_ONLY_FEATURES: custom_alerts); this seed exists so a
+    # licensed node can scope it per runtime, change the window, or add a
+    # webhook. Not pro_only: the template is free to read and the daemon's
+    # entitlement check decides whether rules evaluate.
+    {
+        "id":           "agent_attention_default",
+        "type":         "agent_attention",
+        "threshold":    1,
+        "window_minutes": 30,
+        "min_severity": "warning",
+        "channels":     ["banner", "telegram"],
+        "cooldown_min": 30,
+        "enabled":      True,
+        "pro_only":     False,
+        "label":        "Agent needs attention",
+        "description": (
+            "Fires when a Guard detector finds an agent that is stuck, "
+            "rate limited by its provider, crashed and restarted, or waiting "
+            "on a person. In-app banner and Telegram are free; this rule "
+            "lets you scope it per runtime or add a webhook."
+        ),
+    },
     {
         "id":           "unproductive_burn_default",
         "type":         "unproductive_burn",
@@ -153,6 +616,31 @@ DEFAULT_ALERT_RULES = [
             "Fires when the proxy detects a tool declaration not in the "
             "session's allowed_tools list. Configure allowed_tools in "
             "proxy.json to activate. Observe-only: requests are never blocked."
+        ),
+    },
+    # numbat integration (Perplexity agent-EDR): the sync daemon tails
+    # ~/.numbat/*.ndjson and ingests findings as events rows with
+    # event_type "numbat_finding" (clawmetry/numbat_ingest.py), so this
+    # standard count-over-threshold rule lights up with zero new alert
+    # machinery — the loop_detected precedent. Off by default: it only
+    # matters once the user installs numbat, and numbat publishes no
+    # false-positive rates yet. OSS (no proxy or Pro adapter required).
+    {
+        "id":           "numbat_finding_default",
+        "type":         "numbat_finding",
+        "event_type":   "numbat_finding",
+        "window_hours": 24,
+        "threshold":    1,
+        "channels":     ["banner", "telegram"],
+        "cooldown_min": 60,
+        "enabled":      False,
+        "pro_only":     False,
+        "label":        "numbat security finding",
+        "description": (
+            "Fires when Perplexity's numbat agent-security tool reports a "
+            "finding (secret exfiltration, permission bypass, persistence, "
+            "…) on this node. Install numbat and point it at ClawMetry to "
+            "activate — see docs/NUMBAT.md."
         ),
     },
     # G3 of #1708 (Wolfgang burnout): the proxy now emits a structured
@@ -234,6 +722,27 @@ def _enrich_rules_with_comms(rules):
         # Don't inject ``last_fired_at: None`` when the rule has never
         # fired — keeps the legacy response shape byte-stable for callers
         # that do strict-equality asserts (see test_alert_rules_local_store).
+        #
+        # Evaluator provenance (founder 2026-08-15): which process, if any,
+        # actually evaluates this rule. The UI renders "never triggered" for
+        # a rule with no evaluator identically to one that is armed and
+        # simply hasn't tripped — indistinguishable, and one of them is a
+        # lie. Only stamp when we can tell; absent key = legacy/unknown, so
+        # the byte-stable-shape guarantee above still holds for old rows.
+        _at = (r.get("alert_type") or "").strip()
+        _lt = (r.get("type") or "").strip()
+        if _at in UNSUPPORTED_ALERT_TYPES:
+            r["evaluator"] = "none"
+        elif _at in _EVALUATOR_ONLY:
+            r["evaluator"] = "daemon"
+        elif _lt in _LOCAL_EVALUABLE_TYPES:
+            r["evaluator"] = "dashboard"
+        elif _lt == "anomaly" and not _at:
+            # Pre-0.12.711 zombie: created before the alert_type column and
+            # before the mapping fix, so nothing can evaluate it and nothing
+            # can reconstruct what it meant. Surfaced, not hidden.
+            r["evaluator"] = "none"
+            r["needs_recreate"] = True
 
     # Comms flags. All three predicates need to be True for the banner:
     # 1+ rules configured, 0 historical fires across all of them, oldest
@@ -664,38 +1173,143 @@ def api_alert_rules():
         channels = data.get("channels", ["banner"])
         cooldown = data.get("cooldown_min", 30)
         enabled = data.get("enabled", True)
+        # Per-runtime scope (founder 2026-08-03): rules are runtime-scoped by
+        # default — the Alerts tab sends the active runtime filter — and
+        # "all" is the explicit node-wide opt-in. Unknown runtime ids are
+        # rejected rather than silently widened to node-wide.
+        runtime = str(data.get("runtime") or "all").strip().lower()
+        if runtime != "all":
+            try:
+                from clawmetry.entitlements import ALL_RUNTIMES
+                if runtime not in ALL_RUNTIMES:
+                    return jsonify({"error": f"Unknown runtime '{runtime}'"}), 400
+            except ImportError:
+                pass
+        # Self-hosted bridge (founder 2026-07-28: "alerts should work in the
+        # self-hosted setup"): the Alerts tab speaks the cloud vocabulary
+        # (alert_type / threshold_value / channel_ids). A locally-entitled
+        # install (self-hosted Trial/Pro key) saves those rules HERE instead
+        # of at the cloud; map the fields onto the local schema.
+        #
+        # Founder 2026-08-15: the old map keyed on "cost_daily"/"agent_offline"
+        # while the Alerts tab has always POSTed "daily_spend"/"node_offline"
+        # (static/js/alerts.js EXAMPLE_RULES). Neither key matched, so BOTH
+        # fell through to the ``.get(..., "anomaly")`` default — and the
+        # in-process evaluator has no ``anomaly`` branch, so the rule rendered
+        # green, said "never triggered", and never could. Zombie rules are
+        # worse than no rules: the user believes they are covered.
+        #
+        # The mapping is now explicit and total. Every type the UI can send
+        # lands in exactly one bucket:
+        #   _CLOUD_TO_LOCAL — a real branch in dashboard.py's monitor loop
+        #   _EVALUATOR_ONLY — no local branch, but clawmetry.alert_evaluator
+        #                     implements it; mirrored to DuckDB below so the
+        #                     daemon evaluates it for real
+        #   anything else   — rejected with 422, never silently stored
+        _cloud_type = (data.get("alert_type") or "").strip()
+        _mirror_to_duckdb = False
+        if _cloud_type and not rtype:
+            rtype = _CLOUD_TO_LOCAL.get(_cloud_type, "")
+            if not rtype:
+                if _cloud_type in _EVALUATOR_ONLY:
+                    # Parked as "anomaly" on purpose: the fleet-loop has no
+                    # such branch, so it skips the row and only the daemon's
+                    # alert_evaluator (DuckDB) fires it. Both write the same
+                    # alert_history table and it already dedupes by rule_id
+                    # inside the cooldown window, so there is no double-fire.
+                    rtype = "anomaly"
+                    _mirror_to_duckdb = True
+                else:
+                    return jsonify({
+                        "error": f"Alert type '{_cloud_type}' has no evaluator "
+                                 f"on a self-hosted node yet",
+                        "alert_type": _cloud_type,
+                        "unsupported": True,
+                    }), 422
+            if not threshold:
+                threshold = data.get("threshold_value", 0)
+            if data.get("channel_ids") and channels == ["banner"]:
+                channels = list(data.get("channel_ids") or []) or ["banner"]
         if rtype not in ("threshold", "spike", "token_spike", "anomaly",
-                         "agent_down", "unproductive_burn"):
+                         "agent_down", "session_cost", "unproductive_burn"):
             return jsonify({"error": "Invalid alert type"}), 400
         if not isinstance(threshold, (int, float)) or threshold <= 0:
             return jsonify({"error": "Threshold must be a positive number"}), 400
+        # A behaviour-signal rule must name a preset signal; the threshold
+        # is a rate (percent from the form, fraction accepted) so 100 is the
+        # ceiling. Window and minimum sample are optional with evaluator
+        # defaults (24h, 20 turns).
+        _signal_extra = None
+        if _cloud_type == "signal_rate_above":
+            try:
+                from clawmetry.behaviour_signals import SIGNALS as _SIG
+            except Exception:
+                _SIG = {}
+            _sig_name = str(data.get("signal") or "").strip()
+            if _sig_name not in _SIG:
+                return jsonify({"error": "Unknown signal", "signal": _sig_name,
+                                "allowed": sorted(_SIG)}), 400
+            if threshold > 100:
+                return jsonify({"error": "Threshold is a rate: 0 to 100 percent"}), 400
+            _signal_extra = {"signal": _sig_name}
+            for _k in ("window_minutes", "min_turns"):
+                _v = data.get(_k)
+                if _v is not None:
+                    try:
+                        _signal_extra[_k] = max(1, int(_v))
+                    except (TypeError, ValueError):
+                        pass
         import uuid
 
         rule_id = str(uuid.uuid4())[:8]
         now = time.time()
         with _d._fleet_db_lock:
             db = _d._fleet_db()
+            # ``alert_type`` arrived in 0.12.711 and is added by an ALTER in
+            # _fleet_db init. Don't assume it: this handler also runs against
+            # DBs built by other code paths (and by tests that hand-roll the
+            # schema), and a hard dependency turns a missing column into a
+            # 500 on rule create. Probe, then insert what the table has.
+            _cols = {row[1] for row in
+                     db.execute("PRAGMA table_info(alert_rules)").fetchall()}
+            _fields = ["id", "type", "threshold", "channels", "cooldown_min",
+                       "enabled", "runtime"]
+            _values = [rule_id, rtype, threshold, json.dumps(channels),
+                       cooldown, 1 if enabled else 0, runtime]
+            if "alert_type" in _cols:
+                _fields.append("alert_type")
+                _values.append(_cloud_type)
+            _fields += ["created_at", "updated_at"]
+            _values += [now, now]
             db.execute(
-                "INSERT INTO alert_rules (id, type, threshold, channels, cooldown_min, enabled, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    rule_id,
-                    rtype,
-                    threshold,
-                    json.dumps(channels),
-                    cooldown,
-                    1 if enabled else 0,
-                    now,
-                    now,
-                ),
+                f"INSERT INTO alert_rules ({', '.join(_fields)}) "
+                f"VALUES ({', '.join('?' * len(_fields))})",
+                tuple(_values),
             )
             db.commit()
             db.close()
+        mirrored = False
+        if _mirror_to_duckdb:
+            mirrored = _mirror_rule_to_duckdb(
+                rule_id, alert_type=_cloud_type, threshold=threshold,
+                runtime=runtime, channels=channels, cooldown_min=cooldown,
+                enabled=enabled, name=data.get("name") or "",
+                extra=_signal_extra,
+            )
         _audit("alert_rule.create", actor=_actor(), target=rule_id,
                result="created", source="dashboard",
                metadata={"type": rtype, "threshold": threshold,
-                         "channels": channels, "enabled": bool(enabled)})
-        return jsonify({"ok": True, "id": rule_id})
+                         "channels": channels, "enabled": bool(enabled),
+                         "runtime": runtime, "alert_type": _cloud_type,
+                         "duckdb_mirror": mirrored})
+        return jsonify({
+            "ok": True,
+            "id": rule_id,
+            # Honest evaluator provenance so the tab can say WHERE the rule
+            # runs (and warn when the daemon is down and the mirror missed).
+            "evaluator": ("daemon" if _mirror_to_duckdb else "dashboard"),
+            "mirrored": mirrored if _mirror_to_duckdb else None,
+        })
     # Phase 3 of #1032 — local DuckDB fast path. Opt-in via
     # CLAWMETRY_LOCAL_STORE_READ=1; falls through to the legacy fleet-DB
     # _get_alert_rules helper on miss / disabled flag.
@@ -719,11 +1333,13 @@ def api_alert_rules():
             # Alerts UI can render the PR #1410 "your rules will fire now"
             # banner and per-rule "Last fired" pills.
             enriched, comms = _enrich_rules_with_comms(fast.get("rules") or [])
+            _repair_missing_mirrors(enriched)
             fast = dict(fast)
             fast["rules"] = enriched
             fast["_comms"] = comms
             return jsonify(fast)
     enriched, comms = _enrich_rules_with_comms(_d._get_alert_rules())
+    _repair_missing_mirrors(enriched)
     return jsonify({"rules": enriched, "_comms": comms})
 
 
@@ -738,11 +1354,23 @@ def api_alert_rule(rule_id):
             db.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
             db.commit()
             db.close()
+        # Drop the DuckDB mirror too, else the daemon keeps evaluating a rule
+        # the user deleted (it reads DuckDB, not the fleet DB).
+        _unmirror_rule_from_duckdb(rule_id)
         _audit("alert_rule.delete", actor=_actor(), target=rule_id,
                result="deleted", source="dashboard")
         return jsonify({"ok": True})
     # PUT
     data = request.get_json(silent=True) or {}
+    # The Alerts tab speaks the cloud vocabulary (threshold_value /
+    # channel_ids) — the same bridge the POST path applies above. Without
+    # this map an editor save PUT carried only unknown field names, so the
+    # new threshold and channels were silently dropped (the request still
+    # returned ok because ``enabled`` was present).
+    if "threshold" not in data and data.get("threshold_value") is not None:
+        data["threshold"] = data.get("threshold_value")
+    if "channels" not in data and data.get("channel_ids") is not None:
+        data["channels"] = list(data.get("channel_ids") or []) or ["banner"]
     sets = []
     vals = []
     for field in ["threshold", "cooldown_min", "enabled"]:
@@ -754,6 +1382,17 @@ def api_alert_rule(rule_id):
     if "channels" in data:
         sets.append("channels = ?")
         vals.append(json.dumps(data["channels"]))
+    if "runtime" in data:
+        _rt = str(data.get("runtime") or "all").strip().lower()
+        if _rt != "all":
+            try:
+                from clawmetry.entitlements import ALL_RUNTIMES
+                if _rt not in ALL_RUNTIMES:
+                    return jsonify({"error": f"Unknown runtime '{_rt}'"}), 400
+            except ImportError:
+                pass
+        sets.append("runtime = ?")
+        vals.append(_rt)
     if not sets:
         return jsonify({"error": "No fields to update"}), 400
     sets.append("updated_at = ?")
@@ -763,12 +1402,30 @@ def api_alert_rule(rule_id):
         db = _d._fleet_db()
         db.execute(f"UPDATE alert_rules SET {', '.join(sets)} WHERE id = ?", vals)
         db.commit()
+        row = db.execute(
+            "SELECT * FROM alert_rules WHERE id = ?", (rule_id,)
+        ).fetchone()
         db.close()
+    # Keep the DuckDB mirror in step. Without this an operator could flip a
+    # rule off in the UI and the daemon would keep firing it — it evaluates
+    # DuckDB, which the fleet-DB UPDATE above never touches.
+    row = dict(row) if row else {}
+    if (row.get("alert_type") or "") in _EVALUATOR_ONLY:
+        try:
+            _chans = json.loads(row.get("channels") or "[]")
+        except (TypeError, ValueError):
+            _chans = ["banner"]
+        _mirror_rule_to_duckdb(
+            rule_id, alert_type=row.get("alert_type"),
+            threshold=row.get("threshold"), runtime=row.get("runtime") or "all",
+            channels=_chans, cooldown_min=row.get("cooldown_min"),
+            enabled=bool(row.get("enabled")),
+        )
     _audit("alert_rule.update", actor=_actor(), target=rule_id,
            result="updated", source="dashboard",
            metadata={"fields": {k: data[k] for k in data
                                  if k in ("threshold", "cooldown_min",
-                                          "enabled", "channels")}})
+                                          "enabled", "channels", "runtime")}})
     return jsonify({"ok": True})
 
 
@@ -817,6 +1474,8 @@ def api_alerts_webhook():
             "slack_webhook_url",
             "discord_webhook_url",
             "pagerduty_routing_key",
+            "telegram_bot_token",
+            "telegram_chat_id",
             "opsgenie_api_key",
             "opsgenie_api_url",
             "cost_spike_alerts",
@@ -914,18 +1573,12 @@ def api_alert_channels():
     import dashboard as _d
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
-        allowed = {
-            "webhook_url",
-            "slack_webhook_url",
-            "discord_webhook_url",
-            "pagerduty_routing_key",
-            "opsgenie_api_key",
-            "opsgenie_api_url",
-            "cost_spike_alerts",
-            "agent_error_rate_alerts",
-            "security_posture_changes",
-            "min_severity",
-        }
+        # Derived from the schema, not a third hand-maintained copy: this
+        # route, _default_alerts_webhook_config and _save_alerts_webhook_
+        # config used to list the same keys three times, and a key missing
+        # from any one of them saved as a silent no-op (the Telegram card
+        # that never left "Connect").
+        allowed = set(_d._default_alerts_webhook_config())
         updates = {k: data[k] for k in data if k in allowed}
         cfg = _d._save_alerts_webhook_config(updates)
         return jsonify({"ok": True, "config": cfg})
@@ -967,6 +1620,42 @@ def api_alert_channels_test():
         if url:
             _d._send_discord_alert(message, severity=severity, title=title)
             sent.append("discord")
+    # Self-hosted delivery (founder 2026-07-28: notifications must work
+    # locally): Telegram and PagerDuty are plain outbound HTTP, sent
+    # directly from the configured keys so the test proves the LOCAL path.
+    if target in ("all", "telegram"):
+        tok = str(cfg.get("telegram_bot_token", "")).strip()
+        chat = str(cfg.get("telegram_chat_id", "")).strip()
+        if tok and chat:
+            try:
+                import urllib.request as _ur
+                _req = _ur.Request(
+                    f"https://api.telegram.org/bot{tok}/sendMessage",
+                    data=json.dumps({"chat_id": chat,
+                                     "text": title + "\n" + message}).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+                _ur.urlopen(_req, timeout=10)
+                sent.append("telegram")
+            except Exception:
+                pass
+    if target in ("all", "pagerduty"):
+        rk = str(cfg.get("pagerduty_routing_key", "")).strip()
+        if rk:
+            try:
+                import urllib.request as _ur
+                _req = _ur.Request(
+                    "https://events.pagerduty.com/v2/enqueue",
+                    data=json.dumps({
+                        "routing_key": rk, "event_action": "trigger",
+                        "payload": {"summary": f"{title}: {message}",
+                                    "source": "clawmetry-local",
+                                    "severity": "warning" if severity == "warning" else "critical"},
+                    }).encode(),
+                    headers={"Content-Type": "application/json"}, method="POST")
+                _ur.urlopen(_req, timeout=10)
+                sent.append("pagerduty")
+            except Exception:
+                pass
 
     if not sent:
         return jsonify({"ok": False, "error": "No configured webhook URL for selected target"}), 400
@@ -1038,8 +1727,10 @@ def api_harness_inject_cost():
                 continue
             msg = (f"Daily spending ${status['daily_spent']:.2f} exceeded "
                    f"threshold ${rule['threshold']:.2f}")
+            # A USER rule: deliver to exactly the channels it was saved
+            # with, never through the built-in monitor prefs.
             _d._fire_alert(rule_id=rule["id"], alert_type="threshold",
-                           message=msg, channels=channels)
+                           message=msg, channels=channels, builtin=False)
             rules_fired.append(rule["id"])
     history_after = len(_d._get_alert_history(limit=500))
     return jsonify({

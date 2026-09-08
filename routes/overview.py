@@ -37,6 +37,65 @@ from clawmetry.config import is_local_store_read_enabled
 bp_overview = Blueprint('overview', __name__)
 
 
+def _system_rows() -> list:
+    """Disk / RAM / Load rows for the dashboard's system panel.
+
+    Shape is ``[[label, value, colour], ...]`` — unchanged from the legacy
+    inline blocks this replaces (there were two near-identical copies, one
+    per overview handler).
+
+    Previously each row shelled out to ``df -h /`` / ``free -h`` or read
+    ``/proc/loadavg``. None of those exist on Windows, and every row was
+    wrapped in a bare ``except``, so Windows silently rendered "--" for
+    Disk, RAM *and* Load on the primary dashboard. ``helpers.system`` now
+    provides stdlib-only equivalents that work on all three platforms.
+    """
+    from helpers.system import (
+        cpu_percent, disk_usage, load_average, memory_usage, uptime_pretty,
+    )
+
+    rows = []
+
+    du = disk_usage()
+    if du:
+        pct = int(round(du["pct"]))
+        colour = "green" if pct < 80 else ("yellow" if pct < 90 else "red")
+        rows.append([
+            f"Disk {du['mount']}",
+            f"{du['used_gb']}G / {du['total_gb']}G ({pct}%)",
+            colour,
+        ])
+    else:
+        rows.append(["Disk", "--", ""])
+
+    mu = memory_usage()
+    if mu:
+        rows.append([
+            "RAM",
+            f"{round(mu['used_mb'] / 1024, 1)}G / {round(mu['total_mb'] / 1024, 1)}G",
+            "",
+        ])
+    else:
+        rows.append(["RAM", "--", ""])
+
+    # Windows has no load-average concept. Rather than render a permanent
+    # "--", fall back to instantaneous CPU utilisation, which is the metric
+    # a Windows user actually expects in that slot.
+    la = load_average()
+    if la:
+        rows.append(["Load", " ".join(f"{v:.2f}" for v in la[:3]), ""])
+    else:
+        cp = cpu_percent()
+        # cpu_percent() is non-blocking and returns None until it has two
+        # samples to diff, so the row populates on the next dashboard poll.
+        rows.append(["CPU", f"{cp}%" if cp is not None else "--", ""])
+
+    up = uptime_pretty()
+    rows.append(["Uptime", up.replace("up ", "") if up != "unknown" else "--", ""])
+
+    return rows
+
+
 # Default OpenClaw heartbeat cadence (30 min). Surfaced in /api/overview's
 # `heartbeat` block so the dashboard can compare to actual gap.
 _HEARTBEAT_EXPECTED_SECONDS = 1800
@@ -931,9 +990,18 @@ def _try_local_store_overview():
     user_sessions = [s for s in sessions if _is_user_main(s)]
     main = user_sessions[0] if user_sessions else sessions[0]
 
-    # Active = status=='active' (DuckDB persists status as a free-form string;
-    # 'active' is what sync.py writes for in-progress sessions).
-    active_count = sum(1 for s in sessions if s["status"] == "active")
+    # Active = a session whose transcript grew inside the active window
+    # (sync.py ``_session_liveness``). ``status`` is a free-form string in
+    # DuckDB and different producers spell "in progress" differently
+    # ('active' from the recency buckets, 'running' from the gateway
+    # registry), so match the whole live vocabulary rather than one literal —
+    # counting only 'active' is how this silently read 0 while six terminals
+    # were mid-task. Counted over user_sessions so sub-agents and ClawMetry's
+    # own plumbing sessions can't inflate it.
+    active_count = sum(
+        1 for s in user_sessions
+        if str(s.get("status") or "").strip().lower() in ("active", "running")
+    )
 
     # Model: prefer metadata.model on the main session; fall back to the most
     # recently observed model across events.
@@ -976,48 +1044,8 @@ def _try_local_store_overview():
         mem_files = []
     total_size = sum(f.get("size", 0) for f in mem_files)
 
-    # System info — copied verbatim from the legacy handler so the response
-    # shape matches byte-for-byte. Each subprocess has a 2s timeout so a slow
-    # df/free/uptime can't hang the request thread.
-    system = []
-    try:
-        disk = (
-            _sub.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
-            .stdout.strip().split("\n")[-1].split()
-        )
-        disk_pct = int(disk[4].replace("%", "")) if len(disk) > 4 else 0
-        disk_color = "green" if disk_pct < 80 else ("yellow" if disk_pct < 90 else "red")
-        system.append(["Disk /", f"{disk[2]} / {disk[1]} ({disk[4]})", disk_color])
-    except Exception:
-        system.append(["Disk /", "--", ""])
-
-    try:
-        mem = (
-            _sub.run(["free", "-h"], capture_output=True, text=True, timeout=2)
-            .stdout.strip().split("\n")[1].split()
-        )
-        system.append(["RAM", f"{mem[2]} / {mem[1]}", ""])
-    except Exception:
-        system.append(["RAM", "--", ""])
-
-    try:
-        load = open("/proc/loadavg").read().split()[:3]
-        system.append(["Load", " ".join(load), ""])
-    except Exception:
-        system.append(["Load", "--", ""])
-
-    try:
-        # Portable: GNU `uptime -p` doesn't exist on macOS / BSD.
-        from helpers.system import uptime_pretty
-
-        uptime = uptime_pretty()
-        system.append([
-            "Uptime",
-            uptime.replace("up ", "") if uptime != "unknown" else "--",
-            "",
-        ])
-    except Exception:
-        system.append(["Uptime", "--", ""])
+    # System info — portable across Linux/macOS/Windows via helpers.system.
+    system = _system_rows()
 
     if _sys.platform != "win32":
         try:
@@ -1062,6 +1090,29 @@ def _try_local_store_overview():
     # cloud snapshot's `sessionCount` (clawmetry/sync.py builds the same way).
     user_session_count = len(user_sessions) if user_sessions else len(sessions)
 
+    # `sessionCount` is an ALL-TIME count over the most-recent rows — it has no
+    # date predicate anywhere in its query. The hero rendered it as "N sessions
+    # today", which read 89 on a day that had 16 (founder report 2026-08-15).
+    # Ship the real number rather than dropping the word: "today" next to
+    # today's cost is the comparison a person actually wants. Local calendar
+    # day, because "today" means the user's day, not UTC's.
+    _today = datetime.now().astimezone().date()
+    sessions_today = 0
+    for _s in (user_sessions or sessions):
+        _st = _s.get("started_at") or ""
+        if not _st:
+            continue
+        try:
+            # NB: not `_d` — that name is the `import dashboard as _d` alias in
+            # this module and shadowing it 500s the whole endpoint.
+            _started = datetime.fromisoformat(str(_st).replace("Z", "+00:00"))
+            if _started.tzinfo is None:
+                _started = _started.replace(tzinfo=timezone.utc)
+            if _started.astimezone().date() == _today:
+                sessions_today += 1
+        except (ValueError, TypeError, OSError, OverflowError):
+            continue
+
     # `currentContextTokens` is the right "Context Window Usage" gauge —
     # the most recent assistant turn's live prompt size (input + cache),
     # filtered to exclude clawmetry-* plumbing sessions. `contextWindow`
@@ -1084,6 +1135,7 @@ def _try_local_store_overview():
         "model": model_name,
         "provider": _d._infer_provider_from_model(model_name),
         "sessionCount": user_session_count,
+        "sessionsToday": sessions_today,
         "sessions": user_session_count,  # alias for E2E compatibility
         "activeSessions": active_count,
         "mainSessionUpdated": main.get("last_active_at") or main.get("started_at"),
@@ -1142,55 +1194,8 @@ def api_overview():
     mem_files = _d._get_memory_files()
     total_size = sum(f["size"] for f in mem_files)
 
-    # System info
-    system = []
-    # 2s timeout on every subprocess: on slow/NFS-backed volumes df/free/uptime
-    # can hang the request thread indefinitely, and /api/overview is on the
-    # dashboard's hot path (fires every refresh). Better to show "--" than hang.
-    try:
-        disk = (
-            subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
-            .stdout.strip()
-            .split("\n")[-1]
-            .split()
-        )
-        disk_pct = int(disk[4].replace("%", "")) if len(disk) > 4 else 0
-        disk_color = (
-            "green" if disk_pct < 80 else ("yellow" if disk_pct < 90 else "red")
-        )
-        system.append(["Disk /", f"{disk[2]} / {disk[1]} ({disk[4]})", disk_color])
-    except Exception:
-        system.append(["Disk /", "--", ""])
-
-    try:
-        mem = (
-            subprocess.run(["free", "-h"], capture_output=True, text=True, timeout=2)
-            .stdout.strip()
-            .split("\n")[1]
-            .split()
-        )
-        system.append(["RAM", f"{mem[2]} / {mem[1]}", ""])
-    except Exception:
-        system.append(["RAM", "--", ""])
-
-    try:
-        load = open("/proc/loadavg").read().split()[:3]
-        system.append(["Load", " ".join(load), ""])
-    except Exception:
-        system.append(["Load", "--", ""])
-
-    try:
-        # Portable: GNU `uptime -p` doesn't exist on macOS / BSD.
-        from helpers.system import uptime_pretty
-
-        uptime = uptime_pretty()
-        system.append([
-            "Uptime",
-            uptime.replace("up ", "") if uptime != "unknown" else "--",
-            "",
-        ])
-    except Exception:
-        system.append(["Uptime", "--", ""])
+    # System info — portable across Linux/macOS/Windows via helpers.system.
+    system = _system_rows()
 
     if sys.platform != "win32":
         try:
@@ -1226,13 +1231,10 @@ def api_overview():
         infra["runtime"] = "Runtime"
 
     try:
-        disk_info = (
-            subprocess.run(["df", "-h", "/"], capture_output=True, text=True, timeout=2)
-            .stdout.strip()
-            .split("\n")[-1]
-            .split()
-        )
-        infra["storage"] = f"{disk_info[1]} root"
+        from helpers.system import disk_usage as _du
+
+        _d_info = _du()
+        infra["storage"] = f"{_d_info['total_gb']}G {_d_info['mount']}" if _d_info else "Disk"
     except Exception:
         infra["storage"] = "Disk"
 
@@ -1711,7 +1713,90 @@ def cloud_cta_status():
     import dashboard as _d
 
     token = _d._read_cloud_token()
-    return jsonify({"connected": bool(token)})
+    # Local-only must WIN over "has a token": a signed-in Self-Hosted node
+    # (account + trial license, nocloud marker kept) is NOT cloud-connected
+    # — the founder saw a green "Cloud Connected" badge on a machine whose
+    # whole promise was "nothing leaves this device" (2026-07-30).
+    try:
+        from clawmetry.config import is_cloud_disabled
+
+        local_only = is_cloud_disabled()
+    except Exception:
+        local_only = False
+    # The sign-in email behind the key — the profile menu's "who am I" for
+    # cloud-OAuth accounts that hold no local license (license `sub` is
+    # empty there). '' when unresolvable; the UI then still shows a
+    # signed-in state, just without the address.
+    account_email = ""
+    if token:
+        try:
+            account_email = _d._account_email_for_token(token) or ""
+        except Exception:
+            account_email = ""
+    return jsonify({
+        "connected": bool(token) and not local_only,
+        "account_linked": bool(token),
+        "account_email": account_email,
+        "local_only": local_only,
+    })
+
+
+@bp_overview.route("/api/sync/toggle", methods=["POST"])
+def sync_toggle():
+    """Flip cloud sync on/off from the dashboard header chip.
+
+    Reads current state via ``is_cloud_disabled()`` and either calls
+    ``enable_cloud()`` (removes ``~/.clawmetry/nocloud``) or
+    ``disable_cloud()`` (writes it), then returns the new state. The
+    sync daemon polls the marker on each iteration, so the toggle takes
+    effect within seconds — no restart required.
+
+    Returns 409 when the user has no cm_ key on this machine and asks
+    to enable sync: without an account there is nothing to push to. The
+    dashboard should redirect them through the "Enable Cloud Sync" CTA
+    (cloud-cta/oauth-start) instead of silently no-opping.
+
+    Also refuses when ``CLAWMETRY_NO_CLOUD=1`` is set in the environment
+    — that's an explicit per-run opt-out the operator chose; the chip
+    can't override it, only the operator can (unset the env + relaunch).
+    """
+    import os as _os
+    import dashboard as _d
+    from clawmetry.config import (
+        is_cloud_disabled, enable_cloud, disable_cloud,
+        _NO_CLOUD_ENABLE_VALUES,
+    )
+
+    env_flag = _os.environ.get("CLAWMETRY_NO_CLOUD", "").strip().lower()
+    if env_flag in _NO_CLOUD_ENABLE_VALUES:
+        return jsonify({
+            "ok": False,
+            "error": "env_locked",
+            "detail": "CLAWMETRY_NO_CLOUD=1 is set in the environment; unset it and relaunch to change this from the UI.",
+        }), 409
+
+    currently_disabled = is_cloud_disabled()
+    want_enable = currently_disabled  # if disabled, toggle -> enable, and vice versa
+
+    if want_enable:
+        # Enabling: refuse if there is no account key on this machine.
+        token = _d._read_cloud_token()
+        if not token:
+            return jsonify({
+                "ok": False,
+                "error": "no_account",
+                "detail": "No cloud account linked. Sign in first via the 'Enable Cloud Sync' CTA.",
+            }), 409
+        enable_cloud()
+    else:
+        disable_cloud()
+
+    new_disabled = is_cloud_disabled()
+    return jsonify({
+        "ok": True,
+        "local_only": new_disabled,
+        "connected": (not new_disabled) and bool(_d._read_cloud_token()),
+    })
 
 
 @bp_overview.route(
@@ -1736,7 +1821,8 @@ def cloud_proxy(cloud_path):
     if not token:
         return jsonify({"error": "cloud_not_connected"}), 401
 
-    url = "https://app.clawmetry.com/" + cloud_path
+    from clawmetry.endpoints import app_url as _resolve_app_url
+    url = _resolve_app_url() + "/" + cloud_path
     if request.query_string:
         url += "?" + request.query_string.decode("utf-8", errors="replace")
 
@@ -1766,12 +1852,23 @@ def cloud_proxy(cloud_path):
 
 @bp_overview.route("/api/cloud-cta/oauth-start", methods=["POST"])
 def cloud_cta_oauth_start():
-    """One-click cloud sign-up + node connect via GitHub/Google OAuth.
+    """One-click sign-up via GitHub/Google OAuth (managed or self-host).
 
     Starts a loopback browser-bridge and returns the cloud OAuth start URL for
     the dashboard to open in a new tab. The cm_ key the cloud mints rides back
-    over 127.0.0.1 only; the bridge thread then registers this node and starts
-    the sync daemon. The dashboard polls /api/cloud-cta/oauth-status.
+    over 127.0.0.1 only. mode="managed" then registers this node and
+    starts the sync daemon; mode="selfhost" keeps data local (nocloud marker)
+    and activates the account's 7-day trial license instead. The dashboard
+    polls /api/cloud-cta/oauth-status.
+
+    When the caller omits ``mode``, the default follows the install's
+    recorded intent (``_selfhost_intent``): a self-host install signing back
+    in (profile menu "Sign in") stays on the identity-only selfhost rail;
+    anything else defaults to managed. Explicit modes always win — the
+    "Enable Cloud Sync" CTA sends mode="managed" because clicking it IS the
+    egress opt-in. Founder report 2026-08-09: sign-in from the profile menu
+    rode the managed rail on a self-host machine, and enable_cloud()
+    silently started pushing snapshots.
     """
     import dashboard as _d
 
@@ -1779,7 +1876,15 @@ def cloud_cta_oauth_start():
     provider = (data.get("provider") or "").strip().lower()
     if provider not in ("github", "google"):
         return jsonify({"ok": False, "error": "Unsupported provider"}), 400
-    url = _d._start_oauth_bridge(provider)
+    mode = (data.get("mode") or "").strip().lower()
+    if not mode:
+        try:
+            mode = "selfhost" if _d._selfhost_intent() else "managed"
+        except Exception:
+            mode = "managed"
+    if mode not in ("managed", "selfhost"):
+        return jsonify({"ok": False, "error": "Unsupported mode"}), 400
+    url = _d._start_oauth_bridge(provider, mode=mode)
     if not url:
         err = (_d._OAUTH_BRIDGE or {}).get("error") or "Could not start sign-in"
         return jsonify({"ok": False, "error": err}), 500
@@ -1795,8 +1900,10 @@ def cloud_cta_oauth_status():
         {
             "status": st.get("status", "idle"),
             "provider": st.get("provider", ""),
+            "mode": st.get("mode", ""),
             "node_id": st.get("node_id", ""),
             "enc_key": st.get("enc_key", ""),
+            "trial": st.get("trial", ""),
             "error": st.get("error", ""),
         }
     )
@@ -1812,16 +1919,21 @@ def cloud_cta_send_otp():
     if not email or "@" not in email:
         return jsonify({"ok": False, "error": "Invalid email"}), 400
     try:
+        from clawmetry.endpoints import app_url as _resolve_app_url
         _body = _jr.dumps({"email": email, "source": "dashboard"}).encode()
         _req = _ur.Request(
-            "https://app.clawmetry.com/api/otp/send",
+            _resolve_app_url() + "/api/otp/send",
             data=_body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
-            return jsonify({"ok": True, "error": result.get("error")})
+            # A 200 carrying an "error" field is still a failure — the cloud
+            # answers that way for rate limits and blocked addresses. Reporting
+            # ok=True there walked the caller on to the code prompt for a mail
+            # that was never sent.
+            return jsonify({"ok": not result.get("error"), "error": result.get("error")})
     except Exception as _ex:
         _sc = getattr(getattr(_ex, "code", None), "__class__", type(_ex)).__name__
         try:
@@ -1844,26 +1956,97 @@ def cloud_cta_verify_otp():
     code = (data.get("code") or "").strip()
     if not email or not code:
         return jsonify({"ok": False, "error": "Missing email or code"}), 400
+    # Same rail selection as /api/cloud-cta/oauth-start. Explicit mode wins;
+    # otherwise follow the install's recorded intent, because identity and
+    # egress are separate choices and signing in must never flip egress on
+    # by itself (founder report 2026-08-09, on the OAuth twin of this path).
+    mode = (data.get("mode") or "").strip().lower()
+    if mode not in ("managed", "selfhost"):
+        if mode:
+            return jsonify({"ok": False, "error": "Unsupported mode"}), 400
+        try:
+            mode = "selfhost" if _d._selfhost_intent() else "managed"
+        except Exception:
+            mode = "managed"
     try:
+        from clawmetry.endpoints import app_url as _resolve_app_url
         _body = _jr.dumps({"email": email, "code": code}).encode()
         _req = _ur.Request(
-            "https://app.clawmetry.com/api/otp/verify",
+            _resolve_app_url() + "/api/otp/verify",
             data=_body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         with _ur.urlopen(_req, timeout=10) as _resp:
             result = _jr.loads(_resp.read())
-            if result.get("token"):
-                _d._write_cloud_token(result["token"])
-                return jsonify({"ok": True, "token": result["token"]})
-            return jsonify({"ok": False, "error": result.get("error", "Invalid code")})
+            # The cloud mints the key under "api_key" (routes/auth.py
+            # api_otp_verify), which is also what the CLI and the desktop
+            # pane read. This proxy only ever looked for "token", so a
+            # SUCCESSFUL verify fell through to the error branch below and
+            # rendered "Invalid code" — after the cloud had already deleted
+            # the OTP. Every valid code was reported as invalid and burned,
+            # on this path and on the cloud modal that shares it. Accept
+            # every name the cloud has used rather than pinning one.
+            cm_key = (
+                result.get("api_key")
+                or result.get("token")
+                or result.get("key")
+                or ""
+            ).strip()
+            if cm_key:
+                # managed: route through _full_connect_with_key so this path
+                # is symmetric with the OAuth loopback bridge AND with
+                # `clawmetry connect --start-sync-now` — persist identity
+                # into ~/.clawmetry/config.json, mint-or-reuse the 7-day
+                # Pro trial, enable cloud egress, restart the sync daemon.
+                # The earlier one-liner _write_cloud_token() persisted only
+                # the cm_ key and left the account on FREE with no trial;
+                # founder ask 2026-08-12: cloud users must get the same
+                # 7-day trial self-host gets, or they can't experience the
+                # full product before deciding to pay.
+                #
+                # selfhost: identity + the same trial, egress stays off. The
+                # nocloud marker is written BEFORE the key lands, so the
+                # daemon never observes a cm_ key without it.
+                trial = "unavailable"
+                try:
+                    if mode == "selfhost":
+                        _node_id, trial = _d._selfhost_signin_with_key(cm_key)
+                    else:
+                        _node_id, _enc_key, trial = _d._full_connect_with_key(cm_key)
+                except Exception:
+                    # If _full_connect_with_key fails, still persist the
+                    # token — pairing is more important than daemon restart
+                    # or trial activation, which recover naturally later.
+                    try:
+                        _d._write_cloud_token(cm_key)
+                    except Exception:
+                        pass
+                return jsonify({
+                    "ok": True,
+                    "token": cm_key,
+                    "trial": trial,
+                    "mode": mode,
+                })
+            # A 200 carrying neither a key nor an error is a shape we do not
+            # understand. Say that, rather than blaming the code the user
+            # typed — a wrong code comes back as a 401 and is handled below.
+            return jsonify({
+                "ok": False,
+                "error": result.get("error")
+                or "Signed in, but the server response was not understood. Try again.",
+            })
     except Exception as _ex:
         try:
             _eb = _jr.loads(_ex.read()) if hasattr(_ex, "read") else {}
         except Exception:
             _eb = {}
-        return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), 502
+        # A rejected code is a 401 from the cloud, not a gateway failure —
+        # pass its status through so an API consumer can tell "you typed the
+        # wrong code" from "the cloud is unreachable".
+        _up = getattr(_ex, "code", None)
+        _status = _up if isinstance(_up, int) and 400 <= _up < 500 else 502
+        return jsonify({"ok": False, "error": _eb.get("error", "Invalid code")}), _status
 
 
 def _compute_device_summary() -> dict:

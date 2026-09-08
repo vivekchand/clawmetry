@@ -5,18 +5,19 @@
      in static/js/app.js. -->
 <div class="page" id="page-inventory">
   <div class="inv-wrap">
-    <h2 class="inv-heading" data-i18n="inventory.title">Your agents</h2>
-    <p class="inv-story" id="inv-story" data-i18n="inventory.story">
-      A calm, one-glance view of every agent on this machine: what it runs, what it costs, and whether it is alive.
-    </p>
+    <!-- Live hero, same shape and voice as the Home tab's: what is true right
+         now, in one sentence, above everything that is a rollup. Rendered by
+         _invRenderHero(). -->
+    <div class="inv-hero" id="inv-hero" style="display:none;"></div>
 
     <!-- 4-tile strip (reuses the Overview hero chrome so it feels native). -->
     <div class="stats-footer inv-stats" id="inv-stats" style="display:none;">
       <div class="stats-footer-item">
         <span class="stats-footer-icon">🟢</span>
         <div>
-          <div class="stats-footer-label" data-i18n="inventory.tile_alive">Alive</div>
+          <div class="stats-footer-label" data-i18n="inventory.tile_working">Working now</div>
           <div class="stats-footer-value" id="inv-tile-alive">--</div>
+          <div class="inv-tile-sub" id="inv-tile-alive-sub" style="display:none;"></div>
         </div>
       </div>
       <div class="stats-footer-item">
@@ -24,6 +25,7 @@
         <div>
           <div class="stats-footer-label" data-i18n="inventory.tile_agents">Agents</div>
           <div class="stats-footer-value" id="inv-tile-agents">--</div>
+          <div class="inv-tile-sub" id="inv-tile-agents-sub" style="display:none;"></div>
         </div>
       </div>
       <div class="stats-footer-item">
@@ -31,13 +33,19 @@
         <div>
           <div class="stats-footer-label" data-i18n="inventory.tile_today">Today</div>
           <div class="stats-footer-value" id="inv-tile-today">--</div>
+          <!-- Subscription-coverage sub-line, e.g.
+               "Claude Max 20x covers it · ~$0.16 at API rates" (device parity). -->
+          <div class="inv-tile-sub" id="inv-tile-today-sub" style="display:none;"></div>
         </div>
       </div>
       <div class="stats-footer-item">
         <span class="stats-footer-icon">❤️</span>
         <div>
           <div class="stats-footer-label" data-i18n="inventory.tile_health">Health</div>
+          <!-- Measured from each agent's 24h outcome rollup, never asserted:
+               "No runs yet" is a legal (and common) answer here. -->
           <div class="stats-footer-value" id="inv-tile-health">--</div>
+          <div class="inv-tile-sub" id="inv-tile-health-sub" style="display:none;"></div>
         </div>
       </div>
     </div>
@@ -56,8 +64,8 @@
     <div class="inv-empty" id="inv-empty" style="display:none;">
       <div class="inv-empty-icon">🤖</div>
       <div class="inv-empty-title" data-i18n="inventory.empty_title">No agents yet, and that is fine.</div>
-      <div class="inv-empty-body" id="inv-empty-body" data-i18n="inventory.empty_body">
-        ClawMetry watches OpenClaw, NVIDIA NemoClaw, and 10 more runtimes the moment they run. Nothing to configure.
+      <div class="inv-empty-body" id="inv-empty-body" data-i18n="inventory.empty_body_v2">
+        ClawMetry watches OpenClaw, NVIDIA NemoClaw, Claude Code, Cursor, and every other supported runtime the moment they run. Nothing to configure.
       </div>
     </div>
   </div>

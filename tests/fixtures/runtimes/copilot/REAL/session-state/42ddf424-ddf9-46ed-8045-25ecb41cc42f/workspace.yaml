@@ -1,0 +1,8 @@
+id: 42ddf424-ddf9-46ed-8045-25ecb41cc42f
+cwd: /private/tmp/claude-502/-Users-vivek-projects-clawmetry/7e71b98d-0405-460d-8ce2-7a1ad4405db3/scratchpad
+client_name: github/cli
+name: 'Create a file named copilot_fixture_note.txt containing the single line ''clawmetry fixture'', then run: cat copilot_fixture_note.txt'
+user_named: false
+summary_count: 0
+created_at: 2026-08-02T21:03:28.482Z
+updated_at: 2026-08-02T21:03:30.686Z

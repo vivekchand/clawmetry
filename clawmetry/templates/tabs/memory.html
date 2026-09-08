@@ -4,6 +4,8 @@
       <div style="font-size:18px;font-weight:700;color:var(--text-primary);" data-i18n="memory.title">Memory</div>
       <div style="font-size:12px;color:var(--text-muted);margin-top:4px;" data-i18n="memory.subtitle">Markdown files your agent reads and updates. Edit them too if you want.</div>
     </div>
+    <!-- No runtime picker here on purpose: the global runtime switcher is the
+         only one. See _CM_RT_NODEWIDE / cmRuntimeSelect in static/js/app.js. -->
     <div style="display:flex;gap:6px;align-items:center;">
       <div class="mem-view-tab" data-view="summary" onclick="memorySwitchView('summary')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg-secondary);border:1px solid var(--border-primary);color:var(--text-primary);" data-i18n="memory.view_summary">Summary</div>
       <div class="mem-view-tab" data-view="all" onclick="memorySwitchView('all')" style="padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:transparent;border:1px solid transparent;color:var(--text-muted);" data-i18n="memory.view_all_files">All files</div>
@@ -12,7 +14,10 @@
     </div>
   </div>
 
-  <!-- SUMMARY VIEW (IDE-style single surface) -->
+  <!-- RUNTIME FILE BROWSER (non-OpenClaw runtimes) -->
+  <div id="memory-runtime-browser" class="runtime-file-browser" data-tab="memory" data-category="memory" style="display:none;"></div>
+
+  <!-- SUMMARY VIEW (IDE-style single surface) — OpenClaw only -->
   <div id="memory-summary-view">
     <div class="mem-ide" style="display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:520px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">
 
@@ -42,8 +47,13 @@
             </div>
             <div style="flex:1;"></div>
             <div id="selfconfig-editor-toolbar" style="display:none;align-items:center;gap:0;padding-right:8px;">
-              <div class="sc-mode-btn" data-mode="preview" onclick="selfconfigSetMode('preview')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-primary);border-bottom:2px solid #6366f1;" data-i18n="memory.mode_preview">Preview</div>
+              <div class="sc-mode-btn" data-mode="code" onclick="selfconfigSetMode('code')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-primary);border-bottom:2px solid #6366f1;" data-i18n="memory.mode_code">Code</div>
+              <div class="sc-mode-btn" data-mode="preview" onclick="selfconfigSetMode('preview')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;" data-i18n="memory.mode_preview">Preview</div>
               <div class="sc-mode-btn" data-mode="edit" onclick="selfconfigSetMode('edit')" style="padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;" data-i18n="memory.mode_edit">Edit</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;padding-right:10px;">
+              <button class="cm-fv-btn" onclick="memIdeCopy(this)" title="Copy the whole file">⧉ <span data-i18n="common.copy">Copy</span></button>
+              <button class="cm-fv-btn" onclick="memIdeToggleFullscreen(this)" title="Full screen (Esc to exit)">⤡ <span data-i18n="memory.full_screen">Full screen</span></button>
             </div>
           </div>
 

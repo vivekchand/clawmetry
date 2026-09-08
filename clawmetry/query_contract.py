@@ -115,6 +115,22 @@ QUERY_CONTRACT: dict = {
         "backing": "query_events",
         "doc": "Alias of events scoped to one required session_id.",
     },
+    "transcript_page": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True),
+            "before_ts": _arg(),
+            "limit": _arg(default=150, lo=1, hi=250),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_transcript_page",
+        "doc": (
+            "One older-history page of a session's events, newest-first. "
+            "before_ts is an exclusive ms-epoch cursor (pass the previous "
+            "page's next_before_ts to walk backward). Returns "
+            "{rows, count, has_more, next_before_ts}."
+        ),
+    },
     "spans": {
         "status": STATUS_LIVE,
         "args": {
@@ -265,13 +281,56 @@ QUERY_CONTRACT: dict = {
     "agent_graph": {
         "status": STATUS_LIVE,
         "args": {
+            "runtime": _arg(),
             "since": _arg(),
             "until": _arg(),
             "limit": _arg(default=500, lo=1, hi=2000),
         },
         "trust": TRUST_PLAINTEXT,
         "backing": "query_agent_graph",
-        "doc": "Cross-session agent spawn graph: nodes (agent_type+id stats) + spawn edges.",
+        "doc": "Cross-session agent spawn graph: nodes (agent_type+id stats) + "
+               "spawn edges. Optional runtime arg scopes to one runtime "
+               "('openclaw' matches legacy NULL agent_type).",
+    },
+    "replay_events": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True),
+            "limit": _arg(default=2000, lo=1, hi=10000),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_replay_events",
+        "doc": "Canonical replay-event rows for one session (#4813). Rows in "
+               "kind-agnostic order; the /api/replay-tree endpoint groups "
+               "them into turns/delegations/workflows/approvals.",
+    },
+    "session_context": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True),
+            "agent_type": _arg(),
+            "limit": _arg(default=200, lo=1, hi=1000),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_session_context",
+        "doc": "Inputs & context rows for one session: system prompt, first "
+               "user prompt, tool definitions, MCP servers, context files and "
+               "runtime setup captured from context.compiled events. Content "
+               "is redacted + capped; sha256/size describe the full text.",
+    },
+    "similar_sessions": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True),
+            "window_days": _arg(default=30, lo=1, hi=365),
+            "limit": _arg(default=10, lo=1, hi=50),
+        },
+        "trust": TRUST_E2E,
+        "backing": "query_similar_sessions",
+        "doc": "Runs shaped like this one (WO-60): nearest sessions by "
+               "tool-call n-gram similarity inside a window, same runtime "
+               "first, with score, runtime, model, cost, outcome. Carries "
+               "session titles, so content class.",
     },
 }
 

@@ -1,0 +1,12 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "similar_sessions",
+  "_via": "<volatile>",
+  "candidates": 0,
+  "coverage": "no other sessions in window",
+  "neighbours": [],
+  "runtime": "openclaw",
+  "session_id": "sess-a",
+  "tool_calls": 2,
+  "window_days": 30
+}

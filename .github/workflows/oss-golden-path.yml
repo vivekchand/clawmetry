@@ -7,6 +7,9 @@ name: OSS Golden Path (C1)
 # the user-reported bug (2026-05-17): "gateway token not passed for OSS,
 # never displays other screens." test_e2e_oss_all_tabs.py covers all 33
 # tabs; this is the first time it runs as a hard per-PR gate.
+# OTLP smoke (added 2026-08-13): POST /v1/traces -> DuckDB spans table ->
+# /api/spans round-trip (commit #4785). Runs before Playwright browser
+# install (~5s overhead, no browser needed).
 # Budget: 12 minutes wall-clock (raised from 8; Playwright chromium download
 # ~100 MB takes up to 4.5 min on a cold runner -- cache hit drops it to ~30 s;
 # C5 33-tab Playwright sweep adds ~90 s on top of the C1 9-tab sweep).
@@ -21,23 +24,36 @@ concurrency:
   group: oss-golden-path-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Least privilege: these jobs only read the repo. Any job needing more
+# must elevate with its own job-level `permissions:` block.
+permissions:
+  contents: read
+
 jobs:
   oss-golden-path:
     name: OSS golden path (wheel + OpenClaw + 9 tabs)
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    # Trial-end hard block is default-ON — see clawmetry/trial_enforcement.py.
+    # The golden-path test drives /api/sessions and 8 other observability tabs
+    # without installing a license; opt out at the job level. Hard-block
+    # coverage stays in tests/test_trial_hard_block.py.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
       # Cache the ~100 MB Playwright chromium binary so the download step
       # takes seconds rather than minutes on warm runners.
       - name: Cache Playwright browsers
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('setup.py', 'requirements.txt') }}
@@ -71,7 +87,6 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/setup-openclaw
         with:
-          version: latest
           gateway-token: ci-golden-token
 
       # Guarantee the token is in GITHUB_ENV even when Setup OpenClaw
@@ -175,8 +190,9 @@ jobs:
           for i in $(seq 1 30); do
             count=$(
               curl -s -H "Authorization: Bearer ci-golden-token" \
-                http://localhost:8920/api/sessions \
-                | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('sessions', [])))"
+                http://localhost:8920/api/sessions -o /tmp/golden-sessions.json \
+                2>/dev/null &&
+              python3 -c "import json; d=json.load(open('/tmp/golden-sessions.json')); print(len(d.get('sessions', [])))" \
                 2>/dev/null || echo 0
             )
             if [ "${count:-0}" -ge 1 ]; then
@@ -185,6 +201,22 @@ jobs:
             fi
             sleep 1
           done
+
+      # Step 5b -- OTLP trace ingest smoke (no Playwright required).
+      # Verifies the full pipeline: POST /v1/traces -> DuckDB spans table ->
+      # /api/spans returns the synthetic span. Catches regressions in the
+      # out-of-the-box OTLP receiver shipped in commit #4785 (2026-08-12).
+      # Runs BEFORE the Playwright browser install so it adds ~5s overhead
+      # regardless of whether the browser cache is warm.
+      - name: Run OTLP ingest E2E smoke
+        env:
+          CLAWMETRY_URL: http://localhost:8920
+          CLAWMETRY_TOKEN: ci-golden-token
+        run: |
+          /tmp/oss-golden/bin/python -m pytest \
+            tests/test_e2e_otlp_ingest.py \
+            -v --tb=short --junitxml=/tmp/junit-otlp.xml \
+            -m 'not quarantine'
 
       # Step 6 -- Playwright tab sweeps.
       - name: Install Playwright browsers
@@ -270,7 +302,7 @@ jobs:
 
       - name: Upload JUnit test reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-c1c5-${{ github.run_id }}
           path: /tmp/junit-*.xml
@@ -279,7 +311,7 @@ jobs:
 
       - name: Upload logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: c1-c5-golden-path-logs
           path: |

@@ -26,13 +26,15 @@ Design rules:
 
 Public API:
     EvalInput(output_text=..., tool_calls=[...], had_error=False)
-    eval_input_from_events(events) -> EvalInput        # best-effort extractor
+    eval_input_from_events(events) -> EvalInput        # adapter Event shape
+    eval_input_from_stored_rows(rows) -> EvalInput     # DuckDB event rows
     BUILTIN_EVALUATORS: dict[str, callable]
     run_checks(eval_input, checks) -> list[DeterministicEvalResult]
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import re
@@ -340,12 +342,17 @@ def eval_input_from_events(events: list) -> EvalInput:
         content = _get(ev, "content", "") or ""
         if content:
             output_text = content  # last non-empty wins (latest output)
+        added_for_event = 0
         for tc in (_get(ev, "tool_calls", None) or []):
             if isinstance(tc, dict):
                 tool_calls.append({"name": tc.get("name"),
                                    "arguments": tc.get("arguments") or tc.get("input") or {}})
+                added_for_event += 1
+        # ``tool_name`` is a fallback for events whose call list is absent;
+        # real ingested rows carry BOTH, so counting both double-counted
+        # every call (362 "calls" for a 181-call session).
         tname = _get(ev, "tool_name", "") or ""
-        if tname:
+        if tname and not added_for_event:
             tool_calls.append({"name": tname, "arguments": {}})
         extra = _get(ev, "extra", None) or {}
         if "error" in etype.lower():
@@ -353,3 +360,101 @@ def eval_input_from_events(events: list) -> EvalInput:
         if isinstance(extra, dict) and (extra.get("is_error") or extra.get("isError")):
             had_error = True
     return EvalInput(output_text=output_text, tool_calls=tool_calls, had_error=had_error)
+
+
+# ── Bridge from stored DuckDB event rows ────────────────────────────────────────
+#
+# The rows ``LocalStore.query_events`` returns are NOT the adapter ``Event``
+# shape above: the Event fields live inside ``row["data"]``, and ingest
+# stringifies nested values (``data["tool_calls"]`` / ``data["extra"]`` arrive
+# as Python-repr or JSON strings). This bridge is why #4436 found the module
+# "unintegrated": it could never see stored data. (#2862)
+
+
+def _parse_stored_field(value: Any) -> Any:
+    """Best-effort revival of a stringified nested field: JSON first, then
+    Python literal (single-quoted repr), else the raw value."""
+    if not isinstance(value, str) or not value.strip():
+        return value
+    try:
+        return json.loads(value)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return ast.literal_eval(value)
+    except (ValueError, SyntaxError, MemoryError, RecursionError):
+        return value
+
+
+def stored_row_to_event(row: dict) -> dict:
+    """Map one stored event row to the ``Event``-dict shape
+    :func:`eval_input_from_events` understands. Never raises."""
+    if not isinstance(row, dict):
+        return {}
+    data = _parse_stored_field(row.get("data"))
+    if not isinstance(data, dict):
+        data = {}
+    tool_calls = _parse_stored_field(data.get("tool_calls"))
+    extra = _parse_stored_field(data.get("extra"))
+    return {
+        "type": row.get("event_type") or data.get("type") or "",
+        "content": data.get("content") or "",
+        "tool_calls": tool_calls if isinstance(tool_calls, list) else [],
+        "tool_name": data.get("tool_name") or "",
+        "extra": extra if isinstance(extra, dict) else {},
+    }
+
+
+def eval_input_from_stored_rows(rows: list) -> EvalInput:
+    """Build an :class:`EvalInput` straight from ``query_events`` rows.
+
+    Rows come back newest-first from the store; "last output wins" needs
+    chronological order, so sort ascending by ``ts`` when present (stable
+    for ties / missing ts)."""
+    rows = _sorted_stored_rows(rows)
+    return eval_input_from_events([stored_row_to_event(r) for r in rows])
+
+
+def _sorted_stored_rows(rows: list) -> list[dict]:
+    rows = [r for r in (rows or []) if isinstance(r, dict)]
+    try:
+        rows = sorted(rows, key=lambda r: str(r.get("ts") or ""))
+    except Exception:
+        pass
+    return rows
+
+
+# Event types that identify the speaker when ``data.role`` is absent.
+# Mirrors eval_runner's prompt/response unions (v3 + legacy shapes).
+_USER_TURN_TYPES = frozenset({"prompt.submitted", "user", "subagent:user"})
+_ASSISTANT_TURN_TYPES = frozenset({
+    "model.completed", "assistant", "message", "subagent:assistant",
+})
+
+
+def turns_from_stored_rows(rows: list) -> list[dict[str, Any]]:
+    """Chronological ``[{"role": "user"|"assistant", "content": str}, ...]``
+    from stored event rows: the conversation shape multi-turn evaluators
+    (and the DeepEval bridge) consume.
+
+    ``data.role`` wins when present (claude_code rows carry it); otherwise
+    the event type decides. Tool traffic and empty turns are dropped."""
+    turns: list[dict[str, Any]] = []
+    for row in _sorted_stored_rows(rows):
+        data = _parse_stored_field(row.get("data"))
+        if not isinstance(data, dict):
+            data = {}
+        content = data.get("content") or ""
+        if not isinstance(content, str) or not content.strip():
+            continue
+        role = str(data.get("role") or "").strip().lower()
+        if role not in ("user", "assistant"):
+            etype = str(row.get("event_type") or "").lower()
+            if etype in _USER_TURN_TYPES:
+                role = "user"
+            elif etype in _ASSISTANT_TURN_TYPES:
+                role = "assistant"
+            else:
+                continue
+        turns.append({"role": role, "content": content})
+    return turns

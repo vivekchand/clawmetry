@@ -31,16 +31,42 @@ The FREE layer needs no key, no network call, and no account.
 
 - `openclaw` — OpenClaw agents
 - `nemoclaw` — NVIDIA NemoClaw agents
+- `goose` — [Goose](https://github.com/block/goose) agents (Block, Apache-2.0)
+
+Free here means genuinely free: each of these adapters ships **in this
+package** (`clawmetry/adapters/`), so `pip install clawmetry` observes them
+with no account, no licence key, and no wheel download. A runtime listed as
+free whose reader lived only in the closed wheel would not be free in any
+sense a user cares about, so `tests/test_phase4_adapter_move.py` pins the
+invariant.
+
+### The rule for which runtimes are free
+
+**An open-source runtime gets a free, open-source adapter. A commercial
+vendor product stays paid.** Whoever pays a vendor for the agent will pay to
+observe it; whoever runs an OSS agent is part of a community we would rather
+reach than bill. Goose moved free on 2026-08-19 as the first application of
+the rule, for three reasons worth recording:
+
+1. Its maintainers will accept a ClawMetry tutorial into **their own docs**
+   only if it works without a paid plan (`aaif-goose/goose#11282`). That
+   placement is worth more than the runtime ever earned us.
+2. An audit of every paying account found **zero** that depend on Goose — or
+   on any other OSS runtime. Every payer is anchored on OpenClaw (already
+   free) or on a runtime we keep paid.
+3. Free alternatives in this category already publish integration pages for
+   these runtimes. Being the paid option loses the comparison before anyone
+   installs us.
 
 `nemo_governance` (policy enforcement layered on top of any runtime) is a
 separate **free feature**, not a runtime — see the feature list below.
 
-**Chat-channel adapters** (all 22 are free; `entitlements.ALL_CHANNELS`):
+**Chat-channel adapters** (all 23 are free; `entitlements.ALL_CHANNELS`):
 
 Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat,
 Google Chat, Microsoft Teams, BlueBubbles, Matrix, Mattermost, LINE,
 Nostr, Twitch, Feishu, Zalo, Tlon, Synology Chat, Nextcloud Talk,
-ClickClack.
+ClickClack, Buzz.
 
 There is **no paid-channel tier** — every adapter unlocks on every plan.
 What tiers govern is how many channels can be *active concurrently*
@@ -64,16 +90,26 @@ below live here so the free UI can render locked rows with an accurate
 
 **Additional runtimes** (`entitlements.PAID_RUNTIMES`):
 
-`claude_code`, `codex`, `cursor`, `aider`, `goose`, `opencode`,
-`qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`.
+`claude_code`, `codex`, `cursor`, `aider`, `opencode`,
+`qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`,
+`n8n`, `antigravity`, `copilot`, `grok`, `grok_bot`, `qm`, `deepseek_harness`, `exo`,
+`kimi`, `devin`, `gemini_cli`, `cline`, `openhands`, `openworker`, `lovable`.
 
 **Additional features**, split across three tiers:
 
 | Bucket | Constant | Features |
 |---|---|---|
 | Starter | `STARTER_FEATURES` | `multi_runtime`, `fleet`, `cloud_sync`, `all_channels`, `approval_queue`, `budget_limits`, `per_runtime_health_timeline` |
-| Pro-only | `PRO_ONLY_FEATURES` | `per_run_waste_flags`, `per_run_compare`, `error_triage`, `self_evolve`, `asset_registry`, `eval_suite`, `tool_policy`, `otel_export`, `custom_webhooks`, `custom_runtime_ingest`, `custom_alerts`, `alert_webhooks`, `anomaly_detection`, `cost_optimizer` |
-| Enterprise | `ENTERPRISE_FEATURES` | `siem_export`, `sso`, `audit_logs`, `rbac`, `air_gapped_license`, `custom_data_residency` |
+| Pro-only | `PRO_ONLY_FEATURES` | `per_run_waste_flags`, `per_run_compare`, `error_triage`, `self_evolve`, `asset_registry`, `eval_suite`, `tool_policy`, `otel_export`, `custom_webhooks`, `custom_runtime_ingest`, `custom_alerts`, `alert_webhooks`, `anomaly_detection`, `cost_optimizer`, `compliance_pack`, `audit_logs`, `rbac` |
+| Enterprise | `ENTERPRISE_FEATURES` | `siem_export`, `sso`, `air_gapped_license`, `custom_data_residency`, `org_analytics` |
+
+`audit_logs` and `rbac` moved from Enterprise to Pro on 2026-08-25. Pro was
+sold as "the governance layer" while every governance primitive sat in
+Enterprise. `audit_logs` moved with a working surface behind it (append-only
+hash chain, real producers, `/api/audit-log`, the Security-tab feed). `rbac`
+has **no implementation yet** and is deliberately not advertised on the
+pricing page: there is no principal to attach a role to until agent identity
+ships. Ship the capability, then the claim.
 
 Display labels for every feature live in `entitlements.FEATURE_LABELS`.
 
@@ -192,15 +228,929 @@ family of preview/diff/batch helpers. The stable everyday endpoints are:
 | `GET /api/entitlement/required-tier?feature=<f>` | Cheapest tier that includes the given feature/runtime/channel-count/etc. |
 
 Beyond these there is a large family of preview / batch / capacity /
-"at-tier" endpoints that let a UI answer questions like "what does
-tier X look like at N channels", "which tiers are affordable at this
-node count", and "what does the path from tier A to tier B unlock at
-each step". They all read the same in-memory tier matrix and never
+'at-tier' / rollup (`has-all`, `missing-all`, `missing-all-at`) /
+row-detail complement (`missing-features`, `missing-runtimes`) /
+multi-bundle boolean-fold (`has-features-bundle-batch`,
+`has-runtimes-bundle-batch`) endpoints that let a UI answer questions
+like "what does tier X look like at N channels", "which tiers are
+affordable at this node count", "what does the path from tier A to tier B
+unlock at each step", "does the resolved install grant this whole bundle
+in one boolean fold" and "what's blocking the upgrade off ONE per-axis
+denial payload". They all read the same in-memory tier matrix and never
 mutate state. See `routes/entitlement.py` for the full list.
+
+### Boolean-fold bundle-batch endpoints
+
+`POST /api/entitlement/has-features-bundle-batch` and `POST
+/api/entitlement/has-runtimes-bundle-batch` fold N caller-supplied
+feature/runtime bundles to N `has_*` booleans in one round-trip — the
+boolean-fold sibling of `/min-tier-for-features-batch` /
+`/min-tier-for-runtimes-batch` on the same bundle axis.
+
+**Request body** (byte-identical to the `min-tier-for-*-batch` siblings):
+
+```json
+{"bundles": [["fleet", "sso"], ["otel_export"], []]}
+```
+
+A bare list-of-strings is treated as one bundle (single-bundle shorthand).
+400 on missing / non-list / empty `bundles` key.
+
+**Response envelope** (6 keys):
+
+```json
+{
+  "bundles":          [...],
+  "count":            3,
+  "current_tier":     "oss",
+  "current_tier_rank": 0,
+  "grace":            true,
+  "enforced":         false
+}
+```
+
+**Per-bundle row** (5 keys; `has_features` / `has_runtimes` mirrors the
+singular scalar's return-slot name):
+
+```json
+{
+  "features":     ["fleet", "sso"],
+  "unknown":      [],
+  "kind":         "features",
+  "count":        2,
+  "has_features": true
+}
+```
+
+The `features`/`runtimes`, `unknown`, `kind`, and `count` keys are
+byte-identical to the corresponding `/min-tier-for-*-batch` rows so a UI
+can render "granted right now?" and "cheapest tier that grants it?"
+side-by-side per bundle from two calls.
+
+**Behaviour notes:**
+
+- An unknown token anywhere in a bundle collapses that row's `has_*` to
+  `false` (matches the singular `has_features` / `has_runtimes`
+  typo-at-callsite posture — a typo surfaces via `unknown[]` instead of
+  silently appearing granted).
+- Empty, all-unknown, `None`, and non-iterable bundles surface as a stable
+  row with `has_*: false`.
+- Runtime aliases are canonicalised per-bundle before the membership check
+  (`claude-code` → `claude_code`); unknown ids echo raw into `unknown[]`.
+- Never raises: per-bundle failures short-circuit to the empty row shape so
+  the batch keeps building.
+- Ships in GRACE mode — `has_*` reads the live grant via the same resolver
+  as the singular scalar. A paid feature returns `true` in grace; FREE
+  runtimes return `true` on the live install regardless of rollout state.
 
 Every endpoint is defensive: a resolver failure falls back to the OSS-
 free snapshot (identical shape) rather than 500-ing, so a UI can rely
 on the response shape being stable.
+
+### Row-detail batch endpoint: `missing-all-at-batch`
+
+`GET /api/entitlement/missing-all-at-batch?tiers=oss,cloud_pro,...&features=a,b&runtimes=x,y&channels=N&retention_days=N&nodes=N`
+
+Batch what-if row-detail complement of `has-all-at-batch`. Fixes ONE
+5-axis mixed bundle and sweeps across N caller-supplied `perspective_tiers`,
+returning per-axis denial detail for each tier in one round-trip. Answers
+"out of {fleet, sso, claude_code, 100 channels, 90d retention, 100 nodes},
+which axes are still blocked at OSS vs Cloud Starter vs Cloud Pro vs
+Enterprise?" for a paywall diagnostics matrix without N separate calls to
+`missing_all_at()`.
+
+**Grace-independent by construction**: reads static per-tier grant tables
+via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on the
+capacity axes — so the answer is byte-identical under grace vs enforce for
+the same inputs. This differs from the LIVE `missing-all` endpoint (which
+reads the resolver's grace pass-through).
+
+**Per-tier row:** mirrors `has_all_at_batch` on the axis-echo slots with a
+per-axis `missing` sub-dict instead of a single `has_all_at` bool:
+
+```json
+{
+  "tier":           "oss",
+  "tier_label":     "OSS",
+  "tier_rank":      0,
+  "missing": {
+    "features":       ["fleet"],
+    "runtimes":       ["claude_code"],
+    "channels":       100,
+    "retention_days": 90,
+    "nodes":          100
+  }
+}
+```
+
+The scalar is `clawmetry.entitlements.missing_all_at_batch(perspective_tiers, *, features, runtimes, channels, retention_days, nodes)`.
+
+
+### Path-walk endpoint: `has-all-at-path`
+
+`GET /api/entitlement/has-all-at-path?from=<id>&to=<id>&features=a,b&runtimes=x,y&channels=N&retention_days=N&nodes=N`
+
+Aggregate mixed-axis path-shaped boolean-fold. Fixes ONE 5-axis bundle
+and sweeps across every purchasable rung between `from` and `to`, returning
+one row per rung with the aggregate `has_all_at` fold at that rung. Answers
+"at which tier does this whole 5-axis bundle unlock?" in one round-trip.
+
+Per-rung `has_all_at` byte-equals `has_all_at()` for the same (rung, bundle)
+pair. **Grace-independent by construction**: reads static per-tier grant
+tables via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on the
+capacity axes — so the answer is byte-identical under grace vs enforce for
+the same inputs.
+
+**Per-rung row:** `{ tier, tier_label, tier_rank, has_all_at }`.
+
+**Envelope keys:** `from`, `from_label`, `from_rank`, `to`, `to_label`,
+`to_rank`, `direction` (`upgrade` | `downgrade` | `lateral` | `identity` |
+`unknown`), `features`, `runtimes`, `channels`, `retention_days`, `nodes`,
+`unknown_features`, `unknown_runtimes`, `supplied_axes`, `supplied_count`,
+`path`, `path_length`, `allowed_count`, `all_allowed`, `any_allowed`,
+`required_tier`, `required_tier_label`, `required_tier_rank`, plus the
+standard resolver envelope (`current_tier`, `current_tier_rank`, `grace`,
+`enforced`).
+
+Unknown or missing endpoints return 200 with `path=[]` and
+`direction="unknown"` (never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_at_path(from_tier, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
+
+### Row-detail path-walk endpoint: `missing-all-at-path`
+
+`GET /api/entitlement/missing-all-at-path?from=<id>&to=<id>&features=a,b&runtimes=x,y&channels=N&retention_days=N&nodes=N`
+
+Aggregate mixed-axis path-shaped row-detail complement of `has-all-at-path`.
+Fixes ONE 5-axis bundle and sweeps across every purchasable rung between
+`from` and `to`, returning per-axis denial detail at each rung in one
+round-trip. Answers "at which rung does each per-axis slot in this 5-axis
+bundle clear?" for an upgrade-walkthrough tooltip without first calling
+`/tier-path` for the rung list and then N calls to `missing_all_at()`.
+
+**Grace-independent by construction**: reads static per-tier grant tables
+via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on the
+capacity axes — so the answer is byte-identical under grace vs enforce for
+the same inputs.
+
+**Per-rung row:**
+
+```json
+{
+  "tier":       "cloud_starter",
+  "tier_label": "Starter",
+  "tier_rank":  2,
+  "missing": {
+    "features":       ["sso"],
+    "runtimes":       [],
+    "channels":       null,
+    "retention_days": null,
+    "nodes":          null
+  }
+}
+```
+
+Complement invariant with `has-all-at-path`: `any(row["missing"].values())`
+byte-equals `not row["has_all_at"]` on the paired boolean-fold row for
+every fully-parseable bundle.
+
+Unknown or missing endpoints return 200 with `path=[]` (never 4xxs or 5xxs).
+Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_at_path(from_tier, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
+
+### Bundle path-walk boolean-fold endpoint: `has-all-bundle-at-path`
+
+`POST /api/entitlement/has-all-bundle-at-path?from=<id>&to=<id>`
+
+Path-shaped bundle sibling of `has-all-bundle-at` (singular perspective)
+and bundle-shaped counterpart of `has-all-at-path` (kwargs-shaped path
+walker). Fixes ONE 5-axis bundle and sweeps across every purchasable
+rung between `from` and `to`, returning per-rung aggregate boolean-fold
+in one round-trip. Answers "at which rung does this WHOLE 5-axis bundle
+unlock?" straight from the bundle dict without first normalising it by
+hand and calling `/has-all-at-path`, or first calling `/tier-path` and
+then N calls to `/has-all-bundle-at`.
+
+**Grace-independent by construction**: reads static per-tier grant
+tables via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on
+the capacity axes — so the answer is byte-identical under grace vs
+enforce for the same inputs.
+
+**Request body** (byte-identical to `has-all-bundle-at` — wrapped or
+bare-dict shorthand):
+
+```json
+{"bundle": {"features": ["fleet"], "runtimes": ["claude_code"],
+            "channels": 5, "retention_days": 30, "nodes": 2}}
+```
+
+**Per-rung row:**
+
+```json
+{
+  "tier":           "cloud_pro",
+  "tier_label":     "Cloud Pro",
+  "tier_rank":      3,
+  "features":       ["fleet"],
+  "runtimes":       ["claude_code"],
+  "channels":       5,
+  "retention_days": 30,
+  "nodes":          2,
+  "has_all_at":     true
+}
+```
+
+400 on missing / non-object `bundle`. Unknown or missing endpoints
+return 200 with `path=[]` (never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_bundle_at_path(from_tier, to_tier, bundle)`.
+
+### Bundle path-walk row-detail endpoint: `missing-all-bundle-at-path`
+
+`POST /api/entitlement/missing-all-bundle-at-path?from=<id>&to=<id>`
+
+Row-detail path-shaped bundle sibling of the boolean-fold
+`has-all-bundle-at-path` and bundle-shaped counterpart of
+`missing-all-at-path`. Fixes ONE 5-axis bundle and sweeps across every
+purchasable rung between `from` and `to`, returning per-axis denial
+detail at each rung in one round-trip. Answers "at which rung does
+each per-axis slot in this 5-axis bundle clear?" straight from the
+bundle dict without first normalising it by hand and calling
+`/missing-all-at-path`, or first calling `/tier-path` and then N calls
+to the singular row-detail per-perspective seat.
+
+**Grace-independent by construction** — same static-table read pattern
+as the paired boolean-fold endpoint.
+
+**Request body**: byte-identical to `has-all-bundle-at-path` above.
+
+**Per-rung row:**
+
+```json
+{
+  "tier":           "cloud_starter",
+  "tier_label":     "Starter",
+  "tier_rank":      2,
+  "features":       ["fleet"],
+  "runtimes":       ["claude_code"],
+  "channels":       5,
+  "retention_days": 30,
+  "nodes":          2,
+  "missing": {
+    "features":       ["fleet"],
+    "runtimes":       [],
+    "channels":       null,
+    "retention_days": null,
+    "nodes":          null
+  }
+}
+```
+
+Complement invariant with `has-all-bundle-at-path`: per rung,
+`any(row["missing"].values())` byte-equals `not row["has_all_at"]` on
+the paired boolean-fold row for every fully-parseable bundle.
+
+400 on missing / non-object `bundle`. Unknown or missing endpoints
+return 200 with `path=[]` (never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_bundle_at_path(from_tier, to_tier, bundle)`.
+
+### Bundle batch path-walk boolean-fold endpoint: `has-all-bundle-batch-at-path`
+
+`POST /api/entitlement/has-all-bundle-batch-at-path?from=<id>&to=<id>`
+
+Bundle-axis batch sibling of `has-all-bundle-at-path` (singular
+bundle) and path-shaped counterpart of `has-all-bundle-batch-at`
+(perspective-batch, no path). Fixes ONE `(from, to)` endpoint pair
+and fans out over N caller-supplied aggregate 5-axis bundles,
+returning one per-bundle cell with its own rung-by-rung path walk
+in ONE round-trip. Lets a paywall matrix comparing several
+hypothetical whole configs ("Starter-shaped install vs Pro-shaped
+install vs Enterprise-shaped install") render the per-config "at
+which rung does this WHOLE bundle unlock?" walk for EVERY column
+off ONE call instead of N calls to `has-all-bundle-at-path`.
+
+**Grace-independent by construction** -- same static-table walk as
+the singular endpoint applied per bundle cell.
+
+**Request body**:
+
+```json
+{
+  "bundles": [
+    {"features": ["fleet"], "runtimes": ["claude_code"]},
+    {"channels": 5, "retention_days": 30, "nodes": 2},
+    {}
+  ]
+}
+```
+
+Also accepts the `{"bundles": {...}}` bare-dict shorthand for ONE
+bundle (matches `/has-all-bundle-batch` posture). `from` and `to` are
+required query args.
+
+**Per-bundle cell:**
+
+```json
+{
+  "bundle_index":   0,
+  "features":       ["fleet"],
+  "runtimes":       ["claude_code"],
+  "channels":       5,
+  "retention_days": 30,
+  "nodes":          2,
+  "path": [
+    {"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1,
+     "features": ["fleet"], "runtimes": ["claude_code"],
+     "channels": 5, "retention_days": 30, "nodes": 2,
+     "has_all_at": true}
+  ],
+  "path_length":   1,
+  "allowed_count": 1,
+  "all_allowed":   true,
+  "any_allowed":   true
+}
+```
+
+Per-cell per-rung `has_all_at` byte-equals `/has-all-bundle-at-path`
+for the same `(from, to, bundle)` triple. Direction (`upgrade` /
+`downgrade` / `lateral` / `identity` / `unknown`) is envelope-level
+and shared across every cell.
+
+400 on missing / non-list-non-dict / empty `bundles`. Unknown or
+missing `from` / `to` returns 200 with `bundles=[]` / `count=0`
+(never 4xxs on endpoint validity or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_bundle_batch_at_path(from_tier, to_tier, bundles)`.
+
+### Bundle batch path-walk row-detail endpoint: `missing-all-bundle-batch-at-path`
+
+`POST /api/entitlement/missing-all-bundle-batch-at-path?from=<id>&to=<id>`
+
+Row-detail complement of `has-all-bundle-batch-at-path` and
+row-detail bundle-axis batch sibling of `missing-all-bundle-at-path`.
+Same per-bundle fan-out plus per-rung path walk, but each rung
+carries the per-axis `missing` dict instead of the boolean fold.
+Answers "for each of these hypothetical whole configs, which axis is
+denied at each rung along the walk?" for a paywall-matrix upgrade
+storyline.
+
+**Grace-independent by construction** -- same static-table walk as
+the paired boolean-fold endpoint.
+
+**Request body**: byte-identical to `has-all-bundle-batch-at-path`
+above.
+
+**Per-bundle cell:**
+
+```json
+{
+  "bundle_index":   0,
+  "features":       ["fleet"],
+  "runtimes":       ["claude_code"],
+  "channels":       500,
+  "retention_days": null,
+  "nodes":          null,
+  "path": [
+    {"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1,
+     "features": ["fleet"], "runtimes": ["claude_code"],
+     "channels": 500, "retention_days": null, "nodes": null,
+     "missing": {"features": [], "runtimes": [], "channels": 500,
+                 "retention_days": null, "nodes": null}}
+  ],
+  "path_length":   1,
+  "denied_count":  1,
+  "all_denied":    true,
+  "any_denied":    true
+}
+```
+
+Complement invariant with `has-all-bundle-batch-at-path`: per cell
+per rung, `any(row["missing"].values())` byte-equals
+`not paired_row["has_all_at"]` on the paired boolean-fold call for
+every fully-parseable bundle.
+
+400 on missing / non-list-non-dict / empty `bundles`. Unknown or
+missing endpoints return 200 with `bundles=[]` / `count=0` (never
+4xxs on endpoint validity or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_bundle_batch_at_path(from_tier, to_tier, bundles)`.
+
+### Source-batch bundle path-walk boolean-fold endpoint: `has-all-bundle-from-path-batch`
+
+`POST /api/entitlement/has-all-bundle-from-path-batch?to=<id>`
+
+Source-axis batch bundle-shaped sibling of `has-all-bundle-at-path`
+(singular source path) and bundle-shape twin of
+`has-features-from-path-batch` / `has-runtimes-from-path-batch` on the
+same source-batch seat. Fixes ONE 5-axis bundle and walks the rungs
+between N candidate SOURCE tiers and one shared `to` in ONE
+round-trip. Answers "for each of the tiers my fleet sits on today,
+does this WHOLE 5-axis subscription state unlock at every rung
+climbed toward `<to>`?" without N calls to `has-all-bundle-at-path`.
+
+**Grace-independent by construction** — same static-table walk as
+the singular `has-all-bundle-at-path` applied per source.
+
+**Request body** (canonical, or bare-axis shorthand alongside
+`from_tiers`):
+
+```json
+{"from_tiers": ["oss", "cloud_starter"],
+ "bundle": {"features": ["fleet"], "runtimes": ["claude_code"],
+            "channels": 5, "retention_days": 30, "nodes": 2}}
+```
+
+**Per-source row:**
+
+```json
+{
+  "from":          "oss",
+  "from_label":    "OSS",
+  "from_rank":     0,
+  "direction":     "upgrade",
+  "path":          [<has-all-bundle-at-path row>, ...],
+  "path_length":   4,
+  "allowed_count": 4,
+  "all_allowed":   true,
+  "any_allowed":   true
+}
+```
+
+Each `path` row byte-equals `has-all-bundle-at-path`'s `.path` for
+the same `(from, to, bundle)` triple. Per-source path lengths can
+differ (the rungs walked depend on the source). Unknown source ids
+echo into `unknown_tiers[]` without short-circuiting the batch.
+
+- **400** on missing / non-object `bundle`.
+- Missing / blank / unknown `to`, or empty / missing `from_tiers` →
+  200 with `tiers=[]` (never 4xxs).
+- Never 5xxs.
+
+Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_bundle_from_path_batch(from_tiers, to_tier, bundle)`.
+
+### Source-batch bundle path-walk row-detail endpoint: `missing-all-bundle-from-path-batch`
+
+`POST /api/entitlement/missing-all-bundle-from-path-batch?to=<id>`
+
+Row-detail complement of `has-all-bundle-from-path-batch` on the
+source-axis batch seat. Same request body; per-source rollups renamed
+for the missing seat (`denied_count` / `all_denied` / `any_denied`)
+and per-rung `path` rows carry the per-axis `missing` dict via
+`missing-all-bundle-at-path`.
+
+**Per-source row:**
+
+```json
+{
+  "from":         "oss",
+  "from_label":   "OSS",
+  "from_rank":    0,
+  "direction":    "upgrade",
+  "path":         [<missing-all-bundle-at-path row>, ...],
+  "path_length":  4,
+  "denied_count": 4,
+  "all_denied":   true,
+  "any_denied":   true
+}
+```
+
+Complement invariant with `has-all-bundle-from-path-batch`: per
+source per rung, `any(row["missing"].values())` byte-equals
+`not row["has_all_at"]` on the paired boolean-fold call for every
+fully-parseable bundle.
+
+- **400** on missing / non-object `bundle`.
+- Missing / blank / unknown `to`, or empty / missing `from_tiers` →
+  200 with `tiers=[]` (never 4xxs).
+- Never 5xxs.
+
+Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_bundle_from_path_batch(from_tiers, to_tier, bundle)`.
+
+
+### Batch path-walk endpoint: `has-all-at-path-batch`
+
+`GET /api/entitlement/has-all-at-path-batch?from=<id>&to=a,b,c&features=x,y&runtimes=p,q&channels=N&retention_days=N&nodes=N`
+
+Aggregate mixed-axis batch companion of `has-all-at-path`. Fixes ONE
+5-axis bundle and sweeps across every purchasable rung between `from`
+and each of the N candidate `to` tiers in ONE round-trip, returning
+per-destination path lists of aggregate `has_all_at` fold rows. Answers
+"from my current rung, here are 3 tiers I'm considering: for the WHOLE
+5-axis bundle show me at which rung this bundle unlocks along every
+candidate path" for an upgrade-comparison matrix without N calls to
+`has-all-at-path` or 5·N calls to the per-axis path-batch endpoints
+plus a client-side AND-chain per rung per destination.
+
+Per-destination `path` row byte-equals `has-all-at-path`'s `.path` for
+the same `(from, to, bundle)` triple. Per-destination path lengths can
+legitimately differ (the rungs walked depend on the destination).
+**Grace-independent by construction** — same static-table walk as the
+singular endpoint applied per destination.
+
+**Per-destination row:**
+
+```json
+{
+  "to":            "pro",
+  "to_label":      "Self-hosted Pro",
+  "to_rank":       2,
+  "direction":     "upgrade",
+  "path":          [{"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1, "has_all_at": true}],
+  "path_length":   1,
+  "allowed_count": 1,
+  "all_allowed":   true,
+  "any_allowed":   true
+}
+```
+
+**Envelope keys:** `from`, `from_label`, `from_rank`, `features`,
+`runtimes`, `channels`, `retention_days`, `nodes`, `unknown_features`,
+`unknown_runtimes`, `unknown_tiers`, `supplied_axes`, `supplied_count`,
+`tiers`, `required_tier`, `required_tier_label`, `required_tier_rank`,
+plus the standard resolver envelope (`current_tier`,
+`current_tier_rank`, `grace`, `enforced`).
+
+Runtime-alias canonicalisation (`claude-code` → `claude_code`) is
+applied per token upstream. Unknown feature/runtime tokens OR non-int
+capacity collapse EVERY rung of EVERY destination to `has_all_at=False`
+at the endpoint layer (matches the singular `has-all-at-path`
+typo-`False` posture). Missing/blank/unknown `from` or an empty /
+all-unknown destination CSV returns 200 with `tiers=[]` (never 4xxs or
+5xxs). `trial` IS accepted as a destination via the lateral / identity
+branches. Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_at_path_batch(from_tier, to_tiers, *, features, runtimes, channels, retention_days, nodes)`.
+
+### Batch row-detail path-walk endpoint: `missing-all-at-path-batch`
+
+`GET /api/entitlement/missing-all-at-path-batch?from=<id>&to=a,b,c&features=x,y&runtimes=p,q&channels=N&retention_days=N&nodes=N`
+
+Aggregate mixed-axis batch companion of `missing-all-at-path` and
+row-detail complement of `has-all-at-path-batch` at the batch-path
+layer. Fixes ONE 5-axis bundle and sweeps across every purchasable rung
+between `from` and each of the N candidate `to` tiers in ONE round-
+trip, returning per-destination path lists of aggregate per-axis
+`missing` row-detail rows. Answers "from my current rung, here are 3
+tiers I'm considering: for the WHOLE 5-axis bundle show me which
+per-axis slots are still locked at every rung climbed to reach each"
+for an upgrade-comparison matrix without N calls to `missing-all-at-path`.
+
+**Grace-independent by construction** — same static-table walk as the
+singular endpoint applied per destination.
+
+**Per-destination row:**
+
+```json
+{
+  "to":           "pro",
+  "to_label":     "Self-hosted Pro",
+  "to_rank":      2,
+  "direction":    "upgrade",
+  "path":         [
+    {"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1,
+     "missing": {"features": ["sso"], "runtimes": [], "channels": null, "retention_days": null, "nodes": null}}
+  ],
+  "path_length":  1,
+  "denied_count": 1,
+  "all_denied":   true,
+  "any_denied":   true
+}
+```
+
+**Envelope keys:** identical to `has-all-at-path-batch` on the
+axis-echo / resolver slots; per-destination rollup slots use
+`denied_count` / `all_denied` / `any_denied` instead of the
+boolean-fold `allowed_count` / `all_allowed` / `any_allowed`.
+
+Complement invariant with `has-all-at-path-batch`: per destination per
+rung, `any(row["missing"].values())` byte-equals `not row["has_all_at"]`
+on the paired boolean-fold row for every fully-parseable bundle.
+Non-int capacity is the deliberate divergence: the row-detail slot
+surfaces the raw string on every rung while the boolean-fold slot
+collapses to `False`.
+
+Missing/blank/unknown `from` or an empty / all-unknown destination CSV
+returns 200 with `tiers=[]` (never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_at_path_batch(from_tier, to_tiers, *, features, runtimes, channels, retention_days, nodes)`.
+
+### Source-batch path-walk endpoint: `has-all-from-path-batch`
+
+`GET /api/entitlement/has-all-from-path-batch?from=a,b,c&to=<id>&features=x,y&runtimes=p,q&channels=N&retention_days=N&nodes=N`
+
+Mirror-direction source-batch sibling of `has-all-at-path-batch`
+(destination-batch): where the destination-batch fixes ONE source and
+fans out over N candidate destinations, this fixes ONE destination and
+fans out over N candidate sources in ONE round-trip. Answers "for each
+of the tiers my fleet currently sits on, walking up to Enterprise for
+the WHOLE 5-axis bundle, at which rung does this bundle unlock along
+every candidate ladder?" for a source-side upgrade-comparison matrix
+without N calls to `has-all-at-path` or 5·N calls to the per-axis
+source-batch endpoints plus a client-side AND-chain per rung per source.
+
+Per-source `path` row byte-equals `has-all-at-path`'s `.path` for the
+same `(from, to, bundle)` triple. Per-source path lengths can
+legitimately differ (the rungs walked depend on the source).
+**Grace-independent by construction** — same static-table walk as the
+singular endpoint applied per source.
+
+**Per-source row:**
+
+```json
+{
+  "from":          "oss",
+  "from_label":    "OSS",
+  "from_rank":     0,
+  "direction":     "upgrade",
+  "path":          [{"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1, "has_all_at": true}],
+  "path_length":   1,
+  "allowed_count": 1,
+  "all_allowed":   true,
+  "any_allowed":   true
+}
+```
+
+**Envelope keys:** `to`, `to_label`, `to_rank`, `features`, `runtimes`,
+`channels`, `retention_days`, `nodes`, `unknown_features`,
+`unknown_runtimes`, `unknown_tiers`, `supplied_axes`, `supplied_count`,
+`tiers`, `required_tier`, `required_tier_label`, `required_tier_rank`,
+plus the standard resolver envelope (`current_tier`,
+`current_tier_rank`, `grace`, `enforced`).
+
+Runtime-alias canonicalisation (`claude-code` → `claude_code`) is
+applied per token upstream. Unknown feature/runtime tokens OR non-int
+capacity collapse EVERY rung of EVERY source to `has_all_at=False` at
+the endpoint layer (matches the singular `has-all-at-path` typo-`False`
+posture). Missing/blank/unknown `to` or an empty / all-unknown source
+CSV returns 200 with `tiers=[]` (never 4xxs or 5xxs). `trial` IS
+accepted as a source via the lateral / identity branches. Ships in
+GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_from_path_batch(from_tiers, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
+
+### Source-batch row-detail path-walk endpoint: `missing-all-from-path-batch`
+
+`GET /api/entitlement/missing-all-from-path-batch?from=a,b,c&to=<id>&features=x,y&runtimes=p,q&channels=N&retention_days=N&nodes=N`
+
+Mirror-direction source-batch sibling of `missing-all-at-path-batch`
+(destination-batch) and row-detail complement of
+`has-all-from-path-batch` at the source-batch path layer. Fixes ONE
+destination and fans out over N candidate sources in ONE round-trip,
+returning per-source path lists of aggregate per-axis `missing` row-
+detail rows. Answers "for each of the tiers my fleet currently sits on,
+walking toward Enterprise for the WHOLE 5-axis bundle, which per-axis
+slots are still locked at every rung climbed to reach it?" for a
+source-side upgrade-comparison matrix without N calls to
+`missing-all-at-path`.
+
+**Grace-independent by construction** — same static-table walk as the
+singular endpoint applied per source.
+
+**Per-source row:**
+
+```json
+{
+  "from":         "oss",
+  "from_label":   "OSS",
+  "from_rank":    0,
+  "direction":    "upgrade",
+  "path":         [
+    {"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1,
+     "missing": {"features": ["sso"], "runtimes": [], "channels": null, "retention_days": null, "nodes": null}}
+  ],
+  "path_length":  1,
+  "denied_count": 1,
+  "all_denied":   true,
+  "any_denied":   true
+}
+```
+
+**Envelope keys:** identical to `has-all-from-path-batch` on the
+axis-echo / resolver slots; per-source rollup slots use `denied_count`
+/ `all_denied` / `any_denied` instead of the boolean-fold
+`allowed_count` / `all_allowed` / `any_allowed`.
+
+Complement invariant with `has-all-from-path-batch`: per source per
+rung, `any(row["missing"].values())` byte-equals `not row["has_all_at"]`
+on the paired boolean-fold row for every fully-parseable bundle.
+Non-int capacity is the deliberate divergence: the row-detail slot
+surfaces the raw string on every rung while the boolean-fold slot
+collapses to `False`.
+
+Missing/blank/unknown `to` or an empty / all-unknown source CSV returns
+200 with `tiers=[]` (never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_from_path_batch(from_tiers, to_tier, *, features, runtimes, channels, retention_days, nodes)`.
+
+### Bundle batch path-walk boolean-fold endpoint: `has-all-bundle-at-path-batch`
+
+`POST /api/entitlement/has-all-bundle-at-path-batch?from=<id>&to=a,b,c`
+
+Bundle-shaped destination-batch companion of `has-all-bundle-at-path`
+(singular destination) and bundle-shaped counterpart of
+`has-all-at-path-batch` (kwargs-shaped batch-path). Fixes ONE aggregate
+5-axis bundle dict and sweeps across every purchasable rung between
+`from` and each of the N candidate `to` tiers in ONE round-trip,
+returning per-destination path lists of aggregate `has_all_at` fold
+rows. Answers "from my current rung, here are 3 tiers I'm considering:
+for this WHOLE 5-axis bundle dict show me at which rung this bundle
+unlocks along every candidate path" straight from the bundle dict —
+without first normalising it by hand and calling
+`/has-all-at-path-batch`, or N calls to `/has-all-bundle-at-path`.
+
+**Grace-independent by construction** — same static-table walk as the
+singular endpoint applied per destination.
+
+**Request body**: byte-identical to `has-all-bundle-at-path`
+(`{"bundle": {...}}` wrapped form, or bare-dict shorthand).
+
+**Per-destination row:**
+
+```json
+{
+  "to":            "pro",
+  "to_label":      "Self-hosted Pro",
+  "to_rank":       2,
+  "direction":     "upgrade",
+  "path":          [
+    {"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1,
+     "features": ["fleet"], "runtimes": ["claude_code"], "channels": 5,
+     "retention_days": null, "nodes": null, "has_all_at": true}
+  ],
+  "path_length":   1,
+  "allowed_count": 1,
+  "all_allowed":   true,
+  "any_allowed":   true
+}
+```
+
+**Envelope keys:** `from`, `from_label`, `from_rank`, `features`,
+`runtimes`, `channels`, `retention_days`, `nodes`, `unknown_tiers`,
+`tiers`, plus the standard resolver envelope (`current_tier`,
+`current_tier_rank`, `grace`, `enforced`).
+
+Per-destination `path` row byte-equals `has-all-bundle-at-path`'s
+`.path` for the same `(from, to, bundle)` triple. Per-destination path
+lengths can legitimately differ (the rungs walked depend on the
+destination). Runtime-alias canonicalisation (`claude-code` →
+`claude_code`) is applied per token by the bundle normaliser. Unknown
+feature id collapses every rung of every destination to
+`has_all_at=false` (matches the singular typo posture). `trial` IS
+accepted as a destination via the lateral / identity branches.
+
+400 on missing / non-object `bundle`. Missing/blank/unknown `from` or
+an empty / all-unknown destination CSV returns 200 with `tiers=[]`
+(never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.has_all_bundle_at_path_batch(from_tier, to_tiers, bundle)`.
+
+### Bundle batch path-walk row-detail endpoint: `missing-all-bundle-at-path-batch`
+
+`POST /api/entitlement/missing-all-bundle-at-path-batch?from=<id>&to=a,b,c`
+
+Row-detail bundle-shaped destination-batch companion of
+`missing-all-bundle-at-path` (singular destination), bundle-shaped
+counterpart of `missing-all-at-path-batch` (kwargs-shaped batch-path),
+and row-detail complement of `has-all-bundle-at-path-batch` at the
+bundle-shaped batch-path layer. Fixes ONE aggregate 5-axis bundle dict
+and sweeps across every purchasable rung between `from` and each of
+the N candidate `to` tiers in ONE round-trip, returning per-destination
+path lists of aggregate per-axis `missing` row-detail rows. Answers
+"from my current rung, here are 3 tiers I'm considering: for this
+WHOLE 5-axis bundle dict show me which per-axis slots are still locked
+at every rung climbed to reach each" straight from the bundle dict.
+
+**Grace-independent by construction** — same static-table walk as the
+singular endpoint applied per destination.
+
+**Request body**: byte-identical to `has-all-bundle-at-path-batch`
+above.
+
+**Per-destination row:**
+
+```json
+{
+  "to":           "pro",
+  "to_label":     "Self-hosted Pro",
+  "to_rank":      2,
+  "direction":    "upgrade",
+  "path":         [
+    {"tier": "cloud_starter", "tier_label": "Starter", "tier_rank": 1,
+     "features": ["fleet"], "runtimes": ["claude_code"], "channels": 5,
+     "retention_days": null, "nodes": null,
+     "missing": {"features": ["fleet"], "runtimes": [], "channels": null,
+                 "retention_days": null, "nodes": null}}
+  ],
+  "path_length":  1,
+  "denied_count": 1,
+  "all_denied":   true,
+  "any_denied":   true
+}
+```
+
+**Envelope keys:** identical to `has-all-bundle-at-path-batch` on the
+axis-echo / resolver slots; per-destination rollup slots use
+`denied_count` / `all_denied` / `any_denied` instead of the boolean-fold
+`allowed_count` / `all_allowed` / `any_allowed`.
+
+Complement invariant with `has-all-bundle-at-path-batch`: per
+destination per rung, `any(row["missing"].values())` byte-equals `not
+row["has_all_at"]` on the paired boolean-fold row for every
+fully-parseable bundle.
+
+400 on missing / non-object `bundle`. Missing/blank/unknown `from` or
+an empty / all-unknown destination CSV returns 200 with `tiers=[]`
+(never 4xxs or 5xxs). Ships in GRACE mode.
+
+The scalar is `clawmetry.entitlements.missing_all_bundle_at_path_batch(from_tier, to_tiers, bundle)`.
+
+### Bundle-batch perspective row-detail endpoint: `missing-all-bundle-batch-at`
+
+`POST /api/entitlement/missing-all-bundle-batch-at?tier=<perspective>`
+
+Hypothetical-perspective row-detail sibling of `has-all-bundle-batch-at`
+(boolean fold) and `missing-all-bundle-batch` (LIVE row detail). Folds N
+caller-supplied 5-axis bundles to N per-axis `missing` dicts scoped by a
+caller-supplied `perspective_tier` in one round-trip. Answers "which axes
+of each bundle would tier `<perspective>` NOT grant?" for a pricing-matrix
+walkthrough without N separate calls to `missing_all_at()`.
+
+**Grace-independent by construction**: reads static per-tier grant tables
+via `_hypothetical_entitlement` on the feature/runtime axes and
+`_TIER_CHANNEL_LIMIT` / `_TIER_RETENTION_DAYS` / `_TIER_NODE_LIMIT` on the
+capacity axes — so grace vs enforce yields byte-identical row bodies.
+At `tier=oss`, a paid-feature bundle reports `missing.features=["fleet"]`
+even in grace, whereas the LIVE `missing-all-bundle-batch` reports
+`missing.features=[]` for the same bundle via grace pass-through.
+
+**Request body** (byte-identical to `missing-all-bundle-batch` and
+`has-all-bundle-batch-at`):
+
+```json
+{"bundles": [{"features": ["fleet"], "runtimes": ["claude_code"]}, {"channels": 5}]}
+```
+
+A bare dict is treated as one bundle (single-bundle shorthand).
+
+**Response envelope** (9 keys):
+
+```json
+{
+  "perspective_tier":       "cloud_pro",
+  "perspective_tier_label": "Cloud Pro",
+  "perspective_tier_rank":  4,
+  "bundles":                [...],
+  "count":                  2,
+  "current_tier":           "oss",
+  "current_tier_rank":      0,
+  "grace":                  true,
+  "enforced":               false
+}
+```
+
+**Per-bundle row:** mirrors `has-all-bundle-batch-at` byte-for-byte on the
+axis-echo slots (`features`, `runtimes`, `channels`, `retention_days`,
+`nodes`) with the fold slot swapped from `has_all_at` bool to a per-axis
+`missing` dict:
+
+```json
+{
+  "features":       ["fleet"],
+  "runtimes":       ["claude_code"],
+  "channels":       null,
+  "retention_days": null,
+  "nodes":          null,
+  "missing": {
+    "features":       ["fleet"],
+    "runtimes":       [],
+    "channels":       null,
+    "retention_days": null,
+    "nodes":          null
+  }
+}
+```
+
+Complement invariant with `has-all-bundle-batch-at`: `any(row["missing"].values())`
+strictly negates the paired `has_all_at` for every fully-parseable bundle
+on a valid perspective.
+
+- **400** on missing/blank `tier=`, missing/empty/non-list `bundles`
+- **404** on unknown `tier=` (body carries `which=tier`)
+- Never 5xxs.
+
+Ships in GRACE mode. The scalars are
+`clawmetry.entitlements.missing_all_bundle_batch_at(perspective_tier, bundles)`
+and the private `_missing_all_bundle_row_at(perspective_tier, bundle)`.
 
 ---
 

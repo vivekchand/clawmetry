@@ -1,0 +1,57 @@
+# Code owners for the verification surface.
+#
+# Purpose: route review requests automatically when someone touches a file that
+# decides whether other changes can merge. These paths are load-bearing in a way
+# ordinary source is not -- weakening one silently widens what can ship.
+#
+# ------------------------------------------------------------------------
+# IMPORTANT -- do NOT enable "Require review from Code Owners" on this repo
+# while it is effectively single-maintainer.
+#
+# GitHub does not let an author approve their own pull request. Every PR here,
+# including the ones agents open, is authored by @vivekchand, so turning that
+# setting on would make every PR permanently unmergeable. CODEOWNERS is used
+# here for review ROUTING and visibility only.
+#
+# The actual anti-tampering enforcement is mechanical instead, and works fine
+# with a single maintainer:
+#   - tests/test_guard_census.py  -- guard files must exist; the merge gate may
+#                                    only grow, never shrink
+#   - tests/test_e2e_gate.py      -- the gate must still block what it claims to
+#   - tests/test_workflow_yaml_valid.py -- no workflow may silently fail at startup
+# Those run in CI and fail the build. They do not need a second human.
+# ------------------------------------------------------------------------
+
+# Default owner.
+*                                   @vivekchand
+
+# The merge gate itself. scripts/e2e_gate.py IS branch protection in practice:
+# the single required context "E2E Gate (required)" aggregates whatever this
+# file lists, so editing it changes what is allowed to ship.
+/scripts/e2e_gate.py                @vivekchand
+/.github/workflows/e2e-gate.yml     @vivekchand
+
+# Required-status-check configuration and its watchdog.
+/scripts/apply_required_status_checks.py    @vivekchand
+/scripts/c6_required_checks_status.py       @vivekchand
+/.github/workflows/c6-*.yml                 @vivekchand
+/.github/workflows/apply-required-checks.yml @vivekchand
+
+# Bug-class guards. Each of these exists because a specific regression reached
+# users; deleting one re-opens that door.
+/scripts/check_py39_annotations.py  @vivekchand
+/scripts/sync_runtime_count.py      @vivekchand
+/scripts/verification_matrix.py     @vivekchand
+/scripts/mutation_ratchet.py        @vivekchand
+
+# The declared coverage surface and its recorded baselines.
+/verification/                      @vivekchand
+
+# Anti-tampering tests.
+/tests/test_guard_census.py         @vivekchand
+/tests/test_e2e_gate.py             @vivekchand
+/tests/test_workflow_yaml_valid.py  @vivekchand
+/tests/test_verification_matrix.py  @vivekchand
+
+# CI definition at large.
+/.github/workflows/                 @vivekchand

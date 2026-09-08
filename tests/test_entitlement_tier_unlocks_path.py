@@ -233,9 +233,11 @@ def test_ascending_path_unlocks_enterprise_at_top(ent):
     path = ent.tier_unlocks_path(ent.TIER_OSS, ent.TIER_ENTERPRISE)
     final = path[-1]
     assert final["tier"] == ent.TIER_ENTERPRISE
-    # enterprise-only features land at the terminal rung
+    # enterprise-only features land at the terminal rung. audit_logs moved
+    # to Pro on 2026-08-25, so it now unlocks EARLIER in the walk, not here.
     assert "sso" in final["features"]
-    assert "audit_logs" in final["features"]
+    assert "siem_export" in final["features"]
+    assert "audit_logs" not in final["features"]
 
 
 def test_descending_path_terminates_at_to_but_unlocks_are_empty(ent):

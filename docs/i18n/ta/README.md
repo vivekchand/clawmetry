@@ -1,393 +1,197 @@
-<!-- i18n-src:8f42d460a973 -->
+<!-- i18n-src:88be2deff5d5 -->
 > தமிழ் translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
 
-[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![PyPI Downloads/week](https://static.pepy.tech/badge/clawmetry/week)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
+[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
+[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**உங்கள் ஏஜென்ட் சிந்திப்பதைப் பாருங்கள்.** **14 AI ஏஜென்ட் ரன்டைம்களுக்கான** நிகழ்நேர கண்காணிப்பு: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex மற்றும் மேலும் 10. உங்கள் முழு ஏஜென்ட் கூட்டத்திற்கும் ஒரே டாஷ்போர்டு.
+**உங்கள் ஏஜென்ட் சிந்திப்பதைப் பாருங்கள்.** **30 AI ஏஜென்ட் ரன்டைம்களுக்கான** நிகழ்நேர கண்காணிப்பு: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & மேலும் 26. உங்கள் முழு ஏஜென்ட் கடற்படைக்கும் ஒரே டாஷ்போர்டு.
 
-> 🌐 **இதை இந்த மொழிகளில் படியுங்கள்:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [மேலும் →](docs/i18n/)
+> 🌐 **இதை இதில் படிக்கவும்:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [மேலும் →](docs/i18n/)
 
-ஒரே கட்டளை. எந்த கட்டமைப்பும் தேவையில்லை. எல்லாவற்றையும் தானாகவே கண்டறியும்.
+ஒரே கட்டளை. கட்டமைப்பு தேவையில்லை. எல்லாவற்றையும் தானாகக் கண்டறியும்.
 
 ```bash
 pip install clawmetry && clawmetry
 ```
 
-**http://localhost:8900** இல் திறக்கும், முடிந்தது.
+**http://localhost:8900** இல் திறக்கும். கட்டமைப்பு தேவையில்லை: நீங்கள் ஏற்கெனவே வைத்திருக்கும் ஏஜென்ட் ரன்டைம்களைக் கண்டறிந்து, அவற்றை படிப்பதற்கு மட்டுமே அணுகி, அவை இயங்கும் விதத்தில் எதையும் மாற்றாது.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## 14 ஏஜென்ட் ரன்டைம்களுடன் இயங்குகிறது
+## 30 ஏஜென்ட் ரன்டைம்களுடன் இயங்குகிறது
 
-ClawMetry ஆரம்பத்தில் OpenClaw க்கான கண்காணிப்புக் கருவியாக இருந்தது, இப்போது உங்கள் **முழு ஏஜென்ட் கூட்டத்தையும்** ஒரே டாஷ்போர்டில் அளவிடுகிறது, உங்கள் கணினியில் உள்ள ஒவ்வொரு ரன்டைமையும் தானாகவே கண்டறிந்து:
+**ஓபன் சோர்ஸ் ஆப்பில் இலவசம்:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
+**கட்டண திட்டத்தில்:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-OpenClaw மற்றும் NemoClaw திறந்த மூலப் பயன்பாட்டில் இலவசம்; மற்ற ரன்டைம்கள் ClawMetry Cloud அல்லது சுய-நேர்த்தி Pro உரிமத்துடன் செயல்படுகின்றன. தலைப்பிலிருந்து ரன்டைம்களை மாற்றவும், ஒவ்வொரு தாவலும் - செலவு, டோக்கன்கள், கருவிகள், தடங்கள் - அந்த ரன்டைமிற்கு மீண்டும் வரையறுக்கப்படும். துல்லியமான இலவச/கட்டணச் சிதைவு, அடுக்கு அணி, `/api/entitlement` வடிவம், மற்றும் `clawmetry license` CLI க்கு **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** ஐக் காணவும்.
+ஒவ்வொரு ரன்டைமும் ஒரே டாஷ்போர்டைப் பெறுகிறது. பலவற்றை ஒரே நேரத்தில் இயக்கினால், தலைப்பு சுவிட்சர் ஒவ்வொரு டேபையும் அவற்றில் ஒன்றுக்கு மறு-நோக்கமாக்குகிறது.
 
-## நீங்கள் பெறுவது
+SDK-யில் உங்கள் சொந்த ஏஜென்டை உருவாக்கினீர்களா? இன்டர்செப்டர் அதன் LLM அழைப்புகளையும் கண்காணிக்கிறது. [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md) பார்க்கவும்.
 
-- **Flow** - சேனல்கள், மூளை, கருவிகள் வழியாக சென்று திரும்பும் செய்திகளின் ஓட்டத்தைக் காட்டும் நேரடி அசைவூட்ட வரைபடம்
-- **Overview** - சுகாதார சோதனைகள், செயல்பாட்டு வெப்பவரைபடம், அமர்வு எண்ணிக்கைகள், மாதிரி தகவல்
-- **Usage** - தினசரி/வாராந்திர/மாதாந்திர பிரிவுகளுடன் டோக்கன் மற்றும் செலவு கண்காணிப்பு
-- **Sessions** - மாதிரி, டோக்கன்கள், கடைசி செயல்பாட்டுடன் கூடிய தீவிர ஏஜென்ட் அமர்வுகள்
-- **Crons** - நிலை, அடுத்த இயக்கம், கால அளவுடன் திட்டமிடப்பட்ட வேலைகள்
-- **Logs** - வண்ணக் குறியீடு செய்யப்பட்ட நிகழ்நேர பதிவு ஸ்ட்ரீமிங்
-- **Memory** - SOUL.md, MEMORY.md, AGENTS.md, தினசரிக் குறிப்புகளை உலாவுங்கள்
-- **Transcripts** - அமர்வு வரலாறுகளைப் படிக்க அரட்டைக் குமிழி UI
-- **Alerts** - பட்ஜெட் வரம்புகள், பிழை-விகிதத் தூண்டிகள், ஏஜென்ட்-ஆஃப்லைன் கண்டறிதல்; Slack, Discord, PagerDuty, Telegram, Email க்கு அனுப்புகிறது
-- **Approvals** - அழிக்கும் நீக்கங்கள், கட்டாயப் புஷ்கள், DB மாற்றங்கள், sudo, பேக்கேஜ் நிறுவல்கள், நெட்வொர்க் அழைப்புகளை ஒரு-கிளிக் ஒப்புதலுக்குப் பின்னால் தடுக்கவும்
+## நீங்கள் என்ன பெறுவீர்கள்
 
-## ஸ்கிரீன்ஷாட்கள்
+- **அமர்வுகள் & டிரான்ஸ்கிரிப்ட்கள்**: ஒவ்வொரு ஏஜென்டும் என்ன செய்தது, ஒவ்வொரு டர்னாக, ரீப்ளேயுடன்
+- **செலவு & டோக்கன்கள்**: ரன்டைம், மாடல், அமர்வு மற்றும் நாள் வாரியாக, ஏனோமலி கொடிகளுடன்
+- **ஃப்ளோ**: சேனல்கள், மாடல்கள் மற்றும் டூல்கள் வழியாக நகரும் செய்திகளின் நேரடி வரைபடம்
+- **பிரெயின்**: நிகழும் அப்போதே தர்க்கம் மற்றும் டூல்-அழைப்பு நிகழ்வு ஸ்ட்ரீம்
+- **சூழல் அதிகச்செலவு**: வழங்குநர் வாரியாக அளவிடப்பட்ட விண்டோ பயன்பாடு, காம்பாக்ஷன் vs கட்டாய ஓவர்ஃப்ளோ, மேலும் நாம் *பார்க்க முடியாதவற்றின்* ரன்டைம்-வாரி வரைபடம் ([எப்படி](docs/CONTEXT_BLOWOUT.md))
+- **நினைவகம் & திறன்கள்**: ஒவ்வொரு ரன்டைமும் உண்மையில் ஏற்றிய கோப்புகள் மற்றும் திறன்கள்
+- **ஆரோக்கியம் & பதிவுகள்**: வட்டு, நினைவகம், பிழை விகிதங்கள், விகித வரம்புகள், நேரடி பதிவு ஸ்ட்ரீம்
+- **எச்சரிக்கைகள்**: பட்ஜெட் வரம்புகள், பிழை உயர்வுகள், ஏஜென்ட்-ஆஃப்லைன், Slack, Discord, PagerDuty, Telegram, Email-க்கு அனுப்பப்படும்
+- **அனுமதிகள்**: அபாயகரமான டூல் அழைப்புகளை அவை இயங்குவதற்கு *முன்* இடைநிறுத்தி, உங்கள் ஃபோனிலிருந்தே அனுமதிக்கவும் ([எப்படி](docs/APPROVALS.md))
 
-### 🧠 Brain - நேரடி ஏஜென்ட் நிகழ்வு ஸ்ட்ரீம்
-![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
+## சூழல் அதிகச்செலவு, மற்றும் கண்காணிப்பதன் விலை
 
-### 📊 Overview - டோக்கன் பயன்பாடு & அமர்வுச் சுருக்கம்
-![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+எந்த ஏஜென்ட்-ஒப்பீட்டு கருவியையும் நம்புவதற்கு முன் பதில் தெரிந்திருக்க வேண்டிய இரண்டு கேள்விகள்.
 
-### ⚡ Flow - நிகழ்நேர கருவி அழைப்பு ஊட்டம்
-![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+**ரன்டைம்கள் முழுவதும் சூழல்-விண்டோ அதிகச்செலவை இது எப்படி கையாள்கிறது?**
 
-### 💰 Tokens - மாதிரி & அமர்வு வாரியான செலவுப் பிரிவு
-![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
+ஒரு பயன்பாட்டு சதவீதம் அது எதை வகுக்கிறதோ அதனளவுக்கே நேர்மையானது. ClawMetry நீங்கள் படித்து PR செய்யக்கூடிய [ஒரு அட்டவணையிலிருந்து](clawmetry/context_windows.py) வழங்குநர் வாரியாக விண்டோவை அளவிடுகிறது, இது Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama மற்றும் GLM ஐ உள்ளடக்குகிறது. இது 30 ரன்டைம்களையும் ஒரே வழங்குநரின் அளவுகோலால் அளவிடுவதில்லை. இது முக்கியமானது: Anthropic-இன் 200K-க்கு எதிராக மதிப்பிடப்படும் 300K GPT-5 டர்ன் ">100%, தகர்ந்தது" எனக் காட்டுகிறது, அது உண்மையில் GPT-5-இன் 400K-இல் 75%-ஆக இருக்கும்போது. அதே அளவுகோல் உண்மையில் அதிகச்செலவான 130K DeepSeek டர்னை வசதியான 65%-ஆக மறைக்கிறது.
 
-### 🧬 Memory - பணியிடக் கோப்பு உலாவி
-![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
+ஒவ்வொரு விண்டோவும் அதன் தோற்றத்துடன் வருகிறது: `model_table`, `explicit_marker`, `observed_floor`, அல்லது மாடல் தெரியாதபோது நேர்மையான `default`. யூகத்தின் அடிப்படையில் கட்டப்பட்ட ஒரு கேஜ், தேடலின் அடிப்படையில் கட்டப்பட்டதைப் போன்ற அதிகாரத்துடன் ஒருபோதும் காட்சியளிக்காது.
 
-### 🔐 Security - நிலைப்பாடு & தணிக்கைப் பதிவு
-![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
+சில ரன்டைம்களில் மட்டுமே ClawMetry-ஆல் காம்பாக்ஷன் நிகழ்வுகளைப் பார்க்க முடியும். எனவே `GET /api/context-coverage`, ஒவ்வொரு ரன்டைமிற்கும், **பூஜ்ஜியம் என்றால் "சுத்தமாக இயங்கியது" என்றா அல்லது "நமக்குத் தெரியவில்லை" என்றா** என்பதை அறிக்கை செய்கிறது. உண்மையில் தெரியாது என்று பொருள்படும் `0` அப்படியே கூறுகிறது.
+[முழு விவரம்](docs/CONTEXT_BLOWOUT.md)
 
-### 🚨 Alerts - பட்ஜெட் வரம்புகள், பிழை-விகிதத் தூண்டிகள், Slack / Discord / PagerDuty / Email க்கு வெப்ஹுக்குகள்
-![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+**கருவியமைப்பு (instrumentation) எவ்வளவு செலவாகும்?**
 
-### ✋ Approvals - ஆபத்தான கருவி அழைப்புகளை கைமுறை ஒப்புதலுக்குப் பின்னால் தடுக்கவும்; கொள்கை ஆதரவு பாதுகாப்பு விதிகள்
-![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+| பாதை | உங்கள் ஏஜென்டுக்கு சேர்க்கப்படுவது | இயல்புநிலையா? |
+|---|---|---|
+| அமர்வு-கோப்பு டெயிலிங் (30 ரன்டைம்களும்) | **0**. தனி செயல்முறை, உங்கள் ஏஜென்டில் ClawMetry கோட் இல்லை | ஆம் |
+| HTTP இன்டர்செப்டர் (`CLAWMETRY_INTERCEPT=1`) | ஒரு LLM அழைப்புக்கு **+0.44 ms**, அதாவது 5s அழைப்பில் 0.009% | இல்லை |
+| முன்-டூல் ஹூக் கேட் (warm cache) | 36 ms இன்டர்ப்ரெட்டர் தளத்திற்கு மேல், ஒரு கேட் செய்யப்பட்ட டூல் அழைப்புக்கு **+44 ms** | இல்லை |
+| அமலாக்க ப்ராக்ஸி | ஒரு LLM அழைப்புக்கு **+9.7 ms** | இல்லை |
+
+டீமன் ஹோஸ்ட் செலவு: **2,762 நிகழ்வுகள்/வினாடி** உள்வாங்கல், நிகழ்வுக்கு வட்டில் **710 பைட்டுகள்** (100k நிகழ்வுகளுக்கு 67.7 MB), மற்றும் பரபரப்பான நிறுவலில் நிலையான **~12% ஒரு கோர்**. அந்த கடைசி எண் நமது சொந்த கூறப்பட்ட 5-10% பட்ஜெட்டை மீறுகிறது, எனவே அதை பக்கத்திலிருந்து விட்டுவிடாமல் துரத்தப்பட வேண்டிய பிழையாக வெளியிடப்படுகிறது.
+
+Apple M2 Pro-இல் `benchmarks/overhead.py` மூலம் அளவிடப்பட்டது. ஹார்னஸ் ஒவ்வொரு நிலையையும் தனி செயல்முறையில் இயக்கி, அவற்றின் வரிசையை மாற்றி, **சுற்றுகள் அதன் அடையாளத்தில் உடன்படாதபோது எண்ணை அச்சிட மறுக்கிறது**. உங்கள் சொந்த கணினியில் ஒரு நிமிடத்தில் இதை இயக்கவும்:
+
+```bash
+pip install clawmetry && python -m benchmarks.overhead
+```
+
+ஹூக் கேட்கள் மற்றும் அமலாக்க ப்ராக்ஸி உட்பட ஒவ்வொரு பாதையும் அளவிடப்படுகிறது, மேலும் ஹார்னஸ் CI-இல் Linux, macOS மற்றும் Windows-இல் இயங்குகிறது. தெரிந்திருக்க வேண்டிய இரண்டு முடிவுகள்: Linux-ஐ விட Windows-இல் ப்ராக்ஸி சுமார் ஏழு மடங்கு அதிகமாக செலவாகிறது, மேலும் டீமன் தற்போது ஒரு கோரின் சுமார் 12%-ஐ நிலைநிறுத்துகிறது, இது நமது சொந்த 5-10% பட்ஜெட்டை மீறுகிறது. மூல JSON, முறை, மற்றும் இன்னும் அளவிடப்படாதவை [docs/OVERHEAD.md](docs/OVERHEAD.md)-இல் உள்ளன.
+
+## விலை நிர்ணயம்
+
+| திட்டம் | இது எதை உள்ளடக்கியது | விலை |
+|---|---|---|
+| **இலவசம்** | OpenClaw + NVIDIA NemoClaw + Goose, முழு டாஷ்போர்டு, லோக்கல் மட்டும் | $0 |
+| **ஸ்டார்ட்டர்** | மேலே உள்ள மற்ற ஒவ்வொரு ரன்டைமும், ஃப்ளீட் வியூ, க்ளவுட் சின்க் | ஒரு நோடுக்கு மாதம் $9 |
+| **Pro** | ஸ்டார்ட்டர் + கட்டுப்பாடு மற்றும் மதிப்பீடு: அனுமதிகள், டூல்-ரிஸ்க் கொள்கைகள், மதிப்பீடுகள், ஏனோமலி கண்டறிதல், செலவு உகப்பாக்கி, OTel எக்ஸ்போர்ட், டேம்பர்-எவிடென்ட் ஆடிட் லாக் | ஒரு நோடுக்கு மாதம் $19 |
+
+வருடாந்திர திட்டங்கள், Enterprise மற்றும் தற்போதைய எண்கள் **[clawmetry.com/pricing](https://clawmetry.com/pricing)**-இல் உள்ளன. சுய-ஹோஸ்ட் செய்யப்பட்ட உரிம விசைகள் க்ளவுட் இல்லாமலேயே வேலை செய்கின்றன (`clawmetry license`). சரியான இலவச/கட்டண பிரிவு [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)-இல் உள்ளது.
+
+## உங்கள் தரவு உங்கள் கணினியில் மட்டுமே இருக்கும்
+
+ClawMetry உள்ளூர் அமர்வு கோப்புகள் மற்றும் பதிவுகளைப் படிக்கிறது. **நீங்கள் `clawmetry connect` இயக்காத வரை எந்த அமர்வு தரவும் உங்கள் கணினியிலிருந்து வெளியேறாது** — ப்ராம்ப்ட்கள், பதில்கள், டூல் ஆர்குமென்ட்கள், கோப்பு உள்ளடக்கங்கள் அல்லது பதிவு வரிகள் எதுவும் இல்லை. நீங்கள் இணைக்கும்போது, ஸ்னாப்ஷாட் உங்கள் கணினியை விட்டு ஒருபோதும் வெளியேறாத ஒரு விசையுடன் எண்ட்-டு-எண்ட் என்க்ரிப்ட் செய்யப்பட்டு, உங்கள் பிரவுசரில் டிக்ரிப்ட் செய்யப்படுகிறது. ஒரு நோடில் விசை இல்லையென்றால், அப்லோட் தெளிவாக அனுப்பப்படுவதற்குப் பதிலாக தவிர்க்கப்படுகிறது, மேலும் எந்த சர்வர் பதிலும் அதை மாற்ற முடியாது.
+
+நீங்கள் இணைப்பதற்கு முன் இயல்பாக இயங்கும் இரண்டு விஷயங்கள் உள்ளன, இரண்டும் ஆப்ட்-அவுட் செய்யக்கூடியவை மற்றும் இரண்டுமே அமர்வு தரவை சுமக்காதவை: ஒரு அநாமதேய நிறுவல் பிங் மற்றும் PyPI-க்கு எதிரான ஒரு பதிப்பு சரிபார்ப்பு. இயல்புநிலை நிறுவலும் தொடக்க பேனர் வரிக்காக உங்கள் பொது IP-ஐ ஒருமுறை தேடுகிறது. ஒவ்வொரு இலக்கிடமும், அது என்ன சுமக்கிறது, மற்றும் அதை எப்படி அணைப்பது என்பதும் [docs/EGRESS.md](docs/EGRESS.md)-இல் பட்டியலிடப்பட்டுள்ளது; சுய-ஹோஸ்ட், மறு-இலக்கிடப்பட்ட மற்றும் காற்று-துண்டிக்கப்பட்ட நிறுவல்கள் விருப்பப்படி வெளிச்செல்லும் அழைப்புகள் எதையும் செய்யாது.
+
+டிக்ரிப்ஷன் உங்கள் பிரவுசரில், நாங்கள் உங்களுக்கு வழங்கும் கோடில் நடக்கிறது. இது முன்பு ஒரு வாக்குறுதியாக இருந்தது; இப்போது நீங்கள் சரிபார்க்கக்கூடிய ஒன்று. உங்கள் விசையைத் தொடும் ஒவ்வொரு வரியும் ஒரே படிக்கக்கூடிய கோப்பில் உள்ளது, [`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js), இது வீலுக்குள் அனுப்பப்பட்டு அப்படியே வழங்கப்பட்டு, ஒரு Subresource Integrity ஹாஷுடன் பின் செய்யப்பட்டுள்ளது. பிரவுசர் நாங்கள் வெளியிட்டதையே இயக்குகிறது என்பதை உறுதிப்படுத்த:
+
+```bash
+curl -s https://app.clawmetry.com/static/js/cm-e2e.js -o served.js
+pip download --no-deps clawmetry==$(clawmetry --version | tr -d 'a-z ') -d /tmp/cm
+unzip -p /tmp/cm/clawmetry-*.whl clawmetry/static/js/cm-e2e.js > published.js
+diff served.js published.js && echo identical
+```
+
+அது என்ன நிரூபிக்காது: கோப்பை ஏற்றும் பக்கத்தை நாங்களே வழங்குகிறோம், எனவே நாங்கள் வேறு பக்கத்தை வழங்கியிருக்கலாம். இன்டெக்ரிட்டி ஹாஷ்கள் ஒரு சமரசம் செய்யப்பட்ட CDN-இலிருந்து உங்களைப் பாதுகாக்கின்றன, விற்பனையாளரிடமிருந்து அல்ல. நீங்கள் பெறுவது என்னவென்றால், எந்த மாற்றீடும் வேண்டுமென்றே, பக்க மூலத்தில் தெரியும் வகையில், யாரும் PyPI-இலிருந்து பெறக்கூடிய ஒரு கலைப்பொருளிலிருந்து வேறுபட்டதாக இருக்க வேண்டும் என்பதே. சுய-ஹோஸ்டிங் அல்லது உள்ளூர்-மட்டும் இருப்பது இந்த சார்பை முற்றிலும் நீக்குகிறது.
 
 ## நிறுவுதல்
 
-**ஒரே வரி (பரிந்துரைக்கப்படுகிறது):**
 ```bash
-curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
+pip install clawmetry     # பிறகு: clawmetry
 ```
 
-**pip:**
-```bash
-pip install clawmetry
-clawmetry
-```
+அல்லது ஒரே-வரி: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-**மூலத்திலிருந்து:**
-```bash
-git clone https://github.com/vivekchand/clawmetry.git
-cd clawmetry && pip install flask && python3 dashboard.py
-```
+macOS, Linux அல்லது Windows-இல் Python 3.8+ தேவை, அதே கணினியில் குறைந்தது ஒரு ஏஜென்ட் ரன்டைம் இருக்க வேண்டும். Docker வழிமுறைகள்: [docs/DOCKER.md](docs/DOCKER.md).
 
-## v2 முன்முனை மேம்பாடு
-
-v2 React பயன்பாடு `frontend/` இல் உள்ளது, மேலும் Flask சேவையகம் v2 இயக்கப்பட்ட நிலையில் தொடங்கப்படும்போது இது `/v2` இல் வழங்கப்படுகிறது.
-
-மேம்படுத்தும்போது இரண்டு டெர்மினல்களைப் பயன்படுத்தவும்:
+அல்லது ஏஜென்டே இதை உங்களுக்கு அமைக்கட்டும். [`agent-kill-switch`](skills/agent-kill-switch/SKILL.md) திறன், Claude Code, Codex, Cursor, Gemini CLI, Copilot அல்லது OpenCode-க்கு ClawMetry-ஐ நிறுவவும், கணினியில் உள்ள ஏஜென்ட்கள் என்ன செய்கின்றன மற்றும் செலவழிக்கின்றன என்பதை அறிக்கை செய்யவும், கோரிக்கையின் பேரில் ஒரு அமர்வை நிறுத்தவும், மற்றும் அபாயகரமான டூல் அழைப்புகளை அனுமதிக்காக நிறுத்தவும் கற்பிக்கிறது:
 
 ```bash
-# Terminal 1: Flask API/server on :8900
-CLAWMETRY_V2=1 python3 dashboard.py
+npx skills add vivekchand/clawmetry --skill agent-kill-switch
 ```
 
-```bash
-# Terminal 2: Vite dev server on :5173
-cd frontend
-nvm use
-npm ci
-npm run dev
-```
+## ஆவணங்கள்
 
-`http://localhost:5173/v2/` ஐத் திறக்கவும். Vite `/api` கோரிக்கைகளை
-`http://localhost:8900` க்கு ப்ராக்ஸி செய்கிறது, எனவே React பயன்பாடு கூடுதல்
-CORS அமைப்பு இல்லாமல் லோக்கல் Flask சேவையகத்துடன் தொடர்பு கொள்ள முடியும்.
+| | |
+|---|---|
+| [ரன்டைம் இணக்கத்தன்மை](docs/compatibility.md) | ஒவ்வொரு அடாப்டரும் என்ன படிக்கிறது, மற்றும் ஒரு ரன்டைமை எப்படி சேர்ப்பது |
+| [சூழல் அதிகச்செலவு](docs/CONTEXT_BLOWOUT.md) | வழங்குநர்-வாரி விண்டோக்கள், காம்பாக்ஷன் vs ஓவர்ஃப்ளோ, ரன்டைம்-வாரி கவரேஜ் |
+| [ஓவர்ஹெட்](docs/OVERHEAD.md) | கருவியமைப்பின் விலை, அளவிடப்பட்டது, அதை மறுஉருவாக்கம் செய்ய ஹார்னஸுடன் |
+| [தகுதிகள்](docs/ENTITLEMENTS.md) | இலவசம் vs கட்டணம், டையர் மேட்ரிக்ஸ், உரிம CLI |
+| [அனுமதிகள் & கொள்கைகள்](docs/APPROVALS.md) | இயங்குவதற்கு முந்தைய கேட்டிங், ரிஸ்க் ஸ்கோரிங், ஃபோன் அனுமதிகள் |
+| [OpenTelemetry](docs/OPENTELEMETRY.md) | டிரேஸ்களை எங்கு வேண்டுமானாலும் எக்ஸ்போர்ட் செய்யவும், எதிலிருந்தும் OTLP-ஐ உள்வாங்கவும் |
+| [உங்கள் சொந்த ஏஜென்டைக் கொண்டு வாருங்கள்](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore, Pydantic AI, LangChain முதலிலிருந்து இறுதி வரை, இயக்கக்கூடிய உதாரணங்களுடன் |
+| [SDK கண்காணிப்பு](docs/SDK_TRACKING.md) | நீங்களே உருவாக்கிய ஏஜென்ட்களுக்கான செலவு அட்ரிபியூஷன் |
+| [சாட் சேனல்கள்](docs/CHANNELS.md) | ஃப்ளோவில் காட்டப்படும் சாட் அடாப்டர்கள் |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | சாண்ட்பாக்ஸ் செய்யப்பட்ட NVIDIA NemoClaw அமைப்புகள் |
+| [Docker](docs/DOCKER.md) | இமேஜ், காம்போஸ், வால்யூம் மவுன்ட்கள் |
+| [கட்டமைப்பு](ARCHITECTURE.md) · [டெவலப்மென்ட்](docs/DEVELOPMENT.md) | இது உள்ளே எப்படி வேலை செய்கிறது; மூலத்திலிருந்து இயக்குதல் |
+| [டெலிமெட்ரி](docs/TELEMETRY.md) | அநாமதேய நிறுவல் மற்றும் டெஸ்க்டாப்-ஓபன் பிங்குகள், மற்றும் அவற்றை எப்படி அணைப்பது |
 
-Python பேக்கேஜுடன் அனுப்பப்படும் பண்டலை உருவாக்க:
+## ஸ்க்ரீன்ஷாட்கள்
 
-```bash
-cd frontend
-npm run build
-```
+கீழே உள்ள ஒவ்வொரு எண்ணும் ஒரு உண்மையான கணினியிலிருந்து, படிப்பதற்கு மட்டும் அணுகி, எதுவும் விதைக்காமல் பெறப்பட்டது.
 
-உற்பத்தி பண்டல் `clawmetry/static/v2/dist/` இல் எழுதப்படுகிறது.
+**ஏதோ தவறாக இருக்கும்போது அது உங்களுக்குச் சொல்கிறது, என்ன நடந்தது என்பதை மட்டும் அல்ல.**
+மேலே இரண்டு ஏனோமலி பேனர்கள்: தினசரி சராசரியை விட 7 மடங்கு அதிகமாக செலவு இயங்குகிறது, மற்றும் 4.2 மடங்கு செலவு உயர்வு. அவற்றுக்குக் கீழே, சமீபத்திய 667 அமர்வுகளில் 324, காரணம் வாரியாகப் பட்டியலிடப்பட்ட வீணடிப்பு சிக்னலைக் கொண்டுள்ளன.
 
-## ரன்டைம் / ஏஜென்ட் இணக்கத்தன்மை
+![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
-ClawMetry OpenClaw மட்டுமல்லாமல் பல AI-ஏஜென்ட் ரன்டைம்களையும் கண்காணிக்கிறது. OpenClaw அல்லாத ஒவ்வொரு ரன்டைமும் அதன் சொந்த அமர்வு வடிவமைப்பை ClawMetry இன் ஒருங்கிணைந்த வடிவங்களாக மொழிபெயர்க்கும் ஒரு பிரத்யேக ரீடர் அடாப்டரை வழங்குகிறது; daemon அவற்றை ரன்டைம் குறியிடப்பட்ட அதே DuckDB ஸ்டோர் + கிளவுட் ஸ்னாப்ஷாட்டில் இன்ஜெஸ்ட் செய்கிறது, மேலும் ஒன்றுக்கும் மேற்பட்ட ரன்டைம்கள் இருக்கும்போது Session replay தாவல் ஒரு **ரன்டைம் மாற்றியைக்** காட்டுகிறது. முழு அணி + ரன்டைம்களைச் சேர்ப்பதற்கான வழிகாட்டிக்கு [`docs/compatibility.md`](docs/compatibility.md) ஐயும், OpenClaw-குடும்ப அறிமுகத்திற்கு [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) ஐயும் காணவும்.
+**பணம் எங்கு சென்றது என்பதை, ஒவ்வொரு காலக்கட்டத்திலும் இது உங்களுக்குக் காட்டுகிறது.**
+இன்று $252.47, இந்த வாரம் $513.15, இந்த மாதம் $1,312.92, ஒவ்வொன்றுக்கும் பின்னால் உள்ள டோக்கன்களுடனும் உங்கள் சந்தா ஏற்கெனவே எவ்வளவு உள்ளடக்குகிறது என்பதுடனும். அதற்குக் கீழே, சுமார் $1,128/மாதம் மீட்டெடுக்கக்கூடியதாக பட்டியலிடப்பட்டு, மேலும் கேஷ் மறுபயன்பாட்டால் ஏற்கெனவே $17,256/மாதம் சேமிக்கப்பட்டுள்ளது.
 
-| ரன்டைம் / ஏஜென்ட் | நிலை | குறிப்புகள் |
-|---|---|---|
-| **OpenClaw** | நேட்டிவ் | குறிப்பு ரன்டைம், தானாகக் கண்டறியப்பட்டது |
-| **PicoClaw** | பீட்டா அடாப்டர் | தட்டையான `providers.Message` JSONL (`~/.picoclaw/workspace/sessions`). டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள். |
-| **NanoClaw** | பீட்டா அடாப்டர் | ஒரு அமர்வுக்கான SQLite (`data/v2-sessions`). டிரான்ஸ்கிரிப்ட்கள் + செய்தி எண்ணிக்கைகள். |
-| **Hermes** | பீட்டா அடாப்டர் | SQLite `~/.hermes/state.db`. டிரான்ஸ்கிரிப்ட்கள், மாடல், டோக்கன்கள்/செலவு. |
-| **Claude Code** | பீட்டா அடாப்டர் | JSONL `~/.claude/projects/.../<id>.jsonl`. டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள் + சிந்தனை, டோக்கன் பயன்பாடு. |
-| **Codex** | பீட்டா அடாப்டர் | ரோலவுட் JSONL `~/.codex/sessions/...`. டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள், டோக்கன் பயன்பாடு. |
-| **Cursor** | பீட்டா அடாப்டர் | SQLite `state.vscdb`. அரட்டை/கம்போசர் டிரான்ஸ்கிரிப்ட்கள், மாடல். |
-| **Aider** | பீட்டா அடாப்டர் | ஒவ்வொரு திட்டத்திற்கும் `.aider.chat.history.md`. டிரான்ஸ்கிரிப்ட்கள், மாடல், டோக்கன் எண்ணிக்கைகள். |
-| **Goose** | பீட்டா அடாப்டர் | SQLite `~/.local/share/goose`. டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள், டோக்கன் மொத்தங்கள். |
-| **opencode** | பீட்டா அடாப்டர் | SQLite `~/.local/share/opencode`. டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள், டோக்கன்கள் + செலவு. |
-| **Qwen Code** | பீட்டா அடாப்டர் | JSONL `~/.qwen/projects/.../chats`. டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள், டோக்கன் பயன்பாடு. |
-| **Pi** | பீட்டா அடாப்டர் | JSONL `~/.pi/agent/sessions`. டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள், டோக்கன்கள் + செலவு. |
-| **Deep Agents** | பீட்டா அடாப்டர் | SQLite `~/.deepagents/.state/sessions.db`. டிரான்ஸ்கிரிப்ட்கள், மாடல், கருவி அழைப்புகள், டோக்கன்கள் + செலவு. |
+![Cost: today, this week and this month, with an efficiency grade and itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
 
-"பீட்டா அடாப்டர்" என்றால் ClawMetry அந்த ரன்டைமின் உண்மையான ஆன்-டிஸ்க் வடிவமைப்பிற்கான ரீடரை வழங்குகிறது என்பதாகும், ஒவ்வொன்றும் ஒரு உண்மையான கணினியில் உண்மையான நிறுவலுக்கு எதிராக உருவாக்கப்பட்டு + சரிபார்க்கப்பட்டது (`tests/fixtures/runtimes/<rt>/` ஐக் காணவும்). அடாப்டர்கள் படிக்க-மட்டும்; ஒவ்வொன்றும் அதன் ரன்டைம் உண்மையில் என்ன சேமிக்கிறது என்பதில் நேர்மையாக இருக்கும் (எ.கா. PicoClaw/NanoClaw/Cursor டோக்கன் செலவை டிஸ்கில் எழுதுவதில்லை). ஒரு நோடில் பல ரன்டைம்கள் இயங்கும்போது, ரன்டைம் மாற்றி அமர்வுகள் காட்சியை ஒரு சுத்தமான ஆழமான ஆய்வுக்காக ஒரே ஒன்றுக்கு வரையறுக்கிறது.
+**ஒரு செய்தி எப்படி பதிலாக மாறுகிறது என்பதை இது வரைகிறது.**
+நேரடி ஃப்ளோ வரைபடம்: நீங்கள், அது வந்த சேனல், கேட்வே, தற்போது பதிலளிக்கும் மாடல், மற்றும் அது அணுகிய ஒவ்வொரு டூலும். வேலை அவற்றின் வழியாக நகரும்போது நோட்கள் ஒளிரும்.
 
-## எந்த SDK ஏஜென்டையும் கண்காணியுங்கள் - அவுட்-லூப் செலவு பங்கீடு
+![Flow: live diagram from you through the gateway to the model and its tools](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
-மேலே உள்ள ரன்டைம்கள் அனைத்தும் அமர்வுகளை டிஸ்கில் எழுதுகின்றன. நீங்கள் OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B, அல்லது ஒரு சாதாரண `httpx` லூப்பில் கட்டமைத்த உங்கள் சொந்த **உற்பத்தி ஏஜென்ட்** அவ்வாறு செய்யாது. ClawMetry இன் ஜீரோ-கான்ஃபிக் இன்டர்செப்டர் `httpx`/`requests` ஐ மங்கி-பேட்ச் செய்வதன் மூலம் அதன் LLM அழைப்புகளை (செலவு, டோக்கன்கள், தாமதம், பிழைகள்) இன்னும் பிடிக்கிறது:
+**கணினியில் உள்ள ஒவ்வொரு ஏஜென்டும், ஒரே அட்டவணையில்.**
+அது என்ன இயக்குகிறது, கடந்த 24 மணி நேரத்திலும் அதன் ஆயுட்காலம் முழுவதும் அது எவ்வளவு செலவாகிறது, அது கடைசியாக எப்போது காணப்பட்டது, யாருக்குச் சொந்தமானது, மற்றும் ஒரு சந்தா பில்லை உள்ளடக்குகிறதா. இங்கே 14 ஏஜென்ட்கள், 3 அமர்வுகள் வேலை செய்கின்றன, 13 அமைதியாக உள்ளன.
 
-```python
-import clawmetry.track            # activate the interceptor
-clawmetry.track.set_source("support-agent")   # name this product
+![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
-# ...your agent runs as normal; every LLM call is now tracked + attributed.
-```
+**ஒரு டர்னின் நேரமும் பணமும் எங்கு சென்றது என்பதை, டூல் வாரியாக இது காட்டுகிறது.**
+ஒரு உண்மையான அமர்வின் ஒரு டர்ன்: 11.2 நிமிடங்களில் 11 டூல்கள், $1.16-க்கு. ஒவ்வொரு Bash அழைப்பும் மாடல் அழைப்பும் காலவரிசையில் அதன் சொந்த பட்டியைப் பெறுகிறது, எனவே 4.1 நிமிடங்கள் இயங்கிய கட்டளையும் 226ms இயங்கிய கட்டளையும் ஒரே பார்வையில் வேறுபடுத்தப்படுகின்றன.
 
-`set_source()` (அல்லது `CLAWMETRY_SOURCE=support-agent` env var) ஒவ்வொரு அழைப்பையும் ஒரு **பெயரிடப்பட்ட சோர்ஸுடன்** குறியிடுகிறது, எனவே நீங்கள் இயக்கும் ஒவ்வொரு தயாரிப்பும் Overview இல் உள்ள டாஷ்போர்டின் **🔌 Out-loop sources** கார்டில் அதன் சொந்த முதல்-வகுப்பு, செலவு-பங்கீடு செய்யக்கூடிய வரியாகத் தோன்றும் - ஒரு ஏஜென்டுக்கான அழைப்புகள், வழங்குநர்கள், தாமதம், பிழை விகிதம். சோர்ஸ் எதுவும் அமைக்கப்படவில்லையா? அழைப்புகள் இன்னும் கண்காணிக்கப்படும்; கார்டு மட்டும் மறைந்திருக்கும்.
+![Sessions: one agent turn on a timeline, every tool call with its own duration and the turn's cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/sessions.png)
 
-```bash
-CLAWMETRY_SOURCE=billing-agent python my_agent.py
-```
+**இது வேலையை மதிப்பிடுகிறது, செலவை மட்டும் அல்ல.**
+இந்த வாரம் ஒரு A: 54 பணிகள் சுத்தமாக முடிந்தன, 2 கடினமானவை $48.57 செலவாயின, மற்றும் மதிப்பிடுவதற்குப் போதுமான செயல்பாடு இல்லாத ரன்கள் வெற்றிகளாக எண்ணப்படுவதற்குப் பதிலாக மதிப்பீட்டிலிருந்து விடுபடுகின்றன. ஒவ்வொரு கடினமான ரன்னும் அதன் டிரேசுடன் இணைக்கப்படுகிறது.
 
-இது ரன்டைம் அடாப்டர்கள் ஊட்டும் அதே தரவு அடுக்கு (DuckDB → கிளவுட் ஸ்னாப்ஷாட்), எனவே அவுட்-லூப் சோர்ஸ்கள் மற்ற எல்லாவற்றையும் போலவே கிளவுட் டாஷ்போர்டுடன் ஒத்திசைக்கப்படுகின்றன, E2E-குறியாக்கம் செய்யப்பட்டவை.
+![Quality: this week's report card with the rough runs and what they cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/quality.png)
 
-## OpenTelemetry - வழங்குநர்-நடுநிலை, உங்கள் தடங்களை எங்கும் அனுப்புங்கள்
+**சூழல் விண்டோ ஏன் தொடர்ந்து நிரம்புகிறது என்பதை இது காட்டுகிறது.**
+சமீபத்திய டர்னில் 1M-டோக்கன் விண்டோவில் 715K, 83.3% உச்சம், அனைத்தும் ஓவர்ஃப்ளோவில் அல்லாமல் முன்கூட்டியே தொடங்கிய 4 காம்பாக்ஷன்கள், மற்றும் அதற்குப் பின்னால் உள்ள ஒவ்வொரு டர்னின் பயன்பாடும்.
 
-ClawMetry **GenAI செமான்டிக் கன்வென்ஷன்களைப்** பயன்படுத்தி இரு திசைகளிலும் **OpenTelemetry** பேசுகிறது, எனவே உங்கள் ஏஜென்ட் தடங்கள் ஒரு கருவியில் மட்டும் பூட்டப்படுவதில்லை.
+![Context usage: window utilisation per turn, compaction events and tokens reclaimed](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/context.png)
 
-ஒவ்வொரு அமர்வையும் - LLM அழைப்புகள், கருவிகள், துணை-ஏஜென்ட்கள், டோக்கன்கள், செலவு - எந்த கலெக்டருக்கும் (Datadog, Grafana, Honeycomb, அல்லது உங்கள் சொந்த OTel Collector) OTLP/HTTP GenAI ஸ்பான்களாக **ஏற்றுமதி** செய்யுங்கள்:
+**நீங்கள் எதையும் கட்டமைக்காமலேயே கண்டறிதல் இயங்குகிறது.**
+நிறுவலிலிருந்தே இயல்பான டிடெக்டர்கள் இயங்குகின்றன: ஏஜென்ட் அமைதியாகிவிட்டது, டெலிமெட்ரி ஃபீட் நின்றுவிட்டது, செலவு உயர்வு, டோக்கன் வெடிப்பு, ஏறும் பிழைகள், பிழை உயர்வு, பட்ஜெட் வரம்பு, அச்சுறுத்தல் கையொப்பம் பொருந்தியது, செக்யூரிட்டி டூல் கண்டுபிடிப்பு, செக்யூரிட்டி நிலைமை மாற்றம். உங்கள் சொந்த விதிகள் இதற்கு மேல் விருப்பமானவை.
 
-```bash
-clawmetry --otel-export http://localhost:4318/v1/traces
-# equivalently:
-CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
-```
+![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-Auth ஹெடர்கள் மற்றும் போல் இடைவெளி விருப்பமான env vars ஆகும்:
+**அபாயகரமான அழைப்பை நிறுத்துவது ஆப்ட்-இன், மற்றும் அணைந்த நிலையில் வெளியிடப்படுகிறது.**
+ரிகர்சிவ் டிலீட்கள், ஃபோர்ஸ் புஷ்கள், sudo, இரகசியங்கள், பேக்கேஜ் நிறுவல்கள் மற்றும் வெளிச்செல்லும் அழைப்புகள் ஒவ்வொன்றும் நீங்கள் இயக்கக்கூடிய ஒரு விதியைப் பெறுகின்றன. நீங்கள் அதைச் செய்யும் வரை, ClawMetry கவனிக்கிறது, எதையும் மாற்றாது. ஒன்று இயக்கப்பட்டதும், பொருந்தும் அழைப்புகள் இங்கே (அல்லது உங்கள் ஃபோனில்) ஒரு அனுமதி அல்லது மறுப்புக்காக காத்திருக்கும்.
 
-```bash
-CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # extra HTTP headers
-CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
-```
+![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
-**Ingest** - உள்ளமைக்கப்பட்ட OTLP ரிசீவர் `/v1/traces` மற்றும் `/v1/metrics` இல் வேறு எதிலிருந்தும் தடங்கள் மற்றும் மெட்ரிக்குகளை ஏற்றுக்கொள்கிறது (protobuf இன்ஜெஸ்டுக்கு `pip install clawmetry[otel]`).
-
-உங்களுக்கு ஜீரோ-கான்ஃபிக், லோக்கல்-முதல் ClawMetry டாஷ்போர்டு **மற்றும்** உங்கள் குழு ஏற்கனவே இயக்கும் எந்தப் பேக்எண்டிலும் உங்கள் தரவும் கிடைக்கும் - பூட்டு இல்லை, நிறுவ இரண்டாவது ஏஜென்ட் இல்லை.
-
-## கட்டமைப்பு
-
-பெரும்பாலானவர்களுக்கு எந்தக் கட்டமைப்பும் தேவையில்லை. ClawMetry உங்கள் பணியிடம், பதிவுகள், அமர்வுகள் மற்றும் cron களை தானாகவே கண்டறியும்.
-
-தனிப்பயனாக்க வேண்டும் என்றால்:
-
-```bash
-clawmetry --port 9000              # Custom port (default: 8900)
-clawmetry --host 127.0.0.1         # Bind to localhost only
-clawmetry --workspace ~/mybot      # Custom workspace path
-clawmetry --name "Alice"           # Your name in Flow visualization
-```
-
-அனைத்து விருப்பங்களும்: `clawmetry --help`
-
-## ஆதரிக்கப்படும் சேனல்கள்
-
-நீங்கள் கட்டமைத்த ஒவ்வொரு OpenClaw சேனலுக்கும் ClawMetry நேரடி செயல்பாட்டைக் காட்டுகிறது. உங்கள் `openclaw.json` இல் உண்மையில் அமைக்கப்பட்ட சேனல்கள் மட்டுமே Flow வரைபடத்தில் தோன்றும் - கட்டமைக்கப்படாதவை தானாகவே மறைக்கப்படும்.
-
-உள்வரும்/வெளிச்செல்லும் செய்தி எண்ணிக்கைகளுடன் கூடிய நேரடி அரட்டைக் குமிழி காட்சியைக் காண Flow இல் உள்ள எந்த சேனல் நோடையும் கிளிக் செய்யவும்.
-
-| சேனல் | நிலை | நேரடி பாப்-அப் | குறிப்புகள் |
-|---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ முழு | ✅ | செய்திகள், புள்ளிவிவரங்கள், 10 வினாடி புதுப்பிப்பு |
-| 💬 **iMessage** | ✅ முழு | ✅ | `~/Library/Messages/chat.db` ஐ நேரடியாகப் படிக்கிறது |
-| 💚 **WhatsApp** | ✅ முழு | ✅ | WhatsApp Web (Baileys) வழியாக |
-| 🔵 **Signal** | ✅ முழு | ✅ | signal-cli வழியாக |
-| 🟣 **Discord** | ✅ முழு | ✅ | கில்ட் + சேனல் கண்டறிதல் |
-| 🟪 **Slack** | ✅ முழு | ✅ | பணியிடம் + சேனல் கண்டறிதல் |
-| 🌐 **Webchat** | ✅ முழு | ✅ | உள்ளமைக்கப்பட்ட வெப் UI அமர்வுகள் |
-| 📡 **IRC** | ✅ முழு | ✅ | டெர்மினல்-பாணி குமிழி UI |
-| 🍏 **BlueBubbles** | ✅ முழு | ✅ | BlueBubbles REST API வழியாக iMessage |
-| 🔵 **Google Chat** | ✅ முழு | ✅ | Chat API வெப்ஹுக்குகள் வழியாக |
-| 🟣 **MS Teams** | ✅ முழு | ✅ | Teams பாட் ப்ளக்இன் வழியாக |
-| 🔷 **Mattermost** | ✅ முழு | ✅ | சுய-நேர்த்தி குழு அரட்டை |
-| 🟩 **Matrix** | ✅ முழு | ✅ | பரவலாக்கப்பட்டது, E2EE ஆதரவு |
-| 🟢 **LINE** | ✅ முழு | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ முழு | ✅ | பரவலாக்கப்பட்ட NIP-04 DM கள் |
-| 🟣 **Twitch** | ✅ முழு | ✅ | IRC இணைப்பு வழியாக அரட்டை |
-| 🔷 **Feishu/Lark** | ✅ முழு | ✅ | WebSocket நிகழ்வு சந்தா |
-| 🔵 **Zalo** | ✅ முழு | ✅ | Zalo Bot API |
-
-> **தானியங்கு கண்டறிதல்:** ClawMetry உங்கள் `~/.openclaw/openclaw.json` ஐப் படித்து, நீங்கள் உண்மையில் கட்டமைத்த சேனல்களை மட்டுமே காட்டுகிறது. கைமுறை அமைப்பு எதுவும் தேவையில்லை.
-
-## Docker வரிசைப்படுத்தல்
-
-ClawMetry ஐ ஒரு கன்டெய்னரில் இயக்க விரும்புகிறீர்களா? பிரச்சனையே இல்லை! 🐳
-
-**Docker உடன் விரைவான தொடக்கம்:**
-
-```bash
-# Build the image
-docker build -t clawmetry .
-
-# Run with default settings
-docker run -p 8900:8900 clawmetry
-
-# Or mount your agent's data dir (shown: OpenClaw's ~/.openclaw)
-docker run -p 8900:8900 \
-  -v ~/.openclaw:/root/.openclaw \
-  -v /tmp/moltbot:/tmp/moltbot \
-  clawmetry
-```
-
-**Docker Compose உதாரணம்:**
-
-```yaml
-version: '3.8'
-services:
-  clawmetry:
-    build: .
-    ports:
-      - "8900:8900"
-    volumes:
-      - ~/.openclaw:/root/.openclaw:ro
-      - /tmp/moltbot:/tmp/moltbot:ro
-    restart: unless-stopped
-```
-
-> **குறிப்பு:** Docker இல் இயக்கும்போது, ClawMetry உங்கள் அமைப்பைத் தானாகவே கண்டறிய, உங்கள் ஏஜென்டின் தரவு + பதிவுக் கோப்பகங்களை (எ.கா. `~/.openclaw`, `~/.claude`, `~/.codex`) மவுன்ட் செய்யவும்.
-
-## தேவைகள்
-
-- Python 3.8+
-- Flask (pip வழியாகத் தானாக நிறுவப்படும்)
-- அதே கணினியில் ஒரு AI ஏஜென்ட் ரன்டைம்: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, அல்லது Deep Agents (அல்லது Docker க்கான மவுன்ட் செய்யப்பட்ட வால்யூம்கள்)
-- Linux அல்லது macOS
-
-## NemoClaw / OpenShell ஆதரவு
-
-ClawMetry தானாகவே [NemoClaw](https://github.com/NVIDIA/NemoClaw) ஐக் கண்டறிகிறது - இது சாண்ட்பாக்ஸ் செய்யப்பட்ட OpenShell கன்டெய்னர்களுக்குள் ஏஜென்ட்களை இயக்கும், OpenClaw க்கான NVIDIA இன் நிறுவன பாதுகாப்பு மேலாடை.
-
-பெரும்பாலான சந்தர்ப்பங்களில் கூடுதல் கட்டமைப்பு தேவையில்லை. sync daemon அமர்வுக் கோப்புகளை, அவை ஹோஸ்டில் `~/.openclaw/` இல் இருந்தாலும் அல்லது OpenShell கன்டெய்னருக்குள் இருந்தாலும், தானாகவே கண்டுபிடிக்கிறது.
-
-### இது எவ்வாறு செயல்படுகிறது
-
-ClawMetry NemoClaw ஐ இரண்டு வழிகளில் கண்டறிகிறது:
-
-1. **பைனரி கண்டறிதல்** - `nemoclaw` CLI ஐச் சரிபார்த்து, சாண்ட்பாக்ஸ் தகவலைப் பெற `nemoclaw status` ஐ இயக்குகிறது
-2. **கன்டெய்னர் கண்டறிதல்** - இயங்கும் Docker கன்டெய்னர்களை `openshell`, `nemoclaw`, அல்லது `ghcr.io/nvidia/` இமேஜ்களுக்காக ஸ்கேன் செய்து, பின்னர் வால்யூம் மவுன்ட்கள் அல்லது `docker cp` வழியாக அமர்வுகளைப் படிக்கிறது
-
-NemoClaw கன்டெய்னர்களிலிருந்து ஒத்திசைக்கப்பட்ட அமர்வுக் கோப்புகள் கிளவுட் டாஷ்போர்டில் `runtime=nemoclaw` மற்றும் `container_id` மெட்டாடேட்டாவுடன் குறியிடப்படுகின்றன, எனவே அவற்றை நிலையான OpenClaw அமர்வுகளிலிருந்து ஒரே பார்வையில் பிரித்தறியலாம்.
-
-### பரிந்துரைக்கப்பட்ட அமைப்பு: HOST இல் sync daemon
-
-சிறந்த அனுபவத்திற்கு, ClawMetry இன் sync daemon ஐ **ஹோஸ்ட் கணினியில்** இயக்கவும் (சாண்ட்பாக்ஸுக்குள் அல்ல). இது NemoClaw நெட்வொர்க் கொள்கைக் கட்டுப்பாடுகளைத் தவிர்க்கிறது.
-
-```bash
-# On the host (outside the sandbox)
-pip install clawmetry
-clawmetry connect
-clawmetry sync
-```
-
-sync daemon இயங்கும் எந்த OpenShell கன்டெய்னர்களுக்குள்ளும் உள்ள அமர்வுகளைத் தானாகவே கண்டுபிடிக்கும்.
-
-### விருப்பம்: வெளிப்படையான சாண்ட்பாக்ஸ் பெயர்
-
-தானியங்கு கண்டறிதல் வேலை செய்யவில்லை என்றால், ClawMetry ஐ சரியான சாண்ட்பாக்ஸை நோக்கிச் சுட்டவும்:
-
-```bash
-export NEMOCLAW_SANDBOX=my-sandbox-name
-clawmetry sync
-```
-
-### சாண்ட்பாக்ஸுக்குள் இயக்குதல் (மேம்பட்டது)
-
-sync daemon ஐ OpenShell சாண்ட்பாக்ஸுக்குள் **இயக்கவே** வேண்டும் என்றால், அது ClawMetry ingest API ஐ அடைய, உங்கள் NemoClaw நெட்வொர்க் கொள்கையில் இந்த egress விதியைச் சேர்க்கவும்:
-
-```yaml
-# nemoclaw-policy.yaml
-network:
-  egress:
-    - host: ingest.clawmetry.com
-      port: 443
-      protocol: https
-```
-
-இதனுடன் பயன்படுத்தவும்:
-
-```bash
-nemoclaw policy apply --file nemoclaw-policy.yaml
-```
-
-### போர்ட்டுகள் மற்றும் எண்ட்பாயிண்ட்கள்
-
-| எண்ட்பாயிண்ட் | போர்ட் | நெறிமுறை | தேவையா |
-|---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | ஆம் (sync daemon → கிளவுட்) |
-| `localhost:8900` | 8900 | HTTP | ஆம் (லோக்கல் டாஷ்போர்டு UI) |
-| Docker சாக்கெட் (`/var/run/docker.sock`) | — | Unix சாக்கெட் | கன்டெய்னர் அமர்வு கண்டறிதலுக்காக |
-
-sync daemon `ingest.clawmetry.com` க்கு மட்டுமே அவுட்பவுண்ட் HTTPS அழைப்புகளை மேற்கொள்கிறது. எந்த இன்பவுண்ட் போர்ட்டும் தேவையில்லை.
-
----
-
-## கிளவுட் வரிசைப்படுத்தல்
-
-SSH டன்னல்கள், ரிவர்ஸ் ப்ராக்ஸி, மற்றும் Docker க்கு **[Cloud Testing Guide](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** ஐக் காணவும்.
-
-## சோதனை
-
-இந்தத் திட்டம் BrowserStack உடன் சோதிக்கப்படுகிறது.
-
-[![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
-
-## டெலிமெட்ரி
-
-ClawMetry ஒரு புதிய கணினியில் `clawmetry` CLI ஐ முதல் முறையாக இயக்கும்போது
-`https://app.clawmetry.com/api/install` க்கு ஒரே ஒரு அநாமதேய "முதல் இயக்கம்" பிங்
-அனுப்புகிறது. நாங்கள் இதை நிறுவல்களை எண்ணிக்கை செய்யப் பயன்படுத்துகிறோம் (ஒரு OSS
-திட்டத்திற்கு எங்களிடம் உள்ள ஒரே மார்க்கெட்டிங் அளவீடு இதுவே) மேலும் எங்கள் பயனர்கள்
-எந்த ஏஜென்ட் ஃப்ரேம்வொர்க்குகளை நிறுவியிருக்கிறார்கள் என்பதை அறிந்துகொள்ளவும்.
-
-**ஒரு நிறுவலுக்கு சரியாக ஒரு POST**, கொண்டிருப்பது:
-
-| புலம் | உதாரணம் | ஏன் |
-|---|---|---|
-| `install_id` | `~/.clawmetry/install_id` இல் சேமிக்கப்பட்ட ரேண்டம் UUID | நகல் நீக்கம்; உங்கள் மின்னஞ்சல் அல்லது api_key உடன் இணைக்கப்படவில்லை |
-| `version` | `0.12.167` | வெளியில் உள்ள பதிப்புகள் என்ன |
-| `os` / `os_version` | `Darwin` / `25.3.0` | தளம் ஆதரவு முன்னுரிமைகள் |
-| `python` | `3.11.15` | Python பதிப்பு ஆதரவு அணி |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | அடுத்து எந்த ஏஜென்ட்களுடன் நாங்கள் ஒருங்கிணைக்க வேண்டும் |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | மனித நிறுவல்களை CI சத்தத்திலிருந்து பிரிக்க |
-
-**நாங்கள் அனுப்பாதவை**: IP (கிளவுட் கோரிக்கையிலிருந்து நாட்டுக் குறியீட்டை
-சர்வர்-பக்கத்தில் பெற்றுக்கொண்டு, பின்னர் IP ஐ நிராகரிக்கிறது), ஹோஸ்ட்நேம், யூசர்நேம்,
-பணியிடப் பாதை, கோப்பு உள்ளடக்கங்கள், உங்கள் api_key, உங்கள் மின்னஞ்சல், எந்த PII அல்லது
-பணியிடம் சார்ந்த தகவலும் இல்லை. வயர் பேலோட்
-[`clawmetry/telemetry.py`](clawmetry/telemetry.py) இல் தணிக்கை செய்யக்கூடியது.
-
-**விலகல்** (இவற்றில் ஏதேனும் ஒன்று இதை நிரந்தரமாக முடக்கும்):
-
-```bash
-export CLAWMETRY_NO_TELEMETRY=1                # per-shell
-export DO_NOT_TRACK=1                          # W3C cross-tool standard
-touch ~/.clawmetry/notelemetry                 # persistent file marker
-```
-
-இங்கு ஒரு நெட்வொர்க் தோல்வி `clawmetry` இயங்குவதைத் தடுக்காது - பிங்
-ஒரு daemon த்ரெட்டில் 3 வினாடி டைம்அவுட்டுடன் fire-and-forget ஆக அமைந்துள்ளது.
+மேலும், ரன்டைம் வாரியாக: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
 ## நட்சத்திர வரலாறு
 
@@ -401,11 +205,6 @@ touch ~/.clawmetry/notelemetry                 # persistent file marker
 
 ## உரிமம்
 
-MIT
+MIT · உருவாக்கியவர் [@vivekchand](https://github.com/vivekchand) · [clawmetry.com](https://clawmetry.com)
 
----
-
-<p align="center">
-  <strong>🦞 உங்கள் ஏஜென்ட் சிந்திப்பதைப் பாருங்கள்</strong><br>
-  <sub><a href="https://github.com/vivekchand">@vivekchand</a> ஆல் உருவாக்கப்பட்டது · <a href="https://clawmetry.com">clawmetry.com</a> · <a href="https://github.com/openclaw/openclaw">OpenClaw</a> சூழல்தொகுப்பின் ஒரு பகுதி</sub>
-</p>
+<!-- osai-verify: f3ac716d40002c1ad6dd -->

@@ -13,6 +13,9 @@ Endpoints
 * ``GET  /api/review/queue``           — pending + recently-decided rows
                                          joined with session summary so
                                          the UI renders one row per card.
+                                         Carries ``store_available`` so a
+                                         caller can tell an empty queue
+                                         apart from an unreadable store.
 * ``POST /api/review/<session_id>``    — body ``{status, notes}``;
                                          updates the row.
 * ``GET  /api/review/accuracy``        — per-agent + global accuracy
@@ -155,7 +158,14 @@ def get_review_queue():
         "query_review_queue",
         status=status,
         limit=limit,
-    ) or []
+    )
+    # None means the store could not be read at all (the hosted dashboard has
+    # no local DuckDB; the daemon proxy can also be briefly down). That is a
+    # different fact from "nothing is waiting for you", and a surface that
+    # renders them identically tells a cloud user their queue is empty when
+    # we simply cannot see it. Callers branch on ``store_available``.
+    store_available = rows is not None
+    rows = rows or []
 
     # Decorate with session summary (title + total_tokens) so the UI
     # renders one self-contained card per row without a second fetch.
@@ -176,6 +186,7 @@ def get_review_queue():
     return jsonify({
         "rows":  rows,
         "count": len(rows),
+        "store_available": store_available,
     })
 
 
@@ -212,11 +223,16 @@ def get_review_accuracy():
         window = max(1, int(raw))
     except (TypeError, ValueError):
         window = 30
-    data = _store_call("query_review_accuracy", window_days=window) or {
-        "window_days": window,
-        "global":      {"correct": 0, "wrong": 0, "borderline": 0, "accuracy": None},
-        "per_agent":   [],
-    }
+    data = _store_call("query_review_accuracy", window_days=window)
+    store_available = data is not None
+    if not data:
+        data = {
+            "window_days": window,
+            "global":      {"correct": 0, "wrong": 0, "borderline": 0, "accuracy": None},
+            "per_agent":   [],
+        }
+    # Same distinction as the queue: an unreadable store is not a clean record.
+    data["store_available"] = store_available
     return jsonify(data)
 
 

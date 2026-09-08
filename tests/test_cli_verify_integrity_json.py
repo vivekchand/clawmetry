@@ -71,6 +71,11 @@ def test_json_valid_emits_store_shape_and_exits_zero(monkeypatch, capsys):
         "checked": 42,
         "pre_chain": 3,
         "broken_at": None,
+        # Linkage counters ride along with every verdict so a script can tell
+        # "verified end to end" from "verified, ordering incomplete" without
+        # parsing prose. Both are 0 on a clean chain.
+        "unlinked": 0,
+        "fork_points": 0,
         "error": None,
     }
 

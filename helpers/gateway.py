@@ -1,5 +1,4 @@
-"""
-helpers/gateway.py — OpenClaw gateway WebSocket RPC + HTTP invoke client.
+"""helpers/gateway.py — OpenClaw gateway WebSocket RPC + HTTP invoke client.
 
 Extracted from dashboard.py as Phase 6.5. Owns the persistent WebSocket
 JSON-RPC client used for live gateway queries (sessions.list, cron.list,
@@ -21,12 +20,17 @@ those via late ``import dashboard as _d`` inside the functions below —
 the same pattern routes/*.py use.
 """
 
+from clawmetry.gateway_protocol import (
+    GATEWAY_MAX_PROTOCOL as _GW_MAX_PROTO,
+    GATEWAY_MIN_PROTOCOL as _GW_MIN_PROTO,
+)
 import json
 import subprocess
 import threading
+import time
 
 
-# ── WebSocket RPC Client ────────────────────────────────────────────────
+# ── WebSocket RPC Client ───────────────────────────────────────────────────────
 # Persistent connection state. Shared by all threads that call
 # `_gw_ws_rpc`; the lock serialises send/recv pairs so responses don't
 # get scrambled across concurrent callers.
@@ -34,10 +38,24 @@ _ws_client = None
 _ws_lock = threading.Lock()
 _ws_connected = False
 
+# Backoff state — updated inside _gw_ws_connect(), which is always called
+# under _ws_lock, so no separate lock is needed for these variables.
+_ws_fail_count = 0
+_ws_next_retry_time = 0.0
+# Delays in seconds: 2, 4, 8, 16, 30, 60 (capped at 60).
+_WS_BACKOFF_DELAYS = (2, 4, 8, 16, 30, 60)
+
 
 def _gw_ws_connect(url=None, token=None):
     """Connect to the OpenClaw gateway via WebSocket JSON-RPC."""
-    global _ws_client, _ws_connected
+    global _ws_client, _ws_connected, _ws_fail_count, _ws_next_retry_time
+
+    # Honour exponential backoff — don't hammer a gateway that keeps
+    # rejecting us (issue #4356: v4 gateways reject immediately, producing
+    # bursts of ~5 reconnect attempts per 100ms in the gateway log).
+    if _ws_next_retry_time and time.monotonic() < _ws_next_retry_time:
+        return False
+
     try:
         import websocket
     except ImportError:
@@ -56,6 +74,7 @@ def _gw_ws_connect(url=None, token=None):
     if not ws_url or not tok:
         return False
 
+    _ok = False
     try:
         # timeout=5 applies to the initial TCP/WS handshake; we also set
         # ws.settimeout(5) below so per-message recv() can't hang forever if
@@ -66,28 +85,34 @@ def _gw_ws_connect(url=None, token=None):
         ws.recv()
         # Send connect.
         #
-        # Issue #1720: the OpenClaw gateway only honours requested scopes
-        # (``operator.read`` / ``operator.admin``) when the connecting
-        # client identifies itself as ``openclaw-control-ui``. Any other
-        # ``client.id`` (we previously sent ``cli``) gets an OK connect
-        # response with an empty ``auth.scopes`` array, and every
-        # subsequent ``cron.list`` / ``sessions.list`` call fails with
-        # ``INVALID_REQUEST: missing scope: operator.read`` — surfacing as
-        # empty Crons / Sessions tabs in the dashboard. The bundled
-        # control UI is the only client the gateway whitelists for those
-        # scopes, so we mimic its identity for our read-only RPCs.
+        # Issue #1720 history: protocol-3 gateways only honoured requested
+        # scopes when the client identified as ``openclaw-control-ui``, so
+        # this helper used to impersonate it. Protocol-4 gateways
+        # (OpenClaw 2026.5.28+) close that loophole: a control-ui identity
+        # presenting a raw bearer token is REJECTED outright with
+        # ``control-ui-insecure-auth`` (the real control UI authenticates
+        # via device pairing). A rejected handshake made the dashboard
+        # report a perfectly healthy gateway as "not running".
+        #
+        # So connect honestly as ``cli`` (verified ok:true / protocol:4
+        # against a live v4 gateway, 2026-08-01). On gateways that grant
+        # the token no scopes this degrades exactly as before #1720 —
+        # Crons/Sessions tabs empty, connection and unscoped RPCs fine —
+        # which is strictly better than "not running". The durable scope
+        # story on v4 needs a scoped token / pairing integration (tracked
+        # in the follow-up issue referenced by this PR).
         connect_msg = {
             "type": "req",
             "id": "clawmetry-connect",
             "method": "connect",
             "params": {
-                "minProtocol": 3,
-                "maxProtocol": 3,
+                "minProtocol": _GW_MIN_PROTO,
+                "maxProtocol": _GW_MAX_PROTO,
                 "client": {
-                    "id": "openclaw-control-ui",
+                    "id": "cli",
                     "version": _d.__version__,
                     "platform": _d._CURRENT_PLATFORM,
-                    "mode": "webchat",
+                    "mode": "cli",
                     "instanceId": f"clawmetry-{_d._uuid.uuid4().hex[:8]}",
                 },
                 "role": "operator",
@@ -103,14 +128,27 @@ def _gw_ws_connect(url=None, token=None):
                 if r.get("ok"):
                     _ws_client = ws
                     _ws_connected = True
-                    return True
+                    _ok = True
                 else:
                     ws.close()
-                    return False
-        ws.close()
+                break
+        if not _ok:
+            try:
+                ws.close()
+            except Exception:
+                pass
     except Exception:
         pass
-    return False
+
+    if _ok:
+        _ws_fail_count = 0
+        _ws_next_retry_time = 0.0
+    else:
+        _ws_fail_count += 1
+        _ws_next_retry_time = time.monotonic() + _WS_BACKOFF_DELAYS[
+            min(len(_WS_BACKOFF_DELAYS) - 1, _ws_fail_count - 1)
+        ]
+    return _ok
 
 
 def _gw_ws_rpc(method, params=None):

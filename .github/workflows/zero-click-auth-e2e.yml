@@ -28,6 +28,10 @@ on:
       - "tests/e2e/package.json"
       - ".github/workflows/zero-click-auth-e2e.yml"
 
+concurrency:
+  group: zca-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -36,15 +40,23 @@ jobs:
     name: Zero-click localhost auto-login (positive + XFF refuse)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Trial-end hard block is default-ON in code (clawmetry/trial_enforcement.py).
+    # This job tests the unrelated zero-click localhost auth flow; opt out so
+    # the dashboard shell serves cleanly without a license. Hard-block behavior
+    # has its own dedicated coverage in tests/test_trial_hard_block.py.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "20"
 
@@ -54,7 +66,11 @@ jobs:
       - name: Install Playwright + Chromium
         working-directory: tests/e2e
         run: |
-          npm install
+          # `npm ci`, not `npm install`: installs exactly what the committed
+          # package-lock.json resolves to and fails if the lockfile and
+          # package.json disagree, so CI cannot silently drift onto a newer
+          # transitive dependency than the one that was reviewed.
+          npm ci
           npx playwright install --with-deps chromium
 
       - name: Run zero-click-auth E2E

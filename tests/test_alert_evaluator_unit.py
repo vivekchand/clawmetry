@@ -364,7 +364,7 @@ def test_legacy_alert_type_maps_to_count_evaluator():
 
 def _quality(*, eval_count=0, eval_avg=None, eval_scores=None,
              classified_total=0, failed_count=0, outcome_counts=None,
-             window_minutes=60):
+             window_minutes=60, window_spend_usd=0.0):
     """Build a query_session_quality_window()-shaped dict."""
     failure_rate = (failed_count / classified_total) if classified_total else None
     return {
@@ -376,6 +376,7 @@ def _quality(*, eval_count=0, eval_avg=None, eval_scores=None,
         "classified_total": classified_total,
         "failed_count":     failed_count,
         "failure_rate":     failure_rate,
+        "window_spend_usd": window_spend_usd,
     }
 
 
@@ -492,3 +493,49 @@ def test_quality_rules_coexist_with_event_rules():
     matches = alert_evaluator.evaluate([qrule, erule], events, {}, q)
     rids = sorted(m["rule"]["id"] for m in matches)
     assert rids == ["r-count", "r-eval"]
+
+
+# ── dollars_per_done_above (Harness Engineering "Watch $/done") ──────────────
+
+
+def test_dollars_per_done_fires_above_threshold():
+    rule = _rule("r-dpd", alert_type="dollars_per_done_above",
+                 threshold_value=5, cooldown_sec=0)
+    # $60 across 10 classified sessions, 6 finished -> $10/done > $5.
+    q = _quality(classified_total=10,
+                 outcome_counts={"success": 6, "failed": 4},
+                 window_spend_usd=60.0)
+    matches = alert_evaluator.evaluate([rule], [], {}, q)
+    assert len(matches) == 1
+    md = matches[0]["metadata"]
+    assert md["dollars_per_done"] == 10.0
+    assert md["basis"] == "classified_sessions"
+    assert md["threshold_usd"] == 5.0
+
+
+def test_dollars_per_done_no_fire_at_or_below_threshold():
+    rule = _rule("r-dpd", alert_type="dollars_per_done_above",
+                 threshold_value=10, cooldown_sec=0)
+    q = _quality(classified_total=10,
+                 outcome_counts={"success": 6, "failed": 4},
+                 window_spend_usd=60.0)
+    assert alert_evaluator.evaluate([rule], [], {}, q) == []
+
+
+def test_dollars_per_done_underfires_with_zero_successes():
+    """No finished jobs means no price; the rule must not divide by hope."""
+    rule = _rule("r-dpd", alert_type="dollars_per_done_above",
+                 threshold_value=1, cooldown_sec=0)
+    q = _quality(classified_total=10,
+                 outcome_counts={"failed": 10},
+                 window_spend_usd=500.0)
+    assert alert_evaluator.evaluate([rule], [], {}, q) == []
+
+
+def test_dollars_per_done_respects_min_sessions():
+    rule = _rule("r-dpd", alert_type="dollars_per_done_above",
+                 threshold_value=1, cooldown_sec=0)
+    q = _quality(classified_total=2,
+                 outcome_counts={"success": 1, "failed": 1},
+                 window_spend_usd=100.0)
+    assert alert_evaluator.evaluate([rule], [], {}, q) == []

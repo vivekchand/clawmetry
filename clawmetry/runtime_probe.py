@@ -25,7 +25,16 @@ import os
 from dataclasses import dataclass
 
 # Runtimes the free tier watches (FLYWHEEL: free on every plan).
-FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw"})
+#
+# Sourced from the entitlement catalogue rather than duplicated: this module
+# only labels a probe row ``free``, and a stale copy here would show a free
+# runtime as locked in onboarding while the gate happily allowed it. The
+# literal is kept solely as an import-failure fallback (this module is
+# imported by the installer path, which must never hard-fail on an import).
+try:  # pragma: no cover - trivial import shim
+    from clawmetry.entitlements import FREE_RUNTIMES
+except Exception:  # pragma: no cover - defensive; keep onboarding alive
+    FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
 
 
 @dataclass
@@ -45,7 +54,12 @@ class RuntimeProbe:
                 if root and os.path.exists(os.path.expanduser(root)):
                     return True
             for p in self.paths:
-                expanded = os.path.expanduser(p)
+                # expandvars FIRST so "$XDG_DATA_HOME/..." resolves; an unset
+                # var stays literal and simply globs to nothing, which is the
+                # honest answer rather than a bare-root false positive.
+                expanded = os.path.expanduser(os.path.expandvars(p))
+                if "$" in expanded:
+                    continue
                 if _glob.glob(expanded):
                     return True
         except Exception:
@@ -66,7 +80,22 @@ RUNTIME_PROBES: tuple = (
         "~/.config/Cursor/User/globalStorage/state.vscdb",
     )),
     RuntimeProbe("aider", "Aider", ("~/.aider*",), env="AIDER_HISTORY_DIRS"),
-    RuntimeProbe("goose", "Goose", ("~/.local/share/goose/sessions",)),
+    # Goose resolves its data dir with etcetera's choose_app_strategy, which
+    # is XDG on macOS as well as Linux (NOT ~/Library/Application Support)
+    # and RoamingAppData on Windows; GOOSE_PATH_ROOT relocates all of it.
+    # The last entry is the legacy macOS location Goose's own paths.rs still
+    # names for pre-existing installs. The env-var forms are globbed rather
+    # than declared via ``env=``, because "$GOOSE_PATH_ROOT exists" is not
+    # evidence of a Goose install — "$GOOSE_PATH_ROOT/data/sessions exists"
+    # is. Kept in step with clawmetry/adapters/goose.py::_candidate_db_paths().
+    RuntimeProbe("goose", "Goose", (
+        "$GOOSE_PATH_ROOT/data/sessions",
+        "$XDG_DATA_HOME/goose/sessions",
+        "~/.local/share/goose/sessions",
+        "$APPDATA/Block/goose/data/sessions",
+        "~/AppData/Roaming/Block/goose/data/sessions",
+        "~/Library/Application Support/Block/goose/sessions",
+    )),
     RuntimeProbe("opencode", "opencode", ("~/.local/share/opencode",)),
     RuntimeProbe("qwen_code", "Qwen Code", ("~/.qwen/projects",)),
     RuntimeProbe("hermes", "Hermes", ("~/.hermes",), env="HERMES_HOME"),
@@ -74,6 +103,113 @@ RUNTIME_PROBES: tuple = (
     RuntimeProbe("nanoclaw", "NanoClaw", ("~/.nanoclaw",)),
     RuntimeProbe("pi", "Pi", ("~/.pi/agent/sessions",)),
     RuntimeProbe("deepagents", "DeepAgents", ("~/.deepagents/.state", "~/.deepagents")),
+    RuntimeProbe("n8n", "n8n", ("~/.n8n",), env="N8N_USER_FOLDER"),
+    RuntimeProbe("antigravity", "Antigravity",
+                 ("~/.gemini/antigravity", "~/.gemini/antigravity-cli",
+                  "~/.gemini/antigravity-ide", "~/.gemini/jetski"),
+                 env="CLAWMETRY_ANTIGRAVITY_HOME"),
+    RuntimeProbe("copilot", "GitHub Copilot", ("~/.copilot/session-state",),
+                 env="CLAWMETRY_COPILOT_HOME"),
+    RuntimeProbe("grok", "Grok",
+                 ("~/.grok/logs", "~/.grok/sessions", "~/.grok/bin/grok"),
+                 env="CLAWMETRY_GROK_HOME"),
+    # DeepSeek Harness (`dsh`) keeps everything under one home ($DSH_HOME,
+    # default ~/.dsh); JSONL session logs live in <home>/sessions.
+    RuntimeProbe("deepseek_harness", "DeepSeek Harness",
+                 ("~/.dsh/sessions",), env="DSH_HOME"),
+    # Exo harness state is WORKSPACE-relative (<workspace>/.exo/exoharness),
+    # not home-anchored; the probe checks the common clone locations and the
+    # CLAWMETRY_EXO_ROOTS override. The pro adapter does the deeper
+    # well-known-parents scan.
+    RuntimeProbe("exo", "Exo",
+                 ("~/exo/.exo/exoharness", "~/.exo/exoharness"),
+                 env="CLAWMETRY_EXO_ROOTS"),
+    # Kimi CLI keeps everything under one share dir ($KIMI_SHARE_DIR,
+    # default ~/.kimi); the standalone successor Kimi Code CLI uses
+    # ~/.kimi-code. Same store shape, same runtime here.
+    RuntimeProbe("kimi", "Kimi CLI",
+                 ("~/.kimi/sessions", "~/.kimi-code/sessions"),
+                 env="KIMI_SHARE_DIR"),
+    # Google Gemini CLI keeps per-project chat recordings under
+    # <home>/.gemini/tmp/<project-basename>/chats/. NOTE the env var names the
+    # dir CONTAINING .gemini (unlike KIMI_SHARE_DIR/QWEN_HOME, which name the
+    # data dir itself), so the probe globs both the plain ~/.gemini tree and
+    # the CLAWMETRY override that points straight at a data dir.
+    RuntimeProbe("gemini_cli", "Gemini CLI",
+                 ("~/.gemini/tmp/*/chats", "~/.gemini/projects.json"),
+                 env="CLAWMETRY_GEMINI_CLI_HOME"),
+    # Cline CLI keeps sessions under the DATA leaf of its home -- ~/.cline
+    # itself only holds hooks/ and worktrees/, which our own installer creates,
+    # so probing the bare ~/.cline would false-positive on every machine that
+    # has ClawMetry's hooks installed and no Cline at all.
+    RuntimeProbe("cline", "Cline",
+                 ("~/.cline/data/db/sessions.db", "~/.cline/data/sessions"),
+                 env="CLAWMETRY_CLINE_DATA_DIR"),
+    # OpenHands persists one directory per conversation. The probe requires the
+    # conversations dir rather than the ~/.openhands root, because the CLI
+    # creates ~/.openhands/profiles and ~/.openhands/cache on first launch even
+    # when the persistence dir points elsewhere -- so the root existing is not
+    # evidence that any conversation was ever recorded.
+    # OpenWorker ("coworker") is a desktop app; its state dir is
+    # $COWORKER_STATE_DIR, else %APPDATA%\\coworker on Windows, else
+    # ~/.config/coworker (coworker/secrets.py::state_dir). Probe the STORE
+    # files rather than the directory: the dir alone is created by a first
+    # launch that never recorded a session, and ~/.config is shared with
+    # every other tool, so a bare-dir probe is the weakest possible evidence.
+    RuntimeProbe("openworker", "OpenWorker",
+                 ("~/.config/coworker/coworker.db",
+                  "~/.config/coworker/conversations",
+                  "~/AppData/Roaming/coworker/coworker.db"),
+                 env="CLAWMETRY_OPENWORKER_STATE_DIR"),
+    # Lovable (lovable.dev) has NO install and no fixed data dir: the local
+    # evidence is a git clone of a Lovable-synced repo, identified by its
+    # CONTENT (README project marker + bot commits), which a path glob cannot
+    # express without false positives. So the probe fires only on the
+    # explicit env override; real discovery is content-based in the adapter.
+    RuntimeProbe("lovable", "Lovable", (),
+                 env="CLAWMETRY_LOVABLE_DIRS"),
+    # Replit Agent serializes into the Repl WORKSPACE, not the machine home:
+    # <workspace>/.local/state/replit/agent/. On a laptop that dir only
+    # exists inside a cloned/exported Repl, so the probe checks the in-Repl
+    # location (a daemon running inside a Repl sees it under ~/workspace)
+    # and otherwise relies on the env override the adapter honours.
+    RuntimeProbe("replit", "Replit Agent",
+                 ("~/workspace/.local/state/replit/agent",
+                  "~/.local/state/replit/agent"),
+                 env="CLAWMETRY_REPLIT_ROOTS"),
+    # Grok Bot (Anysphere "sand" desktop client). Probe the SLICE DIR and
+    # ~/.grokbot, not ~/.grok -- that is Grok Build, a different runtime.
+    RuntimeProbe("grok_bot", "Grok Bot",
+                 ("~/Library/Application Support/Grok Bot/sand-client-persistence",
+                  "~/AppData/Roaming/Grok Bot/sand-client-persistence",
+                  "~/.config/Grok Bot/sand-client-persistence",
+                  "~/.grokbot/settings.json"),
+                 env="CLAWMETRY_GROK_BOT_DATA_ROOT"),
+    RuntimeProbe("openhands", "OpenHands",
+                 ("~/.openhands/conversations/*/base_state.json",),
+                 env="CLAWMETRY_OPENHANDS_HOME"),
+    # qm (github.com/yc-software/qm) has no on-disk session store — it's a
+    # Node service backed by Postgres — so the probe looks for the npm
+    # install artefacts (typical install layouts) plus a CLAWMETRY_QM_HOME
+    # override. The adapter itself uses DATABASE_URL + qm's tables directly.
+    RuntimeProbe("qm", "QM",
+                 ("~/node_modules/@yc-software/qm",
+                  "~/.qm", "~/qm/package.json",
+                  "/opt/qm/package.json"),
+                 env="CLAWMETRY_QM_HOME"),
+    # Devin CLI (cli.devin.ai) keeps every session in ONE XDG-anchored SQLite
+    # store; ~/.config/devin/config.json is the other half of a real install
+    # (it exists even when the CLI has only ever run in ACP mode under an
+    # IDE, which never creates sessions.db). Devin Cloud sessions are
+    # API-only and cannot be probed from disk at all.
+    RuntimeProbe("devin", "Devin",
+                 ("~/.local/share/devin/cli/sessions.db",
+                  "~/.local/share/cognition/cli/sessions.db",
+                  "~/.local/share/chisel/cli/sessions.db",
+                  "~/.config/devin/config.json",
+                  "~/AppData/Local/devin/cli/sessions.db",
+                  "~/AppData/Roaming/devin/config.json"),
+                 env="CLAWMETRY_DEVIN_DB"),
 )
 
 
@@ -109,19 +245,25 @@ def render_detection_lines(probes: list) -> list:
     found = [p for p in probes if p.get("found")]
     if not found:
         return []
-    lines = ["Detected AI agent runtimes on this machine:"]
-    for p in found:
-        tier = "free" if p.get("free") else "Pro"
-        lines.append(f"  [x] {p['label']}  ({tier})")
-    lines.append("")
-    lines.append("Free forever: OpenClaw and NVIDIA NemoClaw.")
+    n = len(found)
+    plural = "runtime" if n == 1 else "runtimes"
+    lines = [f"Detected {n} AI agent {plural} on this machine:"]
+    # Compact grid, 3 per row: ten detections should read as one confident
+    # block of checkmarks, not a ten-line paywall ledger (per-line tier
+    # labels moved into the two summary lines below).
+    cell = max(len(p["label"]) for p in found) + 3
+    for i in range(0, n, 3):
+        row = "".join(f"[x] {p['label']:<{cell}}" for p in found[i : i + 3])
+        lines.append("  " + row.rstrip())
     paid = [p for p in found if not p.get("free")]
     if paid:
-        names = ", ".join(p["label"] for p in paid)
+        lines.append("")
+    if len(paid) == 1:
         lines.append(
-            f"To watch {names}: enter a license key (clawmetry activate <key>,"
+            f"A free 7-day Pro trial (sign in below) unlocks {paid[0]['label']} too, or paste a license key."
         )
+    elif paid:
         lines.append(
-            "purchase at clawmetry.com/pricing) or pick [2] Cloud below to sign up."
+            f"A free 7-day Pro trial (sign in below) unlocks the other {len(paid)}, or paste a license key."
         )
     return lines

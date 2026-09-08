@@ -1,17 +1,19 @@
-<!-- i18n-src:8f42d460a973 -->
+<!-- i18n-src:88be2deff5d5 -->
 > Bahasa Indonesia translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # 🦞 ClawMetry
 
-[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![PyPI Downloads/week](https://static.pepy.tech/badge/clawmetry/week)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
 [![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
+[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
+[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Lihat agen Anda berpikir.** Observabilitas real-time untuk **14 runtime agen AI**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 10 lainnya. Satu dashboard untuk seluruh armada agen Anda.
+**Lihat cara agen Anda berpikir.** Observabilitas real-time untuk **30 runtime agen AI**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 lainnya. Satu dashboard untuk seluruh armada agen Anda.
 
 > 🌐 **Baca dalam bahasa lain:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [lainnya →](docs/i18n/)
 
@@ -21,374 +23,199 @@ Satu perintah. Tanpa konfigurasi. Mendeteksi semuanya secara otomatis.
 pip install clawmetry && clawmetry
 ```
 
-Terbuka di **http://localhost:8900** dan Anda selesai.
+Terbuka di **http://localhost:8900**. Tanpa konfigurasi: aplikasi ini menemukan runtime agen yang sudah Anda miliki, membacanya secara read-only, dan tidak mengubah apa pun tentang cara kerjanya.
 
-![Flow Visualization](https://clawmetry.com/screenshots/flow.png)
+![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## Bekerja dengan 14 runtime agen
+## Bekerja dengan 30 runtime agen
 
-ClawMetry dimulai sebagai observabilitas untuk OpenClaw, dan sekarang memantau **seluruh armada agen Anda** dalam satu dashboard, mendeteksi secara otomatis setiap runtime di mesin Anda:
+**Gratis di aplikasi open source:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-🦞 **OpenClaw** · 🟩 **NVIDIA NemoClaw** · ◆ **Claude Code** · ⬡ **OpenAI Codex** · **Cursor** · 🪿 **Goose** · ⚡ **Hermes** · **opencode** · ◈ **Qwen Code** · **Aider** · **NanoClaw** · **PicoClaw** · **Pi** · **Deep Agents**
+**Di paket berbayar:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-OpenClaw dan NemoClaw gratis di aplikasi open-source; runtime lainnya aktif dengan ClawMetry Cloud atau lisensi Pro self-hosted. Alihkan runtime dari header dan setiap tab, biaya, token, tools, trace, akan disesuaikan cakupannya ke runtime tersebut. Lihat **[docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md)** untuk pembagian gratis/berbayar yang tepat, matriks tier, bentuk `/api/entitlement`, dan CLI `clawmetry license`.
+Setiap runtime mendapatkan dashboard yang sama. Jalankan beberapa sekaligus dan pengalih di header akan mengarahkan ulang setiap tab ke salah satunya.
 
-## Apa yang Anda Dapatkan
+Membangun agen sendiri di atas sebuah SDK? Interceptor juga melacak panggilan LLM-nya. Lihat [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 
-- **Flow** — Diagram animasi langsung yang menunjukkan pesan mengalir melalui channel, otak, tools, dan kembali
-- **Overview** — Pemeriksaan kesehatan, heatmap aktivitas, jumlah sesi, info model
-- **Usage** — Pelacakan token dan biaya dengan rincian harian/mingguan/bulanan
-- **Sessions** — Sesi agen aktif dengan model, token, aktivitas terakhir
-- **Crons** — Tugas terjadwal dengan status, run berikutnya, durasi
-- **Logs** — Streaming log real-time dengan kode warna
-- **Memory** — Jelajahi SOUL.md, MEMORY.md, AGENTS.md, catatan harian
-- **Transcripts** — UI gelembung obrolan untuk membaca riwayat sesi
-- **Alerts** — Batas anggaran, pemicu tingkat error, deteksi agen offline; diarahkan ke Slack, Discord, PagerDuty, Telegram, Email
-- **Approvals** — Menahan penghapusan destruktif, force push, mutasi DB, sudo, instalasi paket, panggilan jaringan di balik persetujuan satu klik
+## Apa yang Anda dapatkan
 
-## Tangkapan Layar
+- **Sesi & transkrip**: apa yang dilakukan setiap agen, giliran demi giliran, dengan replay
+- **Biaya & token**: per runtime, model, sesi dan hari, dengan penanda anomali
+- **Flow**: diagram langsung dari pesan yang bergerak melalui channel, model dan tool
+- **Brain**: aliran peristiwa penalaran dan pemanggilan tool saat terjadi
+- **Context blowout**: pemanfaatan jendela yang diukur per penyedia, kompaksi vs overflow paksa, plus peta per-runtime tentang apa yang *tidak* bisa kita lihat ([caranya](docs/CONTEXT_BLOWOUT.md))
+- **Memory & skill**: file dan skill yang benar-benar dimuat oleh setiap runtime
+- **Kesehatan & log**: disk, memori, tingkat error, rate limit, aliran log langsung
+- **Alert**: batas anggaran, lonjakan error, agen-offline, diarahkan ke Slack, Discord, PagerDuty, Telegram, Email
+- **Approvals**: menjeda pemanggilan tool berisiko *sebelum* dijalankan dan menyetujuinya dari ponsel Anda ([caranya](docs/APPROVALS.md))
 
-### 🧠 Brain — Aliran event agen langsung
-![Brain tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/brain.png)
+## Context blowout, dan berapa biaya memantaunya
 
-### 📊 Overview — Penggunaan token & ringkasan sesi
-![Overview tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+Dua pertanyaan yang layak dijawab sebelum Anda mempercayai alat pembanding agen apa pun.
 
-### ⚡ Flow — Feed pemanggilan tool real-time
-![Flow tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+**Bagaimana cara aplikasi ini menangani blowout jendela konteks di berbagai runtime?**
 
-### 💰 Tokens — Rincian biaya per model & sesi
-![Tokens tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/tokens.png)
+Persentase pemanfaatan hanya sejujur pembaginya. ClawMetry mengukur jendela per penyedia dari [tabel yang bisa Anda baca dan ajukan PR-nya](clawmetry/context_windows.py), mencakup Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama dan GLM. Aplikasi ini tidak mengukur ke-30 runtime dengan penggaris satu vendor saja. Hal itu penting: sebuah giliran GPT-5 300K yang dinilai terhadap 200K milik Anthropic terbaca ">100%, blown" padahal sebenarnya berada di 75% dari 400K milik GPT-5. Penggaris yang sama menyembunyikan giliran DeepSeek 130K yang benar-benar overflow sebagai 65% yang terlihat nyaman.
 
-### 🧬 Memory — Penjelajah file workspace
-![Memory tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/memory.png)
+Setiap jendela dilengkapi asal-usulnya: `model_table`, `explicit_marker`, `observed_floor`, atau `default` yang jujur ketika kita tidak tahu modelnya. Gauge yang dibangun dari tebakan tidak pernah ditampilkan dengan otoritas yang sama seperti yang dibangun dari lookup.
 
-### 🔐 Security — Postur & log audit
-![Security tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/security.png)
+ClawMetry hanya bisa melihat peristiwa kompaksi pada beberapa runtime. Jadi `GET /api/context-coverage` melaporkan, per runtime, apakah **angka nol berarti "berjalan bersih" atau "kita buta"**. Sebuah `0` yang sebenarnya berarti buta akan mengatakannya demikian. [Detail lengkap](docs/CONTEXT_BLOWOUT.md)
 
-### 🚨 Alerts — Batas anggaran, pemicu tingkat error, webhook ke Slack / Discord / PagerDuty / Email
-![Alerts tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+**Berapa biaya instrumentasinya?**
 
-### ✋ Approvals — Menahan pemanggilan tool berisiko di balik persetujuan manual; aturan perlindungan berbasis kebijakan
-![Approvals tab](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+| Jalur | Ditambahkan ke agen Anda | Default? |
+|---|---|---|
+| Session-file tailing (semua 30 runtime) | **0**. Proses terpisah, tidak ada kode ClawMetry di agen Anda | aktif |
+| HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** per panggilan LLM, atau 0,009% dari panggilan 5 detik | nonaktif |
+| Pre-tool hook gate (warm cache) | **+44 ms** per panggilan tool yang di-gate, di atas floor interpreter 36 ms | nonaktif |
+| Enforcement proxy | **+9.7 ms** per panggilan LLM | nonaktif |
+
+Biaya host daemon: ingest **2.762 peristiwa/detik**, **710 byte/peristiwa** di disk (67,7 MB per 100 ribu peristiwa), dan **~12% dari satu core** yang berkelanjutan pada instalasi yang sibuk. Angka terakhir itu melebihi anggaran 5-10% yang kami nyatakan sendiri, sehingga dipublikasikan sebagai bug yang perlu dikejar, bukan disembunyikan dari halaman ini.
+
+Diukur pada Apple M2 Pro dengan `benchmarks/overhead.py`. Harness ini menjalankan setiap kondisi dalam proses terpisah, mengganti-ganti urutannya, dan **menolak untuk mencetak angka ketika putaran-putarannya tidak sepakat soal tandanya**. Jalankan di mesin Anda sendiri dalam satu menit:
+
+```bash
+pip install clawmetry && python -m benchmarks.overhead
+```
+
+Setiap jalur diukur, termasuk hook gate dan enforcement proxy, dan harness ini berjalan di Linux, macOS dan Windows di CI. Dua hasil yang layak diketahui: proxy menelan biaya sekitar tujuh kali lebih besar di Windows dibanding di Linux, dan daemon saat ini mempertahankan sekitar 12% dari satu core, melebihi anggaran 5-10% kami sendiri. Data JSON mentah, metodenya, dan apa yang masih belum diukur ada di [docs/OVERHEAD.md](docs/OVERHEAD.md).
+
+## Harga
+
+| Paket | Cakupan | Harga |
+|---|---|---|
+| **Free** | OpenClaw + NVIDIA NemoClaw + Goose, dashboard lengkap, hanya lokal | $0 |
+| **Starter** | Semua runtime lain di atas, tampilan armada, sinkronisasi cloud | $9 per node / bulan |
+| **Pro** | Starter + kontrol dan evaluasi: approvals, kebijakan risiko tool, evals, deteksi anomali, cost optimizer, ekspor OTel, log audit tamper-evident | $19 per node / bulan |
+
+Paket tahunan, Enterprise dan angka terkini ada di
+**[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Kunci lisensi self-hosted berfungsi tanpa cloud (`clawmetry license`). Rincian pasti pembagian gratis/berbayar ada di [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
+
+## Data Anda tetap di mesin Anda
+
+ClawMetry membaca file sesi dan log lokal. **Tidak ada data sesi yang meninggalkan mesin Anda kecuali Anda menjalankan `clawmetry connect`** — tidak ada prompt, balasan, argumen tool, isi file atau baris log. Ketika Anda memang menghubungkan, snapshot dienkripsi end-to-end dengan kunci yang tidak pernah meninggalkan mesin Anda, dan didekripsi di browser Anda. Jika sebuah node tidak memiliki kunci, unggahan dilewati alih-alih dikirim dalam bentuk tidak terenkripsi, dan tidak ada respons server yang bisa mematikan perlindungan itu.
+
+Dua hal yang tetap berjalan secara default sebelum Anda menghubungkan, keduanya opt-out dan tidak membawa data sesi: ping instalasi anonim dan pemeriksaan versi terhadap PyPI. Instalasi default juga mencari alamat IP publik Anda satu kali untuk baris banner saat startup. Setiap tujuan, apa yang dibawanya dan cara mematikannya tercantum di [docs/EGRESS.md](docs/EGRESS.md); instalasi self-hosted, yang diarahkan ulang, dan yang air-gapped tidak melakukan panggilan keluar opsional sama sekali.
+
+Dekripsi terjadi di browser Anda, dengan kode yang kami sajikan kepada Anda. Dulunya itu hanya sebuah janji; sekarang menjadi sesuatu yang bisa Anda periksa. Setiap baris yang menyentuh kunci Anda berada dalam satu file yang bisa dibaca, [`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js), yang dikirim di dalam wheel dan disajikan apa adanya, dipatok dengan hash Subresource Integrity. Untuk memastikan browser menjalankan apa yang kami publikasikan:
+
+```bash
+curl -s https://app.clawmetry.com/static/js/cm-e2e.js -o served.js
+pip download --no-deps clawmetry==$(clawmetry --version | tr -d 'a-z ') -d /tmp/cm
+unzip -p /tmp/cm/clawmetry-*.whl clawmetry/static/js/cm-e2e.js > published.js
+diff served.js published.js && echo identical
+```
+
+Apa yang tidak dibuktikan oleh ini: kami menyajikan halaman yang memuat file tersebut, sehingga kami bisa saja menyajikan halaman yang berbeda. Hash integritas melindungi Anda dari CDN yang diretas, bukan dari vendor. Yang Anda peroleh adalah bahwa penggantian apa pun harus disengaja, terlihat di sumber halaman, dan berbeda dari artefak di PyPI yang bisa diambil siapa saja. Melakukan self-hosting atau tetap lokal-saja menghilangkan ketergantungan ini sepenuhnya.
 
 ## Instalasi
 
-**Satu baris perintah (direkomendasikan):**
 ```bash
-curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash
+pip install clawmetry     # lalu: clawmetry
 ```
 
-**pip:**
-```bash
-pip install clawmetry
-clawmetry
-```
+Atau perintah satu baris: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-**Dari sumber:**
-```bash
-git clone https://github.com/vivekchand/clawmetry.git
-cd clawmetry && pip install flask && python3 dashboard.py
-```
+Membutuhkan Python 3.8+ di macOS, Linux atau Windows, dan setidaknya satu runtime agen di mesin yang sama. Instruksi Docker: [docs/DOCKER.md](docs/DOCKER.md).
 
-## Pengembangan Frontend v2
-
-Aplikasi React v2 berada di `frontend/` dan disajikan di `/v2` ketika
-server Flask dijalankan dengan v2 diaktifkan.
-
-Gunakan dua terminal saat mengembangkan:
+Atau biarkan agen yang menyiapkannya untuk Anda. Skill [`agent-kill-switch`](skills/agent-kill-switch/SKILL.md)
+mengajarkan Claude Code, Codex, Cursor, Gemini CLI, Copilot atau OpenCode untuk
+menginstal ClawMetry, melaporkan apa yang sedang dilakukan dan dibelanjakan oleh agen-agen di mesin tersebut,
+menghentikan satu sesi atas permintaan, dan menahan pemanggilan tool berisiko untuk persetujuan:
 
 ```bash
-# Terminal 1: Flask API/server di :8900
-CLAWMETRY_V2=1 python3 dashboard.py
+npx skills add vivekchand/clawmetry --skill agent-kill-switch
 ```
 
-```bash
-# Terminal 2: Server dev Vite di :5173
-cd frontend
-nvm use
-npm ci
-npm run dev
-```
-
-Buka `http://localhost:5173/v2/`. Vite mem-proxy permintaan `/api` ke
-`http://localhost:8900`, sehingga aplikasi React dapat berkomunikasi dengan server Flask lokal
-tanpa pengaturan CORS tambahan.
-
-Untuk membangun bundle yang dikirim bersama paket Python:
-
-```bash
-cd frontend
-npm run build
-```
-
-Bundle produksi ditulis ke `clawmetry/static/v2/dist/`.
-
-## Kompatibilitas Runtime / Agen
-
-ClawMetry mengamati banyak runtime agen AI, bukan hanya OpenClaw. Setiap runtime non-OpenClaw dilengkapi adapter pembaca khusus yang menerjemahkan format sesi aslinya ke dalam bentuk terpadu ClawMetry; daemon menyerapnya ke dalam penyimpanan DuckDB + snapshot cloud yang sama, ditandai dengan runtime-nya, dan tab replay Session menampilkan **pengalih runtime** ketika lebih dari satu ada. Lihat [`docs/compatibility.md`](docs/compatibility.md) untuk matriks lengkap + panduan menambahkan runtime, dan [`docs/RUNTIME_FAMILY.md`](docs/RUNTIME_FAMILY.md) untuk pengantar keluarga OpenClaw.
-
-| Runtime / Agen | Status | Catatan |
-|---|---|---|
-| **OpenClaw** | Native | Runtime referensi, terdeteksi otomatis |
-| **PicoClaw** | Adapter beta | `providers.Message` JSONL datar (`~/.picoclaw/workspace/sessions`). Transkrip, model, pemanggilan tool. |
-| **NanoClaw** | Adapter beta | SQLite per sesi (`data/v2-sessions`). Transkrip + jumlah pesan. |
-| **Hermes** | Adapter beta | SQLite `~/.hermes/state.db`. Transkrip, model, token/biaya. |
-| **Claude Code** | Adapter beta | JSONL `~/.claude/projects/.../<id>.jsonl`. Transkrip, model, pemanggilan tool + thinking, penggunaan token. |
-| **Codex** | Adapter beta | Rollout JSONL `~/.codex/sessions/...`. Transkrip, model, pemanggilan tool, penggunaan token. |
-| **Cursor** | Adapter beta | SQLite `state.vscdb`. Transkrip chat/composer, model. |
-| **Aider** | Adapter beta | `.aider.chat.history.md` per proyek. Transkrip, model, jumlah token. |
-| **Goose** | Adapter beta | SQLite `~/.local/share/goose`. Transkrip, model, pemanggilan tool, total token. |
-| **opencode** | Adapter beta | SQLite `~/.local/share/opencode`. Transkrip, model, pemanggilan tool, token + biaya. |
-| **Qwen Code** | Adapter beta | JSONL `~/.qwen/projects/.../chats`. Transkrip, model, pemanggilan tool, penggunaan token. |
-| **Pi** | Adapter beta | JSONL `~/.pi/agent/sessions`. Transkrip, model, pemanggilan tool, token + biaya. |
-| **Deep Agents** | Adapter beta | SQLite `~/.deepagents/.state/sessions.db`. Transkrip, model, pemanggilan tool, token + biaya. |
-
-"Adapter beta" berarti ClawMetry menyediakan pembaca untuk format asli di disk dari runtime tersebut, masing-masing dibangun + diverifikasi terhadap instalasi nyata pada mesin nyata (lihat `tests/fixtures/runtimes/<rt>/`). Adapter bersifat read-only; masing-masing jujur soal apa yang benar-benar disimpan oleh runtime-nya (misalnya PicoClaw/NanoClaw/Cursor tidak menulis biaya token ke disk). Ketika beberapa runtime berjalan pada satu node, pengalih runtime membatasi cakupan tampilan sesi ke satu runtime untuk deep-dive yang bersih.
-
-## Melacak agen SDK apa pun, atribusi biaya out-loop
-
-Runtime di atas semuanya menulis sesi ke disk. **Agen produksi** Anda sendiri, yang Anda bangun di atas OpenAI Agents SDK, LangChain, Vercel AI SDK, LlamaIndex, E2B, atau loop `httpx` biasa, tidak melakukannya. Interceptor tanpa konfigurasi milik ClawMetry tetap menangkap pemanggilan LLM-nya (biaya, token, latensi, error) dengan melakukan monkey-patch pada `httpx`/`requests`:
-
-```python
-import clawmetry.track            # aktifkan interceptor
-clawmetry.track.set_source("support-agent")   # beri nama produk ini
-
-# ...agen Anda berjalan seperti biasa; setiap pemanggilan LLM kini dilacak + diatribusikan.
-```
-
-`set_source()` (atau variabel lingkungan `CLAWMETRY_SOURCE=support-agent`) menandai setiap pemanggilan dengan **sumber bernama**, sehingga setiap produk yang Anda jalankan muncul sebagai baris tersendiri kelas satu yang dapat diatribusikan biayanya di kartu **🔌 Out-loop sources** pada Overview dashboard, panggilan, provider, latensi, tingkat error per agen. Tidak ada sumber yang diatur? Pemanggilan tetap dilacak; kartunya saja yang tetap disembunyikan.
-
-```bash
-CLAWMETRY_SOURCE=billing-agent python my_agent.py
-```
-
-Ini adalah lapisan data yang sama yang diisi oleh adapter runtime (DuckDB → snapshot cloud), sehingga sumber out-loop disinkronkan ke dashboard cloud sama seperti yang lainnya, dienkripsi E2E.
-
-## OpenTelemetry, netral vendor, kirim trace Anda ke mana saja
-
-ClawMetry berbicara **OpenTelemetry** dalam kedua arah, menggunakan **konvensi semantik GenAI**, sehingga trace agen Anda tidak pernah terkunci pada satu tool.
-
-**Ekspor** setiap sesi, pemanggilan LLM, tools, sub-agen, token, biaya, sebagai span GenAI OTLP/HTTP ke collector mana pun (Datadog, Grafana, Honeycomb, atau OTel Collector Anda sendiri):
-
-```bash
-clawmetry --otel-export http://localhost:4318/v1/traces
-# setara dengan:
-CLAWMETRY_OTEL_EXPORT_ENDPOINT=http://localhost:4318/v1/traces clawmetry
-```
-
-Header autentikasi dan interval polling adalah variabel lingkungan opsional:
-
-```bash
-CLAWMETRY_OTEL_EXPORT_HEADERS='{"X-API-Key":"…"}'   # header HTTP tambahan
-CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # detik (default 60)
-```
-
-**Ingest** — receiver OTLP bawaan menerima trace dan metrik dari sumber lain apa pun di `/v1/traces` dan `/v1/metrics` (`pip install clawmetry[otel]` untuk ingest protobuf).
-
-Anda mendapatkan dashboard ClawMetry yang tanpa konfigurasi dan local-first **dan** data Anda di backend apa pun yang sudah digunakan tim Anda, tanpa lock-in, tanpa perlu memasang agen kedua.
-
-## Konfigurasi
-
-Kebanyakan orang tidak memerlukan konfigurasi apa pun. ClawMetry secara otomatis mendeteksi workspace, log, sesi, dan cron Anda.
-
-Jika Anda memang perlu menyesuaikan:
-
-```bash
-clawmetry --port 9000              # Port kustom (default: 8900)
-clawmetry --host 127.0.0.1         # Bind hanya ke localhost
-clawmetry --workspace ~/mybot      # Path workspace kustom
-clawmetry --name "Alice"           # Nama Anda dalam visualisasi Flow
-```
-
-Semua opsi: `clawmetry --help`
-
-## Channel yang Didukung
-
-ClawMetry menampilkan aktivitas langsung untuk setiap channel OpenClaw yang Anda konfigurasikan. Hanya channel yang benar-benar diatur di `openclaw.json` Anda yang muncul di diagram Flow; yang belum dikonfigurasi otomatis disembunyikan.
-
-Klik node channel mana pun di Flow untuk melihat tampilan gelembung obrolan langsung dengan jumlah pesan masuk/keluar.
-
-| Channel | Status | Popup Langsung | Catatan |
-|---------|--------|------------|-------|
-| 📱 **Telegram** | ✅ Penuh | ✅ | Pesan, statistik, refresh 10 detik |
-| 💬 **iMessage** | ✅ Penuh | ✅ | Membaca `~/Library/Messages/chat.db` langsung |
-| 💚 **WhatsApp** | ✅ Penuh | ✅ | Via WhatsApp Web (Baileys) |
-| 🔵 **Signal** | ✅ Penuh | ✅ | Via signal-cli |
-| 🟣 **Discord** | ✅ Penuh | ✅ | Deteksi guild + channel |
-| 🟪 **Slack** | ✅ Penuh | ✅ | Deteksi workspace + channel |
-| 🌐 **Webchat** | ✅ Penuh | ✅ | Sesi UI web bawaan |
-| 📡 **IRC** | ✅ Penuh | ✅ | UI gelembung gaya terminal |
-| 🍏 **BlueBubbles** | ✅ Penuh | ✅ | iMessage via BlueBubbles REST API |
-| 🔵 **Google Chat** | ✅ Penuh | ✅ | Via webhook Chat API |
-| 🟣 **MS Teams** | ✅ Penuh | ✅ | Via plugin bot Teams |
-| 🔷 **Mattermost** | ✅ Penuh | ✅ | Chat tim self-hosted |
-| 🟩 **Matrix** | ✅ Penuh | ✅ | Terdesentralisasi, dukungan E2EE |
-| 🟢 **LINE** | ✅ Penuh | ✅ | LINE Messaging API |
-| ⚡ **Nostr** | ✅ Penuh | ✅ | DM NIP-04 terdesentralisasi |
-| 🟣 **Twitch** | ✅ Penuh | ✅ | Chat via koneksi IRC |
-| 🔷 **Feishu/Lark** | ✅ Penuh | ✅ | Langganan event WebSocket |
-| 🔵 **Zalo** | ✅ Penuh | ✅ | Zalo Bot API |
-
-> **Deteksi otomatis:** ClawMetry membaca `~/.openclaw/openclaw.json` Anda dan hanya merender channel yang benar-benar telah Anda konfigurasikan. Tidak perlu pengaturan manual.
-
-## Deployment Docker
-
-Ingin menjalankan ClawMetry dalam container? Tidak masalah! 🐳
-
-**Mulai cepat dengan Docker:**
-
-```bash
-# Bangun image
-docker build -t clawmetry .
-
-# Jalankan dengan pengaturan default
-docker run -p 8900:8900 clawmetry
-
-# Atau mount direktori data agen Anda (contoh: ~/.openclaw milik OpenClaw)
-docker run -p 8900:8900 \
-  -v ~/.openclaw:/root/.openclaw \
-  -v /tmp/moltbot:/tmp/moltbot \
-  clawmetry
-```
-
-**Contoh Docker Compose:**
-
-```yaml
-version: '3.8'
-services:
-  clawmetry:
-    build: .
-    ports:
-      - "8900:8900"
-    volumes:
-      - ~/.openclaw:/root/.openclaw:ro
-      - /tmp/moltbot:/tmp/moltbot:ro
-    restart: unless-stopped
-```
-
-> **Catatan:** Saat menjalankan di Docker, mount direktori data + log agen Anda (misalnya `~/.openclaw`, `~/.claude`, `~/.codex`) agar ClawMetry dapat mendeteksi pengaturan Anda secara otomatis.
-
-## Persyaratan
-
-- Python 3.8+
-- Flask (terpasang otomatis via pip)
-- Runtime agen AI di mesin yang sama: OpenClaw, NVIDIA NemoClaw, Claude Code, Codex, Cursor, Goose, Hermes, opencode, Qwen Code, Aider, NanoClaw, PicoClaw, Pi, atau Deep Agents (atau volume yang di-mount untuk Docker)
-- Linux atau macOS
-
-## Dukungan NemoClaw / OpenShell
-
-ClawMetry secara otomatis mendeteksi [NemoClaw](https://github.com/NVIDIA/NemoClaw), wrapper keamanan enterprise milik NVIDIA untuk OpenClaw yang menjalankan agen di dalam container OpenShell yang di-sandbox.
-
-Konfigurasi tambahan tidak diperlukan dalam kebanyakan kasus. Daemon sync secara otomatis menemukan file sesi baik yang berada di `~/.openclaw/` pada host maupun di dalam container OpenShell.
-
-### Cara kerjanya
-
-ClawMetry mendeteksi NemoClaw dengan dua cara:
-
-1. **Deteksi biner** — memeriksa CLI `nemoclaw` dan menjalankan `nemoclaw status` untuk mendapatkan info sandbox
-2. **Deteksi container** — memindai container Docker yang berjalan untuk image `openshell`, `nemoclaw`, atau `ghcr.io/nvidia/`, lalu membaca sesi via volume mount atau `docker cp`
-
-File sesi yang disinkronkan dari container NemoClaw ditandai dengan metadata `runtime=nemoclaw` dan `container_id` di dashboard cloud, sehingga Anda dapat membedakannya dari sesi OpenClaw standar sekilas pandang.
-
-### Pengaturan yang direkomendasikan: daemon sync di HOST
-
-Untuk pengalaman terbaik, jalankan daemon sync ClawMetry di **mesin host** (bukan di dalam sandbox). Ini menghindari pembatasan kebijakan jaringan NemoClaw.
-
-```bash
-# Di host (di luar sandbox)
-pip install clawmetry
-clawmetry connect
-clawmetry sync
-```
-
-Daemon sync akan secara otomatis menemukan sesi di dalam container OpenShell mana pun yang sedang berjalan.
-
-### Opsional: nama sandbox eksplisit
-
-Jika deteksi otomatis tidak berfungsi, arahkan ClawMetry ke sandbox yang benar:
-
-```bash
-export NEMOCLAW_SANDBOX=my-sandbox-name
-clawmetry sync
-```
-
-### Menjalankan di dalam sandbox (lanjutan)
-
-Jika Anda harus menjalankan daemon sync **di dalam** sandbox OpenShell, tambahkan aturan egress ini ke kebijakan jaringan NemoClaw Anda agar dapat menjangkau API ingest ClawMetry:
-
-```yaml
-# nemoclaw-policy.yaml
-network:
-  egress:
-    - host: ingest.clawmetry.com
-      port: 443
-      protocol: https
-```
-
-Terapkan dengan:
-
-```bash
-nemoclaw policy apply --file nemoclaw-policy.yaml
-```
-
-### Port dan endpoint
-
-| Endpoint | Port | Protokol | Wajib |
-|---|---|---|---|
-| `ingest.clawmetry.com` | 443 | HTTPS | Ya (daemon sync → cloud) |
-| `localhost:8900` | 8900 | HTTP | Ya (UI dashboard lokal) |
-| Docker socket (`/var/run/docker.sock`) | — | Unix socket | Untuk penemuan sesi container |
-
-Daemon sync hanya melakukan panggilan HTTPS keluar ke `ingest.clawmetry.com`. Tidak ada port masuk yang diperlukan.
-
----
-
-## Deployment Cloud
-
-Lihat **[Panduan Pengujian Cloud](https://github.com/vivekchand/clawmetry/blob/main/docs/CLOUD_TESTING.md)** untuk tunnel SSH, reverse proxy, dan Docker.
-
-## Pengujian
-
-Proyek ini diuji dengan BrowserStack.
-
-[![BrowserStack](https://img.shields.io/badge/tested%20with-BrowserStack-orange.svg)](https://browserstack.com)
-
-## Telemetri
-
-ClawMetry mengirim satu ping anonim "first run" ke
-`https://app.clawmetry.com/api/install` saat pertama kali Anda menjalankan CLI
-`clawmetry` di mesin baru. Kami menggunakan ini untuk menghitung instalasi (satu-satunya
-metrik pemasaran yang kami miliki untuk proyek OSS) dan untuk mengetahui framework
-agen apa yang telah diinstal oleh pengguna kami.
-
-**Tepat satu POST per instalasi**, berisi:
-
-| Field | Contoh | Alasan |
-|---|---|---|
-| `install_id` | UUID acak yang disimpan di `~/.clawmetry/install_id` | dedup; tidak terkait dengan email atau api_key Anda |
-| `version` | `0.12.167` | versi apa saja yang sedang beredar |
-| `os` / `os_version` | `Darwin` / `25.3.0` | prioritas dukungan platform |
-| `python` | `3.11.15` | matriks dukungan versi Python |
-| `agent` | `openclaw` / `nemoclaw` / `hermes` / `none` | agen mana yang harus kami integrasikan selanjutnya |
-| `is_ci` / `ci_provider` | `true` / `github_actions` | memisahkan instalasi manusia dari noise CI |
-
-**Apa yang TIDAK kami kirim**: IP (cloud menurunkan kode negara secara
-server-side dari permintaan, lalu membuang IP-nya), hostname, username, path
-workspace, isi file, api_key Anda, email Anda, apa pun yang bersifat PII atau
-spesifik workspace. Payload wire dapat diaudit di
-[`clawmetry/telemetry.py`](clawmetry/telemetry.py).
-
-**Opt out** (salah satu dari ini menonaktifkannya secara permanen):
-
-```bash
-export CLAWMETRY_NO_TELEMETRY=1                # per-shell
-export DO_NOT_TRACK=1                          # standar lintas-tool W3C
-touch ~/.clawmetry/notelemetry                 # penanda file permanen
-```
-
-Kegagalan jaringan di sini tidak pernah menghalangi `clawmetry` untuk berjalan,
-ping ini bersifat fire-and-forget pada thread daemon dengan timeout 3 detik.
+## Dokumentasi
+
+| | |
+|---|---|
+| [Kompatibilitas runtime](docs/compatibility.md) | Apa yang dibaca setiap adapter, dan cara menambahkan runtime |
+| [Context blowout](docs/CONTEXT_BLOWOUT.md) | Jendela per penyedia, kompaksi vs overflow, cakupan per-runtime |
+| [Overhead](docs/OVERHEAD.md) | Berapa biaya instrumentasi, terukur, dengan harness untuk mereproduksinya |
+| [Entitlements](docs/ENTITLEMENTS.md) | Gratis vs berbayar, matriks tier, CLI lisensi |
+| [Approvals & policies](docs/APPROVALS.md) | Gating pra-eksekusi, penilaian risiko, persetujuan via ponsel |
+| [OpenTelemetry](docs/OPENTELEMETRY.md) | Ekspor trace ke mana saja, ingest OTLP dari apa saja |
+| [Bawa agen Anda sendiri](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore, Pydantic AI, LangChain dari ujung ke ujung, dengan contoh yang bisa dijalankan |
+| [Pelacakan SDK](docs/SDK_TRACKING.md) | Atribusi biaya untuk agen yang Anda bangun sendiri |
+| [Chat channel](docs/CHANNELS.md) | Adapter chat yang ditampilkan di Flow |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Setup NVIDIA NemoClaw yang di-sandbox |
+| [Docker](docs/DOCKER.md) | Image, compose, volume mount |
+| [Arsitektur](ARCHITECTURE.md) · [Pengembangan](docs/DEVELOPMENT.md) | Cara kerjanya di dalam; menjalankan dari source |
+| [Telemetri](docs/TELEMETRY.md) | Ping instalasi anonim dan pembukaan desktop, dan cara mematikannya |
+
+## Tangkapan layar
+
+Setiap angka di bawah ini berasal dari satu mesin nyata, read-only, tanpa apa pun yang direkayasa.
+
+**Aplikasi ini memberi tahu Anda saat ada yang salah, bukan hanya apa yang terjadi.**
+Dua banner anomali di bagian atas: pengeluaran berjalan 7x rata-rata harian, dan
+lonjakan biaya 4,2x. Di bawahnya, 324 dari 667 sesi terbaru membawa
+sinyal pemborosan, dirinci berdasarkan penyebabnya.
+
+![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
+
+**Aplikasi ini menunjukkan ke mana uang Anda pergi, di setiap jendela waktu.**
+$252,47 hari ini, $513,15 minggu ini, $1.312,92 bulan ini, masing-masing dengan token
+di baliknya dan seberapa besar yang sudah ditanggung langganan Anda. Di bawahnya, sekitar
+$1.128/bulan dirinci sebagai dapat dipulihkan dan $17.256/bulan yang sudah dihemat
+oleh penggunaan ulang cache.
+
+![Cost: today, this week and this month, with an efficiency grade and itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
+
+**Aplikasi ini menggambarkan bagaimana sebuah pesan menjadi jawaban.**
+Diagram flow langsung: Anda, channel tempat pesan itu tiba, gateway, model
+yang sedang menjawab saat ini, dan setiap tool yang digunakannya. Node menyala saat pekerjaan
+bergerak melaluinya.
+
+![Flow: live diagram from you through the gateway to the model and its tools](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
+
+**Setiap agen di mesin, dalam satu tabel.**
+Apa yang dijalankannya, berapa biayanya dalam 24 jam terakhir dan sepanjang masa pakainya, kapan
+terakhir terlihat, siapa pemiliknya, dan apakah sebuah langganan menutupi
+tagihannya. 14 agen di sini, 3 sesi sedang bekerja, 13 diam.
+
+![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
+
+**Aplikasi ini menunjukkan ke mana waktu dan uang sebuah giliran pergi, tool demi tool.**
+Satu giliran dari sesi nyata: 11 tool dalam 11,2 menit seharga $1,16. Setiap
+panggilan Bash dan panggilan model mendapatkan bar-nya sendiri di timeline, sehingga perintah yang berjalan
+selama 4,1 menit dan yang berjalan selama 226ms bisa dibedakan sekilas.
+
+![Sessions: one agent turn on a timeline, every tool call with its own duration and the turn's cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/sessions.png)
+
+**Aplikasi ini menilai hasil kerja, bukan hanya pengeluarannya.**
+Nilai A minggu ini: 54 tugas selesai dengan bersih, 2 yang bermasalah menghabiskan $48,57, dan
+proses dengan aktivitas terlalu sedikit untuk dinilai dikeluarkan dari penilaian, bukan
+dihitung sebagai keberhasilan. Setiap proses bermasalah tertaut ke trace-nya.
+
+![Quality: this week's report card with the rough runs and what they cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/quality.png)
+
+**Aplikasi ini menunjukkan mengapa jendela konteks terus terisi penuh.**
+715K dari jendela 1M token pada giliran terakhir, puncak 83,3%, 4 kompaksi
+yang semuanya terpicu secara proaktif alih-alih karena overflow, dan pemanfaatan
+setiap giliran di baliknya.
+
+![Context usage: window utilisation per turn, compaction events and tokens reclaimed](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/context.png)
+
+**Deteksi berjalan tanpa Anda perlu mengonfigurasi apa pun.**
+Detektor bawaan aktif sejak instalasi: agen diam, feed telemetri
+berhenti, lonjakan biaya, ledakan token, error meningkat, lonjakan error, ambang
+anggaran, tanda tangan ancaman cocok, temuan tool keamanan, postur keamanan
+berubah. Aturan Anda sendiri bersifat opsional di atasnya.
+
+![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
+
+**Menahan panggilan berisiko bersifat opt-in, dan dikirim dalam keadaan nonaktif.**
+Penghapusan rekursif, force push, sudo, secret, instalasi paket dan panggilan
+keluar masing-masing mendapatkan aturan yang bisa Anda aktifkan. Sampai Anda melakukannya, ClawMetry mengamati dan
+tidak mengubah apa pun. Setelah salah satu diaktifkan, panggilan yang cocok menunggu di sini (atau di ponsel Anda)
+untuk disetujui atau ditolak.
+
+![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
+
+Lebih lanjut, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
 ## Riwayat Star
 
@@ -402,11 +229,6 @@ ping ini bersifat fire-and-forget pada thread daemon dengan timeout 3 detik.
 
 ## Lisensi
 
-MIT
+MIT · Dibuat oleh [@vivekchand](https://github.com/vivekchand) · [clawmetry.com](https://clawmetry.com)
 
----
-
-<p align="center">
-  <strong>🦞 Lihat agen Anda berpikir</strong><br>
-  <sub>Dibuat oleh <a href="https://github.com/vivekchand">@vivekchand</a> · <a href="https://clawmetry.com">clawmetry.com</a> · Bagian dari ekosistem <a href="https://github.com/openclaw/openclaw">OpenClaw</a></sub>
-</p>
+<!-- osai-verify: f3ac716d40002c1ad6dd -->

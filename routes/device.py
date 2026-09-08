@@ -77,9 +77,15 @@ def _usage_today():
         from routes.usage import _try_local_store_usage
 
         usage = _try_local_store_usage() or {}
+        # ``todayCost`` is None when nobody could price the window (see
+        # clawmetry/provenance.py). The device has one line and no room for a
+        # basis badge, so an unknown lands as 0.0 here. That is lossy on
+        # purpose and cannot happen today (the unscoped call never returns
+        # None); the ``or`` is here so a future runtime-scoped caller degrades
+        # instead of raising on float(None).
         return (
-            round(float(usage.get("todayCost", 0.0)), 4),
-            int(usage.get("today", 0)),
+            round(float(usage.get("todayCost") or 0.0), 4),
+            int(usage.get("today") or 0),
         )
     except Exception:
         return (0.0, 0)
@@ -338,7 +344,7 @@ _DEVICE_PREVIEW_HTML = """<!doctype html>
         <button class="deny" onclick="decide('deny')">Deny</button>
       </div>
     </div>
-    <div class="foot">one device · <b>all 14 runtimes</b></div>
+    <div class="foot">one device · <b>all 30 runtimes</b></div>
   </div>
 <script>
 const MOODS = {
@@ -355,6 +361,7 @@ function fmtTokens(n){
   return String(n||0);
 }
 let last = null;
+let decided = {};  // approval ids already decided from this page
 async function tick(){
   try{
     const r = await fetch('/api/device/snapshot');
@@ -374,7 +381,9 @@ async function tick(){
     else al.style.display='none';
 
     const ap = document.getElementById('approval');
-    if(d.approval){
+    // A just-decided id can linger in the snapshot for one cache TTL (5 s);
+    // don't resurrect the buttons for a decision that's already been made.
+    if(d.approval && !decided[d.approval.id]){
       ap.style.display='block';
       document.getElementById('apTool').textContent = d.approval.action;
       const w = d.approval.waiting_seconds;
@@ -394,15 +403,35 @@ async function tick(){
   }
 }
 async function decide(decision){
-  // The physical Approve/Deny button. Best-effort POST to the approvals API;
-  // the preview stays useful even where the write path isn't wired yet.
+  // The physical Approve/Deny button. Writes through the same endpoint the
+  // dashboard queue uses — POST /api/approvals/<id>/decide with a JSON
+  // {"decision": "approve"|"deny"} body (routes/policy.py) — so a button
+  // press really flips the row. Success (or an already-decided row, which
+  // the endpoint reports idempotently) clears the card; a failure keeps it
+  // up and says why, so the button is never a silent no-op.
   if(!last || !last.approval) return;
+  const id = last.approval.id;
+  const state = document.getElementById('state');
   try{
-    await fetch('/api/approvals/'+encodeURIComponent(last.approval.id)+'/'+decision,
-                {method:'POST'});
-  }catch(e){}
-  document.getElementById('approval').style.display='none';
-  tick();
+    const r = await fetch('/api/approvals/'+encodeURIComponent(id)+'/decide',
+      {method:'POST',
+       headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({decision:decision, reason:'device button'})});
+    let d = {};
+    try{ d = await r.json(); }catch(e){}
+    if(r.ok && d.ok){
+      decided[id] = true;
+      document.getElementById('approval').style.display='none';
+      state.textContent = d.already
+        ? ('already '+d.status) : (decision==='approve'?'approved':'denied');
+      tick();
+    }else{
+      state.textContent =
+        'decision failed: '+(d.error || ('HTTP '+r.status));
+    }
+  }catch(e){
+    state.textContent = 'decision failed: daemon offline';
+  }
 }
 tick();
 setInterval(tick, 3000);

@@ -1,0 +1,6 @@
+# CI retrigger — 2026-08-06 GitHub Actions outage recovery
+# The CI runs on this PR failed due to a transient GitHub Actions
+# infrastructure outage (~15:10-16:00 UTC 2026-08-06) where runners
+# returned "Service Unavailable" / "Bad Gateway" and could not
+# download action definitions. No code was changed here.
+# This file may be squashed or removed when the PR is merged.

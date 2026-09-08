@@ -369,6 +369,10 @@ def test_local_store_eval_suite_runs_round_trip(tmp_path, monkeypatch):
     # Reset the singleton if the module is already loaded from a prior test.
     if hasattr(local_store, "_STORE"):
         local_store._STORE = None  # type: ignore[attr-defined]
+    # On a dev box with a live daemon, get_store() would return the HTTP
+    # proxy (whose daemon lacks a tmp-path store). The test owns its DB.
+    if hasattr(local_store, "mark_writer_owner"):
+        local_store.mark_writer_owner()
     try:
         store = local_store.get_store()
     except Exception as e:
@@ -388,3 +392,44 @@ def test_local_store_eval_suite_runs_round_trip(tmp_path, monkeypatch):
     assert rows[0]["status"] == "pass"
     assert rows[0]["score"] == 4.0
     assert rows[0]["sha"] == "abc123"
+
+
+# ── Regression: suites grade with the USER'S rubric, not the shipped default ──
+
+
+def test_suite_judge_uses_user_rubric_prompt(tmp_path, monkeypatch):
+    """_evaluate_one built its judge prompt from DEFAULT_RUBRIC directly,
+    silently ignoring ~/.clawmetry/evals.yaml. An operator who tuned the
+    rubric expects the golden suites to grade with the same prompt the
+    production judge uses."""
+    from clawmetry import eval_runner
+
+    rubric_file = tmp_path / "evals.yaml"
+    rubric_file.write_text(
+        "default:\n"
+        "  judge_model: claude-haiku-4-5\n"
+        "  prompt: |\n"
+        "    CUSTOM-RUBRIC-MARKER judge kindly.\n"
+        "    Output exactly two lines:\n"
+        "    SCORE: <0-5>\n"
+        "    REASON: <one short sentence>\n"
+    )
+    monkeypatch.setattr(eval_runner, "RUBRIC_PATH", rubric_file)
+
+    seen_prompts = []
+
+    def _judge(model, prompt, *, timeout=30.0):
+        seen_prompts.append(prompt)
+        return "SCORE: 5\nREASON: fine"
+
+    suite = Suite(
+        name="rubric", judge_model="claude-haiku-4-5",
+        tests=[TestCase(name="t1", input="hi", expected_tools=[],
+                        expected_outcome="any", expected_min_score=1)],
+    )
+    run = run_suite(suite, agent_call=_agent_ok(), judge_call=_judge,
+                    persist=False)
+    assert run.passed == 1
+    assert seen_prompts and "CUSTOM-RUBRIC-MARKER" in seen_prompts[0], (
+        "suite judge must grade with the user's rubric prompt"
+    )

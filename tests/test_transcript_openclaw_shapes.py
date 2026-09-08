@@ -158,7 +158,13 @@ def test_trace_artifacts_emits_user_assistant_and_tool(env):
 
 def test_trace_artifacts_empty_data_emits_nothing(env):
     """A trace with no prompt/assistant/tool content should yield zero turns
-    rather than a phantom 'trace.artifacts' message."""
+    rather than a phantom 'trace.artifacts' message.
+
+    "Zero turns" means deferring to the JSONL fallback (None), same as
+    ``test_empty_store_returns_none`` below. Serving a zero-filled shell
+    instead was what put an empty "Messages 0" card on screen and blocked
+    the fallback that could have read the real transcript off disk.
+    """
     store, sessions_mod = env
     sid = "sess-empty-trace"
     _ingest(store, sid, {
@@ -167,9 +173,7 @@ def test_trace_artifacts_empty_data_emits_nothing(env):
         "data": {"finalStatus": "success"},
     })
     _wait(store)
-    result = sessions_mod._try_local_store_transcript(sid)
-    assert result is not None
-    assert result["messages"] == []
+    assert sessions_mod._try_local_store_transcript(sid) is None
 
 
 def test_model_completed_emits_assistant(env):
@@ -232,12 +236,9 @@ def test_plumbing_events_emit_nothing(env):
     for et in ("session.started", "session.ended", "context.compiled", "agent.heartbeat"):
         _ingest(store, sid, {"type": et, "data": {"status": "ok"}})
     _wait(store)
-    result = sessions_mod._try_local_store_transcript(sid)
-    assert result is not None
-    assert result["messages"] == []
-    # And no debug-typed role leaks through.
-    for m in result["messages"]:
-        assert "." not in m["role"]
+    # A session made only of plumbing has nothing to render, so the detail
+    # path defers to the JSONL fallback rather than serving an empty card.
+    assert sessions_mod._try_local_store_transcript(sid) is None
 
 
 def test_unknown_openclaw_event_does_not_emit_garbage(env):
@@ -247,8 +248,7 @@ def test_unknown_openclaw_event_does_not_emit_garbage(env):
     sid = "sess-unknown"
     _ingest(store, sid, {"type": "foo.bar", "data": {"content": "anything"}})
     _wait(store)
-    result = sessions_mod._try_local_store_transcript(sid)
-    assert result["messages"] == []
+    assert sessions_mod._try_local_store_transcript(sid) is None
 
 
 def test_anthropic_shape_still_works(env):

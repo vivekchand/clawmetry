@@ -139,6 +139,18 @@ def _build_local_inventory():
     except Exception:
         node_id = ""
 
+    # Recency liveness, read from the SAME typed sessions table
+    # ``/api/live-sessions`` uses so the Agents tab and the Home hero can never
+    # disagree about what is working right now. ``None`` (not ``{}``) when the
+    # read fails, so the roster renders "unknown" instead of a confident zero.
+    live_by_rt = None
+    try:
+        rows = _ls_call("query_sessions_table", limit=200)
+        if rows is not None:
+            live_by_rt = _sync._live_counts_by_runtime(rows)
+    except Exception:
+        live_by_rt = None
+
     try:
         node_wide, _by_rt = _sync._build_agent_inventory(
             runtime_summary,
@@ -149,6 +161,7 @@ def _build_local_inventory():
             detected,
             agent_meta,
             node_id,
+            live_by_rt=live_by_rt,
         )
         return node_wide
     except Exception:
@@ -172,6 +185,26 @@ def api_inventory():
         # the UI can render an honest "daemon not ingesting yet" state instead
         # of the misleading "No agents yet" copy (issue #3917).
         detected = _detected_runtimes()
+        if not detected:
+            # The adapter registry only knows the runtimes whose adapters are
+            # loaded — on a fresh self-host install the pro plugin (Claude
+            # Code, Cursor, ...) is not importable yet, so a machine covered
+            # in Claude Code sessions still detected NOTHING here and the UI
+            # fell back to the generic "No agents yet" copy (live-hit
+            # 2026-08-02). The lite detector filesystem-scans instead, so it
+            # sees paid runtimes before the pro wheel lands.
+            try:
+                import dashboard as _d
+                detected = [
+                    {
+                        "name": r.get("id", ""),
+                        "displayName": r.get("label") or r.get("id", ""),
+                        "sessions": r.get("sessions", 0),
+                    }
+                    for r in (_d._detect_other_runtimes_lite() or [])
+                ]
+            except Exception:
+                detected = []
         if detected:
             return jsonify({
                 "agents": [],

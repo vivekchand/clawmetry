@@ -1,15 +1,13 @@
 """Runtime-gate wiring for the per-agent sessions endpoint on ``bp_agents``.
 
 ``/api/agents/<name>/sessions`` returns per-runtime session data, so it is
-gated with :func:`clawmetry._gate.require_runtime` — the same contract
-``dashboard_claudecode.py`` enforces with ``@gate_runtime("claude_code")``
-on its JSON endpoints. This module pins the contract on the real
-``routes/agents.py`` blueprint that ``dashboard.py`` registers:
+gated with :func:`clawmetry._gate.require_runtime`. This module pins the
+contract on the real ``routes/agents.py`` blueprint that ``dashboard.py``
+registers:
 
 * Enforce mode + OSS-free install → paid-runtime session listings return
   402 with ``error="upgrade_required"``, ``runtime=<canonical>``, and
-  ``required_tier=cloud_starter`` (mirrors ``tests/test_claudecode_runtime_gate``
-  / ``routes/fleet_history.py``).
+  ``required_tier=cloud_starter`` (mirrors ``routes/fleet_history.py``).
 * Enforce mode + free runtime (``openclaw``, ``nemoclaw``) → gate passes
   through unchanged.
 * Grace mode (the default) → gate is transparent for both free and paid
@@ -140,8 +138,7 @@ def test_top_level_agents_list_stays_reachable_in_enforce_mode(enforce):
     together) so the UI can render an upgrade CTA on locked chips. Gating
     it would leave enforced installs with an empty chip bar and no way to
     discover paid runtimes exist. Mirrors ``routes/fleet_history.py``
-    keeping ``/fleet`` reachable and ``dashboard_claudecode.py`` keeping
-    ``/api/health`` reachable."""
+    keeping ``/fleet`` reachable in enforce mode."""
     app = _make_app()
     with app.test_client() as c:
         r = c.get("/api/agents")
@@ -153,8 +150,7 @@ def test_paid_agent_detail_stays_reachable_in_enforce_mode(enforce):
     install-probe (does the runtime workspace exist?), not the runtime's
     data. The UI needs it in enforce mode to distinguish "not installed"
     from "installed but not entitled" — otherwise the upgrade CTA can't
-    render the right copy. Parallels ``dashboard_claudecode.py``'s
-    decision to keep ``/api/health`` ungated."""
+    render the right copy."""
     app = _make_app()
     with app.test_client() as c:
         r = c.get("/api/agents/claude_code")

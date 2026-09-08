@@ -1,4 +1,646 @@
 // ─────────────────────────────────────────────────────────────────────────
+// Trial-end hard-block overlay.
+//
+// Fires when ``/api/trial/status`` returns ``hard_blocked: true`` (the daemon
+// has ``CLAWMETRY_HARD_BLOCK=1`` set AND the resolver reports an unpaid /
+// expired entitlement). Renders a full-viewport, un-dismissable modal that
+// takes the user straight to checkout, offers a paste-in field for a license
+// key they already own, and polls ``/api/trial/refresh-license`` in the
+// background so the moment the daemon writes a fresh license file the
+// overlay auto-clears and the dashboard resumes.
+//
+// This runs at the very top of app.js so:
+//   * it beats every other tab-init call to the ``/api/*`` surface (which
+//     would 402 anyway and dump errors into the console),
+//   * it survives a stale cached copy of app.js — the poll is defensive
+//     and never assumes any other function exists yet.
+// ─────────────────────────────────────────────────────────────────────────
+(function initClawMetryHardBlockOverlay() {
+  var POLL_MS_ACTIVE = 15000;    // while blocked: retry auto-refresh every 15s
+  var POLL_MS_IDLE   = 60000;    // while unblocked: sanity-check every 60s
+  var POLL_MS_PAYING = 5000;     // after "Continue to payment": poll hard
+  var PAYING_WINDOW_MS = 10 * 60 * 1000;  // fast-poll for 10 min after click
+  var _checkoutClickedAt = 0;
+  var OVERLAY_ID     = 'cm-hard-block-overlay';
+  var STYLE_ID       = 'cm-hard-block-overlay-style';
+
+  // Plan picker state + copy.
+  //
+  // PRICES MIRROR THE CLOUD'S _SUB_PRICING TABLE (clawmetry-cloud
+  // routes/api.py) -- that table is the billing source of truth and what
+  // Stripe actually charges. These numbers are display-only; if they ever
+  // disagree, Stripe wins and the user sees the real amount on the checkout
+  // page. Keep them in this one place so a repricing is a single edit.
+  // ``was`` is the previous ladder's annual price, shown struck through on the
+  // annual tab exactly as /pricing does. It is the real prior price, not an
+  // invented anchor.
+  var PLAN_PRICES = {
+    starter: { month: 9,  year: 90,  was: 190 },
+    pro:     { month: 19, year: 190, was: 390 },
+  };
+  // Kept deliberately close to /pricing so the overlay and the public page
+  // make the same promise in the same words.
+  var PLAN_BLURB = {
+    starter: 'Every agent, every session, and every dollar in one dashboard.',
+    pro: 'The governance layer: gate tools before they fire, score runs with evals, catch runaway waste.',
+  };
+  var PLAN_FEATURES = {
+    starter: ['Unlimited channels + cloud sync', 'Approval queue'],
+    pro: ['Everything in Starter', 'Tool policy + evals + cost optimizer'],
+  };
+  // Publish the table so the OTHER in-app upgrade surface — the self-host
+  // modal's expired-trial step (static/js/onboarding.js, loaded after this
+  // file) — sells the same plans at the same prices. Two hardcoded ladders
+  // is how a reprice ships half-done.
+  window.CM_PLANS = {
+    prices: PLAN_PRICES,
+    blurb: PLAN_BLURB,
+    features: PLAN_FEATURES,
+    // Annual-only perk. The cloud collects a shipping address on annual
+    // checkouts (_annual_device_checkout_extras) and ships on the first PAID
+    // invoice, so this is a real promise, not a made-up one.
+    deviceValue: 149,
+  };
+  var _selTier = 'starter';
+  var _selInterval = 'year';   // annual preselected: better retention + the device perk
+  // Filled from /api/entitlement (allowlisted, so it answers while blocked).
+  // Never hardcode a runtime count -- it has drifted every time it was.
+  var _paidRuntimeCount = 0;
+
+  function planPriceHtml() {
+    var p = PLAN_PRICES[_selTier] || PLAN_PRICES.starter;
+    var yearly = _selInterval === 'year';
+    var amt = yearly ? p.year : p.month;
+    var was = (yearly && p.was)
+      ? '<span class="cm-hbo-was">$' + p.was + '</span> ' : '';
+    return was + '$' + amt
+      + '<span class="cm-hbo-per"> / node / ' + (yearly ? 'year' : 'month') + '</span>';
+  }
+
+  function featsHtml() {
+    var rows = [runtimesLine()].concat(PLAN_FEATURES[_selTier] || PLAN_FEATURES.starter);
+    return rows.map(function (r) { return '<li>' + escapeHtml(r) + '</li>'; }).join('');
+  }
+
+  function runtimesLine() {
+    return _paidRuntimeCount
+      ? ('All ' + _paidRuntimeCount + ' runtimes (Claude Code, Codex, Cursor +'
+         + Math.max(0, _paidRuntimeCount - 3) + ')')
+      : 'Every supported runtime (Claude Code, Codex, Cursor, …)';
+  }
+
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+    var st = document.createElement('style');
+    st.id = STYLE_ID;
+    st.textContent = ''
+      + '#' + OVERLAY_ID + ' {'
+      + '  position: fixed; inset: 0; z-index: 2147483647;'
+      + '  background: rgba(15,17,20,0.92); backdrop-filter: blur(6px);'
+      + '  -webkit-backdrop-filter: blur(6px);'
+      // align-items:center clips BOTH ends once the card is taller than the
+      // window, and a fixed inset:0 box does not scroll, so the overflow is
+      // unreachable rather than merely hidden. That took out the headline at
+      // the top and the "continue on free runtimes" escape at the bottom on a
+      // laptop-height desktop window. flex-start + overflow-y:auto lets a tall
+      // card scroll; the auto margins on the card keep it optically centred
+      // whenever it does fit.
+      + '  display: flex; align-items: flex-start; justify-content: center;'
+      + '  overflow-y: auto; overscroll-behavior: contain;'
+      + '  padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-card {'
+      + '  max-width: 460px; width: 100%; background: #1a1d22;'
+      + '  border: 1px solid #2a2f36; border-radius: 14px;'
+      + '  box-shadow: 0 24px 60px rgba(0,0,0,0.55);'
+      + '  padding: 22px 26px; color: #e8eaed;'
+      + '  margin: auto;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-eyebrow {'
+      + '  color: #ffb020; font-size: 11px; font-weight: 700;'
+      + '  text-transform: uppercase; letter-spacing: 1.3px;'
+      + '  margin: 0 0 6px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' h2 {'
+      + '  margin: 0 0 8px 0; font-size: 19px; line-height: 1.25;'
+      + '  color: #ffffff; font-weight: 700;'
+      + '}'
+      + '#' + OVERLAY_ID + ' p.cm-hbo-body {'
+      + '  margin: 0 0 14px 0; font-size: 13px; line-height: 1.5;'
+      + '  color: #b5b8be;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-cta {'
+      + '  display: block; width: 100%; padding: 11px 18px;'
+      + '  border-radius: 10px; border: 0; background: #ff9500;'
+      + '  color: #1a1d22; font-size: 15px; font-weight: 700;'
+      + '  cursor: pointer; text-align: center; text-decoration: none;'
+      + '  box-sizing: border-box; margin: 0 0 10px 0;'
+      + '  transition: background 120ms ease;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-cta:hover { background: #ffa726; }'
+      // ── plan picker ──────────────────────────────────────────────────
+      + '#' + OVERLAY_ID + ' .cm-hbo-seg {'
+      + '  display: flex; gap: 4px; padding: 3px; margin: 0 0 10px 0;'
+      + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-seg button {'
+      + '  flex: 1; padding: 7px 10px; border: 0; border-radius: 7px;'
+      + '  background: transparent; color: #b5b8be; font-size: 13px;'
+      + '  font-weight: 600; cursor: pointer; font-family: inherit;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-seg button[aria-pressed="true"] {'
+      + '  background: #ff9500; color: #1a1d22;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-seg .cm-hbo-save {'
+      + '  font-weight: 400; opacity: 0.85; margin-left: 4px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier {'
+      + '  display: flex; align-items: center; gap: 11px; width: 100%;'
+      + '  padding: 10px 13px; margin: 0 0 6px 0; text-align: left;'
+      + '  background: #14171b; border: 1px solid #2a2f36; border-radius: 10px;'
+      + '  color: #e8eaed; cursor: pointer; font-family: inherit;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier[aria-pressed="true"] {'
+      + '  border-color: #ff9500; background: #211a12;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-radio {'
+      + '  width: 16px; height: 16px; border-radius: 50%; flex: 0 0 auto;'
+      + '  border: 2px solid #4a4f57;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier[aria-pressed="true"] .cm-hbo-radio {'
+      + '  border-color: #ff9500; box-shadow: inset 0 0 0 3px #ff9500;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier-name {'
+      + '  font-size: 14px; font-weight: 700; color: #fff; display: block;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-tier-sub {'
+      + '  font-size: 12px; color: #9aa0a8; display: block; margin-top: 2px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-feats {'
+      + '  margin: 9px 0 10px 0; padding: 0; list-style: none;'
+      + '  font-size: 12.5px; color: #b5b8be;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-feats li { margin: 0 0 4px 0; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-feats li::before {'
+      + '  content: "+"; color: #22c55e; font-weight: 700; margin-right: 8px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-price {'
+      + '  text-align: center; margin: 0 0 10px 0;'
+      + '  font-size: 23px; font-weight: 700; color: #fff;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-device {'
+      + '  margin: 0 0 10px 0; padding: 9px 12px; border-radius: 9px;'
+      + '  border: 1px solid #33406b; background: #151a2b;'
+      + '  font-size: 12.5px; color: #b9c2dd; line-height: 1.45;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-device strong { color: #22c55e; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-was {'
+      + '  color: #6b7078; text-decoration: line-through;'
+      + '  font-size: 17px; font-weight: 600; margin-right: 4px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-per {'
+      + '  font-size: 13px; font-weight: 500; color: #9aa0a8;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-price small {'
+      + '  display: block; margin-top: 4px; font-size: 12px;'
+      + '  font-weight: 500; color: #22c55e;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider {'
+      + '  display: flex; align-items: center; gap: 10px;'
+      + '  color: #6b7078; font-size: 11px; text-transform: uppercase;'
+      + '  letter-spacing: 1.2px; margin: 12px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider::before,'
+      + '#' + OVERLAY_ID + ' .cm-hbo-divider::after {'
+      + '  content: ""; flex: 1; height: 1px; background: #2a2f36;'
+      + '}'
+      + '#' + OVERLAY_ID + ' label.cm-hbo-label {'
+      + '  display: block; font-size: 12px; color: #b5b8be;'
+      + '  margin: 0 0 6px 0;'
+      + '}'
+      + '#' + OVERLAY_ID + ' textarea.cm-hbo-key {'
+      + '  width: 100%; min-height: 52px; padding: 8px 11px;'
+      + '  border-radius: 8px; border: 1px solid #2a2f36;'
+      + '  background: #12141a; color: #e8eaed;'
+      + '  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;'
+      + '  font-size: 12px; box-sizing: border-box; resize: vertical;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-activate {'
+      + '  margin-top: 8px; width: 100%; padding: 9px 14px;'
+      + '  border-radius: 10px; border: 1px solid #2a2f36;'
+      + '  background: transparent; color: #e8eaed;'
+      + '  font-size: 14px; font-weight: 600; cursor: pointer;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-activate:hover { border-color: #4a5058; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status {'
+      + '  min-height: 16px; margin-top: 9px; font-size: 11.5px;'
+      + '  color: #b5b8be; text-align: center;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status.err { color: #ff6b6b; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-status.ok  { color: #59d18d; }'
+      + '#' + OVERLAY_ID + ' .cm-hbo-foot {'
+      + '  margin-top: 18px; font-size: 11px; color: #6b7078;'
+      + '  text-align: center;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-foot code {'
+      + '  font-family: "JetBrains Mono", ui-monospace, monospace;'
+      + '  color: #b5b8be; background: #12141a; padding: 1px 5px;'
+      + '  border-radius: 3px;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-free {'
+      + '  margin-top: 12px; width: 100%; padding: 11px 14px;'
+      + '  border-radius: 10px; border: 1px solid #2a2f36;'
+      + '  background: transparent; color: #b5b8be;'
+      + '  font-size: 13px; font-weight: 600; cursor: pointer;'
+      + '  transition: color 120ms ease, border-color 120ms ease;'
+      + '}'
+      + '#' + OVERLAY_ID + ' button.cm-hbo-free:hover {'
+      + '  color: #e8eaed; border-color: #4a5058;'
+      + '}'
+      + '#' + OVERLAY_ID + ' .cm-hbo-free-note {'
+      + '  margin-top: 8px; font-size: 11px; color: #6b7078;'
+      + '  text-align: center; line-height: 1.45;'
+      + '}';
+    document.head.appendChild(st);
+  }
+
+  function buildOverlay(state) {
+    var el = document.createElement('div');
+    el.id = OVERLAY_ID;
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-modal', 'true');
+    el.setAttribute('aria-labelledby', 'cm-hbo-title');
+    el.setAttribute('data-cm-locked', '1');
+    var upgradeUrl = (state && (state.checkout_url || state.upgrade_url)) || 'https://app.clawmetry.com/upgrade';
+    var reason = (state && state.reason) || 'A valid ClawMetry subscription is required to continue.';
+    var eyebrow = state && state.expired ? 'Trial ended' : 'Subscription required';
+    var daysLeft = state && typeof state.days_until_expiry === 'number' ? state.days_until_expiry : null;
+    var subline = daysLeft !== null && daysLeft > 0
+      ? ('Your trial ends in ' + daysLeft + ' day' + (daysLeft === 1 ? '' : 's') + '. Upgrade now to keep syncing without interruption.')
+      : 'Complete checkout to unlock the dashboard, or paste a license key you already own.';
+    var freeEndpoint = (state && state.free_only_endpoint) || '/api/trial/continue-free';
+    var freeRuntimes = (state && Array.isArray(state.free_runtimes) && state.free_runtimes.length)
+      ? state.free_runtimes
+      : ['openclaw', 'nemoclaw', 'goose'];
+    // nemoclaw is NVIDIA NemoClaw and it is FREE. nanoclaw is a different
+    // runtime entirely, and it is PAID (entitlements.PAID_RUNTIMES). This
+    // mapping said 'NanoClaw', so the one screen that tells a blocked user
+    // what they still get named a runtime they do NOT get and never named
+    // the one they do. Labels come from entitlements.RUNTIME_LABELS.
+    var RT_LABELS = { openclaw: 'OpenClaw', nemoclaw: 'NVIDIA NemoClaw', goose: 'Goose' };
+    var freeRuntimesLabel = freeRuntimes
+      .map(function (r) { return RT_LABELS[r] || r; })
+      .join(' + ');
+    el.innerHTML = ''
+      + '<div class="cm-hbo-card">'
+      + '  <div class="cm-hbo-eyebrow">' + eyebrow + '</div>'
+      + '  <h2 id="cm-hbo-title">' + escapeHtml(reason) + '</h2>'
+      + '  <p class="cm-hbo-body">' + escapeHtml(subline) + '</p>'
+      + '  <div class="cm-hbo-seg" role="group" aria-label="Billing interval">'
+      + '    <button type="button" data-interval="month" aria-pressed="' + (_selInterval === 'month') + '">Monthly</button>'
+      + '    <button type="button" data-interval="year" aria-pressed="' + (_selInterval === 'year') + '">Annual<span class="cm-hbo-save">2 months free</span></button>'
+      + '  </div>'
+      + '  <button type="button" class="cm-hbo-tier" data-tier="starter" aria-pressed="' + (_selTier === 'starter') + '">'
+      + '    <span class="cm-hbo-radio"></span>'
+      + '    <span><span class="cm-hbo-tier-name">Starter</span>'
+      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.starter) + '</span></span>'
+      + '  </button>'
+      + '  <button type="button" class="cm-hbo-tier" data-tier="pro" aria-pressed="' + (_selTier === 'pro') + '">'
+      + '    <span class="cm-hbo-radio"></span>'
+      + '    <span><span class="cm-hbo-tier-name">Pro</span>'
+      + '      <span class="cm-hbo-tier-sub">' + escapeHtml(PLAN_BLURB.pro) + '</span></span>'
+      + '  </button>'
+      + '  <ul class="cm-hbo-feats" id="cm-hbo-feats">' + featsHtml() + '</ul>'
+      // Annual-only perk. The cloud already collects a shipping address on
+      // annual checkouts for this (_annual_device_checkout_extras), and it
+      // ships on the first PAID invoice, so this is not a promise we invent
+      // here. Hidden on monthly.
+      + '  <div class="cm-hbo-device" id="cm-hbo-device" style="' + (_selInterval === 'year' ? '' : 'display:none;') + '">'
+      + '    Includes a free <strong>$149 desk device</strong>.'
+      + '  </div>'
+      + '  <div class="cm-hbo-price" id="cm-hbo-price">' + planPriceHtml() + '</div>'
+      + '  <a class="cm-hbo-cta" href="' + escapeAttr(upgradeUrl) + '" target="_blank" rel="noopener">'
+      + '    Continue to Stripe  →'
+      + '  </a>'
+      + '  <div class="cm-hbo-divider">or</div>'
+      + '  <label class="cm-hbo-label" for="cm-hbo-key">Paste license key</label>'
+      + '  <textarea id="cm-hbo-key" class="cm-hbo-key" spellcheck="false" autocomplete="off" placeholder="header.payload.signature"></textarea>'
+      + '  <button type="button" class="cm-hbo-activate">Activate license</button>'
+      + '  <div class="cm-hbo-status" id="cm-hbo-status" aria-live="polite">Waiting for payment — the dashboard will unlock automatically once your license lands.</div>'
+      + '  <button type="button" class="cm-hbo-free" data-endpoint="' + escapeAttr(freeEndpoint) + '">'
+      + '    Continue free with ' + escapeHtml(freeRuntimesLabel) + ' only'
+      + '  </button>'
+      + '  <div class="cm-hbo-free-note">Free mode keeps ' + escapeHtml(freeRuntimesLabel) + ' observability working. Paid runtimes (Claude Code, Codex, Cursor, …) stay locked until you upgrade.</div>'
+      + '  <div class="cm-hbo-foot">Prefer the CLI? Run <code>clawmetry activate &lt;KEY&gt;</code></div>'
+      + '</div>';
+
+    // Emit paywall telemetry so the fleet dashboard sees a "user hit hard block"
+    // count. Fire-and-forget; failure never blocks the render.
+    try {
+      fetch('/api/paywall/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'hard_block_view',
+          tier: state && state.tier,
+          source: state && state.source,
+          expired: state && state.expired,
+        }),
+      }).catch(function () {});
+    } catch (e) { /* noop */ }
+
+    // Wire the payment CTA. The href (per-account checkout URL if the
+    // heartbeat cached one, else the upgrade page) is only the no-JS
+    // fallback: on click we ask /api/trial/checkout to mint a live Stripe
+    // Checkout Session for the account this node is already linked to, so
+    // the user lands directly on the card form instead of a generic
+    // upgrade page. The tab MUST be opened synchronously in the click
+    // handler (popup blockers kill window.open from inside a fetch
+    // callback) and is redirected once the URL arrives.
+    // Plan picker. Selection lives in module state (not the DOM) so a
+    // re-render from the background poll never silently resets the user's
+    // choice back to the default mid-checkout.
+    var priceEl = el.querySelector('#cm-hbo-price');
+    function repaintPicker() {
+      Array.prototype.forEach.call(
+        el.querySelectorAll('.cm-hbo-seg button'), function (b) {
+          b.setAttribute('aria-pressed', String(b.getAttribute('data-interval') === _selInterval));
+        });
+      Array.prototype.forEach.call(
+        el.querySelectorAll('.cm-hbo-tier'), function (b) {
+          b.setAttribute('aria-pressed', String(b.getAttribute('data-tier') === _selTier));
+        });
+      if (priceEl) priceEl.innerHTML = planPriceHtml();
+      var featsEl = el.querySelector('#cm-hbo-feats');
+      if (featsEl) featsEl.innerHTML = featsHtml();
+      var devEl = el.querySelector('#cm-hbo-device');
+      if (devEl) devEl.style.display = (_selInterval === 'year') ? '' : 'none';
+    }
+    Array.prototype.forEach.call(
+      el.querySelectorAll('.cm-hbo-seg button'), function (b) {
+        b.addEventListener('click', function () {
+          _selInterval = b.getAttribute('data-interval') === 'year' ? 'year' : 'month';
+          repaintPicker();
+        });
+      });
+    Array.prototype.forEach.call(
+      el.querySelectorAll('.cm-hbo-tier'), function (b) {
+        b.addEventListener('click', function () {
+          _selTier = b.getAttribute('data-tier') === 'pro' ? 'pro' : 'starter';
+          repaintPicker();
+        });
+      });
+
+    // Runtime count for the copy. /api/entitlement is allowlisted so it
+    // answers even while blocked; on failure we keep the countless wording
+    // rather than printing a number we cannot stand behind.
+    if (!_paidRuntimeCount) {
+      try {
+        fetch('/api/entitlement')
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function (ent) {
+            var all = ent && ent.all_runtimes;
+            if (Array.isArray(all) && all.length) {
+              _paidRuntimeCount = all.length;
+              var fe = el.querySelector('#cm-hbo-feats');
+              if (fe) fe.innerHTML = featsHtml();
+            }
+          })
+          .catch(function () {});
+      } catch (e) { /* noop */ }
+    }
+
+    var ctaEl = el.querySelector('.cm-hbo-cta');
+    var statusElForCta = el.querySelector('.cm-hbo-status');
+    ctaEl.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      _checkoutClickedAt = Date.now();
+      var payTab = null;
+      try { payTab = window.open('about:blank', '_blank'); } catch (e) { payTab = null; }
+      function go(url) {
+        if (payTab) { try { payTab.location = url; return; } catch (e) { /* fall through */ } }
+        try { window.open(url, '_blank', 'noopener'); } catch (e) { window.location.href = url; }
+      }
+      statusElForCta.className = 'cm-hbo-status';
+      statusElForCta.textContent = 'Opening secure checkout…';
+      fetch('/api/trial/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tier: _selTier,
+          plan: _selInterval === 'year' ? 'yearly' : 'monthly',
+        }),
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (resp) {
+          go(resp && resp.url ? resp.url : ctaEl.href);
+          statusElForCta.textContent = 'Waiting for payment. This dashboard unlocks automatically once checkout completes.';
+          // Poll hard while the user is off paying so the unlock feels
+          // instant when the license lands on the next daemon heartbeat.
+          refreshAndMaybeUnblock(true);
+        })
+        .catch(function () { go(ctaEl.href); });
+      try {
+        fetch('/api/paywall/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event: 'hard_block_checkout_click',
+            tier: _selTier,
+            interval: _selInterval,
+          }),
+        }).catch(function () {});
+      } catch (e) { /* noop */ }
+    });
+
+    // Wire activate button — POSTs to /api/license/activate (allowlisted),
+    // then forces a refresh + snapshot. The overlay auto-removes itself if
+    // the fresh snapshot reports hard_blocked=false.
+    var activateBtn = el.querySelector('.cm-hbo-activate');
+    var statusEl = el.querySelector('.cm-hbo-status');
+    activateBtn.addEventListener('click', function () {
+      var ta = el.querySelector('#cm-hbo-key');
+      var key = (ta && ta.value || '').trim();
+      if (!key) {
+        statusEl.className = 'cm-hbo-status err';
+        statusEl.textContent = 'Paste a license key first.';
+        return;
+      }
+      statusEl.className = 'cm-hbo-status';
+      statusEl.textContent = 'Verifying key…';
+      activateBtn.disabled = true;
+      fetch('/api/license/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: key }),
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (resp) {
+          activateBtn.disabled = false;
+          if (resp && resp.ok === false) {
+            statusEl.className = 'cm-hbo-status err';
+            statusEl.textContent = resp.message || resp.error || 'License activation failed.';
+            return;
+          }
+          statusEl.className = 'cm-hbo-status ok';
+          statusEl.textContent = 'License installed — reloading…';
+          return refreshAndMaybeUnblock(true);
+        })
+        .catch(function (err) {
+          activateBtn.disabled = false;
+          statusEl.className = 'cm-hbo-status err';
+          statusEl.textContent = 'Activation failed: ' + (err && err.message || err);
+        });
+    });
+
+    // Free-mode escape: expired-trial users can drop back to
+    // free-runtime-only mode instead of paying (entitlements.py's
+    // FREE_RUNTIMES = {openclaw, nemoclaw, goose} — NOT nanoclaw, which is paid;
+    // this comment said NanoClaw and that is how the label above got it
+    // wrong too). Posts to the
+    // continue-free endpoint (allowlisted), then reloads to a
+    // free-runtime-scoped URL so the gate short-circuits and the overlay
+    // stays down. Paid-runtime tabs on the free scope render a locked
+    // padlock CTA (handled by the existing paywall banner system).
+    var freeBtn = el.querySelector('.cm-hbo-free');
+    if (freeBtn) {
+      freeBtn.addEventListener('click', function () {
+        var ep = freeBtn.getAttribute('data-endpoint') || '/api/trial/continue-free';
+        statusEl.className = 'cm-hbo-status';
+        statusEl.textContent = 'Switching to free mode…';
+        freeBtn.disabled = true;
+        activateBtn.disabled = true;
+        fetch(ep, { method: 'POST' })
+          .then(function (r) { return r.json().catch(function () { return {}; }); })
+          .then(function () {
+            statusEl.className = 'cm-hbo-status ok';
+            statusEl.textContent = 'Free mode enabled — reloading with OpenClaw scope…';
+            // Force the URL onto a free runtime so the gate lets the page
+            // in even though the entitlement is still expired.
+            try {
+              var url = new URL(window.location.href);
+              url.searchParams.set('runtime', 'openclaw');
+              window.location.replace(url.toString());
+            } catch (e) {
+              window.location.replace('/?runtime=openclaw');
+            }
+          })
+          .catch(function (err) {
+            freeBtn.disabled = false;
+            activateBtn.disabled = false;
+            statusEl.className = 'cm-hbo-status err';
+            statusEl.textContent = 'Could not switch to free mode: ' + (err && err.message || err);
+          });
+      });
+    }
+
+    // Belt & braces: block ESC / TAB-out / right-click chrome from letting
+    // the user reach controls behind the overlay while it's mounted.
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); }
+    });
+    return el;
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function escapeAttr(s) {
+    return String(s == null ? '' : s).replace(/"/g, '&quot;');
+  }
+
+  function mount(state) {
+    injectStyles();
+    var existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+    var el = buildOverlay(state);
+    document.body.appendChild(el);
+    try { document.body.style.overflow = 'hidden'; } catch (e) { /* noop */ }
+  }
+
+  function unmount() {
+    var existing = document.getElementById(OVERLAY_ID);
+    if (existing) existing.remove();
+    try { document.body.style.overflow = ''; } catch (e) { /* noop */ }
+  }
+
+  function currentRuntimeScope() {
+    try {
+      var u = new URL(window.location.href);
+      var r = (u.searchParams.get('runtime') || u.searchParams.get('scope') || '').trim();
+      return r || '';
+    } catch (e) { return ''; }
+  }
+
+  function withRuntime(path) {
+    var scope = currentRuntimeScope();
+    if (!scope) return path;
+    var sep = path.indexOf('?') === -1 ? '?' : '&';
+    return path + sep + 'runtime=' + encodeURIComponent(scope);
+  }
+
+  function refreshAndMaybeUnblock(force) {
+    var endpoint = force ? '/api/trial/refresh-license' : '/api/trial/status';
+    endpoint = withRuntime(endpoint);
+    var opts = force ? { method: 'POST' } : { method: 'GET' };
+    return fetch(endpoint, opts)
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (state) {
+        applyState(state);
+        return state;
+      })
+      .catch(function () { /* noop — retry next tick */ });
+  }
+
+  var _lastBlocked = null;
+  function applyState(state) {
+    if (!state) return;
+    var blocked = !!state.hard_blocked;
+    if (blocked && !_lastBlocked) mount(state);
+    else if (!blocked && _lastBlocked) unmount();
+    else if (blocked) {
+      // still blocked — refresh the copy in case reason / countdown changed
+      var existing = document.getElementById(OVERLAY_ID);
+      if (!existing) mount(state);
+    }
+    _lastBlocked = blocked;
+    // Broadcast every snapshot so the header trial pill (static/js/trial-pill.js)
+    // rides this poll instead of running a second identical one. Fire-and-forget:
+    // no listener, or a browser without CustomEvent, changes nothing here.
+    try {
+      window.dispatchEvent(new CustomEvent('cm:trial-state', { detail: state }));
+    } catch (e) { /* noop */ }
+    var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
+    var delay = blocked ? (paying ? POLL_MS_PAYING : POLL_MS_ACTIVE) : POLL_MS_IDLE;
+    if (window.__cmHardBlockTimer) clearTimeout(window.__cmHardBlockTimer);
+    window.__cmHardBlockTimer = setTimeout(tick, delay);
+  }
+
+  function tick() {
+    // While the user is off paying, force the refresh-license path so the
+    // entitlement cache is invalidated and a license the daemon just wrote
+    // is honoured on THIS tick, not after the resolver TTL expires.
+    var paying = _checkoutClickedAt && (Date.now() - _checkoutClickedAt) < PAYING_WINDOW_MS;
+    refreshAndMaybeUnblock(!!paying);
+  }
+
+  // First tick: read status ASAP (before any other tab hits an /api/* that
+  // would 402 and pollute the console). If the document isn't ready yet,
+  // defer until it is.
+  function boot() {
+    try { tick(); } catch (e) { /* noop */ }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+
+// ─────────────────────────────────────────────────────────────────────────
 // Response-shape tolerance helpers (epic #1032 Phase 2-5 forward-compat)
 //
 // As routes migrate to the local-DuckDB fast path (`_source: "local_store"`)
@@ -350,10 +992,96 @@ function _cmAgentDownBannerCopy(orig) {
   return t('alerts.feed_stopped_unknown', null, 'One of our data feeds from your agent stopped. You’re still seeing live activity, but some charts may lag.');
 }
 
+// Where an alert sends you. Returns {label, go} or null when the alert
+// genuinely has no better destination than the banner itself.
+//
+// Labels are active-voice and name the destination in the operator's own
+// words ("Investigate", "Open session"), never the system's ("View
+// security_events"). Each one is a promise about what the next screen shows.
+function _cmBannerDestination(alert) {
+  if (!alert) return null;
+  var type = String(alert.type || '');
+  var ruleId = typeof alert.rule_id === 'string' ? alert.rule_id : '';
+
+  function goTab(tab, after) {
+    return function () {
+      if (typeof switchTab === 'function') switchTab(tab);
+      if (typeof after === 'function') { try { after(); } catch (e) {} }
+    };
+  }
+  function goSession(sid) {
+    return function () {
+      // Deep-link via hash so the Session-replay tab can pick it up either on
+      // first paint (window.location.hash) or via the hashchange listener if
+      // the tab is already mounted.
+      try { window.location.hash = 'session=' + encodeURIComponent(sid); } catch (e) {}
+      if (typeof switchTab === 'function') switchTab('transcripts');
+    };
+  }
+
+  // Session-scoped alarms: dashboard.py encodes the session in the rule_id.
+  if (type === 'stuck_session' && ruleId.indexOf('stuck_session_') === 0) {
+    var sid = ruleId.slice('stuck_session_'.length);
+    if (sid) return { label: t('app.open_session', null, 'Open session →'), go: goSession(sid) };
+  }
+
+  // Guard detector incidents delivered to a human (stuck / rate limited /
+  // crashed / waiting on you). The Guard tab lists the session with its
+  // Pause / Stop controls, which is the action the banner is asking for.
+  if (type === 'agent_attention') {
+    return {
+      label: t('app.open_guard', null, 'Open Guard →'),
+      go: goTab('guard', function () {
+        if (typeof loadGuardTab === 'function') loadGuardTab();
+      })
+    };
+  }
+
+  // Security alarms. The rule_id here is the DETECTION rule (numbat's
+  // rule_id, or a built-in signature id) — not a session — so we cannot jump
+  // straight to a transcript. The findings log can: it lists this finding
+  // with the session attached, one click further on.
+  if (type === 'numbat_finding' || type === 'security_threat') {
+    return {
+      label: t('app.investigate', null, 'Investigate →'),
+      go: goTab('security', function () {
+        if (typeof loadSecurityFindings === 'function') loadSecurityFindings();
+        var el = document.getElementById('security-findings-panel');
+        if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      })
+    };
+  }
+
+  // Liveness alarms — "is my agent alive" is answered on the Overview.
+  if (type === 'heartbeat_silent' || type === 'agent_down') {
+    return { label: t('app.check_agent', null, 'Check agent →'), go: goTab('overview') };
+  }
+
+  // Money alarms. Note the two vocabularies: user rules store 'threshold' /
+  // 'spike', while the always-on cost monitor fires 'anomaly'. Both mean
+  // "your spend moved" and both belong on Usage.
+  if (type === 'threshold' || type === 'session_cost' || type === 'spike'
+      || type === 'anomaly' || type === 'daily_threshold_breached'
+      || type === 'budget_blocked') {
+    return { label: t('app.see_spending', null, 'See spending →'), go: goTab('usage') };
+  }
+
+  // Burn alarms — token velocity and unproductive spinning both need the
+  // session that is doing it, which the Sessions list ranks for you.
+  // 'token_spike' is the rule vocabulary; 'token_velocity' is what the
+  // always-on monitor fires.
+  if (type === 'token_spike' || type === 'token_velocity'
+      || type === 'unproductive_burn') {
+    return { label: t('app.see_sessions', null, 'See sessions →'), go: goTab('transcripts') };
+  }
+
+  return null;
+}
+
 async function checkActiveAlerts() {
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
-    var alerts = data.alerts || [];
+    var alerts = (data.alerts || []).filter(function(a) { return !(a && _cmDismissedAlertIds[a.id]); });
     var count = alerts.length;
     // Update bell icon badge and Alerts nav tab badge
     var bellBadge = document.getElementById('alerts-bell-badge');
@@ -378,32 +1106,31 @@ async function checkActiveAlerts() {
     var latest = bannerAlerts[0];
     var msgEl = document.getElementById('alert-banner-msg');
     msgEl.textContent = latest.type === 'agent_down' ? _cmAgentDownBannerCopy(latest.message) : latest.message;
-    // Stuck-session deep-link: dashboard.py:_check_stuck_sessions emits
-    // rule_id = `stuck_session_<full-session-id>`. Surface an "Open session →"
-    // button on the banner so users go from "what's wrong" to "look at it"
-    // in one click. Idempotent across polls — remove any prior button first.
+    // Every alarm needs somewhere to go.
+    //
+    // This used to special-case exactly one type: stuck_session got an
+    // "Open session →" button, and every other alert — including a HIGH
+    // security finding — offered only Dismiss. Founder, 2026-08-15, on a
+    // numbat secret-exfiltration banner: "unable to understand what action I
+    // need to take... for the first one I just see dismiss button, so what??"
+    // Dismiss is not a response to a security alert; it is the absence of one.
+    //
+    // _cmBannerDestination maps an alert to the screen that answers the
+    // question it raises. Adding an alert type without a destination is a
+    // regression — tests/test_alert_banner_destinations.py enforces it.
     var existingOpen = document.getElementById('alert-banner-open-session');
     if (existingOpen && existingOpen.parentNode) existingOpen.parentNode.removeChild(existingOpen);
-    if (latest && latest.type === 'stuck_session' && typeof latest.rule_id === 'string') {
-      var sid = latest.rule_id.indexOf('stuck_session_') === 0
-        ? latest.rule_id.slice('stuck_session_'.length) : '';
-      if (sid) {
-        var openBtn = document.createElement('button');
-        openBtn.id = 'alert-banner-open-session';
-        openBtn.textContent = t("app.open_session", null, "Open session →");
-        openBtn.style.cssText = 'margin-left:12px;background:transparent;border:1px solid rgba(255,255,255,0.3);color:inherit;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;';
-        openBtn.onclick = function () {
-          // Deep-link via hash so the Session-replay tab can pick it up
-          // either on first paint (window.location.hash) or via the
-          // hashchange listener if the tab is already mounted.
-          try { window.location.hash = 'session=' + encodeURIComponent(sid); } catch(e) {}
-          if (typeof switchTab === 'function') switchTab('transcripts');
-        };
-        // Insert before the Dismiss / ack button so it reads left-to-right.
-        var ackBtn = document.getElementById('alert-resume-btn');
-        if (ackBtn && ackBtn.parentNode) ackBtn.parentNode.insertBefore(openBtn, ackBtn);
-        else if (msgEl && msgEl.parentNode) msgEl.parentNode.appendChild(openBtn);
-      }
+    var dest = _cmBannerDestination(latest);
+    if (dest) {
+      var openBtn = document.createElement('button');
+      openBtn.id = 'alert-banner-open-session';
+      openBtn.textContent = dest.label;
+      openBtn.style.cssText = 'margin-left:12px;background:transparent;border:1px solid rgba(255,255,255,0.3);color:inherit;border-radius:6px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;';
+      openBtn.onclick = dest.go;
+      // Insert before the Dismiss / ack button so it reads left-to-right.
+      var ackBtn = document.getElementById('alert-resume-btn');
+      if (ackBtn && ackBtn.parentNode) ackBtn.parentNode.insertBefore(openBtn, ackBtn);
+      else if (msgEl && msgEl.parentNode) msgEl.parentNode.appendChild(openBtn);
     }
     banner.style.display = 'flex';
     // Show resume button if gateway is paused
@@ -412,15 +1139,33 @@ async function checkActiveAlerts() {
   } catch(e) {}
 }
 
+// Ids the user has dismissed but the server may not have acknowledged yet.
+// The banner poller skips them, so a slow or failed acknowledge can never
+// make the banner reappear seconds after the click (2026-09-02: twenty stale
+// agent-down alerts, acknowledged one request at a time, each request queued
+// behind a loaded server; the poller re-rendered the banner before the loop
+// finished, so Dismiss looked broken).
+var _cmDismissedAlertIds = {};
+
 async function ackAllAlerts() {
+  var banner = document.getElementById('alert-banner');
+  if (banner) banner.style.display = 'none';
   try {
     var data = await fetch('/api/alerts/active').then(function(r){return r.json();});
     var alerts = data.alerts || [];
-    for(var i=0; i<alerts.length; i++) {
-      await fetch('/api/alerts/history/'+alerts[i].id+'/ack', {method:'POST'});
+    var ids = [];
+    for (var i = 0; i < alerts.length; i++) {
+      if (alerts[i] && alerts[i].id != null) { ids.push(alerts[i].id); _cmDismissedAlertIds[alerts[i].id] = true; }
     }
-    document.getElementById('alert-banner').style.display = 'none';
+    // All at once, not one after another: twenty sequential round trips on a
+    // busy server take longer than the poller's interval.
+    await Promise.all(ids.map(function(id) {
+      return fetch('/api/alerts/history/' + id + '/ack', {method: 'POST'})
+        .then(function(r) { if (!r.ok) delete _cmDismissedAlertIds[id]; })
+        .catch(function() { delete _cmDismissedAlertIds[id]; });
+    }));
   } catch(e) {}
+  try { checkActiveAlerts(); } catch (e) {}
 }
 
 // PRD #1252 Phase 1 — visibility-gated setInterval. The 5 module-init
@@ -660,11 +1405,41 @@ setTimeout(loadAnomalyPanel, 4000);
 visibilitySetInterval(loadAnomalyPanel, 120000);
 
 // === Heartbeat Gap Alerting ===
+// Dismissal is scoped to the current silence EPISODE, not to the tab. The
+// button used to just set display:none inline, which the 30s poller below
+// undid on its next tick, so "Dismiss" bought the user 30 seconds and the
+// banner came back forever. Keyed on last_heartbeat_ts because that value is
+// constant for the whole of one outage and changes the moment the agent
+// checks in again: dismissing silences THIS outage, and a genuinely new one
+// still alerts. Same shape as cm_paused_banner_dismissed.
+var _CM_HB_DISMISS_KEY = 'cm_heartbeat_banner_dismissed_for';
+
+function _cmHeartbeatEpisodeKey(data) {
+  // Falls back when the API can't name a last heartbeat (status "unknown");
+  // anything stable within one episode works.
+  return String((data && data.last_heartbeat_ts) || 'none');
+}
+
+function dismissHeartbeatBanner() {
+  var banner = document.getElementById('heartbeat-banner');
+  if (banner) banner.style.display = 'none';
+  try {
+    localStorage.setItem(_CM_HB_DISMISS_KEY, window._cmHeartbeatEpisode || 'none');
+  } catch(e) { /* private mode: banner just isn't sticky */ }
+}
+
 async function checkHeartbeatStatus() {
   try {
     var data = await fetch('/api/heartbeat-status').then(function(r){return r.json();});
     var banner = document.getElementById('heartbeat-banner');
     if (!banner) return;
+    window._cmHeartbeatEpisode = _cmHeartbeatEpisodeKey(data);
+    var dismissedFor = null;
+    try { dismissedFor = localStorage.getItem(_CM_HB_DISMISS_KEY); } catch(e) {}
+    if (dismissedFor && dismissedFor === window._cmHeartbeatEpisode) {
+      banner.style.display = 'none';
+      return;
+    }
     if (data.status === 'warning' || data.status === 'silent') {
       var gap = data.gap_seconds;
       var gapStr = gap >= 3600 ? Math.floor(gap/3600) + 'h ' + Math.floor((gap%3600)/60) + 'm' : Math.floor(gap/60) + ' minutes';
@@ -804,90 +1579,6 @@ async function checkOnboardingStatus() {
 _cmOnboardingTimer = visibilitySetInterval(checkOnboardingStatus, 15000);
 setTimeout(checkOnboardingStatus, 300);
 
-// === No-Agent-Detected Empty-State Banner ===================================
-// Distinct from the first-heartbeat onboarding banner above:
-//   * onboarding-banner fires when "agent installed but no heartbeat yet"
-//     (transient race that resolves in ~30s)
-//   * no-agent-banner fires when "no agent installed at all" — persistent
-//     until the user installs OpenClaw or NVIDIA NemoClaw.
-// Two copy variants (see banners.html): if the backend detected paid
-// runtimes on this machine (Claude Code, Cursor, ...) that the plan does
-// not cover, we pitch the Pro trial instead of telling the user to
-// install a second agent they don't want.
-// Mutual exclusion: if openclaw or nemoclaw IS detected (heartbeat just
-// hasn't landed yet), we hide this banner and let onboarding-banner do
-// its thing. Polls every 60s — filesystem state for "did the user pip
-// install an agent" changes on the order of minutes, not seconds.
-var _cmNoAgentPaywallLogged = false;
-function _cmApplyNoAgentVariant(data) {
-  var msg = document.getElementById('no-agent-banner-msg');
-  var cta = document.getElementById('no-agent-upgrade-cta');
-  var installs = [document.getElementById('no-agent-install-openclaw'),
-                  document.getElementById('no-agent-install-nemoclaw')];
-  var detected = (data && data.detected_runtimes) || [];
-  var locked = detected.filter(function(r){ return r && !r.entitled; });
-  var upgrade = locked.length > 0;
-  if (upgrade && msg && cta) {
-    var names = locked.map(function(r){ return r.label || r.id; }).join(', ');
-    var t = (typeof window.t === 'function') ? window.t : function(k, v, fb){ return fb; };
-    msg.textContent = t('banners.detected_runtimes_msg', {runtimes: names},
-      'Detected ' + names + ' on this machine. ClawMetry Pro watches them in real time.');
-    cta.href = 'https://app.clawmetry.com/upgrade?source=no-agent-banner&harness='
-      + encodeURIComponent(locked[0].id || '');
-    cta.style.display = 'inline-block';
-    installs.forEach(function(a){ if (a) a.style.display = 'none'; });
-    if (!_cmNoAgentPaywallLogged) {
-      _cmNoAgentPaywallLogged = true;
-      try {
-        fetch('/api/paywall/event', {method:'POST', headers:{'Content-Type':'application/json'},
-          credentials:'same-origin',
-          body: JSON.stringify({event:'paywall_view', feature:'runtime_observability',
-            harness: locked[0].id || '', source:'no-agent-banner'})});
-      } catch(e) {}
-    }
-  } else {
-    // Install variant (nothing detected, or everything detected is already
-    // entitled and just hasn't produced data yet — banners.no_agent_msg is
-    // the stored default English for this span, restored via i18n).
-    if (cta) cta.style.display = 'none';
-    installs.forEach(function(a){ if (a) a.style.display = ''; });
-  }
-}
-async function checkAgentPresence() {
-  var banner = document.getElementById('no-agent-banner');
-  if (!banner) return;
-  try {
-    var data = await fetch('/api/agent-presence').then(function(r){return r.json();});
-    var noAgent = !!(data && data.no_agent === true);
-    if (noAgent) {
-      // No OpenClaw, no NemoClaw, no local data — show the persistent
-      // empty-state banner and hide the first-heartbeat one so we don't
-      // double up. Setting _cmOnboardingDismissed stops the 5s poller
-      // from re-flashing the "Setting up your node" copy.
-      var ob = document.getElementById('onboarding-banner');
-      if (ob) ob.style.display = 'none';
-      _cmOnboardingDismissed = true;
-      _cmApplyNoAgentVariant(data);
-      banner.style.display = 'flex';
-    } else {
-      // Agent appeared. Hide the no-agent banner and (if the dashboard
-      // was already showing it) reload the data so cards render.
-      var wasShown = banner.style.display !== 'none';
-      banner.style.display = 'none';
-      if (wasShown && typeof loadAll === 'function') {
-        try { loadAll(); } catch(e) {}
-      }
-    }
-  } catch(e) {
-    // Transient fetch failure. Per feedback_persistent_sessions: never
-    // surface a network blip as a terminal user-facing error. Keep the
-    // banner in whatever state it was in.
-  }
-}
-// Fast first check (500ms) so brand-new users see the banner before
-// staring at an empty dashboard. Re-poll every 60s thereafter.
-setTimeout(checkAgentPresence, 500);
-visibilitySetInterval(checkAgentPresence, 60000);
 
 function dismissPausedBanner() {
   localStorage.setItem('cm_paused_banner_dismissed', String(Date.now()));
@@ -1038,6 +1729,88 @@ function _ceToggleCompaction(idx) {
   row.style.display = (row.style.display === 'none' || !row.style.display) ? 'block' : 'none';
 }
 
+// ── Per-runtime signal coverage ─────────────────────────────────────────
+// "Compactions: 0" is two different statements wearing the same clothes: the
+// runtime ran clean, or we cannot see compactions on that runtime at all.
+// ClawMetry only emits compaction events for a minority of its adapters, so
+// for most runtimes the second reading is the true one. Rendering them
+// identically tells a user their Codex sessions never blow out when we were
+// never going to know either way. Reads /api/context-coverage.
+// A utilisation percentage is only as honest as its denominator. When the
+// context window came from our fallback rather than a lookup, the gauge has
+// to say so: rendering a guessed denominator with the same authority as a
+// looked-up one is how a dashboard tells a confident lie. Sources are
+// model_table / explicit_marker / observed_floor / default (see
+// clawmetry/context_windows.py).
+function _ceWindowProvenance(pt) {
+  if (!pt) return '';
+  var src = pt.window_source || pt.context_window_source || '';
+  if (!src || src === 'model_table' || src === 'explicit_marker' || src === 'observed_floor') return '';
+  return ' · <span style="color:#d97706;" title="No context-window size is known for this model, so the gauge uses ClawMetry\'s 200K fallback. Set CLAWMETRY_CONTEXT_WINDOW to pin it, or add the model to clawmetry/context_windows.py.">estimated window</span>';
+}
+
+async function loadContextCoverage() {
+  var el = document.getElementById('ce-coverage-panel');
+  if (!el) return;
+  var data;
+  try {
+    data = await fetch('/api/context-coverage').then(function(r){ return r.json(); });
+  } catch (e) {
+    el.innerHTML = '';   // never block the tab on the honesty panel
+    return;
+  }
+  var rows = (data && data.runtimes) || [];
+  if (!rows.length) { el.innerHTML = ''; return; }
+
+  var SIGNALS = [
+    { key: 'utilization', label: 'Window %' },
+    { key: 'compaction',  label: 'Compaction' },
+    { key: 'overflow',    label: 'Overflow' }
+  ];
+  function cell(c) {
+    if (!c) return '<td></td>';
+    var v = c.verdict;
+    if (v === 'observed') {
+      return '<td style="padding:6px 10px;color:#16a34a;font-weight:600;">' + escHtml(String(c.count)) + '</td>';
+    }
+    if (v === 'supported_none_seen') {
+      return '<td style="padding:6px 10px;color:var(--text-muted);">0</td>';
+    }
+    // unsupported: the number is not a number, it is a blind spot.
+    return '<td style="padding:6px 10px;color:#d97706;" title="' + escHtml(c.note || '') + '">'
+      + 'not visible</td>';
+  }
+  var body = rows.map(function(r) {
+    return '<tr style="border-top:1px solid var(--border-primary);">'
+      + '<td style="padding:6px 10px;font-weight:600;">' + escHtml(r.runtime) + '</td>'
+      + '<td style="padding:6px 10px;color:var(--text-muted);">' + escHtml(String(r.sessions)) + '</td>'
+      + SIGNALS.map(function(sg){ return cell(r[sg.key]); }).join('')
+      + '</tr>';
+  }).join('');
+
+  var blind = rows.filter(function(r) {
+    return SIGNALS.some(function(sg){ return r[sg.key] && r[sg.key].verdict === 'unsupported'; });
+  });
+
+  el.innerHTML = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">'
+    + '<div style="font-size:13px;font-weight:700;margin-bottom:4px;">What we can see, per runtime</div>'
+    + '<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;max-width:720px;">'
+    + 'A zero only means "ran clean" when we could have seen otherwise. Where a signal is '
+    + '<span style="color:#d97706;">not visible</span>, the runtime does not record it and ClawMetry is blind to it.</div>'
+    + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+    + '<thead><tr style="color:var(--text-muted);text-align:left;">'
+    + '<th style="padding:6px 10px;font-weight:600;">Runtime</th>'
+    + '<th style="padding:6px 10px;font-weight:600;">Sessions</th>'
+    + SIGNALS.map(function(sg){ return '<th style="padding:6px 10px;font-weight:600;">' + escHtml(sg.label) + '</th>'; }).join('')
+    + '</tr></thead><tbody>' + body + '</tbody></table>'
+    + (blind.length
+        ? '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;">'
+          + escHtml(String(blind.length)) + ' of ' + escHtml(String(rows.length))
+          + ' runtimes have at least one blind spot. Hover a cell for why.</div>'
+        : '')
+    + '</div>';
+}
+
 async function loadContextEconomics() {
   var gaugeEl = document.getElementById('ce-gauge-panel');
   var sumEl = document.getElementById('ce-summary');
@@ -1045,7 +1818,10 @@ async function loadContextEconomics() {
   var compEl = document.getElementById('ce-compactions-panel');
   var ovEl = document.getElementById('ce-overflow-panel');
   if (!gaugeEl) return;
-  var url = '/api/context-economics?limit=400' + (_ceSessionId ? ('&session_id=' + encodeURIComponent(_ceSessionId)) : '');
+  var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/context-economics?limit=400'
+    + (_ceSessionId ? ('&session_id=' + encodeURIComponent(_ceSessionId)) : '')
+    + ((_rt && _rt !== 'all') ? ('&runtime=' + encodeURIComponent(_rt)) : '');
   var data;
   try {
     data = await fetch(url).then(function(r){ return r.json(); });
@@ -1053,11 +1829,32 @@ async function loadContextEconomics() {
     gaugeEl.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_context_economics", null, "Failed to load context economics") + ': ' + escHtml(String(e)) + '</div>';
     return;
   }
+  try { loadContextCoverage(); } catch (e) { /* panel is additive, never fatal */ }
+  try { _loadCeInputsMeasured(_ceSessionId); } catch (e) { /* additive */ }
   var util = data.utilization || [];
   var comps = data.compactions || [];
   var overflow = data.overflow_sessions || [];
   var chips = data.session_chips || [];
-  var s = data.summary || {};
+  // Session scope, enforced client-side as well: the cloud snapshot
+  // interceptor serves the whole contextEconomics slice regardless of
+  // session_id, so without this the chip picker silently kept showing
+  // all sessions on the hosted dashboard.
+  if (_ceSessionId) {
+    util = util.filter(function(u){ return String(u.session_id) === _ceSessionId; });
+    comps = comps.filter(function(c){ return String(c.session_id) === _ceSessionId; });
+    overflow = overflow.filter(function(o){ return String(o.session_id) === _ceSessionId; });
+  }
+  // Recompute the summary from the scoped lists so the chips always agree
+  // with the gauge and compaction log below them, local and cloud alike.
+  var _ovCount = comps.filter(function(c){ return c.trigger === 'overflow'; }).length;
+  var s = {
+    compaction_count: comps.length,
+    overflow_count: _ovCount,
+    proactive_count: comps.length - _ovCount,
+    total_reclaimed: comps.reduce(function(t2, c){ return t2 + Number(c.reclaimed || 0); }, 0),
+    peak_pct: Math.round(util.reduce(function(m, u){ return Math.max(m, Number(u.pct || 0)); }, 0) * 10) / 10,
+    overflow_sessions: overflow.length
+  };
   _ceCompactionsCache = comps;
 
   // ── Summary chips ──
@@ -1069,6 +1866,7 @@ async function loadContextEconomics() {
     }
     var peakColor = (s.peak_pct || 0) >= 90 ? '#ef4444' : ((s.peak_pct || 0) >= 70 ? '#d97706' : 'var(--text-primary)');
     sumEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+      + chip('Turns', util.length)
       + chip('Peak window', (s.peak_pct || 0) + '%', peakColor)
       + chip('Compactions', s.compaction_count || 0)
       + chip('Overflow', s.overflow_count || 0, (s.overflow_count || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
@@ -1076,6 +1874,30 @@ async function loadContextEconomics() {
       + chip('Tokens reclaimed', _ceFmtTokens(s.total_reclaimed || 0), '#16a34a')
       + chip('Overflow sessions', s.overflow_sessions || 0, (s.overflow_sessions || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
       + '</div>';
+  }
+
+  // ── Current context window (latest real per-turn reading) ──
+  // The honest replacement for the old LLM Context tab's headline gauge:
+  // measured input + cache tokens from the newest assistant turn against
+  // that turn's model-aware window, scoped to the picked session/runtime.
+  var curEl = document.getElementById('ce-current-gauge');
+  if (curEl) {
+    if (util.length === 0) {
+      curEl.innerHTML = '';
+    } else {
+      var _last = util[util.length - 1];
+      var _lp = Number(_last.pct || 0);
+      var _lcolor = _lp >= 90 ? '#ef4444' : (_lp >= 70 ? '#d97706' : '#22c55e');
+      var _lscope = _ceSessionId ? _ceShortSid(_ceSessionId) : t('app.latest_turn_any_session', null, 'latest turn, any session in scope');
+      curEl.innerHTML = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px;">'
+        + '<span style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">' + t('app.current_context_window', null, 'Current context window') + '</span>'
+        + '<span style="font-size:12px;color:var(--text-muted);">' + _ceFmtTokens(_last.tokens) + ' / ' + _ceFmtTokens(_last.window) + ' tokens (' + _lp + '%)' + (_last.model ? (' · ' + escHtml(String(_last.model))) : '') + '</span></div>'
+        + '<div style="height:14px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:7px;overflow:hidden;">'
+        + '<div style="height:100%;width:' + Math.min(100, _lp) + '%;background:' + _lcolor + ';border-radius:7px;transition:width .5s;"></div></div>'
+        + '<div style="font-size:10px;color:var(--text-faint);margin-top:4px;">' + escHtml(_lscope) + ' · ' + escHtml(String(_last.ts || '')) + _ceWindowProvenance(_last) + '</div>'
+        + '</div>';
+    }
   }
 
   // ── Session picker chips ──
@@ -1090,7 +1912,7 @@ async function loadContextEconomics() {
         var active = (_ceSessionId === c.session_id);
         var pk = Number(c.peak_pct || 0);
         var dot = pk >= 90 ? '#ef4444' : (pk >= 70 ? '#d97706' : '#16a34a');
-        ch += '<span onclick="_ceSelectSession(' + JSON.stringify(c.session_id) + ')" title="' + escHtml(c.session_id) + ' · peak ' + pk + '%" style="cursor:pointer;font-size:12px;font-weight:600;border-radius:14px;padding:4px 12px;border:1px solid ' + (active ? '#3b82f6' : 'var(--border-primary)') + ';background:' + (active ? 'rgba(59,130,246,.12)' : 'transparent') + ';color:var(--text-primary);">'
+        ch += '<span onclick="_ceSelectSession(' + attrJsStr(c.session_id) + ')" title="' + escHtml(c.session_id) + ' · peak ' + pk + '%" style="cursor:pointer;font-size:12px;font-weight:600;border-radius:14px;padding:4px 12px;border:1px solid ' + (active ? '#3b82f6' : 'var(--border-primary)') + ';background:' + (active ? 'rgba(59,130,246,.12)' : 'transparent') + ';color:var(--text-primary);">'
           + '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + dot + ';margin-right:5px;"></span>'
           + escHtml(_ceShortSid(c.session_id)) + ' <span style="color:var(--text-muted);font-weight:500;">' + pk + '%</span></span>';
       });
@@ -1132,7 +1954,7 @@ async function loadContextEconomics() {
       compEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_compactions_recorded", null, "No compactions recorded") + '' + (_ceSessionId ? ' for this session' : '') + '. Your agent compacts the transcript when the window fills; events appear here as they happen.</div>';
     } else {
       var c = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">';
-      c += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Compaction events <span style="color:var(--text-faint);font-weight:500;text-transform:none;">— click a row to expand</span></div>';
+      c += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Compaction events <span style="color:var(--text-faint);font-weight:500;text-transform:none;">click a row to expand</span></div>';
       comps.forEach(function(cp, idx) {
         var isOverflow = cp.trigger === 'overflow';
         var trigColor = isOverflow ? '#ef4444' : '#16a34a';
@@ -1158,7 +1980,7 @@ async function loadContextEconomics() {
           c += '<div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px;">Compaction summary</div>';
           c += '<div style="max-height:160px;overflow:auto;white-space:pre-wrap;color:var(--text-secondary);line-height:1.5;border:1px solid var(--border-secondary);border-radius:6px;padding:8px;background:var(--bg-primary);">' + escHtml(String(cp.summary).slice(0, 4000)) + '</div>';
         }
-        c += '<div style="margin-top:10px;"><a href="#" onclick="event.stopPropagation();viewTranscript(' + JSON.stringify(cp.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;font-weight:600;">View session transcript &#8594;</a></div>';
+        c += '<div style="margin-top:10px;"><a href="#" onclick="event.stopPropagation();viewTranscript(' + attrJsStr(cp.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;font-weight:600;">View session transcript &#8594;</a></div>';
         c += '</div>';
       });
       c += '</div>';
@@ -1177,8 +1999,8 @@ async function loadContextEconomics() {
         o += '<div style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
         o += '<span style="color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;font-size:10px;" title="' + escHtml(os.session_id || '') + '">' + escHtml(_ceShortSid(os.session_id)) + '</span>';
         o += '<span style="flex:1;color:var(--text-muted);">' + (os.compaction_count || 0) + ' compactions · ' + (os.overflow_count || 0) + ' overflow</span>';
-        o += '<a href="#" onclick="_ceSelectSession(' + JSON.stringify(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Scope gauge</a>';
-        o += '<a href="#" onclick="viewTranscript(' + JSON.stringify(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Transcript &#8594;</a>';
+        o += '<a href="#" onclick="_ceSelectSession(' + attrJsStr(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Scope gauge</a>';
+        o += '<a href="#" onclick="viewTranscript(' + attrJsStr(os.session_id) + ');return false;" style="color:#7eb8f7;text-decoration:underline;">Transcript &#8594;</a>';
         o += '</div>';
       });
       o += '</div>';
@@ -1189,11 +2011,37 @@ async function loadContextEconomics() {
 
 
 function switchTab(name) {
+  // The old "LLM Context" tab (mostly hardcoded estimates, node-wide) merged
+  // into Context usage (real per-turn readings, session + runtime scoped).
+  // Alias so deep links and old bookmarks keep working.
+  if (name === 'context') name = 'context-economics';
   // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
   // run on their own screen instead of on every tab.
   _cmCurrentTab = name;
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
+  // ...and CLOSE pane-scoped streams that don't belong to the tab we're
+  // entering. Dwell only gates OPENS: streams from a left pane kept their
+  // connection slots, so Activity->Flow stacked brain-stream (x2: Activity
+  // + Flow's own brain feed) + flow-events on top of the boot-level logs +
+  // health streams — 5 of the browser's 6 per-origin HTTP/1.1 slots — and
+  // every new fetch starved into "Failed to load: timeout" while curl
+  // answered in 30ms (founder live-hit 2026-07-30, 107 stream connections
+  // recorded in one tab). Each pane re-opens its own stream on entry and
+  // every starter guards on readyState, so closing here is idempotent.
+  var _paneSSE = {
+    brain: ['_brainSSE'],
+    flow: ['_flowBrainSse', '_flowSse'],
+  };
+  Object.keys(_paneSSE).forEach(function(pane) {
+    if (pane === name) return;
+    _paneSSE[pane].forEach(function(key) {
+      try {
+        var es = window[key];
+        if (es && typeof es.close === 'function') { es.close(); window[key] = null; }
+      } catch (e) {}
+    });
+  });
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
   // Phase-1 IA refactor (issue #1659): also clear/set .active on left-nav.
@@ -1221,7 +2069,17 @@ function switchTab(name) {
       if (btn) btn.setAttribute('aria-expanded', 'true');
     }
   });
-  if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active') && typeof event !== 'undefined' && event && event.target) event.target.classList.add('active');
+  // Fallback for tabs with no nav item of their own: highlight whatever the
+  // user clicked. `event.target` is only a real element when a click brought
+  // us here - on a boot-time deep link (#trail=...) window.event is the
+  // DOMContentLoaded event, whose target is `document` and has no classList.
+  // The resulting TypeError threw out of switchTab BEFORE the per-tab loader
+  // dispatch below, so a reloaded/bookmarked trail link sat on its static
+  // "Opening the trail..." skeleton forever (founder report 2026-09-05).
+  if (!document.querySelector('.nav-tab.active') && !document.querySelector('.left-nav-item.active')
+      && typeof event !== 'undefined' && event && event.target && event.target.classList) {
+    event.target.classList.add('active');
+  }
   // Auto-close mobile drawer when a nav item is picked.
   var leftNav = document.getElementById('left-nav');
   if (leftNav && leftNav.classList.contains('open')) leftNav.classList.remove('open');
@@ -1230,6 +2088,12 @@ function switchTab(name) {
   if (name === 'inventory') { if (typeof renderInventory === 'function') renderInventory(); }
   if (name === 'overview') loadAll();
   if (name === 'overview') { if (typeof _velocityPollTimer !== 'undefined' && _velocityPollTimer) clearInterval(_velocityPollTimer); if (typeof loadTokenVelocity === 'function') _velocityPollTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadTokenVelocity(); }, 30000); }
+  // Needs-you strip. loadAll() only runs on tab switch, so without this the
+  // strip would go stale while you sit on Overview — and an agent that starts
+  // waiting while you are looking at the page is exactly the case this
+  // feature exists for. One cheap scoped read, on the same 30s cadence and
+  // the same tab + visibility gates as the velocity poller above.
+  if (name === 'overview') { if (typeof _needsYouTimer !== 'undefined' && _needsYouTimer) clearInterval(_needsYouTimer); if (typeof loadNeedsYou === 'function') _needsYouTimer = visibilitySetInterval(function() { if (!_cmIsOverviewTab()) return; loadNeedsYou(); }, 30000); }
   if (name === 'usage') loadUsage();
   // Agent Graph (#3315): the original wiring landed in the DEAD first
   // DASHBOARD_HTML's inline switchTab in dashboard.py, so the loader never
@@ -1240,10 +2104,19 @@ function switchTab(name) {
   if (name === 'crons') loadCrons();
   if (name === 'memory') loadMemory();
   if (name === 'transcripts') loadTranscripts();
+  // Trail page (session-first IA): one session as Inputs / Decisions / Outcome.
+  // It borrows the transcript / trace / turn renderers' DOM nodes while open
+  // (static/js/trail.js), so every other tab first hands them back. The
+  // Sessions nav item stays highlighted because a trail is a session opened.
+  if (name !== 'trail' && typeof _trailRestoreHosts === 'function') { try { _trailRestoreHosts(); } catch (e) {} }
+  if (name === 'trail') {
+    var _trailNav = document.querySelector('.left-nav-item[data-tab="transcripts"]');
+    if (_trailNav) _trailNav.classList.add('active');
+    if (typeof loadTrailTab === 'function') loadTrailTab();
+  }
   if (name === 'version-impact') loadVersionImpact();
   if (name === 'clusters') loadClusters();
   if (name === 'flow') initFlow();
-  if (name === 'context') loadContextInspector();
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
   if (name === 'tool-catalog') { if (typeof loadToolCatalog === 'function') loadToolCatalog(); }
@@ -1252,18 +2125,19 @@ function switchTab(name) {
   if (name === 'brain') loadBrainPage();
   if (name === 'selfevolve') loadSelfEvolvePage();
   if (name === 'notifications') { if (typeof loadNotificationsPage === 'function') loadNotificationsPage(); }
-  if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); }
+  if (name === 'security') { loadSecurityPage(); loadSecurityPosture(); loadRetentionSetting(); }
   if (name === 'policy') { if (typeof loadToolPolicy === 'function') loadToolPolicy(); }
   if (name === 'approvals') { if (typeof loadApprovalsTab === 'function') loadApprovalsTab(); }
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
+  if (name === 'guard') { if (typeof loadGuardTab === 'function') loadGuardTab(); }
+  if (name === 'signals') { if (typeof loadSignalsTab === 'function') loadSignalsTab(); }
+  if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
+  if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
-  if (name === 'dives') { if (typeof loadDivesPage === 'function') loadDivesPage(); }
   if (name === 'actions') loadQAHistory();
   if (name === 'models') loadModelAttribution();
   if (name === 'nemoclaw') { loadNemoClaw(); _startNcApprovalsAutoRefresh(); }
   if (name !== 'nemoclaw') _stopNcApprovalsAutoRefresh();
-  if (name === 'subagents') { loadOrchestration(); loadRunLedger(); loadSubagents(); if (!_subagentsTimer) _subagentsTimer = visibilitySetInterval(function(){ loadOrchestration(); loadRunLedger(); loadSubagents(); }, 5000); }
-  if (name !== 'subagents' && _subagentsTimer) { clearInterval(_subagentsTimer); _subagentsTimer = null; }
   if (name === 'swimlane') { loadSwimlane(); if (!_swimlaneTimer) _swimlaneTimer = visibilitySetInterval(loadSwimlane, 3000); }
   if (name !== 'swimlane' && _swimlaneTimer) { clearInterval(_swimlaneTimer); _swimlaneTimer = null; }
 }
@@ -1420,6 +2294,239 @@ function _friendlyBytes(n) {
 // UI-coverage audit: today's activity counters strip. Reads /api/activity-today
 // (local: cached DuckDB rollup; cloud: cm-cloud-activity serves it from the
 // snapshot's activityToday slice). Hidden until there is any activity today.
+// ── Needs-you strip ────────────────────────────────────────────────────────
+// "Is anything waiting on me right now?" -- the question people actually open
+// the dashboard with, answered above every chart.
+//
+// THREE states, and telling them apart is the whole point:
+//   waiting  -> one row per blocked agent, with its confidence
+//   quiet    -> "Nothing needs you right now" + how many are working
+//   unknown  -> "Can't tell right now" when the daemon has gone silent
+//
+// The third is why this is not a one-liner. An empty list from a wedged
+// detector must never render as all-clear: a calm reassurance that turns out
+// to be wrong is how you teach someone to stop trusting the whole dashboard.
+
+// Is this signal a CONFIRMED one? 'hook' means the runtime told us directly;
+// 'queue' means a real approval is sitting unanswered in our own queue. Both
+// are things we know rather than deduce, so both read as confirmed. Only
+// 'inferred' is a guess. Kept in one place so a new source cannot end up
+// rendering as certain on one surface and hedged on another.
+function _cmAttnConfirmed(signal) {
+  return signal === 'hook' || signal === 'queue';
+}
+
+function cmNeedsAge(sec) {
+  sec = Math.max(0, parseInt(sec, 10) || 0);
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm';
+  return Math.floor(sec / 3600) + 'h';
+}
+
+// Plain-language line per row. "Wants to run Bash" beats "pending tool_use
+// approval" for someone who has never opened an observability tool.
+function cmNeedsPhrase(item) {
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  // Reuse the switcher's label map — one definition of "what this runtime is
+  // called", so the strip can never disagree with the header.
+  var runtime = esc((typeof _cmRuntimeLabel === 'function')
+    ? _cmRuntimeLabel(item.runtime) : (item.runtime || 'Agent'));
+  var tool = item.tool ? esc(item.tool) : '';
+  if (_cmAttnConfirmed(item.signal)) {
+    return tool
+      ? '<b>' + runtime + '</b> is asking to run ' + tool
+      : '<b>' + runtime + '</b> is asking for permission';
+  }
+  return tool
+    ? '<b>' + runtime + '</b> has been on ' + tool + ' with no reply'
+    : '<b>' + runtime + '</b> has been silent mid-task';
+}
+
+// Last rendered signature. The strip is an aria-live region, so rewriting it
+// with identical content would make a screen reader re-announce "nothing
+// needs you" every poll. Only paint when something actually changed.
+var _cmNeedsSig = null;
+//: Handle for the Overview poller, cleared and re-armed on each tab switch so
+//: two visits cannot leave two intervals running.
+var _needsYouTimer = null;
+
+function cmRenderNeedsYou(d) {
+  var box = document.getElementById('needs-you');
+  if (!box) return;
+  var sig = JSON.stringify([
+    d && d.fresh, (d && d.working) || 0, (d && d.quiet) || 0,
+    ((d && d.items) || []).map(function (i) {
+      // Wait time is excluded on purpose: a ticking counter would make every
+      // poll a change and defeat the guard. The row's identity is what it is
+      // waiting on, not how long it has waited.
+      return [i.session_id, i.signal, i.tool].join('|');
+    }),
+    (d && d.runtimes_without_approval) || [],
+  ]);
+  if (sig === _cmNeedsSig) return;
+  _cmNeedsSig = sig;
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  box.classList.remove('is-waiting', 'is-unknown');
+
+  // 1. We could not check. Say that -- do not imply all-clear.
+  if (!d || d.fresh === false) {
+    box.classList.add('is-unknown');
+    // On the hosted dashboard the reason is different and the user can do
+    // nothing about it: the cloud has no DuckDB, so this is computed on the
+    // machine the agent runs on and reaches here through the snapshot.
+    // Blaming their machine for our missing plumbing would be a lie.
+    var sub = window.CLOUD_MODE
+      ? t('needs.cloud_sub', null,
+          'This is worked out on the machine your agent runs on, and is not in the hosted view yet.')
+      : t('needs.unknown_sub', null,
+          'ClawMetry has not heard from your machine recently, so it cannot say what needs you.');
+    box.innerHTML =
+      '<div class="cm-needs-head">' +
+        '<span class="cm-needs-title">' +
+          t('needs.unknown_title', null, "Can't tell right now") + '</span>' +
+        '<span class="cm-needs-sub">' + sub + '</span>' +
+      '</div>';
+    box.style.display = '';
+    return;
+  }
+
+  var items = d.items || [];
+
+  // 2. Nothing waiting. The reassuring case, and the one people see most.
+  if (!items.length) {
+    var working = parseInt(d.working, 10) || 0;
+    var quiet = parseInt(d.quiet, 10) || 0;
+    // The hero renders the same two buckets, by name, a few hundred pixels
+    // below this line. "No agents running" while it lists open sessions is
+    // one screen answering one question twice, so the quiet bucket gets said
+    // out loud rather than collapsing into "none".
+    var sub;
+    if (working === 1) {
+      sub = t('needs.one_working', null, '1 agent working');
+    } else if (working > 0) {
+      sub = t('needs.n_working', { n: working }, working + ' agents working');
+    } else if (quiet === 1) {
+      sub = t('needs.one_quiet', null, '1 agent is open but has gone quiet');
+    } else if (quiet > 0) {
+      sub = t('needs.n_quiet', { n: quiet },
+              quiet + ' agents are open but have gone quiet');
+    } else {
+      sub = t('needs.none_running', null, 'No agents running');
+    }
+    // Some runtimes have no permission prompt at all (Pi's trust machinery
+    // guards loading config, not running tools). Filtered to one of those,
+    // "nothing needs you" would imply we looked and found nothing — so say
+    // what is actually true instead.
+    var noAsk = d.runtimes_without_approval || [];
+    var rtNow = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    if (noAsk.length && rtNow && rtNow !== 'all' && noAsk.indexOf(rtNow) !== -1) {
+      var rtName = (typeof _cmRuntimeLabel === 'function')
+        ? _cmRuntimeLabel(rtNow) : rtNow;
+      sub = t('needs.never_asks', { runtime: rtName },
+              rtName + " never asks for permission, so nothing here waits on you.");
+    }
+    box.innerHTML =
+      '<div class="cm-needs-head">' +
+        '<span class="cm-needs-title">' +
+          t('needs.clear_title', null, 'Nothing needs you right now') + '</span>' +
+        '<span class="cm-needs-sub">' + esc(sub) + '</span>' +
+      '</div>';
+    box.style.display = '';
+    return;
+  }
+
+  // 3. Something is waiting.
+  box.classList.add('is-waiting');
+  var title = items.length === 1
+    ? t('needs.one_waiting', null, '1 agent needs you')
+    : t('needs.n_waiting', { n: items.length }, items.length + ' agents need you');
+
+  var rows = items.slice(0, 6).map(function (it) {
+    var hook = _cmAttnConfirmed(it.signal);
+    var where = [it.project, it.git_branch].filter(Boolean).join(' · ');
+    var confidence = hook
+      ? t('needs.confident', null, 'Waiting for you')
+      : t('needs.inferred', null, "Looks like it's waiting");
+    return '' +
+      '<button type="button" class="cm-needs-row" ' +
+        'onclick="cmOpenNeedsSession(' + JSON.stringify(it.session_id || '').replace(/"/g, '&quot;') + ')" ' +
+        'title="' + esc(confidence) + '">' +
+        '<span class="cm-needs-dot ' + (hook ? 'is-hook' : 'is-inferred') + '" aria-hidden="true"></span>' +
+        '<span class="cm-needs-what">' + cmNeedsPhrase(it) + '</span>' +
+        '<span class="cm-needs-where">' + esc(where) + '</span>' +
+        '<span class="cm-needs-age">' + cmNeedsAge(it.waiting_seconds) + '</span>' +
+      '</button>';
+  }).join('');
+
+  // Only claim certainty where we have it. If every row is a guess, say so
+  // once at the bottom rather than hedging on each line.
+  var allInferred = items.every(function (i) { return !_cmAttnConfirmed(i.signal); });
+  var note = allInferred
+    ? '<div class="cm-needs-note">' +
+        t('needs.inferred_note', null,
+          "Worked out from what each agent last did, so this is a best guess.") +
+      '</div>'
+    : '';
+
+  var extra = items.length > 6
+    ? '<div class="cm-needs-note">' +
+        t('needs.more', { n: items.length - 6 }, '+' + (items.length - 6) + ' more') +
+      '</div>'
+    : '';
+
+  box.innerHTML =
+    '<div class="cm-needs-head">' +
+      '<span class="cm-needs-title">' + esc(title) + '</span>' +
+    '</div>' +
+    '<div class="cm-needs-list">' + rows + '</div>' + extra + note;
+  box.style.display = '';
+}
+
+// Jump to the blocked session's transcript. Falls back to the Sessions page
+// when the deep link is unavailable, so the row is never a dead end.
+function cmOpenNeedsSession(sid) {
+  if (!sid) return;
+  try {
+    if (typeof showTranscript === 'function') { showTranscript(sid); return; }
+    if (typeof switchPage === 'function') { switchPage('transcripts'); return; }
+  } catch (e) { console.warn('needs-you open failed', e); }
+}
+
+// Session-row badge. Same two confidences as the strip, same wording, so a
+// user only has to learn the distinction once. Returns '' when nothing is
+// waiting — an absent badge is the quiet default, not a "no" badge.
+function _cmAttentionBadge(state, signal, tool) {
+  if (!state) return '';
+  var esc = (typeof escapeHtml === 'function') ? escapeHtml : function (s) { return s; };
+  var hook = _cmAttnConfirmed(signal);
+  var label = hook
+    ? t('needs.badge_waiting', null, 'Waiting for you')
+    : t('needs.badge_maybe', null, 'Maybe waiting');
+  var why = hook
+    ? (tool ? 'This agent is asking to run ' + tool + '.'
+            : 'This agent is asking for permission.')
+    : (tool ? 'Best guess: ' + tool + ' was started and never came back.'
+            : 'Best guess: this agent went quiet mid-task.');
+  return '<span class="cm-attn-badge" title="' + esc(why) + '">' +
+           '<span class="cm-needs-dot ' + (hook ? 'is-hook' : 'is-inferred') +
+             '" aria-hidden="true"></span>' + esc(label) +
+         '</span>';
+}
+
+async function loadNeedsYou() {
+  var box = document.getElementById('needs-you');
+  if (!box) return;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var q = (rt && rt !== 'all') ? ('?runtime=' + encodeURIComponent(rt)) : '';
+  var d = null;
+  try {
+    d = await fetchJsonWithTimeout('/api/attention' + q, 4000);
+  } catch (e) {
+    d = null;   // renders "can't tell", which is the truth here
+  }
+  cmRenderNeedsYou(d);
+}
+
 async function loadActivityToday() {
   var strip = document.getElementById('activity-today-strip');
   if (!strip) return;
@@ -2093,7 +3200,7 @@ async function _selfconfigRenderReader(filename, ts) {
     }
   }
 
-  _selfconfigMode = 'preview';
+  _selfconfigMode = 'code';
   _selfconfigUpdateModeButtons();
   if (bodyEl) bodyEl.style.display = 'block';
   if (editorBody) editorBody.style.display = 'none';
@@ -2121,12 +3228,11 @@ async function _selfconfigRenderReader(filename, ts) {
       } else if (!d.content || !d.content.trim()) {
         bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.this_file_is_empty", null, "This file is empty.") + '</div>';
       } else {
-        // Show raw markdown source, not rendered HTML — these files ARE the
-        // agent's source-of-truth and editing them has agent-behaviour
-        // consequences, so rendering bullets/headers obscures the actual
-        // bytes the agent reads. Same monospace style as the Edit textarea
-        // so Preview ↔ Edit looks consistent.
-        bodyEl.innerHTML = '<pre style="margin:0;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--text-primary);">' + escHtml(d.content) + '</pre>';
+        // Raw source by default, now with a line-number gutter — these files
+        // ARE the agent's source-of-truth and editing them has agent-behaviour
+        // consequences, so rendering bullets/headers obscures the actual bytes
+        // the agent reads. Rendered markdown is one click away (Preview).
+        bodyEl.innerHTML = _cmFvCodeHtml(d.content, true);
       }
     }
     _selfconfigUpdateStatusBar(filename, ts, d);
@@ -2142,7 +3248,8 @@ function _selfconfigUpdateStatusBar(filename, ts, d) {
   var updatedEl = document.getElementById('selfconfig-status-updated');
   if (fileEl) fileEl.textContent = filename || '—';
   if (modeEl) modeEl.textContent = (_selfconfigSelectedTs == null)
-    ? (_selfconfigMode === 'edit' ? 'Editing' : 'Preview')
+    ? (_selfconfigMode === 'edit' ? 'Editing'
+       : (_selfconfigMode === 'preview' ? 'Preview' : 'Source'))
     : 'History';
   if (sizeEl) {
     var src = d && typeof d.content === 'string' ? d.content : (_selfconfigOriginal || '');
@@ -2175,6 +3282,18 @@ function selfconfigSetMode(mode) {
   var bodyEl = document.getElementById('selfconfig-reader-body');
   var editorBody = document.getElementById('selfconfig-editor-body');
   var textarea = document.getElementById('selfconfig-editor-textarea');
+  // 'code' = raw source with line numbers (default), 'preview' = rendered
+  // markdown, 'edit' = the textarea. Re-render the read-only pane in place.
+  if (bodyEl && mode !== 'edit') {
+    var src = _selfconfigOriginal || '';
+    if (mode === 'preview') {
+      var split = _cmFvSplitFrontmatter(src);
+      bodyEl.innerHTML = '<div class="cm-fv-preview mem-prose" style="padding:0;">'
+        + _cmFvFrontmatterHtml(split.fm) + cmSafeMarkdown(split.body) + '</div>';
+    } else {
+      bodyEl.innerHTML = _cmFvCodeHtml(src, true);
+    }
+  }
   if (mode === 'edit') {
     if (bodyEl) bodyEl.style.display = 'none';
     if (editorBody) editorBody.style.display = 'flex';
@@ -2463,137 +3582,34 @@ async function openSkillBrowser(skillName) {
 async function loadSkillFile(skillName, filePath) {
   var contentEl = document.getElementById('skills-browser-content');
   if (!contentEl) return;
-  contentEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;">' + t("app.loading", null, "Loading...") + '</div>';
+  cmFileViewerPlaceholder('skills-browser-content', t("app.loading", null, "Loading..."));
 
   try {
     var data = await fetch('/api/skills/' + encodeURIComponent(skillName) + '/file?path=' + encodeURIComponent(filePath)).then(function(r) { return r.json(); });
-    if (data.error) { contentEl.innerHTML = '<div style="color:var(--text-error);padding:20px;">' + escHtml(data.error) + '</div>'; return; }
+    if (data.error) { cmFileViewerPlaceholder('skills-browser-content', data.error, true); return; }
 
-    var header = '<div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;margin-bottom:12px;">';
-    header += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(filePath) + '</div>';
-    header += '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(skillName) + ' &middot; ' + (data.language || 'text') + ' &middot; ' + data.size + ' bytes</div>';
-    header += '</div>';
-
-    var content = data.content || '';
-    if (data.language === 'markdown') {
-      // Simple markdown rendering
-      content = content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      content = content.replace(/^### (.+)$/gm, '<h3 style="margin:16px 0 8px;font-size:14px;color:var(--text-primary);">$1</h3>');
-      content = content.replace(/^## (.+)$/gm, '<h2 style="margin:20px 0 8px;font-size:16px;color:var(--text-primary);">$1</h2>');
-      content = content.replace(/^# (.+)$/gm, '<h1 style="margin:20px 0 8px;font-size:18px;color:var(--text-primary);">$1</h1>');
-      content = content.replace(/`([^`]+)`/g, '<code style="background:var(--bg-secondary);padding:1px 5px;border-radius:3px;font-size:12px;">$1</code>');
-      content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      content = content.replace(/^- (.+)$/gm, '<div style="padding-left:16px;">&bull; $1</div>');
-      content = content.replace(/^---$/gm, '<hr style="border:none;border-top:1px solid var(--border);margin:12px 0;">');
-      content = '<div style="font-size:13px;line-height:1.7;color:var(--text-secondary);">' + content + '</div>';
-    } else {
-      content = '<pre style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:6px;padding:12px 16px;font-size:12px;line-height:1.6;overflow-x:auto;color:var(--text-primary);white-space:pre-wrap;">' + escHtml(content) + '</pre>';
-    }
-
-    contentEl.innerHTML = header + content;
+    // Same viewer the runtime browser uses: raw source first, Preview toggle
+    // for markdown, copy + full screen. The old hand-rolled regex renderer
+    // mangled anything it didn't have a rule for.
+    var size = data.size || 0;
+    cmFileViewerOpen('skills-browser-content', {
+      name: filePath,
+      path: filePath,
+      content: data.content || '',
+      language: data.language || 'text',
+      meta: [skillName, (size >= 1024 ? (size / 1024).toFixed(1) + 'K' : size + 'B'), data.language || 'text']
+    });
+    _cmRtFitHeight();
   } catch(e) {
-    contentEl.innerHTML = '<div style="color:var(--text-error);padding:20px;">Error: ' + escHtml(String(e)) + '</div>';
+    cmFileViewerPlaceholder('skills-browser-content', 'Error: ' + String(e), true);
   }
 }
 
-var _sunSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
-var _moonSVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-
-function toggleTheme() {
-  const body = document.body;
-  const toggle = document.getElementById('theme-toggle-btn');
-  const isLight = !body.hasAttribute('data-theme') || body.getAttribute('data-theme') !== 'dark';
-  
-  if (isLight) {
-    body.setAttribute('data-theme', 'dark');
-    toggle.innerHTML = _sunSVG;
-    toggle.title = 'Switch to light theme';
-    localStorage.setItem('openclaw-theme', 'dark');
-  } else {
-    body.removeAttribute('data-theme');
-    toggle.innerHTML = _moonSVG;
-    toggle.title = 'Switch to dark theme';
-    localStorage.setItem('openclaw-theme', 'light');
-  }
-}
-
-function initTheme() {
-  const savedTheme = 'dark'; localStorage.setItem('openclaw-theme', 'dark');
-  const body = document.body;
-  const toggle = document.getElementById('theme-toggle-btn');
-  
-  if (savedTheme === 'dark') {
-    body.setAttribute('data-theme', 'dark');
-    if (toggle) { toggle.innerHTML = _sunSVG; toggle.title = 'Switch to light theme'; }
-  } else {
-    body.removeAttribute('data-theme');
-    if (toggle) { toggle.innerHTML = _moonSVG; toggle.title = 'Switch to dark theme'; }
-  }
-}
-
-// === Zoom Controls ===
-let currentZoom = 1.0;
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 2.0;
-const ZOOM_STEP = 0.1;
-
-function initZoom() {
-  const savedZoom = localStorage.getItem('openclaw-zoom');
-  if (savedZoom) {
-    currentZoom = parseFloat(savedZoom);
-  }
-  applyZoom();
-}
-
-function applyZoom() {
-  const wrapper = document.getElementById('zoom-wrapper');
-  const levelDisplay = document.getElementById('zoom-level');
-  
-  if (wrapper) {
-    wrapper.style.transform = `scale(${currentZoom})`;
-  }
-  if (levelDisplay) {
-    levelDisplay.textContent = Math.round(currentZoom * 100) + '%';
-  }
-  
-  // Save to localStorage
-  localStorage.setItem('openclaw-zoom', currentZoom.toString());
-}
-
-function zoomIn() {
-  if (currentZoom < MAX_ZOOM) {
-    currentZoom = Math.min(MAX_ZOOM, currentZoom + ZOOM_STEP);
-    applyZoom();
-  }
-}
-
-function zoomOut() {
-  if (currentZoom > MIN_ZOOM) {
-    currentZoom = Math.max(MIN_ZOOM, currentZoom - ZOOM_STEP);
-    applyZoom();
-  }
-}
-
-function resetZoom() {
-  currentZoom = 1.0;
-  applyZoom();
-}
-
-// Keyboard shortcuts for zoom
-document.addEventListener('keydown', function(e) {
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-    if (e.key === '=' || e.key === '+') {
-      e.preventDefault();
-      zoomIn();
-    } else if (e.key === '-') {
-      e.preventDefault();
-      zoomOut();
-    } else if (e.key === '0') {
-      e.preventDefault();
-      resetZoom();
-    }
-  }
-});
+// Theme toggle and in-page zoom controls were removed in the 2026-09 header
+// cleanup. The dashboard is dark-only (<body data-theme="dark"> in the
+// template), and page zoom is the browser's job -- applyZoom() used to set a
+// `transform: scale()` on #zoom-wrapper even at 100%, which turned the wrapper
+// into a containing block for every `position: fixed` descendant (issue #1717).
 
 function timeAgo(ms) {
   if (!ms) return 'never';
@@ -2697,6 +3713,73 @@ function applyBillingHintToFlow(billingSummary) {
   document.querySelectorAll('[id$="brain-billing-text"]').forEach(function(el) {
     el.textContent = fitFlowLabel(hint, 14);
   });
+}
+
+// ── Subscription-coverage helpers ─────────────────────────────────────
+// Goal: on the Cost tab, when a user's Claude Max / ChatGPT Plus / Cursor
+// Pro subscription already covers the shown API-equivalent cost, paint a
+// green "$0 extra — covered by <plan>" banner instead of an alarming
+// bill number they don't actually owe. Detection comes from
+// dashboard.py._get_billing_coverage (same code path the fleet heartbeat
+// uses on-device, so device and dashboard agree on the plan label).
+
+function _planLabel(cov) {
+  if (!cov) return '';
+  var acc = cov.account_plan;
+  if (acc && acc.label) return String(acc.label);
+  var subs = cov.subscription_labels;
+  if (subs && subs.length) return subs.join(' + ');
+  return '';
+}
+
+function renderBillingCoverageBanner(cov, usageData) {
+  var host = document.getElementById('usage-coverage-banner');
+  if (!host) return;
+  if (!cov || !cov.detected || !cov.any_subscription) {
+    host.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  var plan = _planLabel(cov) || 'your subscription';
+  var monthCost  = Number((usageData && usageData.monthCost) || 0);
+  var monthCovered = Number((cov.month && cov.month.covered_usd) || 0);
+  var monthOOP     = Number((cov.month && cov.month.out_of_pocket_usd) || 0);
+  var color, icon, title, body;
+  if (cov.all_covered) {
+    color = { bg: 'rgba(34,197,94,0.10)', bd: 'rgba(34,197,94,0.45)', fg: '#16a34a' };
+    icon = '✅';
+    title = "You're covered by " + plan;
+    body = 'The costs below are the <strong>API-equivalent</strong> — what these tokens would cost against a raw API key. '
+         + 'Your actual out-of-pocket spend is <strong>$0</strong>: ' + plan + ' already covers this usage. '
+         + 'This month: ' + fmtCost(monthCost) + ' shown, <strong>$0</strong> billed to you.';
+  } else if (cov.any_subscription && cov.any_metered) {
+    color = { bg: 'rgba(59,130,246,0.10)', bd: 'rgba(59,130,246,0.45)', fg: '#2563eb' };
+    icon = '🧾';
+    title = 'Partly covered — ' + plan;
+    body = plan + ' covers the OAuth/included models below (~<strong>' + fmtCost(monthCovered) + '</strong> this month, billed as $0 to you). '
+         + 'API-keyed models are billed per-token: about <strong>' + fmtCost(monthOOP) + '</strong> this month. '
+         + 'The card numbers are API-equivalent so both parts compare on the same axis.';
+    if (cov.metered_labels && cov.metered_labels.length) {
+      body += ' <span style="opacity:0.7;">Metered: ' + cov.metered_labels.map(escHtml).join(', ') + '.</span>';
+    }
+  } else {
+    // Subscription detected but every model looks API-keyed — the plan
+    // won't help; fall through to no banner rather than misleading UX.
+    host.style.display = 'none';
+    host.innerHTML = '';
+    return;
+  }
+  host.style.cssText = 'display:block;padding:12px 14px;border-radius:8px;'
+    + 'background:' + color.bg + ';border:1px solid ' + color.bd + ';'
+    + 'font-size:13px;line-height:1.5;color:var(--text-primary,#0f172a);';
+  host.innerHTML =
+      '<div style="display:flex;gap:10px;align-items:flex-start;">'
+    + '<div style="font-size:18px;line-height:1.2;">' + icon + '</div>'
+    + '<div style="flex:1;min-width:0;">'
+    +   '<div style="font-weight:600;color:' + color.fg + ';margin-bottom:3px;">' + escHtml(title) + '</div>'
+    +   '<div style="color:var(--text-secondary,#475569);">' + body + '</div>'
+    + '</div></div>';
 }
 
 function setFlowTextAll(idSuffix, text, maxLen) {
@@ -2912,6 +3995,271 @@ function renderCompareResult(data) {
   body.innerHTML = html;
 }
 
+// ── Cohort compare: "did the change help?" (WO-60) ─────────────────────────
+// Suggestions first (cards a newcomer clicks), then one verdict word with the
+// sample size next to it, then the metric table coloured by favourable
+// direction, then the sessions behind either side. The raw two-session
+// compare above stays one click deeper under "Advanced". On the hosted
+// dashboard the suggestions come from the snapshot's cohortSuggested slice
+// (served on the same URL by the cloud); custom filters stay local and the
+// surface says so instead of rendering blank.
+
+var _cohortSuggested = null;
+
+var _COHORT_ROWS = [
+  ['cost_per_done', 'Cost per finished job'],
+  ['cost_per_session', 'Cost per session'],
+  ['cost_usd', 'Total cost'],
+  ['tokens_per_session', 'Tokens per session'],
+  ['steps_per_session', 'Tool calls per session'],
+  ['tool_error_rate', 'Tool error rate'],
+  ['failure_rate', 'Failure rate'],
+  ['done_rate', 'Finished'],
+  ['cache_hit', 'Cache hit'],
+  ['frustration_rate', 'Frustration rate']
+];
+
+function _cohortFmt(key, v) {
+  if (v == null) return 'n/a';
+  if (/rate|cache_hit/.test(key)) return (v * 100).toFixed(v * 100 < 10 ? 1 : 0) + '%';
+  if (/cost/.test(key)) return '$' + (v < 0.01 ? Number(v).toFixed(4) : Number(v).toFixed(2));
+  if (typeof v === 'number' && Math.abs(v) >= 1000) return Math.round(v).toLocaleString();
+  if (typeof v === 'number') return (Math.round(v * 10) / 10).toString();
+  return String(v);
+}
+
+function _cohortDelta(key, d) {
+  if (!d || d.abs == null) return '';
+  var color = d.favorable ? 'var(--ok, #22c55e)' : 'var(--err, #ef4444)';
+  if (d.abs === 0) color = 'var(--text-muted)';
+  var sign = d.abs > 0 ? '+' : '';
+  var pct = d.pct == null ? '' : ' (' + (d.pct > 0 ? '+' : '') + d.pct.toFixed(0) + '%)';
+  return ' <span style="color:' + color + ';font-size:11px;font-weight:600;">' + sign + escapeHtmlSafe(_cohortFmt(key, d.abs)) + pct + '</span>';
+}
+
+function _cohortVerdictColor(word) {
+  if (word === 'Better') return 'var(--ok, #22c55e)';
+  if (word === 'Worse') return 'var(--err, #ef4444)';
+  if (word === 'Same') return 'var(--text-secondary)';
+  return 'var(--text-muted)';
+}
+
+function _cohortRuntimeParam() {
+  var rt = 'all';
+  try { if (typeof _cmRuntimeFilter === 'function') rt = _cmRuntimeFilter() || 'all'; } catch (e) {}
+  return rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '';
+}
+
+async function loadCohortSuggested() {
+  var host = document.getElementById('cohort-suggestions');
+  if (!host) return;
+  var adv = document.getElementById('cohort-advanced-body');
+  if (adv && window.CLOUD_MODE) {
+    adv.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">'
+      + escapeHtmlSafe(t('overview.compare_cloud_custom', null, 'Custom filters run on the local dashboard. The hosted view shows the suggested comparisons your node computed.')) + '</div>';
+  }
+  var data = null;
+  try {
+    var resp = await fetch('/api/cohort-compare/suggested' + _cohortRuntimeParam());
+    if (resp.status === 402) {
+      var up = null; try { up = await resp.json(); } catch (e) {}
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+        + escapeHtmlSafe(t('overview.compare_upgrade', null, 'Cohort compare is a paid feature.'))
+        + (up && up.required_tier ? ' <a href="/upgrade?feature=per_run_compare" style="color:var(--accent, #3b82f6);">' + escapeHtmlSafe(t('app.upgrade', null, 'Upgrade')) + '</a>' : '')
+        + '</div>';
+      return;
+    }
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    data = await resp.json();
+  } catch (e) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+      + escapeHtmlSafe(window.CLOUD_MODE
+          ? t('overview.compare_cloud_wait', null, 'Suggested comparisons arrive with the next snapshot from your node.')
+          : t('overview.compare_unreachable', null, 'Could not reach the local store.')) + '</div>';
+    return;
+  }
+  _cohortSuggested = data;
+  var list = (data && data.suggestions) || [];
+  if (!list.length) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
+      + escapeHtmlSafe(data && data.store_available === false
+          ? t('overview.compare_unreachable', null, 'Could not reach the local store.')
+          : t('overview.compare_none', null, 'Nothing changed recently. Suggestions appear when a new model or runtime version shows up, or after a week of sessions.'))
+      + '</div>';
+    return;
+  }
+  host.innerHTML = list.map(function (s, i) {
+    var res = s.result || {};
+    var v = (res.verdict || {});
+    var word = v.verdict || '';
+    var na = v.sample ? v.sample.a : (res.a && res.a.stats ? res.a.stats.session_count : 0);
+    var nb = v.sample ? v.sample.b : (res.b && res.b.stats ? res.b.stats.session_count : 0);
+    return '<button type="button" class="cohort-card" data-idx="' + i + '" onclick="showCohortSuggestion(' + i + ')" '
+      + 'style="text-align:left;cursor:pointer;padding:10px 12px;border:1px solid var(--border-primary);border-radius:10px;background:var(--bg-primary);color:var(--text-primary);">'
+      + '<div style="font-size:12px;font-weight:600;line-height:1.35;">' + escapeHtmlSafe(s.title || '') + '</div>'
+      + '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);display:flex;gap:8px;align-items:baseline;">'
+      + '<span style="font-weight:700;color:' + _cohortVerdictColor(word) + ';">' + escapeHtmlSafe(word) + '</span>'
+      + '<span>' + escapeHtmlSafe(na + ' vs ' + nb + ' ' + t('overview.compare_sessions', null, 'sessions')) + '</span>'
+      + '</div></button>';
+  }).join('');
+}
+
+function showCohortSuggestion(idx) {
+  var s = _cohortSuggested && _cohortSuggested.suggestions && _cohortSuggested.suggestions[idx];
+  if (!s) return;
+  try {
+    var cards = document.querySelectorAll('#cohort-suggestions .cohort-card');
+    cards.forEach(function (c) { c.style.borderColor = (String(c.getAttribute('data-idx')) === String(idx)) ? 'var(--accent, #3b82f6)' : 'var(--border-primary)'; });
+  } catch (e) {}
+  renderCohortResult(s.result, s.title, s.why);
+}
+
+function _cohortSessionList(side, sessions) {
+  if (!sessions || !sessions.length) {
+    return '<div style="font-size:11px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, 'No data.')) + '</div>';
+  }
+  return sessions.map(function (r) {
+    var label = r.title || r.session_id;
+    return '<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-top:1px solid var(--border-primary);font-size:11px;">'
+      + '<a href="#" data-sid="' + escapeHtmlSafe(r.session_id) + '" onclick="openCohortSession(this.getAttribute(\'data-sid\'));return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(label) + '</a>'
+      + '<span style="color:var(--text-muted);white-space:nowrap;">' + _cmOutcomeChip(r.outcome) + ' ' + escapeHtmlSafe(_cohortFmt('cost_usd', r.cost_usd)) + '</span>'
+      + '</div>';
+  }).join('');
+}
+
+function openCohortSession(sessionId) {
+  if (!sessionId) return;
+  try { switchTab('transcripts'); } catch (e) {}
+  try { viewTranscript(sessionId); } catch (e) {}
+}
+
+function renderCohortResult(res, title, why) {
+  var host = document.getElementById('cohort-result');
+  if (!host) return;
+  if (!res || !res.a || !res.b) {
+    host.style.display = '';
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, 'No data.')) + '</div>';
+    return;
+  }
+  var v = res.verdict || {};
+  var word = v.verdict || t('overview.compare_not_enough', null, 'Not enough data');
+  var sa = res.a.stats || {}, sb = res.b.stats || {};
+  var html = '<div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">'
+    + '<div style="font-size:26px;font-weight:800;color:' + _cohortVerdictColor(word) + ';letter-spacing:-0.5px;">' + escapeHtmlSafe(word) + '</div>'
+    + '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe((sa.session_count || 0) + ' vs ' + (sb.session_count || 0) + ' ' + t('overview.compare_sessions', null, 'sessions')) + '</div>'
+    + (title ? '<div style="font-size:12px;color:var(--text-secondary);">' + escapeHtmlSafe(title) + '</div>' : '')
+    + '</div>';
+  if (v.reason) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtmlSafe(v.reason) + '</div>';
+  if (v.mixed) {
+    html += '<div style="font-size:11px;color:var(--warn, #eab308);margin-top:4px;">' + escapeHtmlSafe(t('overview.compare_mixed', null, 'Mixed: some numbers moved the other way.'))
+      + ' ' + escapeHtmlSafe((v.against || []).map(function (k) { return k.replace(/_/g, ' '); }).join(', ')) + '</div>';
+  }
+  var comp = res.comparability || {};
+  (comp.warnings || []).forEach(function (w) {
+    html += '<div style="font-size:11px;color:var(--warn, #eab308);margin-top:4px;">⚠ ' + escapeHtmlSafe(w.note || '') + '</div>';
+  });
+  if (why) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtmlSafe(why) + '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:170px 1fr 1fr;gap:10px;font-size:12px;margin-top:12px;">'
+    + '<div></div>'
+    + '<div style="font-size:11px;color:var(--text-muted);">A: ' + escapeHtmlSafe(res.a.label || '') + '</div>'
+    + '<div style="font-size:11px;color:var(--text-muted);">B: ' + escapeHtmlSafe(res.b.label || '') + '</div>';
+  _COHORT_ROWS.forEach(function (kv) {
+    var key = kv[0], label = kv[1];
+    var va = sa[key], vb = sb[key];
+    if (va == null && vb == null) return;
+    html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(label) + '</div>'
+      + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cohortFmt(key, va)) + '</div>'
+      + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(_cohortFmt(key, vb)) + _cohortDelta(key, (res.deltas || {})[key]) + '</div>';
+  });
+  var mixA = sa.outcome_mix || {}, mixB = sb.outcome_mix || {};
+  var mixFmt = function (m) { return Object.keys(m).map(function (k) { return _cmOutcomeChip(k) + ' ' + m[k]; }).join(' ') || 'n/a'; };
+  html += '<div style="color:var(--text-muted);padding:4px 0;border-top:1px solid var(--border-primary);">' + escapeHtmlSafe(t('app.compare_outcome', null, 'Outcome')) + '</div>'
+    + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + mixFmt(mixA) + '</div>'
+    + '<div style="padding:4px 0;border-top:1px solid var(--border-primary);">' + mixFmt(mixB) + '</div>';
+  if (res.signals === 'not available') {
+    html += '<div style="grid-column:1 / -1;font-size:11px;color:var(--text-muted);padding-top:6px;">' + escapeHtmlSafe(t('overview.compare_no_signals', null, 'Behaviour signals are not recorded in this store yet.')) + '</div>';
+  }
+  html += '</div>';
+
+  html += '<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);font-weight:600;list-style:none;">▸ ' + escapeHtmlSafe(t('overview.compare_show_sessions', null, 'Show sessions')) + '</summary>'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px;">'
+    + '<div><div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">A</div>' + _cohortSessionList('a', res.a.sessions) + '</div>'
+    + '<div><div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">B</div>' + _cohortSessionList('b', res.b.sessions) + '</div>'
+    + '</div></details>';
+  host.style.display = '';
+  host.innerHTML = html;
+}
+
+// Custom filters (local dashboard): a and b are filter objects.
+async function runCohortCompare(a, b, title) {
+  var host = document.getElementById('cohort-result');
+  if (!host) return;
+  if (window.CLOUD_MODE) {
+    host.style.display = '';
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('overview.compare_cloud_custom', null, 'Custom filters run on the local dashboard. The hosted view shows the suggested comparisons your node computed.')) + '</div>';
+    return;
+  }
+  host.style.display = '';
+  host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.loading_2', null, 'Loading…')) + '</div>';
+  var qs = 'a=' + encodeURIComponent(JSON.stringify(a || {})) + '&b=' + encodeURIComponent(JSON.stringify(b || {}));
+  var rtp = _cohortRuntimeParam();
+  if (rtp) qs += '&' + rtp.slice(1);
+  try {
+    var resp = await fetch('/api/cohort-compare?' + qs);
+    if (!resp.ok) {
+      var err = null; try { err = await resp.json(); } catch (e) {}
+      host.innerHTML = '<div style="font-size:12px;color:var(--err);">' + escapeHtmlSafe((err && (err.hint || err.error)) || ('Request failed (' + resp.status + ')')) + '</div>';
+      return;
+    }
+    renderCohortResult(await resp.json(), title);
+  } catch (e) {
+    host.innerHTML = '<div style="font-size:12px;color:var(--err);">' + escapeHtmlSafe(t('app.network_error', null, 'Network error')) + '</div>';
+  }
+}
+
+// ── Runs shaped like this one (WO-60) ──────────────────────────────────────
+// Rendered below the fold of the session view. Tool-call n-gram similarity,
+// computed in the daemon; no model call.
+async function loadSimilarRuns(sessionId) {
+  var card = document.getElementById('similar-runs-card');
+  var body = document.getElementById('similar-runs-body');
+  if (!card || !body || !sessionId) return;
+  card.style.display = '';
+  if (window.CLOUD_MODE) {
+    body.innerHTML = escapeHtmlSafe(t('transcripts.similar_runs_cloud', null, 'Available on the local dashboard.'));
+    return;
+  }
+  body.innerHTML = escapeHtmlSafe(t('app.loading_2', null, 'Loading…'));
+  var data = null;
+  try {
+    var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/similar?window=30d&limit=10');
+    if (resp.status === 402) { card.style.display = 'none'; return; }
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    data = await resp.json();
+  } catch (e) {
+    body.innerHTML = escapeHtmlSafe(t('overview.compare_unreachable', null, 'Could not reach the local store.'));
+    return;
+  }
+  var rows = (data && data.neighbours) || [];
+  if (!rows.length) {
+    var cov = data && data.coverage ? String(data.coverage) : '';
+    body.innerHTML = escapeHtmlSafe(/no tool stream/.test(cov) ? cov
+      : t('transcripts.similar_runs_none', null, 'No other session in the window follows this order of tool calls.'));
+    return;
+  }
+  body.innerHTML = '<div style="display:grid;grid-template-columns:auto 1fr auto auto auto;gap:6px 12px;align-items:center;">'
+    + rows.map(function (r) {
+      var pct = Math.round((r.score || 0) * 100);
+      return '<div style="font-weight:700;color:var(--text-primary);">' + pct + '%</div>'
+        + '<a href="#" data-sid="' + escapeHtmlSafe(r.session_id) + '" onclick="openCohortSession(this.getAttribute(\'data-sid\'));return false;" style="color:var(--accent, #3b82f6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtmlSafe(r.session_id) + '">' + escapeHtmlSafe(r.title || r.session_id) + '</a>'
+        + '<span style="color:var(--text-muted);">' + escapeHtmlSafe((r.runtime || '') + (r.model ? ' · ' + r.model : '')) + '</span>'
+        + '<span>' + _cmOutcomeChip(r.outcome) + '</span>'
+        + '<span style="color:var(--text-muted);">' + escapeHtmlSafe(_cohortFmt('cost_usd', r.cost_usd)) + '</span>';
+    }).join('')
+    + '</div>';
+}
+
 // ── Error triage (#2196 item #5) ────────────────────────────────────────────
 
 async function loadTriageList() {
@@ -2979,7 +4327,8 @@ var _LOADALL_COALESCE_MS = 2000;
 // Human-first Overview hero (FLYWHEEL vision). Answers, in plain words a
 // first-timer gets in ~5s: is my agent alive, what did it just do, is it
 // healthy, what did it cost. Reads only already-fetched state (no new request):
-// alive-state from /api/subagents (window._cmAgentBusy), last reply from the
+// alive-state from /api/subagents (window._cmAgentBusy) plus main-session
+// recency from /api/runtime-summary (window._cmRtAct), last reply from the
 // transcript loadActivityStream already pulled (window._cmLastAgentSay), model
 // + session count from the cached /api/overview, cost from the rendered stat.
 // Idempotent + self-healing: called after each overview/active-tasks refresh.
@@ -3100,27 +4449,258 @@ function _renderOutLoopSources() {
   }).catch(function(){});
 }
 
+// Status vocabulary. /api/subagents passes the daemon's own classification
+// through VERBATIM, so "in progress" arrives as either 'active' (the
+// age-derived buckets in routes/sessions.py) or 'running' (the daemon's or
+// the gateway registry's explicit label). Matching only the literal 'active'
+// is why 14 genuinely running sub-agents rendered as ✅ complete and the hero
+// said "idle" while five terminals worked (founder report 2026-08-15). Every
+// consumer goes through these helpers — never compare the raw string.
+function _cmIsWorkingStatus(s) {
+  s = String(s == null ? '' : s).trim().toLowerCase();
+  return s === 'active' || s === 'running';
+}
+function _cmIsLiveStatus(s) {
+  return _cmIsWorkingStatus(s) || String(s == null ? '' : s).trim().toLowerCase() === 'idle';
+}
+// 'failed' is a first-class status the server emits: routes/sessions.py sets
+// _status_override='failed' for a spawn that errored. The Overview task panel
+// had no branch for it — buckets were active -> running, a narrow
+// stale+aborted+zero-token heuristic -> failed, and EVERYTHING ELSE -> done —
+// so a sub-agent whose own detail modal read FAILED rendered in the list as a
+// green tick under "Recently Completed" (founder report 2026-09-07).
+function _cmIsFailedStatus(s) {
+  s = String(s == null ? '' : s).trim().toLowerCase();
+  return s === 'failed' || s === 'error' || s === 'aborted';
+}
+
+// ── Live sessions ─────────────────────────────────────────────────────────
+// The hero used to answer "is my agent alive?" with one node-wide boolean, so
+// a person driving five terminals read "It's idle right now" while all five
+// were mid-task. /api/live-sessions answers it by NAME instead: which sessions
+// are working, which are parked waiting for you, and how long since each moved.
+//
+// Perf (FLYWHEEL "performance is a feature"): ONE shared cache with a 10s TTL
+// and in-flight dedup, keyed by the runtime filter. The hero repaints far more
+// often than that (two 10s timers plus every subagent poll), and each repaint
+// must reuse the cache rather than issue its own fetch.
+var _CM_LIVE_TTL_MS = 10000;
+function _cmLoadLiveSessions(cb) {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var c = window._cmLive;
+  if (c && c.rt === rt && (Date.now() - c.ts) < _CM_LIVE_TTL_MS) { if (cb) cb(c); return; }
+  if (window._cmLiveWait) return;           // in-flight dedup
+  window._cmLiveWait = true;
+  var url = '/api/live-sessions' + (rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '');
+  fetchJsonWithTimeout(url, 6000).then(function (d) {
+    window._cmLive = {
+      rt: rt, ts: Date.now(),
+      sessions: (d && d.sessions) || [],
+      counts: (d && d.counts) || { working: 0, waiting: 0 },
+      // `available:false` means the daemon could not be reached — that is
+      // "we don't know", not "nothing is running", and the hero says so.
+      available: !(d && d.available === false)
+    };
+  }).catch(function () {
+    var old = window._cmLive || {};
+    window._cmLive = { rt: rt, ts: Date.now(), sessions: old.sessions || [],
+                       counts: old.counts || { working: 0, waiting: 0 }, available: false };
+  }).then(function () {
+    window._cmLiveWait = false;
+    if (cb) cb(window._cmLive);
+  });
+}
+
+// "4m" / "just now" — the age column reads as a live clock, so keep it terse
+// and monospaced at the call site.
+function _cmLiveAge(sec) {
+  if (sec == null) return '';
+  if (sec < 15) return 'just now';
+  if (sec < 60) return Math.round(sec) + 's ago';
+  return Math.round(sec / 60) + 'm ago';
+}
+
+// Jump straight from a live row into that session's transcript.
+function cmOpenLiveSession(sessionId) {
+  if (!sessionId) return;
+  if (typeof switchTab === 'function') switchTab('transcripts');
+  setTimeout(function () {
+    if (typeof viewTranscript === 'function') viewTranscript(sessionId);
+  }, 60);
+}
+
+// The signature element: one row per live session. State dot, the session's
+// own title (its name — the thing you actually recognise), the runtime it runs
+// on, and a right-aligned age column so "how long since each one moved" reads
+// as a single vertical scan. Rows are real buttons: keyboard reachable, with a
+// visible focus ring.
+function _cmLiveRowsHtml(live) {
+  var rows = (live && live.sessions) || [];
+  if (!rows.length) return '';
+  var SHOWN = 6;
+  var html = '<div style="margin:16px 0 4px;border-top:1px solid var(--border-primary);padding-top:14px;">';
+  var shown = rows.slice(0, SHOWN);
+  var sawWaiting = false;
+  shown.forEach(function (s) {
+    var working = s.state === 'working';
+    // A colour alone does not teach a first-timer what amber means, and the
+    // headline only ever names one of the two states. Label the boundary once,
+    // in words, the moment the quiet ones start (rows are sorted by age, so
+    // this fires exactly once).
+    if (!working && !sawWaiting) {
+      sawWaiting = true;
+      if (shown[0] && shown[0].state === 'working') {
+        // "Gone quiet", NOT "waiting on you". `state` here is an age bucket
+        // (last output 2-10 minutes ago), equally consistent with thinking, a
+        // long tool call, or a dead process. The needs-you strip is the only
+        // component with evidence for intent, and it renders directly above
+        // this list — a header claiming these rows want something reads as a
+        // flat contradiction of the "Nothing needs you right now" it sits
+        // under.
+        html += '<div class="cm-live-group">Gone quiet</div>';
+      }
+    }
+    var col = working ? '#22c55e' : '#f59e0b';
+    var title = (s.title || '').trim() || 'Untitled session';
+    var rtLabel = (typeof _cmRuntimeLabel === 'function' && _cmRuntimeLabel(s.runtime)) || s.runtime || '';
+    html += '<button type="button" class="cm-live-row" onclick="cmOpenLiveSession(' + attrJsStr(s.session_id) + ')"'
+      + ' title="Open this session\'s transcript">'
+      + '<span class="cm-live-dot" style="background:' + col + ';' + (working ? '' : 'animation:none;') + '"></span>'
+      + '<span class="cm-live-title">' + escHtml(title) + '</span>'
+      + '<span class="cm-live-rt">' + escHtml(rtLabel) + '</span>'
+      + '<span class="cm-live-age">' + escHtml(_cmLiveAge(s.age_seconds)) + '</span>'
+      + '<span class="cm-live-arrow">→</span>'
+      + '</button>';
+  });
+  if (rows.length > SHOWN) {
+    html += '<div style="font-size:12px;color:var(--text-muted);padding:8px 10px 2px;">'
+      + (rows.length - SHOWN) + ' more. Open Sessions to see them all.</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+// Alive-state truthfulness: /api/subagents only lists SPAWNED children, so a
+// node whose main terminal sessions are hard at work read "It's idle right
+// now" (founder report 2026-08-02). Complement it with per-runtime recency
+// from /api/runtime-summary (`last_activity_ms`, snapshot-served on cloud):
+// working = an active subagent OR a main-session event within the last 3
+// minutes (window absorbs ingest + snapshot lag, stays honest after stop).
+var _CM_RT_ACTIVE_WINDOW_MS = 3 * 60 * 1000;
+function _cmNoteRtActivity(runtimes) {
+  try {
+    var map = {}, mx = 0;
+    Object.keys(runtimes || {}).forEach(function (k) {
+      var v = Number(runtimes[k] && runtimes[k].last_activity_ms) || 0;
+      map[k] = v; if (v > mx) mx = v;
+    });
+    window._cmRtAct = { ts: Date.now(), map: map, max: mx };
+  } catch (e) {}
+}
+function _cmRtRecentlyActive() {
+  var a = window._cmRtAct;
+  if (!a || !a.map) return false;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var ts = (rt && rt !== 'all') ? (a.map[rt] || 0) : (a.max || 0);
+  return ts > 0 && (Date.now() - ts) < _CM_RT_ACTIVE_WINDOW_MS;
+}
 function _renderOverviewHero() {
   var hero = document.getElementById('overview-hero');
   if (!hero) return;
   function _txt(id) { var e = document.getElementById(id); return e ? e.textContent.trim() : ''; }
   var ov = window._cmOverview || {};
-  var busy = !!window._cmAgentBusy;
+  var busy = !!window._cmAgentBusy || _cmRtRecentlyActive();
+  // Recency cache cold/stale → kick ONE runtime-summary load and repaint on
+  // arrival (same guard pattern as the efficiency chip below: the fresh
+  // cache never re-enters, so no render loop).
+  try {
+    var _ra = window._cmRtAct;
+    // Error entries retry after 5s (the cold-load request burst can time this
+    // fetch out; a 30s empty cache would pin the hero on "idle"), and keep any
+    // previously-good map rather than blanking it.
+    var _raTtl = (_ra && _ra.err) ? 5000 : 30000;
+    if (!(_ra && (Date.now() - _ra.ts) < _raTtl) && !window._cmRtActWait) {
+      window._cmRtActWait = true;
+      fetchJsonWithTimeout('/api/runtime-summary', 8000).then(function (d) {
+        _cmNoteRtActivity((d && d.runtimes) || {});
+      }).catch(function () {
+        var _old = window._cmRtAct || {};
+        window._cmRtAct = { ts: Date.now(), map: _old.map || {}, max: _old.max || 0, err: true };
+      }).then(function () {
+        window._cmRtActWait = false;
+        try { _renderOverviewHero(); } catch (e) {}
+      });
+    }
+  } catch (_e_act) {}
+
+  // Named liveness. This is the primary answer to "is my agent alive?" — the
+  // recency signal above is the fallback for when the session list is not
+  // available (cloud, or the daemon briefly unreachable).
+  var _live = window._cmLive;
+  var _liveRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (!_live || _live.rt !== _liveRt || (Date.now() - _live.ts) >= _CM_LIVE_TTL_MS) {
+    _cmLoadLiveSessions(function () { try { _renderOverviewHero(); } catch (e) {} });
+  }
+  var _working = (_live && _live.counts && _live.counts.working) || 0;
+  var _waiting = (_live && _live.counts && _live.counts.waiting) || 0;
+  var _liveKnown = !!(_live && _live.available);
+  if (_working > 0) busy = true;
+
+  // Headline. Say the number and let it carry the news; fall back to the old
+  // single-boolean sentence only when the session list can't be read.
+  var headline;
+  if (_liveKnown && _working > 0) {
+    headline = _working === 1
+      ? 'It’s working right now.'
+      : _working + ' sessions are working right now.';
+  } else if (_liveKnown && _waiting > 0) {
+    // Age-based only (last output 2-10 min ago), so it cannot claim "waiting
+    // on you" — that is the needs-you strip's claim, and it has evidence.
+    // Both render on Overview, so a mismatch here is two components
+    // contradicting each other on one screen.
+    headline = _waiting === 1
+      ? 'One session has gone quiet.'
+      : _waiting + ' sessions have gone quiet.';
+  } else if (!_liveKnown && busy) {
+    headline = 'It’s working right now.';
+  } else if (!_liveKnown) {
+    headline = 'Nothing to report yet.';
+  } else {
+    headline = 'It’s idle right now.';
+  }
+
+  var _liveRows = _liveKnown ? _cmLiveRowsHtml(_live) : '';
   var stateWord = busy ? 'working' : 'idle';
-  var dot = busy ? '#22c55e' : '#3b82f6';
+  var dot = busy ? '#22c55e' : (_liveKnown && _waiting > 0 ? '#f59e0b' : '#3b82f6');
   // When a runtime is selected, the hero must mirror the (runtime-scoped) stat
   // cards, not the node-wide overview. _cmRuntimeScope is set by loadMiniWidgets
   // from the v1 API (FLYWHEEL §1c); null = node-wide. Note: prefer the scoped
   // model card over ov.model here, else the hero kept showing the node's
   // dominant model (e.g. "running claude-opus-4-8" while PicoClaw is selected).
   var _scope = window._cmRuntimeScope;
+  // The cost tile starts life as a literal '$0.00' placeholder and only
+  // reaches its real value once loadMiniWidgets lands, ~15s into a load. So
+  // '$0.00' means EITHER 'genuinely free' OR 'not loaded yet', and the hero
+  // cannot tell them apart from the string alone — it spent the first quarter
+  // minute of every page load announcing 'free on your plan' over a real
+  // $8.49 of spend (founder report 2026-08-15). Track knownness explicitly:
+  // window._cmCostTodayRaw is the number loadMiniWidgets actually rendered.
+  var _costRaw = window._cmCostTodayRaw;
+  var _costKnown = _scope ? true : (typeof _costRaw === 'number');
   var cost = _scope ? ('$' + _scope.cost.toFixed(2)) : (_txt('cost-today') || '$0.00');
   var model = _scope ? (_txt('model-primary') || _scope.model || '—')
                      : (ov.model || _txt('model-primary') || 'your model');
+  // Node-wide, the chip is labelled "today" below, so it must BE today:
+  // ov.sessionCount is an all-time count with no date predicate and read 89
+  // on a day that had 16. Fall back to the all-time number only on a daemon
+  // too old to send sessionsToday, where the label is dropped instead.
+  var _todayKnown = (typeof ov.sessionsToday === 'number');
   var sessions = _scope ? _scope.sessions
-                        : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null);
-  var free = cost === '$0.00' || cost === '$0' ||
-             /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
+                        : (_todayKnown ? ov.sessionsToday
+                           : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null));
+  // Never assert 'free' from a number we have not actually read.
+  var free = _costKnown && (cost === '$0.00' || cost === '$0' ||
+             /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || ''));
   var say = window._cmLastAgentSay;
   var sayText = say && say.text ? String(say.text).replace(/\s+/g, ' ').trim() : '';
   if (sayText.length > 90) sayText = sayText.slice(0, 90) + '…';
@@ -3134,8 +4714,10 @@ function _renderOverviewHero() {
   // (matches the switcher), so don't append "today" — the runtime may have 0
   // sessions today but N on record, and "N sessions today" would be wrong while
   // "0 sessions today" reads as gone. For all-runtimes it stays the live "today".
-  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + (_scope ? '' : ' today'));
-  stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
+  if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + ((!_scope && _todayKnown) ? ' today' : ''));
+  // Show nothing rather than a placeholder: an unlabelled '$0.00' next to
+  // live sessions reads as a real reading, not as 'still loading'.
+  if (_costKnown) stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
   // Efficiency chip (design spec §1a): grade next to cost answers "what did it
   // cost me, and is that reasonable?" in one read. Renders only when the
   // daemon slice is fresh for the CURRENT runtime filter and passes the trust
@@ -3157,11 +4739,16 @@ function _renderOverviewHero() {
   // matches `clawmetry status --live`. Shown only while the agent is producing.
   try {
     var _nowMs = Date.now(), _tt = Number(window._cmTodayTokensRaw || 0), _prevT = window._cmHeroTpsPrev;
-    if (busy && _prevT && _nowMs > _prevT.t) {
+    var _tpsRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    // Same-scope samples only, plus a sanity ceiling: a runtime switch (or a
+    // node-wide -> scoped repaint) swaps the counter's SOURCE, so the delta is
+    // a scope jump, not throughput ("23,058,079 tok/s" shipped from exactly
+    // that once busy started being true for main sessions).
+    if (busy && _prevT && _prevT.rt === _tpsRt && _nowMs > _prevT.t) {
       var _tps = (_tt - _prevT.k) / ((_nowMs - _prevT.t) / 1000);
-      if (_tps > 0.5) stats.push('⚡ <strong style="color:var(--text-primary);">' + Math.round(_tps) + '</strong> tok/s');
+      if (_tps > 0.5 && _tps < 50000) stats.push('⚡ <strong style="color:var(--text-primary);">' + Math.round(_tps) + '</strong> tok/s');
     }
-    window._cmHeroTpsPrev = { k: _tt, t: _nowMs };
+    window._cmHeroTpsPrev = { k: _tt, t: _nowMs, rt: _tpsRt };
   } catch (_e) {}
 
   hero.innerHTML =
@@ -3173,9 +4760,15 @@ function _renderOverviewHero() {
       + '<span style="font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">' + t('overview.hero_eyebrow', null, 'Your agent') + '</span>'
     + '</div>'
     + '<div style="font-family:Georgia,\'Times New Roman\',serif;font-size:32px;line-height:1.15;font-weight:600;color:var(--text-primary);margin:10px 0 4px;">'
-      + (busy ? 'It’s working right now.' : 'It’s idle right now.') + '</div>'
-    + '<div style="font-size:15px;color:var(--text-secondary);margin-bottom:18px;">' + lastLine + '</div>'
-    + '<div style="display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;font-size:15px;color:var(--text-secondary);">'
+      + headline + '</div>'
+    // When the named rows render they ARE the story; a second "last thing it
+    // did" line underneath just competes with them.
+    + (_liveRows
+        ? ''
+        : '<div style="font-size:15px;color:var(--text-secondary);margin-bottom:18px;">' + lastLine + '</div>')
+    + _liveRows
+    + '<div style="display:flex;flex-wrap:wrap;gap:8px 24px;align-items:baseline;font-size:15px;color:var(--text-secondary);'
+      + (_liveRows ? 'margin-top:16px;' : '') + '">'
       + stats.map(function (s) { return '<span>' + s + '</span>'; }).join('') + '</div>';
   hero.style.display = '';
 
@@ -3236,6 +4829,9 @@ async function loadAll() {
     if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
     // UI-coverage audit — today's activity counters strip.
     if (typeof loadActivityToday === 'function') setTimeout(function(){ loadActivityToday().catch(function(e){console.warn('activity today failed',e)}); }, 900);
+    // Needs-you strip. First on the page, so it loads first — this is the
+    // question people open the dashboard with.
+    if (typeof loadNeedsYou === 'function') loadNeedsYou().catch(function(e){console.warn('needs-you failed',e)});
     document.getElementById('refresh-time').textContent = t("app.updated", null, "Updated ") + new Date().toLocaleTimeString();
 
     if (overview.infra) {
@@ -3271,6 +4867,8 @@ async function loadAll() {
     try { loadHealthTimeline(); } catch (e) {}
     // Error-triage list (#2196 item #5) — also fire-and-forget.
     try { loadTriageList(); } catch (e) {}
+    // Cohort compare suggestions (WO-60), fire-and-forget; honest empty states.
+    try { loadCohortSuggested(); } catch (e) {}
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
@@ -3286,11 +4884,47 @@ async function loadAll() {
 }
 
 async function loadMiniWidgets(overview, usage) {
-  // 💰 Cost Ticker 
-  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
-  document.getElementById('cost-today').textContent = fmtCost(usage.todayCost || 0);
-  document.getElementById('cost-week').textContent = fmtCost(usage.weekCost || 0);
-  document.getElementById('cost-month').textContent = fmtCost(usage.monthCost || 0);
+  // 💰 Cost Ticker
+  function fmtCost(c) {
+    if (window.cmProv) return window.cmProv.fmtMoney(c);
+    return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00';
+  }
+  // How these three numbers were obtained, on the tile's label. One badge for
+  // the tile: today, week and month all come out of the same rollup by the
+  // same rule, so they share a basis.
+  var _costEntry = window.cmProv ? window.cmProv.of(usage, 'todayCost') : null;
+  var _costUnknown = window.cmProv ? window.cmProv.isUnknown(_costEntry) : false;
+  var _basisEl = document.getElementById('cost-basis-badge');
+  if (_basisEl && window.cmProv) {
+    _basisEl.innerHTML = window.cmProv.badge(_costEntry, { label: 'Cost' });
+  }
+  // Record the value we actually rendered so the hero can tell a real $0.00
+  // from the placeholder it would otherwise read off the DOM. When the cost
+  // is UNKNOWN there is no value to record: leaving a 0 here would have the
+  // hero announce "$0.00, free on your plan" over a spend nobody could read.
+  if (_costUnknown || usage.todayCost == null) {
+    window._cmCostTodayRaw = null;
+  } else {
+    window._cmCostTodayRaw = Number(usage.todayCost || 0);
+  }
+  var _setCost = function (id, key, label) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (window.cmProv) {
+      // Each window gets its OWN entry: they share a basis but not a period,
+      // and a week figure whose tooltip says "over today" is a new small lie
+      // in the place built to stop them.
+      // noBadge: the tile's single label badge already says how, and the
+      // figure keeps a plain textContent so the hero can read it back.
+      el.innerHTML = window.cmProv.money(usage, key,
+                                         { label: label, noBadge: true });
+    } else {
+      el.textContent = fmtCost(usage[key] || 0);
+    }
+  };
+  _setCost('cost-today', 'todayCost', 'Cost today');
+  _setCost('cost-week', 'weekCost', 'Cost this week');
+  _setCost('cost-month', 'monthCost', 'Cost this month');
   
   var trend = '';
   if (usage.trend && usage.trend.trend) {
@@ -3347,7 +4981,11 @@ async function loadMiniWidgets(overview, usage) {
   // and it briefly read "0" on a slow/failed fetch. Set synchronously from the
   // value already in hand so the card is never blank and never contradicts the
   // hero. (Card relabeled "Sessions today" in overview.html.)
-  document.getElementById('hot-sessions-count').textContent = overview.sessionCount || 0;
+  // Same honesty fix as the hero chip: the card is LABELLED "Sessions today",
+  // so it must carry today's count, not the all-time sessionCount.
+  document.getElementById('hot-sessions-count').textContent =
+    (typeof overview.sessionsToday === 'number' ? overview.sessionsToday
+                                                : overview.sessionCount) || 0;
 
   // 📈 Runtime scope — when a runtime is selected, the Overview stat cards
   // (sessions / tokens / cost / model) must show ONLY that runtime's data
@@ -3365,6 +5003,9 @@ async function loadMiniWidgets(overview, usage) {
     var _ovRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
     if (_ovRt && _ovRt !== 'all') {
       var _rsd = await fetchJsonWithTimeout('/api/runtime-summary', 4000);
+      // Keep the hero's alive-state recency cache warm from this fetch so the
+      // scoped path never issues a second /api/runtime-summary request.
+      try { if (typeof _cmNoteRtActivity === 'function') _cmNoteRtActivity((_rsd && _rsd.runtimes) || {}); } catch (_e_act) {}
       var _rs = _rsd && _rsd.runtimes && _rsd.runtimes[_ovRt];
       _ovModel = (_rs && _rs.primary_model) ? _rs.primary_model : '—';
       // The SESSIONS card must match what the runtime switcher promises
@@ -3410,10 +5051,36 @@ async function loadMiniWidgets(overview, usage) {
         _set('hot-sessions-count', _scope.sessions);
         _set('tokens-today', _fmtT(_scope.tokensToday));
         _set('token-rate', _fmtT(_scope.tokensMonth));
-        _set('cost-today', '$' + _scope.cost.toFixed(2));
+        window._cmCostTodayRaw = Number(_scope.cost || 0);
+        _set('cost-today', fmtCost(_scope.cost));
         // SPENDING wk/mo sub-figures scope too (were node-wide projections).
         if (_scope.costWeek != null) _set('cost-week', fmtCost(_scope.costWeek));
         if (_scope.costMonth != null) _set('cost-month', fmtCost(_scope.costMonth));
+        // These three came from the runtime-scoped API, not the payload
+        // loadMiniWidgets badged, and the local-mode fallback above is NOT
+        // period-split: it repeats the runtime's all-time total in all three
+        // slots. Re-badge from the source actually used, so the tooltip is
+        // about the number on screen rather than the one it replaced.
+        try {
+          var _sBadge = document.getElementById('cost-basis-badge');
+          if (_sBadge && window.cmProv) {
+            var _split = (_scope.costWeek !== _scope.costMonth);
+            _sBadge.innerHTML = window.cmProv.badge({
+              basis: _split ? 'derived' : 'estimated',
+              label: _split ? 'derived' : 'estimated',
+              hint: _split
+                ? 'Derived: computed from measured inputs by an exact rule.'
+                : 'Estimated: modelled, with an assumption that can be wrong.',
+              formula: _split
+                ? ('measured token counts for runtime ' + (_scope.runtime || '')
+                   + ', priced against the provider\'s published rate card')
+                : ('this runtime\'s all-time total, standing in for all three '
+                   + 'windows because the scoped source is not split by period'),
+              source: _split ? '/api/v1/usage?runtime=' + (_scope.runtime || '')
+                             : '/api/runtime-summary'
+            }, { label: 'Cost' });
+          }
+        } catch (_eb) {}
         window._cmTodayTokensRaw = _scope.tokensToday;
       }
     }
@@ -3423,7 +5090,10 @@ async function loadMiniWidgets(overview, usage) {
   // switcher) so "today" would be wrong; node-wide stays the live "today".
   try {
     var _slbl = document.getElementById('hot-sessions-label');
-    if (_slbl) _slbl.textContent = window._cmRuntimeScope
+    // A daemon too old to send sessionsToday falls back to the all-time
+    // count, so drop the "today" from the label rather than lie in it.
+    var _ovToday = window._cmOverview && typeof window._cmOverview.sessionsToday === 'number';
+    if (_slbl) _slbl.textContent = (window._cmRuntimeScope || !_ovToday)
       ? t('overview.sessions', null, 'Sessions')
       : t('overview.sessions_today', null, 'Sessions today');
   } catch (e) {}
@@ -3452,8 +5122,14 @@ async function loadMiniWidgets(overview, usage) {
   }
   document.getElementById('model-breakdown').textContent = modelBreakdown;
   
-  // 🐝 Worker Bees (Sub-Agents)
-  loadSubAgents();
+  // The "Worker Bees (Sub-Agents)" mini-widget used to be fetched here, on
+  // every Home render. Its three targets — #subagents-count, #subagents-status,
+  // #subagents-preview — all live inside overview.html's `display:none`
+  // "elements referenced by existing JS" block, so the whole result was
+  // invisible: one extra /api/subagents round trip per Home load (a 500-record
+  // payload on a busy node) rendering into nothing. FLYWHEEL, "performance is a
+  // feature — and a cost": before adding any fetch, ask whether it needs to run
+  // on every tab. This one did not need to run at all.
 
   // Issue #1619 Phase 1 — eval score tile. Lazy, non-blocking; tile shows
   // a dash on miss so a slow daemon doesn't gate the overview render.
@@ -3471,20 +5147,34 @@ async function loadMiniWidgets(overview, usage) {
 async function loadEvaluators() {
   var listEl = document.getElementById('evaluators-list');
   var countEl = document.getElementById('evaluators-count');
-  if (!listEl) return;
+  var stripEl = document.getElementById('evaluators-overview-line');
+  if (!listEl && !stripEl) return;
   var data = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
   var evs = (data && data.evaluators) || [];
   if (!evs.length) {
-    listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' +
+    if (listEl) listEl.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' +
       t("evaluators.empty", null, "Evaluator library unavailable.") + '</div>';
     if (countEl) countEl.textContent = '';
+    if (stripEl) stripEl.textContent = '';
     return;
   }
+  // "Live" is the server's HONEST per-box count: judge-backed evaluators with
+  // no key on this box come back as status 'needs_key', not 'live'.
+  var liveN = (data && typeof data.live === 'number') ? data.live :
+    evs.filter(function(e){ return e.status === 'live'; }).length;
   if (countEl) {
-    var liveN = evs.filter(function(e){ return e.status === 'live'; }).length;
     countEl.textContent = liveN + ' / ' + evs.length + ' ' +
       t("evaluators.live_now", null, "live now");
   }
+  if (stripEl) {
+    var proN = evs.filter(function(e){ return e.tier === 'pro' && e.locked; }).length;
+    var needsKeyN = evs.filter(function(e){ return e.status === 'needs_key'; }).length;
+    var parts = [liveN + ' ' + t("evaluators.live_now", null, "live now")];
+    if (needsKeyN) parts.push(needsKeyN + ' ' + t("evaluators.strip_needs_key", null, "waiting for a judge key"));
+    if (proN) parts.push(proN + ' ' + t("evaluators.strip_with_pro", null, "with Pro"));
+    stripEl.textContent = parts.join(' · ');
+  }
+  if (!listEl) return;
   // Category → chip color + plain label.
   var CAT = {
     quality:     { c: '#8b5cf6', label: t("evaluators.cat_quality", null, "Quality") },
@@ -3493,14 +5183,27 @@ async function loadEvaluators() {
     safety:      { c: '#ef4444', label: t("evaluators.cat_safety", null, "Safety") },
     agent:       { c: '#10b981', label: t("evaluators.cat_agent", null, "Agent") }
   };
+  // feat/evals-simplify: split the catalogue so the Evals tab stops reading
+  // as a 12-box marketing wall. Primary = entries whose per-session number
+  // actually lands in a session row (outcome, reliability_score, eval_score,
+  // faithfulness_score) — these are what the drill-down surfaces per session.
+  // Secondary = aggregate-only signals we still compute; collapsed by default
+  // so users can see they exist without the wall reading as vaporbox.
+  var primary = evs.filter(function(e){ return e.value_field; });
+  var secondary = evs.filter(function(e){ return !e.value_field; });
+  var renderList = primary.length ? primary : evs;
   var html = '';
-  evs.forEach(function(e) {
+  renderList.forEach(function(e) {
     var cat = CAT[e.category] || { c: 'var(--text-muted)', label: e.category };
     var statusLabel, statusColor;
     if (e.status === 'live') {
       statusLabel = t("evaluators.status_live", null, "Live"); statusColor = '#22c55e';
     } else if (e.status === 'partial') {
       statusLabel = t("evaluators.status_partial", null, "Early"); statusColor = '#f59e0b';
+    } else if (e.status === 'needs_key') {
+      statusLabel = t("evaluators.status_needs_key", null, "Needs key"); statusColor = '#f59e0b';
+    } else if (e.status === 'needs_extra') {
+      statusLabel = t("evaluators.status_needs_extra", null, "Needs install"); statusColor = '#f59e0b';
     } else {
       statusLabel = t("evaluators.status_soon", null, "With Pro"); statusColor = 'var(--text-muted)';
     }
@@ -3522,9 +5225,1386 @@ async function loadEvaluators() {
       html += '<div style="margin-top:8px;font-size:11px;"><a href="/upgrade?source=evaluators" style="color:#8b5cf6;font-weight:600;text-decoration:none;">' +
         t("evaluators.unlock", null, "Unlock with Pro") + ' &rarr;</a></div>';
     }
+    if (e.status === 'needs_key') {
+      html += '<div style="margin-top:8px;font-size:11px;"><a href="#" onclick="openEvalRubricModal();return false;" style="color:#f59e0b;font-weight:600;text-decoration:none;">' +
+        t("evaluators.set_key", null, "Add a judge API key to turn this on") + ' &rarr;</a></div>';
+    }
+    if (e.status === 'needs_extra') {
+      html += '<div style="margin-top:8px;font-size:11px;color:#f59e0b;font-weight:600;">' +
+        t("evaluators.needs_extra_hint", null, "Turn on with: pip install clawmetry[deepeval]") + '</div>';
+    }
     html += '</div>';
   });
+  // Secondary signals: aggregate-only checks (safety scans, per-call
+  // heuristics, DeepEval nice-to-haves). Rendered as compact chips inside a
+  // collapsed <details> so they're honestly present without dominating the
+  // tab. Fresh installs with no primary entries fall back to the old grid
+  // above so the secondary block never renders alone.
+  if (primary.length && secondary.length) {
+    html += '<details style="grid-column:1/-1;margin-top:4px;">';
+    html += '<summary style="cursor:pointer;font-size:11px;color:var(--text-muted);padding:6px 2px;list-style:none;">' +
+      '+ ' + secondary.length + ' ' +
+      t("evaluators.other_signals", null, "other signals ClawMetry tracks aggregate-only") +
+      '</summary>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">';
+    secondary.forEach(function(e) {
+      var cat = CAT[e.category] || { c: 'var(--text-muted)' };
+      var lockIcon = e.locked ? ' 🔒' : '';
+      html += '<span title="' + escHtml(e.description) + '" style="font-size:11px;padding:3px 8px;border-radius:8px;' +
+        'background:var(--bg-primary);border:1px solid var(--border-primary);color:var(--text-secondary);' +
+        (e.locked ? 'opacity:0.7;' : '') + '">' +
+        '<span style="color:' + cat.c + ';font-weight:600;">●</span> ' +
+        escHtml(e.name) + lockIcon + '</span>';
+    });
+    html += '</div></details>';
+  }
   listEl.innerHTML = html;
+}
+
+// ── Quality tab (redesigned Evals, 2026-08-14) ─────────────────────────────
+// One question ("is my agent doing good work?") answered in one fetch. The
+// tab keeps its data-tab="evals" identity so the URL / sidebar highlight
+// stay stable, but the surface inside is entirely new: report card, ranked
+// failure patterns, plain-English rough runs, inline eval-builder. The old
+// loadEvaluators / loadEvalsJudgeCard / loadEvalsRecent / loadEvalsSuites
+// functions stay defined below (they're still used by other surfaces like
+// the Overview evaluators strip); only the tab bootstrap changed.
+function loadEvalsTab() {
+  // Detect the redesigned tab shell by its marker attribute — if we land
+  // on an older cached template (e.g. cloud pin hasn't rolled yet), fall
+  // back to the legacy renderer so the tab still shows something honest.
+  var host = document.getElementById('page-evals');
+  if (host && host.getAttribute('data-quality-tab') === '1') {
+    loadQualityTab();
+    return;
+  }
+  loadEvaluators();
+  if (typeof loadEvalsJudgeCard === 'function') loadEvalsJudgeCard();
+  if (typeof loadEvalsTabSummary === 'function') loadEvalsTabSummary();
+  if (typeof loadEvalsRecent === 'function') loadEvalsRecent();
+  if (typeof loadEvalsSuites === 'function') loadEvalsSuites();
+}
+
+// ── Quality tab renderer ───────────────────────────────────────────────────
+async function loadQualityTab() {
+  // Independent of the grade fetch below, deliberately: different endpoint,
+  // different failure mode. Chaining it behind the report card meant one
+  // slow /api/quality/report-card blanked the outcome line too.
+  _qLoadOutcomeTrend();
+  _qLoadSpotCheck();
+
+  var qs = new URLSearchParams();
+  qs.set('window', '7d');
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (rt) qs.set('runtime', rt);
+
+  var r = await fetch('/api/quality/report-card?' + qs.toString())
+    .catch(function() { return null; });
+  var data = r ? await r.json().catch(function() { return null; }) : null;
+  if (!data) {
+    // Honest empty on network / server miss. The tab renders "Nothing to
+    // grade yet." rather than a spinner or a blank.
+    data = {
+      grade: '—', headline: 'Nothing to grade yet.',
+      subline: "Your agents haven't finished a task in this window. Send Claude Code or OpenClaw a task and come back.",
+      patterns: [], rough_runs: [], week: [], vs_prior: null,
+      graded_runs: 0, total_runs: 0, judge_key_set: false
+    };
+  }
+  _qRenderCard(data);
+  if (data.store_available === false) {
+    // The collector isn't reachable from here (e.g. the hosted dashboard has
+    // no local store). Say that plainly instead of rendering "every run
+    // finished cleanly", which would be a wrong answer dressed as good news.
+    var pe = document.getElementById('q-patterns');
+    var re = document.getElementById('q-runs');
+    var msg = t('quality.store_unavailable', null,
+                'Nothing to show from here — this view reads your local run history.');
+    if (pe) pe.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' + escHtml(msg) + '</li>';
+    if (re) re.innerHTML = '<li class="q-empty">' + escHtml(msg) + '</li>';
+    var st = document.getElementById('q-status-line');
+    if (st) st.textContent = t('quality.status_local_only', null, 'Graded on your machine');
+    _qRenderFooter(data);
+    return;
+  }
+  _qRenderPatterns(data);
+  _qRenderRoughRuns(data);
+  _qRenderStatusLine(data);
+  _qRenderFooter(data);
+}
+
+// A DuckDB-backed read that misses is usually TRANSIENT: the daemon proxy
+// times out under the dashboard's boot fan-out (many panels fetching at
+// once), and the handler answers 200 with the store flagged unavailable.
+// Reproduced 2026-08-25 on a real install: the first call returned rows, the
+// next four came back unavailable while the page was still booting, then
+// recovered. Hiding a panel on that first miss hides it for the whole
+// session, so give it one more chance once the storm has passed.
+//
+// Deliberately one retry, only on the miss path: the happy path stays a
+// single request, so this cannot become a request storm of its own.
+async function _qFetchStore(url, isMiss) {
+  for (var attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise(function(r) { setTimeout(r, 1200); });
+    var data = null;
+    try {
+      var r = await fetch(url);
+      if (r.ok) data = await r.json();
+    } catch (e) { data = null; }
+    if (data && !isMiss(data)) return data;
+    if (attempt) return data;   // second miss: report it, the caller decides
+  }
+  return null;
+}
+
+// ── The marks line: completion, cost, errors ───────────────────────────
+//
+// Deliberately NOT a second opinion on the grade above. The grade judges the
+// runs with enough activity to judge (56 of 177 in the audit window); this
+// line counts every run that reached a terminal state, and reports the three
+// facts that need no judgement at all: how many completed, what each one
+// cost, how many ended in an error.
+//
+// Keeping those separate matters. An earlier cut of this line published
+// "100% finished the job" directly beneath "7 rough ones cost you $122.50",
+// because sessions.outcome and the quality verdicts measure different things.
+// Two numbers about "did it work" disagreeing on one screen costs more trust
+// than either one buys. The scope note below says which is which.
+//
+// Free on every plan: no judge key, no rubric, no API spend.
+async function _qLoadOutcomeTrend() {
+  var sec = document.getElementById('q-outcomes');
+  var cells = document.getElementById('q-oc-cells');
+  var note = document.getElementById('q-oc-note');
+  if (!sec || !cells) return;
+
+  var qs = new URLSearchParams();
+  qs.set('window', '7d');
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : '';
+  if (rt) qs.set('runtime', rt);
+
+  var data = await _qFetchStore(
+    '/api/outcomes/trend?' + qs.toString(),
+    function(d) { return d.store_available === false; }
+  );
+
+  // Unreachable store (the hosted dashboard has no local DuckDB until the
+  // snapshot slice is served) — stay hidden. The tab already says once,
+  // above, that it reads local run history, and a row of dashes would read
+  // as zero rather than as unknown.
+  if (!data || data.store_available === false) { sec.setAttribute('hidden', ''); return; }
+
+  var cur = data.current || {};
+  var delta = data.delta || {};
+  if (!cur.finished) { sec.setAttribute('hidden', ''); return; }
+  sec.removeAttribute('hidden');
+
+  function cell(value, label, deltaHtml) {
+    return '<div class="q-oc">' +
+      '<span class="q-oc-n">' + escHtml(value) + '</span>' +
+      '<span class="q-oc-l">' + escHtml(label) + '</span>' +
+      (deltaHtml || '') + '</div>';
+  }
+  // A delta is only drawn when both periods cleared the comparability bar.
+  // Below it the counts still show; the comparison does not, because one
+  // busy week over one thin week is not a direction.
+  function deltaSpan(text, favourable) {
+    if (!data.comparable || text == null) return '';
+    var cls = favourable === null ? '' : (favourable ? ' up' : ' down');
+    return '<span class="q-oc-d' + cls + '">' + escHtml(text) + '</span>';
+  }
+  function vsWeek(n, sign) {
+    if (n === 0) return t('quality.oc_flat', null, 'same as the week before');
+    return (sign && n > 0 ? '+' : '') + n + ' ' +
+           t('quality.oc_vs_week', null, 'vs the week before');
+  }
+
+  var html = cell(
+    String(cur.finished),
+    t('quality.oc_completed', null, 'tasks completed'),
+    deltaSpan(vsWeek(delta.finished, true), null)
+  );
+
+  // Cost cell only when we actually know the cost. A runtime with no pricing
+  // table sums to $0, and "$0.00 per task" reads as free.
+  if (cur.cost_per_finished != null) {
+    var cd = delta.cost_per_finished;
+    html += cell(
+      _qMoney(cur.cost_per_finished),
+      t('quality.oc_cost', null, 'per completed task'),
+      deltaSpan(
+        cd == null || Math.abs(cd) < 0.005
+          ? t('quality.oc_cost_flat', null, 'about the same')
+          : (cd < 0 ? '−' : '+') + _qMoney(Math.abs(cd)) + ' ' +
+            t('quality.oc_vs_week', null, 'vs the week before'),
+        cd == null ? null : cd < 0
+      )
+    );
+  }
+
+  // Everything that ended badly, not just the "failed" label: an agent stuck
+  // in a loop or on a tool call that never returned burned the budget too.
+  function bad(p) {
+    return (p.failed || 0) + (p.cognitive_loop || 0) + (p.tool_call_stuck || 0);
+  }
+  var errs = bad(cur);
+  var errDelta = errs - bad(data.previous || {});
+  html += cell(
+    String(errs),
+    t('quality.oc_errored', null, 'ended in an error'),
+    deltaSpan(vsWeek(errDelta, true), errDelta === 0 ? null : errDelta < 0)
+  );
+  cells.innerHTML = html;
+
+  if (note) {
+    // Always present. This sentence is what keeps the line from reading as a
+    // contradiction of the grade above it.
+    var scope = t(
+      'quality.oc_scope', null,
+      'Counted from every run that finished, including the ones with too ' +
+      'little activity to grade.'
+    );
+    if (!data.comparable) {
+      scope += ' ' + t(
+        'quality.oc_not_comparable', { n: data.min_finished || 3 },
+        'Not enough finished tasks yet to compare weeks. Both need at least {n}.'
+      );
+    } else if (data.direction === 'regressing') {
+      scope += ' ' + t(
+        'quality.oc_regressing', null,
+        'More of them ended in an error than last week.'
+      );
+    }
+    note.textContent = scope;
+  }
+}
+
+// ── Spot-check ────────────────────────────────────────────────────────
+//
+// Since issue #1615 the daemon has picked a few runs at random every night
+// and written them to a review queue, and tracked how often the operator
+// agreed. It tracked zero for months: the endpoints shipped, the sampler
+// ran, and no screen ever rendered them, so nobody could answer. This is
+// the smallest surface that makes that work reachable.
+//
+// Loaded on the Quality tab only, unchained from the grade fetch.
+async function _qLoadSpotCheck() {
+  var sec = document.getElementById('q-spot');
+  var list = document.getElementById('q-spot-list');
+  var score = document.getElementById('q-spot-score');
+  if (!sec || !list) return;
+
+  var acc = null;
+  var queue = await _qFetchStore(
+    '/api/review/queue?limit=6',
+    function(d) { return d.store_available === false; }
+  );
+
+  // An unreadable store is not an empty queue. Saying "nothing waiting" to a
+  // hosted user who simply has no local DuckDB would be a wrong answer
+  // dressed as good news, so the panel stays hidden instead.
+  if (!queue || queue.store_available === false) {
+    sec.setAttribute('hidden', '');
+    return;
+  }
+  sec.removeAttribute('hidden');
+
+  try {
+    var a = await fetch('/api/review/accuracy?window=30');
+    if (a.ok) acc = await a.json();
+  } catch (e) { acc = null; }
+
+  if (score) {
+    var g = (acc && acc.global) || {};
+    var judged = (g.correct || 0) + (g.wrong || 0) + (g.borderline || 0);
+    score.innerHTML = judged
+      ? t('quality.spot_score', { right: g.correct || 0, n: judged },
+          'You said the agent was right on <b>{right} of {n}</b> runs you checked.')
+      : '';
+  }
+
+  var rows = (queue.rows || []).filter(function(x) { return x && x.session_id; });
+  if (!rows.length) {
+    list.innerHTML =
+      '<li class="q-spot-empty">' +
+      escHtml(t('quality.spot_empty', null,
+                'Nothing waiting. A few runs are picked each night.')) +
+      '<button type="button" onclick="qSampleNow(this)">' +
+      escHtml(t('quality.spot_sample_now', null, 'Pick some now')) +
+      '</button></li>';
+    return;
+  }
+
+  var VERDICTS = [
+    ['reviewed_correct',    t('quality.spot_right', null, 'Right'),    'right'],
+    ['reviewed_wrong',      t('quality.spot_wrong', null, 'Wrong'),    'wrong'],
+    ['reviewed_borderline', t('quality.spot_unsure', null, 'Not sure'), '']
+  ];
+  var html = '';
+  rows.forEach(function(row) {
+    var sum = row.session_summary || {};
+    var title = sum.title || row.session_id;
+    var when = row.sampled_at ? String(row.sampled_at).slice(0, 10) : '';
+    var cost = (sum.cost_usd != null) ? ' · ' + _qMoney(sum.cost_usd) : '';
+    var sid = String(row.session_id);
+    html += '<li data-sid="' + escHtml(sid) + '">' +
+      '<div>' +
+        '<div class="q-spot-when">' + escHtml(when + cost) + '</div>' +
+        '<div class="q-spot-title" title="' + escHtml(title) + '">' +
+          escHtml(title) + '</div>' +
+      '</div>';
+    if (row.status && row.status !== 'pending') {
+      var done = VERDICTS.filter(function(v) { return v[0] === row.status; })[0];
+      html += '<span class="q-spot-verdict ' + (done ? done[2] : '') + '">' +
+              escHtml(done ? done[1] : row.status) + '</span>';
+    } else {
+      html += '<div class="q-spot-actions">';
+      VERDICTS.forEach(function(v) {
+        html += '<button type="button" onclick="qReview(this, ' +
+                JSON.stringify(sid).replace(/"/g, '&quot;') + ', ' +
+                JSON.stringify(v[0]).replace(/"/g, '&quot;') + ')">' +
+                escHtml(v[1]) + '</button>';
+      });
+      html += '</div>';
+    }
+    html += '</li>';
+  });
+  list.innerHTML = html;
+}
+
+// Record one verdict. Replaces the row's buttons in place rather than
+// re-rendering the list, so the rows a person is working through don't
+// reshuffle under the cursor.
+async function qReview(btn, sessionId, status) {
+  var li = btn && btn.closest ? btn.closest('li') : null;
+  var actions = li ? li.querySelector('.q-spot-actions') : null;
+  if (actions) actions.innerHTML =
+    '<span class="q-spot-verdict">' +
+    escHtml(t('quality.spot_saving', null, 'Saving…')) + '</span>';
+  var ok = false;
+  try {
+    var r = await fetch('/api/review/' + encodeURIComponent(sessionId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: status })
+    });
+    ok = r.ok;
+  } catch (e) { ok = false; }
+  if (!ok) {
+    // Say what happened and leave the row usable, rather than a dead spinner.
+    if (actions) actions.innerHTML =
+      '<span class="q-spot-verdict wrong">' +
+      escHtml(t('quality.spot_save_failed', null, "Didn't save. Try again.")) +
+      '</span>';
+    return;
+  }
+  _qLoadSpotCheck();
+}
+
+// Manual trigger for the nightly picker, so a new install can see the
+// workflow without waiting until midnight.
+async function qSampleNow(btn) {
+  if (btn) btn.disabled = true;
+  try {
+    await fetch('/api/review/sample', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+  } catch (e) {}
+  _qLoadSpotCheck();
+}
+
+// Money the way a person reads it: cents below a dollar, two decimals above.
+function _qMoney(v) {
+  var n = Number(v) || 0;
+  if (n > 0 && n < 0.01) return '<1¢';
+  if (n < 1) return Math.round(n * 100) + '¢';
+  return '$' + n.toFixed(2);
+}
+
+// Copy the export endpoint. Absolute, so pasting it into a collector config
+// on another machine works without the reader reconstructing the host.
+function qCopyExportUrl(btn) {
+  var el = document.getElementById('q-export-url');
+  if (!el) return;
+  var url = window.location.origin + el.textContent.trim();
+  var done = function() {
+    if (!btn) return;
+    var was = btn.textContent;
+    btn.textContent = t('quality.export_copied', null, 'Copied');
+    setTimeout(function() { btn.textContent = was; }, 1600);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done, function() {});
+  }
+}
+
+function _qRenderCard(data) {
+  var gradeEl = document.getElementById('q-grade');
+  var headEl  = document.getElementById('q-headline');
+  var subEl   = document.getElementById('q-subline');
+  var weekEl  = document.getElementById('q-week');
+  if (gradeEl) {
+    var g = String(data.grade || '—');
+    gradeEl.textContent = g;
+    gradeEl.setAttribute('data-grade', g === '—' ? '—' : g.charAt(0));
+  }
+  if (headEl) headEl.textContent = String(data.headline || '');
+  if (subEl) {
+    // Render subline with vs_prior arrow if present. Keep it a single sentence.
+    var sub = String(data.subline || '');
+    if (data.vs_prior === 'up') {
+      sub += ' <span class="up">↑ better than last week.</span>';
+    } else if (data.vs_prior === 'down') {
+      sub += ' <span class="down">↓ down from last week.</span>';
+    }
+    subEl.innerHTML = sub;
+  }
+  if (weekEl) {
+    var dots = (data.week || []);
+    if (!dots.length) { weekEl.innerHTML = ''; return; }
+    var html = '<div class="dots">';
+    dots.forEach(function(d, i) {
+      var isToday = (i === dots.length - 1);
+      var g = d.grade || '—';
+      html += '<div class="day' + (isToday ? ' today' : '') + '" data-grade="' + escHtml(g.charAt(0)) + '"' +
+              ' title="' + escHtml(d.date) + ' · ' + escHtml(String(d.runs || 0)) + ' run(s)">' +
+              '<span class="g">' + escHtml(g) + '</span>' +
+              '<span>' + escHtml(d.label) + '</span></div>';
+    });
+    html += '</div>';
+    weekEl.innerHTML = html;
+  }
+}
+
+function _qRenderPatterns(data) {
+  var el = document.getElementById('q-patterns');
+  if (!el) return;
+  var rows = (data.patterns || []);
+  if (!rows.length) {
+    el.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' +
+      t('quality.patterns_empty', null, 'Nothing to complain about here.') +
+      '</li>';
+    return;
+  }
+  var html = '';
+  rows.forEach(function(p) {
+    var isCaught = (String(p.cost_display || '').toLowerCase() === 'caught');
+    html += '<li>';
+    html += '<div class="count">' + escHtml(String(p.count || 0)) + '</div>';
+    html += '<div class="what">' + escHtml(p.label || '') + '</div>';
+    html += '<div class="cost' + (isCaught ? ' q-caught' : '') + '">' +
+            escHtml(p.cost_display || '$0.00') + '</div>';
+    html += '</li>';
+  });
+  el.innerHTML = html;
+}
+
+function _qRenderRoughRuns(data) {
+  var el = document.getElementById('q-runs');
+  var titleEl = document.getElementById('q-rough-title');
+  if (!el) return;
+  var runs = (data.rough_runs || []);
+  if (titleEl) {
+    titleEl.textContent = runs.length
+      ? (t('quality.rough_title_prefix', null, 'The ') + runs.length + ' ' +
+         (runs.length === 1
+           ? t('quality.rough_run_singular', null, 'rough run')
+           : t('quality.rough_run_plural', null, 'rough runs')))
+      : t('quality.rough_title_empty', null, 'No rough runs this week');
+  }
+  if (!runs.length) {
+    el.innerHTML = '<li class="q-empty">' +
+      t('quality.rough_empty', null, 'Every run finished cleanly. Nice.') +
+      '</li>';
+    return;
+  }
+  var html = '';
+  runs.forEach(function(r, i) {
+    var sid = String(r.session_id || '');
+    var when = _qFmtWhen(r.when);
+    var bid = 'q-b-' + i;
+    var eid = 'q-e-' + i;
+    // r.runtime comes from the session's own recorded runtime. The old field
+    // (agent_type) was stamped from a loop variable and read "openclaw" for
+    // every runtime — see the 2026-08-15 audit.
+    var rt = String(r.runtime || '');
+    html += '<li>';
+    html += '<div class="when">' + escHtml(when) + (rt ? ' · ' + escHtml(_qRuntimeLabel(rt)) : '') + '</div>';
+    html += '<div class="task">' + escHtml(r.title || sid || 'Untitled run') + '</div>';
+    html += '<div class="story">' + escHtml(r.story || '') + '</div>';
+    html += '<div class="row-actions">';
+    html += '<button class="prevent" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\', \'' + escHtml(String(r.story || '')).replace(/\'/g, "\\'") + '\')">' +
+            t('quality.prevent_this', null, 'Prevent this →') + '</button>';
+    if ((r.verdicts || []).length) {
+      html += '<button class="q-evidence-toggle" onclick="qToggleEvidence(\'' + eid + '\')">' +
+              t('quality.show_evidence', null, 'Why we flagged it') + '</button>';
+    }
+    html += '<span class="cost-tag">' + escHtml(r.cost_display || '$0.00') + '</span>';
+    html += '</div>';
+    html += '<div id="' + eid + '" class="q-evidence">' + _qEvidenceHtml(r) + '</div>';
+    html += '<div id="' + bid + '" class="q-builder"></div>';
+    html += '</li>';
+  });
+  el.innerHTML = html;
+}
+
+// Human-readable runtime name. Falls back to the raw id so a runtime we
+// haven't named still reads as itself rather than as something else.
+var _Q_RUNTIME_NAMES = {
+  claude_code: 'Claude Code', openclaw: 'OpenClaw', codex: 'Codex',
+  cursor: 'Cursor', aider: 'Aider', goose: 'Goose', opencode: 'opencode',
+  qwen_code: 'Qwen Code', copilot: 'Copilot', antigravity: 'Antigravity',
+  n8n: 'n8n', hermes: 'Hermes', picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
+  nemoclaw: 'NemoClaw', grok: 'Grok Build', grok_bot: 'Grok Bot', pi: 'Pi', deepagents: 'DeepAgents',
+  qm: 'QM', deepseek_harness: 'DeepSeek Harness', exo: 'Exo',
+  kimi: 'Kimi CLI',
+  devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
+  openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
+};
+function _qRuntimeLabel(id) {
+  return _Q_RUNTIME_NAMES[id] || id;
+}
+
+// The evidence panel. This is the product: a verdict the user cannot inspect
+// is a verdict they cannot trust, so every flagged run shows what fired, what
+// it measured, what it compared against, and the actual moments behind it.
+function _qEvidenceHtml(r) {
+  var vs = (r.verdicts || []);
+  if (!vs.length) return '';
+  var h = '';
+  vs.forEach(function(v) {
+    var ev = v.evidence || {};
+    var obs = ev.observed || {};
+    var th = ev.threshold || {};
+    var conf = Math.round((Number(v.confidence) || 0) * 100);
+    h += '<div class="q-ev-block">';
+    // Plain English, never the internal signal id. A person opening this has
+    // never heard of "no_forward_progress" and shouldn't have to.
+    h += '<div class="q-ev-head"><span class="q-ev-sig">' + escHtml(_qSignalLabel(ev.signal || v.verdict || '')) + '</span>' +
+         '<span class="q-ev-conf" title="' +
+         escHtml(t('quality.conf_help', null, 'Derived from how much evidence there is and how far past normal it sits.')) +
+         '">' + conf + '% ' + t('quality.confidence', null, 'confidence') + '</span></div>';
+
+    // What we measured vs what counts as normal HERE. Long values (file
+    // paths) get their own line so the counts stay scannable.
+    var obsBits = [], longBits = [];
+    Object.keys(obs).forEach(function(k) {
+      if (k === 'digest') return;
+      // Percentages must read as percentages. "failure rate 6" is a different
+      // claim from "failure rate 6%".
+      var val = String(obs[k]) + (k === 'pct' ? '%' : '');
+      var frag = '<span class="k">' + escHtml(_qPrettyKey(k)) + '</span> <b>' + escHtml(val) + '</b>';
+      (val.length > 34 ? longBits : obsBits).push(frag);
+    });
+    if (obsBits.length) h += '<div class="q-ev-obs">' + obsBits.join('<i>·</i>') + '</div>';
+    longBits.forEach(function(f) { h += '<div class="q-ev-obs long">' + f + '</div>'; });
+    if (th && (th.pct !== undefined || th.repeats !== undefined || th.edits !== undefined)) {
+      var lim, unit;
+      if (th.pct !== undefined) { lim = th.pct + '%'; unit = ''; }
+      else if (th.repeats !== undefined) { lim = th.repeats; unit = ' ' + t('quality.unit_repeats', null, 'identical calls'); }
+      else { lim = th.edits; unit = ' ' + t('quality.unit_edits', null, 'edits'); }
+      h += '<div class="q-ev-th">' +
+           t('quality.threshold_prefix', null, 'Flagged above') + ' <b>' + escHtml(String(lim) + unit) + '</b>' +
+           (th.source ? ' <span class="src">(' + escHtml(String(th.source)) + ')</span>' : '') +
+           '</div>';
+    }
+
+    // The actual moments. Without these the claim does not render at all.
+    var ex = (ev.exhibits || []);
+    if (ex.length) {
+      h += '<ul class="q-ev-list">';
+      ex.slice(0, 6).forEach(function(x) {
+        var when = x.ts ? _qFmtWhen(new Date(Number(x.ts) * 1000).toISOString()) : '';
+        // Some runtimes don't name the tool on a result event. Showing
+        // "(unnamed tool)" is noise where the error text is the real evidence,
+        // so only render a name when there is one.
+        var bits = [];
+        if (x.tool) bits.push('<span class="tl">' + escHtml(String(x.tool)) + '</span>');
+        if (x.file) bits.push('<span class="f">' + escHtml(String(x.file)) + '</span>');
+        if (x.error) bits.push('<span class="e">' + escHtml(String(x.error).replace(/\s+/g, ' ').slice(0, 120)) + '</span>');
+        else if (x.errored) bits.push('<span class="e">' + t('quality.failed', null, 'failed') + '</span>');
+        h += '<li><span class="ts">' + escHtml(when) + '</span>' + bits.join(' ') + '</li>';
+      });
+      h += '</ul>';
+      if (ev.exhibit_count > ex.slice(0, 6).length) {
+        h += '<div class="q-ev-more">' +
+             t('quality.and_more', null, 'and') + ' ' +
+             escHtml(String(ev.exhibit_count - Math.min(6, ex.length))) + ' ' +
+             t('quality.more_like_this', null, 'more like this') + '</div>';
+      }
+    }
+    h += '</div>';
+  });
+  return h;
+}
+
+// Internal signal id → the sentence a person reads. Kept beside _qPrettyKey
+// so any new signal has an obvious place to get its plain-English name.
+function _qSignalLabel(sig) {
+  var m = {
+    tool_error_rate:     t('quality.sig_tool_error_rate', null, 'Its tools kept failing'),
+    tool_thrash:         t('quality.sig_tool_thrash', null, 'Same call, over and over'),
+    no_forward_progress: t('quality.sig_no_progress', null, 'Edited without ever checking'),
+    hard_failure:        t('quality.sig_hard_failure', null, 'Ended on an error'),
+    tool_failures:       t('quality.sig_tool_error_rate', null, 'Its tools kept failing')
+  };
+  return m[sig] || String(sig || '').replace(/_/g, ' ');
+}
+
+function _qPrettyKey(k) {
+  var m = {
+    tool_results: 'tool calls', tool_errors: 'failed', pct: 'failure rate',
+    identical_calls: 'identical calls', failed: 'of them failed',
+    edits: 'edits', verifications_between: 'checks in between',
+    error_events: 'errors', failed_at_end: 'failed at the end',
+    tool: 'tool', file: 'file'
+  };
+  return m[k] || k.replace(/_/g, ' ');
+}
+
+function qToggleEvidence(eid) {
+  var el = document.getElementById(eid);
+  if (!el) return;
+  el.classList.toggle('open');
+}
+
+function _qFmtWhen(iso) {
+  if (!iso) return '—';
+  try {
+    var d = new Date(String(iso).replace(' ', 'T'));
+    if (isNaN(d.getTime())) return String(iso);
+    var now = new Date();
+    var days = Math.floor((now - d) / 86400000);
+    var hh = String(d.getHours()).padStart(2, '0');
+    var mm = String(d.getMinutes()).padStart(2, '0');
+    if (days <= 0) return 'Today ' + hh + ':' + mm;
+    if (days === 1) return 'Yesterday ' + hh + ':' + mm;
+    if (days < 7) return ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()] + ' ' + hh + ':' + mm;
+    return d.toLocaleDateString();
+  } catch (e) { return String(iso); }
+}
+
+function _qRenderStatusLine(data) {
+  var el = document.getElementById('q-status-line');
+  if (!el) return;
+  var n = Number(data.graded_runs || 0);
+  var total = Number(data.total_runs || 0);
+  var un = Number(data.unmeasured_runs || 0);
+  if (n === 0 && total === 0) {
+    el.textContent = t('quality.status_no_runs', null, 'No runs yet this week');
+    return;
+  }
+  // Say what was graded AND what was left out. A grade that quietly covers
+  // half the window reads as a grade over all of it.
+  var parts = [n + ' ' + (n === 1
+    ? t('quality.run_singular', null, 'run graded')
+    : t('quality.run_plural', null, 'runs graded'))];
+  if (un > 0) {
+    parts.push(un + ' ' + t('quality.too_thin', null, 'with too little activity to judge'));
+  }
+  if (data.benign_filter && data.benign_filter.label) {
+    parts.push(String(data.benign_filter.label));
+  }
+  el.textContent = t('quality.status_prefix_off', null, 'Grading from signals · ') +
+                   parts.join(' · ');
+}
+
+function _qRenderFooter(data) {
+  var el = document.getElementById('q-footer');
+  if (!el) return;
+  // Hide the "add a judge key" nudge when a key is already set.
+  if (data && data.judge_key_set) el.setAttribute('hidden', '');
+  else el.removeAttribute('hidden');
+}
+
+// Open (or toggle) the inline eval builder for a rough run. Pre-fills
+// the "fail when…" field from the story so users see intent immediately;
+// they edit and save. Persistence lands in a follow-up PR — for the first
+// cut the Save button files an issue-style check locally and toasts.
+function qOpenBuilder(bid, sid, story) {
+  var el = document.getElementById(bid);
+  if (!el) return;
+  if (el.classList.contains('open')) {
+    el.classList.remove('open');
+    el.innerHTML = '';
+    return;
+  }
+  var pattern = _qGuessPattern(story || '');
+  var name = _qGuessCheckName(story || '');
+  el.innerHTML =
+    '<p class="b-eyebrow">' + t('quality.builder_eyebrow', null, 'Watch for this pattern') + '</p>' +
+    '<p class="b-title">' + t('quality.builder_title', null, "Turn this rough run into a check we'll fail-fast next time.") + '</p>' +
+    '<div>' +
+      '<label>' + t('quality.builder_when', null, 'Fail the run when…') + '</label>' +
+      '<textarea id="' + bid + '-when">' + escHtml(pattern) + '</textarea>' +
+    '</div>' +
+    '<div style="margin-top:10px;">' +
+      '<label>' + t('quality.builder_name', null, 'Name this check') + '</label>' +
+      '<textarea id="' + bid + '-name" style="min-height:34px;">' + escHtml(name) + '</textarea>' +
+    '</div>' +
+    '<div class="b-example">' + t('quality.builder_example_lead', null, 'Based on this run: ') + escHtml(story || '') + '</div>' +
+    '<div class="b-actions">' +
+      '<button class="btn" onclick="qSaveCheck(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\', \'' + escHtml(sid).replace(/\'/g, "\\'") + '\')">' +
+        t('quality.builder_save', null, 'Save check') + '</button>' +
+      '<button class="btn ghost" onclick="qOpenBuilder(\'' + escHtml(bid).replace(/\'/g, "\\'") + '\')">' +
+        t('common.cancel', null, 'Cancel') + '</button>' +
+    '</div>';
+  el.classList.add('open');
+}
+
+function _qGuessPattern(story) {
+  var s = String(story || '').toLowerCase();
+  if (s.indexOf('stuck') !== -1 || s.indexOf('retry') !== -1) {
+    return 'the same tool errors more than 3 times without progress toward the task';
+  }
+  if (s.indexOf('loop') !== -1 || s.indexOf('edit') !== -1) {
+    return 'the agent edits the same file more than 5 times';
+  }
+  if (s.indexOf('budget') !== -1 || s.indexOf('truncat') !== -1) {
+    return 'the run gets within 5% of the token budget and truncates its answer';
+  }
+  if (s.indexOf('gave up') !== -1 || s.indexOf('escalat') !== -1) {
+    return 'the agent ends the task without a completed answer';
+  }
+  return 'a session ends without a clean answer';
+}
+
+function _qGuessCheckName(story) {
+  var s = String(story || '').toLowerCase();
+  if (s.indexOf('stuck') !== -1 || s.indexOf('retry') !== -1) return 'Tool loop guard';
+  if (s.indexOf('loop') !== -1 || s.indexOf('edit') !== -1)   return 'Edit loop guard';
+  if (s.indexOf('budget') !== -1 || s.indexOf('truncat') !== -1) return 'Budget breach guard';
+  if (s.indexOf('gave up') !== -1) return 'Gave-up guard';
+  return 'Rough-run guard';
+}
+
+async function qSaveCheck(bid, sid) {
+  // First cut: POST to /api/quality/checks (deferred — for now, toast a
+  // confirmation so the interaction feels real end-to-end). The follow-up
+  // PR wires this to a real quality_checks DuckDB table + runner.
+  var whenEl = document.getElementById(bid + '-when');
+  var nameEl = document.getElementById(bid + '-name');
+  var body = {
+    session_id: sid,
+    fail_when:  whenEl ? whenEl.value.trim() : '',
+    name:       nameEl ? nameEl.value.trim() : ''
+  };
+  try {
+    var r = await fetch('/api/quality/checks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    var out = await r.json().catch(function() { return null; });
+    var msg = (out && out.ok)
+      ? t('quality.check_saved', null, "Saved. We'll fail-fast this pattern next time.")
+      : (out && out.error) || t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release.");
+    _qToast(msg);
+  } catch (e) {
+    _qToast(t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release."));
+  }
+  var el = document.getElementById(bid);
+  if (el) { el.classList.remove('open'); el.innerHTML = ''; }
+}
+
+function _qToast(msg) {
+  var t_ = document.createElement('div');
+  t_.textContent = msg;
+  t_.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
+    'background:#1a1611;color:#f0e9dc;padding:12px 20px;border-radius:6px;' +
+    'font-size:13px;font-family:-apple-system,system-ui,sans-serif;' +
+    'border:1px solid rgba(211,53,40,0.4);box-shadow:0 8px 24px rgba(0,0,0,0.4);' +
+    'z-index:9999;';
+  document.body.appendChild(t_);
+  setTimeout(function() { t_.style.opacity = '0'; t_.style.transition = 'opacity 400ms'; }, 3200);
+  setTimeout(function() { t_.remove(); }, 3800);
+}
+
+function _evalsLockedHtml() {
+  return '<div style="font-size:12px;color:var(--text-muted);">' +
+    t("evals.locked", null, "Session scoring is a Pro feature.") +
+    ' <a href="/upgrade?source=evals-tab" style="color:#8b5cf6;font-weight:600;text-decoration:none;">' +
+    t("evaluators.unlock", null, "Unlock with Pro") + ' &rarr;</a></div>';
+}
+
+// The provider catalogue fetched from /api/evals/key — cached per page load so
+// the provider-change handler can fill in default models without a refetch.
+var _evalsKeyCfg = null;
+
+async function loadEvalsJudgeCard() {
+  var el = document.getElementById('evals-judge-body');
+  if (!el) return;
+  // Hosted dashboard: the judge (and its API key) lives on the NODE, never
+  // here. /api/evaluators on cloud reflects the empty container, so the card
+  // used to read "API key: not set" with a live-looking key form that saved
+  // to the container's ephemeral disk instead of the node (founder report
+  // 2026-08-01, the "fake screen"). Render the node's REAL status from the
+  // encrypted snapshot and never render the key form on cloud.
+  if (window.CLOUD_MODE) {
+    var snapJudge = null;
+    try {
+      var _sp = (typeof window.__cmSnap === 'function') ? await window.__cmSnap() : null;
+      snapJudge = _sp && _sp.evals && _sp.evals.judge;
+    } catch (e) {}
+    if (!snapJudge) {
+      el.innerHTML = '<span style="color:var(--text-muted);">' +
+        t("evals.judge_unavailable", null, "Judge status is unavailable here. Scores are computed on the machine your agent runs on.") + '</span>';
+      return;
+    }
+    var snapRejected = snapJudge.key_present && snapJudge.last_error === 'auth';
+    var chtml = '';
+    if (!snapJudge.enabled) {
+      chtml += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">' +
+        t("evals.judge_disabled", null, "Scoring is switched off (CLAWMETRY_EVALS_ENABLED=0).") + '</div>';
+    } else if (snapRejected) {
+      chtml += '<div style="color:#ef4444;font-weight:600;margin-bottom:6px;">● ' +
+        t("evals.judge_key_rejected_node", null, "The judge key saved on your machine was rejected by the provider. Replace it there to resume scoring.") + '</div>';
+    } else if (snapJudge.key_present) {
+      chtml += '<div style="color:#22c55e;font-weight:600;margin-bottom:6px;">● ' +
+        t("evals.judge_on", null, "Scoring is ON. Finished sessions are scored automatically in the background.") + '</div>';
+    } else {
+      chtml += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">● ' +
+        t("evals.judge_needs_key_node", null, "No judge API key on your machine yet, so scoring is off.") + '</div>';
+    }
+    chtml += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;font-size:12px;">';
+    chtml += '<span><span style="color:var(--text-muted);">' + t("evals.judge_model", null, "Judge model") + ':</span> <code>' + escHtml(snapJudge.model || '') + '</code></span>';
+    chtml += '<span><span style="color:var(--text-muted);">' + t("evals.judge_key", null, "API key") + ':</span> ' +
+      (snapRejected ? '<span style="color:#ef4444;font-weight:600;">' + t("evals.key_rejected", null, "rejected") + '</span>'
+        : snapJudge.key_present ? '<span style="color:#22c55e;font-weight:600;">' + t("evals.key_set", null, "set") + '</span>'
+        : '<span style="color:#f59e0b;font-weight:600;">' + t("evals.key_missing", null, "not set") + '</span>') + '</span>';
+    chtml += '</div>';
+    chtml += '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);line-height:1.6;">' +
+      t("evals.key_on_node", null, "The judge API key stays on the machine your agent runs on and is never synced to the cloud. To add or change it, open the dashboard on that machine (Evals tab) or set ANTHROPIC_API_KEY / OPENAI_API_KEY in the daemon environment.") +
+      '</div>';
+    el.innerHTML = chtml;
+    return;
+  }
+  var meta = await fetch('/api/evaluators').then(function(r){return r.json();}).catch(function(){return null;});
+  var judge = meta && meta.judge;
+  if (!judge) {
+    el.innerHTML = '<span style="color:var(--text-muted);">' +
+      t("evals.judge_unavailable", null, "Judge status is unavailable here. Scores are computed on the machine your agent runs on.") + '</span>';
+    return;
+  }
+  var cfgResp = await fetch('/api/evals/key').catch(function(){return null;});
+  var cfg = (cfgResp && cfgResp.ok) ? await cfgResp.json().catch(function(){return null;}) : null;
+  _evalsKeyCfg = cfg;
+  var keyRejected = judge.key_present && judge.last_error === 'auth';
+  var html = '';
+  if (!judge.enabled) {
+    html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">' +
+      t("evals.judge_disabled", null, "Scoring is switched off (CLAWMETRY_EVALS_ENABLED=0).") + '</div>';
+  } else if (keyRejected) {
+    html += '<div style="color:#ef4444;font-weight:600;margin-bottom:6px;">● ' +
+      t("evals.judge_key_rejected", null, "Your judge key was rejected by the provider. Re-add a valid key below.") + '</div>';
+  } else if (judge.key_present) {
+    html += '<div style="color:#22c55e;font-weight:600;margin-bottom:6px;">● ' +
+      t("evals.judge_on", null, "Scoring is ON. Finished sessions are scored automatically in the background.") + '</div>';
+  } else {
+    html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">● ' +
+      t("evals.judge_needs_key", null, "Add an API key below to turn scoring on. Any provider works, not just Claude.") + '</div>';
+  }
+  html += '<div style="font-size:12px;color:var(--text-muted);line-height:1.6;">' +
+    t("evals.judge_how", null, "How it works: after a session finishes, a small model reads a redacted copy of the transcript and scores it 0 to 5 against your rubric. It runs on your machine, with your own API key, capped at 100 scores per hour. Your transcripts never go to ClawMetry servers.") +
+    '</div>';
+  var provLabel = '';
+  if (cfg && cfg.providers && cfg.selection && cfg.providers[cfg.selection.provider]) {
+    provLabel = cfg.providers[cfg.selection.provider].label;
+  }
+  html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:12px;">';
+  html += '<span><span style="color:var(--text-muted);">' + t("evals.judge_model", null, "Judge model") + ':</span> <code>' + escHtml(judge.model || '') + '</code>' +
+    (provLabel ? ' <span style="color:var(--text-muted);">' + t("evals.via", null, "via") + ' ' + escHtml(provLabel) + '</span>' : '') + '</span>';
+  html += '<span><span style="color:var(--text-muted);">' + t("evals.judge_key", null, "API key") + ':</span> ' +
+    (keyRejected ? '<span style="color:#ef4444;font-weight:600;">' + t("evals.key_rejected", null, "rejected") + '</span>'
+      : judge.key_present ? '<span style="color:#22c55e;font-weight:600;">' + t("evals.key_set", null, "set") + '</span>'
+      : '<span style="color:#f59e0b;font-weight:600;">' + t("evals.key_missing", null, "not set") + '</span>') + '</span>';
+  html += '</div>';
+  // The simple ask-for-a-key form: always shown when scoring cannot run, and
+  // reachable via a small "change" link when it can.
+  var showForm = judge.enabled && (!judge.key_present || keyRejected);
+  if (cfg && cfg.providers) {
+    if (showForm) {
+      html += _evalsKeyFormHtml(cfg);
+    } else if (judge.enabled) {
+      html += '<div style="margin-top:8px;font-size:11px;"><a href="#" onclick="var f=document.getElementById(\'evals-key-form\');if(f)f.style.display=f.style.display===\'none\'?\'\':\'none\';return false;" style="color:var(--text-secondary);font-weight:600;text-decoration:none;">' +
+        t("evals.change_judge", null, "Change judge model or key") + '</a></div>';
+      html += '<div id="evals-key-form-wrap" style="display:contents;">' + _evalsKeyFormHtml(cfg, true) + '</div>';
+    }
+  }
+  el.innerHTML = html;
+}
+
+// Build the inline provider/model/key form. hidden=true renders it collapsed
+// (behind the "change" link) for boxes where scoring is already healthy.
+function _evalsKeyFormHtml(cfg, hidden) {
+  var sel = (cfg.selection && cfg.selection.provider) || 'anthropic';
+  if (!cfg.providers[sel]) sel = Object.keys(cfg.providers)[0];
+  var html = '<div id="evals-key-form" style="' + (hidden ? 'display:none;' : '') +
+    'margin-top:12px;padding:12px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:10px;">';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">';
+  html += '<select id="evals-key-provider" onchange="_evalsKeyProviderChanged()" style="font-size:12px;padding:7px 8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+  Object.keys(cfg.providers).forEach(function(pid) {
+    html += '<option value="' + escHtml(pid) + '"' + (pid === sel ? ' selected' : '') + '>' +
+      escHtml(cfg.providers[pid].label) + (cfg.present && cfg.present[pid] ? ' ✓' : '') + '</option>';
+  });
+  html += '</select>';
+  var model = (cfg.selection && cfg.selection.provider === sel && cfg.selection.model) || cfg.providers[sel].default_model;
+  html += '<input id="evals-key-model" type="text" value="' + escHtml(model) + '" title="' +
+    t("evals.model_title", null, "Judge model id — any model this provider serves") + '" style="width:190px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+  html += '<input id="evals-key-input" type="password" autocomplete="off" placeholder="' + escHtml(cfg.providers[sel].key_hint) + '" style="flex:1;min-width:180px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+  html += '<input id="evals-key-baseurl" type="text" placeholder="http://localhost:11434/v1" style="' +
+    (cfg.providers[sel].needs_base_url ? '' : 'display:none;') +
+    'width:210px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+  html += '<button id="evals-key-save" onclick="evalsSaveJudgeKey()" style="background:#22c55e;color:#0a0a0a;border:none;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">' +
+    t("evals.save_verify", null, "Save & verify") + '</button>';
+  html += '</div>';
+  html += '<div id="evals-key-status" style="font-size:11px;margin-top:8px;min-height:14px;color:var(--text-muted);">' +
+    t("evals.key_note", null, "Verified with one tiny test call before saving, then stored only on this machine (never synced).") + '</div>';
+  html += '</div>';
+  return html;
+}
+
+function _evalsKeyProviderChanged() {
+  var cfg = _evalsKeyCfg;
+  var sel = document.getElementById('evals-key-provider');
+  if (!cfg || !cfg.providers || !sel) return;
+  var info = cfg.providers[sel.value];
+  if (!info) return;
+  var modelEl = document.getElementById('evals-key-model');
+  if (modelEl) {
+    modelEl.value = (cfg.selection && cfg.selection.provider === sel.value && cfg.selection.model) || info.default_model;
+  }
+  var keyEl = document.getElementById('evals-key-input');
+  if (keyEl) keyEl.placeholder = info.key_hint;
+  var baseEl = document.getElementById('evals-key-baseurl');
+  if (baseEl) baseEl.style.display = info.needs_base_url ? '' : 'none';
+}
+
+async function evalsSaveJudgeKey() {
+  var btn = document.getElementById('evals-key-save');
+  var status = document.getElementById('evals-key-status');
+  var provider = (document.getElementById('evals-key-provider') || {}).value;
+  var model = ((document.getElementById('evals-key-model') || {}).value || '').trim();
+  var apiKey = ((document.getElementById('evals-key-input') || {}).value || '').trim();
+  var baseUrl = ((document.getElementById('evals-key-baseurl') || {}).value || '').trim();
+  if (!provider) return;
+  if (btn) { btn.disabled = true; btn.textContent = t("evals.verifying", null, "Verifying…"); }
+  if (status) { status.style.color = 'var(--text-muted)'; status.textContent = t("evals.verifying_note", null, "Making one tiny test call to check the key works…"); }
+  try {
+    var r = await fetch('/api/evals/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: provider, api_key: apiKey, model: model, base_url: baseUrl }),
+    });
+    var data = await r.json().catch(function(){return {};});
+    if (r.ok && data.ok) {
+      if (status) {
+        status.style.color = '#22c55e';
+        status.textContent = t("evals.key_verified", null, "Key verified and saved. Scoring starts within a minute.");
+      }
+      setTimeout(function(){ loadEvalsJudgeCard(); loadEvaluators(); }, 1200);
+    } else {
+      if (status) {
+        status.style.color = '#ef4444';
+        status.textContent = t("evals.key_failed", null, "Not saved:") + ' ' + (data.error || ('HTTP ' + r.status));
+      }
+    }
+  } catch (e) {
+    if (status) { status.style.color = '#ef4444'; status.textContent = t("evals.key_failed", null, "Not saved:") + ' ' + e; }
+  }
+  if (btn) { btn.disabled = false; btn.textContent = t("evals.save_verify", null, "Save & verify"); }
+}
+
+async function loadEvalsTabSummary() {
+  var avgEl = document.getElementById('evals-tab-avg');
+  var covEl = document.getElementById('evals-tab-coverage');
+  var pctEl = document.getElementById('evals-tab-percentiles');
+  var regEl = document.getElementById('evals-tab-regression');
+  if (!avgEl) return;
+  var r = await fetch('/api/evals/summary?window=24h').catch(function(){return null;});
+  if (r && r.status === 402) { if (covEl) covEl.innerHTML = _evalsLockedHtml(); return; }
+  var data = r ? await r.json().catch(function(){return null;}) : null;
+  if (!data || !data.scored) {
+    avgEl.textContent = '--';
+    if (covEl) covEl.textContent = t("evals.summary_empty", null, "No sessions scored in the last day.");
+    if (pctEl) pctEl.textContent = '';
+  } else {
+    avgEl.textContent = Number(data.avg_score).toFixed(2) + ' / 5';
+    avgEl.style.color = data.avg_score >= 4 ? '#22c55e' : (data.avg_score >= 3 ? '#f59e0b' : '#ef4444');
+    if (covEl) covEl.textContent = data.scored + ' ' + t("evals.of", null, "of") + ' ' + data.total + ' ' +
+      t("evals.sessions_scored", null, "recent sessions scored");
+    if (pctEl) pctEl.innerHTML = 'p50 <b>' + Number(data.p50).toFixed(2) + '</b><br>p10 <b>' + Number(data.p10).toFixed(2) + '</b>';
+  }
+  if (regEl) {
+    var rr = await fetch('/api/evals/regression-summary?window=7d').then(function(x){return x.status===402?null:x.json();}).catch(function(){return null;});
+    if (rr && rr.tested) {
+      regEl.textContent = t("evals.regression", null, "Regression replay, last 7 days") + ': ' +
+        rr.improved + ' ' + t("evals.improved", null, "improved") + ' · ' +
+        rr.regressed + ' ' + t("evals.regressed", null, "regressed") + ' · ' +
+        rr.same + ' ' + t("evals.same", null, "unchanged");
+    } else {
+      regEl.textContent = '';
+    }
+  }
+}
+
+// One small chip per structural-check verdict (#2862): green pass, red fail.
+// Free tier: these render even with no judge key, so the Evals tab shows the
+// zero-cost checks working out of the box instead of an empty table.
+// Fail-state labels: a red "✗ no tool errors" is a double negative a
+// first-timer misreads; say what actually happened instead.
+var _EVAL_CHIP_FAIL_LABELS = {
+  'no-tool-errors': 'tool errors',
+  'json-parseable': 'not valid JSON',
+  'required-tool-args': 'missing tool args',
+  'output-length-bounds': 'length out of bounds',
+};
+
+function _evalMetricChips(list) {
+  if (!list || !list.length) return '';
+  var out = '';
+  list.slice(0, 4).forEach(function(m) {
+    var slug = String(m.metric_slug || '');
+    var ok = (m.passed === true);
+    var bad = (m.passed === false);
+    var name = (bad && _EVAL_CHIP_FAIL_LABELS[slug]) || slug.replace(/-/g, ' ');
+    var color = ok ? '#22c55e' : (bad ? '#ef4444' : 'var(--text-muted)');
+    var bg = ok ? 'rgba(34,197,94,0.10)' : (bad ? 'rgba(239,68,68,0.10)' : 'var(--bg-primary)');
+    var mark = ok ? '✓' : (bad ? '✗' : '·');
+    out += '<span title="' + escHtml(m.reason || '') + '" style="display:inline-block;margin:1px 3px 1px 0;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:600;white-space:nowrap;color:' + color + ';background:' + bg + ';border:1px solid ' + color + '33;">' + mark + ' ' + escHtml(name) + '</span>';
+  });
+  return out;
+}
+
+async function loadEvalsRecent() {
+  var el = document.getElementById('evals-recent-body');
+  if (!el) return;
+  var r = await fetch('/api/evals/recent?limit=20').catch(function(){return null;});
+  if (r && r.status === 402) { el.innerHTML = _evalsLockedHtml(); return; }
+  var data = r ? await r.json().catch(function(){return null;}) : null;
+  var rows = (data && data.evals) || [];
+  // Per-metric verdicts (deterministic checks + optional DeepEval engine).
+  // Node-local data only: on the hosted dashboard the container has no
+  // metrics table, so skip the fetch and keep the existing honest states.
+  var chipsBySid = {};
+  if (!window.CLOUD_MODE) {
+    var mr = await fetch('/api/evals/metrics?limit=300').catch(function(){return null;});
+    var mdata = mr && mr.ok ? await mr.json().catch(function(){return null;}) : null;
+    ((mdata && mdata.metrics) || []).forEach(function(m) {
+      var k = String(m.session_id || '');
+      if (!k) return;
+      (chipsBySid[k] = chipsBySid[k] || []).push(m);
+    });
+  }
+  // No judge scores yet, but the free checks have verdicts: list those
+  // sessions anyway (score stays "--") so the table is never blank while
+  // real scoring is happening.
+  if (!rows.length) {
+    var seen = {};
+    Object.keys(chipsBySid).forEach(function(sid) {
+      if (rows.length >= 20 || seen[sid]) return;
+      seen[sid] = true;
+      var latest = 0;
+      chipsBySid[sid].forEach(function(m) { if (m.scored_at > latest) latest = m.scored_at; });
+      rows.push({ session_id: sid, eval_score: null, eval_reason: '',
+                  eval_scored_at: latest, agent_type: sid.indexOf(':') > 0 ? sid.split(':')[0] : '' });
+    });
+    rows.sort(function(a, b) { return (b.eval_scored_at || 0) - (a.eval_scored_at || 0); });
+  }
+  if (!rows.length) {
+    el.innerHTML = '<div style="color:var(--text-muted);">' +
+      t("evals.recent_empty", null, "No scored sessions yet. Once the judge has a key, finished sessions show up here with their score and the judge's one-line reason.") + '</div>';
+    return;
+  }
+  var html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html += '<tr style="text-align:left;color:var(--text-muted);">' +
+    '<th style="padding:6px 8px;">' + t("evals.col_session", null, "Session") + '</th>' +
+    '<th style="padding:6px 8px;">' + t("evals.col_score", null, "Score") + '</th>' +
+    '<th style="padding:6px 8px;">' + t("evals.col_checks", null, "Checks") + '</th>' +
+    '<th style="padding:6px 8px;">' + t("evals.col_reason", null, "Judge's reason") + '</th>' +
+    '<th style="padding:6px 8px;">' + t("evals.col_when", null, "When") + '</th>' +
+    '<th style="padding:6px 8px;"></th></tr>';
+  rows.forEach(function(row) {
+    var sid = String(row.session_id || '');
+    var label = row.title ? row.title : (sid.length > 14 ? sid.slice(0, 14) + '…' : sid);
+    var score = (row.eval_score == null) ? '--' : Number(row.eval_score).toFixed(1);
+    var sc = row.eval_score == null ? 'var(--text-muted)' :
+      (row.eval_score >= 4 ? '#22c55e' : (row.eval_score >= 3 ? '#f59e0b' : '#ef4444'));
+    // feat/evals-simplify: rows are clickable — open the drill-down drawer
+    // with judge reason + per-check breakdown + rubric. The Re-score button
+    // stopPropagation so it doesn't ALSO open the drawer.
+    var sidJs = escHtml(sid).replace(/'/g, "\\'");
+    html += '<tr onclick="openEvalSessionDrawer(\'' + sidJs + '\')" ' +
+      'style="border-top:1px solid var(--border-primary);cursor:pointer;" ' +
+      'onmouseover="this.style.background=\'var(--bg-primary)\'" ' +
+      'onmouseout="this.style.background=\'\'">';
+    html += '<td style="padding:6px 8px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(sid) + '">' +
+      (row.agent_type ? '<span style="color:var(--text-muted);">' + escHtml(row.agent_type) + '</span> ' : '') + escHtml(label) + '</td>';
+    html += '<td style="padding:6px 8px;font-weight:700;color:' + sc + ';">' + score + '</td>';
+    html += '<td style="padding:6px 8px;max-width:240px;">' + _evalMetricChips(chipsBySid[sid]) + '</td>';
+    html += '<td style="padding:6px 8px;color:var(--text-muted);max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(row.eval_reason || '') + '">' + escHtml(row.eval_reason || '') + '</td>';
+    html += '<td style="padding:6px 8px;color:var(--text-muted);white-space:nowrap;">' + (row.eval_scored_at ? timeAgo(row.eval_scored_at) : '') + '</td>';
+    html += '<td style="padding:6px 8px;"><button onclick="event.stopPropagation();evalsRescore(\'' + sidJs + '\', this)" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;">↻ ' +
+      t("evals.rescore", null, "Re-score") + '</button></td>';
+    html += '</tr>';
+  });
+  html += '</table></div>';
+  el.innerHTML = html;
+}
+
+async function evalsRescore(sid, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var r = await fetch('/api/evals/rescore/' + encodeURIComponent(sid), { method: 'POST' });
+    var data = await r.json().catch(function(){return {};});
+    if (r.ok && data.score != null) {
+      if (btn) btn.textContent = Number(data.score).toFixed(1);
+    } else {
+      if (btn) btn.textContent = data.skip_reason || data.error || t("evals.rescore_failed", null, "failed");
+    }
+  } catch (e) {
+    if (btn) btn.textContent = t("evals.rescore_failed", null, "failed");
+  }
+  setTimeout(function(){ loadEvalsRecent(); loadEvalsTabSummary(); }, 1500);
+}
+
+// feat/evals-simplify: per-session eval drill-down drawer.
+// Row click in the Recently Scored table opens a right-side panel with the
+// judge's FULL reason (not the truncated one-liner the table shows), every
+// deterministic check verdict + reason, the rubric text the judge used, and
+// a Re-score button that hits /api/evals/rescore/<sid> in place. Anchor
+// element is created on demand and appended to <body> so no template change
+// is required beyond the row's onclick handler.
+function closeEvalSessionDrawer() {
+  var d = document.getElementById('eval-session-drawer');
+  var s = document.getElementById('eval-session-drawer-scrim');
+  if (d) d.remove();
+  if (s) s.remove();
+  document.body.style.overflow = '';
+}
+
+async function openEvalSessionDrawer(sid) {
+  if (!sid) return;
+  closeEvalSessionDrawer();  // one at a time; a second row click replaces it
+  var scrim = document.createElement('div');
+  scrim.id = 'eval-session-drawer-scrim';
+  scrim.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9998;';
+  scrim.onclick = closeEvalSessionDrawer;
+  var drawer = document.createElement('div');
+  drawer.id = 'eval-session-drawer';
+  drawer.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:min(680px,100vw);' +
+    'background:var(--bg-secondary);border-left:2px solid var(--border-primary);' +
+    'z-index:9999;overflow-y:auto;box-shadow:-4px 0 24px rgba(0,0,0,0.5);' +
+    'font-size:13px;color:var(--text-primary);';
+  drawer.innerHTML = '<div style="padding:20px;">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+    '<div style="font-size:15px;font-weight:700;">🔬 ' + t("evals.drawer_title", null, "Eval detail") + '</div>' +
+    '<button onclick="closeEvalSessionDrawer()" style="background:transparent;border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:4px 10px;color:var(--text-secondary);cursor:pointer;font-size:12px;">✕</button>' +
+    '</div>' +
+    '<div id="eval-session-drawer-body" style="color:var(--text-muted);">' +
+    t("app.loading", null, "Loading...") + '</div></div>';
+  document.body.appendChild(scrim);
+  document.body.appendChild(drawer);
+  document.body.style.overflow = 'hidden';
+
+  var body = document.getElementById('eval-session-drawer-body');
+  var r = await fetch('/api/evals/session/' + encodeURIComponent(sid))
+    .catch(function(){return null;});
+  if (!r || !r.ok) {
+    if (body) body.innerHTML = '<div style="color:#ef4444;">' +
+      t("evals.drawer_load_failed", null, "Could not load session detail.") + '</div>';
+    return;
+  }
+  var data = await r.json().catch(function(){return null;});
+  if (!data || !data.session) {
+    if (body) body.innerHTML = '<div style="color:#ef4444;">' +
+      t("evals.drawer_load_failed", null, "Could not load session detail.") + '</div>';
+    return;
+  }
+  var s = data.session;
+  var metrics = data.metrics || [];
+  var sidJs = escHtml(sid).replace(/'/g, "\\'");
+
+  var scoreColor = s.eval_score == null ? 'var(--text-muted)' :
+    (s.eval_score >= 4 ? '#22c55e' : (s.eval_score >= 3 ? '#f59e0b' : '#ef4444'));
+  var scoreText = s.eval_score == null ? '--' : Number(s.eval_score).toFixed(1);
+
+  var html = '';
+  // Header block: session label + score + Re-score / open-transcript actions.
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">';
+  html += '<div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' +
+    escHtml(s.agent_type || '') + '</div>';
+  html += '<div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-top:2px;">' +
+    escHtml(s.title || sid) + '</div>';
+  html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;font-family:monospace;">' + escHtml(sid) + '</div>';
+  html += '</div>';
+  html += '<div style="text-align:right;">';
+  html += '<div style="font-size:28px;font-weight:800;color:' + scoreColor + ';line-height:1;">' + scoreText + '</div>';
+  html += '<div style="font-size:10px;color:var(--text-muted);margin-top:4px;">' +
+    t("evals.drawer_score_out_of", null, "out of 5") + '</div>';
+  html += '</div></div>';
+  html += '<div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">';
+  html += '<button onclick="evalsRescoreFromDrawer(\'' + sidJs + '\', this)" ' +
+    'style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">↻ ' +
+    t("evals.rescore", null, "Re-score") + '</button>';
+  html += '<a href="#" onclick="closeEvalSessionDrawer();switchTab(\'transcripts\');' +
+    'setTimeout(function(){if(typeof viewTranscript===\'function\')viewTranscript(\'' + sidJs + '\')},80);return false;" ' +
+    'style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);' +
+    'border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;text-decoration:none;">📜 ' +
+    t("evals.drawer_open_transcript", null, "Open full transcript") + '</a>';
+  html += '</div></div>';
+
+  // Judge reason (FULL — the table shows a truncated one-liner).
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">' +
+    '⚖️ ' + t("evals.drawer_judge_reason", null, "Judge reason") + '</div>';
+  if (s.eval_reason) {
+    html += '<div style="font-size:13px;color:var(--text-primary);line-height:1.55;white-space:pre-wrap;">' +
+      escHtml(s.eval_reason) + '</div>';
+  } else {
+    html += '<div style="font-size:12px;color:var(--text-muted);font-style:italic;">' +
+      t("evals.drawer_no_judge_reason", null, "No judge reason for this session yet. Add a judge API key and click Re-score to fill this in.") +
+      '</div>';
+  }
+  if (s.eval_judge_model || s.eval_scored_at) {
+    html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);">';
+    if (s.eval_judge_model) html += t("evals.drawer_judge_model", null, "Judge:") + ' <code>' + escHtml(s.eval_judge_model) + '</code>';
+    if (s.eval_judge_model && s.eval_scored_at) html += ' · ';
+    if (s.eval_scored_at) html += t("evals.drawer_scored", null, "Scored") + ' ' + timeAgo(s.eval_scored_at);
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Per-check breakdown. The tile grid's aggregate signals become per-session
+  // rows here, which is where they actually belong. Outcome + reliability +
+  // faithfulness come straight from the session row; DeepEval + policy-scan
+  // verdicts come from eval_metrics.
+  html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+    'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+  html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">' +
+    '🧪 ' + t("evals.drawer_checks", null, "Per-check breakdown") + '</div>';
+  var checks = [];
+  if (s.outcome) {
+    var outColor = (s.outcome === 'success') ? '#22c55e' :
+      ((s.outcome === 'failed' || s.outcome === 'tool_call_stuck' || s.outcome === 'cognitive_loop') ? '#ef4444' : '#f59e0b');
+    checks.push({ label: t("evaluators.did_finish", null, "Did the agent finish the job?"),
+      value: s.outcome, color: outColor, meta: s.outcome_confidence != null ?
+      ('confidence ' + Math.round(s.outcome_confidence * 100) + '%') : '' });
+  }
+  if (s.reliability_score != null) {
+    var relColor = s.reliability_score >= 0.8 ? '#22c55e' : (s.reliability_score >= 0.5 ? '#f59e0b' : '#ef4444');
+    checks.push({ label: t("evaluators.did_work_cleanly", null, "Did the agent work cleanly?"),
+      value: Number(s.reliability_score).toFixed(2), color: relColor, meta: 'reliability score' });
+  }
+  if (s.faithfulness_score != null) {
+    var faithColor = s.faithfulness_score >= 0.8 ? '#22c55e' : (s.faithfulness_score >= 0.5 ? '#f59e0b' : '#ef4444');
+    checks.push({ label: t("evaluators.claims_backed", null, "Was every claim backed by the evidence?"),
+      value: Number(s.faithfulness_score).toFixed(2), color: faithColor, meta: 'faithfulness score (Pro)' });
+  }
+  metrics.forEach(function(m) {
+    var passed = m.passed;
+    var col = passed === true ? '#22c55e' : (passed === false ? '#ef4444' : 'var(--text-muted)');
+    var val = passed === true ? '✓ pass' : (passed === false ? '✗ fail' : '—');
+    checks.push({ label: m.label || m.metric_slug, value: val, color: col,
+      meta: m.reason || (m.engine ? ('via ' + m.engine) : '') });
+  });
+  if (!checks.length) {
+    html += '<div style="font-size:12px;color:var(--text-muted);font-style:italic;">' +
+      t("evals.drawer_no_checks", null, "No per-check verdicts for this session yet.") + '</div>';
+  } else {
+    checks.forEach(function(c) {
+      html += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;' +
+        'padding:6px 0;border-bottom:1px solid var(--border-primary);">';
+      html += '<div style="font-size:12px;color:var(--text-primary);">' + escHtml(c.label) + '</div>';
+      html += '<div style="text-align:right;">';
+      html += '<div style="font-size:12px;font-weight:700;color:' + c.color + ';">' + escHtml(String(c.value)) + '</div>';
+      if (c.meta) html += '<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">' + escHtml(c.meta) + '</div>';
+      html += '</div></div>';
+    });
+  }
+  html += '</div>';
+
+  // Rubric the judge used (verbatim). Users often want to sanity-check "did
+  // this score against the rubric I THINK it did?" — this makes that a glance.
+  if (s.eval_rubric) {
+    html += '<div style="background:var(--bg-primary);border:1px solid var(--border-primary);' +
+      'border-radius:10px;padding:14px 16px;margin-bottom:12px;">';
+    html += '<div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">' +
+      '📜 ' + t("evals.drawer_rubric", null, "Rubric the judge used") + '</div>';
+    html += '<pre style="font-size:11px;font-family:monospace;color:var(--text-secondary);white-space:pre-wrap;' +
+      'margin:0;line-height:1.5;">' + escHtml(s.eval_rubric) + '</pre>';
+    html += '<div style="margin-top:8px;"><a href="#" onclick="closeEvalSessionDrawer();openEvalRubricModal();return false;" ' +
+      'style="font-size:11px;color:#3b82f6;text-decoration:none;">' +
+      t("evals.drawer_edit_rubric", null, "Edit rubric →") + '</a></div>';
+    html += '</div>';
+  }
+
+  // Cost + tokens footer — a bad score costs less to fix if you see what it
+  // cost to produce. Inline formatters (the module-level ones are function-
+  // scoped elsewhere and not reachable here).
+  var _tk = Number(s.total_tokens || 0);
+  var tokens = _tk >= 1e6 ? (_tk / 1e6).toFixed(1) + 'M' :
+               _tk >= 1e3 ? (_tk / 1e3).toFixed(0) + 'K' : String(_tk);
+  var _c = Number(s.cost_usd || 0);
+  var cost = _c >= 0.01 ? '$' + _c.toFixed(2) : (_c > 0 ? '<$0.01' : '$0.00');
+  html += '<div style="font-size:11px;color:var(--text-muted);text-align:right;">' +
+    escHtml(tokens) + ' ' + t("evals.drawer_tokens", null, "tokens") + ' · ' + escHtml(cost) + '</div>';
+
+  if (body) body.innerHTML = html;
+}
+
+// Re-score button INSIDE the drawer — same POST as the table's Re-score,
+// but reloads the drawer in place instead of the table row.
+async function evalsRescoreFromDrawer(sid, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '…'; }
+  try {
+    var r = await fetch('/api/evals/rescore/' + encodeURIComponent(sid), { method: 'POST' });
+    var data = await r.json().catch(function(){return {};});
+    if (!r.ok || data.error) {
+      if (btn) btn.textContent = data.skip_reason || data.error || t("evals.rescore_failed", null, "failed");
+      return;
+    }
+  } catch (e) {
+    if (btn) btn.textContent = t("evals.rescore_failed", null, "failed");
+    return;
+  }
+  // Reload both the drawer and the table underneath so the row's score/reason
+  // update to match.
+  openEvalSessionDrawer(sid);
+  loadEvalsRecent();
+  loadEvalsTabSummary();
+}
+
+async function loadEvalsSuites() {
+  var el = document.getElementById('evals-suites-body');
+  if (!el) return;
+  var r = await fetch('/api/evals/suites').catch(function(){return null;});
+  if (r && r.status === 402) { el.innerHTML = _evalsLockedHtml(); return; }
+  var data = r ? await r.json().catch(function(){return null;}) : null;
+  var suites = (data && data.suites) || [];
+  var html = '';
+  if (suites.length) {
+    html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">';
+    suites.forEach(function(s) {
+      html += '<span style="background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;padding:4px 10px;font-family:monospace;font-size:12px;color:var(--text-primary);">' + escHtml(s) + '</span>';
+    });
+    html += '</div>';
+  } else {
+    html += '<div style="margin-bottom:10px;">' +
+      t("evals.suites_empty", null, "No test suites yet. A suite is a small YAML file of test prompts plus what a good answer looks like; run it before each release to catch a prompt regression before your users do.") + '</div>';
+  }
+  html += '<div style="color:var(--text-muted);">' +
+    t("evals.suites_cli", null, "Suites live in") + ' <code>~/.clawmetry/evals/</code> · ' +
+    t("evals.suites_run", null, "run one with") + ' <code>clawmetry eval --suite &lt;name&gt;</code></div>';
+  el.innerHTML = html;
 }
 
 // Issue #1619 Phase 1 — pull aggregate score for the overview tile.
@@ -3607,7 +6687,42 @@ async function openEvalRubricModal() {
   var pathEl = document.getElementById('eval-rubric-path');
   if (!modal || !ta) return;
   modal.style.display = 'flex';
-  loadEvalKeyStatus();
+  // Hosted dashboard: the key row would save to the cloud container, not the
+  // node the judge runs on (same "fake screen" as the Evals card — founder
+  // report 2026-08-01). Replace it with guidance and show the node's real
+  // status from the snapshot. This supersedes the cloud-side
+  // cm-cloud-evals-keynote patch, which only knew this modal's ids.
+  if (window.CLOUD_MODE) {
+    var keyInp = document.getElementById('eval-key-input');
+    var keyRow = keyInp && keyInp.parentNode;
+    if (keyRow && !keyRow.__cmGated) {
+      keyRow.__cmGated = 1;
+      keyRow.innerHTML = '<div style="font-size:11px;color:var(--text-muted);line-height:1.5;">' +
+        t("evals.key_on_node", null, "The judge API key stays on the machine your agent runs on and is never synced to the cloud. To add or change it, open the dashboard on that machine (Evals tab) or set ANTHROPIC_API_KEY / OPENAI_API_KEY in the daemon environment.") +
+        '</div>';
+    }
+    var keySt = document.getElementById('eval-key-status');
+    if (keySt) {
+      keySt.textContent = t("evals.key_managed_on_node", null, "managed on your machine");
+      keySt.style.color = 'var(--text-muted)';
+      try {
+        var _msp = (typeof window.__cmSnap === 'function') ? await window.__cmSnap() : null;
+        var mj = _msp && _msp.evals && _msp.evals.judge;
+        if (mj && mj.key_present && mj.last_error === 'auth') {
+          keySt.textContent = t("evals.key_rejected_on_node", null, "key on your machine was rejected");
+          keySt.style.color = '#ef4444';
+        } else if (mj && mj.key_present) {
+          keySt.textContent = t("evals.key_set_on_node", null, "✓ key set on your machine");
+          keySt.style.color = '#22c55e';
+        } else if (mj) {
+          keySt.textContent = t("evals.key_missing_on_node", null, "no key on your machine yet");
+          keySt.style.color = '#f59e0b';
+        }
+      } catch (e) {}
+    }
+  } else {
+    loadEvalKeyStatus();
+  }
   if (status) status.textContent = t("app.loading", null, "Loading...");
   try {
     var data = await fetch('/api/evals/rubric').then(function(r){return r.json();});
@@ -3626,6 +6741,7 @@ async function openEvalRubricModal() {
 // Judge API key: presence-only status (never the value) so the user knows
 // whether scoring can run, and can paste a key to enable it without an env var.
 async function loadEvalKeyStatus() {
+  if (window.CLOUD_MODE) return;  // hosted: status comes from the snapshot, form is gated
   var el = document.getElementById('eval-key-status');
   var sel = document.getElementById('eval-key-provider');
   if (!el) return;
@@ -3703,71 +6819,7 @@ async function saveEvalRubric() {
   }
 }
 
-async function loadSubAgents() {
-  try {
-    var _saResp = await fetch('/api/subagents').then(async function(r) { return {s: r.status, b: await r.json()}; });
-    var data = _saResp.b || {};
-    // Issue #1804: show outage banner when ingest is offline (503 envelope).
-    if (_saResp.s === 503 && data && data.error === 'local_store ingest is offline') {
-      document.getElementById('subagents-status').textContent = t("app.ingest_offline", null, "Ingest offline");
-      var _saPrev = document.getElementById('subagents-preview');
-      if (_saPrev) _saPrev.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;font-size:12px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Sub-agent data unavailable; the local_store writer is not responding.</div>';
-      return;
-    }
-    var counts = data.counts;
-    var subagents = data.subagents;
-
-    // Update main counter
-    document.getElementById('subagents-count').textContent = counts.total;
-    
-    // Update status text
-    var statusText = '';
-    if (counts.active > 0) {
-      statusText = counts.active + ' active';
-      if (counts.idle > 0) statusText += ', ' + counts.idle + ' idle';
-      if (counts.stale > 0) statusText += ', ' + counts.stale + ' stale';
-    } else if (counts.total === 0) {
-      statusText = 'No sub-agents spawned';
-    } else {
-      statusText = 'All idle/stale';
-    }
-    document.getElementById('subagents-status').textContent = statusText;
-    
-    // Update preview with top sub-agents (human-readable)
-    var previewHtml = '';
-    if (subagents.length === 0) {
-      previewHtml = '<div style="font-size:11px;color:#666;">No active tasks</div>';
-    } else {
-      // Show active ones first
-      var activeFirst = subagents.filter(function(a){return a.status==='active';}).concat(subagents.filter(function(a){return a.status!=='active';}));
-      var topAgents = activeFirst.slice(0, 3);
-      topAgents.forEach(function(agent) {
-        var icon = agent.status === 'active' ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
-        var name = cleanTaskName(agent.displayName);
-        if (name.length > 40) name = name.substring(0, 37) + '…';
-        previewHtml += '<div class="subagent-item">';
-        previewHtml += '<span style="font-size:10px;">' + icon + '</span>';
-        previewHtml += '<span class="subagent-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(name) + '</span>';
-        previewHtml += '<span class="subagent-runtime">' + agent.runtime + '</span>';
-        previewHtml += '</div>';
-      });
-      
-      if (subagents.length > 3) {
-        previewHtml += '<div style="font-size:9px;color:#555;margin-top:4px;">+' + (subagents.length - 3) + ' more</div>';
-      }
-    }
-    
-    document.getElementById('subagents-preview').innerHTML = previewHtml;
-    
-  } catch(e) {
-    document.getElementById('subagents-count').textContent = '?';
-    document.getElementById('subagents-status').textContent = t("app.error_loading_sub_agents", null, "Error loading sub-agents");
-    document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">' + t("app.failed_to_load_workforce", null, "Failed to load workforce") + '</div>';
-  }
-}
-
 // === Active Tasks for Overview ===
-var _activeTasksTimer = null;
 function cleanTaskName(raw) {
   // Strip timestamp prefixes like "[Sun 2026-02-08 18:22 GMT+1] "
   var name = (raw || '').replace(/^\[.*?\]\s*/, '');
@@ -3776,147 +6828,6 @@ function cleanTaskName(raw) {
   if (dot > 10 && dot < 80) name = name.substring(0, dot + 1);
   if (name.length > 80) name = name.substring(0, 77) + '…';
   return name || 'Background task';
-}
-
-function detectProjectBadge(text) {
-  var projects = {
-    'mockround': { label: 'MockRound', color: '#7c3aed' },
-    'vedicvoice': { label: 'VedicVoice', color: '#d97706' },
-    'openclaw': { label: 'OpenClaw', color: '#2563eb' },
-    'dashboard': { label: 'Dashboard', color: '#0891b2' },
-    'shopify': { label: 'Shopify', color: '#16a34a' },
-    'sanskrit': { label: 'Sanskrit', color: '#ea580c' },
-    'telegram': { label: 'Telegram', color: '#0088cc' },
-    'discord': { label: 'Discord', color: '#5865f2' },
-  };
-  var lower = (text || '').toLowerCase();
-  for (var key in projects) {
-    if (lower.includes(key)) return projects[key];
-  }
-  return null;
-}
-
-function humanTime(runtimeMs) {
-  if (!runtimeMs || runtimeMs === Infinity) return '';
-  var sec = Math.floor(runtimeMs / 1000);
-  if (sec < 60) return 'Started ' + sec + 's ago';
-  var min = Math.floor(sec / 60);
-  if (min < 60) return 'Started ' + min + ' min ago';
-  var hr = Math.floor(min / 60);
-  if (hr < 24) return 'Started ' + hr + 'h ago';
-  return 'Started ' + Math.floor(hr / 24) + 'd ago';
-}
-
-function humanTimeDone(runtimeMs) {
-  if (!runtimeMs || runtimeMs === Infinity) return '';
-  var sec = Math.floor(runtimeMs / 1000);
-  if (sec < 60) return 'Finished ' + sec + 's ago';
-  var min = Math.floor(sec / 60);
-  if (min < 60) return 'Finished ' + min + ' min ago';
-  var hr = Math.floor(min / 60);
-  if (hr < 24) return 'Finished ' + hr + 'h ago';
-  return 'Finished ' + Math.floor(hr / 24) + 'd ago';
-}
-
-async function loadActiveTasks() {
-  try {
-    var grid = document.getElementById('overview-tasks-list') || document.getElementById('active-tasks-grid');
-    if (!grid) return;
-
-    // Fetch active sub-agents
-    var saData = await fetch('/api/subagents').then(r => r.json()).catch(function() { return {subagents:[]}; });
-
-    // "Active Tasks" should mean ACTIVE. Previously we lingered failed
-    // and stale entries here for 24h, which meant a subagent that failed
-    // hours ago still appeared as if it were current. Tightened:
-    //   - active / idle: always show (subagent still alive)
-    //   - failed: only within the last 10 minutes, and only when there's
-    //     nothing live — so a just-failed spawn still surfaces briefly.
-    //   - stale / older failures: don't show. The subagent detail modal
-    //     and the Brain tab are the right surfaces for history.
-    var RECENT_MS = 10 * 60 * 1000;
-    var now = Date.now();
-    var all = (saData.subagents || []);
-    // Scope to the selected runtime (sub-agent sessionId prefix = runtime).
-    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
-    if (_atRt !== 'all') all = all.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
-    var live = all.filter(function(a) { return a.status === 'active' || a.status === 'idle'; });
-    var recentFailed = all.filter(function(a) {
-      return a.status === 'failed' && (now - (a.updatedAt || 0)) < RECENT_MS;
-    });
-    var agents = live.length ? live : recentFailed.slice(0, 3);
-
-    if (agents.length === 0) {
-      grid.innerHTML = '<div class="card" style="text-align:center;padding:24px;color:var(--text-muted);grid-column:1/-1;">'
-        + '<div style="font-size:24px;margin-bottom:8px;">✨</div>'
-        + '<div style="font-size:13px;">No active tasks - all quiet</div></div>';
-      var badge = document.getElementById('overview-tasks-count-badge');
-      if (badge) badge.textContent = '';
-      return;
-    }
-
-    var html = '';
-    var badge = document.getElementById('overview-tasks-count-badge');
-    if (badge) {
-      var liveCount = agents.filter(function(a) { return a.status === 'active' || a.status === 'idle'; }).length;
-      badge.textContent = liveCount > 0 ? (liveCount + ' active') : (agents.length + ' recent');
-    }
-
-    // Per-status visual style
-    var STATUS_STYLE = {
-      active: {cls: 'running',  dot: '#22c55e', label: 'active'},
-      idle:   {cls: 'running',  dot: '#f59e0b', label: 'idle'},
-      stale:  {cls: '',         dot: '#6b7280', label: 'completed'},
-      failed: {cls: '',         dot: '#ef4444', label: 'failed'},
-    };
-
-    // Render sub-agents
-    agents.forEach(function(agent) {
-      var taskName = cleanTaskName(agent.displayName);
-      var badge2 = detectProjectBadge(agent.displayName);
-      var mins = Math.max(1, Math.floor((agent.runtimeMs || 0) / 60000));
-      var st = STATUS_STYLE[agent.status] || STATUS_STYLE.active;
-
-      html += '<div class="task-card ' + st.cls + '" style="cursor:pointer;" onclick="openTaskModal(\'' + escHtml(agent.sessionId).replace(/'/g,"\\'") + '\',\'' + escHtml(taskName).replace(/'/g,"\\'") + '\',\'' + escHtml(agent.key || agent.sessionId).replace(/'/g,"\\'") + '\')">';
-      if (agent.status === 'active' || agent.status === 'idle') {
-        html += '<div class="task-card-pulse active"></div>';
-      }
-      html += '<div class="task-card-header">';
-      html += '<div class="task-card-name"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + st.dot + ';margin-right:6px;vertical-align:middle;"></span>' + escHtml(taskName) + '</div>';
-      html += '<span class="task-card-badge ' + st.cls + '" style="font-size:10px;">' +
-              (agent.status === 'failed' ? '⚠️ ' + st.label :
-               agent.status === 'stale'  ? '🤖 ' + st.label :
-               '🤖 ' + mins + ' min') +
-              '</span>';
-      html += '</div>';
-      // Task summary line (shown for all statuses if present)
-      if (agent.task) {
-        var taskPreview = agent.task.length > 90 ? agent.task.substring(0, 87) + '…' : agent.task;
-        html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px;line-height:1.4;">' + escHtml(taskPreview) + '</div>';
-      }
-      // The failed badge in the top-right already conveys status; the raw
-      // OpenClaw error string ("Validation failed for tool 'subagents':")
-      // was redundant on the card and too jargon-y. Full error is still
-      // surfaced in the modal when the user clicks through.
-      html += '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">';
-      if (badge2) {
-        html += '<span style="display:inline-block;padding:1px 8px;border-radius:10px;font-size:10px;font-weight:700;background:' + badge2.color + '22;color:' + badge2.color + ';border:1px solid ' + badge2.color + '44;">' + badge2.label + '</span>';
-      }
-      html += '<span style="font-size:11px;color:var(--text-muted);">' + escHtml(humanTime(agent.runtimeMs)) + '</span>';
-      html += '</div>';
-      html += '</div>';
-    });
-
-    grid.innerHTML = html;
-  } catch(e) {
-    // silently fail
-  }
-}
-// Auto-refresh active tasks every 30s
-function startActiveTasksRefresh() {
-  loadActiveTasks();
-  if (_activeTasksTimer) clearInterval(_activeTasksTimer);
-  _activeTasksTimer = visibilitySetInterval(loadActiveTasks, 30000);
 }
 
 async function loadToolActivity() {
@@ -4125,7 +7036,16 @@ function _provenancePillHtml(meta, bodyHtml) {
       ? _channelDisplayName(prov)
       : (prov.charAt(0).toUpperCase() + prov.slice(1));
   }
-  var sender = meta.sender ? String(meta.sender) : '';
+  // meta.sender may be a BLOCK ({id, name, username, is_bot}) — Telegram's
+  // "Conversation info (untrusted metadata)" carries one. String() on it
+  // renders "[object Object]" in the pill (founder screenshot 2026-07-31);
+  // unwrap it the same way _extractChannelInfo does.
+  var senderVal = meta.sender;
+  if (senderVal && typeof senderVal === 'object') {
+    senderVal = senderVal.name || senderVal.username || senderVal.first_name
+      || senderVal.display_name || senderVal.id || '';
+  }
+  var sender = senderVal ? String(senderVal) : '';
   var ts = meta.timestamp;
   var tStr = '';
   if (ts) {
@@ -4325,9 +7245,50 @@ function _brainRangeHuman(sinceIso, untilIso) {
 }
 
 function _brainSetRangeActiveBtn(key) {
+  // Legacy no-op-safe shim: the crude button strip was replaced by the
+  // Grafana-style picker (static/js/time-range-picker.js), which owns its
+  // own "active" state. If any legacy button strip is still present (e.g.
+  // an older embed), keep it in sync as a courtesy.
   document.querySelectorAll('#brain-range-bar .brain-range-btn').forEach(function(b) {
     b.classList.toggle('active', b.getAttribute('data-range') === String(key));
   });
+}
+
+// Mount the reusable Grafana-style time range picker on the Brain tab.
+// Idempotent: safe to call every time we render the tab; only initializes
+// once per DOM insertion. Wires the picker's onChange to the existing
+// setBrainTimeRange / applyBrainAbsoluteRange helpers so the rest of the
+// page (SSE, density chart, banner) reacts unchanged.
+function _brainMountRangePicker() {
+  var host = document.getElementById('brain-range-picker');
+  if (!host || host._cmTimeRange) return;
+  if (!window.cmTimeRangePicker) return;
+  var initial = _brainRange
+    ? { since: _brainRange.since, until: _brainRange.until }
+    : 'live';
+  window.cmTimeRangePicker.mount(host, {
+    name: 'brain',
+    showLive: true,
+    initial: initial,
+    onChange: function(r) {
+      if (r.mode === 'live') { setBrainTimeRange('live'); return; }
+      if (r.mode === 'quick') { setBrainTimeRange(r.seconds); return; }
+      if (r.mode === 'absolute') { applyBrainAbsoluteRange(r.since, r.until); return; }
+    }
+  });
+}
+
+// Explicit ISO from/until entry point used by the picker's absolute mode.
+// applyBrainCustomRange() still works and reads from the (now removed)
+// <input> fields — kept as a no-op-if-fields-missing shim for compat.
+function applyBrainAbsoluteRange(sinceIso, untilIso) {
+  var s = new Date(sinceIso), u = new Date(untilIso);
+  if (isNaN(s.getTime()) || isNaN(u.getTime())) return;
+  if (s.getTime() > u.getTime()) { var tmp = s; s = u; u = tmp; }
+  _brainRange = {since: _brainRangeIso(s), until: _brainRangeIso(u)};
+  _brainRangeRetries = 0;
+  _brainSetRangeActiveBtn('custom');
+  _enterBrainHistoryMode();
 }
 
 function _brainUpdateRangeUI() {
@@ -4437,7 +7398,7 @@ var _channelIcons = {
   'googlechat': '🔵', 'matrix': '🔢', 'msteams': '🏢', 'mattermost': '⚡',
   'line': '💚', 'nostr': '🟣', 'twitch': '💜', 'bluebubbles': '💙',
   'feishu': '🟠', 'zalo': '🩵', 'tlon': '🟤', 'synologychat': '🟦',
-  'nextcloudtalk': '☁️', 'clickclack': '🗨️',
+  'nextcloudtalk': '☁️', 'clickclack': '🗨️', 'buzz': '🐝',
   'cli': '🖥️', 'tui': '⌨️', 'cron': '⏰'
 };
 var _channelColors = {
@@ -4446,7 +7407,7 @@ var _channelColors = {
   'googlechat': '#1A73E8', 'matrix': '#0DBD8B', 'msteams': '#4B53BC', 'mattermost': '#0072C6',
   'line': '#06C755', 'nostr': '#9333ea', 'twitch': '#9146FF', 'bluebubbles': '#3478F6',
   'feishu': '#00D6B9', 'zalo': '#0068FF', 'tlon': '#A78BFA', 'synologychat': '#1A73E8',
-  'nextcloudtalk': '#0082C9', 'clickclack': '#FF6B35',
+  'nextcloudtalk': '#0082C9', 'clickclack': '#FF6B35', 'buzz': '#F59E0B',
   'cli': '#94a3b8', 'tui': '#94a3b8', 'cron': '#6B7280'
 };
 // Display-name overrides for channels whose snake/lower-case key isn't a
@@ -4632,10 +7593,16 @@ var _brainTypeIcons = {
 
 // Issue #53 — apply the same filter pills that drive the list view to the
 // graph view, so toggling a source/type/channel hides matching neurons.
+// Canonical per-event source key. The JSONL slow path stamps ev.source; the
+// local-store fast path only carries sessionId/src — without this fallback the
+// session filter chips matched nothing on the fast path (the common install).
+function _brainEvSource(ev) {
+  return (ev && (ev.source || ev.sessionId || ev.src)) || 'main';
+}
 function _brainApplyFilters(events) {
   var out = Array.isArray(events) ? events : [];
   if (_brainFilter && _brainFilter !== 'all') {
-    out = out.filter(function(ev) { return ev && ev.source === _brainFilter; });
+    out = out.filter(function(ev) { return ev && _brainEvSource(ev) === _brainFilter; });
   }
   if (_brainTypeFilter && _brainTypeFilter !== 'all') {
     out = out.filter(function(ev) { return ev && ev.type === _brainTypeFilter; });
@@ -4659,7 +7626,9 @@ function setBrainTypeFilter(type, btn) {
     b.style.background = isActive ? 'rgba(168,85,247,0.2)' : 'transparent';
     b.style.fontWeight = isActive ? '600' : '400';
   });
-  renderBrainFeed();
+  // Was renderBrainFeed() — a function that never existed, so every type-chip
+  // click died on a ReferenceError and the filter silently did nothing.
+  renderBrainStream(_brainAllEvents);
   _brainRefreshGraphIfActive();
 }
 function setBrainFilter(source, btn) {
@@ -4790,7 +7759,7 @@ function renderBrainTypeChips(events) {
   if (_tcRt && _tcRt !== 'all' && typeof _cmRuntimeOf === 'function') {
     events = events.filter(function(ev) { return _cmRuntimeOf(ev) === _tcRt; });
   }
-  var typeColors = {'USER':'#60a5fa','AGENT':'#a855f7','EXEC':'#f59e0b','THINK':'#94a3b8','TOOL':'#f97316','WRITE':'#10b981','SEARCH':'#06b6d4','BROWSER':'#ec4899','SPAWN':'#8b5cf6','MSG':'#22c55e','READ':'#6ee7b7','CONTEXT':'#64748b','RESULT':'#6ee7b7'};
+  var typeColors = {'USER':'#60a5fa','AGENT':'#a855f7','EXEC':'#f59e0b','THINK':'#94a3b8','TOOL':'#f97316','WRITE':'#10b981','SEARCH':'#06b6d4','BROWSER':'#ec4899','SPAWN':'#8b5cf6','MSG':'#22c55e','READ':'#6ee7b7','CONTEXT':'#64748b','RESULT':'#6ee7b7','ERROR':'#ef4444'};
   var typeCounts = {};
   events.forEach(function(ev) { typeCounts[ev.type] = (typeCounts[ev.type]||0) + 1; });
   var types = Object.keys(typeCounts).sort();
@@ -4935,6 +7904,32 @@ function renderRiskBadge(ev) {
     'title="' + escHtml(tip) + '">' + cfg.dot + ' ' + cfg.label + '</span>';
 }
 
+var _toolRiskBadgeStyles = {
+  medium:   { label: 'Medium risk',   color: '#d97706', bg: 'rgba(217,119,6,0.14)' },
+  high:     { label: 'High risk',     color: '#ea580c', bg: 'rgba(234,88,12,0.16)' },
+  critical: { label: 'Critical risk', color: '#dc2626', bg: 'rgba(220,38,38,0.18)' }
+};
+
+// Call-level tool risk chip (ev.toolRisk from clawmetry/tool_risk.py) —
+// what the CALL touches (rm -rf, sudo, credentials …), a different axis
+// from the hallucination pill above. Low risk renders nothing: the chip
+// only appears when there is something to say.
+function renderToolRiskBadge(ev) {
+  if (!ev || typeof ev !== 'object') return '';
+  var tr = ev.toolRisk;
+  if (!tr || typeof tr !== 'object') return '';
+  var lvl = String(tr.level || '').toLowerCase();
+  var cfg = _toolRiskBadgeStyles[lvl];
+  if (!cfg) return '';
+  var tip = cfg.label + ': ' + (tr.reasons || []).join('; ');
+  return '<span class="brain-tool-risk brain-tool-risk-' + lvl + '" ' +
+    'style="display:inline-flex;align-items:center;gap:3px;background:' + cfg.bg +
+    ';color:' + cfg.color + ';padding:1px 6px;border-radius:3px;font-size:10px;' +
+    'font-weight:700;flex-shrink:0;white-space:nowrap;text-transform:uppercase;' +
+    'letter-spacing:0.4px;" title="' + escHtml(tip) + '">\u26a0 ' +
+    escHtml(lvl) + '</span>';
+}
+
 // Walk a Brain event list and return true when any LLM-call event hit
 // the "high" band. Drives the session-row warning icon (issue #567).
 function sessionHasHighRisk(events, sessionId) {
@@ -4981,7 +7976,7 @@ function _isPlumbingEvent(ev) {
 function renderBrainStream(events) {
   var el = document.getElementById('brain-stream');
   if (!el) return;
-  var filtered = _brainFilter === 'all' ? events : events.filter(function(ev) { return ev.source === _brainFilter; });
+  var filtered = _brainFilter === 'all' ? events : events.filter(function(ev) { return _brainEvSource(ev) === _brainFilter; });
   if (_brainTypeFilter !== 'all') {
     filtered = filtered.filter(function(ev) { return ev.type === _brainTypeFilter; });
   }
@@ -5044,6 +8039,13 @@ function renderBrainStream(events) {
   if (hasTelegramAck) {
     html += '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;margin-bottom:6px;background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.2);border-radius:6px;font-size:11px;color:#60a5fa;">📱 Telegram body capture pending OpenClaw upstream — outbound counts only</div>';
   }
+  // Rows are buffered per-event (not concatenated straight into `html`) so
+  // they can be grouped into per-turn sequences below — the Brain-visualizer
+  // pattern. Buffering is the only change here; each row's markup is
+  // untouched.
+  var _seqRowBuf = [];
+  var _seqHeadHtml = html;
+  html = '';
   filtered.forEach(function(ev) {
     var color = ev.color || brainSourceColor(ev.source || 'main');
     var evType = ev.type || 'TOOL';
@@ -5098,7 +8100,7 @@ function renderBrainStream(events) {
     // chips that the backend stamped with a {risk_level, risk_explanation}
     // dict. Green/yellow/red dot + tooltip — readable without ML internals
     // per feedback_simple_ui_for_nontechnical.md.
-    var riskBadge = renderRiskBadge(ev);
+    var riskBadge = renderRiskBadge(ev) + renderToolRiskBadge(ev);
     // Build turn timeline for USER events (Phase 4: Agent Runtime Timeline)
     var turnTimeline = '';
     if (evType === 'USER') {
@@ -5293,6 +8295,7 @@ function renderBrainStream(events) {
     var rowCls = '';
     if (_isPlumbingEvent(ev)) rowCls += ' brain-plumbing';
     if (chInfo && chInfo.bodyMissing) rowCls += ' brain-relay-only';
+    if (evType === 'ERROR' || ev.isError) rowCls += ' brain-error-row';
     html += '<div class="brain-event' + _evExpCls + rowCls + '" data-evkey="' + escHtml(_evKey) + '" onclick="_toggleBrainEvent(this, this.dataset.evkey)">';
     html += '<div class="brain-meta">';
     html += '<span class="brain-time">' + formatBrainTime(ev.time) + '</span>';
@@ -5310,8 +8313,286 @@ function renderBrainStream(events) {
     html += '<span class="brain-detail">' + renderBrainDetail(ev.detail || '') + '</span>';
     html += turnTimeline;
     html += '</div>';
+    _seqRowBuf.push({ev: ev, html: html});
+    html = '';
   });
-  el.innerHTML = html;
+  el.innerHTML = _seqHeadHtml + _brainGroupSequences(_seqRowBuf);
+}
+
+// ── Sequences: group the feed into readable blocks ───────────────────────
+// Adapted from the Antigravity Brain Visualizer (Apache-2.0): a run reads as
+// a handful of "what happened, and how long did it take" blocks instead of
+// one undifferentiated wall of events.
+//
+// Their visualizer anchors each sequence on a USER turn. Our brain feed does
+// NOT carry a user-turn marker on every runtime (a live Claude Code window is
+// TOOL_CALL / TOOL_RESULT / MESSAGE / THINKING with no USER row), and it
+// interleaves concurrent sessions in one chronological stream. So we anchor on
+// what every event does carry: its session. One block per agent run, ordered
+// by most-recent activity, rows inside kept newest-first. Where a runtime DOES
+// emit USER rows, each one starts a new block within its session, which
+// reproduces the visualizer's per-turn grouping exactly.
+//
+// Grouping is presentation-only: every row is rendered exactly once, in the
+// same markup, and a feed with a single session degrades to one block.
+
+function _brainSeqDuration(ms) {
+  if (!isFinite(ms) || ms < 0) return '';
+  var sec = Math.floor(ms / 1000);
+  if (sec < 1) return '<1s';
+  if (sec < 60) return sec + 's';
+  var min = Math.floor(sec / 60);
+  if (min < 60) return min + 'm ' + (sec % 60) + 's';
+  var hr = Math.floor(min / 60);
+  return hr + 'h ' + (min % 60) + 'm';
+}
+
+function _brainSeqTime(ev) {
+  try { return ev && ev.time ? (new Date(ev.time).getTime() || 0) : 0; }
+  catch (e) { return 0; }
+}
+
+function toggleBrainSequence(el) {
+  var body = el && el.nextElementSibling;
+  if (!body) return;
+  var open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : '';
+  var chev = el.querySelector('.brain-seq-chevron');
+  if (chev) chev.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+}
+
+// The event's session identity, across every feed shape. Read all three keys
+// or the cloud feed silently loses its identity:
+//   local  (routes/brain.py)  -> sessionId + src, BOTH namespaced `claude_code:<uuid>`
+//   cloud  (transformEvents)  -> `source` only, and the daemon already stripped
+//                                the namespace (sync.py _rows_to_brain_events
+//                                stamps the BARE uuid so the desk device can
+//                                match it), plus an explicit `runtime` field.
+// Reading only sessionId/src left every cloud event with an empty id, which is
+// how the hosted Brain labelled real Claude Code runs "OpenClaw \u00b7 ?" and
+// bucketed every session into one fake "unknown" run (founder screenshot,
+// 2026-08-22).
+function _brainSeqSid(ev) {
+  return (ev && (ev.sessionId || ev.src || ev.source)) || '';
+}
+
+// Human label for one block: the runtime + short session id, so a feed mixing
+// Claude Code with Antigravity says which is which.
+function _brainSeqLabel(ev) {
+  var sid = _brainSeqSid(ev);
+  // Runtime comes from the ONE canonical resolver (_cmRuntimeOf), never a
+  // local re-parse: the namespace only survives on the local feed, so a
+  // prefix-only rule defaults every cloud event to openclaw. _cmRuntimeOf
+  // falls back to the explicit runtime/agent_type field the cloud does send.
+  var rt = (typeof _cmRuntimeOf === 'function')
+    ? _cmRuntimeOf({sessionId: sid, runtime: (ev && (ev.runtime || ev.agent_type)) || ''})
+    : 'openclaw';
+  var native = sid;
+  var i = sid.indexOf(':');
+  if (i > 0 && sid.charAt(i + 1) !== ':') {
+    var pfx = sid.slice(0, i).toLowerCase();
+    if (_CM_RT_PREFIXES && _CM_RT_PREFIXES[pfx]) { native = sid.slice(i + 1); }
+  }
+  var label = (_CM_RT_LABEL && _CM_RT_LABEL[rt]) || rt;
+  // Orchestration children are namespaced "<parent>::wf_<run>::agent-<id>"
+  // (workflow agents) or "<parent>::agent-<id>" (plain subagents). Label
+  // them as what they are instead of repeating the parent uuid.
+  var parts = (native || '').split('::');
+  if (parts.length >= 2) {
+    var tail = parts[parts.length - 1];
+    var kindLbl = tail.indexOf('agent-') === 0
+      ? (parts.length >= 3 || parts[1].indexOf('wf_') === 0
+          ? t('brain.wf_agent', null, 'wf agent') : t('brain.subagent', null, 'subagent'))
+      : (tail.indexOf('wf_') === 0 ? t('brain.workflow', null, 'workflow') : 'child');
+    return label + ' \u00b7 ' + parts[0].slice(0, 8) + ' \u21b3 ' + kindLbl + ' ' +
+      tail.replace(/^agent-/, '').replace(/^wf_/, '').slice(0, 8);
+  }
+  return label + ' \u00b7 ' + (native || '?').slice(0, 8);
+}
+
+// ── Orchestration badges: workflows + agents each session spawned ──────────
+// Filled by _brainLoadOrchSummaries (polls /api/orchestration-summary for the
+// TOP-LEVEL sessions in view); _brainOrchBadgeHtml renders inline in each
+// session block's header: "\u26a1 1 workflow \u00b7 9/10 agents \u00b7 \u25b6 Bash".
+var _brainOrchSummaries = {};
+var _brainOrchLastFetch = 0;
+function _brainOrchBadgeHtml(sid) {
+  if (!sid || sid.indexOf('::') >= 0) return '';
+  var sum = _brainOrchSummaries[sid];
+  if (!sum) return '';
+  var wf = sum.workflows || {}, ag = sum.agents || {}, sa = sum.subagents || {};
+  var bits = [];
+  if (wf.total) {
+    bits.push('\u26a1 ' + wf.total + ' ' + t(wf.total === 1 ? 'brain.workflow' : 'brain.workflows', null, wf.total === 1 ? 'workflow' : 'workflows')
+      + (wf.running ? ' (' + wf.running + ' ' + t('brain.running', null, 'running') + ')' : ''));
+  }
+  if (ag.total) {
+    bits.push('\ud83e\udd16 ' + ((ag.completed || 0) + (ag.failed || 0)) + '/' + ag.total + ' ' + t('brain.agents_done', null, 'agents done')
+      + (ag.failed ? ' \u00b7 \u26a0 ' + ag.failed : ''));
+  }
+  if (sa.total) bits.push('\ud83e\udd16 ' + sa.total + ' ' + t(sa.total === 1 ? 'brain.subagent' : 'brain.subagents', null, sa.total === 1 ? 'subagent' : 'subagents'));
+  var now = (sum.running_now || [])[0];
+  if (now && now.nowTool) bits.push('\u25b6 ' + escHtml(now.nowTool));
+  if (!bits.length) return '';
+  var running = (wf.running || 0) + (ag.running || 0) + (sa.running || 0);
+  var col = running ? '#f59e0b' : 'var(--text-muted)';
+  var title = t('brain.orch_badge_tooltip', null, 'Workflows and sub-agents this session spawned (from the local store). Open the session in the Sessions tab for the full fan-out with per-agent context and replies.');
+  return '<span class="brain-seq-orch" title="' + escHtml(title) + '" style="font-size:10px;color:' + col + ';white-space:nowrap;flex-shrink:0;border:1px solid ' + (running ? 'rgba(245,158,11,0.4)' : 'var(--border,#444)') + ';border-radius:10px;padding:1px 7px;">'
+    + bits.join(' \u00b7 ') + '</span>';
+}
+function _brainLoadOrchSummaries(events) {
+  var nowMs = Date.now();
+  if (nowMs - _brainOrchLastFetch < 10000) return;  // poll at most every 10s
+  var seen = {}, ids = [];
+  (events || []).forEach(function(ev) {
+    var sid = _brainSeqSid(ev);
+    if (!sid || sid.indexOf('::') >= 0 || seen[sid]) return;
+    seen[sid] = 1;
+    ids.push(sid);
+  });
+  ids = ids.slice(0, 40);
+  if (!ids.length) return;
+  _brainOrchLastFetch = nowMs;
+  fetch('/api/orchestration-summary?session_ids=' + encodeURIComponent(ids.join(',')))
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var sums = (d && d.sessions) || {};
+      var changed = JSON.stringify(sums) !== JSON.stringify(_brainOrchSummaries);
+      _brainOrchSummaries = sums;
+      if (changed && _brainAllEvents && _brainAllEvents.length) {
+        renderBrainStream(_brainAllEvents);
+      }
+    })
+    .catch(function() {});
+}
+
+function _brainGroupSequences(rows) {
+  if (!rows || !rows.length) return '';
+  // Bucket by session, preserving newest-first order inside each bucket. A
+  // USER row (runtimes that emit one) starts a fresh block within its session.
+  var order = [], buckets = {}, turnOf = {};
+  rows.forEach(function(row) {
+    var ev = row.ev || {};
+    var sess = _brainSeqSid(ev) || 'unknown';
+    if (turnOf[sess] === undefined) turnOf[sess] = 0;
+    var key = sess + '#' + turnOf[sess];
+    if (!buckets[key]) { buckets[key] = []; order.push(key); }
+    buckets[key].push(row);
+    // The feed is newest-first, so rows ABOVE a USER row are that turn's
+    // responses: the USER row CLOSES its turn, and everything older belongs
+    // to the previous one.
+    if ((ev.type || '') === 'USER') turnOf[sess]++;
+  });
+  // A single bucket adds nothing but chrome — render flat (also the exact
+  // pre-sequence output, so one-session feeds are unchanged).
+  if (order.length < 2) return rows.map(function(r) { return r.html; }).join('');
+
+  // Only wrap runs with real substance. A live box emits a lot of one-shot
+  // sessions (a single OpenClaw LOG line, <1s); giving each of those a block
+  // header buried the feed under more chrome than content — strictly worse
+  // than the flat wall it replaced. Those render bare, exactly as before.
+  var BLOCK_MIN_EVENTS = 3;
+  var blocked = order.filter(function(k) { return buckets[k].length >= BLOCK_MIN_EVENTS; });
+  if (!blocked.length) return rows.map(function(r) { return r.html; }).join('');
+
+  var out = _brainSwimlane(blocked, buckets);
+  order.forEach(function(key) {
+    var g = buckets[key];
+    if (g.length < BLOCK_MIN_EVENTS) {
+      out += g.map(function(r) { return r.html; }).join('');
+      return;
+    }
+    var newest = _brainSeqTime(g[0].ev);
+    var oldest = _brainSeqTime(g[g.length - 1].ev);
+    var dur = _brainSeqDuration(newest - oldest);
+    var steps = g.length;
+    var meta = steps + ' event' + (steps === 1 ? '' : 's') + (dur ? ' \u00b7 \u23f1 ' + dur : '');
+    // Per-run error badge (Brain-visualizer adoption #3): failed tool
+    // results arrive typed ERROR, so a collapsed block still tells you
+    // which run hit problems before you expand it.
+    var errs = 0;
+    g.forEach(function(r) { var e = r.ev || {}; if ((e.type || '') === 'ERROR' || e.isError) errs++; });
+    var errBadge = errs
+      ? '<span class="brain-seq-errs" title="' + errs + ' failed tool call' + (errs === 1 ? '' : 's') + ' in this run">\u26a0 ' + errs + '</span>'
+      : '';
+    var seqSid = _brainSeqSid(g[0].ev);
+    out += '<div class="brain-seq" id="' + _brainSeqDomId(key) + '" data-sess="' + escHtml(seqSid) + '">'
+        +  '<div class="brain-seq-head" onclick="toggleBrainSequence(this)">'
+        +  '<span class="brain-seq-chevron">\u203a</span>'
+        +  '<span class="brain-seq-label">' + escHtml(_brainSeqLabel(g[0].ev)) + '</span>'
+        +  errBadge
+        +  _brainOrchBadgeHtml(seqSid)
+        +  '<span class="brain-seq-meta">' + escHtml(meta) + '</span>'
+        +  '</div>'
+        +  '<div class="brain-seq-body">'
+        +  g.map(function(r) { return r.html; }).join('')
+        +  '</div></div>';
+  });
+  return out;
+}
+
+// ── Session swimlane ─────────────────────────────────────────────────────
+// The Brain Visualizer's "proportional timeline": a bird's-eye strip where
+// every run is drawn against real wall-clock time, so idle gaps and overlaps
+// are visible at a glance. Adapted to our data — the feed carries no per-turn
+// anchor but does carry a session per event, so each lane is one agent run.
+// Answers the question the density chart can't: WHICH runs were going, WHEN,
+// and did they overlap. Clicking a lane jumps to that run's block.
+
+function _brainSeqDomId(key) {
+  var h = 0;
+  for (var i = 0; i < key.length; i++) { h = ((h << 5) - h + key.charCodeAt(i)) | 0; }
+  return 'brain-seq-' + Math.abs(h).toString(36);
+}
+
+function jumpToBrainSequence(domId) {
+  var el = document.getElementById(domId);
+  if (!el) return;
+  var body = el.querySelector('.brain-seq-body');
+  var head = el.querySelector('.brain-seq-head');
+  if (body && body.style.display === 'none' && head) toggleBrainSequence(head);
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
+  el.classList.add('brain-seq-flash');
+  setTimeout(function() { el.classList.remove('brain-seq-flash'); }, 1400);
+}
+
+function _brainSwimlane(order, buckets) {
+  var spans = [];
+  var min = Infinity, max = -Infinity;
+  order.forEach(function(key) {
+    var g = buckets[key];
+    var end = _brainSeqTime(g[0].ev);
+    var start = _brainSeqTime(g[g.length - 1].ev);
+    if (!start || !end) return;
+    if (start < min) min = start;
+    if (end > max) max = end;
+    var errs = 0;
+    g.forEach(function(r) { var e = r.ev || {}; if ((e.type || '') === 'ERROR' || e.isError) errs++; });
+    spans.push({key: key, start: start, end: end, n: g.length, ev: g[0].ev, errs: errs});
+  });
+  if (spans.length < 2 || !isFinite(min) || max <= min) return '';
+  var total = max - min;
+  var rows = spans.map(function(sp) {
+    var left = ((sp.start - min) / total) * 100;
+    var width = Math.max(1.5, ((sp.end - sp.start) / total) * 100);
+    if (left + width > 100) width = 100 - left;
+    var col = brainSourceColor(sp.ev.source || sp.ev.src || 'main');
+    var title = _brainSeqLabel(sp.ev) + ' \u00b7 ' + sp.n + ' events \u00b7 '
+              + _brainSeqDuration(sp.end - sp.start)
+              + (sp.errs ? ' \u00b7 \u26a0 ' + sp.errs + ' error' + (sp.errs === 1 ? '' : 's') : '');
+    return '<div class="brain-lane" onclick="jumpToBrainSequence(\'' + _brainSeqDomId(sp.key) + '\')" title="'
+         + escHtml(title) + '">'
+         + '<span class="brain-lane-name">' + escHtml(_brainSeqLabel(sp.ev)) + '</span>'
+         + '<span class="brain-lane-track">'
+         + '<span class="brain-lane-bar' + (sp.errs ? ' brain-lane-bar-err' : '') + '" style="left:' + left.toFixed(2) + '%;width:'
+         + width.toFixed(2) + '%;background:' + col + ';"></span>'
+         + '</span></div>';
+  }).join('');
+  var span = _brainSeqDuration(total);
+  return '<div class="brain-swimlane">'
+       + '<div class="brain-swimlane-head">' + escHtml(t('brain.swimlane_title', null, 'Runs over time'))
+       + '<span class="brain-swimlane-span">' + escHtml(span ? 'spanning ' + span : '') + '</span></div>'
+       + rows + '</div>';
 }
 
 // Reasoning Chain Viewer (GH #565)
@@ -5759,7 +9040,7 @@ function renderBrainChart(events) {
   // chart full of bars from other runtimes' events. Apply the same four
   // filters here.
   if (_brainFilter !== 'all') {
-    events = events.filter(function(ev) { return ev.source === _brainFilter; });
+    events = events.filter(function(ev) { return _brainEvSource(ev) === _brainFilter; });
   }
   if (_brainTypeFilter !== 'all') {
     events = events.filter(function(ev) { return ev.type === _brainTypeFilter; });
@@ -6499,216 +9780,30 @@ function _stopBrainSSE() {
 }
 
 function _buildSourcesList(events) {
+  // Client-side session chips: one chip per session in view, labelled the
+  // same way the sequence blocks are ("Claude Code · 097c609a"), newest
+  // first. This is the ONLY source list on the local-store fast path (the
+  // API's `sources` ride the JSONL slow path), so it powers the
+  // sessions/all-sessions filter for the standard install.
   var seen = {};
   var sources = [];
-  events.forEach(function(ev) {
-    if (!seen[ev.source]) {
-      seen[ev.source] = true;
-      sources.push({id: ev.source, label: ev.sourceLabel || ev.source, color: ev.color || '#888'});
+  (events || []).forEach(function(ev) {
+    var id = _brainEvSource(ev);
+    var ts = ev.time ? new Date(ev.time).getTime() : 0;
+    if (!seen[id]) {
+      var label = ev.sourceLabel || (typeof _brainSeqLabel === 'function' ? _brainSeqLabel(ev) : id);
+      var cat = 'other';
+      if (String(id).indexOf('::') >= 0 || String(id).indexOf('subagent') >= 0) cat = 'subagent';
+      seen[id] = {id: id, label: label, color: ev.color || brainSourceColor(id),
+                  category: cat, last_ts: ts, count: 0};
+      sources.push(seen[id]);
     }
+    seen[id].count++;
+    if (ts > seen[id].last_ts) seen[id].last_ts = ts;
   });
   return sources;
 }
 
-// ── LLM Context Inspector ─────────────────────────────────────────────────
-async function loadContextInspector() {
-  try {
-    // Fetch overview for model + token info
-    var ov = await fetchJsonWithTimeout('/api/overview', 5000).catch(function(){return {};});
-    // Fetch brain history for compaction events + turn count
-    var brain = await fetchJsonWithTimeout('/api/brain-history?limit=300', 8000).catch(function(){return {events:[]};});
-    // Skills header token count. Prefer the OSS↔cloud-shared
-    // `skillHeaderTokens` now exposed by /api/overview + the snapshot
-    // (2026-05-23 OSS↔cloud parity fix) so both sides render the same
-    // value. We only need to hit /api/skills when the daemon is too
-    // old to publish that field AND we're not in cloud (where the
-    // endpoint is 410 Gone). Cloud mode without the field falls back
-    // to an empty stub — the bar then uses the contextWindow*0.008
-    // approximation instead of returning a misleading 1.6K.
-    var skills;
-    if (typeof ov.skillHeaderTokens === 'number') {
-      skills = {skills:[], summary:{total_header_tokens: ov.skillHeaderTokens}};
-    } else if (window.CLOUD_MODE) {
-      skills = {skills:[], summary:{}};
-    } else {
-      skills = await fetch('/api/skills').then(function(r){return r.json();}).catch(function(){return {skills:[],summary:{}};});
-    }
-
-    var contextWindow = ov.contextWindow || 200000;
-    // Prefer `currentContextTokens` (the latest assistant turn's actual
-    // input_tokens, capped naturally at the model's context window) over
-    // `mainTokens` (cumulative session total, which can exceed the
-    // window and gave the gauge a misleading "204K/200K (100%)" reading).
-    // Falls back to mainTokens for daemons older than the field.
-    var mainTokens = ov.currentContextTokens || ov.mainTokens || 0;
-    var model = ov.model || 'unknown';
-    // brain may be either {events:[...]} (legacy/local_store) or
-    // {_source:"cache", events_blob:"..."} (cache hit on cloud). Use the
-    // async unwrapper so the cloud-injected decryptBlob can decode the
-    // ciphertext when CLOUD_MODE+enc-key are both available.
-    var events = await unwrapListAsync(brain, 'events', 'events_blob');
-
-    // Context window usage bar
-    var pct = contextWindow > 0 ? Math.min(100, Math.round(mainTokens / contextWindow * 100)) : 0;
-    var usageFill = document.getElementById('ctx-usage-fill');
-    if (usageFill) usageFill.style.width = pct + '%';
-    var usageText = document.getElementById('ctx-usage-text');
-    if (usageText) usageText.textContent = _fmtTokens(mainTokens) + ' / ' + _fmtTokens(contextWindow) + ' tokens (' + pct + '%)';
-    var windowMax = document.getElementById('ctx-window-max');
-    if (windowMax) windowMax.textContent = _fmtTokens(contextWindow);
-    var threshold = document.getElementById('ctx-compact-threshold');
-    if (threshold) threshold.textContent = t("app.compaction_at", null, "Compaction at ~") + _fmtTokens(Math.round(contextWindow * 0.8));
-
-    // Stats cards
-    var turns = events.filter(function(e){return e.type === 'USER';}).length;
-    var compactions = events.filter(function(e){return e.type === 'CONTEXT' && (e.detail||'').indexOf('Compact') >= 0;}).length;
-    var el;
-    el = document.getElementById('ctx-total-turns'); if (el) el.textContent = turns;
-    el = document.getElementById('ctx-compactions'); if (el) el.textContent = compactions;
-    el = document.getElementById('ctx-model-name'); if (el) { el.textContent = model.split('/').pop(); el.style.fontSize = model.length > 20 ? '14px' : '20px'; }
-
-    // Active model + model mix, scoped to the selected runtime. The overview
-    // model (ov.model) is the node-wide active model — for a non-OpenClaw
-    // runtime that's wrong (e.g. it showed claude-opus-4-7 for Codex, which
-    // actually ran gpt-5.4). Pull the per-runtime attribution: the MOST-USED
-    // model becomes the "active" one, the rest are listed with % of turns
-    // (founder spec 2026-06-04). /api/model-attribution honours ?runtime=.
-    (function _ctxModelMix() {
-      var mixEl = document.getElementById('ctx-model-mix');
-      var nameEl = document.getElementById('ctx-model-name');
-      var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-      var _q = (_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '';
-      fetch('/api/model-attribution' + _q).then(function (r) { return r.json(); }).then(function (ma) {
-        var models = (ma && ma.models) || [];
-        var total = (ma && ma.total_turns) || models.reduce(function (s, m) { return s + (m.turns || 0); }, 0);
-        if (!models.length || !total) {
-          if (mixEl) mixEl.style.display = 'none';
-          // A specific runtime with no model data must NOT leak the node-wide
-          // model (Codex showed claude-opus-4-7 for this reason). Show a dash.
-          if (_rt && _rt !== 'all' && nameEl) {
-            nameEl.textContent = '—';
-            nameEl.style.fontSize = '20px';
-            nameEl.title = 'No model usage recorded for ' + _rt + ' yet';
-          }
-          return;
-        }
-        // most-used first
-        models = models.slice().sort(function (a, b) { return (b.turns || 0) - (a.turns || 0); });
-        var top = (ma.primary_model && ma.primary_model !== '--') ? ma.primary_model : models[0].model;
-        if (nameEl) {
-          var shortTop = String(top).replace('anthropic/', '').replace('openai/', '').split('/').pop();
-          nameEl.textContent = shortTop;
-          nameEl.style.fontSize = shortTop.length > 20 ? '14px' : '20px';
-          nameEl.title = top + ' — most-used model for ' + (_rt === 'all' ? 'all runtimes' : _rt);
-        }
-        if (!mixEl) return;
-        // List the OTHER models with % of turns (skip the primary already shown above).
-        var others = models.filter(function (m) { return m.model !== top; });
-        if (!others.length) { mixEl.style.display = 'none'; return; }
-        var html = '';
-        others.slice(0, 4).forEach(function (m) {
-          var pct = total > 0 ? (m.turns / total * 100) : 0;
-          var nm = String(m.model || '').replace('anthropic/', '').replace('openai/', '').split('/').pop();
-          html += '<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:10px;color:var(--text-muted);margin:2px 0;">'
-            + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(m.model || '') + '">' + escHtml(nm) + '</span>'
-            + '<span style="flex-shrink:0;font-weight:600;color:var(--text-secondary);">' + pct.toFixed(0) + '%</span></div>';
-        });
-        mixEl.innerHTML = html;
-        mixEl.style.display = 'block';
-      }).catch(function () { if (mixEl) mixEl.style.display = 'none'; });
-    })();
-
-    // Context composition breakdown
-    var skillHeaderTokens = (skills.summary || {}).total_header_tokens || 0;
-    var memoryFiles = ov.memoryCount || 0;
-    var memorySize = ov.memorySize || 0;
-    var memoryTokens = Math.round(memorySize / 4); // rough estimate
-
-    // Estimate system prompt sections based on known OpenClaw structure
-    var sections = [
-      {name: '## Tooling', tokens: Math.round(contextWindow * 0.015), color: '#3b82f6', desc: 'Tool list + descriptions'},
-      {name: '## Safety', tokens: 120, color: '#ef4444', desc: 'Safety guardrails'},
-      {name: '## Skills', tokens: skillHeaderTokens || Math.round(contextWindow * 0.008), color: '#f59e0b', desc: (skills.skills||[]).length + ' skill headers always loaded'},
-      {name: '## Memories', tokens: 200, color: '#8b5cf6', desc: 'Memory tool guidance'},
-      {name: '## Workspace', tokens: 150, color: '#06b6d4', desc: 'Working directory + docs path'},
-      {name: '## Heartbeats', tokens: 80, color: '#10b981', desc: 'Heartbeat prompt'},
-      {name: 'Bootstrap: SOUL.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.2)) : 750, color: '#e879f9', desc: 'Agent identity + personality'},
-      {name: 'Bootstrap: AGENTS.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.15)) : 500, color: '#c084fc', desc: 'Workspace configuration'},
-      {name: 'Bootstrap: TOOLS.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.1)) : 400, color: '#a78bfa', desc: 'Custom tool instructions'},
-      {name: 'Bootstrap: MEMORY.md', tokens: memoryTokens > 0 ? Math.min(5000, Math.round(memoryTokens * 0.3)) : 1000, color: '#818cf8', desc: 'Persistent agent memory'},
-      {name: 'Tool schemas (JSON)', tokens: Math.round(contextWindow * 0.035), color: '#64748b', desc: 'Hidden but counted in context'},
-      {name: 'Conversation history', tokens: Math.max(0, mainTokens - Math.round(contextWindow * 0.08)), color: '#22c55e', desc: 'Recent messages + tool results'},
-    ];
-
-    var totalSysPrompt = 0;
-    sections.forEach(function(s) { if (s.name.indexOf('Conversation') === -1) totalSysPrompt += s.tokens; });
-    var sysTotalEl = document.getElementById('ctx-sysprompt-total');
-    if (sysTotalEl) sysTotalEl.textContent = '~' + _fmtTokens(totalSysPrompt) + ' tokens (estimated)';
-
-    // Render composition bars
-    var barsEl = document.getElementById('ctx-composition-bars');
-    if (barsEl) {
-      var maxTokens = Math.max.apply(null, sections.map(function(s){return s.tokens;}));
-      var html = '';
-      sections.forEach(function(s) {
-        var barPct = maxTokens > 0 ? Math.max(1, Math.round(s.tokens / maxTokens * 100)) : 0;
-        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
-        html += '<div style="min-width:160px;font-size:11px;color:var(--text-secondary);white-space:nowrap;">' + escHtml(s.name) + '</div>';
-        html += '<div style="flex:1;height:14px;background:var(--bg-primary);border-radius:4px;overflow:hidden;border:1px solid var(--border);">';
-        html += '<div style="height:100%;width:' + barPct + '%;background:' + s.color + ';border-radius:4px;transition:width 0.5s;"></div>';
-        html += '</div>';
-        html += '<div style="min-width:70px;text-align:right;font-size:11px;color:var(--text-muted);font-family:monospace;">' + _fmtTokens(s.tokens) + '</div>';
-        html += '</div>';
-      });
-      barsEl.innerHTML = html;
-    }
-
-    // Render system prompt sections (expandable)
-    var secEl = document.getElementById('ctx-sysprompt-sections');
-    if (secEl) {
-      var html = '';
-      sections.filter(function(s){return s.name.indexOf('Conversation') === -1;}).forEach(function(s) {
-        html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.04);">';
-        html += '<span style="width:8px;height:8px;border-radius:50%;background:' + s.color + ';flex-shrink:0;"></span>';
-        html += '<span style="font-size:12px;color:var(--text-primary);min-width:160px;">' + escHtml(s.name) + '</span>';
-        html += '<span style="font-size:11px;color:var(--text-muted);flex:1;">' + escHtml(s.desc) + '</span>';
-        html += '<span style="font-size:11px;color:var(--text-secondary);font-family:monospace;">' + _fmtTokens(s.tokens) + '</span>';
-        html += '</div>';
-      });
-      secEl.innerHTML = html;
-    }
-
-    // Compaction log
-    var compactionEvents = events.filter(function(e) {
-      return e.type === 'CONTEXT' && (e.detail||'').toLowerCase().indexOf('compact') >= 0;
-    });
-    var logEl = document.getElementById('ctx-compaction-log');
-    if (logEl) {
-      if (compactionEvents.length === 0) {
-        logEl.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px;">No compactions yet. Context hasn\'t exceeded the ~' + _fmtTokens(Math.round(contextWindow * 0.8)) + ' threshold.</div>';
-      } else {
-        var html = '';
-        compactionEvents.forEach(function(ev) {
-          html += '<div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04);font-size:12px;">';
-          html += '<span style="color:var(--text-muted);margin-right:8px;">' + formatBrainTime(ev.time) + '</span>';
-          html += '<span style="color:#f59e0b;font-weight:600;">Compaction</span> ';
-          html += '<span style="color:var(--text-secondary);">' + escHtml((ev.detail||'').substring(0, 200)) + '</span>';
-          html += '</div>';
-        });
-        logEl.innerHTML = html;
-      }
-    }
-  } catch(e) {
-    var barsEl = document.getElementById('ctx-composition-bars');
-    if (barsEl) barsEl.innerHTML = '<div style="color:var(--text-error);font-size:12px;">' + t("app.error_loading_context_data", null, "Error loading context data") + ': ' + escHtml(String(e)) + '</div>';
-  }
-}
-
-function _fmtTokens(n) {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-  return String(n);
-}
 
 // ── Advisor: natural-language Q&A over the agent's recent activity ─────────
 async function advisorProbe() {
@@ -7012,6 +10107,10 @@ window.selfevolveRun = async function () {
 };
 
 async function loadBrainPage(silent) {
+  // Mount the Grafana-style date/time-range picker on first paint (and
+  // re-mount if the tab was rebuilt). Idempotent by design — the helper
+  // no-ops when the container already has a picker attached.
+  try { _brainMountRangePicker(); } catch (e) {}
   // Cloud iframe doesn't proxy /api/brain-history (live event stream is
   // local-only). Without this branch, `loadBrainPage` returned silently and
   // left the inline `Loading...` placeholder in `#brain-stream` forever
@@ -7057,18 +10156,25 @@ async function loadBrainPage(silent) {
     var data = await _bhRaw.json();
     if (_bhRange !== _brainRange) return; // stale response for an old range
     // Hosted relay warm-up: the cloud answered "asked your node, poll me
-    // again" — show an honest status and retry a few times (the node
-    // answers within one heartbeat when it is online).
+    // again" — show an honest status and keep polling. Budget: a node
+    // mid-ingest (e.g. a deep runtime backfill) can hold its next heartbeat
+    // for 2-3 minutes, so allow ~5 min (12 quick polls, then 10s apart)
+    // before declaring failure. The old 12-poll (~40s) budget was shorter
+    // than one busy heartbeat and produced false "could not reach your
+    // node" errors while the node was fine (2026-07-30 window RCA).
     if (_bhRange && data && data._source === 'relay_pending') {
       var stEl = document.getElementById('brain-history-banner-status');
-      if (stEl) stEl.textContent = t('brain.window_fetching', null, 'Fetching this window from your node…');
-      if (_brainRangeRetries++ < 12) {
+      var _bhTry = _brainRangeRetries++;
+      if (stEl) stEl.textContent = _bhTry < 12
+        ? t('brain.window_fetching', null, 'Fetching this window from your node…')
+        : t('brain.window_fetching_busy', null, 'Your node is busy syncing — still fetching this window…');
+      if (_bhTry < 36) {
         setTimeout(function() {
           if (_bhRange === _brainRange) loadBrainPage(true);
-        }, Math.max(2000, (data.eta_sec || 3) * 1000));
+        }, _bhTry < 12 ? Math.max(2000, (data.eta_sec || 3) * 1000) : 10000);
       } else {
         var sEl2 = document.getElementById('brain-stream');
-        if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, 'Could not reach your node for this window. Check that the machine is online, then retry.') + '</div>';
+        if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, 'Could not fetch this window from your node. The node may be offline, or was mid-sync when the request was made — if it is online, retry in a moment.') + '</div>';
         if (stEl) stEl.textContent = '';
       }
       return;
@@ -7088,7 +10194,8 @@ async function loadBrainPage(silent) {
       return tb - ta;
     });
     _brainAllEvents = events;
-    renderBrainFilterChips(data.sources || []);
+    renderBrainFilterChips((data.sources && data.sources.length) ? data.sources : _buildSourcesList(events));
+    _brainLoadOrchSummaries(events);
     renderBrainTypeChips(events);
     // Channel filter chips
     window._brainChannelCounts = data.channels || {};
@@ -7132,6 +10239,16 @@ async function loadBrainPage(silent) {
       var stillLoading = /Loading/i.test(el.innerText || '');
       if (!silent || stillLoading) {
         el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">Failed to load: ' + escHtml(String(e)) + ' &nbsp;<button onclick="loadBrainPage()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
+      }
+      // Boot-time main-thread jank can abort this fetch at its 20 s cap
+      // while the server answers in <50 ms once the thread clears (founder
+      // live-hit 2026-07-30). The pane then parked on this error FOREVER:
+      // the 5 s poll fallback below is disabled the moment SSE connects,
+      // and the SSE handler appends into a list this error just wiped.
+      // One deferred retry heals it; the manual Retry button stays.
+      if (!window.__bhTimeoutRetried && /timeout/i.test(String(e))) {
+        window.__bhTimeoutRetried = true;
+        setTimeout(function() { try { loadBrainPage(); } catch (_) {} }, 4000);
       }
     }
   }
@@ -7328,6 +10445,58 @@ var _loopSignalsExpanded = false;
 var _loopSignalsNotifiedSig = null;
 var _loopSignalsPermissionAsked = false;
 
+// Plain words for each detector kind. The stored signature is an internal id
+// ("daemon_detect_file_blast_radius"); nobody opening this for the first time
+// should have to decode it.
+var LOOP_KIND_LABEL = {
+  stuck_loop: 'Repeating itself',
+  no_progress: 'Busy but not finishing',
+  repeated_tool_failure: 'The same step keeps failing',
+  action_discrepancy: 'Carried on after a failure',
+  file_blast_radius: 'Changed a lot of files at once',
+  credential_access: 'Opened a password or key file',
+  network_egress: 'Contacted somewhere new',
+  privilege_change: 'Asked for admin rights',
+  rate_limited: 'Being rate limited by its provider',
+  blocked_on_user: 'Waiting for you to answer',
+  crashed: 'Crashed and restarted'
+};
+
+// What ignoring this is estimated to cost. Blank when we do not know, because
+// a made-up number is worse than an honest gap.
+function loopMoney(n) {
+  var v = Number(n) || 0;
+  if (v <= 0) return '';
+  return v < 0.01 ? '<$0.01' : '$' + v.toFixed(2);
+}
+
+// The "At risk" cell, with its basis on it. The API sends a provenance entry
+// per row (routes/health.py::_loop_signal_enriched translates the detector's
+// own spend_basis), so the same badge that labels the Cost tab labels this,
+// and a signal nobody could price arrives as null rather than as $0.00.
+function loopRiskCell(row) {
+  var entry = (window.cmProv && window.cmProv.of(row, 'spend_at_risk_usd')) || null;
+  if (window.cmProv) {
+    return window.cmProv.figure(row.spend_at_risk_usd, entry, {
+      label: 'Spend at risk',
+      compact: true,
+      emptyText: 'no cost data'
+    });
+  }
+  var risk = loopMoney(row.spend_at_risk_usd);
+  return risk
+    ? '<span title="' + escHtml(loopBasisHint(row.spend_basis)) + '">' + escHtml(risk) + '</span>'
+    : '<span style="color:var(--text-muted);" title="' + escHtml(loopBasisHint('')) + '">no cost data</span>';
+}
+
+function loopBasisHint(basis) {
+  if (basis === 'burn_rate') return 'Measured: this session spend rate over the time it has been off track.';
+  // Say plainly that this one is rough, because it is the reason the row is
+  // not marked critical however large the number looks.
+  if (basis === 'window_fraction') return 'Rough guide only: the session cost shared across the flagged part of the window. Too approximate to raise the alert level on its own.';
+  return 'We do not have cost data for this session.';
+}
+
 function _loopSignalsMaybeNotify(rows) {
   if (!rows || !rows.length) return;
   if (typeof window === 'undefined' || !('Notification' in window)) return;
@@ -7386,19 +10555,34 @@ async function loadLoopSignals() {
     // for an alerts upsell.
     _loopSignalsMaybeNotify(rows);
     // Render table — keep it dead simple: Time | Session | Pattern | Repeat.
-    var head = '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
-      + '<div>Last seen</div><div>Session</div><div>Pattern</div><div style="text-align:right;">Repeats</div></div>';
+    // Ordered by what it costs to ignore (the API sorts; we just render).
+    var totalRisk = loopMoney(data && data.spend_at_risk_usd);
+    // The total is a FLOOR when some signals could not be priced; the badge
+    // carries that caveat (routes/health.py counts the unpriced ones).
+    var totalRiskHtml = window.cmProv
+      ? window.cmProv.money(data || {}, 'spend_at_risk_usd',
+                            { label: 'Total spend at risk', compact: true })
+      : escHtml(totalRisk);
+    var head = '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
+      + '<div>Last seen</div><div>Session</div><div>What happened</div>'
+      + '<div style="text-align:right;" title="Estimated cost of the flagged stretch, not the whole session.">At risk</div>'
+      + '<div style="text-align:right;">Repeats</div></div>';
     var body = rows.map(function(r) {
       var ts = r.last_seen || r.first_seen || '';
       try { ts = new Date(ts).toLocaleString(); } catch (e) {}
       var sid = String(r.session_id || '').slice(0, 16);
-      var sig = String(r.signature || '');
-      if (sig.length > 60) sig = sig.slice(0, 57) + '...';
+      // Prefer the detector headline, then a plain-words kind label, and only
+      // fall back to the raw signature for proxy-emitted rows that have
+      // neither.
+      var what = String(r.title || '') || LOOP_KIND_LABEL[r.kind] || String(r.signature || '');
+      if (what.length > 70) what = what.slice(0, 67) + '...';
       var rc = r.repeat_count != null ? r.repeat_count : '-';
-      return '<div style="display:grid;grid-template-columns:130px 160px 1fr 70px;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-secondary);">'
+      var riskCell = loopRiskCell(r);
+      return '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:5px 0;border-bottom:1px solid var(--border-secondary);">'
         + '<div style="color:var(--text-muted);">' + escHtml(ts) + '</div>'
         + '<div style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.session_id || '')) + '">' + escHtml(sid) + '</div>'
-        + '<div style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.signature || '')) + '">' + escHtml(sig) + '</div>'
+        + '<div style="color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(String(r.detail || r.signature || '')) + '">' + escHtml(what) + '</div>'
+        + '<div style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums;">' + riskCell + '</div>'
         + '<div style="text-align:right;color:#ef4444;font-weight:700;">' + escHtml(String(rc)) + '</div>'
         + '</div>';
     }).join('');
@@ -7417,7 +10601,13 @@ async function loadLoopSignals() {
         + '<a href="https://app.clawmetry.com/upgrade?ref=loops" target="_blank" rel="noopener" style="color:var(--accent,#7c5cff);font-weight:600;text-decoration:none;">Unlock loop history and alerts in Cloud-Pro</a>'
         + '</div>';
     }
-    tableEl.innerHTML = head + body + cta;
+    // Lead with the money when we have it: the first thing a reader wants to
+    // know is not how many loops there were, it is what they are costing.
+    var summary = totalRisk
+      ? '<div style="padding:6px 0 8px;font-size:12px;color:var(--text-secondary);">About ' + escHtml(totalRisk)
+        + ' of spend is tied up in what is listed below. Stopping an agent here stops that meter.</div>'
+      : '';
+    tableEl.innerHTML = summary + head + body + cta;
   } catch (e) {
     // Fail closed: hide the badge so we don't show a stale or wrong count.
     badge.style.display = 'none';
@@ -7992,18 +11182,187 @@ async function approvalDecide(approvalId, decision, btn) {
 // attention, collapses the passing items behind a one-line "show all"
 // disclosure, and condenses the hero card so the action items aren't
 // buried under a wall of green PASS cards.
+// ── Data retention control (Security tab) ───────────────────────────────
+//
+// The number, WHAT is setting it, and a way to shorten it. A control that
+// showed "7 days" without saying whether that is your choice or your plan's
+// ceiling would just move the reviewer's question rather than answer it.
+//
+// The server resolves shrink-only: asking for more than the plan allows
+// stores the request but keeps pruning at the ceiling, and the copy says so
+// rather than letting the operator believe they bought more retention.
+function _renderRetention(state) {
+  var label = document.getElementById('retention-label');
+  var input = document.getElementById('retention-days-input');
+  if (!label || !input) return;
+  // On the hosted dashboard there is no node to read or write. The server
+  // answers from the plan alone, which is true for the account but blind to
+  // a SHORTER period the operator set on the machine itself — and the write
+  // has no path to that machine at all. Showing the plan number next to an
+  // editable box would state it as the machine's setting and offer a control
+  // that cannot work, so the panel goes read-only and says where the real
+  // answer lives.
+  if (window.CLOUD_MODE) {
+    var _rw = document.getElementById('retention-controls');
+    if (_rw) _rw.style.display = 'none';
+    var _days = state && state.cap_days;
+    label.textContent = _days
+      ? ('Your plan keeps event history for ' + _days + ' day'
+         + (_days === 1 ? '' : 's') + '. A machine can be set to keep less '
+         + 'than that, from the Security tab on the machine itself.')
+      : ('Your plan keeps event history indefinitely. A machine can be set '
+         + 'to keep less, from the Security tab on the machine itself.');
+    var _st = document.getElementById('retention-status');
+    if (_st) { _st.textContent = ''; _st.style.color = ''; }
+    return;
+  }
+  label.textContent = (state && state.explanation) || '';
+  // What is in force right now, so a later Save can tell shrinking from
+  // raising and only confirm the destructive direction.
+  window._cmRetentionEffectiveDays =
+    (state && typeof state.effective_days === 'number') ? state.effective_days : null;
+  if (state && state.configured_days) {
+    input.value = state.configured_days;
+  } else if (state && state.effective_days) {
+    input.value = state.effective_days;
+  } else {
+    input.value = '';
+  }
+  var status = document.getElementById('retention-status');
+  if (!status) return;
+  if (state && state.configured_days && state.cap_days
+      && state.configured_days > state.cap_days) {
+    status.textContent = 'You asked for ' + state.configured_days
+      + ' days; your plan keeps at most ' + state.cap_days
+      + ', so history older than ' + state.cap_days + ' days is still deleted.';
+    status.style.color = 'var(--warning, #d97706)';
+  } else {
+    status.textContent = '';
+    status.style.color = '';
+  }
+}
+
+async function loadRetentionSetting() {
+  try {
+    var r = await fetch('/api/security/retention');
+    if (!r.ok) return;
+    _renderRetention(await r.json());
+  } catch (e) { /* panel stays on its "checking..." copy */ }
+}
+
+async function saveRetentionSetting(usePlanDefault) {
+  var input = document.getElementById('retention-days-input');
+  var status = document.getElementById('retention-status');
+  var days = null;
+  if (!usePlanDefault) {
+    days = parseInt(input && input.value, 10);
+    if (!(days >= 1)) {
+      if (status) {
+        status.textContent = 'Enter a whole number of days, 1 or more.';
+        status.style.color = 'var(--danger, #dc2626)';
+      }
+      return;
+    }
+  }
+  // Shortening retention DELETES history, within the hour, permanently. The
+  // shrink-only design makes the control safe against granting yourself more
+  // retention than you bought; it does nothing to protect you from deleting
+  // your own evidence by typing a smaller number. Those are different risks
+  // and the first one was mistaken for the second. So: say what will go, and
+  // ask. Only when the new period is SHORTER than what is in force -- raising
+  // it, or returning to the plan default, destroys nothing and should not
+  // nag.
+  var _cur = window._cmRetentionEffectiveDays;
+  if (!usePlanDefault && typeof _cur === 'number' && days < _cur) {
+    var _msg = 'Keep event history for ' + days + ' day'
+      + (days === 1 ? '' : 's') + ' instead of ' + _cur + '?\n\n'
+      + 'Everything older than ' + days + ' day' + (days === 1 ? '' : 's')
+      + ' is deleted from this machine within the hour, and cannot be '
+      + 'recovered.';
+    if (!window.confirm(_msg)) {
+      if (status) { status.textContent = 'Left unchanged.'; status.style.color = ''; }
+      return;
+    }
+  }
+  try {
+    var r = await fetch('/api/security/retention', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days: days })
+    });
+    var body = await r.json();
+    if (body && body.ok) {
+      _renderRetention(body);
+    } else if (status) {
+      status.textContent = (body && body.error) || 'Could not save.';
+      status.style.color = 'var(--danger, #dc2626)';
+    }
+  } catch (e) {
+    if (status) {
+      status.textContent = 'Could not save.';
+      status.style.color = 'var(--danger, #dc2626)';
+    }
+  }
+}
+
+// Hosted dashboard: show only the parts of this tab that have real data.
+//
+// The cloud container has no ~/.openclaw config and no local DuckDB, so the
+// posture scan, the live signature scan, the policy/PII scan, the credential
+// scan and the recorded-findings feed have nothing to read. What a trial user
+// saw instead was a full Security page made of dashes, 0/0/0/0 tiles under a
+// heading promising threat detection, severity filters that filtered nothing,
+// and two panels stuck on "Scanning..." forever. That reads as broken
+// software, and the reading is fair: a control that claims a capability it
+// does not have costs more trust than the capability would have earned.
+// So on cloud those panels are removed outright, and #security-cloud-note
+// says in one line where those scans actually run. What survives is what the
+// snapshot really carries: the tamper-evident log, the plan's retention, and
+// governance activity when there is any (loadSecurityAudit hides its own
+// panel when there is none).
+var _CM_SECURITY_CLOUD_HIDDEN = [
+  'security-scan-btn',
+  'security-posture-panel',
+  'security-threat-heading',
+  'security-allclear',
+  'security-summary',
+  'security-filter-pills',
+  'security-threat-panel',
+  'security-findings-panel',
+  'policy-events-panel',
+  'credential-scan-panel',
+  'security-catalog-panel'
+];
+
+function _cmSecurityCloudTrim() {
+  if (!window.CLOUD_MODE) return;
+  _CM_SECURITY_CLOUD_HIDDEN.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  var note = document.getElementById('security-cloud-note');
+  if (note) note.style.display = '';
+}
+
 async function loadSecurityPosture() {
   if (window.CLOUD_MODE) {
-    // Trial-bug fix #23: posture scans the local OpenClaw config (no DuckDB in
-    // cloud) so it errored on the hosted dashboard. Show an honest state.
-    var _pb = document.getElementById('posture-score-badge');
-    if (_pb) _pb.textContent = '--';
-    var _pl = document.getElementById('posture-score-label');
-    if (_pl) _pl.textContent = t('app.local_dashboard_only', null, 'Local dashboard only');
+    // Posture scans the machine's agent config, which the cloud container does
+    // not have. It used to paint '--' + "Local dashboard only" into the panel,
+    // which is an empty score card claiming a scan happened. The panel goes.
+    _cmSecurityCloudTrim();
     return;
   }
   try {
-    var data = await fetchJsonWithTimeout('/api/security/posture', 25000);
+    // Posture is per-runtime: scan the SELECTED runtime's config, not
+    // OpenClaw's regardless of selection ("No openclaw.json found" while
+    // Claude Code was selected — the founder screenshot, 2026-08-02).
+    // 'all' keeps the node default (openclaw) for backward compatibility.
+    var prt = 'openclaw';
+    try {
+      var pf = _cmClientFilterRt(_cmRuntimeFilter());
+      if (pf && pf !== 'all') prt = pf;
+    } catch (e) {}
+    var data = await fetchJsonWithTimeout('/api/security/posture?runtime=' + encodeURIComponent(prt), 25000);
     var badge = document.getElementById('posture-score-badge');
     if (!badge) return;
     var label = document.getElementById('posture-score-label');
@@ -8012,9 +11371,24 @@ async function loadSecurityPosture() {
     var warnEl = document.getElementById('posture-warnings');
     var failedEl = document.getElementById('posture-failed');
     var listEl = document.getElementById('posture-checks-list');
+    if (data && data.status === 'not_available') {
+      // Honest neutral state: no posture checks exist for this runtime yet.
+      // Neither a red failure nor a fake score.
+      badge.textContent = '—';
+      badge.style.background = '#64748b';
+      if (label) label.textContent = _cmRuntimeLabel(prt) + ' · ' +
+        (data.detail || 'No security posture checks for this runtime yet');
+      if (bar) { bar.style.width = '0%'; }
+      if (passedEl) passedEl.textContent = '0';
+      if (warnEl) warnEl.textContent = '0';
+      if (failedEl) failedEl.textContent = '0';
+      if (listEl) listEl.innerHTML = '<div style="padding:12px 14px;background:var(--bg-primary);border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);font-size:12px;">' +
+        escHtml(data.detail || ('Posture checks for ' + _cmRuntimeLabel(prt) + ' are not implemented yet.')) + '</div>';
+      return;
+    }
     badge.textContent = data.score || '?';
     badge.style.background = data.score_color || '#64748b';
-    var labelTxt = (data.score_label || 'Unknown') + ' · ' + (data.score_pct || 0) + '%';
+    var labelTxt = _cmRuntimeLabel(data.runtime || prt) + ' · ' + (data.score_label || 'Unknown') + ' · ' + (data.score_pct || 0) + '%';
     label.innerHTML = escHtml(labelTxt) + (data.config_path ? '<span style="color:var(--text-muted);margin-left:8px;font-size:10px;font-family:ui-monospace,Menlo,monospace;">' + escHtml(data.config_path) + '</span>' : '');
     bar.style.width = (data.score_pct || 0) + '%';
     bar.style.background = data.score_color || '#64748b';
@@ -8067,33 +11441,42 @@ async function loadSecurityPosture() {
 
 async function loadSecurityPage(silent) {
   if (window.CLOUD_MODE) {
-    // Trial-bug fix #24: threat scanning runs on the local node (no DuckDB in
-    // cloud); the early-return left "Scanning..." spinning forever. Render an
-    // honest state instead.
-    var _tl = document.getElementById('security-threat-list');
-    if (_tl) _tl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('app.security_threats_local_only', null, 'Threat detection runs on your local node. Open the local dashboard to scan for misconfigurations.') + '</div>';
-    // Integrity + audit DO ship in the snapshot; a cm-cloud interceptor will
-    // serve them. Until then these render an honest "local node" state rather
-    // than a silent blank (and become live once the interceptor lands).
+    // Threat/policy/credential scans read this machine's event history, which
+    // the cloud container does not have. Their panels go; integrity and the
+    // audit log DO ship in the snapshot (cm-cloud-security), so those load.
+    _cmSecurityCloudTrim();
     loadSecurityIntegrity();
     loadSecurityAudit();
     return;
   }
+  // The durable findings feed is loaded FIRST so the tiles and the all-clear
+  // line can speak for the whole page. Painting them from the live signature
+  // scan alone is how the tab came to print "No threats detected" above a
+  // panel listing hundreds of findings, criticals included.
+  var edrCounts = await loadSecurityFindings();
   try {
-    var data = await fetchJsonWithTimeout('/api/security/threats', 10000);
+    var _secRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _secQs = (_secRt && _secRt !== 'all') ? '?runtime=' + encodeURIComponent(_secRt) : '';
+    var data = await fetchJsonWithTimeout('/api/security/threats' + _secQs, 10000);
     var threats = data.threats || [];
     _securityAllThreats = threats;
     var counts = data.counts || {};
-    document.getElementById('sec-critical-count').textContent = counts.critical || 0;
-    document.getElementById('sec-high-count').textContent = counts.high || 0;
-    document.getElementById('sec-medium-count').textContent = counts.medium || 0;
+    var edr = edrCounts || {};
+    // Tiles = live scan + recorded findings. One number per severity for the
+    // whole screen; the two feeds below say which engine reported what.
+    var totCritical = (counts.critical || 0) + (edr.critical || 0);
+    var totHigh = (counts.high || 0) + (edr.high || 0);
+    var totMedium = (counts.medium || 0) + (edr.medium || 0);
+    document.getElementById('sec-critical-count').textContent = totCritical;
+    document.getElementById('sec-high-count').textContent = totHigh;
+    document.getElementById('sec-medium-count').textContent = totMedium;
     document.getElementById('sec-clean-count').textContent = counts.clean_sessions || 0;
     var scanTime = document.getElementById('security-scan-time');
     if (scanTime) scanTime.textContent = t("app.scanned", null, "Scanned ") + new Date().toLocaleTimeString();
     // Compact "all-clear" mode: when there's nothing to triage, hide the four
     // zero-tiles + severity filter + perpetual "Scanning..." placeholder; show
     // one calm green line instead. Restored the moment anything > 0.
-    var nThreats = (counts.critical || 0) + (counts.high || 0) + (counts.medium || 0) + (threats.length || 0);
+    var nThreats = totCritical + totHigh + totMedium + (threats.length || 0) + (edr.total || 0);
     var summaryEl = document.getElementById('security-summary');
     var filterEl = document.getElementById('security-filter-pills');
     var listWrap = document.getElementById('security-threat-list');
@@ -8159,6 +11542,7 @@ async function loadSecurityPage(silent) {
     if (pel && !silent) pel.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">Policy scan unavailable.</div>';
   }
   // Tamper-evident integrity + Enterprise audit feed (both node-wide).
+  // (loadSecurityFindings already ran at the top — its counts feed the tiles.)
   loadSecurityIntegrity();
   loadSecurityAudit();
   try {
@@ -8208,6 +11592,118 @@ async function loadSecurityPage(silent) {
   }
 }
 
+// Recorded findings — the DURABLE security log (DuckDB security_events),
+// as opposed to #security-threat-list above, which is a live re-scan of
+// recent events through the built-in signature catalog.
+//
+// Founder-reported 2026-08-15: a HIGH numbat finding ("Secret-manager access
+// followed by data-bearing egress") fired the top banner, the banner offered
+// only Dismiss, and the Security tab could not show the finding either — it
+// only ever called /api/security/threats (the live scan), while ingested
+// findings land in security_events and are served by /api/security-threats.
+// The alarm had no destination anywhere in the product.
+//
+// Rows carry the session that triggered them, so this is also where the
+// banner's "Investigate" button lands.
+var _CM_SEV_STYLE = {
+  critical: { color: '#f87171', bg: 'rgba(220,38,38,0.14)', label: 'Critical' },
+  high:     { color: '#fbbf24', bg: 'rgba(245,158,11,0.14)', label: 'High' },
+  medium:   { color: '#60a5fa', bg: 'rgba(59,130,246,0.14)', label: 'Medium' },
+  low:      { color: '#94a3b8', bg: 'rgba(100,116,139,0.14)', label: 'Low' },
+  info:     { color: '#94a3b8', bg: 'rgba(100,116,139,0.14)', label: 'Info' }
+};
+
+async function loadSecurityFindings() {
+  var listEl = document.getElementById('security-findings-list');
+  var countEl = document.getElementById('security-findings-count');
+  if (!listEl) return;
+  // Cloud parity: security_events is not in the snapshot, so the hosted
+  // dashboard has nothing to read. An empty findings panel is a panel that
+  // says "we record findings" while showing none, so it is removed there
+  // rather than filled with an apology.
+  if (window.CLOUD_MODE) {
+    _cmSecurityCloudTrim();
+    if (countEl) countEl.textContent = '';
+    return null;
+  }
+  var rows = [];
+  var counts = null;
+  // Per-runtime honesty: findings are keyed by session id, which carries the
+  // runtime prefix. Scope SERVER-side so the row cap applies to this runtime's
+  // findings — filtering a node-wide page in JS silently drops rows once a
+  // busy runtime fills the cap.
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var qs = '?limit=100' + ((rt && rt !== 'all') ? '&runtime=' + encodeURIComponent(rt) : '');
+  try {
+    var d = await fetchJsonWithTimeout('/api/security-threats' + qs, 10000);
+    rows = (d && d.threats) || [];
+    counts = (d && d.counts) || null;
+  } catch (e) {
+    listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
+      + t('security.findings_unavailable', null, "Couldn't read the findings log. It lives on the machine your agent runs on — open the local dashboard to see it.")
+      + '</div>';
+    if (countEl) countEl.textContent = '';
+    return null;
+  }
+  if (!rows.length) {
+    listEl.innerHTML = '<div style="color:#86efac;padding:12px;font-size:12px;">✓ '
+      + t('security.findings_empty', null, 'Nothing recorded yet. Findings from ClawMetry’s own scan and from any connected security tool will appear here.')
+      + '</div>';
+    if (countEl) countEl.textContent = '';
+    return counts;
+  }
+  if (countEl) {
+    // The list is capped at 100; say how many there really are so the count
+    // never contradicts the tiles above.
+    var nTotal = (counts && counts.total) || rows.length;
+    countEl.textContent = nTotal + ' '
+      + (nTotal === 1
+          ? t('security.finding_word', null, 'finding')
+          : t('security.findings_word', null, 'findings'))
+      + (nTotal > rows.length
+          ? ' · ' + t('security.showing_latest', null, 'showing latest ') + rows.length
+          : '');
+  }
+  var html = '';
+  rows.slice(0, 100).forEach(function (r) {
+    var sev = String(r.severity || 'info').toLowerCase();
+    var st = _CM_SEV_STYLE[sev] || _CM_SEV_STYLE.info;
+    var sid = String(r.session_id || '');
+    var when = String(r.ts || '').slice(0, 19).replace('T', ' ');
+    html += '<div class="cm-finding-row" data-finding-id="' + escHtml(String(r.id || '')) + '">';
+    html += '<span class="cm-finding-sev" style="color:' + st.color + ';background:' + st.bg + ';">'
+         + escHtml(st.label) + '</span>';
+    html += '<div class="cm-finding-body">';
+    html += '<div class="cm-finding-desc">' + escHtml(String(r.description || r.rule_id || 'Security finding')) + '</div>';
+    if (r.snippet) {
+      html += '<code class="cm-finding-snippet">' + escHtml(String(r.snippet)) + '</code>';
+    }
+    html += '<div class="cm-finding-meta">' + escHtml(when);
+    if (r.rule_id) html += ' · ' + escHtml(String(r.rule_id));
+    html += '</div></div>';
+    if (sid) {
+      html += '<button class="cm-finding-open" onclick="cmOpenFindingSession(\''
+           + escHtml(sid).replace(/'/g, "\\'") + '\')">'
+           + t('security.open_session', null, 'Open session') + ' →</button>';
+    } else {
+      html += '<span class="cm-finding-nosession" title="'
+           + t('security.no_session_hint', null, 'The tool that reported this finding did not attach a session id.')
+           + '">' + t('security.no_session', null, 'No session') + '</span>';
+    }
+    html += '</div>';
+  });
+  listEl.innerHTML = html;
+  return counts;
+}
+
+// Jump from a finding to the transcript that produced it. Same hash-based
+// deep-link the stuck-session banner uses, so both entry points behave alike.
+function cmOpenFindingSession(sessionId) {
+  if (!sessionId) return;
+  try { window.location.hash = 'session=' + encodeURIComponent(sessionId); } catch (e) {}
+  if (typeof switchTab === 'function') switchTab('transcripts');
+}
+
 // Tamper-evident hash-chain status. Plain-language labels per the FLYWHEEL
 // vision ("Tamper-evident log: 1,240 events, intact"), never "hash chain
 // verified". Node-wide concept — the runtime switcher does not apply.
@@ -8232,6 +11728,16 @@ async function loadSecurityIntegrity() {
     } else if (d && d.ok === false) {
       paint(t('app.integrity_broken', null, 'Tamper-evident log: a break was detected at event ' + (d.first_break != null ? d.first_break : '?') + '. The activity log may have been altered.'),
             t('app.integrity_broken_badge', null, 'Tampered'), '#ef4444', '&#9888;');
+    } else if (d && d.status === 'degraded') {
+      // Third state, and the common one on a node that ran an older build:
+      // every event still matches its own hash (nothing was altered or
+      // removed), but some could not be placed in a single ordered chain
+      // because the writer chained two flush batches off the same head.
+      // Calling that "Tampered" scared people about a bug of ours; calling it
+      // "Intact" would hide a real insertion. It gets its own honest wording.
+      var nUnlinked = (d.unlinked || 0).toLocaleString();
+      paint(t('app.integrity_degraded', null, 'Tamper-evident log: all ' + nStr + ' events match their recorded fingerprint, so nothing was altered or removed. ' + nUnlinked + ' could not be placed in a single ordered chain, a fault in how older versions recorded the order that is now fixed. New events chain normally.'),
+            t('app.integrity_degraded_badge', null, 'Verified, order incomplete'), '#f59e0b', '&#128274;');
     } else if (window.CLOUD_MODE) {
       // Honest cloud state until the cm-cloud-security interceptor serves the
       // securityIntegrity snapshot slice (no silent blank).
@@ -8258,7 +11764,11 @@ async function loadSecurityAudit() {
     if (countEl) countEl.textContent = rows.length ? (rows.length + (rows.length === 1 ? ' event' : ' events')) : '';
     if (!rows.length) {
       if (window.CLOUD_MODE) {
-        listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;">' + t('app.audit_local_only', null, 'Governance activity is recorded on your local node. Open the local dashboard to review it.') + '</div>';
+        // The snapshot's auditLog slice is real, so "no rows" here means there
+        // has been no governance activity to record -- nothing to show, and no
+        // reason to keep an empty box on the page.
+        var _ap = document.getElementById('security-audit-panel');
+        if (_ap) _ap.style.display = 'none';
       } else {
         listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;" data-i18n="security.audit_empty">' + t('security.audit_empty', null, 'No recorded activity yet. Approval decisions, budget changes, and pauses appear here.') + '</div>';
       }
@@ -8305,8 +11815,16 @@ async function loadSecurityAudit() {
       html += escHtml(when) + '</div>';
       html += '</div></div>';
     });
+    var _ap2 = document.getElementById('security-audit-panel');
+    if (_ap2) _ap2.style.display = '';
     listEl.innerHTML = html;
   } catch (e) {
+    if (window.CLOUD_MODE) {
+      // Same reasoning as the empty case: no feed, no box.
+      var _ap3 = document.getElementById('security-audit-panel');
+      if (_ap3) _ap3.style.display = 'none';
+      return;
+    }
     listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:11px;">' + t('app.audit_unavailable', null, 'Activity feed unavailable.') + '</div>';
   }
 }
@@ -8438,6 +11956,15 @@ function renderLogs(elId, lines) {
 }
 
 function escHtml(s) { s=String(s||''); return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Attribute context needs the quotes escaped too — escHtml alone lets a value
+// containing '"' terminate the attribute it sits in.
+function escAttr(s) { return escHtml(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// Embed a JS string literal inside a double-quoted inline handler
+// (onclick="fn(...)"). JSON.stringify emits double quotes, which TERMINATE
+// the surrounding attribute and silently truncate the handler (the Context
+// usage session chips shipped broken exactly this way). &quot;-encode so the
+// HTML parser hands the handler a proper string literal.
+function attrJsStr(v) { return JSON.stringify(String(v == null ? '' : v)).replace(/"/g, '&quot;'); }
 
 async function viewFile(path) {
   var viewer = document.getElementById('file-viewer');
@@ -8475,7 +12002,11 @@ var _CM_RT_LABEL = {
   picoclaw: 'PicoClaw', nanoclaw: 'NanoClaw',
   hermes: 'Hermes', claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
   aider: 'Aider', goose: 'Goose', opencode: 'opencode', qwen_code: 'Qwen Code',
-  pi: 'Pi', deepagents: 'Deep Agents'
+  pi: 'Pi', deepagents: 'Deep Agents', n8n: 'n8n', antigravity: 'Antigravity',
+  copilot: 'GitHub Copilot', grok: 'Grok Build', grok_bot: 'Grok Bot', qm: 'QM',
+  deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
+  devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
+  openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -8483,7 +12014,11 @@ var _CM_RT_LABEL = {
 // derive them from a prefix (it can't) and never mis-bucket them into openclaw.
 var _CM_RT_PREFIXES = {
   openclaw: 1, picoclaw: 1, nanoclaw: 1, hermes: 1, claude_code: 1, codex: 1,
-  cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1
+  cursor: 1, aider: 1, goose: 1, opencode: 1, qwen_code: 1, pi: 1, deepagents: 1,
+  n8n: 1, antigravity: 1, copilot: 1, grok: 1, qm: 1, deepseek_harness: 1, exo: 1,
+  kimi: 1,
+  devin: 1, gemini_cli: 1, cline: 1, openhands: 1,
+  openworker: 1, grok_bot: 1, lovable: 1, replit: 1,
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -8511,8 +12046,18 @@ function _cmRuntimeOf(o) {
   // Explicit agent_type / runtime field (OTLP apps + server-tagged rows). An
   // OTLP app's spans carry agent_type=<its key>; honor it directly so a
   // selected OTLP runtime matches its own data and nothing else.
-  var r = o && (o.runtime || o.agent_type || o.agentType);
-  if (r) {
+  //
+  // Try every candidate rather than short-circuiting on the first truthy one:
+  // `/api/subagents` records carry a field literally named `runtime` that holds
+  // a FORMATTED DURATION ("44s", "12m", "2h 5m"), not a runtime name — see
+  // routes/sessions.py::_try_local_store_subagents. Short-circuiting on it made
+  // this helper return the 'openclaw' default for EVERY sub-agent, which is how
+  // a Codex sub-agent got filed under OpenClaw. `runtime` is checked last, and
+  // only a value that is actually a known runtime key is ever accepted.
+  var cands = o ? [o.runtimeName, o.agent_type, o.agentType, o.runtime] : [];
+  for (var ci = 0; ci < cands.length; ci++) {
+    var r = cands[ci];
+    if (!r) continue;
     r = String(r).toLowerCase();
     if (_CM_RT_PREFIXES.hasOwnProperty(r) || _CM_OTLP_RT.hasOwnProperty(r)) return r;
   }
@@ -8551,6 +12096,35 @@ function _cmSetRuntimeFilter(v, reload) {
   if (typeof reload === 'function') reload();
 }
 function _cmRuntimeLabel(rt) { return _CM_RT_LABEL[rt] || rt; }
+
+// Empty-state copy for a runtime-scoped cost surface.
+//
+// Three empty states look identical on screen and mean opposite things:
+//   * the runtime keeps no cost record   -> the number will NEVER arrive
+//   * we have not verified this runtime  -> we should claim nothing
+//   * the runtime was simply idle        -> zero is the true answer
+// The server attaches `coverage` (clawmetry/runtime_records.py) so the UI
+// stops saying "yet" to the first two. Falls back to the old wording when
+// coverage is absent (older daemon, or a node-wide request).
+function _cmCoverageNoteHtml(cov, rtLabel) {
+  // A partial runtime HAS a number and it must not be hidden — hiding it
+  // would understate real spend. But it covers only part of the work, so it
+  // is a floor, and saying nothing would present it as a total. That is the
+  // same overstatement this whole surface exists to stop, pointed the other
+  // way.
+  if (cov && cov.cost_is_partial) {
+    return '<strong>' + escHtml(rtLabel) + ': at least this much</strong>'
+      + (cov.partial_note
+         ? '<div style="margin-top:3px;">' + escHtml(cov.partial_note) + '</div>'
+         : '');
+  }
+  if (cov && cov.suppress_zero) {
+    var head = '<strong>' + escHtml(cov.headline || '') + '</strong>';
+    var why = cov.detail ? '<div style="margin-top:3px;">' + escHtml(cov.detail) + '</div>' : '';
+    return head + why;
+  }
+  return 'No cost data recorded for <strong>' + escHtml(rtLabel) + '</strong> yet.';
+}
 // Runtime to use for CLIENT-SIDE prefix filtering of a node-wide blob (Brain
 // list/chart, Tracing, model attribution, active tasks, transcripts). A foreign
 // OTLP app has no session-id prefix, so a prefix filter would empty the view —
@@ -8564,25 +12138,38 @@ function _cmClientFilterRt(rt) {
 // Tabs whose data is a cross-runtime AGGREGATE (merged server/snapshot-side):
 // the switcher can't scope them client-side yet, so picking a specific runtime
 // shows an honest "all runtimes" note rather than pretending the numbers are
-// runtime-specific. (Per-runtime aggregation is a follow-up.)
-// Tool catalog + Context economics now filter per-runtime (snapshot byRuntime
-// slice + cloud interceptor), so they're no longer aggregate-only tabs.
-// context (LLM Context) still pending per-runtime slicing.
-var _CM_RT_AGGREGATE = {
-  context: 1
-};
+// runtime-specific. EMPTY as of the LLM Context → Context usage merge
+// (2026-08-01): every remaining tab either filters for real (server runtime=
+// param / snapshot byRuntime slice) or is an explicitly node-wide concept in
+// _CM_RT_NODEWIDE. Adding a tab here means shipping a view that silently
+// aggregates — do the per-runtime slicing instead.
+var _CM_RT_AGGREGATE = {};
 // Tabs that are NODE-WIDE concepts, not per-runtime: crons run on the gateway,
-// memory/skills are workspace-level, security is machine posture, self-evolve is
-// node findings. The runtime selector simply does not apply to these.
+// security is machine posture, self-evolve is node findings. The runtime
+// selector simply does not apply to these.
 var _CM_RT_NODEWIDE = {
-  crons: 1, memory: 1, security: 1, skills: 1, selfevolve: 1, approvals: 1,
-  alerts: 1, policy: 1, nemoclaw: 1, notifications: 1, dives: 1,
-  'version-impact': 1, clusters: 1, logs: 1, actions: 1,
+  // approvals + alerts left this map 2026-08-03: approvals rows filter by
+  // the requesting session's runtime prefix, and alert rules carry their own
+  // per-rule scope (runtime column, node-wide chip when 'all').
+  // memory + skills left it 2026-08-14: every runtime keeps its memory and
+  // skills in its OWN place on disk (clawmetry/runtime_memory.py), so these
+  // tabs scope for real off the global switcher. Calling them node-wide was
+  // what pushed a redundant per-tab runtime picker into the page.
+  crons: 1, security: 1, selfevolve: 1,
+  policy: 1, nemoclaw: 1, notifications: 1,
+  clusters: 1, actions: 1,
+  // logs + version-impact are NOT node-wide: logs stream a specific runtime's
+  // log source (LOGS capability), version-impact correlates OpenClaw releases.
+  // Both are capability-gated below instead of carrying a false scope note.
   // Inventory is a ROSTER (node/all-agents view): it never hides rows when a
   // runtime is selected. Instead it highlights the selected runtime's row and
   // carries the honest node-wide scope note (FLYWHEEL HARD GATE 2). The DATA
   // path still honours per-runtime via agentInventoryByRuntime.
-  inventory: 1
+  inventory: 1,
+  // Bench IS the cross-runtime comparison (Harness Engineering): hiding
+  // other harnesses under a runtime filter would defeat the tab's purpose,
+  // so it declares node-wide and carries the honesty banner.
+  bench: 1
 };
 // Per-runtime sidebar tab visibility, DERIVED from each adapter's DECLARED
 // Capability enum — the authoritative contract, not an LLM "analysis" (founder
@@ -8598,7 +12185,7 @@ var _CM_RT_NODEWIDE = {
 var _CM_RT_CAPS = {
   openclaw:    ['SESSIONS','EVENTS','COST','SUBAGENTS','CRONS','SKILLS','MEMORY','BRAIN','LOGS','GATEWAY_RPC','CHANNELS'],
   nemoclaw:    ['SESSIONS','EVENTS','COST','SUBAGENTS','CRONS','SKILLS','MEMORY','BRAIN','LOGS','GATEWAY_RPC','CHANNELS'], // sandboxed OpenClaw
-  claude_code: ['SESSIONS','EVENTS','COST'],
+  claude_code: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   codex:       ['SESSIONS','EVENTS','COST'],
   aider:       ['SESSIONS','EVENTS','COST'],
   goose:       ['SESSIONS','EVENTS','COST'],
@@ -8606,6 +12193,29 @@ var _CM_RT_CAPS = {
   qwen_code:   ['SESSIONS','EVENTS','COST'],
   pi:          ['SESSIONS','EVENTS','COST'],
   deepagents:  ['SESSIONS','EVENTS','COST'],
+  n8n:         ['SESSIONS','EVENTS','COST'],
+  antigravity: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  copilot:     ['SESSIONS','EVENTS','COST'],
+  grok:        ['SESSIONS','EVENTS','COST'],
+  // No COST: Grok Bot persists no tokens, model or spend locally.
+  grok_bot:    ['SESSIONS','EVENTS'],
+  // No COST: Lovable bills credits in the vendor cloud; the local clone
+  // records commits, not tokens or spend.
+  lovable:     ['SESSIONS','EVENTS'],
+  deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  exo: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  kimi: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  // Gemini CLI records a per-turn token split AND the model id, plus
+  // nested chats/<parentSessionId>/ transcripts for agent-tool children.
+  gemini_cli: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  // Cline writes real USD to disk, so its cost is reported, not derived.
+  cline: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  // OpenHands: real token counts + a per-call cost list on disk, and
+  // delegated sub-agents persist as nested conversations.
+  openhands: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  // Devin CLI: tokens + ACUs per message, but no subagent lineage in the
+  // local store, so no SUBAGENTS panel rather than an empty one.
+  devin: ['SESSIONS','EVENTS','COST'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS'],   // no COST
@@ -8614,23 +12224,48 @@ var _CM_RT_CAPS = {
 // Capability -> the sidebar tabs it enables. A tab shows iff the runtime
 // declares (at least) one capability that enables it.
 var _CM_CAP_TABS = {
-  SESSIONS:    ['overview','dives'],
-  EVENTS:      ['brain','models','context','tracing','turn-anatomy'],
-  COST:        ['cost','context-economics'],
-  SUBAGENTS:   ['subagents'],
+  SESSIONS:    ['overview'],
+  // context-economics moved COST → EVENTS with the LLM Context merge: the
+  // utilization gauge reads per-turn usage tokens (an EVENTS concern), so
+  // no-cost runtimes (Cursor/PicoClaw/NanoClaw) keep a context surface.
+  // 'agents' (Agent Graph) is EVENTS-derived: spans are reconstructed from
+  // every runtime's normalized events at family-ingest time.
+  EVENTS:      ['brain','models','tracing','turn-anatomy','context-economics','agents'],
+  // Nav uses data-tab="usage" for the Cost tab — 'cost' was a dead id that
+  // left the tab visible for no-cost runtimes (Cursor/PicoClaw/NanoClaw).
+  COST:        ['usage'],
   CRONS:       ['crons'],
   SKILLS:      ['skills'],
   MEMORY:      ['memory'],
-  GATEWAY_RPC: ['approvals','policy','selfevolve'],
+  LOGS:        ['logs'],
+  // approvals moved out of GATEWAY_RPC: the queue is local + runtime-agnostic
+  // (event watcher covers every adapter; pre-tool gates are per-runtime
+  // handlers), so it is a node tab now — and it SCOPES its rows to the
+  // selected runtime via the requesting session-id prefix.
+  // policy/selfevolve/version-impact stay OpenClaw gateway/admin concepts.
+  GATEWAY_RPC: ['policy','selfevolve','version-impact'],
   CHANNELS:    ['flow']
 };
 // Node/account-level tabs — not capability-gated, shown for every runtime.
-var _CM_NODE_TABS = ['alerts','notifications','security'];
+// approvals: one local queue spans all runtimes (see _CM_CAP_TABS note).
+// memory + skills: the multi-runtime file browser (PR #4821) resolves every
+// runtime's on-disk memory/skills paths, so both tabs are node-level (not
+// gated by a per-adapter capability). Without this, the runtime chip bar
+// inside Memory/Skills would be unreachable because the whole tab was
+// hidden by _cmApplyRuntimeTabVisibility whenever a non-OpenClaw runtime
+// was selected in the top-of-page runtime dropdown.
+// guard: one Guard view ranks running sessions from EVERY runtime by spend
+// at risk, and policies apply node-wide. It was in _CM_RT_ALL_TABS but in
+// no capability map, so selecting any runtime hid it (0.12.806 field hit).
+// signals: the behaviour-signal surface covers every runtime that lands
+// text in the store and states its coverage per runtime, so it is node-level.
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','memory','skills','signals'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
-var _CM_RT_ALL_TABS = ['flow','brain','models','context','tracing','turn-anatomy',
-  'context-economics','approvals','alerts','cost','dives','crons','memory',
-  'notifications','security','policy','skills','selfevolve','subagents','nemoclaw'];
+var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
+  'context-economics','approvals','guard','signals','alerts','usage','crons','memory',
+  'notifications','security','policy','skills','selfevolve',
+  'nemoclaw','logs','version-impact','agents'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
 // EVENTS + COST tabs (Brain/Tracing/Models/Context/Turn-anatomy/Cost), plus the
 // roster; OpenClaw-only concepts (Crons/Memory/Skills/Channels/Subagents) do not
@@ -8681,10 +12316,10 @@ function _cmApplyRuntimeScopeNote(name) {
   // it the app's data), state plainly that this app is observed via OTLP traces
   // and its scoped views live where the data actually is (the Inventory roster
   // row + cost/tokens). The Inventory tab keeps its own roster note below.
-  // 'inventory' has its own roster note; 'dives' (transcripts) has its own
-  // scoped empty-state ("no <app> sessions have a transcript yet"), so skip both
+  // 'inventory' has its own roster note; transcripts has its own
+  // scoped empty-state (_cmRuntimeEmptyMsg), so skip both
   // to avoid a conflicting double-note.
-  if (_cmIsOtlpRuntime(rt) && name !== 'inventory' && name !== 'dives') {
+  if (_cmIsOtlpRuntime(rt) && name !== 'inventory') {
     var _otl = _cmRuntimeLabel(rt);
     var _otmsg = '<strong>' + escHtml(_otl) + '</strong> is observed via OpenLLMetry / OTLP traces. '
       + 'This view shows <strong>all runtimes</strong>; its scoped tokens, cost and sessions are on the '
@@ -8829,6 +12464,37 @@ async function _cmLoadDetectedRuntimes() {
   } catch (e) { /* non-fatal — switcher just omits the "detected here" hint */ }
 }
 
+// Server-authoritative capability override. _CM_RT_CAPS above is a
+// hand-mirrored FALLBACK that drifts from the adapters (aider/nanoclaw
+// compute COST dynamically; new runtimes ship in pro before this map learns
+// them). /api/agents serves each loaded adapter's DECLARED capabilities()
+// straight from the Python contract — override the static entries with it so
+// tab visibility can never lie about what an adapter actually supports. The
+// static map still covers cloud mode (no local registry) and locked/absent
+// runtimes.
+async function _cmLoadDeclaredCaps() {
+  if (window.CLOUD_MODE) return;
+  try {
+    var resp = await fetch('/api/agents', { credentials: 'same-origin' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; });
+    var list = resp && resp.agents;
+    if (!Array.isArray(list)) return;
+    var changed = false;
+    list.forEach(function(a) {
+      if (!a || !a.name) return;
+      if (!Array.isArray(a.capabilities) || !a.capabilities.length) return;
+      _CM_RT_CAPS[a.name] = a.capabilities.map(function(c) {
+        return String(c).toUpperCase();
+      });
+      changed = true;
+    });
+    if (changed) {
+      try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+    }
+  } catch (e) { /* non-fatal: the static fallback map applies */ }
+}
+
 function _cmPopulateGlobalRuntime(counts) {
   // Merge-MAX into the running set, never replace. Per-tab loaders pass their
   // own subset (e.g. the Transcripts tab only sees transcript-bearing
@@ -8863,6 +12529,27 @@ function _cmPopulateGlobalRuntime(counts) {
   // Visibility gate: zero-count free runtimes render when the switcher is
   // shown but must not summon it by themselves — a plain single-runtime
   // install (openclaw only, nothing locked) keeps its switcher-free header.
+  // Smart default (founder 2026-07-28): when the user has NEVER chosen a
+  // runtime (no stored key, no URL pin) and exactly ONE runtime has sessions,
+  // default to it instead of "All runtimes". A Claude-Code-only machine
+  // showed "OpenClaw 0 sessions / NemoClaw 0 sessions / Claude Code
+  // 3 sessions" and still made the user pick by hand. Multiple non-zero
+  // runtimes (or none) keep the honest "All runtimes" aggregate. One-time:
+  // the pick persists via the same path as a manual selection, so the
+  // user's later choices always win. MUST run BEFORE the visibility gate
+  // below: the single-runtime case is exactly when the switcher hides
+  // itself, which used to early-return past any chance to default.
+  if (_cmRuntimeFilter() === 'all' && _cmRuntimeFilterUrlPin() === null) {
+    var _neverChosen = false;
+    try { _neverChosen = localStorage.getItem('cm-runtime-filter') === null; } catch (e) {}
+    if (_neverChosen) {
+      var _nonzero = observed.filter(function(k) { return (counts[k] || 0) > 0; });
+      if (_nonzero.length === 1 && !otlpApps.length) {
+        _cmSetRuntimeFilter(_nonzero[0]);
+        try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+      }
+    }
+  }
   var gate = observed.filter(function(k) { return counts[k]; }).length +
     otlpApps.length + locked.length;
   if (gate < 2) { wrap.style.display = 'none'; return; }
@@ -8929,16 +12616,34 @@ function _cmPopulateGlobalRuntime(counts) {
   try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
 }
 
+// True iff `rt` is still locked after a FRESH catalog read. _cmLockedRuntimes
+// is a snapshot taken once at page load; re-reading before blocking someone
+// is the difference between a stale paywall and a correct one.
+async function _cmRuntimeStillLocked(rt) {
+  try { await _cmLoadRuntimeCatalog(); } catch (e) { /* keep the snapshot */ }
+  return !!_cmLockedRuntimes[rt];
+}
+
 function _cmOnGlobalRuntimeChange(sel) {
   if (!sel) return;
   var val = sel.value;
-  // If the chosen runtime is locked (paid, enforcement on) revert the
-  // selection and show the upgrade modal instead of switching.
+  // If the chosen runtime looks locked, re-verify against the server before
+  // refusing the switch — the snapshot can be stale in exactly the case
+  // that hurts most (a paid account whose plan had not resolved at boot).
   if (val !== 'all' && _cmLockedRuntimes[val]) {
     sel.value = _cmRuntimeFilter() || 'all';
-    _cmShowRuntimePaywall(val, _CM_RT_LABEL[val] || val);
+    _cmRuntimeStillLocked(val).then(function (stillLocked) {
+      if (stillLocked) { _cmShowRuntimePaywall(val, _CM_RT_LABEL[val] || val); return; }
+      // Entitled after all: honour the switch the user actually asked for.
+      sel.value = val;
+      _cmApplyRuntimeSelection(val);
+    });
     return;
   }
+  _cmApplyRuntimeSelection(val);
+}
+
+function _cmApplyRuntimeSelection(val) {
   _cmSetRuntimeFilter(val);
   // Hide OpenClaw-only tabs (Memory/Skills/Self-Evolve/Crons/Tool-Policy/NeMo)
   // for non-OpenClaw runtimes — they'd only show OpenClaw's data.
@@ -8989,16 +12694,74 @@ function _invOwnerLabel(a) {
   var o = (a && a.owner != null) ? String(a.owner).trim() : '';
   return o || (typeof t === 'function' ? t('inventory.owner_default', 'me') : 'me');
 }
-function _invDoingNow(a) {
-  if (a && a.running) return { txt: 'Working', cls: 'inv-doing-on' };
-  if (a && a.detected) return { txt: 'Idle', cls: 'inv-doing-idle' };
-  return { txt: 'Quiet', cls: 'inv-doing-quiet' };
+// "45s ago" / "6m ago" / "3h ago" / "2d ago". Mirrors _cmLiveAge's voice for
+// the first minute and keeps going for the quiet agents this tab also lists.
+function _invAgeWords(secs) {
+  if (secs == null) return '';
+  var s = Number(secs);
+  if (!isFinite(s) || s < 0) return '';
+  if (s < 15) return 'just now';
+  if (s < 60) return Math.round(s) + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
 }
-function _invAliveDot(a) {
-  // green = running, amber = detected-not-running, grey = neither.
-  if (a && a.running) return { color: '#22c55e', label: 'Checked in' };
-  if (a && a.detected) return { color: '#f59e0b', label: 'Resting' };
-  return { color: '#6b7280', label: 'Not seen' };
+
+// The one liveness read every part of this tab uses. `running` is a PROCESS
+// heartbeat that only OpenClaw/NemoClaw emit, so it was False for Claude Code
+// while four of its sessions were mid-task and the tab said "Idle / Resting /
+// 0 of 11 alive" next to a Home tab reading "4 sessions are working right now"
+// (founder report 2026-08-16). Recency from the session table is the signal
+// that is true for every runtime; the heartbeat only ever ADDS certainty.
+function _invLive(a) {
+  // Strict TRUE, not "not false": a snapshot from a daemon older than this
+  // change carries no liveness fields at all, and treating that absence as
+  // "known, zero working" would print a confident "nothing is running" over a
+  // busy node on the hosted dashboard. Absent means unknown.
+  var known = !!(a && a.liveKnown === true);
+  var working = Number((a && a.liveWorking) || 0);
+  var waiting = Number((a && a.liveWaiting) || 0);
+  var secs = (a && a.lastSeenSecs != null) ? Number(a.lastSeenSecs) : null;
+  // The session read is a bounded window (200 most-recent rows node-wide), so a
+  // quiet runtime's newest session can fall outside it. Its daily rollup still
+  // knows when it last moved — use that rather than printing "never" about an
+  // agent we demonstrably have activity for.
+  if (secs == null && a && a.lastActivityMs) {
+    var _ms = Number(a.lastActivityMs);
+    if (isFinite(_ms) && _ms > 0) secs = Math.max(0, (Date.now() - _ms) / 1000);
+  }
+  if (!known) {
+    return { key: 'unknown', word: 'Unknown', cls: 'inv-doing-quiet', color: '#6b7280',
+             sessions: 0, secs: secs,
+             tip: 'The session table could not be read, so ClawMetry cannot tell whether this agent is running.' };
+  }
+  if (working > 0) {
+    return { key: 'working', word: 'Working', cls: 'inv-doing-on', color: '#22c55e',
+             sessions: working, secs: secs,
+             tip: working + (working === 1 ? ' session' : ' sessions')
+                  + ' produced output in the last 2 minutes.' };
+  }
+  if (waiting > 0) {
+    // Age bucket, not evidence — the tooltip below hedges ("usually parked at
+    // the prompt") and the word must hedge with it. Only the needs-you strip
+    // can say a session wants something.
+    return { key: 'waiting', word: 'Gone quiet', cls: 'inv-doing-idle', color: '#f59e0b',
+             sessions: waiting, secs: secs,
+             tip: waiting + (waiting === 1 ? ' session is' : ' sessions are')
+                  + ' open but quiet, usually parked at the prompt.' };
+  }
+  // Nothing live. `running` still means something for the two runtimes that
+  // emit a real heartbeat: the process is up, it just is not producing.
+  if (a && a.running) {
+    return { key: 'idle', word: 'Up, not working', cls: 'inv-doing-idle', color: '#f59e0b',
+             sessions: 0, secs: secs,
+             tip: 'The process is running (real heartbeat) but no session has produced output recently.' };
+  }
+  return { key: 'quiet', word: 'Quiet', cls: 'inv-doing-quiet', color: '#6b7280',
+           sessions: 0, secs: secs,
+           tip: secs != null
+             ? 'No session has produced output recently. Last activity ' + _invAgeWords(secs) + '.'
+             : 'No recorded activity for this agent.' };
 }
 
 async function _invFetchData() {
@@ -9023,22 +12786,35 @@ async function _invFetchData() {
   }
 }
 
-// An agent is "active/recent" (shown by default) when it's running, did work in
-// the last 24h (cost or tokens), or is the currently-selected runtime. Everything
-// else folds under a "Show N inactive" expander so the roster reads like the
-// device's calm view instead of every runtime ever used here (#web-accuracy).
-function _invIsRecentlyActive(a, rtFilter) {
+// An agent is "active/recent" (shown by default) when it's running or did work
+// in the last 24h (cost or tokens). Everything else folds under a "Show N
+// inactive" expander so the roster reads like the device's calm view.
+// The partition is INDEPENDENT of the runtime switcher: this tab is node-wide,
+// so the same rows must show no matter what is selected (founder report
+// 2026-07-30 - the old selected-runtime promotion made the row set and the
+// fold count shift on every switcher change). The selected runtime is only
+// HIGHLIGHTED, never promoted or hidden.
+function _invIsRecentlyActive(a) {
   return !!(a.running
+    || Number(a.liveWorking || 0) > 0
+    || Number(a.liveWaiting || 0) > 0
     || (Number(a.cost24hUsd || 0) > 0)
-    || (Number(a.tokens24h || 0) > 0)
-    || (rtFilter !== 'all' && a.agentKey === rtFilter));
+    || (Number(a.tokens24h || 0) > 0));
+}
+
+// Compact token count, mirroring the desk device's fmt_tokens ("360", "1.2k",
+// "3.4M") so both surfaces read the same.
+function _invFmtTok(n) {
+  n = Number(n) || 0;
+  if (n >= 1e6) return (Math.round(n / 1e5) / 10) + 'M';
+  if (n >= 1e3) return (Math.round(n / 100) / 10) + 'k';
+  return String(n);
 }
 
 function _invRosterRow(a, rtFilter) {
   var rt = a.agentKey;
   var label = a.displayName || rt;
-  var doing = _invDoingNow(a);
-  var dot = _invAliveDot(a);
+  var live = _invLive(a);
   var owner = _invOwnerLabel(a);
   var hasCost = _invHasCost(rt);
   // LAST 24h (rolling, event-windowed) vs LIFETIME (all the runtime's sessions).
@@ -9046,30 +12822,51 @@ function _invRosterRow(a, rtFilter) {
   var naTip = '<span class="inv-na" data-i18n-title="inventory.cost_na_tip" title="This runtime does not report cost yet.">--</span>';
   var dayCell = hasCost ? _invFmtUsd(a.cost24hUsd) : naTip;
   var lifeCell = hasCost ? _invFmtUsd(a.costUsd) : naTip;
-  var work = (a.sessions || 0) + ((a.sessions === 1) ? ' conversation' : ' conversations');
+  var work = (a.sessions || 0) + ((a.sessions === 1) ? ' session' : ' sessions');
   var model = a.primaryModel || '--';
   var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
-  // When the row is only visible BECAUSE it is the selected runtime (it had no
-  // activity in 24h and would otherwise sit in the inactive fold), say so.
-  // Without this chip the roster looks like it shows different data on every
-  // switcher change (founder report 2026-07-02).
-  var selectedChip = '';
-  if (rtFilter !== 'all' && rt === rtFilter && !_invIsRecentlyActive(a, 'all')) {
-    selectedChip = ' <span class="inv-selected-chip" '
-      + 'title="' + t('inventory.selected_chip_tip', null, 'Shown because this runtime is selected in the switcher. No activity in the last 24h.') + '" '
-      + 'style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 7px;border-radius:9px;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:#818cf8;vertical-align:middle;">'
-      + t('inventory.selected_chip', null, 'selected') + '</span>';
+  // Subscription coverage, mirroring the desk device's green "covered" / amber
+  // "metered" chip: a subscription runtime's usage adds $0 on top of the flat
+  // plan fee, so its cost columns are API-equivalent value, not extra spend.
+  var covChip = '';
+  if (a.billingMode === 'subscription') {
+    covChip = ' <span class="inv-cov-chip inv-cov-sub" title="'
+      + escHtml((a.billingLabel || 'Subscription'))
+      + ' covers this agent. Usage adds $0 extra; the cost columns show API-equivalent value.">'
+      + t('inventory.covered_chip', null, 'covered') + '</span>';
+  } else if (a.billingMode === 'metered') {
+    covChip = ' <span class="inv-cov-chip inv-cov-met" title="Billed per token at API rates.">'
+      + t('inventory.metered_chip', null, 'metered') + '</span>';
   }
   var pencil = window.CLOUD_MODE
     ? ''
     : '<span class="inv-owner-pencil" title="Rename owner" onclick="event.stopPropagation();_invStartOwnerEdit(this,\'' + escHtml(rt) + '\')">&#9998;</span>';
   return ''
     + '<tr class="inv-row' + highlight + '" data-rt="' + escHtml(rt) + '" onclick="_invToggleRow(this,\'' + escHtml(rt) + '\')">'
-    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + dot.color + '"></span>' + escHtml(label) + selectedChip + '</td>'
+    +   '<td class="inv-c-agent"><span class="inv-dot" style="background:' + live.color + '"></span>' + escHtml(label) + covChip + '</td>'
     +   '<td class="inv-c-owner"><span class="inv-owner-chip" data-rt="' + escHtml(rt) + '"><span class="inv-owner-name">' + escHtml(owner) + '</span>' + pencil + '</span></td>'
-    +   '<td class="inv-c-doing"><span class="inv-doing ' + doing.cls + '">' + doing.txt + '</span></td>'
-    +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + dot.color + '"></span>'
-    +     '<span class="inv-alive-lbl" title="For OpenClaw and NemoClaw this is a real heartbeat; for other runtimes it means a process is running.">' + dot.label + '</span></td>'
+    +   '<td class="inv-c-doing"><span class="inv-doing ' + live.cls + '" title="' + escHtml(live.tip) + '">' + escHtml(live.word) + '</span>'
+    // The session count is the check against the Home tab: "Working · 4
+    // sessions" here must be the same four sessions the hero names there.
+    +     (live.sessions > 0
+        ? ' <span class="inv-doing-tok">' + live.sessions
+          + (live.sessions === 1 ? ' session' : ' sessions') + '</span>'
+        : '')
+    +     (Number(a.tokens24h || 0) > 0
+        ? ' <span class="inv-doing-tok" title="Tokens in the last 24 hours">' + _invFmtTok(a.tokens24h) + ' tok</span>'
+        : '')
+    +   '</td>'
+    // "Last seen" says a checkable fact (when the transcript last grew) where
+    // the column used to print "Resting" off a heartbeat that runtime never
+    // sends. The heartbeat, where it exists, is additional detail in the tip.
+    +   '<td class="inv-c-alive"><span class="inv-dot" style="background:' + live.color + '"></span>'
+    +     '<span class="inv-alive-lbl" title="'
+    +       (a.running
+            ? 'This runtime sends a real process heartbeat, and it is up now.'
+            : 'Measured from the last event in this agent&#39;s sessions. Only OpenClaw and NemoClaw send a process heartbeat; every other runtime is read from transcript activity.')
+    +     '">'
+    +     escHtml(live.secs != null ? _invAgeWords(live.secs) : 'never')
+    +     '</span></td>'
     +   '<td class="inv-c-cost" title="Cost from the last 24 hours of activity (API-equivalent)">' + dayCell + '</td>'
     +   '<td class="inv-c-cost inv-c-cost-life" title="All-time cost across this agent\'s tracked sessions (API-equivalent)">' + lifeCell + '</td>'
     +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
@@ -9080,34 +12877,156 @@ function _invRosterRow(a, rtFilter) {
     + '</td></tr>';
 }
 
+// Node health, computed instead of asserted. The tile used to read
+//   agents.every(function (a) { return !a.detected || a.running || true; })
+// which is `true` for any input — "All good" was printed, never measured
+// (founder report 2026-08-16). The outcome rollup each agent already carries
+// (success / failed / cognitive_loop / tool_call_stuck, 1d window) is the real
+// answer; with no finished runs the honest word is "No runs yet", not "good".
+function _invHealth(agents) {
+  var total = 0, failed = 0, stuck = 0, loops = 0, escalated = 0, seen = 0;
+  (agents || []).forEach(function (a) {
+    var o = a && a.outcome;
+    if (!o || typeof o !== 'object') return;
+    seen++;
+    total += Number(o.total || 0);
+    failed += Number(o.failed || 0);
+    stuck += Number(o.tool_call_stuck || 0);
+    loops += Number(o.cognitive_loop || 0);
+    escalated += Number(o.escalated || 0);
+  });
+  if (!seen || !total) {
+    return { txt: 'No runs yet', sub: 'Nothing finished in the last 24h.', cls: 'inv-health-unknown' };
+  }
+  var bad = failed + stuck + loops;
+  if (!bad) {
+    return { txt: 'All good', cls: 'inv-health-ok',
+             sub: total + (total === 1 ? ' run' : ' runs') + ' in 24h, none failed'
+                  + (escalated ? ' · ' + escalated + ' asked for you' : '') };
+  }
+  var parts = [];
+  if (failed) parts.push(failed + ' failed');
+  if (stuck) parts.push(stuck + ' stuck on a tool');
+  if (loops) parts.push(loops + ' looping');
+  return { txt: bad + ' of ' + total + ' bad', cls: 'inv-health-bad',
+           sub: parts.join(' · ') + ' (24h)' };
+}
+
+// The hero, in the same voice as the Home tab: a dot, an eyebrow, one sentence
+// that says what is true right now, and a sub-line that can be checked against
+// the sessions the Home hero names. Both read the same 120s/600s windows off
+// the same session rows, so they cannot disagree.
+function _invRenderHero(inv) {
+  var agents = (inv && inv.agents) || [];
+  // Strict TRUE (see _invLive): an older daemon's snapshot has no liveness
+  // fields, and that is "unknown", not "nothing is running".
+  var known = (inv && inv.liveKnown === true)
+    || agents.some(function (a) { return a && a.liveKnown === true; });
+  // Sum the rows rather than trusting a node-level rollup: every roster shape
+  // (node-wide, per-runtime slice, an older daemon's snapshot) carries the
+  // per-agent fields, so the headline is derived from the same numbers the
+  // table below prints and cannot disagree with them.
+  var working = 0, waiting = 0;
+  (agents || []).forEach(function (a) {
+    working += Number(a.liveWorking || 0);
+    waiting += Number(a.liveWaiting || 0);
+  });
+  var wAgents = (agents || []).filter(function (a) { return Number(a.liveWorking || 0) > 0; });
+  var qAgents = (agents || []).filter(function (a) { return Number(a.liveWaiting || 0) > 0
+                                                            && !Number(a.liveWorking || 0); });
+  var headline, sub, dot;
+  if (!known) {
+    dot = '#6b7280';
+    headline = 'Can’t tell what’s running.';
+    sub = 'The sync daemon did not answer, so liveness is unknown. The numbers below are the '
+        + 'last thing it recorded, not live.';
+  } else if (wAgents.length === 1) {
+    dot = '#22c55e';
+    headline = escHtml(wAgents[0].displayName || wAgents[0].agentKey) + ' is working right now.';
+    sub = working + (working === 1 ? ' session' : ' sessions') + ' produced output in the last '
+        + 'two minutes' + (waiting ? ', ' + waiting + ' more gone quiet' : '') + '. '
+        + (agents.length - 1) + ' other ' + (agents.length - 1 === 1 ? 'agent is' : 'agents are')
+        + ' quiet.';
+  } else if (wAgents.length > 1) {
+    dot = '#22c55e';
+    headline = wAgents.length + ' agents are working right now.';
+    sub = working + (working === 1 ? ' session' : ' sessions') + ' across '
+        + wAgents.map(function (a) { return escHtml(a.displayName || a.agentKey); }).join(', ')
+        + (waiting ? ' · ' + waiting + ' more quiet' : '') + '.';
+  } else if (qAgents.length) {
+    dot = '#f59e0b';
+    // "Quiet", not "waiting on you". This bucket is purely age-based — last
+    // output 2-10 minutes ago — which is equally consistent with thinking, a
+    // long-running tool, or a dead process. The sub-line below already said
+    // so ("Nothing has produced output in the last two minutes"); the
+    // headline used to contradict it.
+    //
+    // "Waiting on you" is a claim only the needs-you strip can make, because
+    // only it has evidence: a runtime that reported a prompt, an unanswered
+    // approval, or a tool call that hung. Two components on one page must not
+    // answer the same question differently.
+    headline = waiting === 1 ? 'One session has gone quiet.'
+                             : waiting + ' sessions have gone quiet.';
+    sub = 'Open but quiet on '
+        + qAgents.map(function (a) { return escHtml(a.displayName || a.agentKey); }).join(', ')
+        + '. Nothing has produced output in the last two minutes.';
+  } else {
+    dot = '#3b82f6';
+    headline = 'Nothing is working right now.';
+    // Name the most recently active agent so "nothing" is checkable rather
+    // than a shrug.
+    var freshest = null;
+    agents.forEach(function (a) {
+      if (a.lastSeenSecs == null) return;
+      if (!freshest || Number(a.lastSeenSecs) < Number(freshest.lastSeenSecs)) freshest = a;
+    });
+    sub = freshest
+      ? escHtml(freshest.displayName || freshest.agentKey) + ' moved last, '
+        + _invAgeWords(freshest.lastSeenSecs) + '. ' + agents.length
+        + (agents.length === 1 ? ' agent lives' : ' agents live') + ' on this machine.'
+      : agents.length + (agents.length === 1 ? ' agent lives' : ' agents live')
+        + ' on this machine. None has recorded activity yet.';
+  }
+  return ''
+    + '<div style="display:flex;align-items:center;gap:11px;">'
+    +   '<span style="position:relative;display:inline-flex;width:14px;height:14px;flex-shrink:0;">'
+    +     '<span style="position:absolute;inset:0;border-radius:50%;background:' + dot + ';opacity:.35;'
+    +       (known && working ? 'animation:cmHeroPulse 2s ease-out infinite;' : '') + '"></span>'
+    +     '<span style="position:relative;margin:auto;width:10px;height:10px;border-radius:50%;background:' + dot + ';"></span>'
+    +   '</span>'
+    +   '<span style="font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">'
+    +     t('inventory.hero_eyebrow', null, 'Your agents') + '</span>'
+    + '</div>'
+    + '<div class="inv-hero-headline">' + headline + '</div>'
+    + '<div class="inv-hero-sub">' + sub + '</div>';
+}
+
 function _invRenderRoster(inv) {
   var agents = (inv && inv.agents) || [];
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   var active = [], inactive = [];
   agents.forEach(function (a) {
-    (_invIsRecentlyActive(a, rtFilter) ? active : inactive).push(a);
+    (_invIsRecentlyActive(a) ? active : inactive).push(a);
   });
   // Never end up with an empty roster: if nothing is "active" right now, show
   // everything rather than an empty table.
   if (!active.length && inactive.length) { active = inactive; inactive = []; }
-  // Consistent ordering: the selected runtime is always the FIRST row. Without
-  // this the promoted row lands wherever the roster order puts it (OpenClaw
-  // above Claude Code, Hermes below), which reads as the list changing
-  // arbitrarily on every switcher change.
-  if (rtFilter !== 'all') {
-    active.sort(function (a, b) {
-      return (b.agentKey === rtFilter ? 1 : 0) - (a.agentKey === rtFilter ? 1 : 0);
-    });
-  }
+  // NO switcher-dependent re-sort or promotion: the roster set AND order stay
+  // identical across runtime changes (node-wide contract). The selected
+  // runtime's row is highlighted in place, wherever it lives.
   var rows = active.map(function (a) { return _invRosterRow(a, rtFilter); }).join('');
   var foldRows = '';
   if (inactive.length) {
+    // The toggle row lives in its own explicit <tbody>: a bare <tr> emitted as
+    // a direct <table> child gets wrapped in an implicit anonymous tbody by
+    // the HTML parser, which broke _invToggleInactive's sibling lookup and
+    // made the fold permanently un-openable (founder report 2026-07-30).
     foldRows = ''
-      + '<tr class="inv-fold-toggle" onclick="_invToggleInactive(this)">'
+      + '<tbody class="inv-fold-head"><tr class="inv-fold-toggle" onclick="_invToggleInactive(this)">'
       +   '<td colspan="8"><span class="inv-fold-caret">&#9656;</span> '
       +     'Show ' + inactive.length + ' inactive agent' + (inactive.length === 1 ? '' : 's')
       +     ' <span class="inv-fold-hint">(no activity in 24h)</span></td>'
-      + '</tr>'
+      + '</tr></tbody>'
       + '<tbody class="inv-fold-body" style="display:none;">'
       +   inactive.map(function (a) { return _invRosterRow(a, rtFilter); }).join('')
       + '</tbody>';
@@ -9119,7 +13038,7 @@ function _invRenderRoster(inv) {
     +     '<th data-i18n="inventory.col_agent">Agent</th>'
     +     '<th data-i18n="inventory.col_owner">Owner</th>'
     +     '<th data-i18n="inventory.col_doing">Doing now</th>'
-    +     '<th data-i18n="inventory.col_alive">Alive</th>'
+    +     '<th data-i18n="inventory.col_last_seen">Last seen</th>'
     +     '<th data-i18n="inventory.col_cost_24h">Cost (24h)</th>'
     +     '<th data-i18n="inventory.col_cost_life">Cost (lifetime)</th>'
     +     '<th data-i18n="inventory.col_work">Work done</th>'
@@ -9132,7 +13051,12 @@ function _invRenderRoster(inv) {
 
 function _invToggleInactive(el) {
   try {
-    var body = el.parentNode.querySelector('.inv-fold-body')
+    // The fold body is a SIBLING <tbody> of the toggle row's <tbody> - walk up
+    // to the table and search from there (parentNode/nextElementSibling lookups
+    // miss it and made the fold a silent no-op).
+    var table = (el.closest ? el.closest('table') : null);
+    var body = (table && table.querySelector('.inv-fold-body'))
+      || el.parentNode.querySelector('.inv-fold-body')
       || (el.nextElementSibling && el.nextElementSibling.classList.contains('inv-fold-body') ? el.nextElementSibling : null);
     if (!body) return;
     var open = body.style.display !== 'none';
@@ -9227,6 +13151,35 @@ async function _invSaveOwner(rt, owner) {
   try { renderInventory(); } catch (e) {}
 }
 
+// Cross-checks the inventory empty-state's detected-but-not-ingesting
+// runtimes against entitlement, and replaces the (misleading, for a locked
+// runtime) "sync starting up" copy with an upgrade nudge + the existing
+// runtime-paywall trial flow (_cmShowRuntimePaywall) when any of them are
+// found but not allowed on this account's plan.
+function _invCheckLockedDetected(detected, bodyEl) {
+  fetch('/api/entitlement/runtime-detection', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      // Plan not resolved yet => allowed=false means "unknown". Saying
+      // "watching it is part of Starter" to a Pro account is worse than
+      // saying nothing; the caller re-runs once the plan lands.
+      if (d && d.pending) return;
+      var probes = (d && d.probes) || [];
+      var detectedIds = {};
+      detected.forEach(function (r) { detectedIds[r.name] = true; });
+      var locked = probes.filter(function (p) { return p.found && !p.allowed && detectedIds[p.id]; });
+      if (!locked.length || !bodyEl) return;
+      var tier = (d && d.actionable_tier_label) || 'Starter';
+      var names = locked.map(function (p) { return p.label || p.id; }).join(', ');
+      var first = locked[0];
+      bodyEl.innerHTML = 'ClawMetry found <b>' + escHtml(names) + '</b> on this machine, but watching '
+        + (locked.length === 1 ? 'it' : 'them') + ' is part of ' + escHtml(tier) + '. '
+        + '<a href="#" onclick="_cmShowRuntimePaywall(\'' + escHtml(first.id) + '\',\''
+        + escHtml(first.label || first.id) + '\');return false;" style="color:var(--text-accent,#0af);">'
+        + 'Start a free trial</a> to turn it on.';
+    }).catch(function () {});
+}
+
 async function renderInventory() {
   var inv = await _invFetchData();
   var agents = (inv && inv.agents) || [];
@@ -9254,28 +13207,111 @@ async function renderInventory() {
       if (detected.length && bodyEl) {
         var rtNames = detected.map(function (r) { return r.displayName || r.name; }).join(', ');
         var msg = inv.daemonRunning
-          ? rtNames + ' detected. Sync is starting up -- data will appear shortly.'
+          ? rtNames + ' detected. Sync is starting up. Data will appear shortly.'
           : rtNames + ' is running, but the sync daemon is not ingesting yet.'
             + ' Run: <code>clawmetry connect</code> (or <code>clawmetry sync</code>).';
         bodyEl.innerHTML = msg;
+        // A detected-but-LOCKED (not entitled) runtime will never start
+        // ingesting no matter how long you wait, so "sync is starting up"
+        // is actively misleading there — surface the upgrade nudge that
+        // used to live in the retired gateway-setup modal instead.
+        _invCheckLockedDetected(detected, bodyEl);
       }
       emptyEl.style.display = '';
     }
+    // Transient-empty heal: a roster that comes back empty (daemon still
+    // warming up after install/activation, or one failed fetch swallowed by
+    // _invFetchData) used to STICK until the user re-clicked the tab. Re-poll
+    // while the empty state is on the active, visible tab so it resolves
+    // itself the moment ingest catches up.
+    if (!window._invEmptyRetryTimer) {
+      window._invEmptyRetryTimer = setTimeout(function () {
+        window._invEmptyRetryTimer = null;
+        if (_cmCurrentTab === 'inventory' && !document.hidden) renderInventory();
+      }, 20000);
+    }
     return;
   }
+  if (window._invEmptyRetryTimer) { clearTimeout(window._invEmptyRetryTimer); window._invEmptyRetryTimer = null; }
   if (emptyEl) emptyEl.style.display = 'none';
 
+  // Hero first: the tab leads with what is true right now, like Home does.
+  var heroEl = document.getElementById('inv-hero');
+  if (heroEl) {
+    heroEl.innerHTML = _invRenderHero(inv);
+    heroEl.style.display = '';
+  }
+  // Repaint on a live cadence while this tab is the visible one — a headline
+  // that says "working right now" has to stop saying it when the work stops.
+  if (window._invLiveTimer) { clearTimeout(window._invLiveTimer); window._invLiveTimer = null; }
+  window._invLiveTimer = setTimeout(function () {
+    window._invLiveTimer = null;
+    if (_cmCurrentTab === 'inventory' && !document.hidden) renderInventory();
+  }, 15000);
+
   // 4-tile strip.
-  var aliveCount = agents.filter(function (a) { return a.running; }).length;
-  var totalCost = agents.reduce(function (s, a) {
-    return s + (_invHasCost(a.agentKey) ? Number(a.costUsd || 0) : 0);
+  var liveKnown = (inv && inv.liveKnown === true)
+    || agents.some(function (a) { return a && a.liveKnown === true; });
+  var workingSessions = 0, waitingSessions = 0;
+  agents.forEach(function (a) {
+    workingSessions += Number(a.liveWorking || 0);
+    waitingSessions += Number(a.liveWaiting || 0);
+  });
+  var workingAgents = agents.filter(function (a) { return Number(a.liveWorking || 0) > 0; }).length;
+  // "Today" = the rolling-24h spend (cost24hUsd). It used to sum costUsd,
+  // which is LIFETIME - the tile showed the all-time total under a "Today"
+  // label (founder screenshot 2026-07-30: Today $812.65 == lifetime).
+  var totalCost24h = agents.reduce(function (s, a) {
+    return s + (_invHasCost(a.agentKey) ? Number(a.cost24hUsd || 0) : 0);
   }, 0);
-  var allGood = agents.every(function (a) { return !a.detected || a.running || true; });
   var setTxt = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
-  setTxt('inv-tile-alive', aliveCount + ' of ' + agents.length);
+  var setSub = function (id, v) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = v || '';
+    el.style.display = v ? '' : 'none';
+  };
+  // "Working now" counts SESSIONS producing output, the same unit the Home
+  // hero leads with. The old tile counted the process-heartbeat flag and so
+  // read "0 of 11" on a machine with four live Claude Code sessions.
+  if (!liveKnown) {
+    setTxt('inv-tile-alive', 'Unknown');
+    setSub('inv-tile-alive-sub', 'Daemon did not answer');
+  } else {
+    setTxt('inv-tile-alive', workingSessions
+      ? (workingSessions + (workingSessions === 1 ? ' session' : ' sessions'))
+      : 'None');
+    setSub('inv-tile-alive-sub', workingSessions
+      ? ('on ' + workingAgents + ' of ' + agents.length + ' agents')
+      : (waitingSessions
+          ? (waitingSessions + ' gone quiet')
+          : 'nothing in the last 2 min'));
+  }
   setTxt('inv-tile-agents', String(agents.length));
-  setTxt('inv-tile-today', _invFmtUsd(totalCost));
-  setTxt('inv-tile-health', allGood ? 'All good' : 'Check');
+  setSub('inv-tile-agents-sub', agents.filter(_invIsRecentlyActive).length + ' active in 24h');
+  // Subscription honesty (device parity): when the account plan is a
+  // subscription, today's marginal spend is the METERED agents' cost only -
+  // the plan is a flat fee already paid. Mirror the desk device's hero:
+  // "$0.00 extra / Claude Max 20x covers it - ~$X.XX at API rates".
+  var plan = inv.accountPlan || null;
+  var extra = Number(inv.extraCost24hUsd);
+  var todaySub = document.getElementById('inv-tile-today-sub');
+  if (plan && plan.mode === 'subscription') {
+    setTxt('inv-tile-today', _invFmtUsd(isFinite(extra) ? extra : 0) + ' extra');
+    if (todaySub) {
+      todaySub.textContent = (plan.label || 'Subscription') + ' covers it · ~'
+        + _invFmtUsd(totalCost24h) + ' at API rates';
+      todaySub.style.display = '';
+    }
+  } else {
+    setTxt('inv-tile-today', _invFmtUsd(totalCost24h));
+    if (todaySub) { todaySub.textContent = ''; todaySub.style.display = 'none'; }
+  }
+  var health = _invHealth(agents);
+  setTxt('inv-tile-health', health.txt);
+  setSub('inv-tile-health-sub', health.sub);
+  var healthEl = document.getElementById('inv-tile-health');
+  if (healthEl) healthEl.className = 'stats-footer-value ' + (health.cls || '');
   if (statsEl) statsEl.style.display = '';
 
   // Node-wide strip (tools / eval), labeled honestly.
@@ -9297,7 +13333,19 @@ async function renderInventory() {
   try { _cmApplyRuntimeScopeNote('inventory'); } catch (e) {}
 }
 
-function _cmShowRuntimePaywall(harness, label) {
+async function _cmShowRuntimePaywall(harness, label) {
+  // Never paywall someone who is actually entitled. Every entry point here
+  // (the header switcher, the runtime chip menu, the inventory "locked
+  // runtime detected" banner) reads a client-side snapshot that can be
+  // stale, so re-verify against the live catalog before rendering. A
+  // suppressed modal is a paying user getting what they paid for; a shown
+  // one they should not see is a support ticket.
+  try {
+    var fresh = (Date.now() - (window._cmRtCatalogTs || 0)) < 5000;
+    if (!fresh) { await _cmLoadRuntimeCatalog(); }
+    if (harness && !_cmLockedRuntimes[harness]) return;
+  } catch (e) { /* verification unavailable — fall through and show it */ }
+
   // Emit paywall_view telemetry (fire-and-forget).
   try {
     fetch('/api/paywall/event', {method:'POST', headers:{'Content-Type':'application/json'},
@@ -9316,15 +13364,19 @@ function _cmShowRuntimePaywall(harness, label) {
   overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(26,24,22,.45);'
     + 'display:flex;align-items:center;justify-content:center;padding:24px;';
 
-  var upgradeUrl = 'https://app.clawmetry.com/upgrade?source=runtime-switcher&harness='
-    + encodeURIComponent(harness);
-
   // The plan ladder, mirroring the LIVE clawmetry.com/pricing page
-  // (verified 2026-06-09: Free $0 / Starter $9 / Pro $29 / self-hosted via
-  // license key / Enterprise; annual includes the desk device). Prices live
-  // in this ONE object so a reprice is a one-line change here plus the
-  // pricing page. Plain words for someone who has never compared plans.
-  var _cmPlanPrices = { starter: '$9', starterYr: '$90', pro: '$29', proYr: '$290' };
+  // (Free $0 / Starter $9 / Pro $19 / self-hosted via license key /
+  // Enterprise; annual includes the desk device). Prices live in this ONE
+  // object so a reprice is a one-line change here plus the pricing page.
+  // Plain words for someone who has never compared plans.
+  //
+  // SOURCE OF TRUTH is the cloud Stripe catalog (cloud routes/api.py
+  // _SUB_PRICING: starter 900/9000, pro 1900/19000 cents). This comment
+  // said "Pro $29" for weeks after the values were correctly repriced to
+  // $19. Anyone trusting the prose over the code would have "fixed" a
+  // working paywall back to a price no checkout has ever charged. Read
+  // _SUB_PRICING before touching either.
+  var _cmPlanPrices = { starter: '$9', starterYr: '$90', pro: '$19', proYr: '$190' };
   function _tierRow(accent, name, price, desc) {
     return '<div style="margin-bottom:10px;padding:11px 14px;border:1px solid ' + accent + ';'
       + 'border-radius:8px;font-size:13px;color:var(--text-secondary,#cbd5e1);line-height:1.5;">'
@@ -9352,14 +13404,82 @@ function _cmShowRuntimePaywall(harness, label) {
     + '$149 desk device, free. Prefer your own infra? Self-hosted uses the same plans with a license key: '
     + '<a href="https://clawmetry.com/pricing" target="_blank" rel="noopener noreferrer" '
     + 'style="color:#a78bfa;">see all plans</a>.</div>'
+    + '<div id="_cmRtTrialFlow" style="display:none;margin:0 0 12px;">'
+    + '<input id="_cmRtTrialEmail" type="email" placeholder="you@example.com" '
+    + 'style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--border-color,rgba(255,255,255,.2));'
+    + 'border-radius:6px;background:var(--bg-secondary,#101022);color:var(--text-primary,#e2e8f0);font-size:13px;margin-bottom:8px;">'
+    + '<input id="_cmRtTrialCode" type="text" inputmode="numeric" maxlength="6" placeholder="6-digit code" '
+    + 'style="display:none;width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid var(--border-color,rgba(255,255,255,.2));'
+    + 'border-radius:6px;background:var(--bg-secondary,#101022);color:var(--text-primary,#e2e8f0);font-size:15px;'
+    + 'letter-spacing:5px;text-align:center;font-family:monospace;margin-bottom:8px;">'
+    + '<div id="_cmRtTrialMsg" style="display:none;font-size:12px;color:var(--text-muted,#94a3b8);margin-bottom:8px;"></div>'
+    + '</div>'
     + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
     + '<button type="button" id="_cmRtPaywallCancel" style="padding:8px 16px;'
     + 'border:1px solid var(--border-color,rgba(255,255,255,.2));border-radius:6px;'
     + 'background:transparent;color:var(--text-secondary,#cbd5e1);cursor:pointer;font-size:13px;">Not now</button>'
-    + '<a href="' + upgradeUrl + '" target="_blank" rel="noopener noreferrer" id="_cmRtPaywallCTA"'
-    + ' style="padding:8px 16px;background:#7c3aed;color:#fff;border-radius:6px;'
-    + 'text-decoration:none;font-size:13px;font-weight:500;">Start 7-day free trial</a>'
+    + '<button type="button" id="_cmRtPaywallCTA"'
+    + ' style="padding:8px 16px;background:#7c3aed;color:#fff;border:none;border-radius:6px;'
+    + 'cursor:pointer;font-size:13px;font-weight:500;">Start 7-day free trial</button>'
     + '</div></div>';
+
+  // Founder spec (2026-07-30): a locked runtime must lead to SIGN-IN ->
+  // trial license -> unlocked runtimes, right here — never a pricing tab.
+  // Reuses the existing rail: /api/cloud-cta/send-otp (code email) +
+  // /api/trial/activate (verify with the cloud, mint + activate the 7-day
+  // trial license locally). Success reloads so entitlement re-resolves.
+  (function _wireTrialCta() {
+    var state = 'idle';
+    function _msg(t, isErr) {
+      var m = overlay.querySelector('#_cmRtTrialMsg');
+      if (!m) return;
+      m.style.display = t ? 'block' : 'none';
+      m.style.color = isErr ? '#f87171' : 'var(--text-muted,#94a3b8)';
+      m.textContent = t || '';
+    }
+    var cta = overlay.querySelector('#_cmRtPaywallCTA');
+    if (!cta) return;
+    cta.addEventListener('click', function () {
+      var flow = overlay.querySelector('#_cmRtTrialFlow');
+      var emailEl = overlay.querySelector('#_cmRtTrialEmail');
+      var codeEl = overlay.querySelector('#_cmRtTrialCode');
+      if (state === 'idle') {
+        flow.style.display = 'block';
+        _msg('Sign in with your email to start the free 7-day Pro trial. No card needed.');
+        emailEl.focus();
+        state = 'email';
+        cta.textContent = 'Email me a code';
+        return;
+      }
+      if (state === 'email') {
+        var email = (emailEl.value || '').trim();
+        if (!/^[^@]+@[^@]+\.[^@]+$/.test(email)) { _msg('Enter a valid email.', true); return; }
+        cta.disabled = true; _msg('Sending code…');
+        fetch('/api/cloud-cta/send-otp', {method:'POST', headers:{'Content-Type':'application/json'},
+               body: JSON.stringify({email: email})})
+          .then(function(r){ return r.json(); }).then(function(d){
+            cta.disabled = false;
+            if (d && d.ok === false) { _msg(d.error || 'Could not send the code.', true); return; }
+            emailEl.style.display = 'none'; codeEl.style.display = 'block'; codeEl.focus();
+            _msg('We emailed a 6-digit code to ' + email + '.');
+            state = 'code'; cta.textContent = 'Activate trial';
+          }).catch(function(){ cta.disabled = false; _msg('Network error. Try again.', true); });
+        return;
+      }
+      if (state === 'code') {
+        var code = (codeEl.value || '').replace(/\s/g, '');
+        if (code.length !== 6) { _msg('Enter the 6-digit code from your email.', true); return; }
+        cta.disabled = true; _msg('Activating your trial…');
+        fetch('/api/trial/activate', {method:'POST', headers:{'Content-Type':'application/json'},
+               body: JSON.stringify({email: (emailEl.value||'').trim(), code: code})})
+          .then(function(r){ return r.json(); }).then(function(d){
+            if (!d || !d.ok) { cta.disabled = false; _msg((d && d.error) || 'Activation failed. Try again.', true); return; }
+            _msg('Pro trial active — unlocking ' + label + '…');
+            setTimeout(function(){ location.reload(); }, 900);
+          }).catch(function(){ cta.disabled = false; _msg('Network error. Try again.', true); });
+      }
+    });
+  })();
 
   document.body.appendChild(overlay);
   overlay.addEventListener('click', function(e) { if (e.target === overlay) _cmDismissRtPaywall(); });
@@ -9397,14 +13517,20 @@ async function _cmLoadRuntimeCatalog() {
   //      surface; picking it opens the non-blocking two-path card.
   // Cloud guard: the hosted server resolves entitlement as OSS-free, so in
   // CLOUD_MODE trust the account plan/trial instead. A paying or trialing
-  // hosted user must never see the teaser. Re-checked once after 4s because
-  // window._account loads async.
+  // hosted user must never see the teaser.
+  // Pending guard: on a linked machine the daemon writes cloud_plan.json a
+  // few seconds AFTER boot, so a catalog fetched in that window reports
+  // entitled=false for every paid runtime. That is "unknown", not "not on
+  // your plan" — locking on it is what showed a Pro account the upgrade
+  // modal (desktop report 2026-08-19). Never lock while cat.pending, and
+  // re-check until the plan resolves.
   try {
     var cat = await fetch('/api/runtimes', { credentials: 'same-origin' }).then(function(r) { return r.json(); });
     if (!cat || !Array.isArray(cat.runtimes)) return;
-    var teaserOk = true;
+    var pending = !!cat.pending;
+    var teaserOk = !pending;
     try {
-      if (window.CLOUD_MODE) {
+      if (teaserOk && window.CLOUD_MODE) {
         var plan = String(window.CLOUD_PLAN || '').toLowerCase();
         var acct = window._account || {};
         teaserOk = !(/pro|starter|paid/.test(plan) || acct.trial_active);
@@ -9414,7 +13540,7 @@ async function _cmLoadRuntimeCatalog() {
     var free = {};
     cat.runtimes.forEach(function(r) {
       if (!r || !r.id) return;
-      if ((cat.enforced && r.locked) ||
+      if ((!pending && cat.enforced && r.locked) ||
           (teaserOk && r.free === false && r.entitled === false)) locked[r.id] = 1;
       // Free runtimes stay in the switcher even at 0 recent sessions (the
       // 24h session cap must never make OpenClaw itself disappear).
@@ -9422,9 +13548,15 @@ async function _cmLoadRuntimeCatalog() {
     });
     _cmLockedRuntimes = locked;
     _cmFreeRuntimes = free;
-    if (window.CLOUD_MODE && !window._cmRtCatalogRecheck) {
-      window._cmRtCatalogRecheck = 1;
-      setTimeout(_cmLoadRuntimeCatalog, 4000);
+    // Freshness stamp so the paywall guard below knows whether it can trust
+    // this snapshot or has to re-fetch before blocking anyone.
+    window._cmRtCatalogTs = Date.now();
+    // Re-check while the answer can still change: the plan is still
+    // resolving (pending), or CLOUD_MODE's window._account loads async.
+    // Bounded so a permanently-pending box does not poll forever.
+    window._cmRtCatalogTries = (window._cmRtCatalogTries || 0) + 1;
+    if ((pending || window.CLOUD_MODE) && window._cmRtCatalogTries < 20) {
+      setTimeout(_cmLoadRuntimeCatalog, pending ? 3000 : 4000);
     }
   } catch (e) { /* non-fatal: keeps the previous behaviour */ }
 }
@@ -9438,6 +13570,9 @@ async function _cmInitGlobalRuntimeSwitcher() {
   try {
     await _cmLoadRuntimeCatalog();
   } catch (e) { /* non-fatal */ }
+  // Fire-and-forget: declared-capability override re-applies tab visibility
+  // itself when it lands; the switcher must not block on it.
+  try { _cmLoadDeclaredCaps(); } catch (e) { /* non-fatal */ }
   try {
     await _cmLoadDetectedRuntimes();
   } catch (e) { /* non-fatal */ }
@@ -9535,6 +13670,20 @@ async function loadSessions() {
     // running or the local store is unreachable.
     fetch('/api/loop-signals?limit=200&since_minutes=60').then(r => r.json()).catch(function() { return {signals:[]}; })
   ]);
+  // Guard join: per-session control capability (which of Pause/Resume/Stop can
+  // actually work HERE, and why not when not) plus the ranked incident, from
+  // the same resolver the Guard tab and the daemon's policies use. Absent on
+  // cloud (the cloud has its own kill-switch dialogs) and on older daemons —
+  // rows then degrade to the legacy lone Stop button.
+  var guardBySid = {};
+  if (!window.CLOUD_MODE) {
+    try {
+      var _gd = await fetch('/api/guard/sessions?limit=200').then(function(r) { return r.ok ? r.json() : {sessions:[]}; });
+      ((_gd && _gd.sessions) || []).forEach(function(g) {
+        if (g && g.session_id) guardBySid[g.session_id] = g;
+      });
+    } catch (e) { /* guard endpoints absent: legacy rendering */ }
+  }
   // Build a session_id → eval lookup for O(1) overlay.
   var evalMap = {};
   ((evalData && evalData.evals) || []).forEach(function(e) {
@@ -9599,21 +13748,75 @@ async function loadSessions() {
         ' in this session. Open the Brain tab for per-call detail."' +
         ' style="margin-left:6px;color:#dc2626;font-size:13px;">&#9888;</span>';
     }
-    // Issue #1364 — loop-detection badge. Shown when the proxy's LoopDetector
-    // has recorded repeated identical requests from this session in the last
-    // hour. Data comes from the loop_signals DuckDB table via /api/loop-signals.
-    var _loopCount = loopSessions[sid] || 0;
-    if (_loopCount > 0) {
-      html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="Agent may be looping: ' + _loopCount + ' repeated request' + (_loopCount > 1 ? 's' : '') + ' detected. Click to open Brain tab."' +
-        ' style="margin-left:6px;color:#d97706;font-size:11px;font-weight:700;background:rgba(217,119,6,0.12);border:1px solid rgba(217,119,6,0.35);border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; Looping</span>';
+    // Rogue flag on the row itself, not only the banner: the highest-ranked
+    // detector incident for this session (same ranking the Guard tab and the
+    // daemon use), named in plain words and colored by severity. Falls back
+    // to the legacy proxy loop badge when Guard data is unavailable.
+    var _guard = guardBySid[sid] || null;
+    var _inc = _guard && _guard.incident ? _guard.incident : null;
+    if (_inc) {
+      var _sevCrit = String(_inc.severity || '') === 'critical';
+      var _incLabel = LOOP_KIND_LABEL[_inc.kind] || _inc.title || 'Off track';
+      var _incMoney = loopMoney(_inc.spend_at_risk_usd);
+      var _incTitle = (_inc.title || _incLabel) + (_inc.detail ? ' — ' + _inc.detail : '') +
+        (_incMoney ? ' · est. ' + _incMoney + ' at risk (' + (_inc.spend_basis || 'unknown') + ')' : '') +
+        '. Click to open the Guard tab.';
+      var _incColor = _sevCrit ? '#dc2626' : '#d97706';
+      var _incBg = _sevCrit ? 'rgba(220,38,38,0.12)' : 'rgba(217,119,6,0.12)';
+      var _incBorder = _sevCrit ? 'rgba(220,38,38,0.4)' : 'rgba(217,119,6,0.35)';
+      html += '<span class="session-rogue-warn" onclick="event.stopPropagation();switchTab(\'guard\')" title="' + escAttr(_incTitle) + '"' +
+        ' style="margin-left:6px;color:' + _incColor + ';font-size:11px;font-weight:700;background:' + _incBg + ';border:1px solid ' + _incBorder + ';border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; ' +
+        escHtml(_incLabel) + (_incMoney ? ' · ' + _incMoney : '') + '</span>';
+    } else {
+      // Issue #1364 — legacy loop badge (proxy LoopDetector repeats).
+      var _loopCount = loopSessions[sid] || 0;
+      if (_loopCount > 0) {
+        html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="Agent may be looping: ' + _loopCount + ' repeated request' + (_loopCount > 1 ? 's' : '') + ' detected. Click to open Brain tab."' +
+          ' style="margin-left:6px;color:#d97706;font-size:11px;font-weight:700;background:rgba(217,119,6,0.12);border:1px solid rgba(217,119,6,0.35);border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; Looping</span>';
+      }
     }
     html += '</span>';
-    html += '<button onclick="event.stopPropagation();stopSession(\'' + escHtml(sid).replace(/'/g, "\\\\'") + '\')" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
+    // Session controls, right on the row. Pause/Resume render only where this
+    // node can actually deliver them (per-session capability from
+    // process_control.runtime_control_support); a control that cannot work is
+    // disabled with the reason on it rather than quietly doing nothing. Cloud
+    // keeps its own Stop dialog (its kill-switch JS overrides stopSession).
+    // Data-attributes + one delegated listener, never string-built onclick
+    // handlers: a session id, cwd, or capability reason containing a quote
+    // must be inert markup, not a way out of the attribute.
+    html += '<span style="display:flex;gap:5px;align-items:center;flex-shrink:0;">';
+    if (_guard && !window.CLOUD_MODE) {
+      var _acts = _guard.control_actions || [];
+      var _mk = function(action, glyph, label, bg) {
+        var on = _acts.indexOf(action) !== -1;
+        var why = on ? (_guard.control_note || (label + ' this session'))
+                     : (_guard.control_reason || 'Not available for this session');
+        if (on) {
+          return '<button class="cm-guard-btn" data-action="' + action + '"' +
+            ' data-sid="' + escAttr(sid) + '" data-rt="' + escAttr(_guard.runtime || '') + '"' +
+            ' data-cwd="' + escAttr(_guard.cwd || '') + '" title="' + escAttr(why) + '"' +
+            ' style="background:' + bg + ';color:#fff;border:none;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;">' + glyph + ' ' + label + '</button>';
+        }
+        return '<button disabled title="' + escAttr(why) + '"' +
+          ' style="background:var(--bg-tertiary,#2a2a2a);color:var(--text-muted,#888);border:1px solid var(--border-secondary,#3a3a3a);border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:not-allowed;opacity:.6;">' + glyph + ' ' + label + '</button>';
+      };
+      html += _mk('pause', '⏸', 'Pause', '#b45309');
+      html += _mk('resume', '▶', 'Resume', '#15803d');
+      html += _mk('stop', '⏹', 'Stop', '#b91c1c');
+    } else {
+      html += '<button class="cm-stop-btn" data-sid="' + escAttr(sid) + '" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
+    }
+    html += '</span>';
     html += '</div>';
     var sessCost = costMap[sid] || costMap[(sid||'').slice(-16)] || null;
     html += '<div class="session-meta">';
     html += '<span><span class="badge model">' + (s.model||'default') + '</span></span>';
     if (s.channel !== 'unknown') html += '<span><span class="badge channel">' + s.channel + '</span></span>';
+    // Where this session was launched from. Claude Code, the Claude Desktop
+    // app and Agent-SDK runs all write to the same transcript tree, so without
+    // this every desktop session reads as someone typing in a terminal.
+    // Absent for runtimes that only have one surface — no badge, no noise.
+    html += _cmSurfaceBadge(s.surface);
     if (sessCost && sessCost.cost_usd > 0) {
       html += '<span style="font-size:11px;color:var(--text-success);font-weight:600;">💰 $' + Number(sessCost.cost_usd||0).toFixed(4) + ' total</span>';
     }
@@ -9675,11 +13878,13 @@ async function loadSessions() {
     if (subagents.length > 0) {
       html += '<div style="margin-top:8px;margin-left:16px;border-left:2px solid var(--border-primary);padding-left:12px;">';
       subagents.forEach(function(sa) {
-        var statusIcon = sa.status === 'active' ? '🟢' : sa.status === 'idle' ? '🟡' : '⬜';
+        var statusIcon = _cmIsWorkingStatus(sa.status) ? '🟢' : sa.status === 'idle' ? '🟡' : '⬜';
         html += '<details style="margin-bottom:4px;">';
         html += '<summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:4px 0;">';
         html += statusIcon + ' <strong>' + escHtml(sa.displayName) + '</strong>';
-        html += ' <span style="color:var(--text-muted);font-size:11px;">' + sa.runtime + '</span>';
+        // Elapsed time, so runtimeFormatted — `runtime` is the runtime's name
+        // now. Escaped; it was interpolated raw.
+        html += ' <span style="color:var(--text-muted);font-size:11px;">' + escHtml(sa.runtimeFormatted || '') + '</span>';
         html += '</summary>';
         html += '<div style="padding:6px 0 6px 20px;font-size:12px;color:var(--text-muted);">';
         if (sa.recentTools && sa.recentTools.length > 0) {
@@ -9738,7 +13943,7 @@ async function loadSessions() {
       chainHtml += ' &bull; <span style="color:var(--text-success);">$' + chain.chain_cost_usd.toFixed(4) + '</span></span>';
       chainHtml += '</div>';
       chain.children.slice(0, 5).forEach(function(child, idx) {
-        var dot = child.status === 'active' ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
+        var dot = _cmIsWorkingStatus(child.status) ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
         chainHtml += '<div style="padding:6px 12px 6px 28px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
         chainHtml += '<span style="width:7px;height:7px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>';
         if (idx === 0) chainHtml += '<span style="color:var(--text-muted);font-size:10px;margin-right:-4px;">&#x2514;&#x2500;</span>';
@@ -9796,6 +14001,54 @@ function _renderSessionsRetentionCta(capped) {
   } else {
     cta.style.display = 'none';
     cta.innerHTML = '';
+  }
+}
+
+// Delegated click handler for the per-row session controls. The buttons carry
+// their arguments as data-attributes (see the row renderer) so no untrusted
+// value is ever interpolated into an inline handler.
+document.addEventListener('click', function(ev) {
+  var gb = ev.target.closest && ev.target.closest('.cm-guard-btn');
+  if (gb) {
+    ev.stopPropagation();
+    guardControl(gb.dataset.sid, gb.dataset.action, gb.dataset.rt, gb.dataset.cwd);
+    return;
+  }
+  var sb = ev.target.closest && ev.target.closest('.cm-stop-btn');
+  if (sb) {
+    ev.stopPropagation();
+    stopSession(sb.dataset.sid);
+  }
+});
+
+// Row-level session control. One endpoint, the same actuator the Guard tab
+// and the daemon's policies use, so a click here and an automatic policy
+// action are identical to the agent process. Reports the REAL outcome —
+// including advisory_only, where a "pause" is only a proxy flag and no
+// enforcement proxy is running to honor it.
+async function guardControl(sessionId, action, runtime, cwd) {
+  var sid = String(sessionId || '').trim();
+  if (!sid || !action) return;
+  if (action === 'stop' || action === 'kill') {
+    if (!confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' session "' + sid + '"?')) return;
+  }
+  try {
+    var r = await fetch('/api/guard/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: sid, action: action,
+                            runtime: runtime || '', cwd: cwd || ''})
+    });
+    var data = await r.json();
+    if (!r.ok || !data.ok) {
+      var why = (data && (data.detail || data.error)) || 'request failed';
+      alert('Could not ' + action + ' this session: ' + why);
+    } else if (data.advisory_only) {
+      alert('Pause flag set, but no enforcement proxy is running to hold this session — it is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.');
+    }
+    loadSessions();
+  } catch (e) {
+    alert('Could not ' + action + ' this session: ' + e.message);
   }
 }
 
@@ -11146,6 +15399,16 @@ function cronToHuman(expr) {
   return '';
 }
 
+// Runtime whose logs we're viewing: the selected runtime, falling back to
+// openclaw for 'all' (the node's own gateway logs — the pre-runtime-aware
+// behavior). OTLP selections collapse to 'all' via _cmClientFilterRt.
+function _cmLogsRuntime() {
+  try {
+    var f = _cmClientFilterRt(_cmRuntimeFilter());
+    if (f && f !== 'all') return f;
+  } catch (e) {}
+  return 'openclaw';
+}
 async function loadLogs() {
   if (window.CLOUD_MODE) {
     var el = document.getElementById('logs-full');
@@ -11153,8 +15416,27 @@ async function loadLogs() {
     return;
   }
   var lines = document.getElementById('log-lines').value;
-  var data = await fetch('/api/logs?lines=' + lines).then(r => r.json());
-  renderLogs('logs-full', data.lines);
+  var rt = _cmLogsRuntime();
+  var titleEl = document.getElementById('log-stream-title');
+  if (titleEl) titleEl.textContent = 'Live ' + _cmRuntimeLabel(rt) + ' log stream';
+  var data = await fetch('/api/logs?lines=' + lines + '&runtime=' + encodeURIComponent(rt))
+    .then(r => r.json()).catch(function() { return null; });
+  var srcEl = document.getElementById('log-source-path');
+  if (data && data.available === false) {
+    // Honest gating: this runtime has no log source — say so instead of
+    // silently streaming another runtime's logs underneath its name.
+    var el2 = document.getElementById('logs-full');
+    if (el2) el2.innerHTML = '<div style="color:var(--text-secondary);padding:24px;text-align:center;font-size:13px;">' +
+      escapeHtml(data.reason || (_cmRuntimeLabel(rt) + ' does not expose a log stream.')) + '</div>';
+    if (srcEl) srcEl.textContent = '';
+  } else if (data) {
+    if (srcEl && data.source) srcEl.textContent = data.source;
+    renderLogs('logs-full', data.lines);
+  }
+  // Follow the selected runtime with the live stream too.
+  if (typeof _logStreamRt !== 'undefined' && _logStreamRt !== rt) {
+    try { startLogStream(); } catch (e) {}
+  }
 }
 
 async function loadMemoryAnalytics() {
@@ -11325,13 +15607,46 @@ window._traceSpanCopyBuf = '';
 window._traceCollapsed = {};
 
 var _TRACE_KIND_COLORS = {
-  agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', tool: '#10b981',
-  retrieval: '#06b6d4', attachment: '#6b7280', event: '#94a3b8'
+  agent: '#ec4899', prompt: '#3b82f6', llm: '#8b5cf6', reasoning: '#e879f9',
+  tool: '#10b981', retrieval: '#06b6d4', attachment: '#6b7280', event: '#94a3b8'
 };
 var _TRACE_KIND_ICONS = {
-  agent: '🤖', llm: '🧠', tool: '🔧', prompt: '💬', retrieval: '📚',
+  agent: '🤖', llm: '🧠', reasoning: '💭', tool: '🔧', prompt: '💬', retrieval: '📚',
   attachment: '📎', event: '•'
 };
+// Legend order for the trace header. `reasoning` is the model's thinking
+// (its own span kind); the execute_tool spans it drove nest under it.
+var _TRACE_LEGEND_KINDS = [
+  ['agent', 'tracing.legend_agent', 'Agent'],
+  ['prompt', 'tracing.legend_prompt', 'Prompt'],
+  ['llm', 'tracing.legend_llm', 'Model call'],
+  ['reasoning', 'tracing.legend_reasoning', 'Reasoning'],
+  ['tool', 'tracing.legend_tool', 'Tool']
+];
+function _traceLegendHtml() {
+  return '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:var(--text-muted);">'
+    + _TRACE_LEGEND_KINDS.map(function(k) {
+        return '<span style="display:inline-flex;align-items:center;gap:5px;">'
+          + '<span style="width:9px;height:9px;border-radius:2px;background:' + _TRACE_KIND_COLORS[k[0]] + ';"></span>'
+          + t(k[1], null, k[2]) + '</span>';
+      }).join('')
+    + '</div>';
+}
+// Honest empty state for the reasoning lane. `r` is the API's `reasoning`
+// block {runtime, span_count, coverage, note}. Returns '' when there are
+// reasoning spans to show or the coverage is unknown.
+function _traceReasoningNoteHtml(r) {
+  if (!r || (r.span_count || 0) > 0) return '';
+  var rt = escHtml(r.runtime || 'this runtime');
+  var msg = '';
+  if (r.coverage === 'none') msg = t('tracing.reasoning_not_exposed', {runtime: rt}, 'Reasoning is not exposed by {runtime}');
+  else if (r.coverage === 'partial' || r.coverage === 'full') msg = t('tracing.reasoning_none_recorded', {runtime: rt}, 'No reasoning was recorded for this session. {runtime} exposes it only under some settings.');
+  else return '';
+  var note = r.note ? '<span style="color:var(--text-muted);"> ' + escHtml(r.note) + '</span>' : '';
+  return '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;">'
+    + '<span style="width:9px;height:9px;border-radius:2px;background:' + _TRACE_KIND_COLORS.reasoning + ';opacity:0.5;"></span>'
+    + '<span>' + msg + '.' + note + '</span></div>';
+}
 function _traceColor(s) {
   // Sub-agent ROOT span is orange; everything else (incl. spans inside a
   // sub-agent) is colored by its kind so chat/tool stay readable.
@@ -11343,7 +15658,9 @@ function _traceCost(s) { return (s.rolled_cost != null ? s.rolled_cost : s.cost)
 function _traceTokens(s) { return (s.rolled_tokens != null ? s.rolled_tokens : s.tokens) || 0; }
 function _traceFmtDur(ms) {
   ms = ms || 0;
-  if (ms < 1000) return ms + 'ms';
+  // Round: span durations are floats (end_ts - start_ts), and an unrounded
+  // one rendered as '900.0000953674316ms' in the trace list.
+  if (ms < 1000) return Math.round(ms) + 'ms';
   if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
   if (ms < 3600000) return (ms / 60000).toFixed(1) + 'm';
   if (ms < 86400000) return (ms / 3600000).toFixed(1) + 'h';
@@ -11358,11 +15675,11 @@ window._traceListSearch = '';
 // Reuses the trace list (one row per session) for picking a session, then
 // /api/turn-anatomy decomposes that session into turns of ordered spans.
 var _TA_KIND_COLORS = {
-  prompt: '#a78bfa', model: '#22d3ee', tool: '#f59e0b',
+  prompt: '#a78bfa', thinking: '#e879f9', model: '#22d3ee', tool: '#f59e0b',
   compaction: '#f472b6', reply: '#34d399'
 };
 var _TA_KIND_ICONS = {
-  prompt: '💬', model: '🧠', tool: '🔧', compaction: '🗜️', reply: '✅'
+  prompt: '💬', thinking: '💭', model: '🧠', tool: '🔧', compaction: '🗜️', reply: '✅'
 };
 function _taColor(kind) { return _TA_KIND_COLORS[kind] || '#94a3b8'; }
 function _taIcon(kind) { return _TA_KIND_ICONS[kind] || '•'; }
@@ -11389,7 +15706,11 @@ async function loadTurnAnatomy() {
   el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_sessions_hellip", null, "Loading sessions&hellip;") + '</div>';
   var data;
   try {
-    data = await fetch('/api/traces?limit=200').then(function(r){ return r.json(); });
+    // Scope server-side by the active runtime (#4782). A foreign OTLP app
+    // has no session-id prefix, so client-side filtering would empty the
+    // list; the server filters spans by agent_type and events by prefix.
+    data = await fetch('/api/traces?limit=200&runtime='
+      + encodeURIComponent(_cmRuntimeFilter())).then(function(r){ return r.json(); });
   } catch (e) {
     el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.could_not_load_sessions", null, "Could not load sessions.") + '</div>';
     return;
@@ -11494,7 +15815,8 @@ async function viewTurnAnatomy(sessionId) {
   var turns = data.turns || [];
   if (meta) {
     meta.innerHTML = '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;color:var(--text-primary);">' + escHtml(sessionId) + '</div>'
-      + '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">' + turns.length + ' turn' + (turns.length === 1 ? '' : 's') + '</div>';
+      + '<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">' + turns.length + ' turn' + (turns.length === 1 ? '' : 's') + '</div>'
+      + _traceReasoningNoteHtml(data.reasoning);
   }
   if (!turns.length) {
     if (turnsEl) turnsEl.innerHTML = '<div class="card" style="padding:18px;color:var(--text-muted);">' + t("app.no_turns_in_this_session", null, "No turns in this session.") + '</div>';
@@ -11528,6 +15850,7 @@ function _taRenderTurn(t) {
     var color = _taColor(s.kind);
     var spanErr = s.status === 'error';
     var label = (s.label || s.kind || '');
+    if (s.kind === 'thinking' && s.text) label = 'thinking: ' + s.text.replace(/\s+/g, ' ').slice(0, 80);
     var spanCostTip = ((s.cost || 0) > 0 ? ' · ' + _taFmtCost(s.cost) : '') + ((s.tokens || 0) > 0 ? ' · ' + (s.tokens >= 1000 ? (s.tokens / 1000).toFixed(1) + 'K' : s.tokens) + ' tok' : '');
     bars += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;" title="' + escHtml(label) + ' · ' + _traceFmtDur(s.duration_ms) + spanCostTip + (spanErr ? ' · error' : '') + '">'
       + '<span style="width:18px;flex-shrink:0;text-align:center;font-size:11px;">' + _taIcon(s.kind) + '</span>'
@@ -11557,7 +15880,11 @@ async function loadTracing() {
   el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_traces_hellip", null, "Loading traces&hellip;") + '</div>';
   var data;
   try {
-    data = await fetch('/api/traces?limit=200').then(function(r){ return r.json(); });
+    // Scope server-side by the active runtime (#4782). A foreign OTLP app
+    // has no session-id prefix, so client-side filtering would empty the
+    // list; the server filters spans by agent_type and events by prefix.
+    data = await fetch('/api/traces?limit=200&runtime='
+      + encodeURIComponent(_cmRuntimeFilter())).then(function(r){ return r.json(); });
   } catch (e) {
     el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.could_not_load_traces", null, "Could not load traces.") + '</div>';
     return;
@@ -11606,13 +15933,12 @@ function _renderTraceRows() {
   var box = document.getElementById('trace-rows');
   if (!box) return;
   var traces = (window._allTraces || []).slice();
-  // Global runtime switcher (header): scope traces to one runtime. Each
-  // event-derived trace's `trace_id` IS its session_id, whose prefix is the
-  // runtime discriminator (OTLP traces with hex ids fall through to OpenClaw).
-  var _trRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
-  if (_trRt && _trRt !== 'all') {
-    traces = traces.filter(function(t) { return _cmRuntimeOf({ id: t.trace_id }) === _trRt; });
-  }
+  // Runtime scoping is SERVER-side now (#4782): /api/traces?runtime= filters
+  // spans by agent_type and events by session prefix. The old client-side pass
+  // keyed off `trace_id` alone, so a span-derived trace (whose id is a hex OTel
+  // trace id, not a session id) always resolved to 'openclaw' and was filtered
+  // out of its own app's view -- the list rendered empty for the very runtime
+  // you had selected. Re-filtering here would just reintroduce that.
   var f = window._traceListFilter, q = window._traceListSearch;
   if (q) traces = traces.filter(function(t) {
     return (((t.trace_id || '') + ' ' + (t.model || '')).toLowerCase().indexOf(q) !== -1);
@@ -11638,8 +15964,11 @@ function _renderTraceRows() {
       + 'onmouseover="this.style.background=\'var(--bg-tertiary,#1e293b)\'" onmouseout="this.style.background=\'\'">'
       + '<span style="flex:1;min-width:0;">'
         + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + statusDot + ';margin-right:8px;"></span>'
-        + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((t.name || t.trace_id).slice(0, 26)) + '</span>'
+        + '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;color:var(--text-primary);">' + escHtml((t.title || t.name || t.trace_id).slice(0, 34)) + '</span>'
         + (t.has_subagents ? '<span style="margin-left:8px;background:rgba(245,158,11,0.15);color:#f59e0b;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600;">sub-agents</span>' : '')
+        // Provenance chip: this trace came from OTel spans, not a session
+        // transcript. Makes it obvious which of your own apps sent it.
+        + (t.source === 'spans' ? '<span style="margin-left:8px;background:rgba(56,189,248,0.15);color:#38bdf8;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600;">OTel</span>' : '')
         + '<span style="margin-left:8px;color:var(--text-muted);font-size:11px;">' + escHtml(when) + '</span>'
       + '</span>'
       + '<span style="width:64px;text-align:right;color:var(--text-secondary);font-size:12px;">' + (t.span_count || 0) + '</span>'
@@ -11714,6 +16043,8 @@ async function viewTrace(traceId) {
           + '</div>'
           + (title ? '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-muted);margin-top:2px;">' + escHtml((data.trace_id || '').slice(0, 40)) + '</div>' : '')
           + '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;">' + stats.join('') + '</div>'
+          + _traceLegendHtml()
+          + _traceReasoningNoteHtml(data.reasoning)
         + '</div>'
       + '</div>';
   }
@@ -12058,9 +16389,10 @@ function _traceSpanRenderChat(s) {
   msgs.forEach(function(m) {
     var isUser = m.role === 'user';
     var isAssistant = m.role === 'assistant';
-    var bg = isUser ? 'rgba(99,102,241,0.10)' : isAssistant ? 'var(--bg-primary)' : 'rgba(245,158,11,0.08)';
-    var border = isUser ? '#6366f1' : isAssistant ? 'var(--border-secondary)' : '#f59e0b';
-    var label = isUser ? 'User' : isAssistant ? 'Assistant' : (m.role || 'system');
+    var isThinking = m.role === 'thinking';
+    var bg = isUser ? 'rgba(99,102,241,0.10)' : isAssistant ? 'var(--bg-primary)' : isThinking ? 'rgba(232,121,249,0.10)' : 'rgba(245,158,11,0.08)';
+    var border = isUser ? '#6366f1' : isAssistant ? 'var(--border-secondary)' : isThinking ? '#e879f9' : '#f59e0b';
+    var label = isUser ? 'User' : isAssistant ? 'Assistant' : isThinking ? t('tracing.thinking', null, 'Thinking') : (m.role || 'system');
     html += '<div style="background:' + bg + ';border:1px solid ' + border + ';border-left:3px solid ' + border + ';border-radius:6px;padding:8px 10px;">'
       + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);margin-bottom:4px;">' + escHtml(label) + '</div>'
       + '<div style="font-size:13px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word;line-height:1.4;">' + escHtml(m.text || '') + '</div>'
@@ -12120,6 +16452,7 @@ function _traceExtractMessages(s, full) {
         .forEach(function(c) {
           if (c.kind === 'prompt') add('user', c.detail);
           else if (c.kind === 'llm') add('assistant', c.detail);
+          else if (c.kind === 'reasoning') add('thinking', c.detail);
           else if (c.kind === 'tool') {
             if (c.detail) add('tool', (c.tool ? c.tool + ': ' : '') + c.detail);
             if (c.output) add('tool_result', c.output);
@@ -12135,6 +16468,7 @@ function _traceExtractMessages(s, full) {
   if (!out.length && s) {
     var role = s.kind === 'llm' ? 'assistant'
              : s.kind === 'prompt' ? 'user'
+             : s.kind === 'reasoning' ? 'thinking'
              : s.kind === 'tool' ? 'tool' : 'system';
     if (s.detail) add(role, s.detail);
     if (s.output) add('tool_result', s.output);
@@ -12410,12 +16744,38 @@ async function _loadGatewayHealthSparkline() {
 }
 
 // ===== System Health Panel =====
+// Issue #2861 — version-aware health-regression banner.
+// Fetches /api/version-health (backend fully implemented in routes/health.py)
+// and shows a warning card in #sh-version-regression when the current OpenClaw
+// version shows >30% degradation in cost, error-rate, or token usage vs the
+// previous version. Safe to call even when DuckDB has no data — always clears
+// the element on any error or non-detected result so the card never sticks.
+async function _renderVersionRegression() {
+  var el = document.getElementById('sh-version-regression');
+  if (!el) return;
+  try {
+    var data = await fetchJsonWithTimeout('/api/version-health', 8000);
+    var reg = (data && data.regression) ? data.regression : {};
+    if (!reg.detected) { el.innerHTML = ''; return; }
+    el.innerHTML = '<div style="padding:10px 14px;background:rgba(217,119,6,0.12);'
+      + 'border:1px solid rgba(217,119,6,0.4);border-left:3px solid #d97706;'
+      + 'border-radius:8px;font-size:13px;color:var(--text-primary);'
+      + 'display:flex;align-items:flex-start;gap:10px;">'
+      + '<span style="font-size:16px;flex-shrink:0;">⚠️</span>'
+      + '<span>' + _escapeHtml(reg.banner || '') + '</span>'
+      + '</div>';
+  } catch (_e) {
+    el.innerHTML = '';
+  }
+}
+
 async function loadSystemHealth() {
   try {
     var d = await fetchJsonWithTimeout('/api/system-health', 18000);
     // Connector liveness: surface a 'down' inbound channel loudly (incident:
     // a channel went deaf ~37h with no alarm). Driven by the same payload.
     try { _renderConnectorBanner(d.connector_liveness); } catch(e) {}
+    try { _renderVersionRegression(); } catch(e) {}
     var services = Array.isArray(d.services) ? d.services : [];
     var channels = Array.isArray(d.channels) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
@@ -12531,7 +16891,7 @@ async function loadSystemHealth() {
             chtml += '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;">' + chain.child_count + ' agents &bull; ' + chainTokStr + ' tok &bull; <span style="color:var(--text-success);">$' + chain.chain_cost_usd.toFixed(4) + '</span></span>';
             chtml += '</div>';
             chain.children.slice(0, 4).forEach(function(child) {
-              var dot = child.status === 'active' ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
+              var dot = _cmIsWorkingStatus(child.status) ? '#16a34a' : child.status === 'idle' ? '#d97706' : '#6b7280';
               var tokStr = child.total_tokens >= 1000 ? (child.total_tokens/1000).toFixed(0)+'K' : child.total_tokens;
               chtml += '<div style="padding:4px 10px 4px 20px;display:flex;align-items:center;gap:6px;border-bottom:1px solid var(--border-secondary);font-size:11px;">';
               chtml += '<span style="width:6px;height:6px;border-radius:50%;background:' + dot + ';flex-shrink:0;"></span>';
@@ -12763,6 +17123,8 @@ async function loadSystemHealth() {
         gwDot = '🟡'; gwLabel = 'Warning'; gwColor = '#f59e0b';
       } else if (gwStatus === 'healthy') {
         gwDot = '🟢'; gwLabel = 'Healthy'; gwColor = 'var(--text-success,#22c55e)';
+      } else if (gwStatus === 'externally_supervised') {
+        gwDot = '🟡'; gwLabel = 'Supervised pause'; gwColor = '#f59e0b';
       } else {
         gwDot = '⚫'; gwLabel = 'Not running'; gwColor = 'var(--text-muted)';
       }
@@ -13209,6 +17571,9 @@ var _CM_EFF_IDEAS = {
   model_downgrade: { icon: '🔁', stem: 'model', evidenceTab: 'models' },
   context_trim: { icon: '✂️', stem: 'ctx', evidenceTab: 'context-economics' },
   cache_warm: { icon: '♻️', stem: 'reread', evidenceTab: 'context-economics' },
+  // feat/spend-actions: derived from the measured spend flow (thinking share
+  // of output spend); evidence is the "Where the money goes" chart.
+  thinking_trim: { icon: '🧠', stem: 'think', evidenceTab: 'usage' },
 };
 function _cmEffIdeaRowHtml(a) {
   var m = _CM_EFF_IDEAS[a.id];
@@ -13218,6 +17583,7 @@ function _cmEffIdeaRowHtml(a) {
     model: a.model || d.model || 'your main model',
     n: (d.calls != null ? d.calls : 'several'),
     target: d.target_model || 'a smaller model',
+    pct: (d.thinking_pct_of_output_cost != null ? d.thinking_pct_of_output_cost : ''),
   };
   var save = Math.max(1, Math.round(Number(a.savings_monthly_usd) || 0));
   var title = t('efficiency.idea_' + m.stem + '_title', null, '');
@@ -13235,6 +17601,189 @@ function _cmEffIdeaRowHtml(a) {
     + '</div>'
     + '<div style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">' + escHtml(t('efficiency.save_mo', { amt: '$' + save }, 'save about $' + save + '/mo')) + '</div>'
     + '</div>';
+}
+// ── Spend Flow (feat/spend-flow): where the money goes ─────────────────────
+// Three-column flow: input context categories -> runtime -> output categories,
+// ribbon width proportional to dollars. Data: /api/spend-flow (locally the
+// daemon-cached DuckDB walk; on cloud the cm-cloud-spend-flow interceptor
+// serves the `spendFlow` snapshot slice). Category token shares are measured
+// from real event content and reconciled to the model-reported usage; the
+// `overhead` bucket is the residual (system prompt + skill/MCP definitions
+// + truncated tool output), so its copy says "estimated".
+// Palettes validated with the dataviz six-checks script (light + dark).
+var _CM_SF_IN = {
+  user_prompts:    { c: '#2563eb', k: 'usage.sf_user_prompts',    f: 'Your messages' },
+  prior_assistant: { c: '#9333ea', k: 'usage.sf_prior_assistant', f: 'Earlier replies (context)' },
+  tool_results:    { c: '#0d9488', k: 'usage.sf_tool_results',    f: 'Tool results' },
+  overhead:        { c: '#d97706', k: 'usage.sf_overhead',        f: 'System prompt and tool definitions' }
+};
+var _CM_SF_OUT = {
+  thinking:           { c: '#7c3aed', k: 'usage.sf_thinking',  f: 'Thinking' },
+  assistant_text:     { c: '#059669', k: 'usage.sf_text',      f: 'Replies' },
+  builtin_tool_calls: { c: '#0284c7', k: 'usage.sf_builtin',   f: 'Tool calls' },
+  mcp_tool_calls:     { c: '#ea580c', k: 'usage.sf_mcp',       f: 'MCP tool calls' }
+};
+function _sfCost(c) { return c >= 10 ? '$' + c.toFixed(0) : c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+function _sfLabel(meta, id) {
+  var m = meta[id];
+  return m ? t(m.k, null, m.f) : id;
+}
+async function loadSpendFlow() {
+  var title = document.getElementById('spend-flow-title');
+  var card = document.getElementById('spend-flow-card');
+  var box = document.getElementById('spend-flow-content');
+  if (!card || !box) return;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var q = '?days=7' + ((rt && rt !== 'all') ? ('&runtime=' + encodeURIComponent(rt)) : '');
+  var data = null;
+  try {
+    var r = await fetch('/api/spend-flow' + q);
+    if (r.ok) data = await r.json();
+  } catch (_e) {}
+  if (!data || !data.totals) { if (title) title.style.display = 'none'; card.style.display = 'none'; return; }
+  if (title) title.style.display = '';
+  card.style.display = '';
+  var winEl = document.getElementById('spend-flow-window');
+  if (winEl) {
+    winEl.textContent = data.capped_at_24h
+      ? t('usage.sf_window_24h', null, 'last 24 hours · context in, output out')
+      : t('usage.sf_window_7d', null, 'last 7 days · context in, output out');
+  }
+  if (data.insufficient_data) {
+    box.innerHTML = '<div style="padding:10px 4px;font-size:13px;color:var(--text-secondary);">'
+      + escHtml(t('usage.sf_collecting', null, 'Not enough model calls recorded yet. This chart appears once your agents have some activity.'))
+      + '</div>';
+    return;
+  }
+  try { box.innerHTML = _sfRender(data); }
+  catch (e) { if (title) title.style.display = 'none'; card.style.display = 'none'; }
+}
+function _sfRender(data) {
+  var W = 960, H = 340, PAD = 10, NODE_W = 14, TOP = 26, BOT = 12;
+  var LX = 216, MX = 473, RX = 730; // node bar x positions
+  var inCats = (data.input_categories || []).filter(function (c) { return c.cost_usd > 0; });
+  var outCats = (data.output_categories || []).filter(function (c) { return c.cost_usd > 0; });
+  var rts = (data.runtimes || []).filter(function (r) { return r.cost_usd > 0; });
+  var links = data.links || [];
+  if (!inCats.length || !rts.length) {
+    return '<div style="padding:10px 4px;font-size:13px;color:var(--text-secondary);">'
+      + escHtml(t('usage.sf_collecting', null, 'Not enough model calls recorded yet. This chart appears once your agents have some activity.')) + '</div>';
+  }
+  var inTotal = data.totals.input_cost_usd || 0;
+  var outTotal = data.totals.output_cost_usd || 0;
+  var midTotal = 0;
+  rts.forEach(function (r) { midTotal += Math.max(r.input_cost_usd || 0, r.output_cost_usd || 0); });
+  var maxSide = Math.max(inTotal, outTotal, midTotal, 1e-9);
+  var usable = H - TOP - BOT - PAD * Math.max(inCats.length, outCats.length, rts.length);
+  var s = usable / maxSide; // dollars -> px
+  function hOf(c) { return Math.max(6, c * s); }
+
+  // Stack nodes per column, remembering y + running ribbon offsets.
+  var nodes = {}; // id -> {x, y, h, color, in: offset, out: offset}
+  function stack(items, x, idOf, colorOf) {
+    var y = TOP;
+    items.forEach(function (it) {
+      var h = hOf(it.cost_usd);
+      nodes[idOf(it)] = { x: x, y: y, h: h, color: colorOf(it), inOff: 0, outOff: 0, cost: it.cost_usd };
+      y += h + PAD;
+    });
+  }
+  stack(inCats, LX, function (c) { return c.id; }, function (c) { return (_CM_SF_IN[c.id] || {}).c || '#64748b'; });
+  stack(rts, MX, function (r) { return 'runtime:' + r.runtime; }, function () { return 'var(--text-muted, #94a3b8)'; });
+  stack(outCats, RX, function (c) { return c.id; }, function (c) { return (_CM_SF_OUT[c.id] || {}).c || '#64748b'; });
+
+  var svg = [];
+  // Ribbons first (under the node bars). Left->mid use the source category
+  // color; mid->right use the target category color. Deterministic order:
+  // category display order within runtime display order.
+  function ribbon(a, b, aSide, bSide, thickness, color, tip) {
+    if (!a || !b || thickness <= 0) return;
+    var th = Math.max(1.5, thickness * s);
+    var x1 = a.x + (aSide === 'out' ? NODE_W : 0);
+    var x2 = b.x + (bSide === 'in' ? 0 : NODE_W);
+    var y1 = a.y + (aSide === 'out' ? a.outOff : a.inOff);
+    var y2 = b.y + (bSide === 'in' ? b.inOff : b.outOff);
+    if (aSide === 'out') a.outOff += th; else a.inOff += th;
+    if (bSide === 'in') b.inOff += th; else b.outOff += th;
+    var mx = (x1 + x2) / 2;
+    svg.push('<path d="M' + x1 + ',' + y1
+      + ' C' + mx + ',' + y1 + ' ' + mx + ',' + y2 + ' ' + x2 + ',' + y2
+      + ' l0,' + th.toFixed(1)
+      + ' C' + mx + ',' + (y2 + th).toFixed(1) + ' ' + mx + ',' + (y1 + th).toFixed(1) + ' ' + x1 + ',' + (y1 + th).toFixed(1)
+      + ' Z" fill="' + color + '" fill-opacity="0.32"><title>' + escHtml(tip) + '</title></path>');
+  }
+  var linkIdx = {};
+  links.forEach(function (l) { linkIdx[l.source + '>' + l.target] = l; });
+  inCats.forEach(function (c) {
+    rts.forEach(function (r) {
+      var l = linkIdx[c.id + '>runtime:' + r.runtime];
+      if (!l) return;
+      ribbon(nodes[c.id], nodes['runtime:' + r.runtime], 'out', 'in', l.cost_usd,
+        (_CM_SF_IN[c.id] || {}).c || '#64748b',
+        _sfLabel(_CM_SF_IN, c.id) + ' → ' + _cmRuntimeLabel(r.runtime) + ': ' + _sfCost(l.cost_usd));
+    });
+  });
+  rts.forEach(function (r) {
+    outCats.forEach(function (c) {
+      var l = linkIdx['runtime:' + r.runtime + '>' + c.id];
+      if (!l) return;
+      ribbon(nodes['runtime:' + r.runtime], nodes[c.id], 'out', 'in', l.cost_usd,
+        (_CM_SF_OUT[c.id] || {}).c || '#64748b',
+        _cmRuntimeLabel(r.runtime) + ' → ' + _sfLabel(_CM_SF_OUT, c.id) + ': ' + _sfCost(l.cost_usd));
+    });
+  });
+  // Node bars + direct labels (text wears text tokens, marks carry color).
+  function pct(v, tot) { return tot > 0 ? ' · ' + (v / tot * 100).toFixed(0) + '%' : ''; }
+  // Two-line labels stack top-down; when a node is thinner than its label
+  // block, push the label below the previous one so small categories
+  // ("Replies", "MCP tool calls") never overlap.
+  var _lastLblBottom = { left: -1e9, right: -1e9 };
+  function labelY(n, side) {
+    var ly = Math.max(n.y + 11, Math.min(n.y + n.h / 2 + 4, n.y + n.h + 8));
+    if (ly < _lastLblBottom[side] + 15) ly = _lastLblBottom[side] + 15;
+    _lastLblBottom[side] = ly + 13;
+    return ly;
+  }
+  inCats.forEach(function (c) {
+    var n = nodes[c.id];
+    var est = c.basis && c.basis !== 'measured';
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="' + n.color + '"><title>' + escHtml(_sfLabel(_CM_SF_IN, c.id) + ': ' + _sfCost(c.cost_usd)) + '</title></rect>');
+    var ly = labelY(n, 'left');
+    svg.push('<text x="' + (n.x - 10) + '" y="' + ly.toFixed(1) + '" text-anchor="end" font-size="12" fill="var(--text-primary,#1e293b)">' + escHtml(_sfLabel(_CM_SF_IN, c.id)) + '</text>');
+    svg.push('<text x="' + (n.x - 10) + '" y="' + (ly + 13).toFixed(1) + '" text-anchor="end" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml((est ? t('usage.sf_estimated', null, 'about ') : '') + _sfCost(c.cost_usd) + pct(c.cost_usd, data.totals.input_cost_usd)) + '</text>');
+  });
+  rts.forEach(function (r) {
+    var n = nodes['runtime:' + r.runtime];
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="var(--text-secondary,#64748b)"><title>' + escHtml(_cmRuntimeLabel(r.runtime) + ': ' + _sfCost(r.cost_usd)) + '</title></rect>');
+    svg.push('<text x="' + (n.x + NODE_W / 2) + '" y="' + (n.y - 6).toFixed(1) + '" text-anchor="middle" font-size="12" font-weight="600" fill="var(--text-primary,#1e293b)">' + escHtml(_cmRuntimeLabel(r.runtime)) + '</text>');
+    svg.push('<text x="' + (n.x + NODE_W / 2) + '" y="' + (n.y + n.h + 14).toFixed(1) + '" text-anchor="middle" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml(_sfCost(r.cost_usd)) + '</text>');
+  });
+  outCats.forEach(function (c) {
+    var n = nodes[c.id];
+    var est = c.basis && c.basis !== 'measured';
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="' + n.color + '"><title>' + escHtml(_sfLabel(_CM_SF_OUT, c.id) + ': ' + _sfCost(c.cost_usd)) + '</title></rect>');
+    var ly = labelY(n, 'right');
+    svg.push('<text x="' + (n.x + NODE_W + 10) + '" y="' + ly.toFixed(1) + '" font-size="12" fill="var(--text-primary,#1e293b)">' + escHtml(_sfLabel(_CM_SF_OUT, c.id)) + '</text>');
+    svg.push('<text x="' + (n.x + NODE_W + 10) + '" y="' + (ly + 13).toFixed(1) + '" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml((est ? t('usage.sf_estimated', null, 'about ') : '') + _sfCost(c.cost_usd) + pct(c.cost_usd, data.totals.output_cost_usd)) + '</text>');
+  });
+  // Column headers.
+  svg.push('<text x="' + (LX + NODE_W) + '" y="14" text-anchor="end" font-size="11" font-weight="600" fill="var(--text-secondary,#64748b)">' + escHtml(t('usage.sf_col_in', null, 'What the agent reads') + ' · ' + _sfCost(inTotal)) + '</text>');
+  svg.push('<text x="' + RX + '" y="14" font-size="11" font-weight="600" fill="var(--text-secondary,#64748b)">' + escHtml(t('usage.sf_col_out', null, 'What the agent writes') + ' · ' + _sfCost(outTotal)) + '</text>');
+
+  // Accessible table view of the same numbers (details/summary, collapsed).
+  var tbl = '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;color:#3b82f6;">'
+    + escHtml(t('usage.sf_table', null, 'View as table')) + '</summary>'
+    + '<table class="usage-table" style="margin-top:6px;"><tbody>';
+  inCats.forEach(function (c) {
+    tbl += '<tr><td>' + escHtml(_sfLabel(_CM_SF_IN, c.id)) + '</td><td>' + escHtml(_sfCost(c.cost_usd)) + '</td><td>' + escHtml(String(c.tokens.toLocaleString()) + ' tokens') + '</td></tr>';
+  });
+  outCats.forEach(function (c) {
+    tbl += '<tr><td>' + escHtml(_sfLabel(_CM_SF_OUT, c.id)) + '</td><td>' + escHtml(_sfCost(c.cost_usd)) + '</td><td>' + escHtml(String(c.tokens.toLocaleString()) + ' tokens') + '</td></tr>';
+  });
+  tbl += '</tbody></table></details>';
+
+  return '<div style="overflow-x:auto;"><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;min-width:640px;display:block;" role="img" aria-label="'
+    + escHtml(t('usage.spend_flow_title', null, 'Where the money goes')) + '">' + svg.join('') + '</svg></div>' + tbl;
 }
 function renderEfficiencyCard() {
   var card = document.getElementById('efficiency-card');
@@ -13260,6 +17809,18 @@ function _renderEfficiencyCardInner(card, eff) {
   }
   if (eff.insufficient_data || !eff.grade) {
     card.style.display = '';
+    // The grade is computed from per-call cost. A runtime that never records
+    // per-call cost cannot ever produce one, so "collecting… appears after
+    // about a day" would be a promise we can't keep. eff.coverage says which
+    // case this is; it is absent for node-wide (mixed-runtime) requests.
+    var _cvE = eff.coverage;
+    if (_cvE && _cvE.suppress_zero) {
+      card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">'
+        + '<div style="font-weight:600;color:var(--text-secondary);margin-bottom:4px;">'
+        + escHtml(_cvE.headline || '') + '</div>'
+        + escHtml(_cvE.detail || '') + '</div>';
+      return;
+    }
     card.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:13px;">⏳ '
       + escHtml(t('efficiency.collecting', null, 'Collecting efficiency data. Your grade appears after about a day of activity.')) + '</div>';
     return;
@@ -13311,6 +17872,154 @@ function _renderEfficiencyCardInner(card, eff) {
     + '</div>';
 }
 
+// ===== Cache Hit Rate + Routing Advisor cards =====
+// Uber-play companions to the Efficiency grade (Aug 2026 earnings-call framing
+// — "the next phase is efficiency"). Both derive from _cmLoadEfficiency's
+// shared /api/efficiency cache (60s TTL + in-flight dedup already there), so
+// they are cloud-safe by construction (cm-cloud-efficiency serves that URL
+// from the snapshot) and add ZERO fetches on tab load. Perf-first per
+// FLYWHEEL §5 "share, don't duplicate."
+function _cmFmtUsd(n) {
+  n = Number(n) || 0;
+  if (n >= 1000) return '$' + Math.round(n).toLocaleString();
+  if (n >= 10) return '$' + Math.round(n);
+  if (n >= 1) return '$' + n.toFixed(1);
+  return '$' + n.toFixed(2);
+}
+var _CM_CACHE_LEFT_ON_TABLE_FRAC = 0.5;
+var _CM_CACHE_READ_MULT = 0.1;
+// Derive the Cache-Hit tile payload from an efficiency scope, mirroring the
+// server-side helper in routes/usage.py::_cache_hit_shape. Pure JS, never
+// throws — bad shape returns nulls the render code hides on.
+function _cmEffCacheHitShape(scope) {
+  var m = (scope && scope.metrics) || {};
+  var tin = Number(m.tokens_in) || 0;
+  var cr = Number(m.cache_read) || 0;
+  var cw = Number(m.cache_write) || 0;
+  var denom = tin + cr;
+  var hit = denom > 0 ? (cr / denom * 100.0) : null;
+  var saved = Number((scope && scope.cache_saved_monthly_usd)) || 0;
+  var projected = Number((scope && scope.projected_monthly_cost_usd)) || 0;
+  var leaked = 0;
+  if (hit !== null && hit < 100 && projected > 0 && tin > 0) {
+    var weight = (tin + cr + cw) > 0 ? (tin / (tin + cr + cw)) : 0;
+    var monthlyInput = projected * weight;
+    leaked = monthlyInput * _CM_CACHE_LEFT_ON_TABLE_FRAC * (1 - _CM_CACHE_READ_MULT);
+  }
+  return {
+    hit: hit, saved: saved, leaked: leaked,
+    insufficient: !!(scope && scope.insufficient_data),
+    haveData: (denom > 0 && projected > 0)
+  };
+}
+function renderCacheHitRateCard() {
+  var title = document.getElementById('cache-hit-rate-title');
+  var card = document.getElementById('cache-hit-rate-card');
+  if (!card) return;
+  _cmLoadEfficiency(function (eff) {
+    if (!eff) { if (title) title.style.display = 'none'; card.style.display = 'none'; return; }
+    var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    // _cmLoadEfficiency fetches with ?runtime=<id> when scoped, so the payload
+    // is already the correct scope in either mode. Node-wide it also carries
+    // a byRuntime map that we ignore here.
+    var s = _cmEffCacheHitShape(eff);
+    if (!s.haveData || s.insufficient) {
+      if (title) title.style.display = 'none';
+      card.style.display = 'none';
+      return;
+    }
+    var hitColor = s.hit >= 60 ? '#22c55e' : (s.hit >= 30 ? '#f59e0b' : '#ef4444');
+    var scopeLine = _cmEffScopeLine(rt);
+    var frac = Math.round(_CM_CACHE_LEFT_ON_TABLE_FRAC * 100);
+    if (title) title.style.display = '';
+    card.style.display = '';
+    card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
+      + '<div style="flex:0 0 200px;min-width:180px;">'
+        + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Cache hit rate</div>'
+        + '<div style="font-size:40px;font-weight:800;color:' + hitColor + ';line-height:1.05;margin:6px 0 2px;">' + s.hit.toFixed(1) + '%</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);">' + escHtml(scopeLine) + '</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:220px;display:flex;gap:24px;flex-wrap:wrap;">'
+        + '<div style="min-width:120px;">'
+          + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Already saved</div>'
+          + '<div style="font-size:22px;font-weight:700;color:#22c55e;margin:4px 0;">' + _cmFmtUsd(s.saved) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);">measured from cached reads</div>'
+        + '</div>'
+        + '<div style="min-width:140px;">'
+          + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Left on the table</div>'
+          + '<div style="font-size:22px;font-weight:700;color:' + (s.leaked > 0 ? '#f59e0b' : 'var(--text-muted)') + ';margin:4px 0;">' + _cmFmtUsd(s.leaked) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);">estimate · assumes ' + frac + '% of misses were cacheable</div>'
+        + '</div>'
+      + '</div>'
+      + '</div>';
+  });
+}
+// Pull the model_downgrade actions from an efficiency scope. Mirror of the
+// server-side helper (routes/usage.py::_extract_downgrade_suggestions).
+function _cmEffDowngradeSuggestions(scope) {
+  var out = [];
+  ((scope && scope.actions) || []).forEach(function (a) {
+    if (a.id !== 'model_downgrade') return;
+    var save = Number(a.savings_monthly_usd) || 0;
+    if (save <= 0) return;
+    var d = a.data || {};
+    out.push({
+      current_model: a.model || '',
+      suggested_model: d.target_model || '',
+      calls: Number(d.calls) || 0,
+      avg_tokens_out: Number(d.avg_tokens_out) || 0,
+      potential_savings_monthly_usd: save
+    });
+  });
+  out.sort(function (a, b) { return b.potential_savings_monthly_usd - a.potential_savings_monthly_usd; });
+  return out;
+}
+function renderRoutingAdvisorCard() {
+  var title = document.getElementById('routing-advisor-title');
+  var card = document.getElementById('routing-advisor-card');
+  if (!card) return;
+  _cmLoadEfficiency(function (eff) {
+    if (!eff) { if (title) title.style.display = 'none'; card.style.display = 'none'; return; }
+    var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    // Same rationale as renderCacheHitRateCard — _cmLoadEfficiency scopes.
+    var suggestions = _cmEffDowngradeSuggestions(eff);
+    if (!suggestions.length) {
+      if (title) title.style.display = 'none';
+      card.style.display = 'none';
+      return;
+    }
+    var potential = 0;
+    suggestions.forEach(function (s) { potential += s.potential_savings_monthly_usd; });
+    var scopeLine = _cmEffScopeLine(rt);
+    var rows = suggestions.slice(0, 5).map(function (s) {
+      var save = _cmFmtUsd(s.potential_savings_monthly_usd);
+      var calls = s.calls.toLocaleString();
+      return '<div style="display:flex;gap:10px;align-items:baseline;padding:10px 0;border-top:1px solid var(--border-primary,#1f2937);">'
+        + '<div style="flex:1;min-width:0;">'
+          + '<div style="font-size:13px;color:var(--text-primary);"><span style="font-weight:600;">' + escHtml(s.current_model || 'model') + '</span> <span style="color:var(--text-muted);">→</span> <span style="font-weight:600;color:#22c55e;">' + escHtml(s.suggested_model || 'cheaper sibling') + '</span></div>'
+          + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + calls + ' calls in window · avg ' + Math.round(s.avg_tokens_out) + ' output tokens</div>'
+        + '</div>'
+        + '<div style="font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">save about ' + save + '/mo</div>'
+      + '</div>';
+    }).join('');
+    if (title) title.style.display = '';
+    card.style.display = '';
+    card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
+      + '<div style="flex:0 0 220px;min-width:200px;">'
+        + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Potential savings</div>'
+        + '<div style="font-size:34px;font-weight:800;color:#f59e0b;line-height:1.05;margin:6px 0 2px;">' + _cmFmtUsd(potential) + '<span style="font-size:13px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+        + '<div style="font-size:11px;color:var(--text-muted);">from ' + suggestions.length + ' safe swap' + (suggestions.length === 1 ? '' : 's') + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;">' + escHtml(scopeLine) + '</div>'
+      + '</div>'
+      + '<div style="flex:1;min-width:280px;">'
+        + '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">Safe same-provider downgrades</div>'
+        + '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 4px;">Prompts running on a heavier model that would have scored the same on its cheaper sibling. Guarded resolver, never cross-provider.</div>'
+        + rows
+      + '</div>'
+    + '</div>';
+  });
+}
+
 // ===== Usage / Token Tracking =====
 
 // QW4: the "Token Usage (14 days)" title + card hide together when the series
@@ -13340,6 +18049,11 @@ async function loadUsage() {
   // state even when an unrelated usage loader throws below (on nodes where
   // /api/usage fails, the tail of the try block never runs).
   try { renderEfficiencyCard(); } catch (_eEff) {}
+  // Both derive from the same _cmLoadEfficiency cache so they cost nothing
+  // extra on cloud (cm-cloud-efficiency serves the URL from the snapshot).
+  try { renderCacheHitRateCard(); } catch (_eChr) {}
+  try { renderRoutingAdvisorCard(); } catch (_eRa) {}
+  try { loadSpendFlow(); } catch (_eSf) {}
   try { _cmUpdateUsageFleetNote(); } catch (_eFleet) {}
   try {
     // Append the global runtime filter so Cost/Tokens scopes to the selected
@@ -13361,25 +18075,54 @@ async function loadUsage() {
     }
     function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
     function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+    // Subscription-coverage snapshot from /api/usage (dashboard.py
+    // _get_billing_coverage). When the user is on a subscription (e.g.
+    // Claude Max 20x), the headline API-equivalent cost is misleading —
+    // their incremental spend is $0. We paint a green banner + per-card
+    // "$0 out-of-pocket" sub-line so nobody panics over covered spend.
+    var _cov = data.billingCoverage || {};
     // QW3: dollars are the headline (card-value), tokens the sub-line; the
     // estimation marker is the word "about", never the ≈ glyph.
-    function setUsageCard(valId, cost, tokens) {
+    function setUsageCard(valId, cost, tokens, periodKey) {
       var v = document.getElementById(valId);
       var s = document.getElementById(valId + '-cost');
       var costStr = fmtCost(cost || 0);
       var tokStr = fmtTokens(tokens || 0);
       if (v) v.textContent = t('usage.cost_about', { cost: costStr }, 'about ' + costStr);
-      if (s) s.textContent = t('usage.tokens_sub', { tokens: tokStr }, tokStr + ' tokens');
+      if (!s) return;
+      var subText = t('usage.tokens_sub', { tokens: tokStr }, tokStr + ' tokens');
+      var coverExtra = '';
+      var period = periodKey && _cov[periodKey];
+      if (_cov.all_covered && (cost || 0) > 0) {
+        coverExtra = ' · $0 out-of-pocket';
+      } else if (period && _cov.any_subscription && (period.covered_usd || 0) > 0.005) {
+        coverExtra = ' · ~' + fmtCost(period.covered_usd) + ' covered';
+      }
+      s.textContent = subText + coverExtra;
+      if (coverExtra) {
+        s.style.color = 'var(--success, #16a34a)';
+        s.title = 'Covered by ' + (_planLabel(_cov) || 'your subscription') +
+                  ' — this portion of the shown API-equivalent cost is $0 to you.';
+      } else {
+        s.style.color = '';
+        s.title = '';
+      }
     }
-    setUsageCard('usage-today', data.todayCost, data.today);
-    setUsageCard('usage-week', data.weekCost, data.week);
-    setUsageCard('usage-month', data.monthCost, data.month);
+    setUsageCard('usage-today', data.todayCost, data.today, 'today');
+    setUsageCard('usage-week', data.weekCost, data.week, 'week');
+    setUsageCard('usage-month', data.monthCost, data.month, 'month');
+    try { renderBillingCoverageBanner(_cov, data); } catch (_eBC) { console.error('renderBillingCoverageBanner failed', _eBC); }
     // Runtime-scoped empty state: when a specific runtime is selected but has
     // no cost data in any window, surface a clear note rather than showing all zeros.
     var _uEmptyEl = document.getElementById('usage-runtime-empty-note');
     if (_uRt && _uRt !== 'all' && !data.today && !data.week && !data.month) {
       var _uRtLabel = _cmRuntimeLabel(_uRt);
-      var _uEmptyHtml = '<div id="usage-runtime-empty-note" style="margin:8px 0 12px;padding:9px 13px;border-radius:8px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.25);font-size:12px;color:var(--text-secondary);">No cost data recorded for <strong>' + escHtml(_uRtLabel) + '</strong> yet.</div>';
+      // "yet" is only true for a runtime that DOES record cost and happened
+      // to be idle. For a runtime that never writes per-call cost, "yet"
+      // promises a number that will never arrive. data.coverage knows which.
+      var _uEmptyHtml = '<div id="usage-runtime-empty-note" style="margin:8px 0 12px;padding:9px 13px;border-radius:8px;background:rgba(99,102,241,0.07);border:1px solid rgba(99,102,241,0.25);font-size:12px;color:var(--text-secondary);">'
+        + _cmCoverageNoteHtml(data.coverage, _uRtLabel)
+        + '</div>';
       // Anchor on the section title (not the chart div) so the note stays
       // visible when QW4 hides the empty chart section below it.
       var _uAnchor = document.getElementById('usage-chart-title') || document.getElementById('usage-chart');
@@ -13402,9 +18145,20 @@ async function loadUsage() {
       var maxTokens = Math.max.apply(null, _uDays.map(function(d){return d.tokens;})) || 1;
       var chartHtml = '';
       _uDays.forEach(function(d) {
-        var pct = Math.max(1, (d.tokens / maxTokens) * 100);
+        var pct = Math.max(1, ((d.tokens || 0) / maxTokens) * 100);
         var label = d.date.substring(5);
         var val = d.tokens >= 1000 ? (d.tokens/1000).toFixed(0) + 'K' : d.tokens;
+        // A bucket the current plan does not include is WITHHELD, not empty.
+        // It used to arrive zeroed, which painted twelve days on which the
+        // user apparently spent nothing. It now arrives with cost null and
+        // withheld true, and paints as a hatched, reserved slot instead.
+        if (d.withheld) {
+          chartHtml += '<div class="usage-bar-wrap cm-withheld" title="'
+            + escHtml('Not included on this plan. This day is held back, not empty.')
+            + '"><div class="usage-bar" style="height:22%"><div class="usage-bar-value"></div></div>'
+            + '<div class="usage-bar-label">' + escHtml(label) + '</div></div>';
+          return;
+        }
         chartHtml += '<div class="usage-bar-wrap"><div class="usage-bar" style="height:' + pct + '%"><div class="usage-bar-value">' + (d.tokens > 0 ? val : '') + '</div></div><div class="usage-bar-label">' + label + '</div></div>';
       });
       document.getElementById('usage-chart').innerHTML = chartHtml;
@@ -13424,9 +18178,14 @@ async function loadUsage() {
       // ('likely_api_key'), so an "unknown / billing unconfirmed" account no
       // longer reads as if it owes the displayed dollars (#web-accuracy).
       var bs = data.billingSummary;
+      var _plan = _planLabel(_cov);
       if (bs && bs !== 'likely_api_key') {
         usageInfoIcon.style.display = '';
-        if (bs === 'likely_oauth_or_included' || bs === 'mixed') {
+        if (_plan && _cov.all_covered) {
+          usageInfoIcon.title = 'API-equivalent (tokens × API rates). Your ' + _plan + ' subscription covers this — actual out-of-pocket cost is $0.';
+        } else if (_plan) {
+          usageInfoIcon.title = 'API-equivalent (tokens × API rates). ' + _plan + ' covers the OAuth/included portion; API-keyed models bill separately.';
+        } else if (bs === 'likely_oauth_or_included' || bs === 'mixed') {
           usageInfoIcon.title = 'API-equivalent (tokens × API rates). OAuth/included models are typically billed $0 at the provider — your subscription covers them.';
         } else {
           usageInfoIcon.title = 'API-equivalent (tokens × API rates). Billing basis unconfirmed — if your account is on a subscription plan (e.g. Claude Max via the Claude CLI), the actual incremental cost is $0.';
@@ -13437,15 +18196,23 @@ async function loadUsage() {
       }
     }
 
-    var costLabel = data.source === 'otlp' ? 'Telemetry Cost' : 'Estimated Cost';
+    // The cost column no longer needs a label that guesses ("Estimated
+    // Cost"): each cell now carries its own basis, which is the accurate
+    // version of what that heading was reaching for.
+    var costLabel = 'Cost';
+    var _cmCell = function (key, name) {
+      return window.cmProv
+        ? window.cmProv.money(data, key, { label: name })
+        : fmtCost(data[key]);
+    };
     var tableHtml = '<thead><tr><th>Period</th><th>Tokens</th><th>' + costLabel + '</th></tr></thead><tbody>';
-    tableHtml += '<tr><td>Today</td><td>' + fmtTokens(data.today) + '</td><td>' + fmtCost(data.todayCost) + '</td></tr>';
-    tableHtml += '<tr><td>This Week</td><td>' + fmtTokens(data.week) + '</td><td>' + fmtCost(data.weekCost) + '</td></tr>';
-    tableHtml += '<tr><td>This Month</td><td>' + fmtTokens(data.month) + '</td><td>' + fmtCost(data.monthCost) + '</td></tr>';
+    tableHtml += '<tr><td>Today</td><td>' + fmtTokens(data.today) + '</td><td>' + _cmCell('todayCost', 'Cost today') + '</td></tr>';
+    tableHtml += '<tr><td>This Week</td><td>' + fmtTokens(data.week) + '</td><td>' + _cmCell('weekCost', 'Cost this week') + '</td></tr>';
+    tableHtml += '<tr><td>This Month</td><td>' + fmtTokens(data.month) + '</td><td>' + _cmCell('monthCost', 'Cost this month') + '</td></tr>';
     tableHtml += '</tbody>';
     document.getElementById('usage-cost-table').innerHTML = tableHtml;
     // Issue #68 — per-session cost breakdown table.
-    renderTopSessionsByCost(data.sessions || []);
+    renderTopSessionsByCost(data.sessions || [], data);
     // OTLP-specific sections
     var otelExtra = document.getElementById('otel-extra-sections');
     if (data.source === 'otlp') {
@@ -13589,10 +18356,19 @@ function _renderUsageCapCTA(capped) {
 // Issue #68 — render "Top sessions by cost" table on the Usage tab.
 // Rows come straight from /api/usage's new ``sessions`` array, already
 // sorted desc by total_cost_usd server-side.
-function renderTopSessionsByCost(rows) {
+function renderTopSessionsByCost(rows, usageData) {
   var el = document.getElementById('usage-top-sessions-table');
   if (!el) return;
-  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  // One money formatter for the whole app lives in static/js/provenance.js;
+  // this is the local fallback for a cached page that predates it.
+  function fmtCost(c) {
+    if (window.cmProv) return window.cmProv.fmtMoney(c);
+    return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00';
+  }
+  // Every row in this table was priced the same way, so the basis belongs on
+  // the column heading rather than repeated down forty rows.
+  var costEntry = (window.cmProv && usageData)
+    ? window.cmProv.of(usageData, 'sessions[].total_cost_usd') : null;
   function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
   function fmtDate(iso) {
     if (!iso) return '—';
@@ -13608,7 +18384,10 @@ function renderTopSessionsByCost(rows) {
     + '<th>Agent</th>'
     + '<th>Model</th>'
     + '<th style="text-align:right;">Tokens</th>'
-    + '<th style="text-align:right;">Cost</th>'
+    + '<th style="text-align:right;">Cost'
+    + ((costEntry && window.cmProv)
+        ? window.cmProv.badge(costEntry, { label: 'Session cost' }) : '')
+    + '</th>'
     + '<th style="text-align:right;">Msgs</th>'
     + '<th>Started</th>'
     + '</tr></thead><tbody>';
@@ -13620,7 +18399,12 @@ function renderTopSessionsByCost(rows) {
       + '<td>' + escHtml(r.agent_id || '—') + '</td>'
       + '<td>' + (r.model ? '<span class="badge model">' + escHtml(r.model) + '</span>' : '—') + '</td>'
       + '<td style="text-align:right;">' + fmtTokens(r.total_tokens || 0) + '</td>'
-      + '<td style="text-align:right;font-weight:600;">' + fmtCost(r.total_cost_usd || 0) + '</td>'
+      + '<td style="text-align:right;font-weight:600;">'
+        + (window.cmProv
+            ? window.cmProv.figure(r.total_cost_usd, costEntry,
+                                   { label: 'Session cost', noBadge: true })
+            : fmtCost(r.total_cost_usd || 0))
+        + '</td>'
       + '<td style="text-align:right;">' + (r.message_count || 0) + '</td>'
       + '<td style="color:var(--text-muted);font-size:12px;">' + escHtml(fmtDate(r.started_at)) + '</td>'
       + '</tr>';
@@ -13929,14 +18713,26 @@ function renderSpendOptimization(data) {
   }
   var totalSave = data.total_projected_savings_usd_30d || 0;
   var saveFmt = totalSave >= 0.01 ? '$' + totalSave.toFixed(2) : totalSave > 0 ? '<$0.01' : '$0.00';
+  // This is the loudest number on the card and it is a counterfactual: what
+  // the window WOULD have cost on a cheaper tier, assuming that tier does the
+  // same job. Badged as an estimate so it does not read as banked money.
+  var saveEntry = window.cmProv
+    ? window.cmProv.of(data, 'total_projected_savings_usd_30d') : null;
+  var saveHtml = window.cmProv
+    ? window.cmProv.money(data, 'total_projected_savings_usd_30d',
+                          { label: 'Projected 30-day savings' })
+    : escHtml(saveFmt);
   var html = '<div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:8px;">';
   html += '<div style="font-size:12px;color:#86efac;margin-bottom:4px;">Projected 30-day savings</div>';
-  html += '<div style="font-size:22px;font-weight:700;color:#22c55e;">' + saveFmt + '</div>';
+  html += '<div style="font-size:22px;font-weight:700;color:#22c55e;">' + saveHtml + '</div>';
   html += '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">by routing simple tools to a cheaper model tier</div>';
   html += '</div>';
   html += '<div style="display:flex;flex-direction:column;gap:8px;">';
   recs.forEach(function(rec) {
-    var savStr = rec.projected_savings_usd_30d >= 0.01 ? '$' + rec.projected_savings_usd_30d.toFixed(2) : '<$0.01';
+    var savStr = window.cmProv
+      ? window.cmProv.figure(rec.projected_savings_usd_30d, saveEntry,
+                             { label: 'Projected saving', noBadge: true })
+      : (rec.projected_savings_usd_30d >= 0.01 ? '$' + rec.projected_savings_usd_30d.toFixed(2) : '<$0.01');
     var curStr = rec.current_cost_usd_30d >= 0.01 ? '$' + rec.current_cost_usd_30d.toFixed(2) : rec.current_cost_usd_30d > 0 ? '<$0.01' : '$0.00';
     html += '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;">';
     html += '<div style="flex:1;min-width:0;">';
@@ -14024,12 +18820,25 @@ async function loadCostForecast() {
       '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center;">' +
         '<div>' +
           '<div style="font-size:12px;color:var(--text-muted);">Projected month-end</div>' +
-          '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + icon + ' $' + proj.toFixed(2) + '</div>' +
+          // A forecast, and the badge says so. It assumes the rest of the
+          // month looks like the last 7 days, which is wrong in exactly the
+          // week somebody would quote it at their finance team.
+          '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + icon + ' '
+            + (window.cmProv
+                ? window.cmProv.money(d, 'projected_month_usd',
+                                      { label: 'Projected month-end' })
+                : '$' + proj.toFixed(2)) + '</div>' +
         '</div>' +
         '<div style="color:var(--text-muted);font-size:13px;">' + escHtml(statusMsg) + '</div>' +
         '<div style="margin-left:auto;text-align:right;font-size:12px;color:var(--text-muted);">' +
-          '$' + (d.daily_rate_usd || 0).toFixed(4) + '/day avg<br>' +
-          '$' + (d.cost_this_month_usd || 0).toFixed(2) + ' spent so far' +
+          (window.cmProv
+            ? window.cmProv.money(d, 'daily_rate_usd',
+                                  { label: 'Average per day', compact: true })
+            : '$' + (d.daily_rate_usd || 0).toFixed(4)) + '/day avg<br>' +
+          (window.cmProv
+            ? window.cmProv.money(d, 'cost_this_month_usd',
+                                  { label: 'Spent so far this month', compact: true })
+            : '$' + (d.cost_this_month_usd || 0).toFixed(2)) + ' spent so far' +
         '</div>' +
       '</div>';
   } catch(e) {
@@ -14452,9 +19261,181 @@ window.toggleTranscriptPlumbing = function() {
   if (st) st.textContent = window._transcriptShowPlumbing ? '●' : '○';
   loadTranscripts();
 };
+// ── Conversations time-window filter (post-mortem digging) ──────────────
+// null = Live (full recent list). Otherwise {sinceMs, untilMs}: the list is
+// narrowed to conversations ACTIVE inside the window — overlap test on
+// [started||modified, modified] so a session that began before the window
+// and kept running through it still shows. Same UX as the Brain range bar.
+var _transcriptRange = null;
+
+function _txSetRangeActiveBtn(key) {
+  // Legacy no-op-safe shim: the crude button strip was replaced by the
+  // Grafana-style picker (static/js/time-range-picker.js), which owns its
+  // own "active" state. Keep any legacy button strip in sync as a courtesy.
+  document.querySelectorAll('#tx-range-bar .brain-range-btn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-range') === String(key));
+  });
+}
+
+// Mount the reusable Grafana-style time range picker on the Sessions tab.
+// Wires the picker's onChange to setTranscriptTimeRange (Live/quick) and
+// applyTranscriptAbsoluteRange (absolute From/To) so the existing filter
+// logic + "Viewing history" banner keep working unchanged.
+function _transcriptsMountRangePicker() {
+  var host = document.getElementById('transcripts-range-picker');
+  if (!host || host._cmTimeRange) return;
+  if (!window.cmTimeRangePicker) return;
+  var initial = _transcriptRange
+    ? { since: new Date(_transcriptRange.sinceMs).toISOString(),
+        until: new Date(_transcriptRange.untilMs).toISOString() }
+    : 'live';
+  window.cmTimeRangePicker.mount(host, {
+    name: 'transcripts',
+    showLive: true,
+    initial: initial,
+    onChange: function(r) {
+      if (r.mode === 'live') { setTranscriptTimeRange('live'); return; }
+      if (r.mode === 'quick') { setTranscriptTimeRange(r.seconds); return; }
+      if (r.mode === 'absolute') { applyTranscriptAbsoluteRange(r.since, r.until); return; }
+    }
+  });
+}
+
+// Explicit ISO from/until entry point used by the picker's absolute mode.
+// applyTranscriptCustomRange() still works and reads from the (now removed)
+// <input> fields — kept as a no-op-if-fields-missing shim for compat.
+function applyTranscriptAbsoluteRange(sinceIso, untilIso) {
+  var s = new Date(sinceIso), u = new Date(untilIso);
+  if (isNaN(s.getTime()) || isNaN(u.getTime())) return;
+  if (s.getTime() > u.getTime()) { var tmp = s; s = u; u = tmp; }
+  _transcriptRange = {sinceMs: s.getTime(), untilMs: u.getTime()};
+  _txSetRangeActiveBtn('custom');
+  _txUpdateRangeUI();
+  loadTranscripts();
+}
+
+function _txUpdateRangeUI() {
+  var banner = document.getElementById('tx-history-banner');
+  var bannerText = document.getElementById('tx-history-banner-text');
+  if (_transcriptRange) {
+    if (banner) banner.style.display = 'flex';
+    if (bannerText) bannerText.textContent = _brainRangeHuman(
+      new Date(_transcriptRange.sinceMs).toISOString(),
+      new Date(_transcriptRange.untilMs).toISOString());
+  } else if (banner) {
+    banner.style.display = 'none';
+  }
+}
+
+function setTranscriptTimeRange(secondsOrLive, el) {
+  var custom = document.getElementById('tx-custom-range');
+  if (custom) custom.style.display = 'none';
+  if (secondsOrLive === 'live') {
+    _transcriptRange = null;
+    _txSetRangeActiveBtn('live');
+    _txUpdateRangeUI();
+    loadTranscripts();
+    return;
+  }
+  var secs = parseInt(secondsOrLive, 10) || 3600;
+  var now = Date.now();
+  _transcriptRange = {sinceMs: now - secs * 1000, untilMs: now};
+  _txSetRangeActiveBtn(secs);
+  _txUpdateRangeUI();
+  loadTranscripts();
+}
+
+function toggleTranscriptCustomRange(el) {
+  var custom = document.getElementById('tx-custom-range');
+  if (!custom) return;
+  var showing = custom.style.display !== 'none';
+  custom.style.display = showing ? 'none' : 'flex';
+  if (!showing) {
+    var to = document.getElementById('tx-range-to');
+    var from = document.getElementById('tx-range-from');
+    var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+    var fmt = function(d) {
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+             'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    };
+    var now = new Date();
+    if (to && !to.value) to.value = fmt(now);
+    if (from && !from.value) from.value = fmt(new Date(now.getTime() - 24 * 3600 * 1000));
+  }
+}
+
+function applyTranscriptCustomRange() {
+  var from = document.getElementById('tx-range-from');
+  var to = document.getElementById('tx-range-to');
+  if (!from || !from.value || !to || !to.value) return;
+  var s = new Date(from.value), u = new Date(to.value);
+  if (isNaN(s.getTime()) || isNaN(u.getTime())) return;
+  if (s.getTime() > u.getTime()) { var tmp = s; s = u; u = tmp; }
+  _transcriptRange = {sinceMs: s.getTime(), untilMs: u.getTime()};
+  _txSetRangeActiveBtn('custom');
+  _txUpdateRangeUI();
+  loadTranscripts();
+}
+
+// Empty state for "runtime picked, zero rows on this tab". The header's
+// session count and this list come from DIFFERENT places: the count is every
+// session ClawMetry knows about, the list needs a conversation it can actually
+// read. When the count says 15 and the list says nothing, "no sessions have a
+// transcript yet" reads as a lie, so say which of the two we mean (#5643).
+function _cmRuntimeEmptyMsg(rt) {
+  var label = _cmRuntimeLabel(rt);
+  var known = 0;
+  try { known = (_cmGlobalRtCounts && _cmGlobalRtCounts[rt]) || 0; } catch (e) { known = 0; }
+  var pickAll = t('transcripts.pick_all_runtimes', null,
+    'Pick All runtimes in the header to see every session.');
+  var body;
+  if (known > 0) {
+    body = t('transcripts.runtime_counted_but_empty', {count: known, label: label},
+      'This machine has {count} {label} sessions, but none of them have a readable conversation here yet. New ones show up a minute or two after they start.');
+    if (window.CLOUD_MODE) {
+      body += ' ' + t('transcripts.runtime_open_on_machine', {label: label},
+        'To read older {label} sessions, open ClawMetry on the machine itself.');
+    }
+  } else {
+    body = t('transcripts.runtime_none', {label: label},
+      'No {label} sessions have a conversation to show yet.');
+  }
+  return '<div style="padding:16px;color:#666;">' + escHtml(body) + ' ' + escHtml(pickAll) + '</div>';
+}
+
 async function loadTranscripts() {
+  // Mount the Grafana-style date/time-range picker on first paint.
+  // Idempotent — the helper no-ops when already attached.
+  try { _transcriptsMountRangePicker(); } catch (e) {}
+  // Surface a small counter next to the picker: how many rows survived the
+  // window filter this load. Cleared when no window is active.
+  var _rangeCountEl = document.getElementById('transcripts-range-count');
+  if (_rangeCountEl) _rangeCountEl.textContent = '';
   try {
-    var data = await fetch('/api/transcripts').then(r => r.json());
+    // In cloud mode we can't score live (no key, no session DuckDB) but the
+    // snapshot carries recent scores at /api/evals/recent. Refetch each
+    // load and build a sid→{score,reason} map the row renderer reads.
+    // Failure is silent — the rows just render without a badge.
+    if (window.CLOUD_MODE) {
+      try {
+        var _rec = await fetch('/api/evals/recent').then(function(r) { return r.ok ? r.json() : null; });
+        var _byId = {};
+        if (_rec && Array.isArray(_rec.evals)) {
+          _rec.evals.forEach(function(e) {
+            if (e && e.session_id) _byId[e.session_id] = {score: e.score, reason: e.reason || ''};
+          });
+        }
+        window._cmEvalScoresByRow = _byId;
+      } catch (_e) { window._cmEvalScoresByRow = window._cmEvalScoresByRow || {}; }
+    }
+    // Scope the request to the active runtime so its 50-row cap belongs to
+    // that runtime alone. Unscoped, a 20-runtime box shares one global cap
+    // and a filtered Sessions tab renders 2-3 rows and looks empty.
+    var _rtFilter = '';
+    try { _rtFilter = (_cmRuntimeFilter && _cmRuntimeFilter()) || ''; } catch (_e) {}
+    var _tUrl = '/api/transcripts' +
+      (_rtFilter && _rtFilter !== 'all' ? '?runtime=' + encodeURIComponent(_rtFilter) : '');
+    var data = await fetch(_tUrl).then(r => r.json());
     var html = '';
     // ChatGPT-style row: derived title on top (first user prompt, when the
     // daemon shipped one in the snapshot), with the full session id demoted
@@ -14480,10 +19461,42 @@ async function loadTranscripts() {
     if (_rtFilter !== 'all') {
       data.transcripts = _allTx.filter(function(t) { return _cmRuntimeOf(t) === _rtFilter; });
     }
+    // Time-window filter: keep conversations ACTIVE inside the window.
+    // Overlap test on [started, modified]; when the endpoint doesn't ship
+    // `started` (legacy filesystem path), fall back to started = modified,
+    // i.e. strict last-activity-in-window.
+    var _txWin = _transcriptRange;
+    var _txWinEmpty = false;
+    var _txWinHidden = 0;
+    if (_txWin) {
+      var _preWin = data.transcripts.length;
+      data.transcripts = data.transcripts.filter(function(t) {
+        var mod = t.modified || 0;
+        var start = t.started || mod;
+        return start <= _txWin.untilMs && mod >= _txWin.sinceMs;
+      });
+      _txWinHidden = _preWin - data.transcripts.length;
+      _txWinEmpty = (_preWin > 0 && data.transcripts.length === 0);
+    }
+    // Post the "X sessions in this window · Y hidden" counter next to the picker.
+    var _rcEl = document.getElementById('transcripts-range-count');
+    if (_rcEl) {
+      if (_txWin) {
+        var _shown = data.transcripts.length;
+        _rcEl.textContent = _shown + ' session' + (_shown === 1 ? '' : 's') +
+          ' in this window' + (_txWinHidden ? ' · ' + _txWinHidden + ' hidden' : '');
+      } else {
+        _rcEl.textContent = '';
+      }
+    }
     var plumbingTotal = 0;
-    data.transcripts.forEach(function(t) {
-      var raw = String(t.id || '');
-      var titleSrc = (t.title && String(t.title).trim()) || (t.name && String(t.name).trim()) || '';
+    // NOTE: the callback param must NOT be named `t` — that shadows the global
+    // i18n t() and the score-button line below throws "t is not a function",
+    // blanking the whole tab (founder report 2026-08-09). Guarded by
+    // tests/test_app_js_t_shadowing.py.
+    data.transcripts.forEach(function(tx) {
+      var raw = String(tx.id || '');
+      var titleSrc = (tx.title && String(tx.title).trim()) || (tx.name && String(tx.name).trim()) || '';
       var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
       var title = looksLikeId ? 'Untitled session' : titleSrc;
       var isPlumbing = _isPlumbingTranscript(titleSrc);
@@ -14495,19 +19508,58 @@ async function loadTranscripts() {
       html += '<div class="transcript-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(title) + '</div>';
       html += '<div class="transcript-meta-row" style="gap:10px;">';
       html += '<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-muted,#888);font-size:11px;" title="' + escHtml(raw) + '">' + escHtml(raw.slice(0, 8)) + '</span>';
-      html += '<span>' + t.messages + ' messages</span>';
-      if (t.size > 0) html += '<span>' + (t.size > 1024 ? (t.size/1024).toFixed(1) + ' KB' : t.size + ' B') + '</span>';
-      html += '<span>' + timeAgo(t.modified) + '</span>';
+      html += '<span>' + tx.messages + ' messages</span>';
+      if (tx.size > 0) html += '<span>' + (tx.size > 1024 ? (tx.size/1024).toFixed(1) + ' KB' : tx.size + ' B') + '</span>';
+      html += '<span>' + timeAgo(tx.modified) + '</span>';
       html += '</div></div>';
-      html += '<span style="color:#444;font-size:18px;">▸</span>';
+      // Score-this-conversation button (#4562): runs the same judge the daemon
+      // uses via /api/evals/rescore. Empty judge key → button flips to
+      // "Set judge key →" which opens the rubric+key modal in place. Stops
+      // propagation so the click doesn't also open the transcript viewer.
+      //
+      // Cloud-mode carve-out: scoring runs on the machine that has the
+      // judge key + the session DuckDB. Cloud renders the SAME JS but has
+      // neither, so a Score button here would hit cloud's clawmetry install
+      // and return a not-useful skip. Instead we show the stored score
+      // from the snapshot if one exists (populated by _cmEvalScoresByRow
+      // from /api/evals/recent), and nothing otherwise — the message
+      // "scores are computed on the machine your agent runs on" already
+      // lives on the cloud Evals tab.
+      if (window.CLOUD_MODE) {
+        var _stored = (window._cmEvalScoresByRow && window._cmEvalScoresByRow[raw]) || null;
+        if (_stored && (_stored.score !== null && _stored.score !== undefined)) {
+          var _sn = Number(_stored.score);
+          var _sc = _scoreBadgeColor(_sn);
+          var _sr = String(_stored.reason || '');
+          html += '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:' + _sc + '22;color:' + _sc + ';font-size:11px;font-weight:700;" title="' + escHtml(_sr) + '">' + _sn.toFixed(_sn % 1 === 0 ? 0 : 1) + '/5</span>';
+        }
+      } else {
+        html += '<span class="transcript-score-slot" id="tx-score-' + escHtml(raw) + '" data-sid="' + escHtml(raw) + '" style="display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted,#888);">';
+        html += '<button type="button" onclick="event.stopPropagation();scoreTranscript(\'' + escHtml(raw) + '\')" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + t('transcripts.score_btn', null, 'Score') + '</button>';
+        html += '</span>';
+      }
+      // "Needs you" badge — same vocabulary as the Overview strip, so the two
+      // surfaces teach each other. Renders nothing when nothing is waiting;
+      // an absent badge is the quiet default, not a "no" badge.
+      html += _cmAttentionBadge(
+        tx.attention, tx.attention_signal, tx.attention_tool);
+      // Verdict (outcome colour + judge score when known) and the one-click
+      // trail. Both come from static/js/trail.js; an absent verdict renders
+      // nothing rather than a "no data" chip on every row.
+      if (typeof _cmVerdictBadge === 'function') html += _cmVerdictBadge(tx);
+      var _attrSafe = function (s) { return escHtml(s).replace(/"/g, '&quot;'); };
+      html += '<button type="button" class="cm-open-trail" data-sid="' + _attrSafe(raw) + '" onclick="event.stopPropagation();openTrail(this.getAttribute(\'data-sid\'))" title="' + _attrSafe(t('trail.open_tooltip', null, 'What it was asked, what it did, how it ended')) + '">' + escHtml(t('trail.open', null, 'Open trail')) + ' &rarr;</button>';
+      html += '<span style="color:#444;font-size:18px;margin-left:8px;">▸</span>';
       html += '</div>';
     });
     var plumbCountEl = document.getElementById('transcript-plumbing-count');
     if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
     var plumbBtn = document.getElementById('transcript-plumbing-btn');
     if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
-    var emptyMsg = _rtNoTx
-      ? '<div style="padding:16px;color:#666;">No <strong>' + escHtml(_cmRuntimeLabel(_rtFilter)) + '</strong> sessions have a transcript yet. Pick <strong>All runtimes</strong> in the header to see every session.</div>'
+    var emptyMsg = _txWinEmpty
+      ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this window. Try a wider window — or note that only recently synced sessions are listed here.') + '</div>'
+      : _rtNoTx
+      ? _cmRuntimeEmptyMsg(_rtFilter)
       : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
       ? '<div style="padding:16px;color:#666;">No sessions to show — ' + plumbingTotal + ' Self-Evolve session' + (plumbingTotal === 1 ? '' : 's') + ' hidden. Click “Show plumbing” to reveal.</div>'
       : '<div style="padding:16px;color:#666;">No transcript files found</div>';
@@ -14528,6 +19580,14 @@ async function loadTranscripts() {
         viewTranscript(m.session);
         history.replaceState(null, '', window.location.pathname + window.location.search);
       }
+      // SECURITY (2026-08-24 review, finding 11): the scrubber above only
+      // fired for #session=, so a #key=... fragment stayed in the address bar
+      // and in browser history — and got uploaded by browser sync when the
+      // user has it on. Any fragment carrying a key is removed on sight,
+      // whether or not this page was the one that consumed it.
+      if (m.key) {
+        history.replaceState(null, '', window.location.pathname + window.location.search);
+      }
     } catch (e) {}
   } catch(e) {
     document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">' + t("app.failed_to_load_transcripts", null, "Failed to load transcripts") + '</div>';
@@ -14538,6 +19598,59 @@ function showTranscriptList() {
   document.getElementById('transcript-list').style.display = '';
   document.getElementById('transcript-viewer').style.display = 'none';
   document.getElementById('transcript-back-btn').style.display = 'none';
+}
+
+// #4562 — score-this-conversation button. Wraps POST /api/evals/rescore
+// (which is already synchronous). Renders the returned score + reason in
+// place of the button. Skips due to a missing judge key flip the slot into
+// a "Set judge key →" affordance that opens the existing rubric modal —
+// the ⚙ icon top-right of the Evals page is unfindably small otherwise.
+function _scoreBadgeColor(n) {
+  if (n === null || n === undefined) return 'var(--text-muted,#888)';
+  if (n >= 4) return '#22c55e';
+  if (n >= 2.5) return '#f59e0b';
+  return '#ef4444';
+}
+async function scoreTranscript(sid) {
+  var slot = document.getElementById('tx-score-' + sid);
+  if (!slot) return;
+  var busyLabel = t('transcripts.scoring', null, 'Scoring…');
+  slot.innerHTML = '<span style="font-size:11px;color:var(--text-muted,#888);">' + escHtml(busyLabel) + '</span>';
+  try {
+    var resp = await fetch('/api/evals/rescore/' + encodeURIComponent(sid), {method: 'POST'});
+    var body = await resp.json().catch(function() { return {}; });
+    if (!resp.ok) {
+      // 409 = evals disabled, 402/403 = gated, 5xx = judge blew up
+      var msg = (body && body.error) || ('HTTP ' + resp.status);
+      slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml(msg) + '">' + escHtml(t('transcripts.score_err', null, 'Score failed')) + '</span>';
+      return;
+    }
+    if (body.skipped) {
+      var reason = String(body.skip_reason || '');
+      if (/key/i.test(reason)) {
+        // The pivotal fix — no judge key is the most common blocker AND
+        // the current UI's least discoverable state. Turn it into an
+        // action right where the user tried to score.
+        slot.innerHTML = '<button type="button" onclick="event.stopPropagation();openEvalRubricModal()" style="background:transparent;color:#f59e0b;border:1px solid #f59e0b;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">' + escHtml(t('transcripts.set_judge_key', null, 'Set judge key →')) + '</button>';
+        return;
+      }
+      slot.innerHTML = '<span style="font-size:11px;color:var(--text-muted,#888);" title="' + escHtml(reason) + '">' + escHtml(t('transcripts.score_skipped', null, 'Skipped')) + '</span>';
+      return;
+    }
+    if (body.score === null || body.score === undefined) {
+      // Judge unreachable — server returned a non-skipped null-score row.
+      var jm = body.judge_model || '';
+      slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml('Judge (' + jm + ') did not return a score') + '">' + escHtml(t('transcripts.judge_unavailable', null, 'Judge unavailable')) + '</span>';
+      return;
+    }
+    var n = Number(body.score);
+    var color = _scoreBadgeColor(n);
+    var reasonText = String(body.reason || '');
+    var badge = '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:' + color + '22;color:' + color + ';font-size:11px;font-weight:700;" title="' + escHtml(reasonText) + '">' + n.toFixed(n % 1 === 0 ? 0 : 1) + '/5</span>';
+    slot.innerHTML = badge;
+  } catch (e) {
+    slot.innerHTML = '<span style="font-size:11px;color:#ef4444;" title="' + escHtml(String(e && e.message || e)) + '">' + escHtml(t('transcripts.score_err', null, 'Score failed')) + '</span>';
+  }
 }
 
 // ── Session Replay State ────────────────────────────────────────────────────
@@ -14551,12 +19664,52 @@ function _buildReplayEvent(m, idx) {
   var role = m.role || 'unknown';
   // Determine event type for filtering
   var type = m.type || role;
+  // Legacy tool events (majority path) arrive as role='tool' with a prose
+  // content like "[Tool Call: Bash]\n{ ... json ... }" plus a structured
+  // `raw.input`, or as a bare result (raw text output, no prefix). The
+  // deep-dive chip renderer only fires when `m.tool` is set — synthesize
+  // one here so those events collapse into the same clean chip instead of
+  // dumping raw JSON/text into a giant prose bubble.
+  if (!m.tool && role === 'tool' && m.content) {
+    var _tcHead = String(m.content);
+    var _tcCall = _tcHead.match(/^\[Tool Call:\s*([^\]]+)\]\s*/);
+    if (_tcCall) {
+      var _tcName = _tcCall[1].trim();
+      var _tcBody = _tcHead.slice(_tcCall[0].length).trim();
+      // Prefer the structured input from raw.input if present — it's the
+      // authoritative payload and pretty-prints better than the prose blob.
+      var _tcInput = _tcBody;
+      if (m.raw && m.raw.input && typeof m.raw.input === 'object') {
+        try { _tcInput = JSON.stringify(m.raw.input, null, 2); } catch (e) {}
+      }
+      m = Object.assign({}, m, {
+        tool: { kind: 'call', name: _tcName, input: _tcInput, output: '', is_error: false }
+      });
+    } else {
+      // Bare content = raw tool result. Detect obvious error signatures so
+      // the chip badges it red.
+      var _tcLow = _tcHead.toLowerCase();
+      var _tcErr = /^(fatal:|error:|traceback|permission denied|no such file)/i.test(_tcHead) || _tcLow.indexOf('command not found') !== -1;
+      m = Object.assign({}, m, {
+        tool: { kind: 'result', name: 'result', input: '', output: _tcHead, is_error: _tcErr }
+      });
+    }
+  }
   // #1911: tool turns carry a structured `tool` object (name + input/output);
   // classify them as tool_use so the "Tools" filter and deep-dive chip pick up.
   if (m.tool) type = 'tool_use';
   if (role === 'assistant' && m.content && m.content.indexOf('[tool_use]') !== -1) type = 'tool_use';
   if (role === 'assistant' && m.content && m.content.indexOf('<antml_thinking>') !== -1) type = 'thinking';
   if (role === 'compaction') type = 'compaction';
+  // History-gap marker: the server capped this transcript to its newest
+  // window and left a structured placeholder where the elided middle sits.
+  // Older daemons/snapshots shipped it as a prose system message — recognise
+  // that shape too so the gap always renders as a paging affordance.
+  var omitted = null;
+  if (_isHistoryGapMsg(m)) {
+    type = 'history_gap';
+    omitted = _historyGapOmitted(m);
+  }
   // Capture compaction-specific fields
   var extra = {};
   if (role === 'compaction') {
@@ -14574,6 +19727,9 @@ function _buildReplayEvent(m, idx) {
     content: m.content || '',
     timestamp: m.timestamp,
     tokens: m.tokens || null,
+    // Daemon-stamped per-event cost (stamped on the first message of each
+    // event row) — summed per turn for the chapter-header cost badge.
+    cost: m.cost_usd || null,
     params: m.params || null,
     // #1911: structured tool call/result detail for the deep-dive chip.
     tool: m.tool || null,
@@ -14581,9 +19737,25 @@ function _buildReplayEvent(m, idx) {
     raw: (m.raw !== undefined ? m.raw : null),
     originalIndex: idx,
     extra: extra,
+    omitted: omitted,
     modelId: m.modelId || null,
     thinkingLevel: m.thinkingLevel || null
   };
+}
+
+// Is this message the server's history-gap placeholder? New daemons stamp
+// type=history_gap + omitted; pre-0.12.800 snapshots carried only the prose
+// "… N earlier messages not shown here…" system message.
+var _LEGACY_GAP_RE = /^…?\s*(\d+) earlier messages/;
+function _isHistoryGapMsg(m) {
+  if (!m || typeof m !== 'object') return false;
+  if (m.type === 'history_gap') return true;
+  return m.role === 'system' && _LEGACY_GAP_RE.test(String(m.content || ''));
+}
+function _historyGapOmitted(m) {
+  if (typeof m.omitted === 'number') return Math.max(0, m.omitted);
+  var mm = String(m.content || '').match(_LEGACY_GAP_RE);
+  return mm ? parseInt(mm[1], 10) : null;
 }
 
 // ── Raw payload toggle (issue #1895) ───────────────────────────────────────
@@ -14654,6 +19826,8 @@ function _fmtDecodingParams(p) {
 // #1911: render a tool call/result as a named, expandable deep-dive chip.
 // The header shows the tool name (and an error badge for failed results); the
 // body — the exact input args or result output — toggles open on click.
+// Collapsed by default so a long session reads as a chat, not a raw log dump.
+// Users open the ones they care about (or use "Expand tools" in the toolbar).
 function _renderToolDiveChip(ev, highlighted) {
   var t = ev.tool || {};
   var isResult = t.kind === 'result';
@@ -14666,21 +19840,57 @@ function _renderToolDiveChip(ev, highlighted) {
   var hasBody = !!(body && String(body).trim());
   var did = 'tooldive-' + ev.originalIndex;
   var labelText = isResult ? (name + ' · result') : name;
+  // One-line preview so the collapsed chip still tells you what happened
+  // (e.g. "Bash · git status" or "Read · dashboard.py") without expanding.
+  var previewText = hasBody ? _summarizeToolBody(String(body), t.name || '') : '';
   var html = '<div class="chat-tool-chip chat-tool-dive ' + (isResult ? 'tc-user' : 'tc-asst') + '"'
     + ' id="replay-msg-' + ev.originalIndex + '" style="align-self:' + side + ';' + ring + '">';
   html += '<div class="ctd-head"' + (hasBody ? ' onclick="toggleToolDive(\'' + did + '\')"' : '') + '>';
   html += '<span class="chat-tool-chip-label">' + icon + ' ' + labelText + '</span>';
+  if (previewText) html += '<span class="ctd-preview">' + escHtml(previewText) + '</span>';
   if (isResult && t.is_error) html += '<span class="chat-tool-chip-meta" style="color:#e0625a;">error</span>';
-  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▾</span>';
+  if (hasBody) html += '<span class="ctd-caret" id="' + did + '-caret">▸</span>';
   if (ts) html += '<span class="chat-tool-chip-meta">' + ts + '</span>';
   html += '</div>';
   if (hasBody) {
-    // Default expanded so the args/output (the debugging signal) are visible
-    // without an extra click. Click the header to collapse a noisy tool turn.
-    html += '<pre class="ctd-body" id="' + did + '" style="display:block;">' + escHtml(String(body)) + '</pre>';
+    // Collapsed by default — a 500-turn session with every tool expanded is
+    // unreadable. Users click the header (or "Expand tools" in the toolbar) to
+    // reveal the exact args/output for the calls they want to inspect.
+    html += '<pre class="ctd-body" id="' + did + '" style="display:none;">' + escHtml(String(body)) + '</pre>';
   }
   html += '</div>';
   return html;
+}
+
+// _summarizeToolBody returns a compact one-liner for the collapsed chip
+// header. Tries to pick out the most informative field per tool (Bash's
+// `command`, Read/Edit/Write's `file_path`, etc.) and falls back to the first
+// non-empty line trimmed to 100 chars.
+function _summarizeToolBody(body, toolName) {
+  var s = body || '';
+  var name = (toolName || '').toLowerCase();
+  // Structured tool inputs arrive as pretty-printed JSON — pull the
+  // most useful key out so the collapsed line reads well.
+  try {
+    var parsed = JSON.parse(s);
+    if (parsed && typeof parsed === 'object') {
+      if (name === 'bash' && parsed.command) return String(parsed.command).replace(/\s+/g, ' ').slice(0, 120);
+      if ((name === 'read' || name === 'edit' || name === 'write') && parsed.file_path) return String(parsed.file_path);
+      if (parsed.file_path) return String(parsed.file_path);
+      if (parsed.pattern) return String(parsed.pattern).slice(0, 120);
+      if (parsed.query)   return String(parsed.query).slice(0, 120);
+      if (parsed.url)     return String(parsed.url).slice(0, 120);
+      if (parsed.description) return String(parsed.description).slice(0, 120);
+      if (parsed.command) return String(parsed.command).replace(/\s+/g, ' ').slice(0, 120);
+    }
+  } catch (e) {}
+  // Fallback: first non-empty line, tightened.
+  var lines = s.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line) return line.length > 100 ? (line.slice(0, 100) + '…') : line;
+  }
+  return '';
 }
 
 function toggleToolDive(id) {
@@ -14692,11 +19902,35 @@ function toggleToolDive(id) {
   if (caret) caret.textContent = open ? '▸' : '▾';
 }
 
+// Expand or collapse every tool-dive body in the current transcript view.
+// Wired to the "⤢ Expand tools" / "⤡ Collapse tools" toolbar buttons.
+function expandAllToolDives() {
+  document.querySelectorAll('#transcript-messages .ctd-body').forEach(function(pre) {
+    pre.style.display = 'block';
+  });
+  document.querySelectorAll('#transcript-messages .ctd-caret').forEach(function(c) {
+    c.textContent = '▾';
+  });
+}
+
+function collapseAllToolDives() {
+  document.querySelectorAll('#transcript-messages .ctd-body').forEach(function(pre) {
+    pre.style.display = 'none';
+  });
+  document.querySelectorAll('#transcript-messages .ctd-caret').forEach(function(c) {
+    c.textContent = '▸';
+  });
+}
+
 function _renderReplayEvent(ev, highlighted) {
   var role = ev.role;
   // Handle compaction events specially
   if (role === 'compaction') {
     return _renderCompactionEvent(ev, highlighted);
+  }
+  // The history gap is a paging control, never a chat bubble.
+  if (ev.type === 'history_gap') {
+    return _renderHistoryGap(ev);
   }
   // Raw mode (#1895): show the verbatim payload bubble when this turn has one.
   // Compaction markers carry no captured payload, so they fall through above.
@@ -14726,7 +19960,10 @@ function _renderReplayEvent(ev, highlighted) {
   // (prose) turns stand out and the timeline reads cleanly.
   var _c = ev.content;
   if (!_c || !String(_c).trim()) {
-    var chipLabel = role === 'assistant' ? '🔧 Tool call'
+    // A thinking event whose text wasn't captured must not masquerade as a
+    // tool call — label it for what it is.
+    var chipLabel = ev.type === 'thinking' ? '🧠 ' + t("app.thinking_internal", null, "thinking (internal)")
+                  : role === 'assistant' ? '🔧 Tool call'
                   : role === 'user' ? '↩ Tool result'
                   : role === 'system' ? '⚙ System'
                   : (escHtml(role) + ' · no text');
@@ -14736,16 +19973,22 @@ function _renderReplayEvent(ev, highlighted) {
     return '<div class="chat-tool-chip ' + (role === 'user' ? 'tc-user' : 'tc-asst') + '" id="replay-msg-' + ev.originalIndex + '" style="align-self:' + chipSide + ';' + chipRing + '">'
       + '<span class="chat-tool-chip-label">' + chipLabel + '</span>'
       + (ev.tokens ? '<span class="chat-tool-chip-meta">' + ev.tokens + ' tok</span>' : '')
+      + (ev.cost > 0 ? '<span class="chat-tool-chip-meta">' + _taFmtCost(ev.cost) + '</span>' : '')
       + (chipTs ? '<span class="chat-tool-chip-meta">' + chipTs + '</span>' : '')
       + '</div>';
   }
   var cls = role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : role === 'system' ? 'system' : 'tool';
+  // Extended-thinking turns are the model reasoning on the user's behalf, not
+  // the reply — cyan-accented (matching the turn-anatomy "model" color) so a
+  // reader can tell internal work from the actual answer at a glance.
+  var isThinking = ev.type === 'thinking';
+  if (isThinking) cls = 'thinking';
   var content = ev.content;
   var needsTruncate = content.length > 800;
   var displayContent = needsTruncate ? content.substring(0, 800) : content;
   var highlightStyle = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
   var html = '<div class="chat-msg ' + cls + '" id="replay-msg-' + ev.originalIndex + '" style="' + highlightStyle + '">';
-  html += '<div class="chat-role">' + escHtml(role) + '</div>';
+  html += '<div class="chat-role">' + (isThinking ? '&#129504; ' + t("app.thinking_internal", null, "thinking (internal)") : escHtml(role)) + '</div>';
   if (needsTruncate) {
     html += '<div class="chat-content-truncated" id="msg-' + ev.originalIndex + '-short" style="white-space:pre-wrap;word-break:break-word;">' + escHtml(displayContent) + '</div>';
     html += '<div id="msg-' + ev.originalIndex + '-full" style="display:none;white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
@@ -14753,7 +19996,7 @@ function _renderReplayEvent(ev, highlighted) {
   } else {
     html += '<div style="white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
   }
-  if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens</div>';
+  if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens' + (ev.cost > 0 ? ' &middot; ' + _taFmtCost(ev.cost) : '') + '</div>';
   // Issue #564: decoding-config pill — small inline summary of the sampling
   // params that produced this assistant turn (only present when the backend
   // could extract at least one known key).
@@ -14815,14 +20058,260 @@ function toggleCompaction(idx) {
 function _replayFilteredEvents() {
   var f = window._replayFilter;
   if (!f || f === 'all') return window._replayEvents;
-  return window._replayEvents.filter(function(ev) { return ev.type === f || ev.role === f; });
+  // The history gap survives every filter: it is how the user reaches the
+  // rest of the session, and the filtered view has the same hole in it.
+  return window._replayEvents.filter(function(ev) {
+    return ev.type === f || ev.role === f || ev.type === 'history_gap';
+  });
+}
+
+// Group a flat event list into "turns" anchored on each USER event, so a long
+// session reads like a book with chapters instead of a wall of bubbles.
+// Anything before the first USER goes into a synthetic "Setup" turn 0.
+function _groupIntoTurns(events) {
+  var turns = [];
+  var current = null;
+  for (var i = 0; i < events.length; i++) {
+    var ev = events[i];
+    var isUserPrompt = (ev.role === 'user' && !ev.tool && ev.content && String(ev.content).trim().length > 0);
+    if (isUserPrompt || !current) {
+      current = {
+        turn: turns.length,
+        anchor: ev,
+        firstTs: ev.timestamp || null,
+        lastTs: ev.timestamp || null,
+        events: [],
+        toolCount: 0,
+        errorCount: 0,
+        tokens: 0,
+        cost: 0
+      };
+      turns.push(current);
+    }
+    current.events.push(ev);
+    if (ev.timestamp) current.lastTs = ev.timestamp;
+    if (ev.tool) current.toolCount++;
+    if (ev.tool && ev.tool.is_error) current.errorCount++;
+    if (ev.tokens) current.tokens += ev.tokens;
+    if (ev.cost) current.cost += ev.cost;
+  }
+  return turns;
+}
+
+// Human-readable turn duration (from first event to last within the turn).
+function _turnDurationLabel(turn) {
+  if (!turn.firstTs || !turn.lastTs || turn.lastTs <= turn.firstTs) return '';
+  var ms = turn.lastTs - turn.firstTs;
+  var s = Math.round(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60);
+  var rem = s % 60;
+  if (m < 60) return m + 'm' + (rem ? ' ' + rem + 's' : '');
+  var h = Math.floor(m / 60);
+  return h + 'h ' + (m % 60) + 'm';
+}
+
+// Short one-liner used both in the chapter header and the TOC sidebar.
+function _turnAnchorPreview(turn) {
+  var a = turn.anchor;
+  if (!a) return '(empty turn)';
+  if (a.role === 'user' && a.content && String(a.content).trim()) {
+    var s = String(a.content).trim().replace(/\s+/g, ' ');
+    return s.length > 90 ? (s.slice(0, 90) + '…') : s;
+  }
+  if (turn.turn === 0) return 'Session setup';
+  return '(system turn)';
+}
+
+function _renderTurnChapter(turn, highlightOriginal) {
+  var previewLabel = escHtml(_turnAnchorPreview(turn));
+  var timeLabel = turn.firstTs ? new Date(turn.firstTs).toLocaleString() : '';
+  var duration = _turnDurationLabel(turn);
+  var pieces = [];
+  if (turn.toolCount > 0) pieces.push('🔧 ' + turn.toolCount);
+  if (turn.errorCount > 0) pieces.push('<span style="color:#e0625a;">✕ ' + turn.errorCount + '</span>');
+  if (duration) pieces.push('⏱ ' + duration);
+  // Turn spend — same per-event token/cost stamps the Turn anatomy page sums,
+  // so the two figures agree.
+  if (turn.tokens > 0) pieces.push('🪙 ' + (turn.tokens >= 1000 ? (turn.tokens / 1000).toFixed(1) + 'K' : turn.tokens) + ' tok');
+  if (turn.cost > 0) pieces.push('<span style="color:#34d399;">' + _taFmtCost(turn.cost) + '</span>');
+  var meta = pieces.join(' · ');
+  var html = '<section class="turn-chapter" id="turn-chapter-' + turn.turn + '">';
+  html += '<header class="turn-chapter-head">';
+  html +=   '<div class="turn-chapter-title">';
+  html +=     '<span class="turn-chapter-num">Turn ' + turn.turn + '</span>';
+  html +=     '<span class="turn-chapter-preview">' + previewLabel + '</span>';
+  html +=   '</div>';
+  html +=   '<div class="turn-chapter-meta">' + (timeLabel ? escHtml(timeLabel) : '') + (meta ? ' <span class="turn-chapter-sep">·</span> ' + meta : '') + '</div>';
+  html += '</header>';
+  html += '<div class="turn-chapter-body">';
+  for (var i = 0; i < turn.events.length; i++) {
+    var ev = turn.events[i];
+    html += _renderReplayEvent(ev, ev.originalIndex === highlightOriginal);
+  }
+  html += '</div>';
+  html += '</section>';
+  return html;
+}
+
+function _renderTurnTOC(turns, activeTurn) {
+  if (!turns.length) return '';
+  var order = (window._transcriptSort === 'newest') ? turns.slice().reverse() : turns;
+  var html = '<div class="turn-toc-head">Turns <span class="turn-toc-count">' + turns.length + '</span></div>';
+  html += '<div class="turn-toc-list">';
+  for (var i = 0; i < order.length; i++) {
+    var trn = order[i];
+    var isActive = (trn.turn === activeTurn);
+    var preview = escHtml(_turnAnchorPreview(trn));
+    var timeLabel = trn.firstTs ? new Date(trn.firstTs).toLocaleTimeString() : '';
+    var toolBadge = trn.toolCount > 0 ? '<span class="turn-toc-tools">🔧 ' + trn.toolCount + '</span>' : '';
+    var errBadge  = trn.errorCount > 0 ? '<span class="turn-toc-err">✕ ' + trn.errorCount + '</span>' : '';
+    html += '<a class="turn-toc-item' + (isActive ? ' turn-toc-item-active' : '') + '" href="#turn-chapter-' + trn.turn + '"'
+         + ' onclick="return _jumpToTurn(' + trn.turn + ');" title="' + preview + '">';
+    html += '<span class="turn-toc-num">' + trn.turn + '</span>';
+    html += '<span class="turn-toc-body">';
+    html +=   '<span class="turn-toc-preview">' + preview + '</span>';
+    html +=   '<span class="turn-toc-metaline">' + (timeLabel ? '<span class="turn-toc-time">' + timeLabel + '</span>' : '')
+         + ' ' + toolBadge + ' ' + errBadge + '</span>';
+    html += '</span>';
+    html += '</a>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function _jumpToTurn(turnIdx) {
+  var el = document.getElementById('turn-chapter-' + turnIdx);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  _setActiveTurnTOC(turnIdx);
+  // Hold the clicked turn active until the smooth scroll lands; otherwise
+  // the scroll-spy would flicker through every turn in between.
+  window._turnTocPin = { turn: turnIdx, until: Date.now() + 2500 };
+  return false;
+}
+
+// --- Scroll-spy for the turn TOC -------------------------------------------
+// _renderTurnTOC() marks the turn that owns the replay cursor as active, but
+// that only reflects the scrubber — not what the reader has scrolled to. This
+// keeps the highlighted TOC row in sync with the chapter under the top of the
+// viewport, whichever ancestor happens to be the scroll container (window on
+// the local dashboard, an overflow:auto pane on cloud).
+function _setActiveTurnTOC(turnIdx) {
+  var toc = document.getElementById('transcript-toc');
+  if (!toc) return;
+  var items = toc.querySelectorAll('.turn-toc-item');
+  var target = null;
+  for (var i = 0; i < items.length; i++) {
+    var isIt = (items[i].getAttribute('href') === '#turn-chapter-' + turnIdx);
+    items[i].classList.toggle('turn-toc-item-active', isIt);
+    if (isIt) target = items[i];
+  }
+  // Keep the active row visible inside a long, independently-scrolling TOC.
+  if (target && typeof target.scrollIntoView === 'function') {
+    var tr = target.getBoundingClientRect(), cr = toc.getBoundingClientRect();
+    if (tr.top < cr.top || tr.bottom > cr.bottom) target.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function _turnTocScrollContainer(el) {
+  var node = el && el.parentElement;
+  while (node && node !== document.body && node !== document.documentElement) {
+    var oy = getComputedStyle(node).overflowY;
+    if ((oy === 'auto' || oy === 'scroll') && node.scrollHeight > node.clientHeight + 1) return node;
+    node = node.parentElement;
+  }
+  return null; // the window scrolls
+}
+
+function _syncTurnTOCToScroll() {
+  var toc = document.getElementById('transcript-toc');
+  var wrap = document.getElementById('transcript-messages');
+  if (!toc || !wrap || !toc.firstChild) return;
+  var chapters = wrap.querySelectorAll('.turn-chapter');
+  if (!chapters.length) return;
+  var container = _turnTocScrollContainer(wrap);
+  var viewTop = container ? container.getBoundingClientRect().top : 0;
+  var viewBottom = container ? container.getBoundingClientRect().bottom : (window.innerHeight || document.documentElement.clientHeight);
+  // Reference line a little below the top edge so the sticky chapter header
+  // (and anything just scrolled past) counts as "current".
+  var refY = viewTop + Math.min(120, Math.max(48, (viewBottom - viewTop) * 0.25));
+  var pin = window._turnTocPin;
+  if (pin) {
+    var pinned = document.getElementById('turn-chapter-' + pin.turn);
+    var pTop = pinned ? pinned.getBoundingClientRect().top : NaN;
+    var arrived = !pinned || (pTop >= viewTop - 4 && pTop <= refY);
+    if (arrived || Date.now() >= pin.until) { window._turnTocPin = null; }
+    else { _setActiveTurnTOC(pin.turn); window._turnTocActive = pin.turn; return; }
+  }
+  var current = chapters[0];
+  for (var i = 0; i < chapters.length; i++) {
+    if (chapters[i].getBoundingClientRect().top <= refY) current = chapters[i];
+    else break;
+  }
+  // At the very end of the trace the last turn may be too short to ever reach
+  // the reference line — if we're scrolled to the bottom, it is the current one.
+  var atBottom = container
+    ? (container.scrollTop + container.clientHeight >= container.scrollHeight - 4)
+    : ((window.scrollY || window.pageYOffset || 0) + window.innerHeight >= (document.documentElement.scrollHeight - 4));
+  if (atBottom && chapters[chapters.length - 1].getBoundingClientRect().top < viewBottom) current = chapters[chapters.length - 1];
+  var id = current.id || '';
+  var turn = parseInt(id.replace('turn-chapter-', ''), 10);
+  if (isNaN(turn)) return;
+  if (window._turnTocActive === turn) return;
+  window._turnTocActive = turn;
+  _setActiveTurnTOC(turn);
+}
+
+(function _installTurnTOCScrollSpy() {
+  if (window._turnTocSpyInstalled) return;
+  window._turnTocSpyInstalled = true;
+  var scheduled = false;
+  function onScroll() {
+    if (scheduled) return;
+    scheduled = true;
+    (window.requestAnimationFrame || function(fn) { setTimeout(fn, 16); })(function() {
+      scheduled = false;
+      _syncTurnTOCToScroll();
+    });
+  }
+  // Capture phase: scroll events don't bubble, but they do reach document in
+  // capture, so this sees scrolling on the window *and* any inner pane.
+  document.addEventListener('scroll', onScroll, true);
+  window.addEventListener('resize', onScroll);
+})();
+
+// Toolbar toggle — flip the whole trace between oldest-first (default,
+// chat-native) and newest-first (skim recent activity for long sessions).
+//
+// INVARIANT: This is a display-time reversal ONLY. `window._replayEvents`
+// (the LocalStore-supplied event sequence) is NEVER mutated. The reversal
+// operates on a temporary array of turn groups inside _replayRenderCurrent
+// (`turns.slice().reverse()`) that lives for one render pass and is thrown
+// away. Every downstream consumer that reads `_replayEvents` — the scrubber,
+// the filter, the state panel, the raw-mode toggle — still sees events in
+// the original LocalStore order.
+function toggleTranscriptSort() {
+  window._transcriptSort = (window._transcriptSort === 'oldest') ? 'newest' : 'oldest';
+  var btn = document.getElementById('replay-sort-toggle');
+  if (btn) {
+    var isNewest = window._transcriptSort === 'newest';
+    btn.textContent = isNewest ? '↑ Newest first' : '↓ Oldest first';
+    btn.title = isNewest ? 'Newest turn at top — click to flip back' : 'Oldest turn at top — click to flip to newest first';
+  }
+  if (typeof _replayRenderCurrent === 'function') _replayRenderCurrent();
+  // Jump to the top so the sort change is visible without a manual scroll.
+  var wrap = document.getElementById('transcript-messages');
+  if (wrap) wrap.scrollTop = 0;
 }
 
 function _replayRenderCurrent() {
   var filtered = _replayFilteredEvents();
+  var wrap = document.getElementById('transcript-messages');
+  var tocEl = document.getElementById('transcript-toc');
   if (!filtered.length) {
-    document.getElementById('transcript-messages').innerHTML = '<div style="color:var(--text-muted);padding:16px;">' + t("app.no_events_match_this_filter", null, "No events match this filter.") + '</div>';
+    wrap.innerHTML = '<div style="color:var(--text-muted);padding:16px;">' + t("app.no_events_match_this_filter", null, "No events match this filter.") + '</div>';
     document.getElementById('replay-pos').textContent = '0/0';
+    if (tocEl) tocEl.innerHTML = '';
     return;
   }
   var idx = window._replayIndex;
@@ -14830,27 +20319,57 @@ function _replayRenderCurrent() {
   if (idx >= filtered.length) idx = filtered.length - 1;
   window._replayIndex = idx;
 
-  // Render all filtered events up to current index (show history)
-  var html = '';
-  for (var i = 0; i <= idx; i++) {
-    html += _renderReplayEvent(filtered[i], i === idx);
+  var highlightOriginal = filtered[idx] ? filtered[idx].originalIndex : -1;
+
+  // Turn-anchored chapter render. Group first, then reverse whole turns for
+  // newest-first — reversing individual events would scramble tool_use /
+  // tool_result pairs within a turn.
+  var turns = _groupIntoTurns(filtered);
+  var activeTurn = 0;
+  for (var i = 0; i < turns.length; i++) {
+    for (var j = 0; j < turns[i].events.length; j++) {
+      if (turns[i].events[j].originalIndex === highlightOriginal) { activeTurn = turns[i].turn; break; }
+    }
   }
-  document.getElementById('transcript-messages').innerHTML = html;
+  var order = (window._transcriptSort === 'newest') ? turns.slice().reverse() : turns;
+  var html = '';
+  for (var k = 0; k < order.length; k++) {
+    html += _renderTurnChapter(order[k], highlightOriginal);
+  }
+  wrap.innerHTML = html;
+  if (tocEl) tocEl.innerHTML = _renderTurnTOC(turns, activeTurn);
+  window._turnTocActive = activeTurn;
+  // Re-sync to the actual scroll position once the new DOM has laid out, so a
+  // re-render (filter change, sort flip, live refresh) never leaves the TOC
+  // pointing at the scrubber's turn while the reader is looking at another.
+  (window.requestAnimationFrame || function(fn) { setTimeout(fn, 16); })(function() {
+    window._turnTocActive = null;
+    _syncTurnTOCToScroll();
+  });
+
   document.getElementById('replay-pos').textContent = (idx + 1) + '/' + filtered.length;
   var scrubber = document.getElementById('replay-scrubber');
   scrubber.max = filtered.length - 1;
   scrubber.value = idx;
 
-  // Scroll highlighted message into view
-  var el = document.getElementById('replay-msg-' + filtered[idx].originalIndex);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // Only scroll the highlighted event into view when the scrubber is what
+  // moved us (play mode / next / prev / jumpTo). On a fresh render we let the
+  // user stay wherever they were scrolled.
+  if (window._replayScrollOnRender) {
+    window._replayScrollOnRender = false;
+    var el = document.getElementById('replay-msg-' + highlightOriginal);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
   _updateReplayStatePanel(filtered[idx] ? filtered[idx].timestamp : null);
+  _updateLoadEarlierBtn();
+  _armHistoryGapAutoload();
 }
 
 function replayNext() {
   var filtered = _replayFilteredEvents();
   if (window._replayIndex < filtered.length - 1) {
     window._replayIndex++;
+    window._replayScrollOnRender = true;
     _replayRenderCurrent();
   }
 }
@@ -14858,12 +20377,14 @@ function replayNext() {
 function replayPrev() {
   if (window._replayIndex > 0) {
     window._replayIndex--;
+    window._replayScrollOnRender = true;
     _replayRenderCurrent();
   }
 }
 
 function replayJumpTo(index) {
   window._replayIndex = index;
+  window._replayScrollOnRender = true;
   _replayRenderCurrent();
 }
 
@@ -14927,6 +20448,7 @@ function replayTogglePlay() {
         return;
       }
       window._replayIndex++;
+      window._replayScrollOnRender = true;
       _replayRenderCurrent();
     }, 100);
   }
@@ -14955,6 +20477,235 @@ function openSessionDeepDive(kind, sessionId) {
   }
 }
 
+// ── Replay history paging ───────────────────────────────────────────────────
+// The replay opens on the NEWEST window instantly (cloud: the snapshot's
+// capped transcript; local: the capped fast path) and pulls older history on
+// demand through /api/transcript-page — an exclusive before_ts cursor walk,
+// rendered by the same backend message builder. Nothing is fetched until the
+// user asks, so the fast first paint costs no extra requests.
+
+function _pagingMsgKey(m) {
+  if (!m || typeof m !== 'object') return String(m);
+  var toolBits = '';
+  if (m.tool) {
+    toolBits = (m.tool.name || '') + '|' + String(m.tool.input || '').slice(0, 40)
+             + '|' + String(m.tool.output || '').slice(0, 40);
+  }
+  return (m.timestamp || 0) + '|' + (m.role || '') + '|'
+       + String(m.content || '').slice(0, 80) + '|' + toolBits;
+}
+
+function _updateLoadEarlierBtn() {
+  var wrap = document.getElementById('transcript-messages');
+  if (!wrap) return;
+  var host = document.getElementById('replay-load-earlier');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'replay-load-earlier';
+    // Span the full row of .transcript-layout's grid: as a plain auto-placed
+    // sibling this button would take the wide first column and push
+    // #transcript-messages into the narrow 240px TOC column.
+    host.style.cssText = 'margin:0 0 8px 0;text-align:center;grid-column:1 / -1;';
+    wrap.parentNode.insertBefore(host, wrap);
+  }
+  var p = window._transcriptPaging;
+  if (!p || !p.hasMore) { host.innerHTML = ''; host.style.display = 'none'; return; }
+  // When the inline history-gap row is on screen it IS the control (with the
+  // live count and loading/error state); a second identical button above the
+  // stream is just noise.
+  if (wrap.querySelector('.replay-history-gap')) { host.innerHTML = ''; host.style.display = 'none'; return; }
+  host.style.display = '';
+  if (p.loading) {
+    host.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">⏳ '
+      + escHtml(t('transcript.loading_earlier', null, 'Loading earlier messages…')) + '</span>';
+  } else if (p.error) {
+    host.innerHTML = '<button class="refresh-btn" onclick="loadEarlierMessages()" '
+      + 'style="color:#e0625a;">'
+      + escHtml(t('transcript.load_earlier_failed', null, 'Couldn\'t load older messages - tap to retry'))
+      + '</button>';
+  } else {
+    host.innerHTML = '<button class="refresh-btn" onclick="loadEarlierMessages()">⬆ '
+      + escHtml(t('transcript.load_earlier', null, 'Load earlier messages'))
+      + '</button>';
+  }
+}
+
+// Inline row rendered where the server cut the transcript: "N earlier
+// messages not loaded" + the load control, carrying the same loading / error
+// state as the top button. The count is decremented as pages arrive and the
+// row disappears when has_more goes false, so it always describes the gap
+// that is actually still there.
+function _renderHistoryGap(ev) {
+  var p = window._transcriptPaging || {};
+  var n = (typeof ev.omitted === 'number') ? ev.omitted : null;
+  var countLabel = n != null
+    ? t('transcript.history_gap_count', {count: n, n: n}, n + ' earlier messages not loaded')
+    : t('transcript.history_gap', null, 'Earlier messages not loaded');
+  var action;
+  if (p.loading || p.draining) {
+    action = '<span class="replay-history-gap-status">⏳ '
+      + escHtml(t('transcript.loading_earlier', null, 'Loading earlier messages…')) + '</span>';
+  } else if (p.error) {
+    action = '<button class="refresh-btn replay-history-gap-btn" style="color:#e0625a;" onclick="loadEarlierMessages()">'
+      + escHtml(t('transcript.load_earlier_failed', null, 'Couldn\'t load older messages - tap to retry'))
+      + '</button>';
+  } else if (p.hasMore) {
+    action = '<button class="refresh-btn replay-history-gap-btn" onclick="loadEarlierMessages()">⬆ '
+      + escHtml(t('transcript.load_earlier', null, 'Load earlier messages'))
+      + '</button>'
+      + '<a href="#" class="replay-history-gap-all" onclick="loadAllEarlierMessages(); return false;">'
+      + escHtml(t('transcript.load_all_earlier', null, 'Load all')) + '</a>';
+  } else {
+    action = '';
+  }
+  return '<div class="replay-history-gap" id="replay-msg-' + ev.originalIndex + '" role="status">'
+    + '<span class="replay-history-gap-line"></span>'
+    + '<span class="replay-history-gap-label">' + escHtml(countLabel) + '</span>'
+    + action
+    + '<span class="replay-history-gap-line"></span>'
+    + '</div>';
+}
+
+// Reverse infinite scroll: when the gap row scrolls into view, pull the next
+// page without a click. After each page the viewport is re-anchored on what
+// the user was reading, which pushes the row back out of view, so it fires
+// once per scroll-up rather than draining the whole session at once. A failed
+// page stops the auto-pull (the row shows tap-to-retry) and newest-first
+// ordering opts out because its anchoring runs the other way.
+function _armHistoryGapAutoload() {
+  var wrap = document.getElementById('transcript-messages');
+  if (!wrap) return;
+  if (window._historyGapObserver) { try { window._historyGapObserver.disconnect(); } catch (e) {} }
+  var row = wrap.querySelector('.replay-history-gap');
+  var p = window._transcriptPaging;
+  if (!row || !p || !p.hasMore || typeof IntersectionObserver !== 'function') return;
+  if (window._transcriptSort === 'newest') return;
+  var obs = new IntersectionObserver(function(entries) {
+    var q = window._transcriptPaging;
+    if (!q) return;
+    for (var i = 0; i < entries.length; i++) {
+      if (!entries[i].isIntersecting) { q.autoArmed = true; continue; }
+      // One auto page per approach: the row must leave the viewport before
+      // it can pull again, otherwise a gap that stays on screen after a page
+      // lands would drain the whole session in a request storm.
+      if (q.autoArmed === false || !q.hasMore || q.loading || q.error || q.draining) return;
+      q.autoArmed = false;
+      loadEarlierMessages();
+      return;
+    }
+  }, { rootMargin: '120px 0px 120px 0px' });
+  obs.observe(row);
+  window._historyGapObserver = obs;
+}
+
+async function loadEarlierMessages() {
+  var p = window._transcriptPaging;
+  if (!p || !p.hasMore || p.loading) return;
+  p.loading = true;
+  p.error = null;
+  _updateLoadEarlierBtn();
+  _refreshHistoryGapRow();
+  try {
+    var url = '/api/transcript-page/' + encodeURIComponent(p.sid) + '?limit=150'
+            + (p.cursor ? ('&before_ts=' + Math.floor(p.cursor)) : '');
+    var r = await fetch(url);
+    var body = await r.json();
+    if (!r.ok || body.error) throw new Error(body.error || ('HTTP ' + r.status));
+    var master = window._transcriptAllMessages || [];
+    // Dedupe: the preserved opening prompt reappears when paging reaches the
+    // session start; anything already on screen must not double up.
+    var seen = {};
+    for (var i = 0; i < master.length; i++) seen[_pagingMsgKey(master[i])] = 1;
+    var fresh = (body.messages || []).filter(function(m) { return !seen[_pagingMsgKey(m)]; });
+    if (!body.has_more) {
+      // Reached the session start — the gap marker no longer describes a
+      // hole, so drop it from the stream.
+      master = master.filter(function(m) { return !_isHistoryGapMsg(m); });
+    } else {
+      // Shrink the marker's count by what just arrived so it keeps telling
+      // the truth about how much is still unloaded.
+      master = master.map(function(m) {
+        if (!_isHistoryGapMsg(m)) return m;
+        var left = _historyGapOmitted(m);
+        if (left == null) return m;
+        var next = Math.max(0, left - fresh.length);
+        return Object.assign({}, m, { type: 'history_gap', omitted: next,
+          content: next + ' earlier messages are not loaded yet.' });
+      });
+    }
+    master = fresh.concat(master);
+    master.sort(function(a, b) { return (a.timestamp || 0) - (b.timestamp || 0); });
+    window._transcriptAllMessages = master;
+    p.cursor = body.next_before_ts || p.cursor;
+    p.hasMore = !!body.has_more;
+    var wasAtEnd = window._replayIndex >= (window._replayEvents.length - 1);
+    window._replayEvents = master.map(function(m, idx) { return _buildReplayEvent(m, idx); });
+    var scrubber = document.getElementById('replay-scrubber');
+    if (scrubber) scrubber.max = Math.max(0, window._replayEvents.length - 1);
+    window._replayIndex = wasAtEnd
+      ? Math.max(0, window._replayEvents.length - 1)
+      : Math.min(window._replayIndex + fresh.length, window._replayEvents.length - 1);
+    if (scrubber) scrubber.value = window._replayIndex;
+    // Keep the viewport anchored on what the user was reading: content grows
+    // above, so restore scroll by the height delta.
+    var se = document.scrollingElement || document.documentElement;
+    var wrapEl = document.getElementById('transcript-messages');
+    var gapBefore = wrapEl ? wrapEl.querySelector('.replay-history-gap') : null;
+    var gapTopBefore = gapBefore ? gapBefore.getBoundingClientRect().top : null;
+    var beforeH = se.scrollHeight, beforeTop = se.scrollTop;
+    _replayRenderCurrent();
+    var gapAfter = wrapEl ? wrapEl.querySelector('.replay-history-gap') : null;
+    if (gapAfter && gapTopBefore != null) {
+      // Pin the gap row where it was: pages land directly beneath it.
+      se.scrollTop = se.scrollTop + (gapAfter.getBoundingClientRect().top - gapTopBefore);
+    } else if (gapTopBefore != null && gapTopBefore >= 0) {
+      // Gap closed while the user was above it: content grew below, stay put.
+    } else {
+      se.scrollTop = beforeTop + (se.scrollHeight - beforeH);
+    }
+  } catch (e) {
+    p.error = String((e && e.message) || e);
+  }
+  p.loading = false;
+  _updateLoadEarlierBtn();
+  _refreshHistoryGapRow();
+}
+
+// Walk every remaining page in sequence (still one bounded request at a
+// time, never a single giant fetch) until the gap closes or a page fails.
+async function loadAllEarlierMessages() {
+  var p = window._transcriptPaging;
+  if (!p || !p.hasMore || p.draining) return;
+  p.draining = true;
+  try {
+    var guard = 0;
+    while (p.hasMore && !p.error && guard++ < 400) {
+      if (window._transcriptPaging !== p) break;  // user opened another session
+      await loadEarlierMessages();
+    }
+  } finally {
+    p.draining = false;
+    _refreshHistoryGapRow();
+  }
+}
+
+// Re-render just the inline gap row (loading / error / count) without
+// rebuilding the whole stream.
+function _refreshHistoryGapRow() {
+  var wrap = document.getElementById('transcript-messages');
+  if (!wrap) return;
+  var row = wrap.querySelector('.replay-history-gap');
+  if (!row) return;
+  var evs = window._replayEvents || [];
+  for (var i = 0; i < evs.length; i++) {
+    if (evs[i].type === 'history_gap') {
+      row.outerHTML = _renderHistoryGap(evs[i]);
+      _armHistoryGapAutoload();
+      return;
+    }
+  }
+}
+
 async function viewTranscript(sessionId) {
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
@@ -14965,18 +20716,55 @@ async function viewTranscript(sessionId) {
   window._replayEvents = [];
   window._replayIndex = 0;
   window._replayFilter = 'all';
+  window._transcriptAllMessages = [];
+  window._transcriptPaging = null;
+  _updateLoadEarlierBtn();
   try {
     // Fetch transcript, compaction markers, config-drift, lexical drift, and policy events in parallel
-    var [data, compactionsData, driftData, lexicalDriftData, policyData] = await Promise.all([
+    var [data, compactionsData, driftData, lexicalDriftData, policyData, evalMetricsData] = await Promise.all([
       fetch('/api/transcript/' + encodeURIComponent(sessionId)).then(r => r.json()),
       fetch('/api/compactions?session_id=' + encodeURIComponent(sessionId) + '&summary_chars=5000').then(r => r.json()).catch(() => ({compactions: []})),
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/config-drift').then(r => r.json()).catch(() => ({has_drift: false})),
       fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/lexical-drift').then(r => r.json()).catch(() => null),
-      fetch('/api/security/policy-events?session_id=' + encodeURIComponent(sessionId)).then(r => r.json()).catch(() => null)
+      fetch('/api/security/policy-events?session_id=' + encodeURIComponent(sessionId)).then(r => r.json()).catch(() => null),
+      // Per-metric eval verdicts (#2862). Node-local data; on the hosted
+      // dashboard the container has no metrics table, so skip the fetch.
+      window.CLOUD_MODE ? Promise.resolve(null)
+        : fetch('/api/evals/metrics?session_id=' + encodeURIComponent(sessionId) + '&limit=8').then(r => r.json()).catch(() => null)
     ]);
+    // /api/transcript 404s when the session has no renderable turns (a
+    // session_id minted off a gateway log line, or a transcript whose file is
+    // gone). Without this guard the meta card below renders "Session
+    // undefined / Messages undefined" off the error payload.
+    if (!data || data.error) {
+      document.getElementById('transcript-meta').innerHTML = '';
+      document.getElementById('transcript-messages').innerHTML =
+        '<div style="color:#555;padding:16px;">' +
+        t("app.no_messages_in_this_transcript", null, "No messages in this transcript") +
+        '</div>';
+      return;
+    }
+    // Runs shaped like this one (WO-60): below the fold, never blocks the replay.
+    try { loadSimilarRuns(sessionId); } catch (e) {}
     var compactions = compactionsData.compactions || [];
+    var evalChips = (evalMetricsData && evalMetricsData.metrics) || [];
+    // Family runtimes store metrics under the canonical prefixed id
+    // (claude_code:<uuid>); a bare transcript id needs a suffix match.
+    if (!evalChips.length && !window.CLOUD_MODE && sessionId.indexOf(':') === -1) {
+      try {
+        var _em = await fetch('/api/evals/metrics?limit=300').then(r => r.json());
+        evalChips = ((_em && _em.metrics) || []).filter(function(m) {
+          var msid = String(m.session_id || '');
+          return msid.length > sessionId.length + 1 &&
+                 msid.slice(-(sessionId.length + 1)) === (':' + sessionId);
+        });
+      } catch (e) { /* chips are optional decoration */ }
+    }
     // Metadata
     var metaHtml = '<div class="stat-row"><span class="stat-label">Session</span><span class="stat-val">' + escHtml(data.name) + '</span></div>';
+    if (evalChips.length) {
+      metaHtml += '<div class="stat-row"><span class="stat-label">' + t("evals.col_checks", null, "Checks") + '</span><span class="stat-val">' + _evalMetricChips(evalChips) + '</span></div>';
+    }
     metaHtml += '<div class="stat-row"><span class="stat-label">Messages</span><span class="stat-val">' + data.messageCount + '</span></div>';
     if (data.model) metaHtml += '<div class="stat-row"><span class="stat-label">Model</span><span class="stat-val"><span class="badge model">' + escHtml(data.model) + '</span></span></div>';
     if (data.totalTokens) metaHtml += '<div class="stat-row"><span class="stat-label">Tokens</span><span class="stat-val"><span class="badge tokens">' + (data.totalTokens/1000).toFixed(0) + 'K</span></span></div>';
@@ -15031,7 +20819,12 @@ async function viewTranscript(sessionId) {
       + '<button class="refresh-btn" onclick="openSessionDeepDive(\'compare\', ' + _ddSid + ')" title="Compare this session side by side with others">' + t('transcript.compare', null, 'Compare') + '</button>'
       + '</div>';
     document.getElementById('transcript-meta').innerHTML = metaHtml;
+    _loadInputsPanel(sessionId);
+    _loadLifecycleCoverageLine(sessionId);
     _loadAuthorityPanel(sessionId);
+    _loadOrchestrationPanel(sessionId);
+    _loadSelfReportsPanel(sessionId);
+    _loadReplayTree(sessionId);   // wire-up per #4814 — no-op until adapters land (#4815, #4816)
     // Build replay events array - include compaction markers as special events
     var events = [];
     var compactionIdx = 0;
@@ -15058,6 +20851,20 @@ async function viewTranscript(sessionId) {
     window._replayEvents = allMessages.map(function(m, idx) {
       return _buildReplayEvent(m, idx);
     });
+    // Arm the "load earlier messages" control when the server said this is a
+    // capped newest-window (_truncated). The cursor is the start of the
+    // contiguous tail; older daemons don't stamp it, so fall back to the
+    // first message after the preserved prompt + omission marker.
+    window._transcriptAllMessages = allMessages;
+    window._transcriptPaging = {
+      sid: sessionId,
+      hasMore: !!data._truncated,
+      cursor: data._oldest_contiguous_ts
+           || (allMessages[2] && allMessages[2].timestamp) || null,
+      loading: false,
+      error: null
+    };
+    _updateLoadEarlierBtn();
     if (window._replayEvents.length > 0) {
       // Show replay controls and start at last event (show full conversation by default)
       window._replayIndex = window._replayEvents.length - 1;
@@ -15076,8 +20883,343 @@ async function viewTranscript(sessionId) {
   }
 }
 
+// Orchestration panel — the session's full fan-out: every Workflow run it
+// launched (with each run's agents, phases, status, tokens/cost, the context
+// each agent was handed and what it replied) plus plain sub-agents. Fed by
+// /api/session-orchestration/<id> (DuckDB subagents table; local-store only).
+async function _loadOrchestrationPanel(sessionId) {
+  var panel = document.getElementById('orchestration-panel');
+  var body = document.getElementById('orchestration-panel-body');
+  var sumEl = document.getElementById('orchestration-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  body.innerHTML = '';
+  try {
+    var d = await fetch('/api/session-orchestration/' + encodeURIComponent(sessionId)).then(function(r) { return r.json(); });
+    if (!d || d.error) return;
+    var wfs = d.workflows || [];
+    var subs = d.subagents || [];
+    if (!wfs.length && !subs.length) return;
+    var sum = d.summary || {};
+    var bits = [];
+    if ((sum.workflows || {}).total) bits.push((sum.workflows.total) + ' ' + t(sum.workflows.total === 1 ? 'brain.workflow' : 'brain.workflows', null, sum.workflows.total === 1 ? 'workflow' : 'workflows'));
+    if ((sum.agents || {}).total) bits.push(sum.agents.total + ' ' + t('transcripts.orch_agents', null, 'agents'));
+    if (subs.length) bits.push(subs.length + ' ' + t(subs.length === 1 ? 'brain.subagent' : 'brain.subagents', null, subs.length === 1 ? 'sub-agent' : 'sub-agents'));
+    var runningTotal = ((sum.workflows || {}).running || 0) + ((sum.agents || {}).running || 0) + ((sum.subagents || {}).running || 0);
+    if (runningTotal) bits.push('<span style="color:#f59e0b;">' + runningTotal + ' ' + t('brain.running', null, 'running') + '</span>');
+    if (sum.cost_usd) bits.push('$' + Number(sum.cost_usd).toFixed(2));
+    if (sumEl) sumEl.innerHTML = bits.join(' · ');
+
+    function statusPill(st) {
+      var m = {running: ['#f59e0b', t('brain.running', null, 'running')],
+               failed: ['#ef4444', t('transcripts.orch_failed', null, 'failed')],
+               completed: ['#10b981', t('transcripts.orch_done', null, 'done')]};
+      var c = m[st] || ['#888', st];
+      return '<span style="font-size:9px;font-weight:700;color:' + c[0] + ';border:1px solid ' + c[0] + ';border-radius:8px;padding:0 6px;">' + escHtml(c[1]) + '</span>';
+    }
+    function textBlock(label, txt) {
+      if (!txt) return '';
+      return '<div style="margin-top:4px;font-size:10px;"><span style="font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">' + escHtml(label) + '</span>'
+        + '<div style="margin-top:2px;padding:5px 8px;background:var(--bg-primary);border-radius:5px;color:var(--text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow-y:auto;">' + escHtml(txt) + '</div></div>';
+    }
+    function agentRow(a) {
+      var meta = [];
+      if (a.phase) meta.push(escHtml(a.phase));
+      if (a.model) meta.push(escHtml(String(a.model).replace(/^claude-/, '')));
+      if (a.tokens) meta.push(Number(a.tokens).toLocaleString() + ' tok');
+      if (a.costUsd) meta.push('$' + Number(a.costUsd).toFixed(2));
+      if (a.status === 'running' && a.nowTool) meta.push('<span style="color:#f59e0b;">▶ ' + escHtml(a.nowTool) + '</span>');
+      else if (a.lastTool) meta.push('🔧 ' + escHtml(a.lastTool));
+      var det = textBlock(t('transcripts.orch_context', null, 'Context given'), a.prompt)
+              + textBlock(t('transcripts.orch_reply', null, 'Replied'), a.reply)
+              + (a.error ? textBlock(t('transcripts.orch_error', null, 'Error'), a.error) : '');
+      var hasDet = !!det;
+      return '<div style="border-top:1px solid var(--border-secondary);padding:5px 0 5px 14px;">'
+        + '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;' + (hasDet ? 'cursor:pointer;' : '') + '"'
+        + (hasDet ? ' onclick="var n=this.nextElementSibling;n.style.display=n.style.display===\'none\'?\'\':\'none\'"' : '') + '>'
+        + statusPill(a.status)
+        + '<span style="font-size:11px;color:var(--text-primary);">' + escHtml((a.label || a.id).slice(0, 90)) + '</span>'
+        + '<span style="font-size:10px;color:var(--text-muted);">' + meta.join(' · ') + '</span>'
+        + (hasDet ? '<span style="font-size:9px;color:var(--text-muted);">▾</span>' : '')
+        + '</div>'
+        + (hasDet ? '<div style="display:none;">' + det + '</div>' : '')
+        + '</div>';
+    }
+    var html = '';
+    wfs.forEach(function(w) {
+      var phases = (w.phases || []).map(function(ph) { return escHtml(ph.title); }).join(' → ');
+      var head = [];
+      head.push((w.agentsDone + w.agentsFailed) + '/' + (w.agentCount || (w.agents || []).length) + ' ' + t('transcripts.orch_agents', null, 'agents'));
+      if (w.agentsRunning) head.push('<span style="color:#f59e0b;">' + w.agentsRunning + ' ' + t('brain.running', null, 'running') + '</span>');
+      if (w.agentsFailed) head.push('<span style="color:#ef4444;">⚠ ' + w.agentsFailed + '</span>');
+      if (w.rollupTokens) head.push(Number(w.rollupTokens).toLocaleString() + ' tok');
+      if (w.rollupCostUsd) head.push('$' + Number(w.rollupCostUsd).toFixed(2));
+      html += '<div style="margin-top:10px;">'
+        + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+        + '<span style="font-size:12px;">⚡</span>'
+        + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">' + escHtml(w.name || w.runId) + '</span>'
+        + statusPill(w.status)
+        + '<span style="font-size:10px;color:var(--text-muted);">' + head.join(' · ') + '</span>'
+        + '</div>'
+        + (w.description ? '<div style="font-size:10px;color:var(--text-muted);margin:2px 0 0 22px;">' + escHtml(w.description) + '</div>' : '')
+        + (phases ? '<div style="font-size:10px;color:var(--text-muted);margin:2px 0 4px 22px;">' + phases + '</div>' : '')
+        + '<div style="margin-left:8px;">' + (w.agents || []).map(agentRow).join('') + '</div>'
+        + (w.reply ? '<div style="margin-left:22px;">' + textBlock(t('transcripts.orch_result', null, 'Result'), w.reply) + '</div>' : '')
+        + '</div>';
+    });
+    if (subs.length) {
+      html += '<div style="margin-top:10px;">'
+        + '<div style="font-size:11px;font-weight:700;color:var(--text-primary);">🤖 ' + t('transcripts.orch_subagents', null, 'Sub-agents') + '</div>'
+        + subs.map(agentRow).join('') + '</div>';
+    }
+    body.innerHTML = html;
+    panel.style.display = '';
+    // Auto-expand while anything is still running — that is when you look.
+    if (runningTotal) body.style.display = '';
+  } catch (e) { /* panel stays hidden */ }
+}
+
 // Authority footprint panel (#880) — fetches /api/authority for the current
 // session and renders tools/filesystem/network sections in a collapsible card.
+// ── Inputs & context: what the agent was given ──────────────────────────
+// Reads /api/sessions/<id>/context (DuckDB session_context, filled from
+// context.compiled events). Every number here is MEASURED from the runtime's
+// own event: real system-prompt bytes, real tool names. When the runtime does
+// not expose its inputs the adapter says so (coverage.inputs === 'none') and
+// the panel says "Not exposed by <runtime>" instead of guessing.
+//
+// Cloud: the hosted dashboard has no DuckDB. The cloud bundle installs
+// window._cmCloudSessionContext(sid) (cm-cloud-session-context interceptor),
+// which slices the E2E-encrypted snapshot's `sessionContext` bucket. That
+// slice carries metadata + a short preview only, so the card explains that
+// the full text stays on the machine rather than rendering an empty box.
+async function _fetchSessionContext(sessionId) {
+  if (window.CLOUD_MODE && typeof window._cmCloudSessionContext === 'function') {
+    var c = await window._cmCloudSessionContext(sessionId);
+    if (c && !c.error) { c._cloud = true; return c; }
+    return c;
+  }
+  var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/sessions/' + encodeURIComponent(sessionId) + '/context'
+    + ((_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '');
+  return fetch(url).then(function(r) { return r.json(); });
+}
+
+function _ctxFmtBytes(n) {
+  n = Number(n || 0);
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024) return (n / 1024).toFixed(n >= 102400 ? 0 : 1) + ' KB';
+  return n + ' B';
+}
+
+function _ctxRuntimeLabel(rt) {
+  try {
+    if (typeof _cmRuntimeDisplayName === 'function') { var d = _cmRuntimeDisplayName(rt); if (d) return d; }
+  } catch (e) { /* fall through */ }
+  return String(rt || 'this runtime');
+}
+
+// One collapsed block: label + measured facts on the header row, redacted
+// text (or the honest "stays on your machine" note) behind a Show toggle.
+function _ctxTextBlock(id, label, item, cloud) {
+  var facts = [];
+  if (item.size_bytes) facts.push(_ctxFmtBytes(item.size_bytes));
+  if (item.sha256) facts.push('<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" title="sha256 of the full text">' + escHtml(String(item.sha256).slice(0, 12)) + '</span>');
+  if (item.turns && item.turns > 1) facts.push(escHtml(t('inputs.seen_turns', {n: item.turns}, 'seen on ' + item.turns + ' turns')));
+  if (item.content_truncated) facts.push('<span style="color:#d97706;">' + escHtml(t('inputs.truncated', null, 'stored copy cut at 64 KB')) + '</span>');
+  var body;
+  if (item.content) {
+    body = '<pre style="margin:6px 0 0;padding:8px 10px;background:var(--bg-primary);border-radius:6px;font-size:11px;line-height:1.45;white-space:pre-wrap;word-break:break-word;max-height:320px;overflow:auto;color:var(--text-secondary);">' + escHtml(item.content) + '</pre>';
+  } else if (cloud) {
+    body = (item.preview ? '<div style="margin-top:6px;font-size:11px;color:var(--text-secondary);font-style:italic;">' + escHtml(item.preview) + (item.preview.length >= 160 ? '…' : '') + '</div>' : '')
+      + '<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.cloud_content_local', null, 'Full text stays on your machine. Open the local dashboard to read it.')) + '</div>';
+  } else {
+    body = '';
+  }
+  var bid = 'ctx-body-' + id;
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
+    + '<span style="font-size:10px;color:var(--text-muted);">' + facts.join(' · ') + '</span>'
+    + (body ? '<button class="refresh-btn" style="margin-left:auto;font-size:10px;padding:2px 8px;" onclick="var b=document.getElementById(\'' + bid + '\');var o=b.style.display===\'none\';b.style.display=o?\'\':\'none\';this.textContent=o?' + JSON.stringify(t('inputs.hide', null, 'Hide')) + ':' + JSON.stringify(t('inputs.show', null, 'Show')) + ';">' + escHtml(t('inputs.show', null, 'Show')) + '</button>' : '')
+    + '</div>'
+    + (body ? '<div id="' + bid + '" style="display:none;">' + body + '</div>' : '')
+    + '</div>';
+}
+
+function _ctxNamesBlock(label, items) {
+  var names = [];
+  var turns = 0;
+  items.forEach(function(it) {
+    (it.names || []).forEach(function(n) { if (names.indexOf(n) === -1) names.push(n); });
+    turns = Math.max(turns, Number(it.turns || 0));
+  });
+  if (!names.length) return '';
+  var head = names.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: names.length}, names.length + ' tools');
+  var pills = names.map(function(n) {
+    return '<span style="display:inline-block;margin:2px 4px 2px 0;padding:1px 7px;border-radius:9px;background:var(--bg-primary);border:1px solid var(--border-secondary);font-size:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary);">' + escHtml(n) + '</span>';
+  }).join('');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
+    + '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(head) + (turns > 1 ? ' · ' + escHtml(t('inputs.seen_turns', {n: turns}, 'seen on ' + turns + ' turns')) : '') + '</span>'
+    + '</div><div style="margin-top:4px;">' + pills + '</div></div>';
+}
+
+function _ctxMetaBlock(label, items) {
+  var meta = {};
+  items.forEach(function(it) { var m = it.meta || {}; Object.keys(m).forEach(function(k) { meta[k] = m[k]; }); });
+  var keys = Object.keys(meta).filter(function(k) { return meta[k] !== null && meta[k] !== '' && typeof meta[k] !== 'object'; });
+  if (!keys.length) return '';
+  var order = ['model', 'provider', 'cwd', 'version', 'permissionMode', 'transport', 'streamStrategy', 'tools_count', 'messages_count', 'imagesCount'];
+  keys.sort(function(a, b) { var ia = order.indexOf(a), ib = order.indexOf(b); ia = ia < 0 ? 99 : ia; ib = ib < 0 ? 99 : ib; return ia - ib || a.localeCompare(b); });
+  var rows = keys.map(function(k) {
+    return '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(k) + '</span> <span style="font-size:10px;color:var(--text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + escHtml(String(meta[k])) + '</span>';
+  }).join('<span style="color:var(--border);margin:0 6px;">|</span>');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);margin-right:8px;">' + escHtml(label) + '</span>' + rows + '</div>';
+}
+
+function _ctxFilesBlock(label, items) {
+  if (!items.length) return '';
+  var lis = items.map(function(it) {
+    return '<div style="font-size:10px;color:var(--text-secondary);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">' + escHtml(it.summary || '') + (it.size_bytes ? ' <span style="color:var(--text-muted);">' + _ctxFmtBytes(it.size_bytes) + '</span>' : '') + '</div>';
+  }).join('');
+  return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span><div style="margin-top:3px;">' + lis + '</div></div>';
+}
+
+function _renderInputsBody(d) {
+  var items = (d && d.items) || [];
+  var cov = (d && d.coverage) || {};
+  var rt = _ctxRuntimeLabel(d && d.runtime);
+  var cloud = !!(d && d._cloud);
+  var byKind = {};
+  items.forEach(function(it) { (byKind[it.kind] = byKind[it.kind] || []).push(it); });
+  var html = '';
+  var summaryBits = [];
+  if (!items.length) {
+    if (cov.inputs === 'none') {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">'
+        + '<strong style="color:var(--text-secondary);">' + escHtml(t('inputs.not_exposed', {runtime: rt}, 'Not exposed by ' + rt)) + '</strong><br>'
+        + escHtml(cov.note || t('inputs.not_exposed_hint', null, 'This runtime does not write its instructions or tool list anywhere ClawMetry can read.')) + '</div>';
+      summaryBits.push(t('inputs.not_exposed', {runtime: rt}, 'Not exposed by ' + rt));
+    } else if (cov.inputs === 'unknown') {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.adapter_missing', null, 'The adapter for this runtime is not loaded here, so ClawMetry cannot say what it exposes.')) + '</div>';
+    } else {
+      html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.none_yet', null, 'Nothing captured for this session yet. It fills in as the agent runs.')) + '</div>';
+    }
+    return {html: html, summary: summaryBits.join(' · ')};
+  }
+  (byKind.system_prompt || []).forEach(function(it, i) { html += _ctxTextBlock('sp' + i, t('inputs.system_prompt', null, 'Instructions (system prompt)'), it, cloud); });
+  (byKind.user_prompt || []).slice(0, 1).forEach(function(it, i) { html += _ctxTextBlock('up' + i, t('inputs.user_prompt', null, 'First request'), it, cloud); });
+  html += _ctxNamesBlock(t('inputs.tools', null, 'Tools it could use'), byKind.tools_available || []);
+  html += _ctxNamesBlock(t('inputs.mcp', null, 'Connected servers (MCP)'), byKind.mcp_servers || []);
+  html += _ctxFilesBlock(t('inputs.context_files', null, 'Context files'), byKind.context_file || []);
+  html += _ctxMetaBlock(t('inputs.setup', null, 'Setup'), byKind.runtime_meta || []);
+  if (cov.inputs === 'partial') {
+    html += '<div style="padding-top:6px;font-size:10px;color:var(--text-muted);">' + escHtml(cov.note || t('inputs.partial_hint', null, 'This runtime shares part of its setup; the rest is not written to disk.')) + '</div>';
+  }
+  var sp = (byKind.system_prompt || [])[0];
+  if (sp && sp.size_bytes) summaryBits.push(_ctxFmtBytes(sp.size_bytes) + ' ' + t('inputs.system_prompt', null, 'Instructions (system prompt)').toLowerCase().split(' (')[0]);
+  var toolNames = [];
+  (byKind.tools_available || []).forEach(function(it) { (it.names || []).forEach(function(n) { if (toolNames.indexOf(n) === -1) toolNames.push(n); }); });
+  if (toolNames.length) summaryBits.push(toolNames.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: toolNames.length}, toolNames.length + ' tools'));
+  var rm = (byKind.runtime_meta || [])[0];
+  if (rm && rm.meta && rm.meta.model) summaryBits.push(String(rm.meta.model));
+  summaryBits.push('<span title="Measured from the runtime\'s own context.compiled event, not estimated." style="color:#10b981;">' + escHtml(t('inputs.measured', null, 'measured')) + '</span>');
+  return {html: html, summary: summaryBits.join(' · ')};
+}
+
+async function _loadInputsPanel(sessionId) {
+  var panel = document.getElementById('inputs-panel');
+  var body  = document.getElementById('inputs-panel-body');
+  var sumEl = document.getElementById('inputs-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  body.innerHTML = '';
+  try {
+    var d = await _fetchSessionContext(sessionId);
+    if (!d || d.error) return;
+    var r = _renderInputsBody(d);
+    body.innerHTML = r.html;
+    if (sumEl) sumEl.innerHTML = r.summary;
+    panel.style.display = '';
+    // Open by default when there is something to read; stay collapsed for
+    // the honest empty states so they do not push the transcript down.
+    body.style.display = (d.items && d.items.length) ? '' : 'none';
+  } catch (e) { /* the panel is additive; the transcript renders without it */ }
+}
+
+// LLM Context tab: measured inputs for the selected session chip. The gauge
+// above it estimates utilisation against a window; this line is the part
+// that is NOT an estimate, so the two never wear the same clothes.
+async function _loadCeInputsMeasured(sessionId) {
+  var el = document.getElementById('ce-inputs-measured');
+  if (!el) return;
+  if (!sessionId) { el.innerHTML = ''; return; }
+  try {
+    var d = await _fetchSessionContext(sessionId);
+    if (!d || d.error) { el.innerHTML = ''; return; }
+    var r = _renderInputsBody(d);
+    el.innerHTML = '<div style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:8px 12px;">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">'
+      + '<span style="font-size:12px;font-weight:700;color:var(--text-primary);">📥 ' + escHtml(t('inputs.title', null, 'What the agent was given')) + '</span>'
+      + '<span style="font-size:11px;color:var(--text-muted);">' + r.summary + '</span></div>'
+      + r.html + '</div>';
+  } catch (e) { el.innerHTML = ''; }
+}
+
+// Per-runtime lifecycle honesty (WO-61). An empty "permission denials" row
+// on a Cursor session means Cursor never exposes one, not that nothing was
+// refused; this line says which. Reads /api/lifecycle/coverage, the one
+// declaration both dashboards render. A missing route (older server, hosted
+// dashboard before its interceptor lands) renders nothing rather than a
+// blank or invented state.
+async function _loadLifecycleCoverageLine(sessionId) {
+  var meta = document.getElementById('transcript-meta');
+  if (!meta) return;
+  var prev = document.getElementById('lifecycle-coverage-line');
+  if (prev) prev.remove();
+  var rt = '';
+  var sid = String(sessionId || '');
+  if (sid.indexOf(':') > 0) rt = sid.slice(0, sid.indexOf(':'));
+  if (!rt) {
+    try {
+      var pf = _cmClientFilterRt(_cmRuntimeFilter());
+      if (pf && pf !== 'all') rt = pf;
+    } catch (e) {}
+  }
+  if (!rt) rt = 'openclaw';
+  var data = null;
+  try {
+    var r = await fetch('/api/lifecycle/coverage?runtime=' + encodeURIComponent(rt));
+    if (!r.ok) return;
+    data = await r.json();
+  } catch (e) { return; }
+  if (!data || !data.facts) return;
+  var lines = (data.lines || []).filter(function(l){ return !!l; });
+  var full = (data.full || []).length;
+  var labels = { tool_failed: 'Tool failures', subagent_started: 'Subagent starts',
+                 subagent_stopped: 'Subagent stops', permission_denied: 'Permission denials',
+                 context_compacted: 'Context compactions', session_started: 'Session start',
+                 instructions_loaded: 'Instructions loaded' };
+  var label = rt;
+  try { label = _cmRuntimeLabel(rt) || rt; } catch (e) {}
+  var html = '<div id="lifecycle-coverage-line" class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-secondary);align-items:flex-start;">'
+    + '<span class="stat-label" title="Which lifecycle facts ' + escHtml(label) + ' can put on this trail. Full: reported as it happens. Partial: recovered after the event. Not exposed: the runtime never tells anyone.">Trail facts</span>'
+    + '<span class="stat-val" style="font-size:11px;line-height:1.5;">';
+  if (!lines.length) {
+    html += '<span style="color:#16a34a;">All ' + full + ' lifecycle facts reported as they happen</span>';
+  } else {
+    var fullNames = (data.full || []).map(function(f){ return labels[f] || f; });
+    if (fullNames.length) html += '<span style="color:#16a34a;">' + escHtml(fullNames.join(', ')) + ': live</span><br>';
+    html += lines.map(function(l){ return '<span style="color:#d97706;">' + escHtml(l) + '</span>'; }).join('<br>');
+  }
+  html += '</span></div>';
+  meta.insertAdjacentHTML('beforeend', html);
+}
+
 async function _loadAuthorityPanel(sessionId) {
   var panel = document.getElementById('authority-panel');
   var body  = document.getElementById('authority-panel-body');
@@ -15133,6 +21275,48 @@ async function _loadAuthorityPanel(sessionId) {
     body.innerHTML = html;
     panel.style.display = '';
   } catch(e) { /* non-critical — panel stays hidden on error */ }
+}
+
+// Runtime-aware replay tree wire-up (#4814) — called from viewTranscript.
+// Overlays the replay tree atop the flat renderer when replay_events exist.
+// No-op today (row_count always 0) until adapter mappers land in #4815/#4816.
+async function _loadReplayTree(sessionId) {
+  if (!window._cmReplayTree) return;
+  var viewer = document.getElementById('transcript-viewer');
+  if (!viewer) return;
+  var mount = document.getElementById('replay-tree-container');
+  if (!mount) {
+    mount = document.createElement('div');
+    mount.id = 'replay-tree-container';
+    // Span the full row of .transcript-layout's grid. That parent is a
+    // two-column grid (messages | sticky turn TOC); as a plain auto-placed
+    // sibling this mount takes the wide first column and pushes
+    // #transcript-messages into the narrow 240px TOC column - the replay
+    // then renders as a squeezed, overflowing strip on the right with the
+    // whole left half blank (founder report 2026-09-05, same trap as
+    // #replay-load-earlier). The CSS rule on .transcript-layout children
+    // covers this too; the inline style keeps the node correct on its own.
+    mount.style.gridColumn = '1 / -1';
+    // The Trail page re-parents #transcript-messages into its own card, so
+    // the anchor is not always a child of #transcript-viewer; inserting
+    // relative to the anchor's real parent avoids the NotFoundError seen on
+    // the hosted dashboard (0.12.811) when a trail opened the replay.
+    var anchor = document.getElementById('transcript-messages');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(mount, anchor);
+    else viewer.appendChild(mount);
+  } else {
+    mount.innerHTML = '';
+  }
+  try {
+    var tree = await window._cmReplayTree.fetchReplayTree(sessionId);
+    if (window._cmReplayTree.renderTree(tree, mount)) {
+      // Tree has rows — shadow the flat renderer.
+      var msgs = document.getElementById('transcript-messages');
+      var ctrl = document.getElementById('replay-controls');
+      if (msgs) msgs.style.display = 'none';
+      if (ctrl) ctrl.style.display = 'none';
+    }
+  } catch (e) { /* non-critical — flat renderer stays on any error */ }
 }
 
 function toggleMsg(idx) {
@@ -15228,6 +21412,21 @@ function _cmSyncDismiss() {
   try { localStorage.setItem('cm-sync-verified-ts', String(Date.now())); } catch (e) {}
 }
 
+// Name what we are actually syncing. `prog.runtimes` is the node's detected
+// runtimes (see _sync_scope_runtimes in dashboard.py); the banner used to
+// hardcode "your OpenClaw workspace", which is a flat lie on a machine that
+// only runs Claude Code. Falls back to a runtime-neutral phrase when detection
+// is empty or unavailable, never to a named runtime.
+function _cmSyncScopeTitle(prog) {
+  var names = ((prog && prog.runtimes) || []).map(function (r) {
+    return (r && (r.label || r.id)) || '';
+  }).filter(Boolean);
+  if (!names.length) return t('app.syncing_your_agents', null, 'Syncing your AI agents');
+  if (names.length === 1) return 'Syncing your ' + names[0] + ' data';
+  if (names.length === 2) return 'Syncing ' + names[0] + ' and ' + names[1];
+  return 'Syncing ' + names.slice(0, 2).join(', ') + ' and ' + (names.length - 2) + ' more';
+}
+
 function _cmSyncRender(prog, health) {
   var bar = document.getElementById('sync-status-banner');
   if (!bar) return;
@@ -15237,6 +21436,7 @@ function _cmSyncRender(prog, health) {
   var errBox = document.getElementById('sync-status-error');
   var title = document.getElementById('sync-status-title');
   if (!sub || !details || !stepper || !errBox || !title) return;
+  title.textContent = _cmSyncScopeTitle(prog);
 
   // Determine the active phase: highest-index phase that's running/complete.
   var phase = (prog && prog.phase) || '';
@@ -15374,317 +21574,7 @@ async function cmSyncInit() {
 setTimeout(function(){ try { cmSyncInit(); } catch (e) {} }, 800);
 
 // ── Sub-Agent Tree ────────────────────────────────────────────────────────
-var _subagentsTimer = null;
 var _subagentsExpanded = {};
-
-async function loadSubagents() {
-  var el = document.getElementById('subagents-list');
-  if (!el) return;
-  try {
-    var data = await fetch('/api/subagents').then(function(r) { return r.json(); });
-    var agents = data.subagents || [];
-    var counts = data.counts || {};
-    if (agents.length === 0) {
-      el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">' + t("app.no_sub_agents_found_sub_agents_appear_here_when_sp", null, "No sub-agents found. Sub-agents appear here when spawned by the main session.") + '</div>';
-      return;
-    }
-    var byId = {};
-    agents.forEach(function(a) { byId[a.sessionId] = a; });
-    var roots = [];
-    var childrenOf = {};
-    agents.forEach(function(a) {
-      var p = a.parent;
-      if (p && byId[p]) {
-        if (!childrenOf[p]) childrenOf[p] = [];
-        childrenOf[p].push(a);
-      } else {
-        roots.push(a);
-      }
-    });
-    function statusDot(status) {
-      var colors = { active: '#16a34a', idle: '#d97706', stale: '#6b7280', failed: '#ef4444', paused: '#7c3aed' };
-      var glow = status === 'active' ? 'box-shadow:0 0 6px rgba(22,163,74,0.6);'
-               : status === 'failed' ? 'box-shadow:0 0 6px rgba(239,68,68,0.5);'
-               : status === 'paused' ? 'box-shadow:0 0 6px rgba(124,58,237,0.5);' : '';
-      return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (colors[status] || '#6b7280') + ';' + glow + 'flex-shrink:0;margin-right:4px;"></span>';
-    }
-    function renderAgent(a, depth) {
-      var sid = a.sessionId;
-      var hasChildren = !!(childrenOf[sid] && childrenOf[sid].length > 0);
-      var isExpanded = _subagentsExpanded[sid] !== false;
-      var indent = depth > 0 ? 'padding-left:' + (depth * 22 + 12) + 'px;' : 'padding-left:12px;';
-      var toggleBtn = hasChildren
-        ? '<button onclick="event.stopPropagation();_saToggle(' + JSON.stringify(sid) + ')" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-muted);padding:0 4px 0 0;line-height:1;min-width:16px;">' + (isExpanded ? '▼' : '▶') + '</button>'
-        : '<span style="display:inline-block;min-width:16px;"></span>';
-      var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K' : a.totalTokens;
-      var depthBadge = a.depth > 0 ? '<span style="font-size:10px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;padding:1px 5px;color:var(--text-muted);margin-left:6px;">d' + a.depth + '</span>' : '';
-      // Click row → subagent detail modal (same call used by Active Tasks cards).
-      // Stop-propagation on the toggle button already handles tree expansion.
-      var name = (a.displayName || '').replace(/"/g,'&quot;').replace(/'/g,"\\'");
-      var sidEsc = (a.sessionId || '').replace(/'/g,"\\'");
-      var keyEsc = (a.key || a.sessionId || '').replace(/'/g,"\\'");
-      var clickAttr = ' onclick="openTaskModal(\'' + sidEsc + '\',\'' + name + '\',\'' + keyEsc + '\')"';
-      var cursor = 'cursor:pointer;';
-      var html = '<div' + clickAttr + ' style="display:flex;align-items:center;gap:6px;' + indent + 'padding-top:8px;padding-bottom:8px;padding-right:12px;border-bottom:1px solid var(--border-secondary);' + cursor + 'transition:background 0.1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
-      html += toggleBtn;
-      html += statusDot(a.status);
-      html += '<span style="font-weight:600;font-size:13px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>';
-      html += depthBadge;
-      if (a.status === 'failed') {
-        html += '<span style="font-size:10px;background:rgba(239,68,68,0.12);color:#ef4444;border:1px solid rgba(239,68,68,0.4);border-radius:4px;padding:1px 6px;margin-left:6px;font-weight:700;">FAILED</span>';
-      }
-      html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + escHtml(a.model || '') + '</span>';
-      html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;margin-left:8px;">' + tokens + ' tok</span>';
-      html += '<span style="font-size:11px;color:var(--text-faint);white-space:nowrap;margin-left:8px;">' + escHtml(a.runtime || '') + '</span>';
-      if (a.status !== 'failed' && a.status !== 'stale' && a.status !== 'stopped') {
-        var keyBtn = (a.key || a.sessionId || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-        var isPaused = a.status === 'paused';
-        html += '<span onclick="event.stopPropagation();" style="margin-left:8px;display:inline-flex;gap:4px;flex-shrink:0;">';
-        if (isPaused) {
-          html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'resume\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid #16a34a;background:transparent;color:#16a34a;cursor:pointer;">Resume</button>';
-        } else {
-          html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'pause\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid var(--border-primary);background:transparent;color:var(--text-muted);cursor:pointer;">Pause</button>';
-        }
-        html += '<button onclick="event.stopPropagation();controlAgent(\'' + keyBtn + '\',\'stop\')" style="font-size:10px;padding:2px 6px;border-radius:4px;border:1px solid rgba(239,68,68,0.5);background:transparent;color:#ef4444;cursor:pointer;">Stop</button>';
-        html += '</span>';
-      }
-      html += '</div>';
-      if (hasChildren && isExpanded) {
-        childrenOf[sid].forEach(function(child) { html += renderAgent(child, depth + 1); });
-      }
-      return html;
-    }
-    var summaryHtml = '<div style="display:flex;gap:16px;padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:12px;flex-wrap:wrap;">';
-    summaryHtml += '<span style="color:var(--text-muted);"><strong style="color:var(--text-primary);">' + (counts.total || 0) + '</strong> total</span>';
-    if (counts.active) summaryHtml += '<span style="color:#16a34a;"><strong>' + counts.active + '</strong> active</span>';
-    if (counts.idle) summaryHtml += '<span style="color:#d97706;"><strong>' + counts.idle + '</strong> idle</span>';
-    if (counts.stale) summaryHtml += '<span style="color:var(--text-muted);"><strong>' + counts.stale + '</strong> stale</span>';
-    if (counts.failed) summaryHtml += '<span style="color:#ef4444;"><strong>' + counts.failed + '</strong> failed</span>';
-    summaryHtml += '</div>';
-    var treeHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;">' + summaryHtml;
-    roots.forEach(function(a) { treeHtml += renderAgent(a, 0); });
-    treeHtml += '</div>';
-    el.innerHTML = treeHtml;
-  } catch(e) {
-    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_sub_agents", null, "Failed to load sub-agents") + ': ' + escHtml(String(e)) + '</div>';
-  }
-}
-
-function _saToggle(sid) {
-  _subagentsExpanded[sid] = (_subagentsExpanded[sid] === false) ? true : false;
-  loadSubagents();
-}
-
-async function loadOrchestration() {
-  var el = document.getElementById('orchestration-board');
-  if (!el) return;
-  try {
-    var data = await fetch('/api/orchestration').then(function(r) { return r.json(); });
-    var agents = data.agents || [];
-    var summary = data.summary || {};
-    if (agents.length === 0) { el.innerHTML = ''; return; }
-    var statusColors = {
-      active: '#16a34a', running: '#16a34a', idle: '#d97706',
-      stale: '#6b7280', failed: '#ef4444', paused: '#7c3aed', completed: '#3b82f6'
-    };
-    var html = '<div style="border:1px solid var(--border-primary);border-radius:10px;overflow:hidden;margin-bottom:4px;">';
-    html += '<div style="display:flex;align-items:center;gap:16px;padding:8px 14px;background:var(--bg-secondary);border-bottom:1px solid var(--border-primary);font-size:12px;flex-wrap:wrap;">';
-    html += '<span style="font-weight:700;color:var(--text-primary);font-size:13px;">🤖 Orchestration</span>';
-    html += '<span style="color:var(--text-muted);"><strong style="color:var(--text-primary);">' + (summary.total || 0) + '</strong> agents</span>';
-    if (summary.active) html += '<span style="color:#16a34a;"><strong>' + summary.active + '</strong> active</span>';
-    if (summary.total_cost_usd) {
-      html += '<span style="color:var(--text-muted);">$<strong style="color:var(--text-primary);">' + summary.total_cost_usd.toFixed(4) + '</strong> total cost</span>';
-    }
-    html += '</div>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;padding:10px;">';
-    agents.forEach(function(a) {
-      var color = statusColors[a.status] || '#6b7280';
-      var glow = (a.status === 'active' || a.status === 'running') ? 'box-shadow:0 0 0 1px ' + color + '40;' : '';
-      var costStr = (a.costUsd > 0) ? '$' + a.costUsd.toFixed(4) : '';
-      var tokens = a.totalTokens >= 1000 ? (a.totalTokens / 1000).toFixed(1) + 'K tok' : (a.totalTokens > 0 ? a.totalTokens + ' tok' : '');
-      var depthBadge = (a.depth > 1) ? '<span style="font-size:9px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:3px;padding:0 4px;color:var(--text-muted);margin-left:4px;">d' + a.depth + '</span>' : '';
-      html += '<div style="flex:0 0 auto;min-width:155px;max-width:215px;border:1px solid var(--border-primary);border-radius:8px;padding:8px 10px;background:var(--bg-card);' + glow + '">';
-      html += '<div style="display:flex;align-items:center;gap:5px;margin-bottom:4px;">';
-      html += '<span style="width:8px;height:8px;border-radius:50%;background:' + color + ';display:inline-block;flex-shrink:0;"></span>';
-      html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;" title="' + escHtml(a.displayName) + '">' + escHtml(a.displayName) + '</span>';
-      html += depthBadge;
-      html += '</div>';
-      if (a.model && a.model !== 'unknown') {
-        html += '<div style="font-size:10px;color:var(--text-muted);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(a.model) + '</div>';
-      }
-      if (costStr || tokens) {
-        html += '<div style="display:flex;gap:8px;font-size:10px;color:var(--text-faint);">';
-        if (costStr) html += '<span style="color:#16a34a;">' + escHtml(costStr) + '</span>';
-        if (tokens) html += '<span>' + escHtml(tokens) + '</span>';
-        html += '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div></div>';
-    el.innerHTML = html;
-  } catch(e) {
-    var board = document.getElementById('orchestration-board');
-    if (board) board.innerHTML = '';
-  }
-}
-
-async function controlAgent(key, action) {
-  if (action === 'stop') {
-    if (!confirm('Stop agent ' + key + '? This will attempt to terminate it via the gateway and cannot be undone.')) return;
-  }
-  try {
-    var body = action === 'stop' ? {confirm: true} : {};
-    var r = await fetch('/api/agents/' + encodeURIComponent(key) + '/' + action, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-    var d = await r.json();
-    if (d.ok) {
-      loadSubagents();
-    } else {
-      alert('Agent ' + action + ' failed: ' + (d.error || 'unknown error'));
-    }
-  } catch(e) {
-    alert('Request failed: ' + e);
-  }
-}
-
-// OpenClaw queue-lane defaults (docs.openclaw.ai/concepts/queue): the
-// subagent lane caps at 8 and the main lane at 4 concurrent runs. cli/cron
-// have no fixed small cap, so we show live running count without a "/cap".
-var _RUN_LEDGER_LANE_CAPS = { subagent: 8, main: 4 };
-// Interactive state: which lane is filtered (null = all) and which run rows
-// are expanded into their detail drawer. Kept module-level so a 5s refresh
-// re-render preserves the user's drill-down.
-var _rlLaneFilter = null;
-var _rlExpanded = {};
-var _rlData = { lanes: [], runs: [] };
-
-// Live OpenClaw run-ledger view: queue-lane saturation bars + recent runs.
-// `runtime` IS the OpenClaw queue lane (cli / cron / subagent), so the lane
-// rollup doubles as the queue/concurrency monitor. Reads /api/run-ledger,
-// which the sync daemon mirrors from ~/.openclaw/tasks/runs.sqlite.
-// Interactive: click a lane to filter, click a run to expand its detail +
-// jump to the child session transcript.
-async function loadRunLedger() {
-  var el = document.getElementById('run-ledger-panel');
-  if (!el) return;
-  try {
-    var data = await fetch('/api/run-ledger?limit=120').then(function(r){ return r.json(); });
-    _rlData = { lanes: data.lanes || [], runs: data.runs || [] };
-    _rlRender();
-  } catch(e) {
-    el.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:16px;">' + t("app.failed_to_load_run_ledger", null, "Failed to load run ledger") + ': '+escHtml(String(e))+'</div>';
-  }
-}
-
-function _rlSetLane(lane) {
-  _rlLaneFilter = (_rlLaneFilter === lane) ? null : lane;  // toggle
-  _rlRender();
-}
-function _rlToggleRun(tid) {
-  _rlExpanded[tid] = !_rlExpanded[tid];
-  _rlRender();
-}
-function _rlOpenSession(key) {
-  // Jump to the child session's transcript (same deep-link the tree uses).
-  try { if (typeof viewTranscript === 'function') { viewTranscript(key); return; } } catch(e) {}
-  try { window.location.hash = 'session=' + encodeURIComponent(key); } catch(e) {}
-}
-
-function _rlRender() {
-  var el = document.getElementById('run-ledger-panel');
-  if (!el) return;
-  var lanes = _rlData.lanes || [], runs = _rlData.runs || [];
-  if (lanes.length === 0 && runs.length === 0) {
-    el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;border:1px solid var(--border-primary);border-radius:10px;">' + t("app.no_background_runs_yet_sub_agent_cron_and_cli_runs", null, "No background runs yet. Sub-agent, cron and CLI runs from OpenClaw’s task ledger appear here as they execute.") + '</div>';
-    return;
-  }
-  function laneColor(lane){ return ({subagent:'#8b5cf6',cron:'#0ea5e9',cli:'#16a34a'})[lane] || '#6b7280'; }
-  function jsq(s){ return String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
-
-  // ── Lane bars (clickable filters) ──
-  var laneHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">';
-  laneHtml += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;"><span style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;">Queue lanes</span>';
-  if (_rlLaneFilter) laneHtml += '<span style="font-size:11px;color:var(--text-muted);">· filtered to <strong style="color:'+laneColor(_rlLaneFilter)+'">'+escHtml(_rlLaneFilter)+'</strong> <a onclick="_rlSetLane(\''+jsq(_rlLaneFilter)+'\')" style="cursor:pointer;color:var(--accent,#3b82f6);">clear ✕</a></span>';
-  else laneHtml += '<span style="font-size:11px;color:var(--text-faint);">click a lane to filter</span>';
-  laneHtml += '</div>';
-  lanes.forEach(function(L){
-    var cap = _RUN_LEDGER_LANE_CAPS[L.lane];
-    var running = L.running||0, total = L.total||0, ok = L.succeeded||0, failed = L.failed||0, queued = L.queued||0;
-    var capLabel = cap ? (running + '/' + cap) : ('' + running);
-    var active = (_rlLaneFilter === L.lane);
-    function seg(n,color){ return total>0 ? '<span style="height:100%;width:'+(n/total*100)+'%;background:'+color+';display:inline-block;"></span>' : ''; }
-    laneHtml += '<div onclick="_rlSetLane(\''+jsq(L.lane)+'\')" title="Filter runs to the '+escHtml(L.lane)+' lane" style="margin-bottom:10px;cursor:pointer;border-radius:7px;padding:6px 8px;'+(active?'background:var(--bg-hover);outline:1px solid '+laneColor(L.lane)+';':'')+'transition:background .1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\''+(active?'var(--bg-hover)':'')+'\'">';
-    laneHtml += '<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:4px;">';
-    laneHtml += '<span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:'+laneColor(L.lane)+';"></span>';
-    laneHtml += '<span style="font-weight:700;color:var(--text-primary);">'+escHtml(L.lane)+'</span>';
-    laneHtml += '<span style="font-size:11px;font-weight:600;color:'+(running>0?'#16a34a':'var(--text-muted)')+';">'+(running>0 ? ('● '+capLabel+' running') : 'idle')+'</span>';
-    laneHtml += '<span style="flex:1;"></span>';
-    laneHtml += '<span style="font-size:11px;color:var(--text-muted);">'+total+' runs · '+ok+'✓'+(failed?(' · '+failed+'✗'):'')+'</span>';
-    laneHtml += '</div>';
-    laneHtml += '<div style="display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--bg-secondary);">';
-    laneHtml += seg(ok,'#16a34a')+seg(running,'#3b82f6')+seg(queued,'#d97706')+seg(failed,'#ef4444');
-    laneHtml += '</div></div>';
-  });
-  laneHtml += '</div>';
-
-  function pill(status){
-    var m = {succeeded:['#16a34a','rgba(22,163,74,.12)'],success:['#16a34a','rgba(22,163,74,.12)'],running:['#3b82f6','rgba(59,130,246,.12)'],failed:['#ef4444','rgba(239,68,68,.12)'],timeout:['#ef4444','rgba(239,68,68,.12)']};
-    var c = m[status] || ['#6b7280','var(--bg-secondary)'];
-    return '<span style="font-size:10px;font-weight:700;color:'+c[0]+';background:'+c[1]+';border-radius:4px;padding:1px 6px;">'+escHtml(String(status||'?'))+'</span>';
-  }
-  function dur(s){ if(!s.started_at||!s.ended_at) return ''; var ms=s.ended_at-s.started_at; if(ms<0) return ''; if(ms<1000) return ms+'ms'; if(ms<60000) return (ms/1000).toFixed(1)+'s'; return Math.round(ms/60000)+'m'; }
-  function tsLabel(ms){ if(!ms) return '-'; try { return new Date(ms).toLocaleString(); } catch(e){ return String(ms); } }
-
-  // ── Recent runs (filtered + clickable to expand) ──
-  var shown = _rlLaneFilter ? runs.filter(function(r){ return r.runtime === _rlLaneFilter; }) : runs;
-  var runHtml = '<div style="border:1px solid var(--border-primary);border-radius:10px;margin-top:14px;overflow:hidden;">';
-  runHtml += '<div style="font-size:12px;font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;padding:12px 14px;border-bottom:1px solid var(--border-primary);">Recent runs'+(_rlLaneFilter?(' · '+escHtml(_rlLaneFilter)):'')+' <span style="color:var(--text-faint);font-weight:500;">('+shown.length+')</span></div>';
-  if (shown.length === 0) {
-    runHtml += '<div style="padding:14px;color:var(--text-muted);font-size:12px;">No runs in this lane.</div>';
-  }
-  shown.slice(0,60).forEach(function(s){
-    var tid = s.task_id || s.run_id || '';
-    var open = !!_rlExpanded[tid];
-    runHtml += '<div onclick="_rlToggleRun(\''+jsq(tid)+'\')" style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;cursor:pointer;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
-    runHtml += '<span style="color:var(--text-faint);font-size:10px;width:10px;">'+(open?'▼':'▶')+'</span>';
-    runHtml += pill(s.status);
-    runHtml += '<span style="font-size:10px;color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;min-width:54px;text-align:center;">'+escHtml(s.runtime||'')+'</span>';
-    runHtml += '<span style="flex:1;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(s.label||'')+'">'+escHtml(s.label||'(untitled)')+'</span>';
-    var d = dur(s); if(d) runHtml += '<span style="color:var(--text-muted);white-space:nowrap;">'+d+'</span>';
-    runHtml += '</div>';
-    if (open) {
-      runHtml += '<div style="padding:10px 14px 12px 34px;background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);font-size:11px;color:var(--text-secondary);line-height:1.7;">';
-      function row(k,v){ return '<div><span style="color:var(--text-muted);display:inline-block;min-width:120px;">'+k+'</span>'+v+'</div>'; }
-      if (s.run_id) runHtml += row('run id', '<code style="color:var(--text-primary);">'+escHtml(s.run_id)+'</code>');
-      if (s.agent_id) runHtml += row('agent', escHtml(s.agent_id));
-      if (s.scope_kind || s.task_kind) runHtml += row('scope', escHtml((s.scope_kind||'')+(s.task_kind?(' · '+s.task_kind):'')));
-      if (s.delivery_status) runHtml += row('delivery', escHtml(s.delivery_status));
-      if (s.terminal_outcome) runHtml += row('outcome', escHtml(s.terminal_outcome));
-      runHtml += row('created', tsLabel(s.created_at));
-      if (s.ended_at) runHtml += row('ended', tsLabel(s.ended_at));
-      if (s.error) runHtml += '<div style="margin-top:4px;color:#ef4444;"><span style="color:var(--text-muted);display:inline-block;min-width:120px;">error</span>'+escHtml(String(s.error).slice(0,400))+'</div>';
-      if (s.child_session_key) {
-        runHtml += '<div style="margin-top:8px;"><button onclick="event.stopPropagation();_rlOpenSession(\''+jsq(s.child_session_key)+'\')" style="font-size:11px;font-weight:600;cursor:pointer;background:var(--accent,#3b82f6);color:#fff;border:none;border-radius:5px;padding:4px 10px;">Open session →</button> <span style="color:var(--text-faint);margin-left:6px;">'+escHtml(s.child_session_key)+'</span></div>';
-      }
-      runHtml += '</div>';
-    }
-  });
-  runHtml += '</div>';
-  el.innerHTML = laneHtml + runHtml;
-}
-
-// ── Tool catalog: provenance + p50/p95 latency (PRD P1-3) ───────────────────
-// Interactive catalog of every tool the agent invoked, grouped by provenance
-// (builtin / MCP / plugin) with call count + p50/p95 latency + error rate.
-// Rows are clickable → expand to the tool's recent individual calls (each
-// linking to its session transcript). Sortable + provenance-filterable.
-// Reads /api/tool-catalog (derived from DuckDB tool_call/tool_result pairs).
-var _toolCatalogData = null;       // last /api/tool-catalog payload
-var _tcExpanded = {};              // tool name -> bool (row expanded)
-var _tcCallsCache = {};            // tool name -> recent-calls payload
 
 function _tcProvBadge(prov, provider) {
   var map = {
@@ -15853,13 +21743,13 @@ function renderToolCatalog() {
 var _cmHarnessTemplates = null;   // {runtime: template}, fetched once
 var _cmHarnessData = null;
 
-// Show the Harness nav iff a specific runtime is selected AND it has a template.
+// The Harness nav is always visible: the tab opens with the plain-language
+// "anatomy of a harness" explainer (static, works for every runtime and on
+// cloud), and adds the runtime-specific extras panel when a template exists.
 function _cmRefreshHarnessNav() {
   var nav = document.getElementById('left-nav-harness');
   if (!nav) return;
-  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  if (!rt || rt === 'all') { nav.style.display = 'none'; return; }
-  nav.style.display = (_cmHarnessTemplates && _cmHarnessTemplates[rt]) ? '' : 'none';
+  nav.style.display = '';
 }
 
 // Eagerly fetch templates at page-init so the nav can appear without waiting
@@ -15873,11 +21763,451 @@ async function _cmInitHarnessNav() {
   _cmRefreshHarnessNav();
 }
 
+// ── Claude surface attribution ──────────────────────────────────────────────
+// Claude Code, the Claude Desktop app (agent mode / Cowork's local ops) and
+// Agent-SDK runs all write into the same ~/.claude/projects tree. The adapter
+// reads the transcript's `entrypoint` and stamps a surface on the session; this
+// renders it. Deliberately quiet — a dimension, not an alert — so it never
+// competes with the cost and failure chips beside it.
+var _CM_SURFACES = {
+  terminal: { glyph: '&#9656;', label: 'terminal',
+              hint: 'Launched from the terminal.' },
+  desktop:  { glyph: '&#9635;', label: 'desktop',
+              hint: 'Launched from the Claude Desktop app.' },
+  sdk:      { glyph: '&#123;&#125;', label: 'SDK',
+              hint: 'Launched programmatically through the Agent SDK.' }
+};
+
+function _cmSurfaceBadge(surface) {
+  var key = String(surface || '').toLowerCase();
+  if (!key) return '';
+  var s = _CM_SURFACES[key];
+  // An entrypoint we have not mapped yet still gets a badge rather than being
+  // silently folded into "terminal" — an unknown surface is worth seeing.
+  var label = s ? s.label : key;
+  var glyph = s ? s.glyph : '&#9679;';
+  var hint = s ? s.hint : 'Launched from ' + key + '.';
+  return '<span><span class="badge" title="' + escHtml(hint)
+    + '" style="background:var(--bg-secondary);color:var(--text-muted);'
+    + 'border:1px solid var(--border-primary);font-weight:600;">'
+    + glyph + ' ' + escHtml(label) + '</span></span>';
+}
+
+// ── Org-wide Claude coverage ────────────────────────────────────────────────
+// The card answers the one question local ingest structurally cannot: what is
+// the rest of the org running on Claude surfaces that never touch this disk?
+// Its shape IS the argument — the first row is traced in full, every row below
+// it is a day-level headcount and says so.
+var _CM_COVERAGE_ERRORS = {
+  unauthorized: 'That key was rejected. Mint a new one at claude.ai/analytics/api-keys.',
+  not_entitled: 'This organization’s plan has no analytics API. Anthropic offers it on Enterprise only.',
+  rate_limited: 'Anthropic is throttling the analytics API right now. It refreshes every few hours.',
+  bad_request:  'The analytics API rejected that request.',
+  unavailable:  'Could not reach the analytics API.'
+};
+
+function _cmCoverageRow(p, configured) {
+  var traced = !!p.locallyTraced;
+  // The signature: a solid accent rule for the surface we trace in full, a
+  // dashed hairline for every surface we can only count. The asymmetry is the
+  // whole point of the card, so it is drawn, not described.
+  var rule = traced
+    ? 'border-left:3px solid var(--bg-accent,#6cf);'
+    : 'border-left:3px dashed var(--border-primary);';
+  var here = traced
+    ? '<span style="color:var(--text-success,#22c55e);font-weight:600;">Traced in full</span>'
+    : '<span style="color:var(--text-muted);">Not on this disk</span>';
+  var org = configured && p.activeUsers > 0
+    ? escHtml(String(p.activeUsers)) + (p.activeUsers === 1 ? ' person' : ' people')
+    : '<span style="color:var(--text-faint,#666);">not counted</span>';
+  return '<div style="' + rule + 'display:grid;grid-template-columns:1fr auto auto;'
+    + 'gap:14px;align-items:baseline;padding:7px 0 7px 12px;">'
+    + '<span style="color:var(--text-primary);font-size:13px;">' + escHtml(p.label) + '</span>'
+    + '<span style="font-size:12px;">' + here + '</span>'
+    + '<span style="font-size:12px;color:var(--text-primary);min-width:70px;text-align:right;">'
+    + org + '</span></div>';
+}
+
+function _cmCoverageHtml(d) {
+  d = d || {};
+  var configured = !!d.configured && !d.error;
+  var products = d.products && d.products.length ? d.products : [
+    { key: 'claude_code', label: 'Claude Code', locallyTraced: true },
+    { key: 'cowork', label: 'Cowork', locallyTraced: false },
+    { key: 'chat', label: 'Claude chat', locallyTraced: false },
+    { key: 'office_agent', label: 'Claude in Office', locallyTraced: false },
+    { key: 'science', label: 'Claude Science', locallyTraced: false }
+  ];
+
+  var state = configured
+    ? '<span class="badge" style="background:rgba(34,197,94,0.12);color:#22c55e;'
+      + 'border:1px solid rgba(34,197,94,0.35);">Connected</span>'
+    : '<span class="badge" style="background:var(--bg-secondary);color:var(--text-muted);'
+      + 'border:1px solid var(--border-primary);">Not connected</span>';
+
+  var h = '<div class="card" style="padding:16px;">';
+  h += '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px;">'
+    + '<div style="font-size:15px;font-weight:700;">Claude surface coverage</div>'
+    + '<div style="margin-left:auto;">' + state + '</div></div>';
+  h += '<div style="font-size:13px;color:var(--muted,#888);line-height:1.6;max-width:720px;">'
+    + 'ClawMetry traces every Claude Code session on this machine down to the tool call. '
+    + 'The rest of your organization also runs Claude in the browser, in Cowork, and in '
+    + 'Chrome. None of that is written to this disk, so none of it can be traced here.'
+    + '</div>';
+
+  h += '<div style="margin:14px 0 0;">';
+  h += '<div style="display:grid;grid-template-columns:1fr auto auto;gap:14px;'
+    + 'padding:0 0 6px 12px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;'
+    + 'color:var(--text-faint,#666);border-bottom:1px solid var(--border-primary);">'
+    + '<span>Surface</span><span>On this machine</span>'
+    + '<span style="min-width:70px;text-align:right;">Across the org</span></div>';
+  h += products.map(function (p) { return _cmCoverageRow(p, configured); }).join('');
+  h += '</div>';
+
+  if (configured) {
+    var through = d.dataThrough ? String(d.dataThrough).slice(0, 10) : '';
+    h += '<div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.6;">'
+      + 'Org figures are daily headcounts over the last ' + escHtml(String(d.windowDays || 30))
+      + ' days' + (through ? ', through ' + escHtml(through) : '')
+      + '. There are no sessions or transcripts behind them. Anthropic’s analytics '
+      + 'API reports one number per person per day.'
+      + '</div>';
+    if (d.topUsers && d.topUsers.length) {
+      h += '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);">Highest spend: '
+        + d.topUsers.slice(0, 3).map(function (u) {
+            return escHtml(u.email || u.name || 'unknown') + ' $' + Number(u.costUsd || 0).toFixed(2);
+          }).join(' &middot; ')
+        + '</div>';
+    }
+    if (d.costError) {
+      h += '<div style="margin-top:8px;font-size:12px;color:#f59e0b;">'
+        + 'Spend figures are unavailable right now (' + escHtml(d.costError) + ').</div>';
+    }
+  } else {
+    var msg = d.error
+      ? (_CM_COVERAGE_ERRORS[d.error] || _CM_COVERAGE_ERRORS.unavailable)
+      : 'Connect an analytics key to fill the last column. It adds a daily headcount and '
+        + 'spend figure per person for every surface above. Not sessions, not transcripts. '
+        + 'Anthropic offers this key on Enterprise plans only.';
+    h += '<div style="margin-top:12px;font-size:12px;color:var(--text-muted);line-height:1.6;'
+      + 'max-width:720px;">' + msg + '</div>';
+    if (d.locked) {
+      h += '<div style="margin-top:10px;"><a href="/upgrade?source=claude_coverage" '
+        + 'style="color:var(--accent,#6cf);font-size:13px;font-weight:600;">'
+        + 'Available on Enterprise &rarr;</a></div>';
+    } else {
+      h += '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+        + '<input id="claude-coverage-key" type="password" autocomplete="off" '
+        + 'placeholder="Analytics key" style="flex:1;min-width:220px;max-width:340px;'
+        + 'background:var(--bg-secondary);border:1px solid var(--border-primary);'
+        + 'border-radius:6px;padding:7px 10px;color:var(--text-primary);font-size:13px;">'
+        + '<button onclick="saveClaudeCoverageKey()" class="btn-ghost" '
+        + 'style="font-size:13px;font-weight:600;">Connect key</button>'
+        + '<span id="claude-coverage-msg" style="font-size:12px;color:var(--text-muted);"></span>'
+        + '</div>';
+    }
+  }
+  h += '</div>';
+  return h;
+}
+
+async function loadClaudeCoverage() {
+  var el = document.getElementById('claude-coverage');
+  if (!el) return;
+  el.style.display = '';
+  try {
+    var r = await fetch('/api/org-analytics', { credentials: 'same-origin' });
+    // 402 is the honest OSS state, not a failure: the card still renders the
+    // full ledger and swaps the key form for the upgrade link. 404 lands here
+    // too — an older paid layer that predates this route is "not available to
+    // you", which is the same answer, not a network error.
+    if (r.status === 402 || r.status === 404) {
+      el.innerHTML = _cmCoverageHtml({ locked: true });
+      return;
+    }
+    el.innerHTML = _cmCoverageHtml(await r.json());
+  } catch (e) {
+    el.innerHTML = _cmCoverageHtml({ configured: true, error: 'unavailable' });
+  }
+}
+
+async function saveClaudeCoverageKey() {
+  var input = document.getElementById('claude-coverage-key');
+  var msg = document.getElementById('claude-coverage-msg');
+  if (!input) return;
+  var key = String(input.value || '').trim();
+  if (!key) { if (msg) msg.textContent = 'Paste a key first.'; return; }
+  if (msg) msg.textContent = 'Connecting…';
+  try {
+    var r = await fetch('/api/org-analytics/key', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: key })
+    });
+    if (!r.ok) { if (msg) msg.textContent = 'Could not save that key.'; return; }
+    input.value = '';
+    await loadClaudeCoverage();
+  } catch (e) {
+    if (msg) msg.textContent = 'Could not save that key.';
+  }
+}
+
+// ── Repo AI-readiness ─────────────────────────────────────────────────────
+// Before you blame the agent, look at what you handed it. Scores the repo an
+// agent actually worked in on how legible it is, and puts that grade next to
+// the stuck-loop counts the detectors recorded for the same repo.
+//
+// Free and ungated. Every figure is a filesystem fact or a DuckDB row; the
+// renderer never invents one. Two honesty rules are load-bearing here and
+// must survive any edit:
+//   1. An `unknown` check is drawn OUTSIDE the weight bar, hatched, labelled
+//      "not counted". It carries weight 0 and must never be shaded as if it
+//      passed or failed.
+//   2. `stuck_rate === null` means no agent has worked here. It renders as
+//      "nothing to compare yet", never as 0%.
+var _cmReadinessPath = '';
+var _cmReadinessBusy = false;
+
+async function loadRepoReadiness(path) {
+  var body = document.getElementById('rr-body');
+  if (!body) return;
+  if (typeof path === 'string' && path) _cmReadinessPath = path;
+  if (_cmReadinessBusy) return;
+  _cmReadinessBusy = true;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/repo-readiness?days=30';
+  if (_cmReadinessPath) url += '&path=' + encodeURIComponent(_cmReadinessPath);
+  if (rt && rt !== 'all') url += '&runtime=' + encodeURIComponent(rt);
+  try {
+    // fetchJsonWithTimeout, not a bare fetch: on a busy node the daemon
+    // serialises DuckDB reads and a plain fetch never settles, which pins the
+    // card on "Scanning the repo..." forever with no way back. Same helper and
+    // budget the rest of the app uses.
+    var data = await fetchJsonWithTimeout(url, 25000);
+    _cmRenderReadinessPicker(data);
+    body.innerHTML = _cmRenderReadiness(data);
+  } catch (e) {
+    var why = String((e && e.message) || e);
+    body.innerHTML = '<div class="rr-empty">'
+      + (/abort|timeout/i.test(why)
+        ? 'The scan is taking longer than usual, most likely because the '
+          + 'agent database is busy. Nothing is wrong with your repo.'
+        : 'Could not scan the repo: ' + escapeHtml(why))
+      + ' <a href="javascript:loadRepoReadiness()">Try again</a></div>';
+  } finally {
+    _cmReadinessBusy = false;
+  }
+}
+
+function _cmRenderReadinessPicker(data) {
+  var sel = document.getElementById('rr-repo-pick');
+  if (!sel) return;
+  var repos = (data && data.repos) || [];
+  var current = (data && data.report && data.report.path) || '';
+  if (!repos.length) {
+    sel.style.display = 'none';
+    var lbl = document.querySelector('.rr-pick-label');
+    if (lbl) lbl.style.display = 'none';
+    return;
+  }
+  sel.style.display = '';
+  sel.innerHTML = repos.map(function (r) {
+    var n = r.signals && r.signals.sessions;
+    var suffix = n ? ' (' + n + ' session' + (n === 1 ? '' : 's') + ')' : '';
+    var gone = r.exists ? '' : ' [not on this machine]';
+    return '<option value="' + escapeHtml(r.path) + '"'
+      + (r.path === current ? ' selected' : '') + '>'
+      + escapeHtml(r.name + suffix + gone) + '</option>';
+  }).join('');
+}
+
+function _cmReadinessVerdict(rep, days) {
+  // One plain sentence joining the grade to what actually happened here.
+  var sig = rep.signals || {};
+  var head = 'Graded <b>' + escapeHtml(rep.score) + ' &middot; '
+    + escapeHtml(rep.score_label) + '</b>.';
+  if (!sig.has_history) {
+    return head + ' No agent session on this machine has run in this repo yet, '
+      + 'so there is nothing to compare the grade against.';
+  }
+  var n = sig.sessions, stuck = sig.stuck_sessions;
+  var tail;
+  if (!stuck) {
+    tail = ' Agents ran <b>' + n + '</b> session' + (n === 1 ? '' : 's')
+      + ' here in the last ' + days + ' days and none of them got stuck.';
+  } else {
+    tail = ' Agents ran <b>' + n + '</b> session' + (n === 1 ? '' : 's')
+      + ' here in the last ' + days + ' days, and <b>' + stuck + '</b> of them '
+      + 'got stuck (' + sig.stuck_rate + '%).';
+  }
+  return head + tail;
+}
+
+var _CM_RR_COLORS = { pass: '#22c55e', warn: '#f59e0b', fail: '#ef4444' };
+var _CM_RR_GLYPH = { pass: '&#10003;', warn: '!', fail: '&#10005;', unknown: '?' };
+var _CM_RR_SIGNAL_LABEL = {
+  stuck_loop: 'Stuck loops',
+  no_progress: 'No progress',
+  repeated_tool_failure: 'Repeated tool failures',
+  action_discrepancy: 'Carried on after a failure'
+};
+
+function _cmRenderReadiness(data) {
+  if (!data || data.status === 'error') {
+    return '<div class="rr-empty">Could not scan the repo: '
+      + escapeHtml((data && data.detail) || 'unknown error') + '</div>';
+  }
+  if (data.status === 'no_repo' || !data.report) {
+    // Two different empty states. With repos in the picker, the selected one
+    // is a checkout that is gone from the machine that scanned it; telling
+    // that reader to "run an agent inside a code repo" would be nonsense.
+    var hasOthers = data.repos && data.repos.length;
+    return '<div class="rr-empty">'
+      + escapeHtml(data.detail || (hasOthers
+        ? 'That checkout is no longer on the machine that scanned it, so there '
+          + 'is nothing left to read. Its history is still in the picker above.'
+        : 'Nothing to score yet.'))
+      + (hasOthers ? ' Pick another repo above.'
+                   : ' Run an agent inside a code repo and this fills in on its own.')
+      + '</div>';
+  }
+  var rep = data.report;
+  if (rep.status === 'not_found') {
+    return '<div class="rr-empty">That repo is no longer on this machine, so '
+      + 'there is nothing to read. Its session history is still in the picker '
+      + 'above.</div>';
+  }
+  var days = data.window_days || 30;
+  var checks = rep.checks || [];
+  var counted = checks.filter(function (c) { return c.weight > 0; });
+  var unknown = checks.filter(function (c) { return c.status === 'unknown'; });
+  var totalW = counted.reduce(function (a, c) { return a + c.weight; }, 0) || 1;
+
+  var html = '';
+  // Per-runtime honesty (FLYWHEEL 0a.2). The hosted card is served from a
+  // snapshot the daemon scored against EVERY runtime's declared files,
+  // because the daemon cannot know which runtime the viewer picked. When a
+  // runtime filter is on and the payload says all_runtimes, say so out loud
+  // rather than letting node-wide data read as runtime-scoped.
+  var rtSel = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (data.scope === 'all_runtimes' && rtSel && rtSel !== 'all') {
+    html += '<div class="rr-scope-note">Scored against every runtime, not just '
+      + escapeHtml(rtSel) + '. This card comes from the snapshot your machine '
+      + 'uploaded, and that scan does not know which runtime you have selected.'
+      + '</div>';
+  }
+  html += '<div class="rr-verdict">' + _cmReadinessVerdict(rep, days) + '</div>';
+  html += '<div class="rr-top">';
+
+  // Grade block.
+  html += '<div class="rr-grade">'
+    + '<div class="rr-letter" style="color:' + escapeHtml(rep.score_color) + ';">'
+    + escapeHtml(rep.score) + '</div>'
+    + '<div class="rr-grade-label" style="color:' + escapeHtml(rep.score_color) + ';">'
+    + escapeHtml(rep.score_label) + '</div>'
+    + '<div class="rr-grade-pct">' + rep.score_pct + '% of the checks that count</div>'
+    + '</div>';
+
+  // Weight bar: one segment per counted check, width = its share of the grade.
+  // Warn is drawn at half opacity because it earns half credit.
+  html += '<div class="rr-bar-wrap"><div class="rr-bar">';
+  counted.forEach(function (c) {
+    var col = _CM_RR_COLORS[c.status] || '#64748b';
+    var op = c.status === 'warn' ? '0.55' : '1';
+    html += '<div class="rr-seg" title="' + escapeHtml(c.label + ': ' + c.status)
+      + '" style="width:' + (c.weight / totalW * 100).toFixed(2) + '%;'
+      + 'background:' + col + ';opacity:' + op + ';"></div>';
+  });
+  html += '</div>';
+  if (unknown.length) {
+    html += '<div class="rr-uncounted"><span class="rr-hatch"></span>'
+      + '<span class="rr-uncounted-text">' + unknown.length + ' check'
+      + (unknown.length === 1 ? '' : 's') + ' we could not read. Not counted, '
+      + 'in either direction.</span></div>';
+  }
+  html += '<div class="rr-legend">'
+    + '<span><i class="rr-dot" style="background:' + _CM_RR_COLORS.pass + ';"></i>Ready</span>'
+    + '<span><i class="rr-dot" style="background:' + _CM_RR_COLORS.warn + ';opacity:.55;"></i>Half credit</span>'
+    + '<span><i class="rr-dot" style="background:' + _CM_RR_COLORS.fail + ';"></i>Missing</span>'
+    + '</div></div>';
+
+  // What actually happened in this repo.
+  html += '<div class="rr-signals"><div class="rr-signals-h">What happened here</div>';
+  var sig = rep.signals || {};
+  if (!sig.has_history) {
+    html += '<div class="rr-empty" style="font-size:12.5px;">No sessions recorded '
+      + 'in this repo yet.</div>';
+  } else {
+    var inc = sig.incidents || {};
+    html += '<div class="rr-chips">';
+    Object.keys(_CM_RR_SIGNAL_LABEL).forEach(function (k) {
+      var n = inc[k] || 0;
+      html += '<span class="rr-chip ' + (n ? 'rr-chip-hot' : 'rr-chip-zero') + '">'
+        + '<b>' + n + '</b>' + escapeHtml(_CM_RR_SIGNAL_LABEL[k]) + '</span>';
+    });
+    html += '</div>';
+  }
+  html += '</div></div>';
+
+  // The checks.
+  html += '<div class="rr-checks">';
+  checks.forEach(function (c) {
+    var col = c.status === 'unknown' ? 'var(--text-faint)'
+      : (_CM_RR_COLORS[c.status] || 'var(--text-faint)');
+    html += '<div class="rr-check">'
+      + '<div class="rr-glyph" style="color:' + col + ';">'
+      + (_CM_RR_GLYPH[c.status] || '?') + '</div>'
+      + '<div class="rr-check-main">'
+      + '<div class="rr-check-h"><span class="rr-check-label">'
+      + escapeHtml(c.label) + '</span>'
+      + '<span class="rr-weight">'
+      + (c.weight > 0 ? 'worth ' + c.weight + ' points' : 'not counted')
+      + '</span></div>'
+      + '<div class="rr-detail">' + escapeHtml(c.detail || '') + '</div>';
+    if (c.remediation) {
+      html += '<div class="rr-fix">' + escapeHtml(c.remediation) + '</div>';
+    }
+    if (c.evidence) {
+      html += '<div class="rr-evidence">read from ' + escapeHtml(c.evidence) + '</div>';
+    }
+    html += '</div></div>';
+  });
+  html += '</div>';
+
+  // Per-runtime honesty: a repo can be legible to one runtime and invisible
+  // to another, and a single node-wide tick would hide that.
+  var cov = rep.runtime_coverage || [];
+  if (cov.length > 1) {
+    html += '<div class="rr-cov"><div class="rr-cov-h">Which runtimes would find '
+      + 'their instructions here</div><div class="rr-cov-pills">';
+    cov.forEach(function (r) {
+      html += '<span class="rr-pill' + (r.has_instructions ? ' on' : '') + '" title="'
+        + escapeHtml((r.has_instructions ? 'Reads: ' + r.files.join(', ')
+                                         : 'Looked for: ' + r.looked_for.join(', ')))
+        + '">' + escapeHtml(r.label) + '</span>';
+    });
+    html += '</div></div>';
+  }
+
+  html += '<div class="rr-evidence" style="margin-top:14px;">Scanned '
+    + escapeHtml(rep.path) + '. Nothing was run and nothing left this machine.</div>';
+  return html;
+}
+
 async function loadHarness() {
   var el = document.getElementById('harness-container');
   if (!el) return;
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   if (!rt || rt === 'all') rt = 'openclaw';
+  // Surface coverage is a Claude-specific story (the surfaces are Anthropic's),
+  // so the card only appears under the Claude Code runtime. Hidden elsewhere
+  // rather than rendered empty.
+  var _cov = document.getElementById('claude-coverage');
+  if (rt === 'claude_code') { loadClaudeCoverage(); }
+  else if (_cov) { _cov.style.display = 'none'; _cov.innerHTML = ''; }
+  // Repo readiness is runtime-scoped (a repo legible to Claude Code can be
+  // invisible to Cursor), so it re-fetches with the switcher, like the panel.
+  loadRepoReadiness();
   try {
     if (!_cmHarnessTemplates) {
       var t = await fetch('/api/harness/templates').then(function (r) { return r.json(); });
@@ -15891,14 +22221,15 @@ async function loadHarness() {
     _cmHarnessData = data;
     el.innerHTML = renderHarnessPanel(tmpl, data);
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load harness view: '
+    el.innerHTML = '<div style="color:var(--muted,#888);">Failed to load the runtime panel: '
       + escapeHtml(String((e && e.message) || e)) + '</div>';
   }
 }
 
 function _cmHarnessNoTemplate(rt) {
-  return '<div style="color:var(--muted,#888);line-height:1.5;">No harness panel for <b>'
-    + escapeHtml(rt) + '</b> yet.<br>Pro runtimes light up their panels when '
+  return '<div style="color:var(--muted,#888);line-height:1.5;">Nothing extra for <b>'
+    + escapeHtml(rt) + '</b> yet. The anatomy above applies to every runtime.<br>'
+    + 'Pro runtimes light up their own panels when '
     + 'clawmetry-pro is installed (Cloud Pro or a self-hosted license).</div>';
 }
 
@@ -16196,6 +22527,11 @@ async function loadToolPolicy() {
         rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;" data-approval-id="'+escHtml(String(d.id||''))+'">';
         rows += '<div style="display:flex;align-items:center;gap:10px;">';
         rows += decPill(d.status);
+        if (d.risk && d.risk.level && d.risk.level !== 'low') {
+          var rColors = {medium:'#d97706', high:'#ea580c', critical:'#dc2626'};
+          var rc = rColors[d.risk.level] || '#6b7280';
+          rows += '<span title="'+escHtml((d.risk.reasons||[]).join('; '))+'" style="font-size:10px;font-weight:700;color:'+rc+';background:'+rc+'22;border:1px solid '+rc+'44;border-radius:4px;padding:1px 6px;text-transform:uppercase;">'+escHtml(String(d.risk.level))+'</span>';
+        }
         rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
         if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
         else rows += '<span style="flex:1;"></span>';
@@ -16318,6 +22654,11 @@ async function loadToolPolicy() {
         rows += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;" data-approval-id="'+escHtml(String(d.id||''))+'">';
         rows += '<div style="display:flex;align-items:center;gap:10px;">';
         rows += decPill(d.status);
+        if (d.risk && d.risk.level && d.risk.level !== 'low') {
+          var rColors = {medium:'#d97706', high:'#ea580c', critical:'#dc2626'};
+          var rc = rColors[d.risk.level] || '#6b7280';
+          rows += '<span title="'+escHtml((d.risk.reasons||[]).join('; '))+'" style="font-size:10px;font-weight:700;color:'+rc+';background:'+rc+'22;border:1px solid '+rc+'44;border-radius:4px;padding:1px 6px;text-transform:uppercase;">'+escHtml(String(d.risk.level))+'</span>';
+        }
         rows += '<span style="font-weight:600;color:var(--text-primary);">'+escHtml(String(d.action||'tool-call'))+'</span>';
         if (d.args_preview) rows += '<span style="flex:1;color:var(--text-muted);font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+escHtml(String(d.args_preview))+'">'+escHtml(String(d.args_preview))+'</span>';
         else rows += '<span style="flex:1;"></span>';
@@ -16698,13 +23039,24 @@ function _stopLogStream() {
   _hideLogConnectionLostBanner();
 }
 
+var _logStreamRt = null;          // runtime the current EventSource follows
+var _logStreamUnavailable = false; // server said "no source" \u2014 don't reconnect-loop
 function startLogStream() {
   if (window.CLOUD_MODE) return;
   if (logStream) logStream.close();
   streamBuffer = [];
+  _logStreamUnavailable = false;
   var statusEl = document.getElementById('log-stream-status');
   if (statusEl) statusEl.textContent = t("app.dot_connecting", null, "\u25cf Connecting\u2026");
-  logStream = new EventSource('/api/logs-stream' + (localStorage.getItem('clawmetry-token') ? '?token=' + encodeURIComponent(localStorage.getItem('clawmetry-token')) : ''));
+  var rt = (typeof _cmLogsRuntime === 'function') ? _cmLogsRuntime() : 'openclaw';
+  _logStreamRt = rt;
+  var qs = [];
+  try {
+    var tok = localStorage.getItem('clawmetry-token');
+    if (tok) qs.push('token=' + encodeURIComponent(tok));
+  } catch (e) {}
+  if (rt && rt !== 'openclaw') qs.push('runtime=' + encodeURIComponent(rt));
+  logStream = new EventSource('/api/logs-stream' + (qs.length ? '?' + qs.join('&') : ''));
   logStream.onopen = function() {
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = t("app.dot_live", null, "\u25cf Live"); s.style.color = '#22c55e'; }
@@ -16713,6 +23065,15 @@ function startLogStream() {
   };
   logStream.onmessage = function(e) {
     var data = JSON.parse(e.data);
+    if (data && data.available === false) {
+      // Honest terminal state: this runtime has no live log source. Stop the
+      // reconnect chain instead of hammering an endpoint that said no.
+      _logStreamUnavailable = true;
+      var su = document.getElementById('log-stream-status');
+      if (su) { su.textContent = '● No live stream'; su.style.color = 'var(--text-muted)'; }
+      try { logStream.close(); } catch (ex) {}
+      return;
+    }
     streamBuffer.push(data.line);
     if (streamBuffer.length > MAX_STREAM_LINES) streamBuffer.shift();
     appendLogLine('ov-logs', data.line);
@@ -16744,6 +23105,7 @@ function startLogStream() {
     } catch(ex) {}
   });
   logStream.onerror = function() {
+    if (_logStreamUnavailable) { try { logStream.close(); } catch (ex) {} return; }
     var s = document.getElementById('log-stream-status');
     if (s) { s.textContent = t("app.dot_reconnecting", null, "\u25cf Reconnecting\u2026"); s.style.color = '#f59e0b'; }
     // Sibling of #1610 - replace one-shot reconnect with exponential
@@ -16878,7 +23240,7 @@ function hideUnconfiguredChannels(svgRoot) {
   // Priority order for slot assignment (up to 3 visible at a time)
   var SLOT_ORDER = ['tui', 'telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
                     'irc', 'webchat', 'googlechat', 'bluebubbles', 'msteams', 'matrix',
-                    'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo', 'clickclack'];
+                    'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo', 'clickclack', 'buzz'];
   fetch('/api/channels').then(function(r){return r.json();}).then(function(d) {
     var active = d.channels || ['telegram', 'signal', 'whatsapp'];
     // Build display list: up to 3 channels, prioritized by SLOT_ORDER
@@ -17164,7 +23526,7 @@ function loadFlowRuns() {
         var ch = r.channel || '—';
         return ''
           + '<tr style="border-top:1px solid var(--border-secondary,#2a2a4a);cursor:pointer;" '
-          +     'onclick="showFlowRunDetail(' + JSON.stringify(sid).replace(/"/g, '&quot;') + ')" '
+          +     'onclick="showFlowRunDetail(' + attrJsStr(sid) + ')" '
           +     'onmouseover="this.style.background=\'var(--bg-tertiary,#0d0d1f)\'" '
           +     'onmouseout="this.style.background=\'\'">'
           + '<td style="padding:8px 14px;font-family:monospace;color:var(--text-primary);">' + sidShort + '</td>'
@@ -17412,6 +23774,19 @@ var _RT_FLOW = {
   qwen_code:   { label:'Qwen Code',   src:['⌨️','Terminal'], accent:'#7c3aed', stroke:'#6d28d9', tools:[['📝','Edit'],['📖','Read'],['⚡','Shell'],['🔍','Search']] },
   pi:          { label:'Pi',          src:['⌨️','Terminal'], accent:'#4f8ef7', stroke:'#3b74d9', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Grep']] },
   deepagents:  { label:'Deep Agents', src:['⌨️','Terminal'], accent:'#2fa87c', stroke:'#238a64', tools:[['📝','Edit'],['📖','Read'],['⚡','Shell'],['📋','Todos']] },
+  n8n:         { label:'n8n',         src:['🔗','Workflow'], accent:'#ea4b71', stroke:'#c93a5c', tools:[['🌐','HTTP'],['🤖','AI Agent'],['⚡','Code'],['🪝','Webhook']] },
+  antigravity: { label:'Antigravity', src:['🪐','IDE'],      accent:'#4285f4', stroke:'#2f6ad9', tools:[['📝','Write'],['⚡','Command'],['📖','View'],['🌐','Search']] },
+  copilot:     { label:'GitHub Copilot', src:['⌨️','Terminal'], accent:'#8b5cf6', stroke:'#7c3aed', tools:[['⚡','Bash'],['📖','View'],['📝','Edit'],['🌐','Web']] },
+  grok:        { label:'Grok Build',  src:['⌨️','Terminal'], accent:'#111827', stroke:'#374151', tools:[['📝','Edit'],['📖','Read'],['⚡','Bash'],['🔍','Search']] },
+  grok_bot:    { label:'Grok Bot',    src:['🖥️','Desktop'],  accent:'#111827', stroke:'#374151', tools:[['🌐','Browser'],['📁','Files'],['⚡','Terminal'],['🔌','MCP']] },
+  lovable:     { label:'Lovable',     src:['☁️','Cloud'],    accent:'#ff3366', stroke:'#d9285a', tools:[['💬','Prompt'],['📝','Edit'],['🐙','GitHub Sync'],['🚀','Deploy']] },
+  deepseek_harness: { label:'DeepSeek Harness', src:['🌐','Web UI'], accent:'#4d6bfe', stroke:'#3a54d9', tools:[['⚡','Bash'],['📖','Read'],['📝','Write'],['🌐','Search']] },
+  exo: { label:'Exo', src:['💬','ExoChat'], accent:'#14b8a6', stroke:'#0f9488', tools:[['⚡','Shell'],['📦','Sandbox'],['🔀','Fork'],['🧠','Memory']] },
+  kimi: { label:'Kimi CLI', src:['⌨️','Terminal'], accent:'#0f172a', stroke:'#334155', tools:[['⚡','Shell'],['📖','ReadFile'],['📝','WriteFile'],['🔍','Grep']] },
+  devin: { label:'Devin', src:['⌨️','Terminal'], accent:'#5b8def', stroke:'#3f6fd1', tools:[['⚡','Shell'],['📖','Read'],['📝','Edit'],['✅','Todo']] },
+  gemini_cli: { label:'Gemini CLI', src:['⌨️','Terminal'], accent:'#4285f4', stroke:'#1a73e8', tools:[['⚡','Shell'],['📖','ReadFile'],['📁','ReadFolder'],['🔍','SearchText']] },
+  cline: { label:'Cline', src:['⌨️','Terminal'], accent:'#5a4fcf', stroke:'#463cad', tools:[['📖','read_files'],['🔍','search_codebase'],['⚡','run_commands'],['🧩','apply_patch']] },
+  openhands: { label:'OpenHands', src:['⌨️','Terminal'], accent:'#c9a227', stroke:'#a8871c', tools:[['⚡','terminal'],['📝','file_editor'],['✅','task_tracker'],['🤝','delegate']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -18476,7 +24851,7 @@ function initOverviewFlow() {
     };
     var OV_SLOT_ORDER = ['tui', 'telegram', 'whatsapp', 'imessage', 'signal', 'discord', 'slack',
                          'irc', 'webchat', 'googlechat', 'bluebubbles', 'msteams', 'matrix',
-                         'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo', 'clickclack'];
+                         'mattermost', 'line', 'nostr', 'twitch', 'feishu', 'zalo', 'clickclack', 'buzz'];
     var visibleChannels = OV_SLOT_ORDER.filter(function(ch) { return active.indexOf(ch) !== -1; }).slice(0, 3);
     // Use the clone SVG as root for getElementById (it's already in DOM via container)
     function ovEl(id) { return document.getElementById(id); }
@@ -18515,12 +24890,36 @@ function initOverviewFlow() {
 var _ovTasksTimer = null;
 window._ovExpandedSet = {};  // track which detail panels are open across refreshes
 
+// When did this task END? There is exactly one answer and it is allowed to be
+// "we don't know".
+//
+// `updatedAt` is a LAST-ACTIVITY stamp, and the ingest path in
+// routes/sessions.py falls back to `now` whenever a spawn's timestamp cannot be
+// parsed. Trusting it blindly meant a sub-agent spawned 2026-08-20 that never
+// ran (runtime 0s, no completion) was stamped with the current time, sailed
+// through the 1-hour "recent" window, and rendered as "Finished 1 min ago"
+// eighteen days later (founder report 2026-09-07). So `updatedAt` counts as an
+// end time only when the record shows the spawn actually ran and stopped.
+// Unknown end time returns 0: the caller shows no timestamp and the task is not
+// "recent". A blank beats an invented number.
+function _ovEndedMs(a) {
+  if (!a) return 0;
+  if (a.completionTs) { var ct = Date.parse(a.completionTs); if (!isNaN(ct)) return ct; }
+  var ran = (a.runtimeMs || 0) > 0 ||
+            (a.outputTokens || 0) > 0 || (a.tokensOut || 0) > 0 ||
+            !!a.completionStatus || !!a.completionResult;
+  if (!ran) return 0;
+  if (a.startedAt && a.runtimeMs) return a.startedAt + a.runtimeMs;
+  if (a.updatedAt) return a.updatedAt;
+  return 0;
+}
+
 function _ovTimeLabel(agent) {
   var ms = agent.runtimeMs || 0;
   var sec = Math.floor(ms / 1000);
   var min = Math.floor(sec / 60);
   var hr = Math.floor(min / 60);
-  if (agent.status === 'active') {
+  if (_cmIsWorkingStatus(agent.status)) {
     if (min < 1) return 'Running (' + sec + 's)';
     if (min < 60) return 'Running (' + min + ' min)';
     return 'Running (' + hr + 'h ' + (min % 60) + 'm)';
@@ -18528,12 +24927,10 @@ function _ovTimeLabel(agent) {
   // "Finished N ago" is time since the spawn ENDED — not the run duration.
   // Using runtimeMs here made stale spawns whose runtime was frozen to 0
   // (the dead-subagent freeze) read "Finished 0s ago" even when they ended
-  // days ago. Prefer completionTs, then updatedAt (last activity), then
-  // startedAt+runtime; blank if the end time is genuinely unknown.
-  var endedMs = 0;
-  if (agent.completionTs) { var ct = Date.parse(agent.completionTs); if (!isNaN(ct)) endedMs = ct; }
-  if (!endedMs && agent.updatedAt) endedMs = agent.updatedAt;
-  if (!endedMs && agent.startedAt && ms) endedMs = agent.startedAt + ms;
+  // days ago. The derivation lives in _ovEndedMs() so this label and the
+  // panel's "recently finished" window can never disagree; blank when the end
+  // time is genuinely unknown.
+  var endedMs = _ovEndedMs(agent);
   if (!endedMs) return '';
   var ago = Math.max(0, Date.now() - endedMs);
   var asec = Math.floor(ago / 1000), amin = Math.floor(asec / 60), ahr = Math.floor(amin / 60);
@@ -18543,11 +24940,70 @@ function _ovTimeLabel(agent) {
   return 'Finished ' + Math.floor(ahr / 24) + 'd ago';
 }
 
+// The ONE place a task's bucket is decided. The card renderer and the grouping
+// logic each used to derive it independently, and they disagreed: the grouping
+// put a failed spawn in `done` while the card drew it with a ✅. One function,
+// one answer.
+function _ovBucketOf(agent) {
+  if (!agent) return 'complete';
+  if (_cmIsWorkingStatus(agent.status)) return 'running';
+  if (_cmIsFailedStatus(agent.status)) return 'failed';
+  // Legacy heuristic for spawns the server could not label outright: it died
+  // stale, mid-run, having produced nothing.
+  if (agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0) return 'failed';
+  return 'complete';
+}
+
+// "Recently Completed/Failed" must mean RECENT — bound by how long ago the task
+// FINISHED, not its run duration. A 5-minute task that ended six days ago used
+// to pass a `runtimeMs < 2h` check and make an idle node look busy.
+var OV_RECENT_DONE_MS = 60 * 60 * 1000; // 1h
+function _ovRecentlyFinished(a, nowMs) {
+  var e = _ovEndedMs(a);
+  return e > 0 && ((nowMs || Date.now()) - e) < OV_RECENT_DONE_MS;
+}
+
+// Split a list into the buckets this panel actually RENDERS. Running tasks
+// always show; finished ones only while they are still recent. Every count the
+// panel reports goes through here, so a number can never promise more than the
+// list will actually display.
+function _ovVisible(list, nowMs) {
+  var now = nowMs || Date.now();
+  var r = [], d = [], f = [];
+  (list || []).forEach(function(a) {
+    var b = _ovBucketOf(a);
+    if (b === 'running') r.push(a);
+    else if (b === 'failed') { if (_ovRecentlyFinished(a, now)) f.push(a); }
+    else if (_ovRecentlyFinished(a, now)) d.push(a);
+  });
+  return { running: r, done: d, failed: f, total: r.length + d.length + f.length };
+}
+
+// Provenance pill: the runtime a task actually ran on, or nothing at all when
+// attribution is unknown. Rendered only in the unfiltered ("all runtimes")
+// view — under a runtime filter every card is that runtime and the pill is
+// noise.
+function _ovRuntimePill(agent) {
+  try {
+    if (_cmClientFilterRt(_cmRuntimeFilter()) !== 'all') return null;
+    var attributed = !!(agent && (agent.runtimeName || agent.agentType || agent.agent_type)) ||
+                     String((agent && (agent.sessionId || agent.key)) || '').indexOf(':') > 0;
+    if (!attributed) return null;   // never guess — no pill beats a wrong one
+    var rt = _cmRuntimeOf(agent);
+    if (!rt) return null;
+    return { label: _cmRuntimeLabel(rt), color: '#64748b' };
+  } catch (e) { return null; }
+}
+
 function _ovRenderCard(agent, idx) {
-  var isRealFailure = agent.status === 'stale' && agent.abortedLastRun && (agent.outputTokens || 0) === 0;
-  var sc = agent.status === 'active' ? 'running' : isRealFailure ? 'failed' : 'complete';
+  var sc = _ovBucketOf(agent);
   var taskName = cleanTaskName(agent.displayName);
-  var badge = detectProjectBadge(agent.displayName);
+  // Was detectProjectBadge() — a substring match of the task's prose against a
+  // hardcoded list of the developer's own project names, shipped to every
+  // customer. Any task whose prompt merely CONTAINED a runtime's name was
+  // stamped with that runtime's pill no matter which runtime actually ran it.
+  // Deleted; this reads real attribution or shows nothing.
+  var badge = _ovRuntimePill(agent);
   var timeLabel = _ovTimeLabel(agent);
   var detailId = 'ovd2-' + idx;
   var isOpen = !!(window._ovExpandedSet || {})[agent.sessionId];
@@ -18601,61 +25057,62 @@ async function loadOverviewTasks() {
     var el = document.getElementById('overview-tasks-list');
     var countBadge = document.getElementById('overview-tasks-count-badge');
     if (!el) return true;
-    var agents = data.subagents || [];
+    var allAgents = data.subagents || [];
+
+    // FLYWHEEL 0a.2 (per-runtime honesty, HARD GATE): a number shown while the
+    // runtime switcher is set to a specific runtime must scope to that runtime
+    // or carry a visible node-wide label. This panel did neither — it rendered
+    // every runtime's tasks under ?runtime=codex, so a Codex user saw OpenClaw
+    // work on their own home screen (founder report 2026-09-07). Filtering
+    // client-side scopes the hosted dashboard too: the cloud `cm-cloud-subagents`
+    // interceptor serves the whole snapshot slice and honours no ?runtime= param.
+    var _atRt = (typeof _cmRuntimeFilter === 'function') ? _cmClientFilterRt(_cmRuntimeFilter()) : 'all';
+    var agents = (_atRt === 'all') ? allAgents
+                                   : allAgents.filter(function(a) { return _cmRuntimeOf(a) === _atRt; });
+
+    // The other-runtime count must be of tasks the user would ACTUALLY SEE after
+    // switching, not of every row the filter removed. Counting raw rows told a
+    // Codex user "489 tasks on other runtimes — switch runtime to see them" when
+    // switching showed nothing at all: all 489 had finished more than an hour
+    // earlier and are excluded by the same recency rule applied here. An empty
+    // state that sends someone somewhere empty is its own small lie.
+    var _hiddenOther = (_atRt === 'all')
+      ? 0
+      : _ovVisible(allAgents.filter(function(a) { return _cmRuntimeOf(a) !== _atRt; })).total;
+    // When the filter hides everything, say so in the runtime's own name rather
+    // than claiming the machine is idle — other runtimes may be flat out.
+    var _rtName = (_atRt === 'all') ? '' : _cmRuntimeLabel(_atRt);
+    function _emptyState() {
+      var head = _rtName ? ('No active tasks for ' + escHtml(_rtName)) : 'No active tasks';
+      var sub  = _hiddenOther > 0
+        ? (_hiddenOther + ' task' + (_hiddenOther === 1 ? '' : 's') + ' on other runtimes — switch runtime to see them.')
+        : 'The AI is idle.';
+      return '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
+        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
+        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">' + head + '</div>'
+        + '<div style="font-size:12px;">' + sub + '</div></div>';
+    }
 
     if (agents.length === 0) {
       if (countBadge) countBadge.textContent = '';
-      el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
-        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
-        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
-        + '<div style="font-size:12px;">The AI is idle.</div></div>';
+      el.innerHTML = _emptyState();
       return true;
     }
 
-    var running = [], done = [], failed = [];
-    agents.forEach(function(a) {
-      var isRealFailure = a.status === 'stale' && a.abortedLastRun && (a.outputTokens || 0) === 0;
-      if (a.status === 'active') running.push(a);
-      else if (isRealFailure) failed.push(a);
-      else done.push(a);
-    });
+    var _split = _ovVisible(agents);
+    var running = _split.running, done = _split.done, failed = _split.failed;
     // Alive-state for the Overview hero: working when something is actively
     // running, otherwise idle. Re-render the hero so it reflects the change.
     window._cmAgentBusy = running.length > 0;
     try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e_hero) {}
           try { if (typeof _renderWasteSummary === 'function') _renderWasteSummary(); } catch (_e) {}
           try { if (typeof _renderOutLoopSources === 'function') _renderOutLoopSources(); } catch (_e4) {}
-    // "Recently Completed/Failed" must mean RECENT — bound by how long ago the
-    // task FINISHED, not its run duration. The old `runtimeMs < 2h` check used
-    // duration, so a 5-minute task that finished 6 days ago still passed and
-    // showed as "recent" (an idle node looked busy). Derive the end time the
-    // same way _ovRenderCard's "Finished N ago" does (completionTs → updatedAt
-    // → startedAt+runtime); unknown end time → not recent.
-    var RECENT_DONE_MS = 60 * 60 * 1000; // 1h
-    var _nowMs = Date.now();
-    function _ovEndedMs(a) {
-      var e = 0;
-      if (a.completionTs) { var ct = Date.parse(a.completionTs); if (!isNaN(ct)) e = ct; }
-      if (!e && a.updatedAt) e = a.updatedAt;
-      if (!e && a.startedAt && a.runtimeMs) e = a.startedAt + a.runtimeMs;
-      return e;
-    }
-    function _ovRecentlyFinished(a) {
-      var e = _ovEndedMs(a);
-      return e > 0 && (_nowMs - e) < RECENT_DONE_MS;
-    }
-    done = done.filter(_ovRecentlyFinished);
-    failed = failed.filter(_ovRecentlyFinished);
-
     if (countBadge) countBadge.textContent = running.length > 0 ? '(' + running.length + ' running)' : '(' + (done.length + failed.length) + ' recent)';
 
     var totalShown = running.length + done.length + failed.length;
     if (totalShown === 0) {
       if (countBadge) countBadge.textContent = '';
-      el.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--text-muted);">'
-        + '<div style="font-size:32px;margin-bottom:12px;" class="tasks-empty-icon">😴</div>'
-        + '<div style="font-size:14px;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;">No active tasks</div>'
-        + '<div style="font-size:12px;">The AI is idle.</div></div>';
+      el.innerHTML = _emptyState();
       return true;
     }
 
@@ -20470,7 +26927,7 @@ function loadToolData(toolKey, comp, isRefresh) {
     // ─── SESSION MODAL ─────────────────────────────────
     if (toolKey === 'session') {
       var agents = data.subagents || [];
-      var active = agents.filter(function(a){return a.status==='active';}).length;
+      var active = agents.filter(function(a){return _cmIsWorkingStatus(a.status);}).length;
       var idle = agents.filter(function(a){return a.status==='idle';}).length;
       var stale = agents.filter(function(a){return a.status==='stale';}).length;
 
@@ -20485,8 +26942,8 @@ function loadToolData(toolKey, comp, isRefresh) {
         html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Sub-Agents</div>';
         html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;">';
         agents.forEach(function(a) {
-          var dotColor = a.status==='active' ? '#22c55e' : a.status==='idle' ? '#f59e0b' : '#ef4444';
-          var dotShadow = a.status==='active' ? 'box-shadow:0 0 6px rgba(34,197,94,0.6);' : '';
+          var dotColor = _cmIsWorkingStatus(a.status) ? '#22c55e' : a.status==='idle' ? '#f59e0b' : '#ef4444';
+          var dotShadow = _cmIsWorkingStatus(a.status) ? 'box-shadow:0 0 6px rgba(34,197,94,0.6);' : '';
           html += '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg-secondary);border-radius:10px;border:1px solid var(--border-secondary);">';
           html += '<div style="width:10px;height:10px;border-radius:50%;background:'+dotColor+';margin-top:4px;flex-shrink:0;'+dotShadow+'"></div>';
           html += '<div style="flex:1;min-width:0;">';
@@ -20994,11 +27451,22 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     }
     var meta = [];
     if (startedAt) meta.push(['Started', startedAt]);
-    // Prefer the child's actual runtime (from OpenClaw completion event) over
-    // our "time since spawn" calculation — runtimeFormatted is e.g. "1s",
-    // match.runtime is e.g. "72h 49m" which is misleading for a 1-second run.
-    var rtDisplay = match.runtimeFormatted || match.runtime || '';
-    if (rtDisplay) meta.push(['Runtime', rtDisplay]);
+    // Prefer the child's actual elapsed time (from the OpenClaw completion
+    // event) over our "time since spawn" calculation: runtimeFormatted is e.g.
+    // "1s" where the spawn-derived figure can read "72h 49m" for a one-second
+    // run. No `|| match.runtime` fallback any more — that field is the
+    // runtime's NAME now, so it would print "codex" where a duration belongs.
+    //
+    // Labelled "Duration", not "Runtime". This row said Runtime and showed a
+    // duration, in a product where "runtime" means Codex / Claude Code /
+    // OpenClaw everywhere else — the same collision that made the Home task
+    // pill claim OpenClaw for a Codex task (2026-09-07).
+    var rtDisplay = match.runtimeFormatted || '';
+    if (rtDisplay) meta.push(['Duration', rtDisplay]);
+    // Now that `runtime` carries the name, show it — "which runtime ran this?"
+    // is the question that started this whole thread. Shown only when known.
+    var rtName = match.runtime || match.runtimeName || '';
+    if (rtName) meta.push(['Runtime', _cmRuntimeLabel(String(rtName).toLowerCase())]);
     if (match.model && match.model !== 'unknown') meta.push(['Model', match.model]);
     if (match.parent) meta.push(['Parent', match.parent]);
     if (match.runId) meta.push(['Run ID', match.runId]);
@@ -21783,23 +28251,53 @@ async function bootDashboard() {
     );
     var authData = await authRes.json();
     if (authData.needsSetup) {
+      // No gateway token configured. The legacy "ClawMetry Setup" wizard
+      // used to force itself open here on every load; the dashboard works
+      // fine with no gateway configured (onboarding.js owns the first-run
+      // managed/self-host choice, and a real OpenClaw gateway can still be
+      // configured opt-in from the Developer tab).
       document.getElementById('login-overlay').style.display = 'none';
-      var gwo = document.getElementById('gw-setup-overlay');
-      gwo.dataset.mandatory = 'true';
-      document.getElementById('gw-setup-close').style.display = 'none';
-      gwo.style.display = 'flex';
       _safeFinishBoot();
       return;
     }
     if (authData.authRequired && !authData.valid) {
-      // Anonymous funnel-loss ping (issue #1365). Gated on "no prior token"
-      // so we measure fresh-install rejects, not session timeouts.
-      if (_shouldPingAuthFailFirstLoad(stored, authData)) {
-        _pingAuthFailFirstLoad();
+      // Stored token may simply be stale (gateway token rotated on disk).
+      // Retry the zero-click loopback bootstrap before walling the user --
+      // the server hands the fresh token to provably-local browsers.
+      // EXCEPT after an explicit sign-out (profile menu → Sign out sets
+      // cm-signed-out): recovering here would silently sign the user back
+      // in, making Sign out a no-op — auth-bootstrap.js suppresses its
+      // zero-click for the same reason, and this is the second such path.
+      var signedOutMarker = false;
+      try { signedOutMarker = localStorage.getItem('cm-signed-out') === '1'; } catch (e) {}
+      var recovered = false;
+      if (!signedOutMarker) try {
+        var dtRes = await _withTimeout(fetch('/api/auth/detected-token'), 3000, 'auth-bootstrap');
+        if (dtRes && dtRes.ok) {
+          var dt = await dtRes.json();
+          if (dt && dt.token) {
+            var reRes = await _withTimeout(
+              fetch('/api/auth/check?token=' + encodeURIComponent(dt.token)), 3000, 'auth');
+            var re = await reRes.json();
+            if (re && re.valid) {
+              localStorage.setItem('clawmetry-token', dt.token);
+              recovered = true;
+            }
+          }
+        }
+      } catch (e) { /* fall through to the manual login wall */ }
+      if (!recovered) {
+        // Anonymous funnel-loss ping (issue #1365). Gated on "no prior token"
+        // so we measure fresh-install rejects, not session timeouts — and on
+        // "not an explicit sign-out", which is intentional, not funnel loss.
+        if (!signedOutMarker && _shouldPingAuthFailFirstLoad(stored, authData)) {
+          _pingAuthFailFirstLoad();
+        }
+        document.getElementById('login-overlay').style.display = 'flex';
+        _safeFinishBoot();
+        return;
       }
-      document.getElementById('login-overlay').style.display = 'flex';
-      _safeFinishBoot();
-      return;
+      document.getElementById('login-overlay').style.display = 'none';
     }
   } catch(e) { /* auth check hung -- boot anyway, safety timeout will fire */ }
 
@@ -21857,8 +28355,6 @@ function _hideCloudIrrelevantNav() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  initTheme();
-  initZoom();
   // Overview is the default tab
   initOverviewFlow();
   initOverviewCompClickHandlers();
@@ -21870,6 +28366,27 @@ document.addEventListener('DOMContentLoaded', function() {
   try { _cmInitGlobalRuntimeSwitcher(); } catch (e) { /* non-fatal */ }
   try { _hideCloudIrrelevantNav(); } catch (e) { /* non-fatal */ }
   try { _applyTracingFlag(); } catch (e) { /* non-fatal */ }
+  // Session-first landing: the product opens on the decision trail (the
+  // Sessions list, each row one click from its Trail), not on a KPI board.
+  // Overview stays one click away under Monitoring. Deep links win:
+  //   #trail=<agent_type>:<session_id>  -> that session's Trail page
+  //   #session=<id>                     -> Sessions, replay opened by loadTranscripts()
+  try { _cmBootLanding(); } catch (e) { /* non-fatal */ }
+});
+
+function _cmBootLanding() {
+  var trailSid = (typeof _trailSessionFromHash === 'function') ? _trailSessionFromHash(window.location.hash) : null;
+  if (trailSid && typeof openTrail === 'function') { openTrail(trailSid); return; }
+  if (typeof switchTab === 'function') switchTab('transcripts');
+}
+
+// Hash router. Only `#trail=` is routed here: `#session=` is consumed by
+// loadTranscripts() and its setters already call switchTab('transcripts').
+window.addEventListener('hashchange', function () {
+  try {
+    var sid = (typeof _trailSessionFromHash === 'function') ? _trailSessionFromHash(window.location.hash) : null;
+    if (sid && typeof openTrail === 'function') openTrail(sid);
+  } catch (e) { /* non-fatal */ }
 });
 
 // The Tracing tab (Phoenix/Arize-style span waterfall + tree + agent graph) is
@@ -22326,8 +28843,8 @@ setTimeout(checkUpdateStatus, 5000);
       if (!it) return;
       var rt = it.getAttribute('data-rt');
       if (it.getAttribute('data-locked')) {
-        window.open('https://app.clawmetry.com/upgrade?source=runtime_chip', '_blank', 'noopener');
         _closeMenu();
+        try { _cmShowRuntimePaywall(rt, _label(rt)); } catch (e) {}
         return;
       }
       _closeMenu();
@@ -22468,7 +28985,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 14 runtimes side by side. Respects the global
+// the headline demo path — the 30 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -22530,7 +29047,7 @@ function openSwimlaneAddLane() {
       var label = s.displayName || s.title || s.subject || _swimlaneShortSid(sid);
       var tok = Number(s.total_tokens || 0);
       var tokStr = tok > 1e6 ? (tok / 1e6).toFixed(1) + 'M' : (tok > 1e3 ? (tok / 1e3).toFixed(0) + 'K' : tok);
-      html += '<div class="swimlane-add-row' + (already ? ' is-added' : '') + '" onclick="' + (already ? '' : 'swimlaneAddLane(' + JSON.stringify(sid) + ')') + '">';
+      html += '<div class="swimlane-add-row' + (already ? ' is-added' : '') + '" onclick="' + (already ? '' : 'swimlaneAddLane(' + attrJsStr(sid) + ')') + '">';
       html += '<span class="swimlane-rt-chip">' + escHtml(rtLbl) + '</span>';
       html += '<span class="swimlane-add-name" title="' + escHtml(sid) + '">' + escHtml(label) + '</span>';
       html += '<span class="swimlane-add-tok">' + tokStr + ' tok</span>';
@@ -22634,7 +29151,7 @@ async function loadSwimlane() {
         var ph = '<span style="font-size:11px;color:var(--text-muted);margin-right:6px;">Lane:</span>';
         lanes.forEach(function (sid) {
           ph += '<button type="button" class="swimlane-single-tab' + (sid === activeSid ? ' active' : '')
-            + '" onclick="window._swimlaneSingleSid=' + JSON.stringify(sid) + ';loadSwimlane()">'
+            + '" onclick="window._swimlaneSingleSid=' + attrJsStr(sid) + ';loadSwimlane()">'
             + escHtml(_swimlaneSessionLabel(sid)) + '</button>';
         });
         sp.innerHTML = ph;
@@ -22724,7 +29241,7 @@ function _swimlaneRenderLane(lm, ranked, rank) {
   h += '<span class="swimlane-rt-chip">' + escHtml(rtLbl) + '</span>';
   h += '<span class="swimlane-title" title="' + escHtml(lm.sid) + '">' + escHtml(lm.label) + '</span>';
   if (lm.isLive) h += '<span class="swimlane-live-dot" title="active in the last 60s"></span>';
-  h += '<span class="swimlane-x" title="Remove lane" onclick="swimlaneRemoveLane(' + JSON.stringify(lm.sid) + ')">✕</span>';
+  h += '<span class="swimlane-x" title="Remove lane" onclick="swimlaneRemoveLane(' + attrJsStr(lm.sid) + ')">✕</span>';
   h += '</div>';
   h += '<div class="swimlane-model">' + escHtml(lm.model || 'model unknown') + '</div>';
   h += '<div class="swimlane-stats">';
@@ -22828,7 +29345,16 @@ function loadAgentGraph() {
   var win   = parseInt((document.getElementById('agent-graph-window') || {}).value || '86400', 10);
   var now   = Math.floor(Date.now() / 1000);
   var since = now - win;
-  fetch('/api/local/agent-graph?since=' + since + '&until=' + now)
+  // Scope to the selected runtime: spans are stamped with their real
+  // agent_type at family-ingest time, so the graph genuinely filters
+  // (OTLP selections collapse to 'all' — foreign spans carry their own
+  // agent_type, not a native runtime id).
+  var rtq = '';
+  try {
+    var grt = _cmClientFilterRt(_cmRuntimeFilter());
+    if (grt && grt !== 'all') rtq = '&runtime=' + encodeURIComponent(grt);
+  } catch (e) {}
+  fetch('/api/local/agent-graph?since=' + since + '&until=' + now + rtq)
     .then(function(r) {
       // The cloud disables /api/local/* (no local DuckDB) with HTTP 410.
       // Say so honestly instead of pretending there is no data.
@@ -22903,4 +29429,2791 @@ function _renderAgentGraph(nodes, edges) {
       (totalTok  ? '<span><b>' + (totalTok / 1000).toFixed(1) + 'K</b> tokens</span>' : '');
     statsEl.style.display = 'block';
   }
+}
+
+
+// === Expired-License / Expired-Trial Banner =================================
+// The paywall modal pitches "Start 7-day free trial" — a dead end once the
+// trial has already ended. This banner is the honest post-expiry step: buy a
+// license, or paste the key you already have. One fetch on load (the
+// entitlement endpoint is cheap and cached server-side); no poller.
+function dismissLicenseExpiredBanner() {
+  try { localStorage.setItem('cm_license_expired_dismissed', String(Date.now())); } catch (e) {}
+  var b = document.getElementById('license-expired-banner');
+  if (b) b.style.display = 'none';
+}
+async function checkLicenseExpiry() {
+  var banner = document.getElementById('license-expired-banner');
+  if (!banner) return;
+  var dismissedAt = 0;
+  try {
+    dismissedAt = parseInt(localStorage.getItem('cm_license_expired_dismissed') || '0', 10) || 0;
+  } catch (e) {}
+  try {
+    var e = await fetch('/api/entitlement', { credentials: 'same-origin' }).then(function (r) { return r.json(); });
+    var expiredTrial = !!(e && e.expired && e.tier === 'trial');
+    var expiredPaid = !!(e && e.expired && e.is_paid && e.tier !== 'trial');
+    // Trial ending: say it LOUD before the cliff, not after.
+    // days_until_expiry === 0 means "ends today". `e.grace` must NOT
+    // gate this: it is the global paywall-rollout flag (true on every
+    // install until enforcement goes live), not a statement about this
+    // trial's expiry — keying on it made a freshly-activated 7-day
+    // trial read "ends today". A trial whose expiry actually passed
+    // surfaces via `e.expired` above.
+    var days = (e && typeof e.days_until_expiry === 'number') ? e.days_until_expiry : null;
+    var endingTrial = !!(e && !e.expired && e.tier === 'trial'
+      && days !== null && days <= 3);
+    if (!expiredTrial && !expiredPaid && !endingTrial) { banner.style.display = 'none'; return; }
+    // A dismissed EXPIRED banner stays gone for 24h; a dismissed
+    // countdown comes back after 4h — the clock is literally running.
+    var dismissWindowMs = (expiredTrial || expiredPaid) ? 24 * 3600 * 1000 : 4 * 3600 * 1000;
+    if (dismissedAt && (Date.now() - dismissedAt) < dismissWindowMs) { banner.style.display = 'none'; return; }
+    var msg = document.getElementById('license-expired-msg');
+    var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
+    if (msg && expiredPaid) {
+      msg.textContent = t('banners.license_expired_msg', null,
+        'Your license has expired. Renew to keep every runtime.');
+    } else if (msg && endingTrial) {
+      if (days <= 0) {
+        msg.textContent = t('banners.trial_ends_today_msg', null,
+          'Your trial ends today. Upgrade now to keep every runtime — after that, this node drops to the free tier.');
+      } else {
+        msg.textContent = t('banners.trial_ending_msg', { days: days },
+          'Your trial ends in ' + days + ' day' + (days === 1 ? '' : 's') + '. Upgrade to keep every runtime.');
+      }
+    }
+    // Hide the paste-a-key link when the selfhost modal is not on this page.
+    var haveKey = document.getElementById('license-expired-have-key');
+    if (haveKey && !window.shmShowLicense) haveKey.style.display = 'none';
+    banner.style.display = 'flex';
+  } catch (e) {
+    // Transient failure: never surface a network blip as a paywall.
+  }
+}
+setTimeout(checkLicenseExpiry, 1200);
+// ─────────────────────────────────────────────────────────────────────────
+// cm-fileview — GitHub-style file viewer (Skills + Memory file browsers).
+//
+// Shows the file the way an editor would: raw source, monospace, line-number
+// gutter, nothing reflowed. Markdown files get a Preview toggle instead of
+// being rendered by default (auto-rendering turned YAML frontmatter into a
+// giant heading and hid the real file). Also: soft-wrap toggle, copy-whole-file
+// button, and a full-screen mode for long reads. All text is selectable; the
+// gutter is user-select:none so copying a range yields clean source.
+// ─────────────────────────────────────────────────────────────────────────
+
+var _cmFileViews = {};   // hostId -> {name, path, content, language, meta[], mode, wrap, fs}
+
+function _cmFvIsMarkdown(lang, name) {
+  if (lang && /^(markdown|md|mdx)$/i.test(lang)) return true;
+  return /\.(md|markdown|mdx)$/i.test(name || '');
+}
+
+// Split a leading YAML frontmatter block off a markdown file so Preview can
+// show it as metadata instead of letting `---` become an <hr> and the keys
+// become body prose.
+function _cmFvSplitFrontmatter(text) {
+  var m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(\r?\n|$)/.exec(text || '');
+  if (!m) return { fm: '', body: text || '' };
+  return { fm: m[1], body: (text || '').slice(m[0].length) };
+}
+
+function _cmFvFrontmatterHtml(fm) {
+  if (!fm) return '';
+  var rows = fm.split(/\r?\n/).map(function(line) {
+    var kv = /^([A-Za-z0-9_.\-]+):[ \t]*(.*)$/.exec(line);
+    return kv ? '<b>' + escHtml(kv[1]) + ':</b> ' + escHtml(kv[2]) : escHtml(line);
+  });
+  return '<div class="cm-fv-fm">' + rows.join('<br>') + '</div>';
+}
+
+// One row per source line keeps numbers aligned even with soft-wrap on, and
+// makes a multi-line selection copy back with real newlines.
+function _cmFvCodeHtml(text, wrap) {
+  var src = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+  var lines = src.split('\n');
+  if (lines.length > 8000) {
+    // Very large file — skip the per-line DOM and fall back to one <pre>.
+    return '<pre class="cm-fv-plain">' + escHtml(src) + '</pre>';
+  }
+  var gutter = String(lines.length).length;
+  var rows = lines.map(function(line, i) {
+    return '<div class="cm-fv-row"><span class="cm-fv-ln">' + (i + 1) + '</span>'
+      + '<span class="cm-fv-lc">' + escHtml(line) + '</span></div>';
+  }).join('');
+  return '<div class="cm-fv-code' + (wrap ? ' cm-fv-wrap' : '')
+    + '" style="--cm-ln-w:' + gutter + 'ch;">' + rows + '</div>';
+}
+
+// Placeholder / loading / error states share the host so the panel never
+// collapses between files.
+function cmFileViewerPlaceholder(hostId, msg, isError) {
+  var host = document.getElementById(hostId);
+  if (!host) return;
+  host.classList.add('cm-fileview');
+  host.innerHTML = '<div class="cm-fv-empty"' + (isError ? ' style="color:#ef4444;"' : '') + '>'
+    + escHtml(msg) + '</div>';
+}
+
+// file: {name, path, content, language, meta:[strings]}
+function cmFileViewerOpen(hostId, file) {
+  var prev = _cmFileViews[hostId] || {};
+  var isMd = _cmFvIsMarkdown(file.language, file.name || file.path);
+  _cmFileViews[hostId] = {
+    name: file.name || file.path || '(file)',
+    path: file.path || file.name || '',
+    content: file.content == null ? '' : String(file.content),
+    language: file.language || 'text',
+    meta: file.meta || [],
+    // Remember the user's Code/Preview choice across files when it applies.
+    mode: (prev.mode === 'preview' && isMd) ? 'preview' : 'code',
+    wrap: !!prev.wrap,
+    fs: !!prev.fs
+  };
+  cmFileViewerRender(hostId);
+}
+
+function cmFileViewerRender(hostId) {
+  var host = document.getElementById(hostId);
+  var s = _cmFileViews[hostId];
+  if (!host || !s) return;
+  host.classList.add('cm-fileview');
+  if (s.fs) host.classList.add('cm-fileview-fs');
+  else host.classList.remove('cm-fileview-fs');
+
+  var isMd = _cmFvIsMarkdown(s.language, s.name);
+  if (!isMd && s.mode === 'preview') s.mode = 'code';
+  var hid = String(hostId).replace(/'/g, "\\'");
+
+  var meta = '<span class="cm-fv-name" title="' + escHtml(s.path) + '">' + escHtml(s.name) + '</span>';
+  (s.meta || []).forEach(function(bit) {
+    if (!bit) return;
+    meta += '<span style="opacity:0.45;">·</span><span>' + escHtml(bit) + '</span>';
+  });
+
+  var tools = '';
+  if (isMd) {
+    tools += '<span class="cm-fv-seg">'
+      + '<button class="cm-fv-btn' + (s.mode === 'code' ? ' active' : '') + '" '
+      + 'onclick="cmFvSetMode(\'' + hid + '\',\'code\')" title="Raw file source">Code</button>'
+      + '<button class="cm-fv-btn' + (s.mode === 'preview' ? ' active' : '') + '" '
+      + 'onclick="cmFvSetMode(\'' + hid + '\',\'preview\')" title="Rendered markdown">Preview</button>'
+      + '</span>';
+  }
+  if (s.mode === 'code') {
+    tools += '<button class="cm-fv-btn' + (s.wrap ? ' active' : '') + '" '
+      + 'onclick="cmFvToggleWrap(\'' + hid + '\')" title="Soft-wrap long lines">Wrap</button>';
+  }
+  tools += '<button class="cm-fv-btn" onclick="cmFvCopy(\'' + hid + '\',this)" '
+    + 'title="Copy the whole file">⧉ Copy</button>';
+  tools += '<button class="cm-fv-btn" onclick="cmFvToggleFullscreen(\'' + hid + '\')" title="'
+    + (s.fs ? 'Exit full screen (Esc)' : 'Full screen') + '">'
+    + (s.fs ? '✕ Exit full screen' : '⤡ Full screen') + '</button>';
+
+  var body;
+  if (s.mode === 'preview') {
+    var split = _cmFvSplitFrontmatter(s.content);
+    body = '<div class="cm-fv-preview mem-prose">' + _cmFvFrontmatterHtml(split.fm)
+      + cmSafeMarkdown(split.body) + '</div>';
+  } else {
+    body = _cmFvCodeHtml(s.content, s.wrap);
+  }
+
+  host.innerHTML =
+    '<div class="cm-fv-head"><div class="cm-fv-meta">' + meta + '</div>'
+    + '<div class="cm-fv-tools">' + tools + '</div></div>'
+    + '<div class="cm-fv-body">' + body + '</div>';
+}
+
+function cmFvSetMode(hostId, mode) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  s.mode = mode;
+  cmFileViewerRender(hostId);
+}
+
+function cmFvToggleWrap(hostId) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  s.wrap = !s.wrap;
+  cmFileViewerRender(hostId);
+}
+
+function _cmFvLegacyCopy(text) {
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+
+function cmFvCopy(hostId, btn) {
+  var s = _cmFileViews[hostId];
+  if (!s) return;
+  var done = function(ok) {
+    if (!btn) return;
+    var old = btn.innerHTML;
+    btn.innerHTML = ok ? '✓ Copied' : 'Copy failed';
+    setTimeout(function() { btn.innerHTML = old; }, 1400);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(s.content).then(
+        function() { done(true); },
+        function() { done(_cmFvLegacyCopy(s.content)); });
+      return;
+    }
+  } catch (e) {}
+  done(_cmFvLegacyCopy(s.content));
+}
+
+// Full screen moves the host to <body> rather than relying on position:fixed
+// inside the panel — an ancestor with a transform would otherwise trap it.
+function cmFvToggleFullscreen(hostId) {
+  var host = document.getElementById(hostId);
+  var s = _cmFileViews[hostId];
+  if (!host || !s) return;
+  s.fs = !s.fs;
+  if (s.fs) {
+    host._cmFvHome = host.parentNode;
+    host._cmFvNext = host.nextSibling;
+    document.body.appendChild(host);
+    document.body.style.overflow = 'hidden';
+  } else {
+    if (host._cmFvHome) {
+      host._cmFvHome.insertBefore(host, host._cmFvNext || null);
+      host._cmFvHome = null;
+      host._cmFvNext = null;
+    }
+    document.body.style.overflow = '';
+  }
+  cmFileViewerRender(hostId);
+  try { _cmRtFitHeight(); } catch (e) {}
+}
+
+// Same full-screen trick for panels that aren't cm-fileview hosts (the
+// OpenClaw Memory IDE surface, which keeps its own edit toolbar).
+var _cmFsPanels = [];
+
+function cmPanelToggleFullscreen(panel, btn) {
+  if (!panel) return;
+  var on = !panel.classList.contains('cm-panel-fs');
+  if (on) {
+    panel._cmFsHome = panel.parentNode;
+    panel._cmFsNext = panel.nextSibling;
+    panel._cmFsHeight = panel.style.height;
+    document.body.appendChild(panel);
+    panel.classList.add('cm-panel-fs');
+    document.body.style.overflow = 'hidden';
+    if (_cmFsPanels.indexOf(panel) === -1) _cmFsPanels.push(panel);
+  } else {
+    panel.classList.remove('cm-panel-fs');
+    if (panel._cmFsHome) {
+      panel._cmFsHome.insertBefore(panel, panel._cmFsNext || null);
+      panel._cmFsHome = null;
+      panel._cmFsNext = null;
+    }
+    panel.style.height = panel._cmFsHeight || '';
+    document.body.style.overflow = '';
+    _cmFsPanels = _cmFsPanels.filter(function(p) { return p !== panel; });
+  }
+  if (btn) {
+    var label = btn.querySelector('span');
+    if (label) label.textContent = on ? 'Exit full screen' : 'Full screen';
+  }
+}
+
+function memIdeToggleFullscreen(btn) {
+  cmPanelToggleFullscreen(document.querySelector('#memory-summary-view .mem-ide'), btn);
+}
+
+function memIdeCopy(btn) {
+  var text = _selfconfigOriginal || '';
+  var done = function(ok) {
+    if (!btn) return;
+    var old = btn.innerHTML;
+    btn.innerHTML = ok ? '✓ Copied' : 'Copy failed';
+    setTimeout(function() { btn.innerHTML = old; }, 1400);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(
+        function() { done(true); },
+        function() { done(_cmFvLegacyCopy(text)); });
+      return;
+    }
+  } catch (e) {}
+  done(_cmFvLegacyCopy(text));
+}
+
+// Esc leaves full screen from anywhere.
+(function _cmFvInstallEsc() {
+  if (window._cmFvEscInstalled) return;
+  window._cmFvEscInstalled = true;
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key !== 'Escape') return;
+    Object.keys(_cmFileViews).forEach(function(hostId) {
+      if (_cmFileViews[hostId] && _cmFileViews[hostId].fs) cmFvToggleFullscreen(hostId);
+    });
+    _cmFsPanels.slice().forEach(function(panel) { cmPanelToggleFullscreen(panel, null); });
+  });
+})();
+
+// ─────────────────────────────────────────────────────────────────────────
+// Runtime Memory & Skills browser (multi-runtime file explorer).
+//
+// Each supported runtime stores its long-lived memory and its skills in
+// different places on disk (see clawmetry/runtime_memory.py). This module
+// renders a file-browser view (left tree, right preview) for whichever
+// runtime the GLOBAL runtime switcher is on.
+//
+// There is deliberately no per-tab runtime picker. An earlier cut shipped a
+// chip bar inside each tab, which meant three runtime selectors on screen at
+// once (header dropdown, nav dropdown, chip bar) that could disagree with
+// each other. The global switcher is the only runtime control; these tabs
+// read it via _cmRuntimeFilter() and re-render from switchTab() when it
+// changes.
+//
+// Scope rules:
+//   'openclaw'  → the rich native Memory/Skills UI (edit + history), because
+//                 OpenClaw is the one runtime we can write back to.
+//   'all'       → every entitled runtime's files, grouped by runtime.
+//   <other>     → that runtime's files only.
+// ─────────────────────────────────────────────────────────────────────────
+
+var _cmRuntimeCatalog = null;
+
+// Which runtime each tab is currently RENDERING. Mirrors the global filter;
+// kept per-tab only so a re-entrant switchTab() can skip a redundant fetch.
+var _cmRuntimeSelected = { memory: 'all', skills: 'all' };
+
+// The global runtime switcher's value, normalised for these two tabs.
+function _cmRuntimeScopeForTab() {
+  var rt = 'all';
+  try { if (typeof _cmRuntimeFilter === 'function') rt = _cmRuntimeFilter() || 'all'; } catch (e) {}
+  return rt || 'all';
+}
+
+function _cmRuntimeIsCloud() {
+  try {
+    return typeof window !== 'undefined' && window.location &&
+           /clawmetry\.com/.test(window.location.hostname);
+  } catch (e) { return false; }
+}
+
+async function _cmRuntimeFetchCatalog(force) {
+  if (_cmRuntimeCatalog && !force) return _cmRuntimeCatalog;
+  try {
+    var r = await fetch('/api/runtimes/memory-catalog');
+    if (!r.ok) throw new Error('http ' + r.status);
+    _cmRuntimeCatalog = await r.json();
+  } catch (e) {
+    _cmRuntimeCatalog = { categories: [], runtimes: [] };
+  }
+  return _cmRuntimeCatalog;
+}
+
+function _cmRuntimeIcon(id) {
+  var map = {
+    openclaw: '🦀', claude_code: '🅲', codex: '🅾', cursor: '🅲',
+    antigravity: '🅶', aider: '🅐', goose: '🪿', opencode: '🅾',
+    qwen_code: '🅠', copilot: '🅶🅓', nemoclaw: '🅝', hermes: '🅗',
+    picoclaw: '🪳', nanoclaw: '🐜', pi: '𝛑', deepagents: '🅳',
+    n8n: '🅽', grok: '🅶', grok_bot: '🤖', deepseek_harness: '🐋', qm: '🅠', exo: '🦾',
+    lovable: '💗',
+    kimi: '🌙',
+    devin: '🅓',
+    gemini_cli: '♊',
+    cline: '🖇',
+    openhands: '🙌',
+  };
+  return map[id] || '•';
+}
+
+// Native (OpenClaw-only) view containers per tab. Shown when the global
+// runtime switcher is on 'openclaw'; hidden otherwise so the file browser
+// owns the surface.
+var _CM_RT_NATIVE_VIEWS = {
+  memory: ['memory-summary-view', 'memory-access-view', 'memory-all-view'],
+  skills: ['skills-summary-row', 'skills-list', 'skills-browser'],
+};
+// Which of those come back on when we return to OpenClaw. memorySwitchView /
+// the Skills grid toggle own the rest.
+var _CM_RT_NATIVE_DEFAULT = {
+  memory: { 'memory-summary-view': 1 },
+  skills: { 'skills-summary-row': 1, 'skills-list': 1 },
+};
+
+// Render one tab for the runtime the global switcher is on. Called from
+// switchTab(), which _cmOnGlobalRuntimeChange() re-invokes on every switcher
+// change — so this is the single place the two tabs react to runtime scope.
+function cmRuntimeSelect(tab, runtimeId) {
+  if (!runtimeId) runtimeId = _cmRuntimeScopeForTab();
+  _cmRuntimeSelected[tab] = runtimeId;
+  var browser = document.getElementById(tab + '-runtime-browser');
+  var native = _CM_RT_NATIVE_VIEWS[tab] || [];
+  var defaults = _CM_RT_NATIVE_DEFAULT[tab] || {};
+  // Controls that only drive the OpenClaw-native view (Memory's
+  // Summary / All files / Access log switch, the Skills Grid button). They
+  // do nothing to the file browser, so showing them over it is a dead control.
+  var nativeCtl = (tab === 'memory')
+    ? document.querySelectorAll('#page-memory .mem-view-tab')
+    : document.querySelectorAll('#page-skills .refresh-btn[onclick*="skills-browser"]');
+  if (runtimeId === 'openclaw') {
+    native.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el && defaults[id]) el.style.display = '';
+    });
+    nativeCtl.forEach(function(el) { el.style.display = ''; });
+    if (browser) browser.style.display = 'none';
+    return;
+  }
+  native.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  nativeCtl.forEach(function(el) { el.style.display = 'none'; });
+  if (browser) {
+    browser.style.display = '';
+    cmRuntimeMountBrowser(browser, runtimeId, tab);
+  }
+}
+
+// Row label for one file in the runtime tree.
+//
+// Naming a row by its basename is fine for `no-em-dashes.md` and useless for
+// the container filenames every runtime reuses — a Skills tree rendered as
+// thirty identical "SKILL.md" rows tells you nothing. For those, name the row
+// after the directory that actually identifies it (the skill folder, the
+// project folder), dropping the structural segments in between.
+var _CM_RT_GENERIC_FILE = {
+  'SKILL.md': 1, 'MEMORY.md': 1, 'CLAUDE.md': 1, 'AGENTS.md': 1,
+  'GEMINI.md': 1, 'README.md': 1, 'index.md': 1, 'settings.json': 1,
+};
+var _CM_RT_GENERIC_DIR = {
+  skills: 1, memory: 1, plugins: 1, external_plugins: 1, marketplaces: 1,
+  commands: 1, agents: 1, hooks: 1, '.claude': 1, '.agents': 1,
+};
+// The disambiguator is a PREFIX, never a replacement: dropping the filename
+// left rows in the live Memory tab reading "-Users-vivek--openclaw-workspace"
+// with no MEMORY.md anywhere on them, next to sibling rows that did show a
+// filename. Keep the base and lead with the folder that identifies it, so
+// every row still names a file.
+function _cmRtDisplayName(rel, fallback) {
+  var segs = String(rel || '').split('/').filter(Boolean);
+  if (!segs.length) return fallback || '(file)';
+  var base = segs[segs.length - 1];
+  if (!_CM_RT_GENERIC_FILE[base]) return base;
+  var parts = segs.slice(0, -1).filter(function(s) { return !_CM_RT_GENERIC_DIR[s]; });
+  if (!parts.length) return base;
+  return parts.slice(-1)[0] + '/' + base;
+}
+
+async function cmRuntimeMountBrowser(container, runtimeId, tab) {
+  if (!container) return;
+  var scopeLabel = (runtimeId === 'all')
+    ? 'all runtimes'
+    : ((typeof _cmRuntimeLabel === 'function' ? _cmRuntimeLabel(runtimeId) : runtimeId) || runtimeId);
+  container.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:12px;">Loading '
+    + escHtml(scopeLabel) + '…</div>';
+  var payload;
+  // Memory owns the `memory` bucket; Skills owns the other four — skills,
+  // slash commands, sub-agent definitions and hooks are all "things the agent
+  // can invoke or is configured by". Without this split the two tabs rendered
+  // byte-identical trees (every category), which is what made Skills look
+  // like a copy of Memory; splitting Skills down to `skills` alone would
+  // instead leave commands/agents/hooks collected but displayed nowhere.
+  var category = (tab === 'skills') ? 'skills,commands,agents,hooks' : 'memory';
+  // What to CALL that set in copy. The tab name, not the raw filter — a
+  // header reading "skills,commands,agents,hooks" is an implementation detail.
+  var catWord = (tab === 'skills') ? 'skills' : 'memory';
+  try {
+    if (typeof window._cmCloudRuntimeFiles === 'function') {
+      // Cloud: the container has no runtime home dirs, so /api/runtimes/*
+      // would list nothing. The cloud dashboard installs this override,
+      // which decrypts the heartbeat file snapshot client-side and slices
+      // out (runtime, category). Contract: {pending:true} on cache miss,
+      // {needkey:true} with no stored E2E key, else the /files shape with
+      // per-file `content` inline (there is no per-file cloud endpoint).
+      payload = await window._cmCloudRuntimeFiles(runtimeId, category);
+      if (payload && payload.pending) {
+        var tries = (container._cmRtPollTries || 0);
+        if (tries < 8) {
+          container._cmRtPollTries = tries + 1;
+          container.innerHTML =
+            '<div style="padding:60px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;">'
+            + '<div style="font-size:28px;margin-bottom:10px;">🔄</div>'
+            + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:4px;">Syncing files from your machine…</div>'
+            + 'Your agent pushes its memory &amp; skills files on the next heartbeat.<br>This usually takes under a minute.</div>';
+          setTimeout(function() {
+            if (container.style.display !== 'none' && _cmRuntimeSelected[tab] === runtimeId) {
+              cmRuntimeMountBrowser(container, runtimeId, tab);
+            }
+          }, 12000);
+          return;
+        }
+        container.innerHTML =
+          '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;">'
+          + 'No file snapshot from this node yet. Make sure the ClawMetry daemon is running '
+          + '(<code>clawmetry status</code>) and up to date, then check back.</div>';
+        return;
+      }
+      container._cmRtPollTries = 0;
+      if (payload && payload.needkey) {
+        if (typeof window._cmRenderKeyPrompt === 'function') {
+          window._cmRenderKeyPrompt(container);
+        } else {
+          container.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:13px;">'
+            + 'Files are end-to-end encrypted. Open the Memory tab to enter your secret key.</div>';
+        }
+        return;
+      }
+    } else {
+    var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files'
+      + '?category=' + encodeURIComponent(category);
+    var r = await fetch(url);
+    if (r.status === 402) {
+      // Paid runtime the caller isn't entitled to. Show upsell CTA
+      // instead of an error — matches the OSS conversion-moment pattern.
+      var rtLabel = (_cmRuntimeCatalog && _cmRuntimeCatalog.runtimes || [])
+        .filter(function(x) { return x.id === runtimeId; })[0];
+      var label = (rtLabel && rtLabel.label) || runtimeId;
+      container.innerHTML =
+        '<div style="padding:36px 20px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.55;max-width:520px;margin:0 auto;">'
+        + '<div style="font-size:28px;margin-bottom:8px;">🔒</div>'
+        + '<div style="font-weight:700;color:var(--text-primary);margin-bottom:6px;font-size:15px;">' + escHtml(label) + ' is a paid runtime</div>'
+        + 'Upgrade your ClawMetry plan to browse this runtime\'s memory and skills files. '
+        + 'Everything ClawMetry knows about ' + escHtml(label) + ' — including where its memory lives on disk — is bundled with the paid tier that ships its adapter.'
+        + '<div style="margin-top:16px;"><a href="https://clawmetry.com/pricing" target="_blank" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-weight:600;font-size:13px;">See pricing</a></div>'
+        + '</div>';
+      return;
+    }
+    if (!r.ok) throw new Error('http ' + r.status);
+    payload = await r.json();
+    }
+  } catch (e) {
+    container.innerHTML = '<div style="padding:16px;color:#ef4444;font-size:12px;">Failed to load: '
+      + escHtml(String(e)) + '</div>';
+    return;
+  }
+  var groups = (payload.groups || []).filter(function(g) { return g.exists; });
+  var absent = (payload.groups || []).filter(function(g) { return !g.exists; });
+  var totalFiles = groups.reduce(function(s, g) { return s + (g.files || []).length; }, 0);
+
+  if (!groups.length) {
+    var emptyHead = (runtimeId === 'all')
+      ? 'No ' + catWord + ' files found for any runtime'
+      : 'No ' + catWord + ' files found for ' + escHtml(payload.label || scopeLabel);
+    var pathList = absent.map(function(g) {
+      return '<div>• <span style="color:var(--text-secondary);">' + escHtml(g.label || g.category)
+        + '</span> <span style="opacity:0.7;">(' + escHtml(g.scope) + ')</span> — <code>' + escHtml(g.root) + '</code></div>';
+    }).join('');
+    // A catalog `note` explains a deliberately empty entry (QM keeps
+    // everything in Postgres — there are no on-disk files to list).
+    var noteHtml = payload.note
+      ? '<div style="margin-bottom:10px;font-size:12px;color:var(--text-secondary);max-width:460px;margin-left:auto;margin-right:auto;">'
+        + escHtml(payload.note) + '</div>'
+      : '';
+    container.innerHTML =
+      '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.5;">'
+      + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:6px;">' + emptyHead + '</div>'
+      + noteHtml
+      + (pathList
+          ? ('ClawMetry looked here:'
+             + '<div style="margin-top:12px;text-align:left;display:inline-block;font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:11px;color:var(--text-muted);">'
+             + pathList + '</div>'
+             + '<div style="margin-top:14px;font-size:11px;">Drop files at one of these paths to make them appear here.</div>')
+          : '<div style="margin-top:8px;font-size:12px;">Pick a specific runtime in the runtime switcher to see the exact paths ClawMetry checks for it.</div>')
+      + '</div>';
+    return;
+  }
+
+  // Build the two-pane layout: left tree, right preview.
+  var treeHtml = groups.map(function(g, gi) {
+    var scopePill = '<span style="font-size:9px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;padding:0 5px;margin-left:6px;color:var(--text-muted);">'
+      + escHtml(g.scope) + '</span>';
+    // The tab already names the category, so the only pill worth the room is
+    // which runtime a group came from — and only when we're showing several.
+    var rtPill = (runtimeId === 'all' && g.runtime_label)
+      ? ('<span style="font-size:9px;background:rgba(99,102,241,0.15);color:#a5b4fc;border-radius:8px;padding:0 5px;margin-left:4px;">'
+         + escHtml(g.runtime_label) + '</span>')
+      : '';
+    var files = (g.files || []).map(function(f, fi) {
+      var name = f.path || g.label || '(file)';
+      var basename = _cmRtDisplayName(f.path, g.label);
+      // Cap the depth indent — plugin skills nest 5+ deep and an uncapped
+      // indent pushed the name clean out of a 320px column.
+      var indent = Math.min((name.split('/').length - 1) * 12, 24);
+      var kb = f.size >= 1024 ? (f.size / 1024).toFixed(1) + 'K' : f.size + 'B';
+      return '<div class="cm-rt-file" data-gi="' + gi + '" data-fi="' + fi
+        + '" onclick="cmRuntimeOpenFile(this,'
+        + gi + ',' + fi + ')" style="padding:3px 10px 3px ' + (18 + indent) + 'px;font-size:11.5px;cursor:pointer;color:var(--text-primary);display:flex;justify-content:space-between;align-items:center;gap:8px;" '
+        + 'title="' + escHtml(name) + '">'
+        + '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(basename) + '</span>'
+        + '<span style="font-size:10px;color:var(--text-muted);flex-shrink:0;">' + kb + '</span>'
+        + '</div>';
+    }).join('');
+    return '<div class="cm-rt-group" style="margin-bottom:8px;">'
+      + '<div style="padding:6px 10px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);display:flex;align-items:center;flex-wrap:wrap;">'
+      + escHtml(g.label) + rtPill + scopePill + '</div>'
+      + '<div style="font-family:\'JetBrains Mono\',\'SF Mono\',monospace;font-size:10px;color:var(--text-muted);padding:0 10px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(g.root) + '">' + escHtml(g.root) + '</div>'
+      + files + '</div>';
+  }).join('');
+
+  container.innerHTML =
+    '<div class="cm-rt-panel" style="display:flex;height:calc(100vh - 260px);min-height:420px;background:var(--bg-primary);border:1px solid var(--border-primary);border-radius:8px;overflow:hidden;">'
+    + '<div id="cm-rt-tree-' + tab + '" style="width:320px;min-width:260px;flex-shrink:0;background:var(--bg-secondary);border-right:1px solid var(--border-primary);overflow-y:auto;padding:8px 0;">'
+    + '<div style="padding:8px 10px 10px;font-size:11px;color:var(--text-muted);border-bottom:1px solid var(--border-primary);margin-bottom:8px;">'
+    + escHtml(payload.label || scopeLabel) + ' · ' + catWord + ' — ' + totalFiles + ' file' + (totalFiles === 1 ? '' : 's') + ' across ' + groups.length + ' location' + (groups.length === 1 ? '' : 's')
+    + '</div>' + treeHtml + '</div>'
+    + '<div id="cm-rt-view-' + tab + '" class="cm-fileview">'
+    + '<div class="cm-fv-empty">Pick a file on the left to view its contents.</div>'
+    + '</div></div>';
+
+  // Stash the payload on the container so cmRuntimeOpenFile can look up
+  // (root, path) by (gi, fi) without another fetch.
+  //
+  // `groups` — the EXISTS-ONLY list — is what the tree was indexed over, so
+  // that is what has to be stashed. Stashing payload.groups (which also holds
+  // the roots we looked at and didn't find) shifted every gi: on a runtime
+  // whose first roots are absent, clicking file 0 resolved to an absent group,
+  // found no files, and returned silently. That was the "clicking a file does
+  // nothing" bug — it only ever worked when every root happened to exist.
+  container._cmRuntimePayload = {
+    runtime: payload.runtime,
+    label: payload.label,
+    groups: groups,
+  };
+  _cmRtFitHeight();
+}
+
+// Grow the browser panels into whatever vertical room is actually left below
+// them. The fixed `calc(100vh - 260px)` guessed wrong the moment a banner
+// appeared (dead space under the panel, or a panel running off-screen), so
+// measure the panel's real top instead. Re-measured on resize.
+function _cmRtFitHeight() {
+  try {
+    document.querySelectorAll('.cm-rt-panel').forEach(function(panel) {
+      if (!panel.offsetParent) return;              // hidden tab — skip
+      var top = panel.getBoundingClientRect().top;
+      if (top <= 0) return;
+      panel.style.height = Math.max(380, Math.round(window.innerHeight - top - 18)) + 'px';
+    });
+  } catch (e) {}
+}
+
+(function _cmRtInstallResizeFit() {
+  if (window._cmRtFitInstalled) return;
+  window._cmRtFitInstalled = true;
+  var timer = null;
+  window.addEventListener('resize', function() {
+    clearTimeout(timer);
+    timer = setTimeout(_cmRtFitHeight, 80);
+  });
+})();
+
+async function cmRuntimeOpenFile(clickEl, gi, fi) {
+  var container = clickEl.closest('.runtime-file-browser');
+  if (!container || !container._cmRuntimePayload) return;
+  var tab = container.getAttribute('data-tab') || 'memory';
+  var groups = container._cmRuntimePayload.groups || [];
+  var group = groups[gi];
+  if (!group) return;
+  var file = (group.files || [])[fi];
+  if (!file) return;
+  // Read against the group's OWN runtime, not the tab's scope: under the
+  // "All runtimes" scope the tab's runtime is the literal 'all', which is a
+  // list-only sentinel and 404s on the single-file read endpoint.
+  var runtimeId = group.runtime || container._cmRuntimePayload.runtime || 'openclaw';
+
+  // Highlight selection
+  container.querySelectorAll('.cm-rt-file').forEach(function(el) {
+    el.style.background = ''; el.style.color = 'var(--text-primary)';
+  });
+  clickEl.style.background = 'rgba(99,102,241,0.15)';
+  clickEl.style.color = '#a5b4fc';
+
+  var hostId = 'cm-rt-view-' + tab;
+  cmFileViewerPlaceholder(hostId, 'Loading ' + (file.path || group.label || 'file') + '…');
+
+  try {
+    var d;
+    if (typeof file.content === 'string') {
+      // Cloud: contents ship inline in the decrypted heartbeat snapshot —
+      // there is no per-file cloud endpoint to fetch from.
+      var lang = /\.(md|mdc|markdown)$/i.test(file.path || group.root || '') ? 'markdown' : 'text';
+      d = { content: file.content, size: file.size, mtime: file.mtime, language: lang };
+    } else {
+      var url = '/api/runtimes/' + encodeURIComponent(runtimeId)
+        + '/file?root=' + encodeURIComponent(group.root)
+        + '&path=' + encodeURIComponent(file.path || '');
+      var r = await fetch(url);
+      d = await r.json();
+      if (!r.ok) throw new Error(d.error || ('http ' + r.status));
+    }
+    var content = d.content || '';
+    var sizeStr = (d.size >= 1024 ? (d.size / 1024).toFixed(1) + 'K' : d.size + 'B');
+    var mstr = d.mtime ? new Date(d.mtime * 1000).toLocaleString() : '';
+    // Raw source by default — auto-rendering markdown reflowed the file into
+    // prose (YAML frontmatter became a giant heading) and there was no way
+    // back to what the file actually says. Preview is one click away.
+    cmFileViewerOpen(hostId, {
+      name: file.path || group.label || '',
+      path: group.root + '/' + (file.path || ''),
+      content: content,
+      language: d.language || 'text',
+      meta: [sizeStr, mstr, d.language || 'text']
+    });
+  } catch (e) {
+    cmFileViewerPlaceholder(hostId, 'Failed to load: '
+      + String(e && e.message || e), true);
+  }
+}
+
+// Hook into tab switches so the browser renders on first paint AND whenever
+// the global runtime switcher changes — _cmOnGlobalRuntimeChange() re-invokes
+// switchTab() for the current tab, so this one hook covers both.
+(function _cmRuntimeInstallHooks() {
+  var origSwitchTab = (typeof switchTab === 'function') ? switchTab : null;
+  if (!origSwitchTab || origSwitchTab._cmRuntimeWrapped) return;
+  var wrapped = function(name) {
+    var out = origSwitchTab.apply(this, arguments);
+    try {
+      if (name === 'memory' || name === 'skills') {
+        cmRuntimeSelect(name, _cmRuntimeScopeForTab());
+      }
+    } catch (e) {}
+    return out;
+  };
+  wrapped._cmRuntimeWrapped = true;
+  window.switchTab = wrapped;
+})();
+
+// ═══════════════════════════════════════════════════════════════════════
+// Runtime-aware replay tree — skeleton (#4813 part 3)
+// ═══════════════════════════════════════════════════════════════════════
+// Fetches /api/replay-tree/<sid> and renders the nested runtime-aware
+// view (mode chip, workflow lane, turn chapters with inline delegations,
+// approvals rail). Dormant until adapter mappers land — when the tree
+// returns row_count=0 the caller falls back to the flat _replayRenderCurrent
+// path (no dead UI per FLYWHEEL §0a.4).
+//
+// Wire-up into openTranscriptModal happens in #4814 (mode + approvals)
+// once there's real data to render. For now the skeleton is reachable
+// via window._debugReplayTree(sessionId) for manual verification during
+// per-runtime mapper development.
+(function _cmReplayTree() {
+  'use strict';
+
+  async function fetchReplayTree(sessionId) {
+    var url = '/api/replay-tree/' + encodeURIComponent(sessionId);
+    var r = await fetch(url, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error('replay-tree ' + r.status);
+    return await r.json();
+  }
+
+  function _escape(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+    });
+  }
+
+  // Runtime dispatcher — mirrors the pattern at app.js:16729 (Harness tab
+  // templates). Each runtime can register a per-kind override; unknown
+  // runtimes fall through to the neutral renderer.
+  var _KIND_RENDERERS = {};   // key = runtime + ':' + kind, value = fn(ev) -> html
+  function registerKindRenderer(runtime, kind, fn) {
+    _KIND_RENDERERS[runtime + ':' + kind] = fn;
+  }
+  function _renderEvent(ev, runtime) {
+    var custom = _KIND_RENDERERS[(runtime || ev.runtime) + ':' + ev.kind];
+    if (typeof custom === 'function') return custom(ev);
+    // Neutral fallback — one line per event, prefix by kind.
+    var kindLabel = _escape(ev.kind || 'event');
+    var body = '';
+    if (ev.payload && typeof ev.payload === 'object') {
+      body = _escape(JSON.stringify(ev.payload).slice(0, 200));
+    }
+    return '<div class="replay-tree-event replay-tree-kind-' +
+           _escape((ev.kind || '').split('.')[0]) + '">' +
+           '<span class="replay-tree-kind">' + kindLabel + '</span>' +
+           (body ? '<span class="replay-tree-body">' + body + '</span>' : '') +
+           '</div>';
+  }
+
+  function _renderDelegations(delegations, runtime, depth) {
+    depth = depth || 1;
+    if (!delegations || !delegations.length) return '';
+    var html = '<div class="replay-tree-delegations" data-depth="' + depth + '">';
+    for (var i = 0; i < delegations.length; i++) {
+      var d = delegations[i];
+      html += '<details class="replay-tree-delegation" open>';
+      html += '<summary>↳ delegated span ' + _escape(d.span_id) + '</summary>';
+      for (var j = 0; j < (d.events || []).length; j++) {
+        html += _renderEvent(d.events[j], runtime);
+      }
+      // Nested delegations render recursively — arbitrary depth (issue
+      // #4815 Claude Code Task nesting stresses this).
+      html += _renderDelegations(d.delegations, runtime, depth + 1);
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function _renderTurn(turn, runtime) {
+    var html = '<section class="replay-tree-turn" data-turn-id="' +
+               _escape(turn.turn_id) + '">';
+    // Approvals rail summary badge on the turn header.
+    var approvalCount = (turn.approvals || []).length;
+    var deniedCount = (turn.approvals || []).filter(function(a) {
+      return a.approval && a.approval.status === 'denied';
+    }).length;
+    var badges = '';
+    if (approvalCount) {
+      badges += ' <span class="replay-tree-badge approvals" title="' +
+                approvalCount + ' approvals (' + deniedCount + ' denied)">' +
+                '✓' + approvalCount + (deniedCount ? ' ✗' + deniedCount : '') +
+                '</span>';
+    }
+    html += '<header class="replay-tree-turn-header">' +
+            '<span class="replay-tree-turn-id">turn ' + _escape(turn.turn_id) + '</span>' +
+            badges + '</header>';
+    // Events (llm.*, tool.*, thinking, mode.changed, compaction).
+    for (var i = 0; i < (turn.events || []).length; i++) {
+      html += _renderEvent(turn.events[i], runtime);
+    }
+    // Inline delegations under the turn that spawned them.
+    html += _renderDelegations(turn.delegations, runtime, 1);
+    html += '</section>';
+    return html;
+  }
+
+  function _renderModeChip(mode) {
+    if (!mode || !mode.permission) return '';
+    var isYolo = mode.permission === 'bypassPermissions' || mode.permission === 'yolo';
+    return '<div class="replay-tree-mode-chip" data-yolo="' +
+           (isYolo ? '1' : '0') + '" title="sandbox: ' +
+           _escape(mode.sandbox || 'unknown') + '">' +
+           _escape(mode.permission) + '</div>';
+  }
+
+  function _renderWorkflows(workflows, runtime) {
+    if (!workflows || !workflows.length) return '';
+    var html = '<div class="replay-tree-workflows">';
+    for (var i = 0; i < workflows.length; i++) {
+      var wf = workflows[i];
+      html += '<details class="replay-tree-workflow" open>';
+      html += '<summary>⚙ workflow ' + _escape(wf.span_id) + ' (' +
+              (wf.events || []).length + ' stages)</summary>';
+      for (var j = 0; j < (wf.events || []).length; j++) {
+        html += _renderEvent(wf.events[j], runtime);
+      }
+      html += '</details>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderTree(tree, mountEl) {
+    if (!mountEl) return false;
+    if (!tree || !tree.row_count) {
+      // Honest empty state — caller falls back to the flat renderer.
+      mountEl.innerHTML = '';
+      return false;
+    }
+    var html = '<div class="replay-tree" data-runtime="' +
+               _escape(tree.runtime || 'unknown') + '">';
+    html += _renderModeChip(tree.mode);
+    html += _renderWorkflows(tree.workflows, tree.runtime);
+    for (var i = 0; i < (tree.turns || []).length; i++) {
+      html += _renderTurn(tree.turns[i], tree.runtime);
+    }
+    html += '</div>';
+    mountEl.innerHTML = html;
+    return true;
+  }
+
+  async function debugReplayTree(sessionId) {
+    // Manual verification hook — creates a floating panel with the
+    // rendered tree. Adapter authors call this to visualize their
+    // iter_replay_events output during development.
+    var panel = document.getElementById('_replay-tree-debug-panel');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.id = '_replay-tree-debug-panel';
+      panel.style.cssText = 'position:fixed;top:20px;right:20px;width:600px;' +
+        'max-height:80vh;overflow:auto;background:var(--bg-elevated,#111);' +
+        'color:var(--text,#eee);border:1px solid var(--border,#444);padding:12px;' +
+        'z-index:10000;font-family:monospace;font-size:12px;';
+      var close = document.createElement('button');
+      close.textContent = '×';
+      close.style.cssText = 'position:absolute;top:4px;right:8px;background:none;color:inherit;border:none;font-size:20px;cursor:pointer;';
+      close.onclick = function() { panel.remove(); };
+      panel.appendChild(close);
+      document.body.appendChild(panel);
+    }
+    panel.innerHTML = '<div>Fetching /api/replay-tree/' +
+                      _escape(sessionId) + ' …</div>';
+    try {
+      var tree = await fetchReplayTree(sessionId);
+      var mount = document.createElement('div');
+      panel.appendChild(mount);
+      var rendered = renderTree(tree, mount);
+      if (!rendered) {
+        mount.innerHTML = '<div style="color:var(--text-muted,#888);padding:16px;">' +
+          'Empty tree — no replay_events for this session yet. ' +
+          'Adapter mappers land in #4815 (Claude Code), #4816 (OpenClaw), ' +
+          'and 13 Pro adapter issues.</div>';
+      }
+    } catch (e) {
+      panel.innerHTML += '<div style="color:#f66;">error: ' +
+                        _escape(String(e)) + '</div>';
+    }
+  }
+
+  // Public surface — small, so #4814 and per-runtime mappers can extend.
+  window._cmReplayTree = {
+    fetchReplayTree: fetchReplayTree,
+    renderTree: renderTree,
+    registerKindRenderer: registerKindRenderer,
+  };
+  window._debugReplayTree = debugReplayTree;
+})();
+
+// =====================================================================
+// BENCH — Harness Engineering tab (routes/bench.py; clawmetry/harness_bench.py)
+// Verdict stamps + $/done crew cards, follow-a-job flow trace, context lanes,
+// workload recommendations, published third-party pairs. Every cell carries
+// its coverage state; a harness we cannot see is never ranked (REQ-HB-001/2).
+// ============================================================================
+(function () {
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function usd(v) {
+    if (v == null || isNaN(v)) return null;
+    return '$' + Number(v).toFixed(2);
+  }
+  var RT_LABEL = function (rt) {
+    try {
+      if (typeof _CM_RT_LABEL === 'object' && _CM_RT_LABEL[rt]) return _CM_RT_LABEL[rt];
+    } catch (e) {}
+    return rt;
+  };
+  var STAMPS = {
+    earning: 'Earning it', burning: 'Burning it',
+    coasting: 'Coasting', cant_see: "Can't see"
+  };
+  var MARK_WORDS = {
+    context: 'keeps its head clear', model_use: 'picks the right brain',
+    subagents: 'shares the work', delegation: 'knows what can wait',
+    completion: 'finishes the job'
+  };
+  var PROFILE_WORDS = {
+    coding: 'Heavy coding', chat_automation: 'Message automation',
+    scheduled_background: 'Scheduled and background',
+    research_long_horizon: 'Research and long-horizon', general: 'General work'
+  };
+
+  function benchEmpty(msg) {
+    var empty = document.getElementById('bench-empty');
+    var body = document.getElementById('bench-body');
+    if (!empty || !body) return;
+    empty.hidden = false; body.hidden = true;
+    empty.innerHTML = '<div class="bench-card bench-empty-card">' + esc(msg) + '</div>';
+  }
+
+  function benchWatchFooter(s) {
+    var dpd = (s.dollars_per_done || {}).value;
+    if (dpd == null) return '';
+    if (window.CLOUD_MODE) {
+      return '<div class="bench-cfoot"><button class="bench-btn" disabled>Watch $/done</button>' +
+        '<span class="bench-whydisabled">watching runs on your node, not the hosted view</span></div>';
+    }
+    var suggested = Math.max(1, Math.round(dpd * 1.5));
+    return '<div class="bench-cfoot"><button class="bench-btn" id="bench-watch-' + esc(s.runtime) + '"' +
+      ' onclick="_benchWatch(&quot;' + esc(s.runtime) + '&quot;,' + suggested + ')">Watch $/done</button>' +
+      '<span class="bench-whydisabled">alerts if a finished job starts costing over ' + esc(usd(suggested)) + '</span></div>';
+  }
+
+  window._benchWatch = async function (runtime, threshold) {
+    var btn = document.getElementById('bench-watch-' + runtime);
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving watch...'; }
+    var r = await fetch('/api/alerts/rules', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        alert_type: 'dollars_per_done_above', runtime: runtime,
+        threshold_value: threshold, channels: ['banner'],
+        name: 'Watch $/done · ' + runtime
+      })
+    }).catch(function () { return null; });
+    if (btn) {
+      if (r && r.ok) {
+        btn.textContent = 'Watching (over ' + usd(threshold) + ')';
+      } else {
+        var msg = 'could not save';
+        try { var j = r ? await r.json() : null; if (j && (j.error || j.message)) msg = j.error || j.message; } catch (e) {}
+        btn.disabled = false; btn.textContent = 'Watch $/done';
+        btn.insertAdjacentHTML('afterend', ' <span class="bench-whydisabled">' + esc(msg).slice(0, 120) + '</span>');
+      }
+    }
+  };
+
+  window._benchCheaper = async function (runtime, slotId) {
+    var slot = document.getElementById(slotId);
+    if (!slot) return;
+    slot.innerHTML = '<span class="bench-faint">checking...</span>';
+    if (window.CLOUD_MODE) {
+      slot.innerHTML = '<span class="bench-faint">cheaper-model advice computes on your node; open the local dashboard</span>';
+      return;
+    }
+    var r = await fetch('/api/efficiency/routing-advisor?days=30').catch(function () { return null; });
+    var d = r && r.ok ? await r.json().catch(function () { return null; }) : null;
+    var scope = d && ((d.byRuntime || {})[runtime] || d.node) || null;
+    var sugg = (scope && scope.suggestions) || [];
+    if (!sugg.length) {
+      slot.innerHTML = '<span class="bench-faint">no cheaper-model swap found for this work right now</span>';
+      return;
+    }
+    slot.innerHTML = sugg.slice(0, 2).map(function (g) {
+      return '<div class="bench-say">' + esc(g.current_model) + ' to ' + esc(g.suggested_model) +
+        ' could save about ' + esc(usd(g.potential_savings_monthly_usd)) + '/mo. Apply via routing rules in ~/.clawmetry/proxy.json.</div>';
+    }).join('');
+  };
+
+  function renderVerdict(bench) {
+    var by = bench.byRuntime || {};
+    var earning = [], burning = [], fog = [];
+    Object.keys(by).forEach(function (rt) {
+      var s = by[rt];
+      if (s.stamp === 'earning') earning.push(RT_LABEL(rt));
+      else if (s.stamp === 'burning') burning.push(RT_LABEL(rt));
+      else if (s.stamp === 'cant_see') fog.push(RT_LABEL(rt));
+    });
+    var parts = [];
+    if (earning.length) parts.push('<span class="bench-v-good">' + esc(earning.join(' and ')) + (earning.length > 1 ? ' are' : ' is') + ' earning it.</span>');
+    if (burning.length) parts.push('<span class="bench-v-bad">' + esc(burning.join(' and ')) + (burning.length > 1 ? ' are' : ' is') + ' burning it.</span>');
+    if (fog.length) parts.push('<span class="bench-v-fog">' + esc(fog.join(' and ')) + (fog.length > 1 ? ' work' : ' works') + " with the door closed, so we won't judge " + (fog.length > 1 ? 'them' : 'it') + '.</span>');
+    var el = document.getElementById('bench-verdict');
+    if (el) el.innerHTML = parts.length ? 'For your work: ' + parts.join(' ') : 'Not enough observed work to hand down a verdict yet.';
+  }
+
+  function markChips(marks) {
+    return Object.keys(MARK_WORDS).map(function (k) {
+      var m = (marks || {})[k] || {};
+      var cls = m.verdict === 'strong' ? 'strong' : (m.verdict === 'weak' ? 'weak' : 'unseen');
+      var note = m.note ? ' title="' + esc(m.note) + '"' : '';
+      return '<span class="bench-mark ' + cls + '"' + note + '><i></i>' + esc(MARK_WORDS[k]) + '</span>';
+    }).join('');
+  }
+
+  function crewCard(s) {
+    var stamp = '<span class="bench-stamp ' + esc(s.stamp) + '">' + esc(STAMPS[s.stamp] || s.stamp) + '</span>';
+    var dpd = s.dollars_per_done || {};
+    var money;
+    if (dpd.value != null) {
+      var band = dpd.band ? (' <span class="bench-band">' + esc(usd(dpd.band[0])) + ' to ' + esc(usd(dpd.band[1])) + '</span>') : '';
+      money = '<span class="bench-big">' + esc(usd(dpd.value)) + '</span><span class="bench-unit">/ finished job</span>' + band +
+              ' <span class="bench-band">' + dpd.n_measurable + ' runs</span>';
+    } else if (s.stamp === 'cant_see') {
+      money = '<span class="bench-nodata">completion not verifiable from what this harness records</span>';
+    } else {
+      money = '<span class="bench-nodata">not enough runs (' + (dpd.n_measurable || 0) + ' of ' + (window._benchMin || 12) + ' needed)</span>';
+    }
+    var burn = '';
+    if (s.failed_spend_share != null) {
+      var pct = Math.round(s.failed_spend_share * 100);
+      burn = '<div class="bench-burnbar"><i style="width:' + (100 - pct) + '%"></i><b style="width:' + pct + '%"></b></div>' +
+             '<div class="bench-burncap">' + pct + '% of its spend went into runs that produced nothing</div>';
+    }
+    return '<div class="bench-ccard' + (s.stamp === 'cant_see' ? ' ghost' : '') + '">' +
+      '<div class="bench-chead"><span class="bench-cname">' + esc(RT_LABEL(s.runtime)) + '</span>' + stamp + '</div>' +
+      '<div class="bench-money">' + money + '</div>' + burn +
+      '<div class="bench-marks">' + markChips(s.marks) + '</div>' +
+      (s.stamp_reason ? '<div class="bench-say">' + esc(s.stamp_reason) + '</div>' : '') +
+      '<div class="bench-say bench-faint">' + s.sessions + ' sessions · ' + esc(usd(s.spend_usd) || '$0.00') + ' in the window' +
+      (s.coverage && s.coverage.unmeasured_sessions ? ' · ' + s.coverage.unmeasured_sessions + ' not gradeable' : '') + '</div>' +
+      benchWatchFooter(s) +
+      '</div>';
+  }
+
+  function renderCrew(bench) {
+    var el = document.getElementById('bench-crew');
+    if (!el) return;
+    var by = bench.byRuntime || {};
+    var html = (bench.ranked || []).map(function (rt) { return crewCard(by[rt]); }).join('');
+    var un = (bench.unranked || []).filter(function (rt) { return by[rt]; });
+    if (un.length) {
+      html += '<div class="bench-divider">unranked · completion below this line is not verifiable or not yet priced</div>';
+      html += un.map(function (rt) { return crewCard(by[rt]); }).join('');
+    }
+    el.innerHTML = html || '<div class="bench-say">No harness activity observed in this window.</div>';
+  }
+
+
+  function renderHeadToHead(h2h) {
+    var el = document.getElementById('bench-h2h');
+    if (!el) return;
+    var matchups = (h2h && h2h.matchups) || [];
+    if (!matchups.length) {
+      el.innerHTML = '<div class="bench-say bench-faint">No comparable cohorts yet: comparing needs two harnesses with ' +
+        ((h2h && h2h.matchups && h2h.min_cohort) || 5) + '+ verified runs on the same kind of work. Honest silence beats an unfair chart.</div>';
+      return;
+    }
+    el.innerHTML = matchups.map(function (m) {
+      var rows = [
+        ['Finished jobs', function (s) { return s.done_rate == null ? 'unseen' : Math.round(s.done_rate * 100) + '%'; }],
+        ['Cost per finished job', function (s) { return s.dollars_per_done == null ? 'not priced' : usd(s.dollars_per_done); }],
+        ['Cost per run', function (s) { return usd(s.avg_cost_usd); }],
+        ['Rough runs (loops, thrash)', function (s) { return s.rough_rate == null ? 'unseen' : Math.round(s.rough_rate * 100) + '%'; }],
+        ['Tokens per run', function (s) { return s.avg_tokens == null ? 'unseen' : Number(s.avg_tokens).toLocaleString(); }],
+        ['Verified runs', function (s) { return String(s.sessions); }]
+      ];
+      var head = '<tr><th></th>' + m.sides.map(function (s) { return '<th>' + esc(RT_LABEL(s.runtime)) + '</th>'; }).join('') + '</tr>';
+      var body = rows.map(function (r) {
+        return '<tr><td>' + esc(r[0]) + '</td>' + m.sides.map(function (s) { return '<td>' + esc(r[1](s)) + '</td>'; }).join('') + '</tr>';
+      }).join('');
+      var title = m.basis === 'workspace'
+        ? esc(m.workspace) : esc(PROFILE_WORDS[m.profile] || m.profile);
+      var scopeNote = m.basis === 'workspace'
+        ? 'same workspace, measurable runs only' : 'same workload, measurable runs only';
+      return '<div class="bench-lane"><div class="bench-lanehead"><b>' + title + '</b> ' +
+        '<span class="bench-faint">' + scopeNote + '</span></div>' +
+        '<div style="overflow-x:auto"><table class="bench-labt bench-h2ht">' + head + body + '</table></div></div>';
+    }).join('');
+  }
+
+  function renderFlow(trace) {
+    var el = document.getElementById('bench-flow');
+    if (!el) return;
+    if (!trace || !trace.available) {
+      el.innerHTML = '<div class="bench-say">Pick up a session once one is observed; the flow view draws only recorded events.</div>';
+      return;
+    }
+    var live = trace.live ? '<span class="bench-live"><i></i>LIVE</span>' : '';
+    var head = '<div class="bench-flowhead"><b>' + esc(RT_LABEL(trace.runtime)) + '</b> · session ' +
+      esc(String(trace.session_id).slice(-8)) + ' ' + live +
+      ' <span class="bench-faint">' + trace.event_count + ' recorded events</span></div>';
+    var groups = { model: [], tool: [], subagent: [], deferred: [] };
+    var reply = null;
+    (trace.stations || []).forEach(function (st) {
+      if (groups[st.type]) groups[st.type].push(st);
+      if (st.type === 'reply') reply = st;
+    });
+    function stationBox(st) {
+      var label, sub;
+      if (st.type === 'model') { label = st.model; sub = st.turns + ' turns' + (st.cost_usd ? ' · ' + usd(st.cost_usd) : ''); }
+      else if (st.type === 'tool') { label = st.tool; sub = st.calls + ' calls' + (st.errors ? ' · ' + st.errors + ' errors' : ''); }
+      else if (st.type === 'subagent') { label = 'Subagent ' + (st.label || st.id || ''); sub = (st.status || '') + (st.cost_usd ? ' · ' + usd(st.cost_usd) : ''); }
+      else { label = 'Deferred ' + (st.label || ''); sub = st.status || 'scheduled'; }
+      return '<div class="bench-station' + (st.type === 'subagent' && st.status === 'running' ? ' live' : '') + '">' +
+        '<div class="bench-st-title">' + esc(label) + '</div><div class="bench-st-sub">' + esc(sub) + '</div></div>';
+    }
+    var cols = '<div class="bench-flowgrid">' +
+      '<div class="bench-flowcol"><div class="bench-station"><div class="bench-st-title">Message in</div><div class="bench-st-sub">observed origin</div></div>' +
+      '<div class="bench-station"><div class="bench-st-title">' + esc(RT_LABEL(trace.runtime)) + '</div><div class="bench-st-sub">the session</div></div></div>' +
+      '<div class="bench-flowcol">' + ['model', 'tool', 'subagent', 'deferred'].map(function (t) {
+        var list = groups[t].slice();
+        if (t === 'tool') list.sort(function (a, b) { return (b.calls || 0) - (a.calls || 0); });
+        var extra = list.length > 8 ? '<div class="bench-say bench-faint">and ' + (list.length - 8) + ' more tools</div>' : '';
+        return list.slice(0, 8).map(stationBox).join('') + extra;
+      }).join('') + '</div>' +
+      '<div class="bench-flowcol">' + (reply ? '<div class="bench-station"><div class="bench-st-title">Reply</div><div class="bench-st-sub">' +
+        (reply.latency_secs != null ? reply.latency_secs + 's end to end' : 'observed') + '</div></div>' : '') + '</div></div>';
+    var fog = (trace.unobserved || []).map(function (u) { return esc(u.type); }).join(', ');
+    var fogNote = fog ? '<div class="bench-say bench-faint">Not observed for this session: ' + fog + '. Unseen is unseen, never guessed.</div>' : '';
+    el.innerHTML = head + cols + fogNote;
+  }
+
+  function laneSvg(curve) {
+    var pts = curve.points || [];
+    if (!pts.length) return '';
+    var W = 420, H = 130, L = 30, R = 6, T = 22, B = 18;
+    var pw = W - L - R, ph = H - T - B;
+    function X(i) { return L + (pts.length === 1 ? 0 : i / (pts.length - 1) * pw); }
+    function Y(p) { return T + (1 - Math.max(0, Math.min(100, p)) / 100) * ph; }
+    var d = 'M' + X(0) + ',' + Y(pts[0].pct);
+    for (var i = 1; i < pts.length; i++) d += ' L' + X(i) + ',' + Y(pts[i].pct);
+    var comp = (curve.compactions || []).length;
+    var flag = curve.overflowed ? ' · overflowed' : (comp ? ' · ' + comp + ' compactions' : '');
+    return '<div class="bench-lane"><div class="bench-lanehead">' + esc(String(curve.session_id).slice(-8)) +
+      ' <span class="bench-faint">peak ' + Math.round(curve.peak_pct) + '%' + esc(flag) + '</span></div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" class="bench-lanesvg">' +
+      '<line x1="' + L + '" y1="' + Y(100) + '" x2="' + (W - R) + '" y2="' + Y(100) + '" stroke="currentColor" stroke-dasharray="3 4" opacity="0.4"></line>' +
+      '<text x="' + (W - R) + '" y="' + (Y(100) - 4) + '" text-anchor="end" font-size="9" fill="currentColor" opacity="0.6">window</text>' +
+      '<path d="' + d + ' L' + X(pts.length - 1) + ',' + Y(0) + ' L' + X(0) + ',' + Y(0) + ' Z" fill="currentColor" opacity="0.10"></path>' +
+      '<path d="' + d + '" fill="none" stroke="currentColor" stroke-width="2"></path>' +
+      '</svg></div>';
+  }
+
+  function renderLanes(cc) {
+    var lanes = document.getElementById('bench-lanes');
+    var minis = document.getElementById('bench-minis');
+    if (lanes) {
+      var curves = (cc && cc.curves) || [];
+      lanes.innerHTML = curves.length
+        ? curves.slice(0, 2).map(laneSvg).join('')
+        : '<div class="bench-say">No context-utilization signal observed yet. Harnesses that do not record prompt sizes show as fog here.</div>';
+    }
+    if (minis) {
+      var by = (cc && cc.byRuntime) || {};
+      minis.innerHTML = Object.keys(by).sort().map(function (rt) {
+        var m = by[rt];
+        var peak = m.median_peak_pct;
+        var bar = peak != null
+          ? '<div class="bench-minibar"><i style="width:' + Math.min(100, Math.round(peak)) + '%"></i></div><span class="bench-faint">median peak ' + Math.round(peak) + '%' + (m.overflows ? ' · ' + m.overflows + ' overflows' : '') + '</span>'
+          : '<span class="bench-faint">no context signal recorded</span>';
+        return '<div class="bench-mini' + (peak == null ? ' ghost' : '') + '"><div class="bench-mininame">' + esc(RT_LABEL(rt)) + '</div>' + bar + '</div>';
+      }).join('');
+    }
+  }
+
+  function renderWork(rec) {
+    var el = document.getElementById('bench-work');
+    if (!el) return;
+    var cards = (rec && rec.cards) || [];
+    el.innerHTML = cards.length ? cards.map(function (c) {
+      var opts = (c.candidates || []).map(function (cand) {
+        var ev;
+        if (cand.evidence === 'measured') ev = 'your ' + usd(cand.dollars_per_done) + '/done';
+        else if (cand.evidence === 'published' && cand.published) {
+          var p = cand.published;
+          ev = 'lab: ' + esc(p.result || '') + ' · ' + esc(p.benchmark || '') + (p.historical ? ' · historical' : '');
+        } else ev = 'observed · not yet priced';
+        return '<div class="bench-opt"><span>' + esc(RT_LABEL(cand.runtime)) + '</span><span class="bench-ev' +
+          (cand.evidence === 'published' ? ' lab' : '') + '">' + ev + '</span></div>';
+      }).join('');
+      var rankNote = c.ranked ? '' : '<div class="bench-say bench-faint">Options are unranked: not enough evidence to order them honestly.</div>';
+      var topRt = (c.candidates && c.candidates[0] && c.candidates[0].runtime) || '';
+      var slotId = 'bench-cheaper-' + c.profile;
+      var cheaper = topRt ? '<div class="bench-cfoot"><button class="bench-btn" onclick="_benchCheaper(&quot;' + esc(topRt) + '&quot;,&quot;' + slotId + '&quot;)">See cheaper options</button></div><div id="' + slotId + '"></div>' : '';
+      return '<div class="bench-wcard"><div class="bench-wname">' + esc(PROFILE_WORDS[c.profile] || c.profile) + '</div>' +
+        '<div class="bench-say bench-faint">' + Math.round((c.spend_share || 0) * 100) + '% of spend</div>' +
+        '<div class="bench-say">Wants: <b>' + (c.qualities || []).map(esc).join('</b>, <b>') + '</b>.</div>' +
+        '<div class="bench-opts">' + opts + '</div>' + rankNote + cheaper + '</div>';
+    }).join('') : '<div class="bench-say">Workload profiles appear once sessions are observed.</div>';
+  }
+
+  function renderLab(pub) {
+    var el = document.getElementById('bench-lab');
+    if (!el) return;
+    var pairs = (pub && pub.pairs) || [];
+    var models = (pub && pub.observed_models) || [];
+    if (!pairs.length) { el.innerHTML = '<div class="bench-say">No published pairs in the shipped catalog.</div>'; return; }
+    var rows = pairs.map(function (p) {
+      var mine = models.indexOf(p.model) >= 0 ? ' class="bench-lab-mine"' : '';
+      return '<tr' + (p.historical ? ' class="stale"' : mine) + '><td>' + esc(RT_LABEL(p.harness)) + ' · ' + esc(p.model) + '</td><td>' +
+        esc(p.benchmark) + '</td><td>' + esc(p.result) + '</td><td>' + esc(p.runner === 'third_party' ? 'third party' : 'vendor') +
+        '</td><td>' + esc((p.result_date || '').slice(0, 7)) + (p.historical ? ' · historical' : '') +
+        '</td><td><a href="' + esc(p.source_url) + '" target="_blank" rel="noopener">source</a></td></tr>';
+    }).join('');
+    el.innerHTML = '<div class="bench-say bench-faint">Results on benchmark tasks, not your work. When they disagree with your bench above, trust the bench.</div>' +
+      '<div style="overflow-x:auto"><table class="bench-labt"><tr><th>Harness + model</th><th>Benchmark</th><th>Result</th><th>Run by</th><th>Date</th><th>Source</th></tr>' + rows + '</table></div>';
+  }
+
+  async function loadBenchTab() {
+    var empty = document.getElementById('bench-empty');
+    var body = document.getElementById('bench-body');
+    if (!empty || !body) return;
+    var r = await fetch('/api/bench?days=30').catch(function () { return null; });
+    if (!r || !r.ok) {
+      benchEmpty('The bench is measured on your node from your own traffic. On the hosted dashboard it fills in from your node\'s encrypted snapshot once the daemon reports; on a local install, start the sync daemon and refresh.');
+      return;
+    }
+    var bench = await r.json().catch(function () { return null; });
+    if (!bench || bench.store_available === false) {
+      benchEmpty('The local store is not reachable, so nothing here would be honest. Start the clawmetry daemon and refresh.');
+      return;
+    }
+    window._benchMin = bench.min_sessions || 12;
+    var by = bench.byRuntime || {};
+    if (!Object.keys(by).length) {
+      benchEmpty('No agent sessions observed in the last ' + (bench.window_days || 30) + ' days. Run some work through a harness and the bench fills in.');
+      return;
+    }
+    empty.hidden = true; body.hidden = false;
+    renderVerdict(bench);
+    renderCrew(bench);
+    var win = document.getElementById('bench-window');
+    if (win) {
+      var total = 0; Object.keys(by).forEach(function (rt) { total += (by[rt].sessions || 0); });
+      win.textContent = 'Measured from your own traffic · last ' + (bench.window_days || 30) + ' days · ' +
+        total + ' sessions across ' + Object.keys(by).length + ' harnesses. Needs ' + (bench.min_sessions || 12) +
+        ' measurable runs to price a job.';
+    }
+    var pubP = fetch('/api/bench/published').then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
+    var ccP = fetch('/api/bench/context-curves').then(function (x) { return x.ok ? x.json() : null; }).catch(function () { return null; });
+    var pub = await pubP, cc = await ccP;
+    renderWork({ cards: bench.recommendations || [] });
+    renderHeadToHead(bench.headtohead);
+    renderLab(pub);
+    renderLanes(cc);
+    var sid = cc && cc.curves && cc.curves.length ? cc.curves[0].session_id : null;
+    if (sid) {
+      var fr = await fetch('/api/bench/flow/' + encodeURIComponent(sid)).catch(function () { return null; });
+      renderFlow(fr && fr.ok ? await fr.json().catch(function () { return null; }) : null);
+    } else {
+      renderFlow(null);
+    }
+  }
+
+  window.loadBenchTab = loadBenchTab;
+})();
+var GUARD_KIND_LABEL = {
+  // Trajectory shape: is this agent stuck?
+  stuck_loop: 'Looping',
+  no_progress: 'Not progressing',
+  repeated_tool_failure: 'Tool failing repeatedly',
+  action_discrepancy: 'Continued after a failure',
+  // Behaviour: is this agent doing something it does not normally do?
+  file_blast_radius: 'Wide or destructive file changes',
+  credential_access: 'Read credentials',
+  network_egress: 'Unusual network destination',
+  privilege_change: 'Privilege change',
+  // Silent failure: it stopped, and nobody was told.
+  rate_limited: 'Rate limited by the provider',
+  blocked_on_user: 'Waiting on you',
+  crashed: 'Crashed and restarted'
+};
+
+// Money first: "$1.20 at risk" is the number that decides what to open next.
+function guardMoney(n) {
+  var v = Number(n) || 0;
+  if (v <= 0) return '';
+  return v < 0.01 ? '<$0.01' : '$' + v.toFixed(2);
+}
+
+function guardSeverityClass(sev) {
+  if (sev === 'critical') return 'pill-danger';
+  if (sev === 'info') return '';
+  return 'pill-warn';
+}
+
+function guardEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+function guardAgo(ts) {
+  if (!ts) return '';
+  var t = new Date(ts).getTime();
+  if (!t || isNaN(t)) return '';
+  var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  return Math.floor(s / 3600) + 'h ago';
+}
+
+function loadGuardTab() {
+  loadGuardSessions();
+  loadGuardPolicies();
+  loadGuardActions();
+  loadGuardNondeterminism();
+  loadGuardSelfReports();
+}
+
+// Honest status line for the second "rogue agent" failure mode (same input,
+// different answer). Measurement is opt-in because it re-runs the user's
+// agent for real money, so the card must say "not measured" until it is.
+function loadGuardNondeterminism() {
+  var el = document.getElementById('guard-nondeterminism-body');
+  if (!el) return;
+  fetch('/api/guard/nondeterminism').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d) { el.textContent = ''; return; }
+    var html = '';
+    if (d.enabled) {
+      html += '<span class="badge badge-ok">Measuring</span> ';
+      if (d.measured_sessions) {
+        html += guardEsc(String(d.measured_sessions)) + ' session' + (d.measured_sessions === 1 ? '' : 's') +
+          ' replayed so far';
+        if (typeof d.mean_agreement_pct === 'number') {
+          html += ', agent agreed with itself ' + guardEsc(String(d.mean_agreement_pct)) + '% of the time';
+        }
+        html += '. ';
+      } else {
+        html += 'No failed session has been replayed yet. ';
+      }
+    } else {
+      html += '<span class="badge">Not measured</span> ';
+    }
+    html += '<span class="section-sub" style="margin:0">' + guardEsc(d.note || '') + '</span>';
+    el.innerHTML = html;
+  }).catch(function () { el.textContent = ''; });
+}
+
+// ── Agent self-reports (WO-59) ────────────────────────────────────────────
+// Category chips share one label table so the Guard card and the transcript
+// panel say the same thing.
+var SELFREPORT_CATEGORY_LABEL = {
+  missing_context: 'Missing context',
+  repeatedly_broken_tool: 'Tool kept failing',
+  capability_gap: 'Capability gap',
+  task_failure: 'Task not finished',
+  bypassed_block: 'Worked around a block',
+  noteworthy: 'Noteworthy'
+};
+var SELFREPORT_UNCORROBORATED_HINT =
+  'No independent evidence was found for this report. That is not the same as false.';
+
+function selfReportCategoryLabel(cat) {
+  if (SELFREPORT_CATEGORY_LABEL[cat]) return SELFREPORT_CATEGORY_LABEL[cat];
+  return String(cat || 'unknown').replace(/_/g, ' ');
+}
+
+function selfReportWhen(ms) {
+  var n = Number(ms) || 0;
+  if (!n) return '';
+  try { return new Date(n).toLocaleString(); } catch (e) { return ''; }
+}
+
+function selfReportCorroborationChip(r) {
+  if (r && r.corroborated) {
+    return '<span class="pill pill-ok" title="' + guardEsc('Independent evidence: ' + (r.corroboration_ref || '')) + '">Corroborated</span>';
+  }
+  return '<span class="pill" title="' + guardEsc(SELFREPORT_UNCORROBORATED_HINT) + '">Uncorroborated</span>';
+}
+
+function loadGuardSelfReports() {
+  var el = document.getElementById('guard-selfreports-body');
+  if (!el) return;
+  var winEl = document.getElementById('guard-selfreports-window');
+  if (window.CLOUD_MODE) {
+    el.innerHTML = '<div class="empty-state">Agent reports are read from the local store. They reach the hosted dashboard with a later cloud release.</div>';
+    return;
+  }
+  var rt = '';
+  try { rt = (typeof _cmRuntimeFilter === 'function') ? String(_cmRuntimeFilter() || '') : ''; } catch (e) { rt = ''; }
+  if (rt === 'all') rt = '';
+  var qs = '?window=7d' + (rt ? '&runtime=' + encodeURIComponent(rt) : '');
+  Promise.all([
+    fetch('/api/self-reports/honesty' + qs).then(function (r) { return r.json(); }),
+    fetch('/api/self-reports/support').then(function (r) { return r.json(); }).catch(function () { return null; })
+  ]).then(function (res) {
+    var d = res[0] || {};
+    var support = (res[1] && res[1].runtimes) || [];
+    if (winEl) winEl.textContent = 'last 7 days' + (rt ? ' on ' + rt : ', all runtimes');
+    var counts = d.counts || {};
+    var honesty = d.honesty || [];
+    var runtimes = Object.keys(counts).sort();
+    var html = '';
+
+    // Runtime-scoped honesty about MCP support comes first: a runtime that
+    // cannot register the server must say so, not show an empty table.
+    if (rt) {
+      var row = null;
+      support.forEach(function (s) { if (s.runtime === rt) row = s; });
+      if (row && row.mcp === 'not_supported') {
+        html += '<div class="empty-state">' + guardEsc(rt) + ' has no MCP support, so it cannot send reports. ' + guardEsc(row.detail || '') + '</div>';
+      } else if (row && row.mcp === 'unknown') {
+        html += '<div class="empty-state">ClawMetry has not verified where ' + guardEsc(rt) + ' keeps its MCP configuration. Register the server by hand to receive reports.</div>';
+      } else if (row && row.status !== 'registered' && row.status !== 'already_present') {
+        html += '<div class="empty-state">The ClawMetry MCP server is not registered with ' + guardEsc(rt) + ' yet. Run <code>clawmetry mcp install --runtime ' + guardEsc(rt) + '</code>.</div>';
+      }
+    } else {
+      var registered = support.filter(function (s) { return s.status === 'registered' || s.status === 'already_present'; });
+      var supported = support.filter(function (s) { return s.mcp === 'supported'; });
+      if (!registered.length && supported.length) {
+        html += '<div class="empty-state">No runtime has the ClawMetry MCP server registered yet, so agents cannot send reports. Run <code>clawmetry mcp install</code> (' + supported.map(function (s) { return guardEsc(s.label || s.runtime); }).join(', ') + ').</div>';
+      }
+    }
+
+    if (!runtimes.length) {
+      html += '<div class="empty-state">No agent reports in the last 7 days' + (rt ? ' from ' + guardEsc(rt) : '') + '.</div>';
+    } else {
+      var cats = {};
+      runtimes.forEach(function (r) { Object.keys(counts[r] || {}).forEach(function (c) { cats[c] = 1; }); });
+      var catList = Object.keys(cats).sort();
+      html += '<table class="data-table"><thead><tr><th>Runtime</th>' +
+        catList.map(function (c) { return '<th>' + guardEsc(selfReportCategoryLabel(c)) + '</th>'; }).join('') +
+        '<th>Total</th></tr></thead><tbody>';
+      runtimes.forEach(function (r) {
+        var total = 0;
+        var cells = catList.map(function (c) {
+          var n = Number((counts[r] || {})[c]) || 0; total += n;
+          return '<td>' + (n || '<span class="muted">0</span>') + '</td>';
+        }).join('');
+        html += '<tr><td>' + guardEsc(r) + '</td>' + cells + '<td>' + total + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    html += '<div style="margin-top:10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-muted);">Honesty: detector findings the agent also reported</div>';
+    if (!honesty.length) {
+      html += '<div class="empty-state">No detector findings in this window, so there is nothing to compare reports against yet.</div>';
+    } else {
+      html += '<table class="data-table"><thead><tr><th>Runtime</th><th>Model</th><th>Findings</th><th>Reported</th><th>Share</th></tr></thead><tbody>';
+      honesty.forEach(function (h) {
+        var share;
+        if (h.withheld || h.honesty === null || h.honesty === undefined) {
+          share = '<span class="muted" title="' + guardEsc(h.reason || '') + '">Withheld: ' + guardEsc(h.reason || 'too few findings') + '</span>';
+        } else {
+          share = Math.round(Number(h.honesty) * 100) + '%';
+        }
+        html += '<tr><td>' + guardEsc(h.runtime) + '</td><td>' + guardEsc(h.model || 'unknown') + '</td>' +
+          '<td>' + (Number(h.incidents) || 0) + '</td><td>' + (Number(h.reported) || 0) + '</td><td>' + share + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    el.innerHTML = html;
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load agent reports.</div>';
+  });
+}
+
+// Transcript view: the notes this session's agent sent, in time order.
+async function _loadSelfReportsPanel(sessionId) {
+  var panel = document.getElementById('selfreports-panel');
+  var body = document.getElementById('selfreports-panel-body');
+  var sumEl = document.getElementById('selfreports-panel-summary');
+  if (!panel || !body) return;
+  panel.style.display = 'none';
+  if (window.CLOUD_MODE) return;  // local-store view; hosted copy comes with the snapshot slice
+  try {
+    var d = await fetch('/api/self-reports?session=' + encodeURIComponent(sessionId) + '&limit=200')
+      .then(function (r) { return r.json(); });
+    if (!d || d.error) return;
+    var rows = (d.reports || []).slice().sort(function (a, b) { return (Number(a.ts) || 0) - (Number(b.ts) || 0); });
+    panel.style.display = '';
+    if (!rows.length) {
+      if (sumEl) sumEl.textContent = 'none';
+      body.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:6px 0;">The agent sent no notes for this session. Reports need the ClawMetry MCP server registered with the runtime (clawmetry mcp install).</div>';
+      return;
+    }
+    var corroborated = rows.filter(function (r) { return r.corroborated; }).length;
+    if (sumEl) sumEl.textContent = rows.length + ' note' + (rows.length === 1 ? '' : 's') + ' · ' + corroborated + ' corroborated';
+    var html = '<div style="font-size:11px;color:var(--text-muted);margin:4px 0 8px;">' + escHtml(SELFREPORT_UNCORROBORATED_HINT) + '</div>';
+    rows.forEach(function (r) {
+      html += '<div style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--border-secondary);">' +
+        '<span style="font-size:10px;color:var(--text-muted);white-space:nowrap;min-width:120px;">' + escHtml(selfReportWhen(r.ts)) + '</span>' +
+        '<span class="pill" style="white-space:nowrap;">' + escHtml(selfReportCategoryLabel(r.category)) + '</span>' +
+        '<span style="flex:1;font-size:12px;color:var(--text-primary);">' + escHtml(r.summary_redacted || '') + '</span>' +
+        selfReportCorroborationChip(r) +
+        '</div>';
+    });
+    body.innerHTML = html;
+  } catch (e) { /* the panel is optional decoration on the transcript */ }
+}
+
+function loadGuardSessions() {
+  var el = document.getElementById('guard-sessions-body');
+  if (!el) return;
+  fetch('/api/guard/sessions').then(function (r) { return r.json(); }).then(function (d) {
+    var rows = (d && d.sessions) || [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-state">No sessions running right now.</div>';
+      guardSetBadge(0);
+      return;
+    }
+    var flagged = 0;
+    var atRisk = document.getElementById('guard-at-risk');
+    if (atRisk) {
+      var total = Number(d && d.spend_at_risk_usd) || 0;
+      atRisk.textContent = total > 0
+        ? guardMoney(total) + ' at risk across ' + (d.flagged || 0) + ' flagged session' + ((d.flagged === 1) ? '' : 's')
+        : '';
+    }
+    var html = '<table class="data-table"><thead><tr>' +
+      '<th>Session</th><th>Runtime</th><th>Status</th><th>At risk</th><th>Cost</th><th>Last active</th><th>Control</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (s) {
+      var inc = s.incident;
+      if (inc) flagged++;
+      // The store's `status` column is only as fresh as the last sync cycle, so
+      // a session the operator killed a second ago still reads "running" there.
+      // The live capability probe knows better: `exited` means this runtime CAN
+      // be signalled and this session has no process left. Printing "Running"
+      // next to a greyed-out control was the tab contradicting itself.
+      var exited = (s.control_state === 'exited');
+      var statusCell;
+      if (exited) {
+        statusCell = '<span class="pill" title="' +
+          guardEsc(s.control_reason || 'No live process for this session on this node.') +
+          '">Stopped</span>';
+        // The detector finding still happened; it is history now, not a state.
+        if (inc) {
+          statusCell += ' <span class="muted" title="' + guardEsc(inc.detail || '') + '">&middot; ' +
+            guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') + '</span>';
+        }
+      } else if (inc) {
+        statusCell = '<span class="pill ' + guardSeverityClass(inc.severity) + '" title="' + guardEsc(inc.detail || '') + '">' +
+          guardEsc(GUARD_KIND_LABEL[inc.kind] || inc.kind || 'flagged') +
+          (inc.count ? ' &middot; ' + inc.count : '') + '</span>';
+      } else {
+        statusCell = '<span class="pill pill-ok">Running</span>';
+      }
+      // Listed from the live process probe, so it can be stopped now, but the
+      // sync daemon has not read its transcript yet. Say that rather than let
+      // the blank cost and missing detector status read as "nothing to see".
+      if (!inc && s.pending_ingest) {
+        statusCell += ' <span class="muted" title="This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.">&middot; just started</span>';
+      }
+      // The estimate says what it is: a burn-rate figure and a
+      // window-fraction figure are not the same kind of number, and the
+      // tooltip is where that distinction lives instead of being hidden.
+      var riskCell = '<span class="muted">&mdash;</span>';
+      if (inc && Number(inc.spend_at_risk_usd) > 0) {
+        var basis = inc.spend_basis === 'burn_rate'
+          ? 'Estimated from this session\'s burn rate over the time it has been off track.'
+          : (inc.spend_basis === 'window_fraction'
+             ? 'Rough estimate: session cost apportioned to the flagged part of the window.'
+             : 'Basis unknown.');
+        riskCell = '<span title="' + guardEsc(basis) + '">' +
+          guardMoney(inc.spend_at_risk_usd) + '</span>';
+      }
+
+      var control;
+      if (!s.controllable) {
+        // A stopped agent's next question is "how do I get back in?", so answer
+        // that instead of restating what ClawMetry cannot do. Where no resume
+        // path is known the old honest label still stands.
+        control = guardResumeCell(s);
+      } else {
+        // Store session fields in data-attributes so onclick handlers read
+        // them after HTML parsing — HTML entity encoding alone is insufficient
+        // in a JS string context (the browser decodes entities before evaluating
+        // the JS, so guardEsc("'") -> &#39; -> ' still breaks out of the string).
+        var dataSid = ' data-sid="' + guardEsc(s.session_id) + '" data-rt="' + guardEsc(s.runtime || '') + '" data-cwd="' + guardEsc(s.cwd || '') + '"';
+        // Which buttons this SESSION supports, answered by the server. Older
+        // builds only sent no_pause, so fall back to that rather than
+        // rendering nothing at all.
+        var allowed = s.control_actions;
+        if (!allowed || !allowed.length) {
+          allowed = s.no_pause ? ['stop', 'kill'] : ['pause', 'stop', 'kill'];
+        }
+        // A control that behaves differently here (OpenClaw's proxy-backed
+        // pause, the Windows console-wide Ctrl+C) explains itself on hover.
+        var noteAttr = s.control_note ? ' title="' + guardEsc(s.control_note) + '"' : '';
+        control = '';
+        if (allowed.indexOf('pause') >= 0) {
+          control += '<button class="btn btn-xs"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'pause\')">Pause</button> ';
+        }
+        if (allowed.indexOf('stop') >= 0) {
+          control += '<button class="btn btn-xs"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'stop\')">Stop</button> ';
+        }
+        if (allowed.indexOf('kill') >= 0) {
+          control += '<button class="btn btn-xs btn-danger"' + noteAttr + dataSid + ' onclick="guardControl(this.dataset.sid,this.dataset.rt,this.dataset.cwd,\'kill\')">Kill</button>';
+        }
+        // Pause is unavailable but the reason is worth reading (no proxy).
+        if (allowed.indexOf('pause') < 0 && s.control_note) {
+          control += ' <span class="muted" title="' + guardEsc(s.control_note) + '">no pause</span>';
+        }
+      }
+
+      html += '<tr><td title="' + guardEsc(s.session_id) + '">' +
+        guardEsc((s.title || s.session_id || '').slice(0, 48)) + '</td>' +
+        '<td>' + guardEsc(s.runtime) + '</td>' +
+        '<td>' + statusCell + '</td>' +
+        '<td>' + riskCell + '</td>' +
+        '<td>' + (s.pending_ingest
+          ? '<span class="muted" title="Not measured yet - the sync daemon has not read this session\'s transcript.">&mdash;</span>'
+          : '$' + (Number(s.cost_usd) || 0).toFixed(2)) + '</td>' +
+        '<td>' + guardEsc(guardAgo(s.last_active_at)) + '</td>' +
+        '<td>' + control + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+    guardSetBadge(flagged);
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load sessions.</div>';
+  });
+}
+
+// What to put in the Control column when nothing here can signal the session.
+//
+// Three shapes, because there are three different truths (see
+// clawmetry/resume_hints.py):
+//   command  a real command line -> show it, and offer one click to copy it
+//   app      no command line exists -> say where the conversation reopens
+//   unknown  we have not verified one -> the old honest label, plus the reason
+// A fabricated command would be the worst of the three: the operator pastes
+// it, it fails, and the whole tab stops being believable.
+function guardResumeCell(s) {
+  var r = s.resume || {};
+  var reason = s.control_reason || '';
+  if (r.kind === 'command' && r.command) {
+    var tip = r.command;
+    if (r.note) tip += '\n\n' + r.note;
+    if (r.source) tip += '\n\nVerified: ' + r.source;
+    return '<span class="guard-resume" title="' + guardEsc(tip) + '">' +
+      '<code>' + guardEsc(r.command) + '</code>' +
+      '<button class="btn btn-xs" data-cmd="' + guardEsc(r.command) +
+      '" onclick="guardCopyResume(this)">Copy</button></span>';
+  }
+  if (r.kind === 'app' && r.note) {
+    return '<span class="muted guard-resume-note" title="' +
+      guardEsc(reason || r.note) + '">' + guardEsc(r.note) + '</span>';
+  }
+  return '<span class="muted" title="' + guardEsc(reason) + '">Not controllable</span>' +
+    (r.note ? ' <span class="muted guard-resume-note">' + guardEsc(r.note) + '</span>' : '');
+}
+
+// Copy the resume command. Reads it from the data-attribute rather than a JS
+// string literal in the markup, for the same reason the control buttons do:
+// entity encoding is decoded before the JS is evaluated, so it is no defence.
+function guardCopyResume(btn) {
+  var cmd = btn && btn.dataset ? (btn.dataset.cmd || '') : '';
+  if (!cmd) return;
+  function done() {
+    var old = btn.textContent;
+    btn.textContent = t("app.copied", null, "Copied");
+    setTimeout(function () { btn.textContent = old || 'Copy'; }, 1200);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(cmd).then(done).catch(function () {});
+    return;
+  }
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = cmd;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    done();
+  } catch (e) {}
+}
+
+// 300 -> "5m". Used wherever a ladder delay is shown.
+function guardHumanSecs(n) {
+  n = Math.max(0, Number(n) || 0);
+  if (n < 60) return n + 's';
+  if (n < 3600) return Math.round(n / 60) + 'm';
+  return Math.round(n / 3600) + 'h';
+}
+
+function guardSetBadge(n) {
+  var b = document.getElementById('nav-guard-badge');
+  if (!b) return;
+  if (n > 0) { b.textContent = n; b.style.display = ''; }
+  else { b.style.display = 'none'; }
+}
+
+var GUARD_VERB = { kill: 'Kill', stop: 'Stop', pause: 'Pause', resume: 'Resume' };
+
+// The session the open modal is about. Held here rather than on the confirm
+// button so a re-render of the table underneath cannot change what a click on
+// "Kill" is about to signal.
+var _guardPending = null;
+
+// Pause / Stop / Kill signal real processes and Kill cannot be undone. Asking
+// "Kill this agent?" and then reporting one word made the most dangerous
+// control in the product the least legible one, so the flow is now:
+//   1. ask the server what this would do  (/api/guard/control/preflight)
+//   2. show the operator the target, the process tree and the signal plan
+//   3. on confirm, run it and render the step-by-step record it returns
+// Nothing is sent to any process until step 3.
+function guardControl(sessionId, runtime, cwd, action) {
+  _guardPending = { session_id: sessionId, runtime: runtime, cwd: cwd, action: action };
+  var verb = GUARD_VERB[action] || action;
+  guardControlOpen(verb + ' this agent?',
+    '<div class="empty-state">Checking what this would do...</div>', '');
+  fetch('/api/guard/control/preflight', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_guardPending)
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    guardRenderPreflight(d || {}, verb);
+  }).catch(function () {
+    // A preflight that cannot run must not block the control: say the preview
+    // is unavailable and let the operator decide with what they do know.
+    guardControlOpen(verb + ' this agent?',
+      '<p class="guard-modal-warn">The preview could not be loaded, so what ' +
+      'follows is unverified. ' + guardEsc(verb) + ' signals the real process.</p>' +
+      guardIdBlock(_guardPending),
+      verb + ' anyway');
+  });
+}
+
+function guardIdBlock(p) {
+  return '<dl class="guard-facts">' +
+    '<dt>Session</dt><dd><code>' + guardEsc(p.session_id) + '</code></dd>' +
+    '<dt>Runtime</dt><dd>' + guardEsc(p.runtime || 'unknown') + '</dd>' +
+    '</dl>';
+}
+
+// What the server says this button would do. Every number here is measured on
+// this node right now — the pid tree in particular, because "Kill" ending nine
+// processes instead of one is exactly the surprise this dialog exists to remove.
+function guardRenderPreflight(d, verb) {
+  var p = _guardPending || {};
+  var html = guardIdBlock(p);
+
+  if (d.blocked_reason) {
+    html += '<p class="guard-modal-warn">This action would be refused: ' +
+      guardEsc(d.blocked_reason) + '</p>';
+    guardControlOpen(verb + ' this agent?', html, '');
+    return;
+  }
+
+  html += '<dl class="guard-facts">';
+  if (d.pid) html += '<dt>Process</dt><dd><code>pid ' + guardEsc(d.pid) + '</code>' +
+    (d.command ? ' <span class="muted">' + guardEsc(d.command) + '</span>' : '') + '</dd>';
+  if (d.cwd) html += '<dt>Working dir</dt><dd><code>' + guardEsc(d.cwd) + '</code></dd>';
+  if (d.guard) html += '<dt>Pid-reuse guard</dt><dd>' + guardEsc(d.guard) +
+    ' <span class="muted">(confirms this pid is still the same process, not a recycled one)</span></dd>';
+  html += '</dl>';
+
+  if (d.plan) html += '<p class="guard-modal-plan">' + guardEsc(d.plan) + '</p>';
+
+  if (d.steps && d.steps.length) {
+    html += '<h4>What will happen, in order</h4><ol class="guard-steps">';
+    d.steps.forEach(function (s) { html += '<li>' + guardEsc(s) + '</li>'; });
+    html += '</ol>';
+  }
+
+  if (d.processes && d.processes.length) {
+    html += '<h4>' + guardEsc(d.tree_size || d.processes.length) +
+      ' process' + ((d.tree_size || d.processes.length) === 1 ? '' : 'es') +
+      ' in this session\u2019s tree</h4><ul class="guard-tree">';
+    d.processes.forEach(function (pr) {
+      html += '<li><code>' + guardEsc(pr.pid) + '</code> ' +
+        (pr.main ? '<span class="pill">main</span> ' : '') +
+        '<span class="muted">' + guardEsc(pr.command || 'unknown command') +
+        '</span></li>';
+    });
+    if (d.tree_size > d.processes.length) {
+      html += '<li class="muted">and ' + guardEsc(d.tree_size - d.processes.length) +
+        ' more</li>';
+    }
+    html += '</ul>';
+  }
+
+  if (d.destructive) {
+    html += '<p class="guard-modal-warn">This cannot be undone. The session ends.</p>';
+  } else if (d.reversible) {
+    html += '<p class="muted">Reversible: Resume continues the agent from here.</p>';
+  }
+  guardControlOpen(verb + ' this agent?', html, verb);
+}
+
+// Run it, then show what the server actually did rather than an alert box.
+function guardControlRun() {
+  var p = _guardPending;
+  if (!p) return;
+  var verb = GUARD_VERB[p.action] || p.action;
+  var go = document.getElementById('guard-control-go');
+  if (go) { go.disabled = true; go.textContent = verb + 'ing...'; }
+  fetch('/api/guard/control', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(p)
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    guardRenderOutcome(d || {}, verb);
+    loadGuardSessions();
+  }).catch(function () {
+    guardRenderOutcome({ ok: false, detail: 'the request did not reach the server' }, verb);
+  });
+}
+
+function guardRenderOutcome(d, verb) {
+  var html = '<p class="' + (d.ok ? 'guard-modal-ok' : 'guard-modal-warn') + '">' +
+    guardEsc(verb) + (d.ok ? ' completed.' : ' did not succeed.') +
+    (d.detail ? ' <span class="muted">' + guardEsc(d.detail) + '</span>' : '') +
+    '</p>';
+  // An advisory result is the one an operator most needs spelled out: the
+  // request succeeded and the agent is still running.
+  if (d.advisory_only) {
+    html += '<p class="guard-modal-warn">Advisory only \u2014 nothing on this ' +
+      'node enforces it, so the agent keeps running.' +
+      (d.note ? ' ' + guardEsc(d.note) : '') + '</p>';
+  }
+  if (d.trace && d.trace.length) {
+    html += '<h4>What was done</h4><ol class="guard-steps guard-trace">';
+    d.trace.forEach(function (s) {
+      html += '<li class="' + (s.ok ? 'ok' : 'bad') + '">' +
+        '<span class="guard-trace-mark">' + (s.ok ? '\u2713' : '\u2717') + '</span> ' +
+        guardEsc(s.step) +
+        (s.detail ? ' <span class="muted">' + guardEsc(s.detail) + '</span>' : '') +
+        '</li>';
+    });
+    html += '</ol>';
+  } else {
+    html += '<p class="muted">The server returned no step record for this action.</p>';
+  }
+  if (d.mechanism) {
+    html += '<p class="muted">Mechanism: <code>' + guardEsc(d.mechanism) + '</code></p>';
+  }
+  guardControlOpen(verb + (d.ok ? ' \u2014 done' : ' \u2014 failed'), html, '');
+}
+
+// Open (or re-render) the modal. An empty `confirmLabel` means "nothing left to
+// confirm": the footer collapses to a single Close, which is the state both the
+// outcome and a blocked preflight land in.
+function guardControlOpen(title, bodyHtml, confirmLabel) {
+  var modal = document.getElementById('guard-control-modal');
+  if (!modal) return;
+  var h = document.getElementById('guard-control-title');
+  var body = document.getElementById('guard-control-body');
+  var go = document.getElementById('guard-control-go');
+  var cancel = document.getElementById('guard-control-cancel');
+  if (h) h.textContent = title;
+  if (body) body.innerHTML = bodyHtml;
+  if (go) {
+    go.disabled = false;
+    go.hidden = !confirmLabel;
+    go.textContent = confirmLabel || '';
+    go.onclick = confirmLabel ? guardControlRun : null;
+    // Kill reads as destructive before it is pressed, here as in the table.
+    var act = (_guardPending || {}).action;
+    go.className = 'btn btn-sm ' + (act === 'kill' ? 'btn-danger' : 'btn-primary');
+  }
+  if (cancel) cancel.textContent = confirmLabel ? 'Cancel' : 'Close';
+  if (!modal.open) {
+    // showModal() puts it in the top layer (see the note in guard.html) and
+    // brings Esc + focus trapping. `cancel` fires on Esc; clear the pending
+    // session there too so a dismissed dialog leaves nothing armed.
+    if (typeof modal.showModal === 'function') {
+      modal.addEventListener('cancel', function () { _guardPending = null; },
+                             { once: true });
+      modal.showModal();
+    } else {
+      modal.setAttribute('open', '');  // very old browser: inline, still legible
+    }
+  }
+  if (go && confirmLabel) go.focus();
+}
+
+function guardControlClose() {
+  var modal = document.getElementById('guard-control-modal');
+  if (modal) {
+    if (typeof modal.close === 'function' && modal.open) modal.close();
+    else modal.removeAttribute('open');
+  }
+  _guardPending = null;
+}
+
+function loadGuardPolicies() {
+  var el = document.getElementById('guard-policies-body');
+  if (!el) return;
+  fetch('/api/guard/policies').then(function (r) { return r.json(); }).then(function (d) {
+    var banner = document.getElementById('guard-enforce-banner');
+    var text = document.getElementById('guard-enforce-text');
+    if (banner && text) {
+      if (d && d.policies && d.policies.length && !d.enforcement_enabled) {
+        // Never let someone believe a rule is protecting them when it is not.
+        text.textContent = 'Policies are in monitor mode. They record what they would do but take no action. Set CLAWMETRY_POLICY_ENFORCE=1 on this node to enforce.';
+        banner.style.display = '';
+      } else {
+        banner.style.display = 'none';
+      }
+    }
+    var rows = (d && d.policies) || [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-state">No policies yet. Add one to act on a stuck agent automatically.</div>';
+      return;
+    }
+    var html = '<table class="data-table"><thead><tr>' +
+      '<th>Name</th><th>When</th><th>Thresholds</th><th>Action</th><th></th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (p) {
+      var when = GUARD_KIND_LABEL[p.trigger_kind] || guardEsc(p.trigger_kind || 'any signal');
+      if (p.scope_runtime) when += ' on ' + guardEsc(p.scope_runtime);
+      var th = [];
+      if (p.min_repeat) th.push('>= ' + p.min_repeat + ' events');
+      if (p.min_duration_s) th.push('>= ' + Math.round(p.min_duration_s / 60) + 'm');
+      if (p.min_spend_usd) th.push('>= $' + Number(p.min_spend_usd).toFixed(2) + ' spent');
+      if (p.min_spend_at_risk_usd) th.push('>= $' + Number(p.min_spend_at_risk_usd).toFixed(2) + ' at risk');
+      if (p.min_severity && p.min_severity !== 'info') th.push(p.min_severity + '+');
+      // Render the LADDER, because "pause" reads very differently when a
+      // kill is queued five minutes behind it.
+      var steps = (p.steps && p.steps.length) ? p.steps
+                                              : [{ action: p.action, after_secs: 0 }];
+      var actionCell = steps.map(function (st, i) {
+        var c = st.action === 'monitor' ? '' : 'pill-warn';
+        var wait = (i > 0 && st.after_secs)
+          ? '<span class="muted"> +' + guardHumanSecs(st.after_secs) + '</span> '
+          : (i > 0 ? '<span class="muted"> &rarr; </span>' : '');
+        return wait + '<span class="pill ' + c + '">' + guardEsc(st.action) + '</span>';
+      }).join(' ');
+      html += '<tr><td>' + guardEsc(p.name || p.policy_id) + '</td>' +
+        '<td>' + guardEsc(when) + '</td>' +
+        '<td>' + guardEsc(th.join(', ') || 'none') + '</td>' +
+        '<td>' + actionCell + '</td>' +
+        '<td><button class="btn btn-xs" data-pid="' + guardEsc(p.policy_id) + '" onclick="guardDeletePolicy(this.dataset.pid)">Delete</button></td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load policies.</div>';
+  });
+}
+
+function guardShowPolicyForm() {
+  var el = document.getElementById('guard-policy-form');
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML =
+    '<div class="form-row"><label>Name</label><input id="gp-name" placeholder="Pause loopers"></div>' +
+    '<div class="form-row"><label>When</label><select id="gp-kind">' +
+      '<option value="">any signal</option>' +
+      '<option value="stuck_loop">Looping</option>' +
+      '<option value="no_progress">Not progressing</option>' +
+      '<option value="repeated_tool_failure">Tool failing repeatedly</option>' +
+      '<option value="action_discrepancy">Continued after a failure</option>' +
+      '<option value="file_blast_radius">Wide or destructive file changes</option>' +
+      '<option value="credential_access">Read credentials</option>' +
+      '<option value="network_egress">Unusual network destination</option>' +
+      '<option value="privilege_change">Privilege change</option>' +
+      '<option value="rate_limited">Rate limited by the provider</option>' +
+      '<option value="blocked_on_user">Waiting on you</option>' +
+      '<option value="crashed">Crashed and restarted</option>' +
+    '</select></div>' +
+    '<div class="form-row"><label>At least this severe</label><select id="gp-severity">' +
+      '<option value="info">info</option>' +
+      '<option value="warning" selected>warning</option>' +
+      '<option value="critical">critical (expensive or irreversible)</option>' +
+    '</select></div>' +
+    '<div class="form-row"><label>Runtime</label><input id="gp-runtime" placeholder="(all runtimes)"></div>' +
+    '<div class="form-row"><label>At least N events</label><input id="gp-repeat" type="number" min="0" value="0"></div>' +
+    '<div class="form-row"><label>Bad for (minutes)</label><input id="gp-mins" type="number" min="0" value="5"></div>' +
+    '<div class="form-row"><label>Session spent at least ($)</label><input id="gp-spend" type="number" min="0" step="0.5" value="0"></div>' +
+    '<div class="form-row"><label title="The estimated cost of the flagged stretch, not the whole session. This is the threshold most people actually want.">At risk at least ($)</label><input id="gp-at-risk" type="number" min="0" step="0.5" value="0"></div>' +
+    '<div class="form-row"><label>Then do this</label><div id="gp-steps"></div></div>' +
+    '<div class="form-row"><label></label><div>' +
+      '<button class="btn btn-xs" onclick="guardAddStep()">Add escalation step</button> ' +
+      '<span class="muted">Each step runs only if the agent is still flagged when its wait is up.</span>' +
+    '</div></div>' +
+    '<button class="btn btn-primary btn-sm" onclick="guardSavePolicy()">Save policy</button>';
+  guardAddStep();
+}
+
+// ── Escalation ladder editor ──────────────────────────────────────────
+// The shape operations actually want is "pause, tell me, then kill if it is
+// still stuck 5 minutes later". One <select> could only express the first
+// rung, so the form builds a list.
+var GUARD_STEP_SEQ = 0;
+
+function guardAddStep(action, afterSecs) {
+  var host = document.getElementById('gp-steps');
+  if (!host) return;
+  var rows = host.querySelectorAll('.gp-step');
+  if (rows.length >= 8) return;                 // mirrors MAX_LADDER_STEPS
+  var first = rows.length === 0;
+  var id = 'gp-step-' + (++GUARD_STEP_SEQ);
+  var div = document.createElement('div');
+  div.className = 'gp-step';
+  div.style.marginBottom = '6px';
+  div.setAttribute('data-step-id', id);
+  // Step 0 fires on the match itself, so it has no wait to configure —
+  // showing a disabled box would invite people to set a value we ignore.
+  var waitHtml = first
+    ? '<span class="muted">immediately</span>'
+    : 'after <input type="number" min="0" step="30" class="gp-step-wait" ' +
+      'value="' + (Number(afterSecs) || 300) + '" style="width:5.5em"> seconds';
+  div.innerHTML =
+    '<select class="gp-step-action">' +
+      '<option value="monitor">monitor (record only)</option>' +
+      '<option value="alert">alert</option>' +
+      '<option value="pause">pause</option>' +
+      '<option value="stop">stop</option>' +
+      '<option value="kill">kill</option>' +
+    '</select> ' + waitHtml +
+    (first ? '' : ' <button class="btn btn-xs" onclick="guardRemoveStep(\'' + id + '\')">Remove</button>');
+  host.appendChild(div);
+  var sel = div.querySelector('.gp-step-action');
+  if (sel && action) sel.value = action;
+}
+
+function guardRemoveStep(id) {
+  var el = document.querySelector('[data-step-id="' + id + '"]');
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function guardReadSteps() {
+  var out = [];
+  var rows = document.querySelectorAll('#gp-steps .gp-step');
+  for (var i = 0; i < rows.length; i++) {
+    var sel = rows[i].querySelector('.gp-step-action');
+    var wait = rows[i].querySelector('.gp-step-wait');
+    if (!sel) continue;
+    out.push({
+      action: sel.value,
+      // Step 0 has no wait input; the server forces it to 0 anyway.
+      after_secs: wait ? (parseInt(wait.value || '0', 10) || 0) : 0
+    });
+  }
+  return out;
+}
+
+function guardSavePolicy() {
+  function v(id) { var e = document.getElementById(id); return e ? e.value : ''; }
+  var body = {
+    name: v('gp-name'),
+    trigger_kind: v('gp-kind'),
+    scope_runtime: v('gp-runtime'),
+    min_repeat: parseInt(v('gp-repeat') || '0', 10) || 0,
+    min_duration_s: (parseInt(v('gp-mins') || '0', 10) || 0) * 60,
+    min_spend_usd: parseFloat(v('gp-spend') || '0') || 0,
+    min_spend_at_risk_usd: parseFloat(v('gp-at-risk') || '0') || 0,
+    min_severity: v('gp-severity') || 'info'
+  };
+  var steps = guardReadSteps();
+  if (!steps.length) { alert('Add at least one action.'); return; }
+  // `action` stays the first rung so a node running an older daemon (which
+  // ignores `steps`) still does something sane rather than nothing.
+  body.action = steps[0].action;
+  if (steps.length > 1) { body.steps = steps; }
+  fetch('/api/guard/policies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    if (!d || !d.ok) { alert('Could not save policy: ' + ((d && d.error) || 'unknown')); return; }
+    var f = document.getElementById('guard-policy-form');
+    if (f) { f.style.display = 'none'; }
+    loadGuardPolicies();
+  }).catch(function () { alert('Could not save policy.'); });
+}
+
+function guardDeletePolicy(pid) {
+  if (!confirm('Delete this policy?')) return;
+  fetch('/api/guard/policies/' + encodeURIComponent(pid), { method: 'DELETE' })
+    .then(function () { loadGuardPolicies(); })
+    .catch(function () { alert('Could not delete policy.'); });
+}
+
+function loadGuardActions() {
+  var el = document.getElementById('guard-actions-body');
+  if (!el) return;
+  fetch('/api/guard/actions?limit=25').then(function (r) { return r.json(); }).then(function (d) {
+    var rows = (d && d.actions) || [];
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-state">No policy has fired yet.</div>';
+      return;
+    }
+    // A ladder writes one row per rung. Without the Step column three rungs
+    // of ONE policy are indistinguishable from three unrelated decisions.
+    var anyLadder = rows.some(function (a) { return Number(a.step_index) > 0; });
+    var html = '<table class="data-table"><thead><tr>' +
+      '<th>When</th><th>Session</th>' + (anyLadder ? '<th>Step</th>' : '') +
+      '<th>Action</th><th>Enforced</th><th>Why</th><th>Result</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (a) {
+      var stepCell = '';
+      if (anyLadder) {
+        var si = Number(a.step_index) || 0;
+        stepCell = '<td class="muted" title="Rung of this policy\'s escalation ladder">' +
+          (si + 1) + '</td>';
+      }
+      html += '<tr><td>' + guardEsc(guardAgo(new Date(a.created_at).toISOString())) + '</td>' +
+        '<td title="' + guardEsc(a.session_id) + '">' + guardEsc(String(a.session_id).slice(0, 20)) + '</td>' +
+        stepCell +
+        '<td>' + guardEsc(a.action) + '</td>' +
+        '<td>' + (a.enforced ? 'yes' : '<span class="muted">dry run</span>') + '</td>' +
+        '<td>' + guardEsc(a.reason) + '</td>' +
+        '<td>' + guardEsc(a.result_detail) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load decisions.</div>';
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SIGNALS TAB (WO-58 Behaviour Signals): what people and agents say about a
+// run. Reads /api/signals (local: DuckDB via the daemon proxy; cloud: the
+// signals / signalsByRuntime snapshot slice). Every number re-derives from the
+// runtime switcher (_cmRuntimeFilter()). Polls only while the tab is active.
+// Copy rule: no em dashes, no double dashes, plain words.
+// ═══════════════════════════════════════════════════════════════════════════
+var _sigState = { window: '7d', timer: null, open: null, data: null };
+var SIGNALS_POLL_MS = 60000;
+var SIGNAL_ORDER = ['user_frustration', 'user_praise', 'assistant_refusal',
+  'assistant_laziness', 'task_failure', 'user_retry'];
+var SIGNAL_LABEL = {
+  user_frustration: 'Frustration', user_praise: 'Praise',
+  assistant_refusal: 'Refusals', assistant_laziness: 'Work handed back',
+  task_failure: 'Gave up', user_retry: 'Retries'
+};
+var SIGNAL_HINT = {
+  user_frustration: 'People swearing at or correcting the agent.',
+  user_praise: 'Thanks, perfect, nice work.',
+  assistant_refusal: 'The agent declines to do the work.',
+  assistant_laziness: 'The agent hands the work back to the person.',
+  task_failure: 'The agent says it could not finish.',
+  user_retry: 'The same request sent again. A floor: retries across ingest gaps are missed.'
+};
+
+function _sigT(key, args, fallback) {
+  if (typeof t === 'function') { try { return t(key, args, fallback); } catch (e) {} }
+  var s = fallback || key;
+  if (args) Object.keys(args).forEach(function (k) { s = s.replace('{' + k + '}', args[k]); });
+  return s;
+}
+function sigEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function sigPct(rate) {
+  if (rate == null || isNaN(rate)) return null;
+  var p = rate * 100;
+  return (p < 10 ? p.toFixed(1) : Math.round(p)) + '%';
+}
+function sigRuntimeLabel(rt) {
+  if (!rt || rt === 'all') return 'all runtimes';
+  if (typeof _cmRuntimeLabel === 'function') { try { return _cmRuntimeLabel(rt); } catch (e) {} }
+  return rt;
+}
+function _sigIsActive() {
+  return (typeof _cmCurrentTab !== 'undefined') && _cmCurrentTab === 'signals';
+}
+
+function signalsSetWindow(w) {
+  _sigState.window = (w === '1d' || w === '30d') ? w : '7d';
+  document.querySelectorAll('#signals-window-seg button').forEach(function (b) {
+    b.classList.toggle('active', b.dataset.window === _sigState.window);
+  });
+  loadSignalsTab();
+}
+
+function loadSignalsTab() {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  loadSignalsIssues(rt);
+  loadSignalsBriefs();
+  var url = '/api/signals?window=' + encodeURIComponent(_sigState.window) +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    _sigState.data = d || {};
+    signalsRenderHeadline(d, rt);
+    signalsRenderTable(d, rt);
+    signalsRenderCoverage(d, rt);
+    if (_sigState.open) signalsOpenSessions(_sigState.open, true);
+  }).catch(function () {
+    var h = document.getElementById('signals-headline');
+    if (h) h.textContent = _sigT('signals.err', null, 'Could not load signals.');
+    var b = document.getElementById('signals-table-body');
+    if (b) b.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.err', null, 'Could not load signals.')) + '</div>';
+  });
+  if (_sigState.timer) clearInterval(_sigState.timer);
+  _sigState.timer = visibilitySetInterval(function () {
+    if (!_sigIsActive()) { clearInterval(_sigState.timer); _sigState.timer = null; return; }
+    loadSignalsTab();
+  }, SIGNALS_POLL_MS);
+}
+
+// The one sentence the tab leads with. Honest states: no daemon, nothing
+// measured yet, a runtime that exposes no text.
+function signalsRenderHeadline(d, rt) {
+  var h = document.getElementById('signals-headline');
+  var sub = document.getElementById('signals-headline-sub');
+  if (!h) return;
+  var elig = (d && d.eligible_turns) || {};
+  var total = (Number(elig.user) || 0) + (Number(elig.assistant) || 0);
+  if (d && d.store === 'unavailable' && !total) {
+    h.textContent = _sigT('signals.no_daemon', null, 'Signals need the ClawMetry daemon running. Nothing has been measured on this node yet.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  var rc = d && d.runtime_coverage;
+  if (rt && rt !== 'all' && rc && rc.state === 'none') {
+    h.textContent = _sigT('signals.not_exposed_headline', { runtime: sigRuntimeLabel(rt) },
+      'Not exposed by {runtime}: it does not write user or assistant text where ClawMetry can read it.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  if (!total) {
+    h.textContent = _sigT('signals.nothing_yet', null, 'Nothing measured yet. Signals appear once a session with readable turns lands.');
+    if (sub) sub.textContent = '';
+    return;
+  }
+  var head = (d && d.headline) || {};
+  h.textContent = head.text || '';
+  if (sub) {
+    sub.textContent = _sigT('signals.measured_over', {
+      user: Number(elig.user) || 0, assistant: Number(elig.assistant) || 0,
+      scope: sigRuntimeLabel(rt)
+    }, 'Measured over {user} user turns and {assistant} agent turns on {scope}.');
+  }
+}
+
+function signalsTrendCell(s) {
+  var tr = (s && s.trend) || {};
+  if (tr.delta == null) return '<span class="sig-muted">' + sigEsc(_sigT('signals.no_prior', null, 'no earlier window')) + '</span>';
+  var pts = Math.abs(Math.round(tr.delta * 1000) / 10);
+  if (tr.direction === 'up') return '<span class="sig-trend sig-up">&#9650; ' + pts + ' pts</span>';
+  if (tr.direction === 'down') return '<span class="sig-trend sig-down">&#9660; ' + pts + ' pts</span>';
+  return '<span class="sig-trend sig-flat">' + sigEsc(_sigT('signals.flat', null, 'about the same')) + '</span>';
+}
+
+function signalsRenderTable(d, rt) {
+  var el = document.getElementById('signals-table-body');
+  var note = document.getElementById('signals-scope-note');
+  if (!el) return;
+  if (note) note.textContent = _sigT('signals.scope', { scope: sigRuntimeLabel(rt) }, 'Scope: {scope}');
+  var sigs = (d && d.signals) || {};
+  var rc = (d && d.runtime_coverage) || null;
+  var elig = (d && d.eligible_turns) || {};
+  var total = (Number(elig.user) || 0) + (Number(elig.assistant) || 0);
+  if (!total) {
+    var msg = (d && d.store === 'unavailable')
+      ? _sigT('signals.no_daemon_short', null, 'No daemon connected.')
+      : (rt !== 'all' && rc && rc.state === 'none'
+        ? _sigT('signals.not_exposed', { runtime: sigRuntimeLabel(rt) }, 'Not exposed by {runtime}')
+        : _sigT('signals.no_turns', null, 'No turns measured in this window.'));
+    el.innerHTML = '<div class="sig-empty">' + sigEsc(msg) + '</div>';
+    return;
+  }
+  var html = '<table class="sig-table"><thead><tr>' +
+    '<th>' + sigEsc(_sigT('signals.col_signal', null, 'Signal')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_rate', null, 'Rate')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_count', null, 'Matches')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_turns', null, 'Of turns')) + '</th>' +
+    '<th>' + sigEsc(_sigT('signals.col_trend', null, 'Vs window before')) + '</th>' +
+    '<th></th></tr></thead><tbody>';
+  SIGNAL_ORDER.forEach(function (name) {
+    var s = sigs[name] || {};
+    var side = s.side || (name.indexOf('user_') === 0 ? 'user' : 'assistant');
+    var exposed = !rc || rc.state == null || rc.state === 'unknown' ||
+      (side === 'user' ? rc.user_text !== false : rc.assistant_text !== false);
+    var rateCell, countCell, turnsCell, trendCell, openCell;
+    if (!exposed) {
+      rateCell = '<span class="sig-muted">' + sigEsc(_sigT('signals.not_exposed', { runtime: sigRuntimeLabel(rt) }, 'Not exposed by {runtime}')) + '</span>';
+      countCell = turnsCell = trendCell = openCell = '';
+    } else if (!s.eligible) {
+      rateCell = '<span class="sig-muted">' + sigEsc(_sigT('signals.no_turns_side', { side: side === 'user' ? 'user' : 'agent' }, 'no {side} turns yet')) + '</span>';
+      countCell = turnsCell = trendCell = openCell = '';
+    } else {
+      var p = sigPct(s.rate);
+      rateCell = '<span class="sig-rate' + (s.count ? '' : ' sig-muted') + '">' + (p == null ? '0%' : p) + '</span>';
+      countCell = String(s.count || 0);
+      turnsCell = String(s.eligible || 0);
+      trendCell = signalsTrendCell(s);
+      openCell = s.count
+        ? '<button class="sig-btn sig-btn-sm" data-sig="' + sigEsc(name) + '" onclick="signalsOpenSessions(this.dataset.sig)">' + sigEsc(_sigT('signals.open_sessions', null, 'Sessions')) + '</button>'
+        : '';
+    }
+    html += '<tr' + (_sigState.open === name ? ' class="sig-row-open"' : '') + '>' +
+      '<td><div class="sig-name">' + sigEsc(SIGNAL_LABEL[name] || s.label || name) + '</div>' +
+      '<div class="sig-hint">' + sigEsc(SIGNAL_HINT[name] || '') + '</div></td>' +
+      '<td>' + rateCell + '</td><td>' + countCell + '</td><td>' + turnsCell + '</td>' +
+      '<td>' + trendCell + '</td><td>' + openCell + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+// Drill-down: the sessions behind one row. Reuses the transcript deep-link
+// the stuck banner and Security findings use (#session=<id> + the
+// Transcripts tab), so every entry point behaves alike.
+function signalsOpenSessions(name, silent) {
+  if (!name) return;
+  _sigState.open = name;
+  var card = document.getElementById('signals-sessions-card');
+  var title = document.getElementById('signals-sessions-title');
+  var body = document.getElementById('signals-sessions-body');
+  if (!card || !body) return;
+  card.style.display = '';
+  if (title) title.textContent = _sigT('signals.sessions_title', { signal: SIGNAL_LABEL[name] || name }, '{signal}: sessions this window');
+  if (!silent) body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.loading', null, 'Loading signals...')) + '</div>';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/signals/' + encodeURIComponent(name) + '/sessions?window=' + encodeURIComponent(_sigState.window) +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    var rows = (d && d.sessions) || [];
+    if (!rows.length) {
+      body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.no_sessions', null, 'No sessions matched in this window.')) + '</div>';
+      return;
+    }
+    var html = '<table class="sig-table"><thead><tr><th>Session</th><th>Runtime</th><th>Model</th><th>Started</th><th>Cost</th><th>Matches</th><th></th></tr></thead><tbody>';
+    rows.forEach(function (s) {
+      var started = s.started ? String(s.started).slice(0, 16).replace('T', ' ') : '';
+      html += '<tr><td title="' + sigEsc(s.session_id) + '">' + sigEsc((s.title || s.session_id || '').slice(0, 56)) + '</td>' +
+        '<td>' + sigEsc(sigRuntimeLabel(s.runtime)) + '</td>' +
+        '<td>' + sigEsc(s.model || 'unknown') + '</td>' +
+        '<td>' + sigEsc(started) + '</td>' +
+        '<td>$' + (Number(s.cost_usd) || 0).toFixed(2) + '</td>' +
+        '<td>' + (Number(s.matches) || 0) + '</td>' +
+        '<td><button class="sig-btn sig-btn-sm" data-sid="' + sigEsc(s.session_id) + '" onclick="signalsOpenTranscript(this.dataset.sid)">' + sigEsc(_sigT('signals.open', null, 'Open')) + '</button></td></tr>';
+    });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+  }).catch(function () {
+    body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.err', null, 'Could not load signals.')) + '</div>';
+  });
+  if (_sigState.data) signalsRenderTable(_sigState.data, rt);
+}
+function signalsCloseSessions() {
+  _sigState.open = null;
+  var card = document.getElementById('signals-sessions-card');
+  if (card) card.style.display = 'none';
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (_sigState.data) signalsRenderTable(_sigState.data, rt);
+}
+function signalsOpenTranscript(sessionId) {
+  if (!sessionId) return;
+  if (typeof cmOpenFindingSession === 'function') return cmOpenFindingSession(sessionId);
+  try { window.location.hash = 'session=' + encodeURIComponent(sessionId); } catch (e) {}
+  if (typeof switchTab === 'function') switchTab('transcripts');
+}
+
+// Coverage strip: one chip per runtime with three honest states. A runtime
+// with no readable text is "not exposed", never 0%.
+function signalsRenderCoverage(d, rt) {
+  var el = document.getElementById('signals-coverage-body');
+  if (!el) return;
+  var cov = (d && d.coverage) || {};
+  var keys = Object.keys(cov).sort();
+  if (!keys.length) {
+    el.innerHTML = '<div class="sig-empty">' + sigEsc(d && d.store === 'unavailable'
+      ? _sigT('signals.no_daemon_short', null, 'No daemon connected.')
+      : _sigT('signals.no_runtimes', null, 'No runtime has landed a session yet.')) + '</div>';
+    return;
+  }
+  var html = '<div class="sig-cov">';
+  keys.forEach(function (k) {
+    var c = cov[k] || {};
+    var state = c.state || 'none';
+    var text;
+    if (state === 'none') text = _sigT('signals.cov_none', null, 'not exposed');
+    else if (state === 'user_text') text = _sigT('signals.cov_user', null, 'user text only');
+    else if (state === 'assistant_text') text = _sigT('signals.cov_assistant', null, 'agent text only');
+    else text = _sigT('signals.cov_both', null, 'user and agent text');
+    var src = c.source === 'adapter' ? _sigT('signals.cov_declared', null, 'declared by the adapter') : _sigT('signals.cov_inferred', null, 'seen in the store');
+    html += '<div class="sig-chip sig-chip-' + sigEsc(state === 'none' ? 'none' : 'ok') + (rt === k ? ' sig-chip-active' : '') + '" title="' + sigEsc(src) + '">' +
+      '<span class="sig-chip-rt">' + sigEsc(sigRuntimeLabel(k)) + '</span>' +
+      '<span class="sig-chip-state">' + sigEsc(text) + '</span></div>';
+  });
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+// ── Signal shifts: open issues (WO-62) ─────────────────────────────────────
+// One issue per (signal, runtime) whose last 24h left the band learned from
+// its own 28 days. Plain words, Resolve and Ignore, never the matched text.
+// The card is hidden when no issue exists; the honest "why nothing" lives
+// in the headline card's sub line.
+function _sigPostJson(url, body) {
+  return fetch(url, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {})
+  }).then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); });
+}
+
+// Hosted dashboard: the tab reads the snapshot (signalIssues, briefs) and
+// every write stays on the local dashboard. Controls render disabled with
+// the note below instead of posting to an endpoint that is not there.
+function _sigCloudReadOnly() {
+  return !!window.CLOUD_MODE;
+}
+function _sigCloudNote() {
+  return _sigT('signals.cloud_manage_local', null, 'Manage on the local dashboard');
+}
+// A server answer that declines (available:false or ok:false) carries its
+// own plain-words reason; show that, never a silent no-op.
+function _sigDeclined(j) {
+  return !j || j.available === false || j.ok === false;
+}
+function _sigReasonOf(j, fallback) {
+  if (j && typeof j.reason === 'string' && j.reason) return j.reason;
+  if (j && typeof j.error === 'string' && j.error) return j.error;
+  return fallback;
+}
+function _sigDisabledAttr() {
+  return _sigCloudReadOnly() ? ' disabled title="' + sigEsc(_sigCloudNote()) + '"' : '';
+}
+
+function loadSignalsIssues(rt) {
+  rt = rt || ((typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all');
+  var url = '/api/signals/issues?status=open' +
+    (rt && rt !== 'all' ? '&runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+    signalsRenderIssues(d || {}, rt);
+  }).catch(function () { signalsRenderIssues({ issues: [], store: 'unavailable' }, rt); });
+}
+
+function signalsIssueBreakdownLine(issue) {
+  var bd = (issue && issue.breakdown) || {};
+  var parts = [];
+  ['model', 'runtime_version', 'tool', 'cwd'].forEach(function (dim) {
+    var list = bd[dim] || [];
+    if (!list.length || list[0].value === 'unknown' || !(list[0].share > 0)) return;
+    var word = { model: _sigT('signals.bd_model', null, 'model'),
+      runtime_version: _sigT('signals.bd_version', null, 'version'),
+      tool: _sigT('signals.bd_tool', null, 'tool'),
+      cwd: _sigT('signals.bd_repo', null, 'repository') }[dim];
+    parts.push(word + ' ' + list[0].value + ' ' + Math.round(list[0].share * 100) + '%');
+  });
+  return parts.length ? _sigT('signals.bd_explains', { parts: parts.join(' · ') }, 'Explains the move: {parts}') : '';
+}
+
+function signalsRenderIssues(d, rt) {
+  var card = document.getElementById('signals-issues-card');
+  var body = document.getElementById('signals-issues-body');
+  var note = document.getElementById('signals-issues-note');
+  var sub = document.getElementById('signals-headline-sub');
+  if (!card || !body) return;
+  var items = (d && d.issues) || [];
+  _sigState.issues = items;
+  if (!items.length) {
+    card.style.display = 'none';
+    body.innerHTML = '';
+    if (sub && d && d.store !== 'unavailable' && d.min_samples) {
+      var ms = d.min_samples;
+      sub.textContent = _sigT('signals.issues_none', { short: ms.short, history: ms.history },
+        'No signal has left its normal band. An issue needs at least {short} turns in the last day and {history} in the month before, per runtime.');
+    }
+    return;
+  }
+  card.style.display = '';
+  if (note) {
+    note.textContent = _sigT('signals.issues_count', { n: items.length }, '{n} open') +
+      (_sigCloudReadOnly() ? ' · ' + _sigCloudNote() : '');
+  }
+  var dis = _sigDisabledAttr();
+  var html = '';
+  items.forEach(function (it) {
+    var sample = _sigT('signals.issue_sample', { during: it.n_during || 0, before: it.n_before || 0 },
+      '{during} turns in the last day, {before} in the month before');
+    var reopened = (it.reopen_count > 0) ? ' <span class="sig-issue-tag">' +
+      sigEsc(_sigT('signals.issue_reopened', { n: it.reopen_count }, 'reopened {n}x')) + '</span>' : '';
+    var bdLine = signalsIssueBreakdownLine(it);
+    html += '<div class="sig-issue" data-issue="' + sigEsc(it.id) + '">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(it.headline || '') + reopened + '</div>' +
+        '<div class="sig-hint">' + sigEsc(sample) + (bdLine ? ' · ' + sigEsc(bdLine) : '') + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm" onclick="signalsOpenSessions(\'' + sigEsc(it.signal) + '\')">' +
+          sigEsc(_sigT('signals.issue_sessions', null, 'Sessions')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsSetIssueStatus(\'' + sigEsc(it.id) + '\', \'resolved\')">' +
+          sigEsc(_sigT('signals.issue_resolve', null, 'Resolve')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsSetIssueStatus(\'' + sigEsc(it.id) + '\', \'ignored\')">' +
+          sigEsc(_sigT('signals.issue_ignore', null, 'Ignore')) + '</button>' +
+      '</div></div>';
+  });
+  body.innerHTML = html;
+}
+
+function signalsSetIssueStatus(id, status) {
+  var note = document.getElementById('signals-issues-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  _sigPostJson('/api/signals/issues/' + encodeURIComponent(id) + '/status', { status: status })
+    .then(function (j) {
+      if (_sigDeclined(j)) {
+        if (note) note.textContent = _sigReasonOf(j, _sigT('signals.issue_err', null, 'Could not update the issue.'));
+        return;
+      }
+      loadSignalsIssues();
+    }).catch(function () {
+      if (note) note.textContent = _sigT('signals.issue_err', null, 'Could not update the issue.');
+    });
+}
+
+// ── Briefs (WO-62) ─────────────────────────────────────────────────────────
+var _sigBriefs = { list: [], channels: [], offered: null, max: 10 };
+
+function loadSignalsBriefs() {
+  fetch('/api/briefs').then(function (r) { return r.json(); }).then(function (d) {
+    if (d && d.available === false) {
+      signalsRenderBriefs({ briefs: [], store: 'unavailable', reason: _sigReasonOf(d, '') });
+      return;
+    }
+    _sigBriefs.list = (d && d.briefs) || [];
+    _sigBriefs.channels = (d && d.channels) || ['dashboard', 'webhook', 'slack', 'discord', 'telegram'];
+    _sigBriefs.offered = (d && d.offered) || null;
+    _sigBriefs.max = (d && d.max) || 10;
+    signalsRenderBriefs(d || {});
+  }).catch(function () { signalsRenderBriefs({ briefs: [], store: 'unavailable' }); });
+}
+
+function signalsBriefStatusWords(b) {
+  if (!b.last_run_at) return _sigT('signals.brief_never_ran', null, 'Has not run yet');
+  var when = new Date(b.last_run_at).toLocaleString();
+  if (b.last_status === 'ok') return _sigT('signals.brief_last_ok', { when: when }, 'Last run {when}: posted');
+  return _sigT('signals.brief_last_failed', { when: when, err: b.last_error || '' }, 'Last run {when}: failed. {err}');
+}
+
+function signalsRenderBriefs(d) {
+  var el = document.getElementById('signals-briefs-body');
+  var note = document.getElementById('signals-briefs-note');
+  var sel = document.getElementById('signals-brief-channel');
+  if (!el) return;
+  if (sel && !sel.options.length) {
+    _sigBriefs.channels.forEach(function (c) {
+      var o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
+    });
+  }
+  var list = _sigBriefs.list;
+  var cloud = _sigCloudReadOnly();
+  if (note) {
+    note.textContent = _sigT('signals.briefs_count', { n: list.length, max: _sigBriefs.max }, '{n} of {max}') +
+      (cloud ? ' · ' + _sigCloudNote() : '');
+  }
+  var addBtn = document.getElementById('signals-briefs-add');
+  if (addBtn) {
+    addBtn.disabled = cloud;
+    addBtn.title = cloud ? _sigCloudNote() : '';
+  }
+  if (cloud) signalsToggleBriefForm(false);
+  var dis = _sigDisabledAttr();
+  var html = '';
+  if (d && d.store === 'unavailable') {
+    html += '<div class="sig-empty">' + sigEsc((d && d.reason) ||
+      _sigT('signals.no_daemon_short', null, 'No daemon connected.')) + '</div>';
+  } else if (!list.length) {
+    html += '<div class="sig-empty">' + sigEsc(_sigT('signals.briefs_none', null, 'No briefs yet. Nothing is scheduled and nothing will be posted.')) + '</div>';
+  }
+  list.forEach(function (b) {
+    html += '<div class="sig-brief' + (b.enabled ? '' : ' sig-brief-off') + '">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(b.title) +
+          (b.builtin ? ' <span class="sig-issue-tag">' + sigEsc(_sigT('signals.brief_builtin', null, 'built in')) + '</span>' : '') +
+          (b.enabled ? '' : ' <span class="sig-issue-tag">' + sigEsc(_sigT('signals.brief_off', null, 'off')) + '</span>') + '</div>' +
+        '<div class="sig-hint">' + sigEsc(b.question) + '</div>' +
+        '<div class="sig-hint">' + sigEsc(_sigT('signals.brief_meta', { cron: b.cron_expr, channel: b.channel_ref || 'dashboard' }, 'Schedule {cron} · channel {channel}')) +
+          ' · ' + sigEsc(signalsBriefStatusWords(b)) + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsToggleBrief(\'' + sigEsc(b.id) + '\', ' + (b.enabled ? 'false' : 'true') + ')">' +
+          sigEsc(b.enabled ? _sigT('signals.brief_disable', null, 'Switch off') : _sigT('signals.brief_enable', null, 'Switch on')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsRunBrief(\'' + sigEsc(b.id) + '\')">' +
+          sigEsc(_sigT('signals.brief_run', null, 'Run now')) + '</button>' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsDeleteBrief(\'' + sigEsc(b.id) + '\')">' +
+          sigEsc(_sigT('signals.brief_delete', null, 'Delete')) + '</button>' +
+      '</div></div>';
+  });
+  if (_sigBriefs.offered) {
+    var o = _sigBriefs.offered;
+    html += '<div class="sig-brief sig-brief-offer">' +
+      '<div class="sig-issue-main">' +
+        '<div class="sig-issue-head">' + sigEsc(_sigT('signals.digest_offer', null, 'Daily digest')) + '</div>' +
+        '<div class="sig-hint">' + sigEsc(_sigT('signals.digest_offer_sub', { cron: o.cron_expr },
+          'Sessions, spend and tokens per runtime, every morning ({cron}). Runs without a model credential. Off until you switch it on.')) + '</div>' +
+      '</div>' +
+      '<div class="sig-issue-actions">' +
+        '<button class="sig-btn sig-btn-sm"' + dis + ' onclick="signalsEnableDigest()">' +
+          sigEsc(_sigT('signals.digest_enable', null, 'Switch on')) + '</button>' +
+      '</div></div>';
+  }
+  el.innerHTML = html;
+}
+
+function signalsToggleBriefForm(show) {
+  var f = document.getElementById('signals-brief-form');
+  if (!f) return;
+  if (_sigCloudReadOnly()) show = false;
+  if (show === undefined) show = f.style.display === 'none';
+  f.style.display = show ? '' : 'none';
+}
+
+function signalsSaveBrief(ev) {
+  if (ev && ev.preventDefault) ev.preventDefault();
+  var msg = document.getElementById('signals-brief-form-msg');
+  var body = {
+    title: (document.getElementById('signals-brief-title') || {}).value || '',
+    question: (document.getElementById('signals-brief-question') || {}).value || '',
+    cron_expr: (document.getElementById('signals-brief-cron') || {}).value || '',
+    channel_ref: (document.getElementById('signals-brief-channel') || {}).value || 'dashboard',
+    enabled: true
+  };
+  if (_sigCloudReadOnly()) {
+    if (msg) msg.textContent = _sigCloudNote();
+    return false;
+  }
+  _sigPostJson('/api/briefs', body).then(function (j) {
+    if (_sigDeclined(j)) {
+      if (msg) msg.textContent = _sigReasonOf(j, _sigT('signals.brief_err', null, 'Could not save the brief.'));
+      return;
+    }
+    if (msg) msg.textContent = '';
+    signalsToggleBriefForm(false);
+    loadSignalsBriefs();
+  }).catch(function () {
+    if (msg) msg.textContent = _sigT('signals.brief_err', null, 'Could not save the brief.');
+  });
+  return false;
+}
+
+// Shared tail for the brief writes: a declined answer puts the server's
+// reason in the card note; a refused fetch says so; success reloads.
+function _sigBriefWriteDone(p, fallback) {
+  var note = document.getElementById('signals-briefs-note');
+  return p.then(function (j) {
+    if (_sigDeclined(j)) {
+      if (note) note.textContent = _sigReasonOf(j, fallback);
+      return;
+    }
+    loadSignalsBriefs();
+  }).catch(function () {
+    if (note) note.textContent = fallback;
+  });
+}
+
+function signalsEnableDigest() {
+  var note = document.getElementById('signals-briefs-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  var o = _sigBriefs.offered || { id: 'builtin_daily_digest' };
+  _sigBriefWriteDone(
+    _sigPostJson('/api/briefs', { id: o.id, enabled: true, channel_ref: o.channel_ref || 'dashboard' }),
+    _sigT('signals.brief_err', null, 'Could not save the brief.'));
+}
+
+function signalsToggleBrief(id, enabled) {
+  var note = document.getElementById('signals-briefs-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  var b = null;
+  _sigBriefs.list.forEach(function (x) { if (x.id === id) b = x; });
+  if (!b) return;
+  _sigBriefWriteDone(
+    _sigPostJson('/api/briefs', { id: b.id, title: b.title, question: b.question, cron_expr: b.cron_expr,
+      tz: b.tz || '', channel_ref: b.channel_ref || 'dashboard', enabled: !!enabled }),
+    _sigT('signals.brief_err', null, 'Could not save the brief.'));
+}
+
+function signalsRunBrief(id) {
+  var note = document.getElementById('signals-briefs-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  if (note) note.textContent = _sigT('signals.brief_running', null, 'Running...');
+  _sigPostJson('/api/briefs/' + encodeURIComponent(id) + '/run', {}).then(function (j) {
+    if (_sigDeclined(j) && !(j && j.result)) {
+      if (note) note.textContent = _sigReasonOf(j, _sigT('signals.brief_err', null, 'Could not save the brief.'));
+      return;
+    }
+    loadSignalsBriefs();
+    if (note && j && j.result) {
+      note.textContent = j.ok
+        ? _sigT('signals.brief_ran_ok', null, 'Posted.')
+        : _sigT('signals.brief_ran_failed', { err: j.result.error || '' }, 'Failed: {err}');
+    }
+  }).catch(function () {
+    if (note) note.textContent = _sigT('signals.brief_err', null, 'Could not save the brief.');
+  });
+}
+
+function signalsDeleteBrief(id) {
+  var note = document.getElementById('signals-briefs-note');
+  if (_sigCloudReadOnly()) {
+    if (note) note.textContent = _sigCloudNote();
+    return;
+  }
+  _sigBriefWriteDone(
+    fetch('/api/briefs/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); }),
+    _sigT('signals.brief_delete_err', null, 'Could not delete the brief.'));
 }

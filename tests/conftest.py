@@ -11,6 +11,27 @@ import pytest
 import requests
 
 
+# Point the WHOLE test session at a scratch DuckDB unless the caller already
+# chose one. ``clawmetry.local_store`` resolves ``DB_PATH`` from this env var
+# at import time, so it has to be set here (conftest imports before any test
+# module is collected), not in a fixture.
+#
+# Why (2026-08-19): a test module that called ``get_store()`` without a path
+# override opened — or, with the sync daemon up, PROXIED INTO — the
+# developer's real ``~/.clawmetry/clawmetry.duckdb``. Thirteen alert-rule
+# fixtures (``rule 0``, ``owner-A``, ``Via dispatch`` …) landed in the live
+# store and rendered in the Alerts tab. The per-process ownership check in
+# ``local_server.discovery_serves_this_db`` stops the proxy hop; this default
+# stops the direct-open leak for every test that forgot to isolate itself.
+_CONFTEST_SET_STORE_PATH = "CLAWMETRY_LOCAL_STORE_PATH" not in os.environ
+if _CONFTEST_SET_STORE_PATH:
+    import tempfile as _tempfile
+
+    os.environ["CLAWMETRY_LOCAL_STORE_PATH"] = os.path.join(
+        _tempfile.mkdtemp(prefix="clawmetry-pytest-store-"), "clawmetry.duckdb"
+    )
+
+
 # On Windows, ntpath.expanduser resolves "~" from USERPROFILE (not HOME), so
 # monkeypatch.setenv("HOME", tmp_path) silently fails to sandbox the config
 # dir.  This shim restores POSIX parity for the test suite only.
@@ -168,6 +189,22 @@ def server(base_url, token):
     # Propagate the CI test token so the server accepts our requests
     if token:
         env["OPENCLAW_GATEWAY_TOKEN"] = token
+    # Trial-end hard block is default-ON (see clawmetry/trial_enforcement.py).
+    # CI runs have no license file → every non-allowlisted request would 402,
+    # and the entire api_test suite (which exercises /api/overview /api/sessions
+    # /api/usage etc. — all NOT on the block allowlist) would ERROR at fixture
+    # setup because the readiness probe fails. Force this test process out so
+    # the legacy tests keep testing what they were written to test; the
+    # hard-block behaviour gets its own dedicated tests in
+    # test_trial_hard_block.py that explicitly re-enable it. Force-set (not
+    # setdefault) so a CI runner that happens to inherit CLAWMETRY_HARD_BLOCK=1
+    # from a matrix step still gets the opt-out applied here.
+    env["CLAWMETRY_HARD_BLOCK"] = "0"
+    # The spawned dashboard must see the SAME store the CI workflow's other
+    # processes use (default path) — the scratch path above is for in-process
+    # unit tests only, so hand back the caller's original environment here.
+    if _CONFTEST_SET_STORE_PATH:
+        env.pop("CLAWMETRY_LOCAL_STORE_PATH", None)
     # Derive port from base_url
     try:
         port = base_url.split(":")[-1].rstrip("/")
@@ -193,3 +230,66 @@ def server(base_url, token):
     yield base_url
 
     proc.terminate()
+
+
+# ── Guard the developer's real ~/.clawmetry identity files ────────────────
+#
+# Hit for real on 2026-08-22: a `-k "license or connect or onboard or activate
+# or entitle"` run over the whole suite DELETED the developer's real
+# ~/.clawmetry/nocloud marker, silently taking a deliberately local-only
+# install out of local-only mode — the daemon would have started pushing to
+# cloud on its next pass. No single test file does it (each one passes in
+# isolation); it is an ordering interaction between a test that patches the
+# marker path and one that resolves it afresh, which is exactly the kind of
+# leak that only shows up on a machine that HAS a real install.
+#
+# Same class as the DuckDB leak guarded at the top of this file: a unit test
+# must never be able to change how the developer's own install behaves. These
+# four files are the ones whose presence or content changes product behaviour
+# (cloud egress, entitlement, first-run onboarding, account identity), so they
+# are snapshotted around every test and restored if a test disturbs them. The
+# warning names the offender so the interaction can be fixed at the source.
+#
+# Deliberately a restore-and-warn, not a failure: the leak is pre-existing and
+# a hard failure would turn an unrelated red into a merge blocker, while the
+# damage — which is the part that matters — is already undone by then.
+_GUARDED_HOME_FILES = tuple(
+    Path(os.path.expanduser("~/.clawmetry")) / name
+    for name in ("nocloud", "onboarding.json", "license.key", "config.json")
+)
+
+
+def _snapshot_guarded_files():
+    snap = {}
+    for path in _GUARDED_HOME_FILES:
+        try:
+            snap[path] = path.read_bytes() if path.is_file() else None
+        except OSError:
+            snap[path] = None
+    return snap
+
+
+@pytest.fixture(autouse=True)
+def _protect_real_clawmetry_home(request):
+    before = _snapshot_guarded_files()
+    yield
+    after = _snapshot_guarded_files()
+    for path, original in before.items():
+        if after.get(path) == original:
+            continue
+        try:
+            if original is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(original)
+        except OSError:
+            pass
+        import warnings
+
+        warnings.warn(
+            f"{request.node.nodeid} modified the real {path} — restored. "
+            "A test must never touch the developer's own ClawMetry install; "
+            "point the path at tmp_path or monkeypatch HOME.",
+            stacklevel=1,
+        )

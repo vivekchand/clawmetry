@@ -1,7 +1,12 @@
 # Dockerfile for ClawMetry
 # Quick start: docker build -t clawmetry . && docker run -p 8900:8900 clawmetry
 
-FROM python:3.11-slim
+# Pinned by digest, not just the `3.11-slim` tag: a tag is mutable, so an
+# identical `docker build` could pull different bytes tomorrow. The tag is
+# kept in the reference so the line stays readable, and Dependabot's docker
+# ecosystem (.github/dependabot.yml) advances the digest -- without that, a
+# digest pin would freeze this image at today's CVEs forever.
+FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 LABEL maintainer="ClawMetry Contributors"
 LABEL description="Real-time observability dashboard for OpenClaw AI agents"
@@ -17,6 +22,16 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# OTLP protobuf support, baked in rather than left to the [otel] extra.
+# This image is what deploy/self-hosted/docker-compose.yml builds, and the
+# daemon-free intake path (an org points OTEL_EXPORTER_OTLP_ENDPOINT here
+# instead of installing anything per machine) depends on it: OTLP/JSON
+# decodes with the stdlib, but the default exporter protocol is
+# http/protobuf, and without these the receiver answers 501 to every POST.
+# An enterprise receiver that has to be told to `pip install clawmetry[otel]`
+# before it accepts data is not a receiver.
+RUN pip install --no-cache-dir "opentelemetry-proto>=1.20.0" "protobuf>=4.21.0"
 
 # Copy application code and necessary files for setup
 COPY dashboard.py .

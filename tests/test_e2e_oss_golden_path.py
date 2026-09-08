@@ -12,6 +12,11 @@ Verifies four tiers of correctness after a full wheel-install + OpenClaw boot:
      subagents.
   4. Sessions tab DOM contains the seeded session title "Golden Path E2E" --
      proves the full render pipeline from JSONL seed to DOM is intact.
+  5. /api/attention returns correct shape + honesty invariant holds --
+     the needs-you strip never surfaces a confident list when the daemon is
+     stale. Added 2026-08-16 to close the C1 gap opened by PR #4916.
+  6. /api/hooks/attention accepts a known-runtime POST with HTTP 200 (fail-
+     open) and returns the correct shape.
 
 C1 definition (tracking issue #1646):
   "install ClawMetry from a wheel + spin up real OpenClaw + send a message +
@@ -32,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 
 import pytest
@@ -118,10 +124,11 @@ class TestOSSGoldenPath:
     """Full OSS golden path: wheel-installed dashboard + synced OpenClaw data + C1 tabs.
 
     All four test groups must pass together for criterion C1 to be green:
-      * auth group   -- token plumbing
-      * data group   -- JSONL ingestion via sync thread
-      * tab group    -- Playwright overlay sweep
-      * render group -- DOM content verification (seeded session title present)
+      * auth group      -- token plumbing
+      * data group      -- JSONL ingestion via sync thread
+      * tab group       -- Playwright overlay sweep
+      * render group    -- DOM content verification (seeded session title present)
+      * attention group -- /api/attention shape + honesty invariant (added 2026-08-16)
     """
 
     # ---- auth group --------------------------------------------------------
@@ -260,4 +267,129 @@ class TestOSSGoldenPath:
             f"Tab '{tab}': auth overlay still visible after token injection: "
             + ", ".join(blocking)
             + f". Ensure OPENCLAW_GATEWAY_TOKEN={TOKEN!r} matches CLAWMETRY_TOKEN."
+        )
+
+    # ---- attention group ---------------------------------------------------
+    # Closes the C1 gap opened by PR #4916 (2026-08-16): the needs-you
+    # attention layer ships /api/attention + /api/hooks/attention but neither
+    # was covered by any golden-path test. A 500 or shape regression on
+    # /api/attention silently renders the 'needs you' strip as 'Can't tell
+    # right now' for all users with no CI signal, because the tab overlay
+    # tests only check auth overlays, not API contract.
+
+    def test_attention_endpoint_returns_valid_shape(self):
+        """/api/attention must return HTTP 200 with the complete response shape.
+
+        In the golden-path environment the sync daemon is NOT running, so
+        fresh=False is expected. The test also verifies the honesty invariant:
+        fresh=False must return items=[] and waiting=0 so a stale daemon never
+        surfaces a confident list of blocked sessions in the UI strip.
+
+        If this test fails with a KeyError, check routes/attention.py
+        build_attention() -- all three exit paths (unavailable, stale, fresh)
+        must return the same seven keys.
+        """
+        data = _api("/api/attention")
+        required_keys = (
+            "items", "waiting", "working", "fresh",
+            "reason", "daemon_age_seconds", "runtimes_without_approval",
+        )
+        for key in required_keys:
+            assert key in data, (
+                f"/api/attention missing required key {key!r}. Response: {data}. "
+                f"All three exit paths in build_attention() (unavailable/stale/fresh) "
+                f"must return all {len(required_keys)} keys."
+            )
+        assert isinstance(data["items"], list), (
+            f"'items' must be list, got {type(data['items']).__name__}. "
+            f"Response: {data}."
+        )
+        assert isinstance(data["waiting"], int), (
+            f"'waiting' must be int, got {type(data['waiting']).__name__}."
+        )
+        assert isinstance(data["working"], int), (
+            f"'working' must be int, got {type(data['working']).__name__}."
+        )
+        assert isinstance(data["fresh"], bool), (
+            f"'fresh' must be bool, got {type(data['fresh']).__name__}."
+        )
+        assert isinstance(data["runtimes_without_approval"], list), (
+            f"'runtimes_without_approval' must be list, "
+            f"got {type(data['runtimes_without_approval']).__name__}."
+        )
+        # Honesty invariant: a stale daemon must NEVER surface a confident list.
+        # fresh=False + items!=[] would show outdated attention badges as real,
+        # defeating the three-state design (waiting / quiet / can't tell).
+        if not data["fresh"]:
+            assert data["items"] == [], (
+                f"Honesty invariant violated: fresh=False but items={data['items']!r}. "
+                f"A stale daemon must return items=[] so the strip renders "
+                f"'Can't tell right now' rather than a potentially outdated list. "
+                f"Check build_attention() in routes/attention.py: "
+                f"the payload line must be 'items: items if fresh else []'."
+            )
+            assert data["waiting"] == 0, (
+                f"Honesty invariant violated: fresh=False but waiting={data['waiting']}. "
+                f"Must be 0 when fresh=False (consistent with items=[])."
+            )
+
+    def test_attention_hook_accepts_known_runtime(self):
+        """/api/hooks/attention must accept a POST from a known runtime and return ok.
+
+        The endpoint is loopback-only; the test runner is on the same host as the
+        dashboard server so the remote_addr guard is satisfied.
+
+        The endpoint is fail-open by design: it ALWAYS returns HTTP 200 even when
+        the daemon proxy is unavailable (stored=False). A hook that 500s would
+        stall the runtime process that called it mid-permission-decision, which
+        is far worse than a missing badge. This test verifies that contract.
+
+        In the golden-path environment the daemon proxy may be unavailable, so
+        stored=False is acceptable -- the test only asserts it is a bool.
+        """
+        body = json.dumps({
+            "session_id": "golden-path-test-session-attn-001",
+            "tool_name":  "Bash",
+        }).encode()
+        req = urllib.request.Request(
+            f"{BASE_URL}/api/hooks/attention?runtime=claude_code",
+            data=body,
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "Content-Type":  "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                status = resp.status
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            data = {}
+
+        assert status == 200, (
+            f"/api/hooks/attention returned HTTP {status} (expected 200). "
+            f"The endpoint must ALWAYS return 200 -- it is fail-open by design "
+            f"so a runtime hook process calling it mid-permission-decision is "
+            f"never stalled by a 500. "
+            f"Check the outer try/except in routes/attention.py "
+            f"api_hook_attention(): it must catch ALL exceptions and return 200."
+        )
+        assert data.get("ok") is True, (
+            f"/api/hooks/attention returned ok={data.get('ok')!r} (expected True). "
+            f"Response: {data}."
+        )
+        assert data.get("state") == "waiting", (
+            f"/api/hooks/attention returned state={data.get('state')!r} "
+            f"(expected 'waiting'). Response: {data}."
+        )
+        assert "stored" in data, (
+            f"/api/hooks/attention response missing 'stored' key. "
+            f"Response: {data}. "
+            f"'stored' tells the caller whether the badge was persisted -- "
+            f"absent means the caller cannot distinguish success from a silent no-op."
+        )
+        assert isinstance(data["stored"], bool), (
+            f"'stored' must be bool, got {type(data.get('stored')).__name__}."
         )

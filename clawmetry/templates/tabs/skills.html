@@ -9,14 +9,16 @@
       <button class="refresh-btn" onclick="loadSkills()">↻ <span data-i18n="common.refresh">Refresh</span></button>
     </div>
   </div>
+  <!-- No runtime picker here on purpose — the global runtime switcher owns it. -->
+  <div id="skills-runtime-browser" class="runtime-file-browser" data-tab="skills" data-category="skills" style="display:none;margin-top:10px;"></div>
   <div id="skills-summary-row" style="display:flex;gap:12px;flex-wrap:wrap;margin:14px 0 16px 0;"></div>
   <div id="skills-list"><div style="color:var(--text-muted);font-size:13px;padding:16px;" data-i18n="app.loading">Loading...</div></div>
   <!-- Skills Browser (file explorer view) -->
-  <div id="skills-browser" style="display:none;height:calc(100vh - 240px);min-height:400px;background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+  <div id="skills-browser" class="cm-rt-panel" style="display:none;height:calc(100vh - 240px);min-height:400px;background:var(--bg-primary);border:1px solid var(--border);border-radius:8px;overflow:hidden;">
     <div style="display:flex;height:100%;">
       <div id="skills-browser-tree" style="width:260px;border-right:1px solid var(--border);overflow-y:auto;padding:8px 0;font-size:12px;background:var(--bg-secondary);"></div>
-      <div id="skills-browser-content" style="flex:1;overflow-y:auto;padding:16px 20px;">
-        <div style="color:var(--text-muted);text-align:center;padding:60px 20px;" data-i18n="skills.select_file">Select a file to view its content</div>
+      <div id="skills-browser-content" class="cm-fileview">
+        <div class="cm-fv-empty" data-i18n="skills.select_file">Select a file to view its content</div>
       </div>
     </div>
   </div>

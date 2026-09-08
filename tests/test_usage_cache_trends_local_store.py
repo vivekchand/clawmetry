@@ -28,7 +28,14 @@ def _iso(epoch_seconds: float) -> str:
 
 
 def _today_iso() -> str:
-    return datetime.now(timezone.utc).date().isoformat()
+    # The NODE-LOCAL day, because that is what both sides of this endpoint
+    # use: the handler builds its date axis with ``datetime.now()`` (local),
+    # and day buckets are node-local calendar days (ADR-046,
+    # clawmetry/cost_windows.local_day). Asserting a UTC day here passed only
+    # because it usually coincides — it went red on any machine whose local
+    # date differed from UTC at the moment the test ran, which was also the
+    # window where the endpoint itself dropped today's row on the floor.
+    return datetime.now().date().isoformat()
 
 
 def _wait_flush(store, timeout=2.0):
@@ -237,6 +244,56 @@ def test_cache_trends_dedupes_v3_sibling_pairs(fast_path_app):
     # Cache hit ratio survives the dedupe (would collapse to 33% under
     # the bug if the slim sibling won and replaced the splits with 0).
     assert abs(t["cache_hit_ratio_pct"] - 66.7) < 0.1, t
+
+
+# ── OpenAI inclusive-schema cache_hit_ratio in by_model ──────────────────
+
+
+def test_cache_trends_openai_inclusive_schema_by_model(fast_path_app):
+    """OpenAI uses an inclusive token schema: cache_read_tokens are already
+    counted inside input_tokens.  The by_model cache_hit_ratio_pct must
+    therefore use ``cache_read / input`` as its denominator, not the
+    Anthropic-style ``cache_read / (input + cache_read)``.
+
+    Regression guard for the fix in routes/usage.py:_summarise_cache_bucket
+    (openai_schema=True path).  With input=100k, cache_read=80k on gpt-4o:
+      * Wrong (Anthropic formula): 80 / (100+80) = 44.4 %
+      * Correct (OpenAI formula): 80 / 100        = 80.0 %
+    """
+    a, ls, _u = fast_path_app
+    store = ls.get_store()
+
+    # Ingest an OpenAI-style assistant event.  The Anthropic SDK envelope
+    # uses cache_read_input_tokens; OpenAI uses the same key (sync.py
+    # normalises both via _extract_usage_splits), so the fixture is identical
+    # except for the model name which drives provider_for_model().
+    _ingest_v3_assistant(
+        store,
+        sid="sess-openai-cache",
+        ts=_iso(time.time()),
+        ev_id="asst-openai-cache",
+        model="gpt-4o",
+        input_tokens=100_000,
+        output_tokens=5_000,
+        cache_read=80_000,
+        cache_write=0,
+        cost_total=0.10,
+    )
+    _wait_flush(store)
+
+    body = a.test_client().get("/api/usage/cache-trends?days=2").get_json()
+    assert body["_source"] == "local_store", body
+
+    by_model = {m["model"]: m for m in body["by_model"]}
+    assert "gpt-4o" in by_model, list(by_model.keys())
+    gpt = by_model["gpt-4o"]
+
+    # Correct OpenAI denominator: cache_read / input_tokens = 80000/100000 = 80.0%
+    assert abs(gpt["cache_hit_ratio_pct"] - 80.0) < 0.2, (
+        f"Expected ~80.0% for OpenAI inclusive schema, got {gpt['cache_hit_ratio_pct']}. "
+        "If this reads ~44.4%, the Anthropic-style denominator (input+cache_read) "
+        "is still being used."
+    )
 
 
 # ── gate: env flag OFF ────────────────────────────────────────────────────

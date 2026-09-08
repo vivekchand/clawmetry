@@ -78,9 +78,22 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
                                # backed shapes (models/runtimes plaintext
                                # aggregates; rollup_sessions e2e-classed).
                                "models", "runtimes", "rollup_sessions",
+                               # Replay history paging: capped replays fetch
+                               # older pages on demand (e2e-classed).
+                               "transcript_page",
                                # #1012 Agent Graph tab (Phase 6 Tracing):
                                # cross-session spawn topology from spans.
-                               "agent_graph"}, (
+                               "agent_graph",
+                               # #4813 session-replay: canonical replay-event
+                               # rows for one session, e2e-classed (carries
+                               # LLM message + tool-arg payloads).
+                               "replay_events",
+                               # Inputs & context: system prompt / tool
+                               # definitions per session, e2e-classed.
+                               "session_context",
+                               # WO-60: runs shaped like this one (tool-call
+                               # n-gram similarity, e2e-classed: titles).
+                               "similar_sessions"}, (
         "the dispatch allowlist changed — review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"

@@ -64,6 +64,43 @@ def test_start_sync_now_skips_ownership_otp(connect_env):
     assert connect_env == []
 
 
+def test_defer_sync_skips_ownership_otp(connect_env):
+    """The desktop onboarding's self-host path runs
+    `connect --key cm_… --defer-sync` non-interactively (no stdin). The key
+    was just minted by the pane's own OAuth/OTP flow, so a second OTP is not
+    only friction — without a tty _verify_key_ownership exits 1, the trial
+    never provisions, and the self-host user lands on OSS with every runtime
+    locked (2026-08-09 lab-machine regression)."""
+    cli._cmd_connect(_connect_args(defer_sync=True))
+    assert connect_env == []
+
+
+def test_keep_local_skips_otp_and_never_reenables_cloud(
+    connect_env, monkeypatch, tmp_path
+):
+    """`connect --key cm_… --keep-local --defer-sync` is the desktop app's
+    Self-Hosted onboarding command. It must (a) skip the ownership OTP
+    (non-interactive subprocess), (b) leave the nocloud marker in place, and
+    (c) never call enable_cloud — signing in must not switch a self-host
+    install to cloud sync."""
+    import clawmetry.config as config
+
+    marker = tmp_path / "nocloud"
+    marker.write_text("")
+    monkeypatch.setattr(config, "NOCLOUD_MARKER_PATH", str(marker))
+    enable_calls = []
+    monkeypatch.setattr(
+        config, "enable_cloud", lambda: enable_calls.append(True)
+    )
+    monkeypatch.setattr(cli, "_activate_signup_trial", lambda: False)
+
+    cli._cmd_connect(_connect_args(keep_local=True, defer_sync=True))
+
+    assert connect_env == []
+    assert marker.exists()
+    assert enable_calls == []
+
+
 def test_plain_key_connect_still_asks_otp(connect_env):
     cli._cmd_connect(_connect_args(start_sync_now=False))
     assert connect_env == ["cm_test1234567890"]

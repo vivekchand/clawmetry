@@ -227,7 +227,11 @@ def test_watcher_queries_tool_call_event_type(monkeypatch):
     import clawmetry.local_store as _ls
     monkeypatch.setattr(_ls, "get_store", lambda *a, **k: _QStub())
     approvals._query_new_events(0, None, 10)
-    assert set(seen) == {"message", "assistant", "tool_call"}
+    # The watcher scans the SHARED _TOOL_EVENT_TYPES list — including the
+    # OpenClaw v3 (model.completed/toolMetas) and NemoClaw (tool.call)
+    # shapes added by the 2026-08-17 blind-spot fix.
+    assert set(seen) == set(approvals._TOOL_EVENT_TYPES)
+    assert {"tool_call", "model.completed", "tool.call"} <= set(seen)
 
 
 # ── monitor (dry-run) mode ────────────────────────────────────────────────
@@ -341,8 +345,8 @@ def test_replay_route_happy_path(replay_client):
     assert body["since"]
     # Replay must scan the SAME event types as the live watcher (shared
     # _TOOL_EVENT_TYPES constant) — including the family adapters' tool_call.
-    assert set(replay_client._requested_event_types) == {
-        "message", "assistant", "tool_call"}
+    assert set(replay_client._requested_event_types) == set(
+        approvals._TOOL_EVENT_TYPES)
 
 
 def test_replay_route_rejects_missing_policy(replay_client):

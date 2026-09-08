@@ -6,6 +6,40 @@ FLYWHEEL — these don't claim a user-facing feature works E2E). All expected
 dollar values are recomputed IN the tests from clawmetry.providers_pricing
 (``_get_rates`` / the cache multipliers / ``default_auto_downgrade_map``) so
 the tests can't drift from the pricing table.
+
+Acceptance criteria proven here (docs/acceptance_criteria.json, mirrored from
+the "Cost and Efficiency Analytics" requirement in 8090 Software Factory):
+
+* AC-OBS-CEA-001.1 -- cost/usage is presented with its runtime scope:
+  ``test_by_runtime_scopes_each_runtime_to_its_own_rows``,
+  ``test_endpoint_runtime_scoped``.
+* AC-OBS-CEA-002.2 -- when the supporting activity is unavailable the signal
+  says so rather than presenting a confident grade:
+  ``test_empty_rows_yield_honest_empty_shape``,
+  ``test_insufficient_data_under_10_calls``,
+  ``test_endpoint_unknown_runtime_is_honest_empty``.
+* AC-OBS-CEA-002.3 -- cache hit rate is surfaced with the amount already saved
+  and a conservative estimate of what is left: ``test_cache_warm_math``,
+  ``test_cache_saved_monthly_and_scaling``,
+  ``test_savings_capped_at_90pct_of_projected_proportionally`` (the
+  conservatism cap).
+* AC-OBS-CEA-002.4 -- a cheaper same-provider sibling produces a routing
+  recommendation, gated on suitability: ``test_model_downgrade_savings_exact``,
+  ``test_model_downgrade_gates``.
+* AC-OBS-CEA-002.5 -- already-realised savings are reported alongside, and not
+  conflated with, potential savings: ``test_cache_saved_monthly_and_scaling``
+  asserts ``cache_saved_monthly_usd`` (realised) separately from the
+  ``actions[].savings_monthly_usd`` recommendations (potential).
+
+Two criteria this file's subject matter touches are covered elsewhere, in the
+modules that actually own the behaviour:
+
+* AC-OBS-CEA-001.2 (an undeterminable cost must read as unavailable, never as
+  zero) -- tests/test_runtime_records.py, where the "does this runtime record
+  cost at all" verdict lives.
+* AC-OBS-CEA-001.3 (one definition of a time scope across surfaces) --
+  tests/test_day_bucket_local.py, which pins the day BUCKETS to the same
+  node-local clock the window helpers use.
 """
 from __future__ import annotations
 
@@ -390,3 +424,120 @@ def test_endpoint_never_500s_on_store_failure(monkeypatch):
     body = resp.get_json()
     assert body["insufficient_data"] is True
     assert body["grade"] is None
+
+
+# ── GET /api/efficiency/cache-hit-rate + /routing-advisor ───────────────────
+# Uber-play companion endpoints (Aug 2026 earnings-call framing). The dashboard
+# tab derives both cards CLIENT-SIDE from the shared /api/efficiency cache; the
+# endpoints below are the public API surface (v1 consumers, mobile, benchmark
+# report). Same monkeypatch pattern as the tests above.
+
+def test_cache_hit_rate_endpoint_node_and_runtime(efficiency_app):
+    app, calls = efficiency_app
+    resp = app.test_client().get("/api/efficiency/cache-hit-rate")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["schema"] == 1
+    assert body["window_days"] == 30
+    node = body["node"]
+    # Seeded rows: tokens_in=130k node-wide, cache_read=70k -> ~35% hit rate.
+    assert node["cache_hit_rate_pct"] == pytest.approx(35.0, abs=0.01)
+    assert node["insufficient_data"] is False
+    assert node["left_on_table_estimate"] is True
+    assert node["cacheable_fraction_used"] == 0.5
+    assert node["left_on_table_monthly_usd"] >= 0
+    assert node["cache_saved_monthly_usd"] > 0
+    assert set(body["byRuntime"].keys()) == {"claude_code", "openclaw"}
+    assert body["byRuntime"]["claude_code"]["cache_hit_rate_pct"] == pytest.approx(70.0, abs=0.01)
+    assert body["byRuntime"]["openclaw"]["cache_hit_rate_pct"] == pytest.approx(0.0, abs=0.01)
+
+
+def test_cache_hit_rate_endpoint_days_clamped_and_never_500(monkeypatch):
+    import routes.usage as usage_mod
+
+    def boom(method_name, **kwargs):
+        raise RuntimeError("store exploded")
+
+    monkeypatch.setattr(usage_mod, "_ls_call", boom)
+    app = Flask(__name__)
+    app.register_blueprint(usage_mod.bp_usage)
+    client = app.test_client()
+    resp = client.get("/api/efficiency/cache-hit-rate?days=500")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["window_days"] == 90
+    assert body["node"]["insufficient_data"] is True
+    assert body["byRuntime"] == {}
+
+
+def test_routing_advisor_endpoint_shape_and_swap_math(efficiency_app):
+    app, calls = efficiency_app
+    resp = app.test_client().get("/api/efficiency/routing-advisor")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["schema"] == 1
+    node = body["node"]
+    assert "realised" in node
+    # No auto_downgraded events seeded -> realised totals are zero, honestly.
+    assert node["realised"]["total_savings_usd"] == 0.0
+    assert node["realised"]["total_substitutions"] == 0
+    # Any surviving suggestion must resolve to a KNOWN safe downgrade target.
+    for s in node["suggestions"]:
+        assert s["current_model"]
+        assert s["suggested_model"]
+        assert s["potential_savings_monthly_usd"] > 0
+        target = downgrade_model_name(s["current_model"], default_auto_downgrade_map())
+        assert s["suggested_model"] == target or target == ""
+    assert set(body["byRuntime"].keys()) == {"claude_code", "openclaw"}
+
+
+def test_routing_advisor_realised_pulled_from_store(monkeypatch):
+    import routes.usage as usage_mod
+
+    seen: list = []
+
+    def fake_ls_call(method_name, **kwargs):
+        seen.append(method_name)
+        if method_name == "query_efficiency_rollup":
+            return [
+                _row(runtime="claude_code", tokens_in=1_000, tokens_out=1_000,
+                     cost_usd=0.01, calls=1),
+            ]
+        if method_name == "query_routing_savings":
+            return {
+                "total_savings_usd": 4.2,
+                "total_substitutions": 17,
+                "by_pair": [{"from": "gpt-4o", "to": "gpt-4o-mini",
+                             "savings_usd": 4.2, "count": 17}],
+            }
+        return None
+
+    monkeypatch.setattr(usage_mod, "_ls_call", fake_ls_call)
+    app = Flask(__name__)
+    app.register_blueprint(usage_mod.bp_usage)
+    resp = app.test_client().get("/api/efficiency/routing-advisor")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["node"]["realised"]["total_savings_usd"] == 4.2
+    assert body["node"]["realised"]["total_substitutions"] == 17
+    assert len(body["node"]["realised"]["by_pair"]) == 1
+    assert "query_routing_savings" in seen
+    assert "query_efficiency_rollup" in seen
+
+
+def test_routing_advisor_never_500s_on_store_failure(monkeypatch):
+    import routes.usage as usage_mod
+
+    def boom(method_name, **kwargs):
+        raise RuntimeError("store exploded")
+
+    monkeypatch.setattr(usage_mod, "_ls_call", boom)
+    app = Flask(__name__)
+    app.register_blueprint(usage_mod.bp_usage)
+    resp = app.test_client().get("/api/efficiency/routing-advisor")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["node"]["insufficient_data"] is True
+    assert body["node"]["suggestions"] == []
+    assert body["node"]["potential_monthly_usd"] == 0.0
+    assert body["byRuntime"] == {}

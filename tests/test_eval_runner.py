@@ -33,6 +33,7 @@ if _REPO_ROOT not in sys.path:
 
 from clawmetry import eval_runner  # noqa: E402
 from clawmetry.eval_runner import (  # noqa: E402
+
     EvalRunner,
     DEFAULT_RUBRIC,
     DEFAULT_RUBRIC_YAML,
@@ -41,6 +42,13 @@ from clawmetry.eval_runner import (  # noqa: E402
     parse_score,
     save_rubric_yaml,
 )
+
+
+@pytest.fixture(autouse=True)
+def _evals_opted_in(monkeypatch):
+    """Scoring is opt-in since the 2026-09-03 egress hardening; the runner
+    tests exercise the scoring path, so opt in unless a test says otherwise."""
+    monkeypatch.setenv("CLAWMETRY_EVALS_ENABLED", "1")
 
 
 # ── Fakes ────────────────────────────────────────────────────────────────────
@@ -351,9 +359,32 @@ def test_disabled_env_var_short_circuits(monkeypatch):
     assert eval_runner.is_enabled() is False
 
 
-def test_enabled_by_default_when_env_unset(monkeypatch):
+def test_disabled_by_default_when_env_unset(monkeypatch, tmp_path):
+    """The judge sends a transcript excerpt to a third-party model API, so a
+    key in the environment is not consent: scoring is opt-in.
+
+    * AC-OBS-LADC-003.6 -- transcript scoring is off until the operator opts in.
+    """
     monkeypatch.delenv("CLAWMETRY_EVALS_ENABLED", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert eval_runner.is_enabled() is False
+
+
+def test_enabled_by_env_opt_in(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CLAWMETRY_EVALS_ENABLED", "1")
     assert eval_runner.is_enabled() is True
+
+
+def test_enabled_by_config_opt_in(monkeypatch, tmp_path):
+    monkeypatch.delenv("CLAWMETRY_EVALS_ENABLED", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".clawmetry").mkdir()
+    (tmp_path / ".clawmetry" / "config.json").write_text('{"evals": true}')
+    assert eval_runner.is_enabled() is True
+    # An explicit env "0" still wins over the config opt-in.
+    monkeypatch.setenv("CLAWMETRY_EVALS_ENABLED", "0")
+    assert eval_runner.is_enabled() is False
 
 
 # ── Live-API smoke (gated on CI_ANTHROPIC_API_KEY) ─────────────────────────
