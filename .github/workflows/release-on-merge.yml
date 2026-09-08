@@ -491,6 +491,38 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NEW_TAG="v${{ steps.bump.outputs.new }}"
+
+          # ── Pin the cloud to the version we JUST published ──────────────
+          # auto-deploy-cloud.yml also triggers on push-to-main, but on a
+          # [RELEASE] merge that push fires BEFORE this job publishes: the
+          # merge commit touches CHANGELOG.md, auto-deploy starts, reads
+          # PyPI's `info.version` — still the PREVIOUS release, because the
+          # upload below has not happened yet — and pins that. Its "wait for
+          # version on PyPI" step then passes instantly, since the version it
+          # is waiting for is the old one that is already there. Nothing
+          # re-triggers it afterwards, so the release we just cut is never
+          # pinned and never deploys.
+          #
+          # That failure is SILENT and total: the PR is merged, the wheel is
+          # on PyPI, the CHANGELOG is updated, the release job is green — and
+          # the hosted dashboard keeps serving the previous bundle forever.
+          # Measured 2026-09-08 on 0.12.829: auto-deploy fired at 23:27:51,
+          # read 0.12.828, pinned it; 0.12.829 published seconds later and had
+          # to be dispatched by hand.
+          #
+          # Dispatching HERE — after the upload — is the only ordering where
+          # "PyPI's latest" is the release this job produced. Same reason the
+          # two dispatches below exist: GITHUB_TOKEN activity does not cascade
+          # into new workflow runs, so the push trigger cannot be relied on.
+          # Non-blocking, like the others: the wheel is already published, and
+          # a failed dispatch must not fail the release. auto-deploy's own
+          # no-downgrade guard makes a duplicate or out-of-order run a no-op.
+          echo "▸ Dispatching auto-deploy-cloud.yml so the cloud pins ${{ steps.bump.outputs.new }}"
+          gh workflow run auto-deploy-cloud.yml \
+            --repo ${{ github.repository }} \
+            --ref main \
+            || echo "⚠ auto-deploy-cloud dispatch failed (non-blocking; cloud will lag until the next OSS push)"
+
           echo "▸ Dispatching desktop-artifacts.yml against $NEW_TAG"
           gh workflow run desktop-artifacts.yml \
             --repo ${{ github.repository }} \

@@ -99,10 +99,16 @@ jobs:
           token: ${{ secrets.CLOUD_REPO_PAT }}
           path: clawmetry-cloud
 
-      # NEVER pin downwards. This job reads __version__ at the TRIGGERING
-      # commit, which on a feature merge is the not-yet-bumped previous
-      # release — and the pin PR it opens can auto-merge MINUTES AFTER a
-      # newer manual pin already deployed, silently rolling prod back.
+      # NEVER pin downwards. This job's target can be BEHIND what is already
+      # deployed, and the pin PR it opens can auto-merge MINUTES AFTER a newer
+      # pin, silently rolling prod back. Two ways that happens: historically
+      # the version came from __version__ at the triggering commit (stale by
+      # construction — see "Get OSS version" above, which now reads PyPI); and
+      # still today, the push trigger fires on a [RELEASE] merge BEFORE
+      # release-on-merge uploads, so PyPI's "latest" here is the PREVIOUS
+      # release. release-on-merge dispatches this workflow again after the
+      # upload, so the correct pin follows; this guard is what makes the early,
+      # already-stale run harmless.
       # (Burned 2026-07-31: #1842 pinned 0.12.605 at 13:01Z; the stale
       # auto/pin-clawmetry-0.12.597 PR #1843 merged at 13:07Z and reverted
       # the enterprise release off prod.) Belt: exit here when the target
