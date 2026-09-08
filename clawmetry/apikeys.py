@@ -1,5 +1,8 @@
 """clawmetry/apikeys.py -- scoped, revocable read keys for custom UIs.
 
+Requirement: "Build your own UI: a keyed, scoped read API for custom
+dashboards" (64c10afd-038d-4fde-9c55-ddca80aaff1e).
+
 Why this exists
 ---------------
 The dashboard reads your agents through the ``q/1`` query contract. That
