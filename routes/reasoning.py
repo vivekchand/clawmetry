@@ -19,6 +19,7 @@ import re
 
 from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
+from clawmetry import event_shape as _event_shape
 
 # Tier-1 DuckDB fast path: enable by exporting CLAWMETRY_LOCAL_STORE_READ=1.
 # When set, /api/reasoning reads thinking blocks from the local events
@@ -302,21 +303,18 @@ def _try_local_store_reasoning(session_id: str):
         content_obj = msg.get("content") if isinstance(msg, dict) else None
 
         if isinstance(content_obj, list):
-            # Shape A — content-block walk
+            # Shape A, content-block walk, through the ONE normaliser
+            # (clawmetry.event_shape) so a thinking block means the same
+            # thing here as in the transcript and the trace.
             if isinstance(msg, dict) and msg.get("role") and msg.get("role") != "assistant":
                 continue
-            for block in content_obj:
-                if not isinstance(block, dict):
-                    continue
-                btype = block.get("type", "")
-                if btype == "thinking":
-                    tt = block.get("thinking", "")
-                    if tt:
-                        thinking_blocks.append(tt)
-                elif btype == "text":
-                    text = block.get("text", "") or ""
-                    answer_word_count += len(text.split())
-                    answer_parts.append(text)
+            shape = _event_shape.classify(r.get("event_type"), data)
+            if shape["role"] not in ("assistant", ""):
+                continue
+            thinking_blocks.extend(t for t in shape["thinking_blocks"] if t)
+            if shape["text"]:
+                answer_word_count = len(shape["text"].split())
+                answer_parts.append(shape["text"])
         else:
             # Shape B — v3 model.completed. Skip non-assistant events that
             # leaked into the union (eg legacy ``message`` with role=user

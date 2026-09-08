@@ -33,6 +33,7 @@ from flask import Blueprint, jsonify, request, Response
 from clawmetry._gate import gate
 from clawmetry.config import is_local_store_read_enabled, hide_clawmetry_session
 from clawmetry._gate import gate
+from clawmetry import event_shape as _event_shape
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
 bp_sessions = Blueprint('sessions', __name__)
@@ -350,6 +351,63 @@ _LIVE_WORKING_SECS = 120
 _LIVE_WAITING_SECS = 600
 
 
+def session_runtime(row: dict) -> str:
+    """Which runtime a ``sessions`` row belongs to. ONE definition.
+
+    ``sessions.agent_type`` is NOT it. The family ingest
+    (``sync.sync_family_runtimes``) stamps every row it writes as
+    ``openclaw`` and puts the real adapter in ``metadata.runtime``, so on a
+    live node all 300 rows read ``agent_type='openclaw'`` while their ids are
+    ``claude_code:<uuid>``. Any surface that filters on ``agent_type``
+    therefore matches nothing for every runtime except OpenClaw — which is
+    how the needs-you strip came to say "No agents running" directly above a
+    hero naming three working Claude Code sessions (founder report
+    2026-09-05).
+
+    Resolution order, most trustworthy first:
+      1. ``metadata.runtime`` — written by the family ingest.
+      2. the ``<runtime>:`` head of the session id — the namespace the store
+         itself uses, so it survives a metadata blob that failed to decode.
+      3. ``agent_type`` — correct for genuine OpenClaw rows, which have
+         neither of the above.
+    """
+    if not isinstance(row, dict):
+        return "openclaw"
+    meta = row.get("metadata")
+    if isinstance(meta, dict):
+        rt = str(meta.get("runtime") or "").strip().lower()
+        if rt:
+            return rt
+    sid = str(row.get("session_id") or "")
+    if ":" in sid:
+        head = sid.split(":", 1)[0].strip().lower()
+        # Only a real runtime name, never an arbitrary id that happens to
+        # carry a colon.
+        try:
+            from clawmetry.entitlements import ALL_RUNTIMES
+            if head in ALL_RUNTIMES:
+                return head
+        except Exception:
+            pass
+    return str(row.get("agent_type") or "").strip().lower() or "openclaw"
+
+
+def is_listable_session(session_id: str) -> bool:
+    """Is this row a top-level conversation a person would expect to see?
+
+    Excludes ClawMetry's own sessions and sub-agent children, which belong
+    under their parent rather than beside it. Shared so every "how many are
+    running" count applies the same exclusions — two counts on one screen
+    that disagree because one of them counted sub-agents is the same defect
+    as one that disagrees about the time window.
+    """
+    sid = str(session_id or "")
+    if hide_clawmetry_session(sid):
+        return False
+    low = sid.lower()
+    return "subagent" not in low and "sub-agent" not in low
+
+
 def _live_state(last_active_iso: str, status: str) -> tuple:
     """Classify one session row into ``(state, age_seconds)``.
 
@@ -432,14 +490,11 @@ def api_live_sessions():
         if not isinstance(r, dict):
             continue
         sid = r.get("session_id") or ""
-        if hide_clawmetry_session(sid):
-            continue
-        low = sid.lower()
-        if "subagent" in low or "sub-agent" in low:
+        if not is_listable_session(sid):
             continue  # sub-agents are shown under their parent, not as peers
         meta = r.get("metadata") or {}
-        runtime = (meta.get("runtime") or "").strip() or "openclaw"
-        if rt_filter and runtime.lower() != rt_filter:
+        runtime = session_runtime(r)
+        if rt_filter and runtime != rt_filter:
             continue
         last_active = r.get("last_active_at") or r.get("started_at") or ""
         state, age = _live_state(last_active, r.get("status"))
@@ -677,6 +732,15 @@ def _try_local_store_sessions():
             "attention":        r.get("attention_state") or "",
             "attention_signal": r.get("attention_signal") or "",
             "attention_tool":   r.get("attention_tool") or "",
+            # Trail (outcome alignment): what the user asked for, in full,
+            # and what the session produced in git. ``intent`` is the first
+            # user prompt (redacted, capped at 4000 chars) rather than the
+            # 80-char title; ``commits`` / ``prs`` are counts from the
+            # read-only git join (0 until a scan has linked the session).
+            "intent":           r.get("intent") or "",
+            "intent_source":    r.get("intent_source") or "",
+            "commits":          int(r.get("commits") or 0),
+            "prs":              int(r.get("prs") or 0),
             "_source":        "local_store",
         })
     # Decorate with channel context from the typed openclaw_channels table.
@@ -684,6 +748,92 @@ def _try_local_store_sessions():
     _decorate_with_channel_context(out)
     _decorate_with_authority_counts(out)
     return {"sessions": out, "_source": "local_store"}
+
+
+def _fetch_session_intent(session_id: str) -> dict:
+    """``{intent, intent_source}`` for one session via the daemon proxy, with
+    the single-process read-only fallback. Empty strings when unknown."""
+    empty = {"intent": "", "intent_source": ""}
+    try:
+        from routes.local_query import local_store_via_daemon
+        row = local_store_via_daemon("get_session_intent", session_id=session_id)
+        if isinstance(row, dict):
+            return {"intent": row.get("intent") or "",
+                    "intent_source": row.get("intent_source") or ""}
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        row = local_store.get_store(read_only=True).get_session_intent(session_id)
+        return {"intent": row.get("intent") or "",
+                "intent_source": row.get("intent_source") or ""}
+    except Exception:
+        return empty
+
+
+def _fetch_session_git_outcomes(session_id: str):
+    """Per-session git outcome payload via the daemon proxy, falling back to
+    a read-only open. ``None`` when the store cannot be reached at all."""
+    try:
+        from routes.local_query import local_store_via_daemon
+        body = local_store_via_daemon(
+            "query_session_git_outcomes", session_id=session_id)
+        if isinstance(body, dict):
+            return body
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store
+        return local_store.get_store(read_only=True).query_session_git_outcomes(
+            session_id=session_id)
+    except Exception:
+        return None
+
+
+@bp_sessions.route("/api/sessions/<session_id>/git-outcomes")
+def api_session_git_outcomes(session_id):
+    """What this session produced in git: the commits the read-only
+    correlator linked to it (sha, subject, authored time, merged verdict, PR
+    state when the code host answered) with the confidence and basis behind
+    each link, plus the pull requests those commits rode in.
+
+    Honest empties: when the git join is switched off
+    (``CLAWMETRY_GIT_OUTCOMES=0``) the response says so with
+    ``{"enabled": false, "reason": ...}`` rather than an empty list that
+    reads as "this session shipped nothing"; when no scan has reached a
+    repository yet, ``available`` is false with its own reason.
+    """
+    sid = (session_id or "").strip()
+    if not sid or len(sid) > 300:
+        return jsonify({"error": "session_id required"}), 400
+    try:
+        from clawmetry import git_outcomes as _git
+        enabled = bool(_git.is_enabled())
+    except Exception:
+        enabled = False
+    if not enabled:
+        return jsonify({
+            "session_id": sid,
+            "enabled": False,
+            "available": False,
+            "reason": "git outcome scanning is disabled on this node "
+                      "(CLAWMETRY_GIT_OUTCOMES=0)",
+            "commits": [], "prs": [],
+            "counts": {"commits": 0, "merged": 0, "prs": 0, "prs_merged": 0},
+        })
+    body = _fetch_session_git_outcomes(sid)
+    if body is None:
+        return jsonify({
+            "session_id": sid, "enabled": True, "available": False,
+            "reason": "local store unreachable",
+            "commits": [], "prs": [],
+            "counts": {"commits": 0, "merged": 0, "prs": 0, "prs_merged": 0},
+        })
+    body["enabled"] = True
+    body.setdefault("session_id", sid)
+    if not body.get("available") and not body.get("reason"):
+        body["reason"] = "no_repositories_scanned"
+    return jsonify(body)
 
 
 @bp_sessions.route("/api/sessions/by-type")
@@ -2219,13 +2369,24 @@ def _try_local_store_subagents(_rows=None):
                    or (r.get("task") or "")[:80] or sid[:20])
         model = extra.get("model") or "unknown"
 
+        # ``runtime_label`` — NOT ``runtime``. Everywhere else in this product
+        # (alerts, attention, guard, live sessions) a field called ``runtime``
+        # is the AGENT RUNTIME'S NAME. This shaper used the same word for a
+        # formatted duration and emitted it as ``"runtime"``, which is how the
+        # generic client-side resolver ``_cmRuntimeOf`` — which reads
+        # ``o.runtime`` — took "12m" for a runtime name, failed to match it,
+        # and filed EVERY sub-agent under the ``openclaw`` default. A Codex
+        # user then saw an OpenClaw pill on their own task (2026-09-07).
         elapsed_s = runtime_ms // 1000
         if elapsed_s < 60:
-            runtime = f"{elapsed_s}s"
+            runtime_label = f"{elapsed_s}s"
         elif elapsed_s < 3600:
-            runtime = f"{elapsed_s // 60}m"
+            runtime_label = f"{elapsed_s // 60}m"
         else:
-            runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+            runtime_label = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+        # The runtime's NAME, from the stored record. `extra["runtime"]` is the
+        # name on the stored side; only this shaper's old local shadowed it.
+        runtime_name = extra.get("runtime") or r.get("agent_type") or ""
 
         counts["total"] += 1
         counts[status] = counts.get(status, 0) + 1
@@ -2239,7 +2400,10 @@ def _try_local_store_subagents(_rows=None):
             "parent":           r.get("parent_session_id") or extra.get("spawnedBy"),
             "totalTokens":      token_count,
             "costUsd":          round(float(r.get("cost_usd") or 0.0), 4),
-            "runtime":          runtime,
+            # The runtime's NAME, consistent with every other record this
+            # product emits. The formatted duration lives in
+            # ``runtimeFormatted`` (display) and ``runtimeMs`` (numeric).
+            "runtime":          runtime_name,
             "runtimeMs":        runtime_ms,
             "startedAt":        spawned_at_ms or updated_at_ms,
             "updatedAt":        updated_at_ms,
@@ -2248,7 +2412,7 @@ def _try_local_store_subagents(_rows=None):
             "completionResult": extra.get("completionResult") or "",
             "completionStatus": extra.get("completionStatus") or "",
             "completionTs":     extra.get("completionTs") or "",
-            "runtimeFormatted": extra.get("runtimeFormatted") or runtime,
+            "runtimeFormatted": extra.get("runtimeFormatted") or runtime_label,
             "tokensIn":         int(extra.get("tokensIn") or 0),
             "tokensOut":        int(extra.get("tokensOut") or 0),
             "spawnAck":         extra.get("spawnAck") or "",
@@ -2275,7 +2439,9 @@ def _try_local_store_subagents(_rows=None):
             "agentsRunning":    int(extra.get("agentsRunning") or 0),
             "agentsDone":       int(extra.get("agentsDone") or 0),
             "agentsFailed":     int(extra.get("agentsFailed") or 0),
-            "runtimeName":      extra.get("runtime") or r.get("agent_type") or "",
+            # Retained as an explicit alias of ``runtime`` so any consumer
+            # written against the disambiguated name keeps working.
+            "runtimeName":      runtime_name,
         })
 
     # "running" is the daemon's own word for "active"; without it the
@@ -2477,13 +2643,26 @@ def api_subagents():
         display = s.get("displayName") or s.get("label") or sid[:20]
         started = s.get("startedAt") or s.get("updatedAt") or now_ms
         elapsed_ms = max(0, int(now_ms - started))
+        # ``runtime_label`` is the DURATION; ``runtime`` means the runtime's
+        # NAME everywhere else in this product. See the note in
+        # _try_local_store_subagents — emitting the duration under the name
+        # ``runtime`` is what made every sub-agent resolve to openclaw.
         elapsed_s = elapsed_ms // 1000
         if elapsed_s < 60:
-            runtime = f"{elapsed_s}s"
+            runtime_label = f"{elapsed_s}s"
         elif elapsed_s < 3600:
-            runtime = f"{elapsed_s // 60}m"
+            runtime_label = f"{elapsed_s // 60}m"
         else:
-            runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+            runtime_label = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+        # These records come from the gateway registry / session roster, which
+        # carry no runtime field, so derive the name from the session-id prefix
+        # the same way the rest of the product does. Empty when unknown — never
+        # a guess, because a wrong runtime label is what this row exists to fix.
+        try:
+            from clawmetry import waste_flags as _wf_rt
+            runtime_name = _wf_rt.runtime_from_session_id(key or sid) or ""
+        except Exception:
+            runtime_name = ""
         counts["total"] += 1
         counts[status] += 1
         # Enrich from the spawn scan by childKey — this gives us the task
@@ -2501,7 +2680,8 @@ def api_subagents():
             "depth": depth,
             "parent": parent,
             "totalTokens": tokens,
-            "runtime": runtime,         # formatted string (legacy)
+            "runtime": runtime_name,    # the runtime's NAME (was: a duration)
+            "runtimeName": runtime_name,  # explicit alias
             "runtimeMs": elapsed_ms,    # numeric ms — used by Active Tasks card
             "startedAt": started,
             "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
@@ -2516,7 +2696,10 @@ def api_subagents():
             "completionResult": s.get("completionResult") or sp_match.get("completionResult") or "",
             "completionStatus": s.get("completionStatus") or sp_match.get("completionStatus") or "",
             "completionTs":     s.get("completionTs")     or sp_match.get("completionTs") or "",
-            "runtimeFormatted": s.get("runtimeFormatted") or sp_match.get("runtimeFormatted") or "",
+            # Falls back to the duration computed above: the upstream field is
+            # OpenClaw's reported completion runtime and is frequently absent,
+            # and this is now the ONLY field carrying a display duration.
+            "runtimeFormatted": s.get("runtimeFormatted") or sp_match.get("runtimeFormatted") or runtime_label,
             "tokensIn":  s.get("tokensIn")  or sp_match.get("tokensIn")  or 0,
             "tokensOut": s.get("tokensOut") or sp_match.get("tokensOut") or 0,
             "spawnAck":  s.get("spawnAck")  or sp_match.get("spawnAck")  or "",
@@ -3713,7 +3896,7 @@ def api_export_otlp():
     Compatible with Grafana Tempo, Jaeger, and any OTLP-capable backend.
     """
     import dashboard as _d
-    import hashlib
+    from clawmetry import nonsecret_hash as _nsh
 
     sessions_dir = _d._get_sessions_dir()
     index_path = os.path.join(sessions_dir, "sessions.json")
@@ -3739,7 +3922,7 @@ def api_export_otlp():
         is_subagent = ":subagent:" in key
         agent_type = "subagent" if is_subagent else "main"
         session_id = val.get("sessionId", key.split(":")[-1])
-        trace_id = hashlib.md5(session_id.encode()).hexdigest()
+        trace_id = _nsh.md5(session_id.encode()).hexdigest()
         span_id = trace_id[:16]
         total_tokens = int(val.get("totalTokens") or 0)
 
@@ -4433,7 +4616,54 @@ def _try_local_store_transcripts(runtime: str = ""):
         transcripts.sort(key=lambda t: t.get("modified") or 0, reverse=True)
     _fill_family_titles(transcripts)
     _fill_attention(transcripts)
+    _fill_outcomes(transcripts)
     return {"transcripts": transcripts, "_source": "local_store"}
+
+
+def _fill_outcomes(transcripts):
+    """Stamp the verdict onto each list row: ``outcome`` (one of the six
+    ``clawmetry.outcome_classifier`` labels), ``outcome_confidence``,
+    ``cost_usd`` and ``ended_at``. Powers the verdict badge on the Sessions
+    list and the "How it ended" card on the Trail page.
+
+    Reads ``query_outcomes`` through the daemon (the same rows the Overview
+    outcome tile uses; the store classifies still-unlabeled sessions inline
+    and persists the label). Best-effort: a row without a stamp simply
+    renders no badge, the honest quiet default. Never fails the request.
+    """
+    try:
+        # The list shows the most recent rows only, so a short window and a
+        # small cap keep this read cheap; the store caches it between calls.
+        since = datetime.fromtimestamp(time.time() - 14 * 86400, tz=timezone.utc)
+        rows = _ls_call(
+            "query_outcomes",
+            since=since.strftime("%Y-%m-%dT%H:%M:%S"),
+            limit=300,
+        ) or []
+    except Exception:
+        return
+    by_id = {}
+    for r in rows:
+        sid = str(r.get("session_id") or "")
+        if sid:
+            by_id[sid] = r
+            # Family runtimes prefix the id (claude_code:<uuid>); the
+            # transcripts list may carry the bare form.
+            if ":" in sid:
+                by_id.setdefault(sid.split(":", 1)[1], r)
+    if not by_id:
+        return
+    for t in transcripts:
+        r = by_id.get(str(t.get("id") or ""))
+        if not r:
+            continue
+        if r.get("outcome"):
+            t["outcome"] = r.get("outcome")
+            t["outcome_confidence"] = r.get("outcome_confidence")
+        if r.get("cost_usd") is not None:
+            t["cost_usd"] = r.get("cost_usd")
+        if r.get("ended_at"):
+            t["ended_at"] = r.get("ended_at")
 
 
 def _fill_attention(transcripts):
@@ -4725,25 +4955,19 @@ def _anthropic_tool_turns(blocks, ts_ms, name_by_id):
     references the id) can show which tool it came from.
     """
     tool_turns: list[dict] = []
-    texts: list[str] = []
-    thinkings: list[str] = []
     if not isinstance(blocks, list):
         return tool_turns, "", ""
+    # One block walker for every reader (clawmetry.event_shape); this
+    # function only decides how the transcript RENDERS each part. Turns are
+    # emitted in block order so a call and its result keep their sequence.
     for b in blocks:
         if not isinstance(b, dict):
             continue
         bt = b.get("type")
-        if bt == "text":
-            t = b.get("text")
-            if t:
-                texts.append(t if isinstance(t, str) else str(t))
-        elif bt == "thinking":
-            t = b.get("thinking")
-            if t:
-                thinkings.append(t if isinstance(t, str) else str(t))
-        elif bt == "tool_use":
-            name = b.get("name") or "tool"
-            tid = b.get("id")
+        if bt == "tool_use":
+            part = _event_shape.split_blocks([b])["tool_uses"][0]
+            name = part["name"]
+            tid = part["id"]
             if tid:
                 name_by_id[tid] = name
             tool_turns.append({
@@ -4754,11 +4978,12 @@ def _anthropic_tool_turns(blocks, ts_ms, name_by_id):
                 "tool": {
                     "kind": "call",
                     "name": name,
-                    "input": _pretty_json(b.get("input") or {}),
+                    "input": _pretty_json(part["input"] or {}),
                 },
             })
         elif bt == "tool_result":
-            name = name_by_id.get(b.get("tool_use_id"), "")
+            part = _event_shape.split_blocks([b])["tool_results"][0]
+            name = name_by_id.get(part["tool_use_id"], "")
             tool_turns.append({
                 "role": "tool",
                 "content": "",
@@ -4767,11 +4992,12 @@ def _anthropic_tool_turns(blocks, ts_ms, name_by_id):
                 "tool": {
                     "kind": "result",
                     "name": name,
-                    "output": _cap_text(_stringify_content(b.get("content"))),
-                    "is_error": bool(b.get("is_error")),
+                    "output": _cap_text(_stringify_content(part["content"])),
+                    "is_error": part["is_error"],
                 },
             })
-    return tool_turns, "\n".join(texts), "\n".join(thinkings)
+    parts = _event_shape.split_blocks(blocks)
+    return tool_turns, parts["text"], parts["thinking"]
 
 
 def _expand_openclaw_event(obj: dict, ts_ms):
@@ -4792,9 +5018,12 @@ def _expand_openclaw_event(obj: dict, ts_ms):
     ):
         return turns
 
+    # Shape questions (who spoke, which tool, what text) are answered ONCE
+    # in clawmetry.event_shape; this function only renders turns.
+    shape = _event_shape.classify(etype, obj)
+
     if etype == "prompt.submitted":
-        text = data.get("finalPromptText") or data.get("text") or data.get("prompt") or ""
-        text = _stringify_content(text)
+        text = shape["text"]
         if text.strip():
             turns.append({"role": "user", "content": text, "timestamp": ts_ms})
         return turns
@@ -4842,25 +5071,15 @@ def _expand_openclaw_event(obj: dict, ts_ms):
         return turns
 
     if etype == "model.completed":
-        text = (
-            data.get("completionText")
-            or data.get("text")
-            or data.get("assistantText")
-        )
-        if text is None:
-            atexts = data.get("assistantTexts")
-            if isinstance(atexts, list):
-                text = "\n".join(_stringify_content(a) for a in atexts if a)
-            elif isinstance(atexts, str):
-                text = atexts
-        text = _stringify_content(text) if text is not None else ""
+        text = shape["text"]
         if text.strip():
             turns.append({"role": "assistant", "content": text, "timestamp": ts_ms})
         return turns
 
     if etype in ("tool.call", "tool.invoked"):
-        tname = data.get("name") or data.get("tool") or "tool"
-        tinput = data.get("input") or data.get("arguments") or data.get("args") or {}
+        call = shape["tool_uses"][0] if shape["tool_uses"] else {}
+        tname = shape["tool_name"] or call.get("name") or "tool"
+        tinput = call.get("input") or {}
         try:
             body = json.dumps(tinput, indent=2)[:500]
         except (TypeError, ValueError):
@@ -4873,7 +5092,7 @@ def _expand_openclaw_event(obj: dict, ts_ms):
         return turns
 
     if etype in ("tool.result", "tool.completed"):
-        tname = data.get("name") or data.get("tool") or "tool"
+        tname = shape["tool_name"] or "tool"
         result = data.get("output") or data.get("result") or ""
         try:
             body = json.dumps(result, indent=2)[:500] if not isinstance(result, str) else result[:500]
@@ -5309,6 +5528,11 @@ def _try_local_store_transcript(session_id: str, _events=None, _msg_cap: int = 5
                 _cap_transcript_messages(messages, _msg_cap))
         except Exception:
             out_messages = messages[:_msg_cap]
+    # Trail: the session's intent (full first user prompt) rides the
+    # transcript payload so the replay can show "what was asked" above the
+    # turns without a second request. Best-effort: an unreachable store
+    # yields an empty string, never a missing key.
+    _intent = _fetch_session_intent(session_id)
     ret = {
         "name": session_id[:40],
         "messageCount": len(messages),
@@ -5317,6 +5541,8 @@ def _try_local_store_transcript(session_id: str, _events=None, _msg_cap: int = 5
         "duration": duration,
         "messages": out_messages,
         "external_api_calls": ext_calls,
+        "intent": _intent.get("intent") or "",
+        "intent_source": _intent.get("intent_source") or "",
         "_source": "local_store",
     }
     if truncated:
@@ -6980,6 +7206,124 @@ def _try_local_store_model_transitions(sid: str):
     }
 
 
+# ── Inputs & context: what the agent was given ──────────────────────────────
+
+
+def _trail_coverage_for(runtime: str) -> dict:
+    """The adapter's own declaration of what it can capture (see
+    ``AgentAdapter.trail_coverage``). ``unknown`` when no adapter for the
+    runtime is loaded in this process (a paid adapter without the pro wheel),
+    which is a different statement from "the runtime does not expose it"."""
+    try:
+        from clawmetry.adapters import registry as _reg
+        adapter = _reg.get(runtime)
+    except Exception:
+        adapter = None
+    if adapter is None and runtime in ("openclaw", "nemoclaw"):
+        # The two FREE adapters ship in this wheel; answer from the class even
+        # when nothing has populated the registry (tests, single-process boots).
+        try:
+            if runtime == "openclaw":
+                from clawmetry.adapters.openclaw import OpenClawAdapter as _A
+            else:
+                from clawmetry.adapters.nemo import NemoClawAdapter as _A
+            adapter = _A()
+        except Exception:
+            adapter = None
+    if adapter is None:
+        return {"inputs": "unknown", "reasoning": "unknown",
+                "note": "no adapter loaded for this runtime"}
+    try:
+        cov = adapter.trail_coverage()
+    except Exception:
+        cov = None
+    if not isinstance(cov, dict):
+        return {"inputs": "none", "reasoning": "none", "note": ""}
+    return {
+        "inputs": str(cov.get("inputs") or "none"),
+        "reasoning": str(cov.get("reasoning") or "none"),
+        "note": str(cov.get("note") or ""),
+    }
+
+
+def _runtime_of_session_id(sid: str, rows: list, requested: str) -> str:
+    for r in rows:
+        at = (r.get("agent_type") or "").strip()
+        if at:
+            return at
+    if requested:
+        return requested
+    # Family sessions carry their runtime as a prefix (claude_code:<uuid>).
+    if ":" in sid:
+        head = sid.split(":", 1)[0]
+        if head and " " not in head and len(head) <= 32:
+            return head
+    return "openclaw"
+
+
+@bp_sessions.route("/api/sessions/<path:session_id>/context")
+def api_session_context(session_id):
+    """Inputs & context for one session, from the DuckDB ``session_context``
+    table only (no raw-file fallback: a session ingested from a machine other
+    than this one has no file here).
+
+    Returns ``{session_id, runtime, coverage:{inputs, reasoning, note},
+    items:[{kind, sha256, size_bytes, summary, turns, first_ts, last_ts,
+    content, content_truncated}]}``. ``content`` is the redacted, capped text
+    for ``system_prompt`` / ``user_prompt`` / ``context_file`` only; for
+    ``tools_available`` and ``mcp_servers`` the JSON ``summary`` carries the
+    names and ``names`` is the parsed list. Honours ``?runtime=``.
+    """
+    sid = (session_id or "").strip()
+    if not sid or any(c in sid for c in ("/", "\\", "..")):
+        return jsonify({"error": "invalid session id"}), 400
+    requested = (request.args.get("runtime") or "").strip().lower()
+    if requested == "all":
+        requested = ""
+    rows = _ls_call(
+        "query_session_context",
+        session_id=sid,
+        agent_type=requested or None,
+        limit=200,
+    ) or []
+    runtime = _runtime_of_session_id(sid, rows, requested)
+    items = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        item = {
+            "kind": r.get("kind"),
+            "sha256": r.get("sha256"),
+            "size_bytes": r.get("size_bytes"),
+            "summary": r.get("summary"),
+            "turns": r.get("turns"),
+            "first_ts": r.get("first_ts"),
+            "last_ts": r.get("last_ts"),
+            "content": r.get("content"),
+            "content_truncated": bool(r.get("content_truncated")),
+        }
+        if item["kind"] in ("tools_available", "mcp_servers", "runtime_meta"):
+            try:
+                parsed = json.loads(r.get("summary") or "null")
+            except Exception:
+                parsed = None
+            if item["kind"] == "runtime_meta":
+                item["meta"] = parsed if isinstance(parsed, dict) else {}
+            else:
+                item["names"] = parsed if isinstance(parsed, list) else []
+        items.append(item)
+    return jsonify({
+        "session_id": sid,
+        "runtime": runtime,
+        "coverage": _trail_coverage_for(runtime),
+        "items": items,
+        "count": len(items),
+        # Every row is measured from the runtime's own event; nothing here
+        # is estimated, so the UI never needs an "estimated" badge for it.
+        "basis": "measured",
+    })
+
+
 @bp_sessions.route("/api/sessions/<sid>/model-transitions")
 def api_session_model_transitions(sid):
     """Return model/provider transitions detected within a single session."""
@@ -8369,28 +8713,13 @@ def _run_compare_stats(sid, quality=None):
 def _run_compare_deltas(a, b):
     """Signed deltas for every numeric metric in both stats panels. Each entry
     carries ``favorable`` so the UI can colour improvements green and
-    regressions red without re-applying the rule."""
-    out = {}
-    for key in (_RUN_COMPARE_LOWER_BETTER + _RUN_COMPARE_HIGHER_BETTER):
-        va = a.get(key)
-        vb = b.get(key)
-        if va is None or vb is None:
-            continue
-        try:
-            absd = vb - va
-        except TypeError:
-            continue
-        # percent change relative to A; None when A is zero (avoid /0).
-        pct = (absd / va * 100.0) if va not in (0, 0.0) else None
-        if key in _RUN_COMPARE_LOWER_BETTER:
-            favorable = absd < 0  # decreased -> improvement
-        else:
-            favorable = absd > 0
-        out[key] = {
-            "a": va, "b": vb, "abs": absd, "pct": pct,
-            "favorable": favorable, "favorable_lower": key in _RUN_COMPARE_LOWER_BETTER,
-        }
-    return out
+    regressions red without re-applying the rule.
+
+    The arithmetic is :func:`clawmetry.cohort_compare.signed_deltas`, the one
+    delta rule shared with ``/api/cohort-compare`` (WO-60), so a green cell
+    means the same thing on both surfaces."""
+    from clawmetry.cohort_compare import signed_deltas
+    return signed_deltas(a, b, _RUN_COMPARE_LOWER_BETTER, _RUN_COMPARE_HIGHER_BETTER)
 
 
 @bp_sessions.route("/api/run-compare")

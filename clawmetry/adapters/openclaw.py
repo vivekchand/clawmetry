@@ -398,6 +398,15 @@ def _resolve_lmstudio_base_url() -> str:
     return val or "http://localhost:1234/v1"
 
 
+def _resolve_vllm_base_url() -> str:
+    """Return the active vLLM server base URL from env var or the default.
+
+    VLLM_HOST overrides; falls back to vLLM's default port.
+    """
+    val = os.environ.get("VLLM_HOST", "").strip()
+    return val or "http://localhost:8000/v1"
+
+
 def _list_ollama_models(host: str) -> list:
     """Return available Ollama model names. Never raises; returns [] on failure.
 
@@ -774,6 +783,126 @@ def _gateway_log_events_probe(count: int = 50) -> tuple:
         return [], False
 
 
+def _gateway_migration_warning(events: list) -> Optional[str]:
+    """Return the first migration-warning message from gateway log events, or None.
+
+    OpenClaw 2026.9.1+ stays running when a migration warning is detected
+    instead of refusing to start, but enters a degraded state.  The warning
+    appears as a ``warn``/``warning``-level log entry whose ``msg`` contains
+    the word ``migration``.  Callers surface ``gatewayDegraded`` so the UI
+    can distinguish "up" from "up but degraded".
+
+    Accepts the already-fetched events list (no extra I/O).  Returns None
+    when no migration warning is present.  Never raises (#5547).
+    """
+    try:
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            level = str(evt.get("level", "")).lower()
+            if level not in ("warn", "warning"):
+                continue
+            msg = str(evt.get("msg", ""))
+            if "migration" in msg.lower():
+                return msg
+        return None
+    except Exception:
+        return None
+
+
+def _gateway_oom_victim(events: list) -> dict:
+    """Return OOM-victim metadata when a local model server was killed under memory pressure.
+
+    OpenClaw 2026.9.1+ ("A Gateway that stays up") lowers the gateway's own OOM
+    score so the kernel preferentially kills local model server processes (e.g.
+    an Ollama-backed sandbox) rather than the gateway itself.  When that happens
+    the gateway logs a structured entry whose ``msg`` mentions ``"oom"`` or
+    ``"out of memory"``, or whose ``msg`` mentions ``"killed"`` alongside a
+    model-server keyword (``"model"``, ``"ollama"``, ``"sandbox"``, or
+    ``"server"``).
+
+    Accepts the already-fetched events list (no extra I/O).  Returns a dict with
+    ``oomVictimDetected=True``, ``oomVictimMsg``, and optionally ``oomVictimTs``
+    on the first matching entry; returns ``{}`` when no OOM event is found.
+    Never raises (closes #5548).
+    """
+    try:
+        if not events:
+            return {}
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            raw_msg = evt.get("msg", "")
+            msg = str(raw_msg).lower()
+            if not msg:
+                continue
+            is_oom = "oom" in msg or "out of memory" in msg
+            is_model_kill = "killed" in msg and any(
+                kw in msg for kw in ("model", "ollama", "sandbox", "server")
+            )
+            if is_oom or is_model_kill:
+                result: dict = {
+                    "oomVictimDetected": True,
+                    "oomVictimMsg": str(raw_msg),
+                }
+                ts = evt.get("ts")
+                if ts is not None:
+                    result["oomVictimTs"] = ts
+                return result
+        return {}
+    except Exception:
+        return {}
+
+
+def _backup_outcome_events(events: list) -> dict:
+    """Return backup-outcome metadata when the gateway logs a backup event.
+
+    OpenClaw 2026.9.2+ ("Backups that preserve your data") improved the backup
+    pipeline to reject corrupt archive headers instead of silently accepting an
+    incomplete backup, and to preserve NUL-containing text in Git backups.
+    A corrupt-archive rejection is a data-loss-adjacent event: the backup did
+    not complete, but silently.  This scanner makes it visible in ClawMetry.
+
+    Scans the already-fetched events list (no extra I/O).  Matches entries
+    whose ``msg`` contains ``"backup"`` (the match trigger).  Within a matching
+    entry, the additional keywords ``"corrupt"``, ``"integrity"``,
+    ``"reject"``, and ``"invalid"`` determine whether to set
+    ``backupCorruptArchiveRejected=True``.  Returns a dict with
+    ``backupOutcomeDetected=True``, ``backupOutcomeMsg``, and optionally
+    ``backupOutcomeTs`` and ``backupCorruptArchiveRejected=True``.  Returns
+    ``{}`` when no backup event is found.  Never raises (closes #5618).
+    """
+    try:
+        if not events:
+            return {}
+        _BACKUP_KEYWORDS = ("backup",)
+        _CORRUPT_KEYWORDS = ("corrupt", "integrity", "reject", "invalid")
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            raw_msg = evt.get("msg", "")
+            msg = str(raw_msg).lower()
+            if not msg:
+                continue
+            is_backup = any(kw in msg for kw in _BACKUP_KEYWORDS)
+            if not is_backup:
+                continue
+            result: dict = {
+                "backupOutcomeDetected": True,
+                "backupOutcomeMsg": str(raw_msg),
+            }
+            ts = evt.get("ts")
+            if ts is not None:
+                result["backupOutcomeTs"] = ts
+            is_corrupt = any(kw in msg for kw in _CORRUPT_KEYWORDS)
+            if is_corrupt:
+                result["backupCorruptArchiveRejected"] = True
+            return result
+        return {}
+    except Exception:
+        return {}
+
+
 def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
     """Retrieve OCSF JSON audit log lines for a NemoClaw sandbox.
 
@@ -1144,6 +1273,11 @@ def _sandbox_inference_configs() -> list:
                 provider_key = "lmstudio"
                 primary = f"lmstudio/{model}" if model else ""
                 base_url = _resolve_lmstudio_base_url()
+                compat = "openai"
+            elif provider in ("vllm", "vllm-server"):
+                provider_key = "vllm"
+                primary = f"vllm/{model}" if model else ""
+                base_url = _resolve_vllm_base_url()
                 compat = "openai"
             else:
                 provider_key = _MANAGED
@@ -2558,6 +2692,31 @@ class OpenClawAdapter(AgentAdapter):
             if _gw_events:
                 meta["gatewayLogEvents"] = _gw_events
             meta["gatewayLogSourceAvailable"] = _gw_available
+            # Migration-warning degraded-start state (#5547): OpenClaw 2026.9.1+
+            # keeps the gateway running when a migration warning fires but enters a
+            # partial/degraded boot state distinct from full healthy or full down.
+            # Scan the already-fetched events so there is no extra I/O.
+            _mig_warn = _gateway_migration_warning(_gw_events)
+            if _mig_warn is not None:
+                meta["gatewayDegraded"] = True
+                meta["gatewayMigrationWarning"] = _mig_warn
+            # OOM-victim detection (#5548): OpenClaw 2026.9.1 lowers its own OOM
+            # score so the kernel preferentially kills local model servers (e.g.
+            # Ollama) under memory pressure.  Scan the already-fetched events so
+            # there is no extra I/O; surface oomVictimDetected so the dashboard
+            # can explain an otherwise-silent sandbox outage.
+            _oom = _gateway_oom_victim(_gw_events)
+            if _oom:
+                meta.update(_oom)
+            # Backup-outcome detection (#5618): OpenClaw 2026.9.2 rejects corrupt
+            # archive headers instead of silently accepting an incomplete backup.
+            # A corrupt-archive rejection is data-loss-adjacent and was invisible
+            # to ClawMetry before this.  Scan the already-fetched events so there
+            # is no extra I/O; surface backupOutcomeDetected (and optionally
+            # backupCorruptArchiveRejected) so the dashboard can flag it.
+            _backup = _backup_outcome_events(_gw_events)
+            if _backup:
+                meta.update(_backup)
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by
@@ -3371,6 +3530,40 @@ class OpenClawAdapter(AgentAdapter):
             Capability.LOGS,
             Capability.GATEWAY_RPC,
             Capability.CHANNELS,
+            # The trajectory recorder writes ``context.compiled`` (system
+            # prompt + tool definitions) next to every transcript; the daemon
+            # ingests it into session_context (sync._sync_trajectory_context).
+            Capability.INPUTS,
+            # Reasoning: OpenClaw persists assistant ``message.content[]``
+            # blocks of ``type: "thinking"`` (the transcript writer keeps them
+            # when a thinking level is set); the tracing/anatomy readers turn
+            # each block into a reasoning span. See trail_coverage().
+            Capability.REASONING,
+        }
+
+    def trail_coverage(self) -> dict:
+        """Decision-trail coverage for OpenClaw session JSONL.
+
+        Inputs are ``full``: the trajectory sidecar's ``context.compiled``
+        carries the system prompt, the prompt and the tool definitions on
+        every model call, and the daemon reads that event out of the sidecar
+        (``sync._sync_trajectory_context``). It is written only when
+        ``OPENCLAW_TRAJECTORY`` is not turned off. Reasoning is ``partial``:
+        the session transcript keeps assistant ``message.content[]`` blocks
+        of ``type: "thinking"`` only when the session runs with a thinking
+        level set (``thinking_level_change`` events record the switch); with
+        thinking off, or a model that has no extended thinking, the
+        transcript carries plain ``text`` blocks and there is nothing to show.
+        """
+        return {
+            "inputs": "full",
+            "reasoning": "partial",
+            "note": ("<sid>.trajectory.jsonl context.compiled carries systemPrompt, "
+                     "prompt, tools[] (name/description/parameters), transport, "
+                     "streamStrategy, imagesCount plus workspaceDir/provider/modelId "
+                     "on the line (written only when OPENCLAW_TRAJECTORY is not off); "
+                     "assistant message.content[] thinking blocks are written only "
+                     "while a thinking level is set for the session"),
         }
 
     # ── Span reconstruction (issue #1010 / Trace 4) ───────────────────────────────────────────────
@@ -3570,6 +3763,38 @@ class OpenClawAdapter(AgentAdapter):
                     _slow = obj.get("slowReply") or obj.get("slow_reply")
                     if _slow:
                         llm_attrs["llm.slow_reply"] = True
+                # Reply lifecycle state from harness 2026.9.2 (#138071, #137606,
+                # #136236, #138519, #138565): a restart-recovered, queued, or delegated
+                # reply carries these fields so the Tracing tab can distinguish it from
+                # a normal reply. Keys accepted in both camelCase (harness native) and
+                # snake_case (normalised). Applied to every assistant span, not just the
+                # first -- a recovery or queue transition can happen mid-session.
+                _reply_queue_status = (
+                    obj.get("replyQueueStatus") or obj.get("reply_queue_status")
+                )
+                if isinstance(_reply_queue_status, str) and _reply_queue_status.strip():
+                    llm_attrs["reply.queue_status"] = _reply_queue_status.strip()
+                _recovery_marker = (
+                    obj.get("recoveryMarker") or obj.get("recovery_marker")
+                )
+                if isinstance(_recovery_marker, str) and _recovery_marker.strip():
+                    llm_attrs["reply.recovery_marker"] = _recovery_marker.strip()
+                elif _recovery_marker is not None and _recovery_marker is not False:
+                    llm_attrs["reply.recovery_marker"] = str(_recovery_marker)
+                _retry_attempt = obj.get("retryAttempt") or obj.get("retry_attempt")
+                if _retry_attempt is not None:
+                    try:
+                        llm_attrs["reply.retry_attempt"] = int(_retry_attempt)
+                    except (TypeError, ValueError):
+                        pass
+                _continuation_count = (
+                    obj.get("continuationCount") or obj.get("continuation_count")
+                )
+                if _continuation_count is not None:
+                    try:
+                        llm_attrs["reply.continuation_count"] = int(_continuation_count)
+                    except (TypeError, ValueError):
+                        pass
                 spans.append({
                     "span_id": llm_sid,
                     "trace_id": trace_id,
@@ -3863,6 +4088,46 @@ class OpenClawAdapter(AgentAdapter):
                     "session_id": session_id,
                     "agent_type": agent_type,
                     "attributes": wc_attrs,
+                })
+
+            elif t == "response_steered":
+                # OpenClaw CHANGELOG 2026.9.2 (#138046, #138434): when a
+                # response is steered mid-flight over a cached WebSocket during
+                # async tool execution, the harness writes a response_steered
+                # event. Without this branch the span builder silently drops it,
+                # leaving a gap in the Timeline/Brain stream (#5578).
+                _sc = (
+                    obj.get("steeringCount")
+                    or obj.get("steering_count")
+                    or obj.get("count")
+                )
+                _tid = (
+                    obj.get("asyncToolId")
+                    or obj.get("async_tool_id")
+                    or obj.get("toolCallId")
+                    or obj.get("tool_call_id")
+                )
+                _cid = obj.get("continuationId") or obj.get("continuation_id")
+                steer_attrs: dict = {"event.kind": "response_steered"}
+                if _sc is not None:
+                    try:
+                        steer_attrs["steering.count"] = int(_sc)
+                    except (TypeError, ValueError):
+                        pass
+                if isinstance(_tid, str) and _tid.strip():
+                    steer_attrs["steering.async_tool_id"] = _tid.strip()
+                if isinstance(_cid, str) and _cid.strip():
+                    steer_attrs["steering.continuation_id"] = _cid.strip()
+                spans.append({
+                    "span_id": _sid("response_steered", session_id, str(raw_ts)),
+                    "trace_id": trace_id,
+                    "parent_span_id": session_span_id,
+                    "name": "response.steered",
+                    "kind": "INTERNAL",
+                    "start_ts": ts,
+                    "session_id": session_id,
+                    "agent_type": agent_type,
+                    "attributes": steer_attrs,
                 })
 
         return spans

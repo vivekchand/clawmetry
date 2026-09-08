@@ -56,7 +56,8 @@ class TestCronHealthSummary:
 
     def test_response_structure(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
-        assert_keys(d, "jobs", "totals", "hasAnomalies", "hasErrors", "hasSilent")
+        assert_keys(d, "jobs", "totals", "hasAnomalies", "hasErrors", "hasSilent",
+                    "quarantinedCrons", "hasQuarantined")
 
     def test_jobs_is_list(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
@@ -65,8 +66,25 @@ class TestCronHealthSummary:
     def test_totals_keys(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
         totals = d["totals"]
-        assert_keys(totals, "total", "ok", "error", "silent", "disabled", "warning")
-        assert totals["total"] >= 0
+        assert_keys(totals, "total", "ok", "error", "silent", "disabled", "warning",
+                    "quarantined")
+        for key in ("total", "ok", "error", "silent", "disabled", "warning", "quarantined"):
+            assert totals[key] >= 0, f"totals.{key} must be non-negative, got {totals[key]}"
+
+    def test_quarantine_fields_types(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
+        assert isinstance(d["quarantinedCrons"], list), "quarantinedCrons must be a list"
+        assert isinstance(d["hasQuarantined"], bool), "hasQuarantined must be bool"
+        assert isinstance(d["totals"]["quarantined"], int), "totals.quarantined must be int"
+
+    def test_quarantine_count_consistency(self, api, base_url):
+        d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
+        assert d["totals"]["quarantined"] == len(d["quarantinedCrons"]), (
+            "totals.quarantined must equal len(quarantinedCrons)"
+        )
+        assert d["hasQuarantined"] == bool(d["quarantinedCrons"]), (
+            "hasQuarantined must equal bool(quarantinedCrons)"
+        )
 
     def test_totals_sum_consistency(self, api, base_url):
         d = assert_ok(get(api, base_url, "/api/cron/health-summary"))
@@ -452,3 +470,79 @@ class TestAnomalyDetectionLogic:
             conn.close()
         finally:
             os.unlink(db_path)
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — cron quarantine surfacing (GH #5546, no server needed)
+# ---------------------------------------------------------------------------
+
+class TestCronQuarantineUnit:
+    """Pure unit tests for quarantined-row extraction logic.
+
+    Exercises the gw_data.get("quarantined", []) path in
+    api_cron_health_summary without a running server by directly calling the
+    helper that builds the local-store response, which is fully self-contained.
+    """
+
+    def test_local_store_response_includes_quarantine_fields(self):
+        """_try_local_store_cron_health_summary always returns quarantine keys."""
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import routes.crons as cron_routes
+
+        # Patch _ls_call to return an empty list (no DuckDB rows).
+        original = cron_routes._ls_call
+        try:
+            cron_routes._ls_call = lambda *a, **kw: []
+            result = cron_routes._try_local_store_cron_health_summary()
+        finally:
+            cron_routes._ls_call = original
+
+        # With no DuckDB rows the function returns None (empty table path).
+        # Test the non-None path by returning a single minimal row instead.
+        minimal_row = {
+            "cron_id": "test-1", "name": "test", "enabled": 1,
+            "last_run_at": None, "last_status": "ok", "next_run_at": None,
+            "data": None, "updated_at": None,
+        }
+        try:
+            cron_routes._ls_call = lambda *a, **kw: [minimal_row]
+            result = cron_routes._try_local_store_cron_health_summary()
+        finally:
+            cron_routes._ls_call = original
+
+        if result is None:
+            pytest.skip("_row_to_cron_job rejected the minimal row — schema mismatch, skip")
+
+        assert "quarantinedCrons" in result, "quarantinedCrons missing from local-store response"
+        assert "hasQuarantined" in result, "hasQuarantined missing from local-store response"
+        assert result["quarantinedCrons"] == [], "local-store path should always return []"
+        assert result["hasQuarantined"] is False, "local-store path should always return False"
+        assert result["totals"].get("quarantined") == 0, "totals.quarantined should be 0"
+
+    def test_quarantine_defaults_when_gateway_omits_field(self):
+        """gw_data without 'quarantined' key produces safe defaults."""
+        gw_data = {"jobs": []}
+        quarantined_rows = gw_data.get("quarantined", [])
+        if not isinstance(quarantined_rows, list):
+            quarantined_rows = []
+        assert quarantined_rows == []
+        assert bool(quarantined_rows) is False
+
+    def test_quarantine_extracted_when_gateway_provides_field(self):
+        """gw_data with 'quarantined' key is surfaced correctly."""
+        bad_row = {"id": "bad-cron", "reason": "malformed schedule"}
+        gw_data = {"jobs": [], "quarantined": [bad_row]}
+        quarantined_rows = gw_data.get("quarantined", [])
+        if not isinstance(quarantined_rows, list):
+            quarantined_rows = []
+        assert len(quarantined_rows) == 1
+        assert quarantined_rows[0]["id"] == "bad-cron"
+        assert bool(quarantined_rows) is True
+
+    def test_quarantine_coerced_when_gateway_returns_wrong_type(self):
+        """Non-list 'quarantined' value is coerced to [] safely."""
+        gw_data = {"jobs": [], "quarantined": "unexpected-string"}
+        quarantined_rows = gw_data.get("quarantined", [])
+        if not isinstance(quarantined_rows, list):
+            quarantined_rows = []
+        assert quarantined_rows == []

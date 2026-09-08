@@ -380,6 +380,10 @@ import os
 import time
 
 from flask import Blueprint, jsonify, request
+from routes.paywall_lifecycle import (
+    PAYWALL_LIFECYCLE_EVENTS as _PAYWALL_LIFECYCLE_EVENTS,  # noqa: F401
+    ping_paywall_lifecycle as _ping_paywall_lifecycle,
+)
 
 logger = logging.getLogger("clawmetry.routes.entitlement")
 
@@ -23598,7 +23602,10 @@ def api_paywall_event():
         _pe.record_event(body)
     except Exception as exc:
         logger.debug("api_paywall_event: store swallowed error: %s", exc)
+    _ping_paywall_lifecycle(body)
     return "", 204
+
+
 
 
 @bp_entitlement.route("/api/paywall/events/summary")

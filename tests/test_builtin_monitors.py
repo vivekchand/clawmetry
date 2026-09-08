@@ -23,6 +23,9 @@ _SOURCES = [
     REPO / "routes" / "infra.py",
     REPO / "routes" / "health.py",
     REPO / "routes" / "usage.py",
+    # Guard detector incidents -> human (daemon-side; writes the same
+    # alert_history table the banner reads, with a literal alert_type).
+    REPO / "clawmetry" / "incident_alerts.py",
 ]
 
 

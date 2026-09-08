@@ -858,27 +858,22 @@ def calculate_cost(
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
 ) -> float:
-    """Calculate cost in USD for a request based on model and token counts."""
-    model_lower = model.lower()
-    pricing = MODEL_PRICING.get("default")
+    """Calculate cost in USD using provider-aware accounting.
 
-    for key, prices in MODEL_PRICING.items():
-        if key == "default":
-            continue
-        if key in model_lower:
-            pricing = prices
-            break
-
-    input_price, output_price = pricing
-
-    # Cache read tokens are typically 90% cheaper
-    regular_input = input_tokens - cache_read_tokens
-    cache_read_cost = (cache_read_tokens / 1_000_000) * (input_price * 0.1)
-    cache_create_cost = (cache_creation_tokens / 1_000_000) * (input_price * 1.25)
-    input_cost = (max(0, regular_input) / 1_000_000) * input_price
-    output_cost = (output_tokens / 1_000_000) * output_price
-
-    return round(input_cost + cache_read_cost + cache_create_cost + output_cost, 6)
+    Delegates to providers_pricing.estimate_event_cost_usd so that Anthropic's
+    additive cache schema (input_tokens is uncached-only; cache reads are
+    additional) and OpenAI's inclusive schema (cache reads are a cheaper subset
+    of prompt_tokens) are handled correctly.  Model-specific rates come from the
+    same maintained table used everywhere else.
+    """
+    from clawmetry.providers_pricing import estimate_event_cost_usd
+    return estimate_event_cost_usd(
+        model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_creation_tokens,
+    )
 
 
 # ── Loop Detection ─────────────────────────────────────────────────────
@@ -1136,6 +1131,7 @@ def parse_openai_sse_chunk(line: str, usage: StreamUsage) -> None:
     if u:
         usage.input_tokens = u.get("prompt_tokens", 0)
         usage.output_tokens = u.get("completion_tokens", 0)
+        usage.cache_read_tokens = (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
 
     choices = data.get("choices", [])
     if choices and choices[0].get("finish_reason"):
@@ -1977,6 +1973,7 @@ def create_proxy_app(config: ProxyConfig = None) -> "Flask":
                 u = resp_data.get("usage", {})
                 usage.input_tokens = u.get("prompt_tokens", 0)
                 usage.output_tokens = u.get("completion_tokens", 0)
+                usage.cache_read_tokens = (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
                 usage.model = resp_data.get("model", "")
                 choices = resp_data.get("choices", [])
                 if choices:

@@ -158,14 +158,18 @@ class TestTabsLoad:
         tabs = nav_tabs_locator(page)
         assert tabs.count() > 0, "No nav tabs found in dashboard"
 
-    def test_overview_tab_is_default(self, page: Page):
-        """Overview page is active by default."""
+    def test_sessions_tab_is_default(self, page: Page):
+        """The Sessions list is the landing page (session-first IA, Trail
+        2026-09): the product opens on the decision trail, not the KPI board.
+        Overview still exists, one click away under Monitoring."""
         load_dashboard(page)
         overview = page.locator("#page-overview")
         assert overview.count() > 0, "#page-overview element not found"
-        # Check it's the active page
-        active = page.locator("#page-overview.active")
-        assert active.count() > 0, "#page-overview should be active by default"
+        active = page.locator("#page-transcripts.active")
+        assert active.count() > 0, "#page-transcripts (Sessions) should be active by default"
+        assert page.locator("#page-overview.active").count() == 0, (
+            "#page-overview must not also be active on landing"
+        )
 
     def test_flow_tab_loads(self, page: Page):
         """Clicking Flow tab shows the flow page."""

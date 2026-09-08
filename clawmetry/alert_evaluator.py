@@ -86,7 +86,40 @@ _LEGACY_ALERT_TYPE_MAP = {
     # Harness Engineering "Watch $/done": cost per finished job crossed a
     # dollar threshold. Quality-slice fed, maps to itself.
     "dollars_per_done_above": "dollars_per_done_above",
+    # Behaviour Signals (WO-58): a named signal's rate over a window crossed
+    # a threshold. Fed by the ``signal_turns`` / ``signal_matches`` tables the
+    # daemon fills (clawmetry/behaviour_signals.py), never by matched text.
+    "signal_rate_above": "signal_rate_above",
+    # Silent-failure rule types (fed by the Guard detectors' loop_signals rows
+    # and the event stream's cost column). Map to themselves.
+    "stuck_session":    "stuck_session",
+    "rate_limited":     "rate_limited",
+    "blocked_on_user":  "blocked_on_user",
+    "agent_attention":  "agent_attention",
+    "cost_velocity":    "cost_velocity",
 }
+
+# Rule types that read the behaviour-signal rate slice. Like the quality
+# types, the daemon only queries that slice when such a rule is enabled.
+SIGNAL_RULE_TYPES = frozenset({"signal_rate_above"})
+DEFAULT_SIGNAL_WINDOW_MINUTES = 24 * 60
+DEFAULT_SIGNAL_MIN_TURNS = 20
+
+# Rule types that read the Guard detectors' ``loop_signals`` slice (the
+# daemon pre-fetches it only when one of these rules is enabled). Each maps to
+# the detector kinds it fires on; ``condition.kinds`` may narrow or widen it.
+STUCK_KINDS = frozenset({"stuck_loop", "no_progress", "repeated_tool_failure",
+                         "action_discrepancy"})
+ATTENTION_RULE_KINDS: dict[str, frozenset] = {
+    "stuck_session":   STUCK_KINDS,
+    "rate_limited":    frozenset({"rate_limited"}),
+    "blocked_on_user": frozenset({"blocked_on_user"}),
+    # The seed rule: anything a person needs to step in for.
+    "agent_attention": STUCK_KINDS | {"rate_limited", "blocked_on_user", "crashed"},
+}
+ATTENTION_RULE_TYPES = frozenset(ATTENTION_RULE_KINDS)
+DEFAULT_ATTENTION_WINDOW_MINUTES = 30
+_ATTENTION_SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 
 # Rule types that read the per-session quality slice (eval scores + outcome
 # labels) instead of the raw event stream. The daemon only bothers to query
@@ -142,8 +175,21 @@ def evaluate(
     last_eval_state: dict[str, Any] | None,
     quality: dict[str, Any] | None = None,
     quality_by_runtime: dict[str, dict[str, Any]] | None = None,
+    signals: dict[str, Any] | None = None,
+    signals_by_runtime: dict[str, dict[str, Any]] | None = None,
+    loop_signals: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Pure evaluator. Walks ``events`` against ``rules``, returns matches.
+
+    ``signals`` / ``signals_by_runtime``: the behaviour-signal rate slice for
+    the ``signal_rate_above`` rule type, keyed ``{rule_id: rate_window}``
+    (each ``rate_window`` is ``LocalStore.query_signal_rate_window``'s dict).
+    ``None`` means the daemon did not fetch it and those rules no-fire.
+
+    ``loop_signals`` is the ``loop_signals`` slice (``query_recent_loop_signals``
+    rows) the silent-failure rule types read (``stuck_session`` /
+    ``rate_limited`` / ``blocked_on_user`` / ``agent_attention``). ``None``
+    means the daemon did not fetch it, and those types no-fire.
 
     No I/O. ``last_eval_state`` is mutated in place to remember the most
     recent fire time per rule so a second call within the cooldown window
@@ -211,21 +257,30 @@ def evaluate(
             continue
 
         rule_rt = _rule_runtime(raw_rule)
+        rule_loop_signals = loop_signals
         if rule_rt != "all":
             rule_events = [e for e in events_chrono
                            if _session_runtime(e.get("session_id")) == rule_rt]
+            if loop_signals is not None:
+                rule_loop_signals = [
+                    s for s in loop_signals
+                    if _session_runtime(s.get("session_id")) == rule_rt]
             # Quality slices are AGGREGATES (no session ids), so a scoped
             # rule needs a per-runtime slice pre-fetched by the caller.
             # Missing slice -> None -> quality rule types no-fire for that
             # tick (honest under-fire; never a node-wide number under a
             # runtime label).
             rule_quality = (quality_by_runtime or {}).get(rule_rt)
+            rule_signals = ((signals_by_runtime or {}).get(rule_rt) or {})
         else:
             rule_events = events_chrono
             rule_quality = quality
+            rule_signals = signals or {}
 
         try:
-            match = _evaluate_one(rule, rule_events, rule_quality)
+            match = _evaluate_one(rule, rule_events, rule_quality,
+                                  signal_window=(rule_signals or {}).get(rid),
+                                  loop_signals=rule_loop_signals)
         except Exception as e:
             log.warning("alerts: rule %s evaluator errored: %s", rid, e)
             continue
@@ -335,10 +390,18 @@ def _evaluate_one(
     rule: dict[str, Any],
     events_chrono: list[dict[str, Any]],
     quality: dict[str, Any] | None = None,
+    signal_window: dict[str, Any] | None = None,
+    loop_signals: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Dispatch on ``rule['type']``. Returns the match dict (rule-agnostic
     shape) or ``None`` when the rule didn't fire."""
     rt = rule.get("type")
+    if rt == "signal_rate_above":
+        return _eval_signal_rate_above(rule, signal_window)
+    if rt in ATTENTION_RULE_TYPES:
+        return _eval_signal_kinds(rule, loop_signals)
+    if rt == "cost_velocity":
+        return _eval_cost_velocity(rule, events_chrono)
     if rt == "count_over_threshold":
         return _eval_count_over_threshold(rule, events_chrono)
     if rt == "error_rate":
@@ -485,6 +548,80 @@ def _eval_outcome_failure_rate(
     }
 
 
+def signal_rule_fields(rule: dict[str, Any]) -> dict[str, Any]:
+    """``{signal, threshold, window_minutes, min_turns}`` for a
+    ``signal_rate_above`` rule, reading the normalised rule and its raw
+    condition body. ``threshold`` is a fraction in [0, 1]; a percent (> 1)
+    is divided by 100 the way ``outcome_failure_rate`` does."""
+    cond = rule.get("condition") or {}
+    sig = str(cond.get("signal") or rule.get("signal") or "").strip()
+    thr = rule.get("threshold")
+    if thr is None:
+        thr = cond.get("threshold", cond.get("threshold_value"))
+    try:
+        thr = float(thr) if thr is not None else None
+    except (TypeError, ValueError):
+        thr = None
+    if thr is not None and thr > 1.0:
+        thr = thr / 100.0
+    wm = cond.get("window_minutes")
+    if wm is None and cond.get("window_sec") is not None:
+        wm = _coerce_int(cond.get("window_sec"), DEFAULT_SIGNAL_WINDOW_MINUTES * 60) // 60
+    return {
+        "signal": sig,
+        "threshold": thr,
+        "window_minutes": max(1, _coerce_int(wm, DEFAULT_SIGNAL_WINDOW_MINUTES)),
+        "min_turns": max(1, _coerce_int(cond.get("min_turns"), DEFAULT_SIGNAL_MIN_TURNS)),
+    }
+
+
+def _eval_signal_rate_above(
+    rule: dict[str, Any],
+    window: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Fire when a behaviour signal's rate over the window EXCEEDS
+    ``threshold`` (fraction 0..1) with at least ``min_turns`` eligible turns,
+    so one session cannot trip it. ``window`` is
+    ``LocalStore.query_signal_rate_window``'s dict for this rule; ``None`` or
+    an empty store -> no fire. The payload names the signal, the rate, the
+    window, the runtime and the model. It never carries matched text."""
+    if not isinstance(window, dict) or not window:
+        return None
+    f = signal_rule_fields(rule)
+    if not f["signal"] or f["threshold"] is None or f["threshold"] < 0:
+        return None
+    turns = int(window.get("turns") or 0)
+    if turns < f["min_turns"]:
+        return None
+    rate = window.get("rate")
+    if rate is None:
+        return None
+    rate = float(rate)
+    if rate <= f["threshold"]:
+        return None
+    wm = int(window.get("window_minutes") or f["window_minutes"])
+    runtime = str(window.get("runtime") or "all")
+    model = window.get("top_model") or "unknown"
+    return {
+        "event": _quality_pseudo_event(f"signal_rate_above:{f['signal']}", wm),
+        "summary": (f"rule fired: {f['signal']} rate {rate:.1%} "
+                    f"({int(window.get('matches') or 0)}/{turns} turns) in {wm}m "
+                    f"on {runtime} (threshold={f['threshold']:.1%})"),
+        "metadata": {
+            "signal":         f["signal"],
+            "rate":           round(rate, 4),
+            "matches":        int(window.get("matches") or 0),
+            "turns":          turns,
+            "threshold":      round(f["threshold"], 4),
+            "window_minutes": wm,
+            "window":         f"{wm}m",
+            "runtime":        runtime,
+            "model":          model,
+            "min_turns":      f["min_turns"],
+        },
+    }
+
+
 def _eval_dollars_per_done(
     rule: dict[str, Any],
     quality: dict[str, Any] | None,
@@ -540,6 +677,134 @@ def _eval_dollars_per_done(
             "basis":             "classified_sessions",
             "min_sessions":      min_sessions,
             "window_minutes":    window_minutes,
+        },
+    }
+
+
+def _signal_kind(sig: dict[str, Any]) -> str:
+    """Detector kind of one ``loop_signals`` row: ``details.kind`` when set,
+    else derived from the ``daemon_detect_<kind>`` signature, else the
+    no-progress stuck detector's ``daemon_stuck`` -> ``stuck_loop``."""
+    det = sig.get("details")
+    if isinstance(det, (bytes, bytearray, str)):
+        try:
+            import json as _json
+            det = _json.loads(det if isinstance(det, str) else bytes(det).decode("utf-8", "replace"))
+        except Exception:
+            det = None
+    if isinstance(det, dict) and det.get("kind"):
+        return str(det.get("kind"))
+    sigt = str(sig.get("signature") or "")
+    if sigt.startswith("daemon_detect_"):
+        return sigt[len("daemon_detect_"):]
+    if sigt == "daemon_stuck":
+        return "stuck_loop"
+    return ""
+
+
+def _eval_signal_kinds(
+    rule: dict[str, Any],
+    signals: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Fire when a Guard detector wrote a ``loop_signals`` row of one of the
+    rule's kinds, at or above ``min_severity`` (default warning), inside
+    ``window_minutes`` (default 30). ``threshold`` = how many distinct
+    sessions must be affected (default 1). Reads the slice the daemon
+    pre-fetched; ``None`` -> no fire, never a crash."""
+    if not signals:
+        return None
+    cond = rule.get("condition") or {}
+    kinds = ATTENTION_RULE_KINDS.get(str(rule.get("type") or ""), frozenset())
+    extra = cond.get("kinds")
+    if isinstance(extra, (list, tuple)) and extra:
+        kinds = frozenset(str(k) for k in extra)
+    min_sev = _ATTENTION_SEVERITY_RANK.get(str(cond.get("min_severity") or "warning").lower(), 1)
+    window_min = _coerce_int(cond.get("window_minutes"), DEFAULT_ATTENTION_WINDOW_MINUTES)
+    cutoff = time.time() - max(1, window_min) * 60
+    need = max(1, int(rule.get("threshold") or 1))
+
+    hits: dict[str, dict[str, Any]] = {}
+    for sig in signals:
+        if not isinstance(sig, dict):
+            continue
+        kind = _signal_kind(sig)
+        if kind not in kinds:
+            continue
+        sev = str(sig.get("severity") or "warning").lower()
+        if _ATTENTION_SEVERITY_RANK.get(sev, 1) < min_sev:
+            continue
+        seen = _parse_iso_ts(str(sig.get("last_seen") or "")) if sig.get("last_seen") else None
+        if seen is not None and seen < cutoff:
+            continue
+        sid = str(sig.get("session_id") or "")
+        prev = hits.get(sid)
+        if prev is None or _ATTENTION_SEVERITY_RANK.get(sev, 1) > _ATTENTION_SEVERITY_RANK.get(prev["severity"], 1):
+            hits[sid] = {"session_id": sid, "kind": kind, "severity": sev,
+                         "last_seen": sig.get("last_seen")}
+    if len(hits) < need:
+        return None
+    worst = sorted(hits.values(),
+                   key=lambda h: -_ATTENTION_SEVERITY_RANK.get(h["severity"], 1))[0]
+    n = len(hits)
+    pseudo = {
+        "id": f"signal:{worst['session_id']}:{worst['kind']}:{worst.get('last_seen')}",
+        "event_type": f"signal.{worst['kind']}",
+        "session_id": worst["session_id"],
+        "ts": str(worst.get("last_seen") or ""),
+        "data": {"kind": worst["kind"], "severity": worst["severity"]},
+    }
+    return {
+        "event": pseudo,
+        "summary": (f"rule fired: {n} session(s) need attention "
+                    f"({worst['kind']}, {worst['severity']}) in {window_min}m"),
+        "metadata": {
+            "sessions": n, "threshold": need, "window_minutes": window_min,
+            "kinds": sorted({h["kind"] for h in hits.values()}),
+            "worst_session_id": worst["session_id"],
+            "worst_kind": worst["kind"], "worst_severity": worst["severity"],
+        },
+    }
+
+
+def _eval_cost_velocity(
+    rule: dict[str, Any],
+    events_chrono: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Fire when spend over the trailing ``window_sec`` averages >= ``threshold``
+    dollars per minute. Sums ``cost_usd`` on the events themselves (derived
+    at ingest), so an install with no OTLP still gets a real number. No
+    events with cost -> no fire (never a fabricated rate)."""
+    threshold = float(rule.get("threshold") or 0)
+    if threshold <= 0:
+        return None
+    window_sec = max(60, int(rule.get("window_sec") or DEFAULT_WINDOW_SEC))
+    priced = []
+    for e in events_chrono:
+        try:
+            c = float(e.get("cost_usd") or 0)
+        except (TypeError, ValueError):
+            continue
+        if c <= 0:
+            continue
+        ts = _parse_iso_ts(e.get("ts"))
+        if ts is None:
+            continue
+        priced.append((ts, c, e))
+    if not priced:
+        return None
+    end_ts = priced[-1][0]
+    start = end_ts - window_sec
+    spent = sum(c for ts, c, _ in priced if ts >= start)
+    per_min = spent / (window_sec / 60.0)
+    if per_min < threshold:
+        return None
+    return {
+        "event": priced[-1][2],
+        "summary": (f"rule fired: ${per_min:.2f}/min over the last "
+                    f"{window_sec // 60}m (threshold ${threshold:.2f}/min)"),
+        "metadata": {
+            "usd_per_min": round(per_min, 4), "threshold": threshold,
+            "window_sec": window_sec, "spent_usd": round(spent, 4),
         },
     }
 
