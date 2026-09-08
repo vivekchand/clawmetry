@@ -6212,7 +6212,18 @@ def _otel_to_row(span, resource_attrs):
         or inferred from the model — same as the #2049 event path.
       * ``gen_ai.tool.name`` / ``tool.name`` / ``code.function`` → ``tool_name``
       * ``gen_ai.conversation.id`` / ``session.id`` / ``openclaw.session_id`` →
-        ``session_id``
+        ``session_id``; when an exporter sends NONE of them (the OTel GenAI
+        convention does not require one, and a plain SDK or OpenLLMetry on
+        defaults sends none), the span's own ``trace_id`` supplies it as
+        ``<agent_type>:trace:<trace_id>`` so the run still reaches Sessions /
+        Cost / Guard (#5691). One trace is one run: measured across 265 real
+        traces, ``trace_id`` maps to exactly one session and no session spans
+        more than one trace. The ``<agent_type>:`` head is required, not
+        cosmetic, because every session-id parser here reads the runtime from
+        the text before the first colon; ``trace:`` marks the id as derived
+        rather than sent. Not applied when ``agent_type`` is ``openclaw``,
+        whose sessions come from transcripts and whose spans keep a null
+        ``session_id``.
       * ``gen_ai.agent.id`` / ``agent.id`` / ``openclaw.agent_id`` (also from
         resource) → ``agent_id``
       * ``agent.type`` (also from resource) → ``agent_type``
@@ -6375,6 +6386,48 @@ def _otel_to_row(span, resource_attrs):
         # so the span joins the transcript session (WO-57). No profile: the
         # span keeps the bare id, as before.
         session_id = _prof.session_key(session_id)
+
+    # Issue #5691: no conversation id at all. The span lands in ``spans`` and
+    # no ``sessions`` row is ever produced, so the app is invisible to
+    # Sessions / Cost / Guard while its data sits in the store. Nothing
+    # errors, so nothing prompts anyone to look. Nothing in the GenAI
+    # convention REQUIRES a conversation id, and a plain OTel SDK or
+    # OpenLLMetry on defaults does not send one, so this is the common case.
+    #
+    # Fall back to the trace id. Measured on a live node before choosing it
+    # (see the issue): across 265 real traces, ``trace_id`` maps to exactly
+    # one session and no session spans more than one trace, so this
+    # reproduces the mapping conforming exporters already produce rather than
+    # inventing one. The feared "one trace per tool call" flood is not the
+    # shape of real data either: median 2 spans per trace, p90 231, p90
+    # duration ~2.4 h, which is a RUN, not a tool call.
+    #
+    # The key is ``<runtime>:trace:<id>``, NOT ``otlp:trace:<id>``. Every
+    # session-id parser in this codebase (``_sid_runtime`` and its siblings in
+    # sessions / bench / cohort / harness / health) takes the text before the
+    # FIRST colon as the runtime, so an ``otlp:`` prefix would file every one
+    # of these under a runtime literally named "otlp" instead of the app's own
+    # ``agent_type`` -- the exact mis-bucketing
+    # ``_otlp_service_name_to_agent_type`` exists to prevent, and a breach of
+    # the per-runtime honesty gate. Keeping ``trace:`` as the second segment
+    # marks the id as DERIVED, so a reader can tell it from a session id an
+    # exporter actually sent.
+    #
+    # Confined to foreign apps on purpose. ``agent_type == "openclaw"`` is the
+    # one population the materializer deliberately skips (OpenClaw sessions
+    # come from transcripts, WO-55's ghost-session guard), so minting a key
+    # there would put a session id on a span that joins NO session -- a
+    # phantom, which is a bug we have shipped before. Those spans keep the
+    # NULL they have today.
+    if not session_id and agent_type != "openclaw":
+        _tid = _hex(span.trace_id)
+        if _tid:
+            _derived = "trace:" + _tid
+            session_id = (
+                _prof.session_key(_derived)
+                if (_prof is not None and _prof.session_key_prefix)
+                else "{}:{}".format(agent_type, _derived)
+            )
 
     # Span events: array of {time_unix_nano, name, attributes}.
     events = []
