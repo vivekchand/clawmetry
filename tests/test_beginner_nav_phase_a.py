@@ -27,7 +27,7 @@ _EN_JSON = os.path.join(_HERE, "..", "clawmetry", "static", "locales", "en.json"
 
 
 def _nav_block() -> str:
-    """The live left-nav markup (from the second DASHBOARD_HTML)."""
+    """The live left-nav markup (from the last DASHBOARD_HTML assignment)."""
     with open(_DASH, encoding="utf-8") as fh:
         src = fh.read()
     start = src.rindex('<aside id="left-nav"')

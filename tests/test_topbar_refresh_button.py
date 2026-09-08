@@ -29,19 +29,23 @@ BTN_ID = 'id="cm-reconnect-btn"'
 
 
 def _live_dashboard_html() -> str:
-    """The SECOND DASHBOARD_HTML block -- the one actually served."""
+    """The DASHBOARD_HTML block that actually serves — the LAST assignment.
+
+    There used to be two, and the dead first one was deleted 2026-09-08; this
+    takes the last so it is correct either way. The count itself is asserted by
+    tests/test_dashboard_html_defined_once.py, which owns that question — a
+    hardcoded ``== 2`` here made this file fail on the deletion for a reason
+    that has nothing to do with the refresh button.
+    """
     src = DASHBOARD.read_text()
     starts = [m.start() for m in re.finditer(r'^DASHBOARD_HTML = r"""', src, re.M)]
-    assert len(starts) == 2, (
-        f"expected exactly 2 DASHBOARD_HTML definitions, found {len(starts)}. "
-        "If this changed, re-check which block is live before trusting this test."
-    )
-    return src[starts[1]:]
+    assert starts, "no DASHBOARD_HTML definition found in dashboard.py"
+    return src[starts[-1]:]
 
 
 def test_refresh_button_is_in_the_live_html_block():
     assert BTN_ID in _live_dashboard_html(), (
-        "the refresh button is missing from the live (second) DASHBOARD_HTML "
+        "the refresh button is missing from the live DASHBOARD_HTML "
         "block -- if it was added to the first block it renders for nobody"
     )
 

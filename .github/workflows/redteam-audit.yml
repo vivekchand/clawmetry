@@ -1,0 +1,114 @@
+name: Red-team detection audit (daily)
+
+# Every day: replay every publicly disclosed agent attack in
+# scripts/redteam/corpus/ against ClawMetry's own detectors and report what we
+# would MISS. The PR gate (ci.yml, "Red-team corpus") catches a regression a
+# change introduces; this catches the other direction -- a signature added to
+# the corpus, or a detector that drifts on main while nobody opens a PR.
+#
+# A MISS is filed as a `sec-gap` issue on the private tracker (product work on
+# closed detectors does not belong in the public repo). The script dedupes on a
+# fingerprint it prints into each issue body, so a standing gap is filed once,
+# not once a day.
+#
+# Safe to merge before REDTEAM_ISSUE_TOKEN exists: with no token the audit still
+# runs and the run is still red on a gap; only the filing step is skipped, and it
+# says so in the summary rather than failing silently.
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # daily 05:00 UTC (an hour before the harness audit)
+  workflow_dispatch:
+    inputs:
+      file_issues:
+        description: "Actually open sec-gap issues (false = dry-run)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: redteam-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Replay the red-team corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install flask waitress cryptography duckdb requests psutil
+
+      - name: Token visibility (presence only)
+        env:
+          REDTEAM_ISSUE_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
+        run: |
+          if [ -n "$REDTEAM_ISSUE_TOKEN" ]; then
+            echo "issue token: set (gaps will be filed to the private tracker)"
+          else
+            echo "::warning::CLOUD_REPO_PAT not set -- the audit runs and still fails on a gap, but no sec-gap issue is filed."
+          fi
+
+      # Exit-code contract (scripts/redteam/audit.py):
+      #   0 -- every case passes
+      #   1 -- gaps, only with --strict
+      #   2 -- a CONTROL failed, or a corpus payload actually executed
+      # Exit 2 is NOT "gaps found": a control failure means the audit cannot
+      # vouch for any of its other verdicts, so its whole report is worthless
+      # that day and the run must say so loudly.
+      - name: Run the audit
+        env:
+          # gh reads GH_TOKEN; the corpus gaps are filed cross-repo to the
+          # private tracker, which github.token cannot write to.
+          GH_TOKEN: ${{ secrets.CLOUD_REPO_PAT }}
+          REDTEAM_ISSUE_REPO: vivekchand/clawmetry-pro
+          # Dispatch inputs are untrusted text: bind to env, read as a quoted
+          # shell variable, never interpolate ${{ github.event.* }} into `run:`.
+          FILE_ISSUES: ${{ github.event.inputs.file_issues }}
+          HAS_TOKEN: ${{ secrets.CLOUD_REPO_PAT != '' }}
+        run: |
+          ARGS=(--strict --json redteam-report.json --summary "$GITHUB_STEP_SUMMARY")
+          if [ "$FILE_ISSUES" = "false" ] || [ "$HAS_TOKEN" != "true" ]; then
+            echo "dry-run (no issues will be filed)"
+          else
+            ARGS+=(--file-issues)
+          fi
+          set +e
+          python3 scripts/redteam/audit.py "${ARGS[@]}"
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "audit clean" ;;
+            2)
+              echo "::error::CONTROL FAILURE (exit 2): a control case failed or a corpus payload executed. Today's verdicts are untrustworthy -- fix the harness before reading any other row."
+              {
+                echo ""
+                echo "> **Control failure.** The audit could not vouch for its own verdicts in this run."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+            1)
+              echo "::error::Detection gap (exit 1): a disclosed attack in the corpus is not detected. See the sec-gap issue on the private tracker."
+              exit 1
+              ;;
+            *) echo "::error::Audit exited $code (unexpected)"; exit 1 ;;
+          esac
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: redteam-report
+          path: redteam-report.json
+          if-no-files-found: warn

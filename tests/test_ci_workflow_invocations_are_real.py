@@ -120,16 +120,44 @@ def test_workflow_run_triggers_name_a_real_workflow():
 
 
 def test_cloud_pin_can_follow_a_release():
-    """The specific regression: the cloud pin must have a post-release trigger.
+    """The specific regression: the cloud pin must have a post-release trigger
+    THAT ACTUALLY FIRES.
 
     A `[RELEASE]` merge fires the push trigger while PyPI still serves the old
     version, and the follow-up version-bump commit is `[skip ci]`, so without a
     release-completion trigger the cloud stays a version behind.
+
+    This assertion used to accept the mere presence of `workflow_run:` — and
+    that is not enough, which the repository had already proven elsewhere.
+    `auto-deploy-cloud.yml` declares exactly::
+
+        workflow_run:
+          workflows: ["Auto-release on [RELEASE] merge"]
+          types: [completed]
+
+    which is the identical declaration `release-canary.yml` carried when it
+    produced **zero runs** for 0.12.757: activity driven by ``GITHUB_TOKEN``
+    does not cascade into new workflow runs. So the guard passed, the blueprint
+    recorded the responsibility as covered, and the cloud still silently sat a
+    release behind — 0.12.829 on 2026-09-08 being the measured case.
+
+    A trigger that cannot fire is not a trigger. The reachable path is the
+    explicit dispatch from the publishing workflow, after the upload, and that
+    is what this now requires; `workflow_run` stays as belt-and-braces but may
+    not be the only thing standing here.
     """
     src = _read(os.path.join(ROOT, ".github", "workflows", "auto-deploy-cloud.yml"))
     assert "workflow_run:" in src, (
         "auto-deploy-cloud.yml has no workflow_run trigger, so nothing pins "
         "the cloud after a release completes"
+    )
+    rel = _read(os.path.join(ROOT, ".github", "workflows", "release-on-merge.yml"))
+    assert "gh workflow run auto-deploy-cloud.yml" in rel, (
+        "the workflow_run trigger on auto-deploy-cloud.yml does NOT fire "
+        "(GITHUB_TOKEN activity does not cascade — release-canary.yml proved "
+        "this with the same declaration). release-on-merge.yml must dispatch "
+        "auto-deploy-cloud.yml explicitly after the upload, or a published "
+        "release never reaches the cloud."
     )
 
 

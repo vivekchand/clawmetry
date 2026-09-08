@@ -1,0 +1,30 @@
+{
+  "id": "control-benign-repo",
+  "name": "CONTROL (negative): an ordinary repo and an ordinary session",
+  "disclosed": "2026-01-01",
+  "source": "negative control — not a disclosure",
+  "cve": [],
+  "attack_class": "none",
+  "surface": "none",
+  "affects_runtimes": ["*"],
+  "summary": "A normal .git/config with a normal session. Nothing here is an attack.",
+  "why_hard_to_see": "Inverted: this case exists to catch a scanner that screams at everything. A detector that flags this is worse than no detector, because it teaches people to ignore it.",
+  "control": true,
+  "workspace": {
+    "files": {
+      ".git/config": "[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n\tignorecase = true\n[remote \"origin\"]\n\turl = git@github.com:acme/app.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch \"main\"]\n\tremote = origin\n\tmerge = refs/heads/main\n[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n",
+      "README.md": "# app\n"
+    }
+  },
+  "events": [
+    {"event_type": "tool_call", "ts": "2026-09-08T10:20:01", "data": {"tool": "Read", "args": {"file_path": "/w/proj/src/main.py"}}},
+    {"event_type": "tool_call", "ts": "2026-09-08T10:20:04", "data": {"tool": "Bash", "args": {"command": "git status"}}},
+    {"event_type": "tool_call", "ts": "2026-09-08T10:20:08", "data": {"tool": "Write", "args": {"file_path": "/w/proj/src/main.py"}}}
+  ],
+  "expect": {
+    "detected": false,
+    "any_of": [],
+    "min_severity": null,
+    "rationale": "git-lfs ships command-valued filter keys in millions of legitimate repos. A scanner that cannot tell git-lfs from a payload is unshippable."
+  }
+}
