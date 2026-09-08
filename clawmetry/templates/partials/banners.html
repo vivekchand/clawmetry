@@ -91,6 +91,35 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_ab_pill_dismissed','
 </div>
 
 <!-- Auto-Pause Banner -->
+<!-- Store-unreachable banner (#5534). Shown when a read in this dashboard
+     could not reach the collector that holds your data. Without it the tabs
+     render "no sessions" / "0 models" over a full store, which reads as data
+     loss. -->
+<div id="store-unreachable-banner" style="
+  display:none;
+  padding:10px 16px;
+  background:#78350f;
+  border-bottom:2px solid #f59e0b;
+  color:#fde68a;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:10px;
+  ">
+  <span style="font-size:16px;">⚠</span>
+  <span id="store-unreachable-banner-msg" style="flex:1;" data-i18n="banners.store_unreachable">Can’t reach the collector on this machine, so some screens may look emptier than they are. Nothing has been lost — retrying.</span>
+  <button type="button" onclick="cmRetryStoreRead()" style="
+    background:#b45309;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    " data-i18n="common.retry">Retry</button>
+</div>
+
 <div id="paused-banner" style="
   display:none;
   padding:10px 16px;
