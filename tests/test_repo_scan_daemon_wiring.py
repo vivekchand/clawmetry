@@ -41,15 +41,33 @@ def _poisoned_repo(tmp_path, name="repo"):
 
 
 # ── the cwd the scan keys on ────────────────────────────────────────────────
-def test_session_cwd_prefers_the_column_over_metadata():
+def test_session_row_cwd_prefers_the_column_over_metadata():
     """Regression: reading only ``metadata`` hid the column every cwd-aware
     consumer already uses, so cursor/goose/opencode/pi/qwen_code sessions all
-    looked like they had no workspace."""
-    assert _sync._session_cwd({"cwd": "/tmp/a", "metadata": {"cwd": "/tmp/b"}}) == "/tmp/a"
-    assert _sync._session_cwd({"cwd": None, "metadata": {"cwd": "/tmp/b"}}) == "/tmp/b"
-    assert _sync._session_cwd({"cwd": "  ", "metadata": {"project_dir": "/tmp/c"}}) == "/tmp/c"
-    assert _sync._session_cwd({"metadata": {}}) == ""
-    assert _sync._session_cwd(None) == ""
+    looked like they had no workspace.
+
+    Named ``_session_row_cwd`` because ``_session_cwd`` was already taken by
+    the alias-based reader for raw adapter dicts; sharing the name silently
+    replaced that one for all three of its callers.
+    """
+    assert _sync._session_row_cwd({"cwd": "/tmp/a", "metadata": {"cwd": "/tmp/b"}}) == "/tmp/a"
+    assert _sync._session_row_cwd({"cwd": None, "metadata": {"cwd": "/tmp/b"}}) == "/tmp/b"
+    assert _sync._session_row_cwd({"cwd": "  ", "metadata": {"project_dir": "/tmp/c"}}) == "/tmp/c"
+    assert _sync._session_row_cwd({"metadata": {}}) == ""
+    assert _sync._session_row_cwd(None) == ""
+    # The metadata fallback goes through the SAME twelve-alias set the raw
+    # reader uses, so a runtime that spells it `workingDir` or `directory` is
+    # found. Reading two keys is what the shadowing accident reduced it to.
+    assert _sync._session_row_cwd({"metadata": {"workingDir": "/tmp/d"}}) == "/tmp/d"
+    assert _sync._session_row_cwd({"metadata": {"directory": "/tmp/e"}}) == "/tmp/e"
+
+
+def test_the_alias_reader_still_answers_for_raw_dicts():
+    """``_session_cwd`` is the OTHER helper: a raw adapter/gateway dict read by
+    alias. Its three callers are why the shadowing mattered."""
+    assert _sync._session_cwd({"workingDir": "/tmp/w"}) == "/tmp/w"
+    assert _sync._session_cwd({"directory": "/tmp/d"}) == "/tmp/d"
+    assert _sync._session_cwd({"folder": "/tmp/f"}) == "/tmp/f"
 
 
 def test_detector_facts_carry_the_column_cwd():
