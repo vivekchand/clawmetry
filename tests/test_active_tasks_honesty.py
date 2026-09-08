@@ -129,9 +129,12 @@ def test_failed_status_is_a_real_bucket():
         "bucket. Without it a failed spawn falls through to `done` and renders "
         "with a green tick."
     )
-    assert "_cmIsFailedStatus" in _body("loadOverviewTasks") or "_ovBucketOf" in _body(
-        "loadOverviewTasks"
-    ), "the grouping must use the shared classifier"
+    # The grouping lives in _ovVisible (which loadOverviewTasks calls); pin the
+    # invariant — the buckets come from _ovBucketOf — not the call site, which
+    # moved when the count and the list were unified (2026-09-08).
+    assert "_ovBucketOf(a)" in _body("_ovVisible"), (
+        "the grouping must use the shared classifier"
+    )
 
 
 def test_card_and_grouping_share_one_classifier():
@@ -139,8 +142,11 @@ def test_card_and_grouping_share_one_classifier():
     assert "_ovBucketOf(agent)" in _body("_ovRenderCard"), (
         "_ovRenderCard must read _ovBucketOf, not re-derive the status"
     )
-    assert "_ovBucketOf(a)" in _body("loadOverviewTasks"), (
-        "loadOverviewTasks must read _ovBucketOf, not re-derive the status"
+    assert "_ovBucketOf(a)" in _body("_ovVisible"), (
+        "the panel's bucket splitter must read _ovBucketOf, not re-derive status"
+    )
+    assert "_ovVisible(" in _body("loadOverviewTasks"), (
+        "loadOverviewTasks must go through the shared splitter"
     )
     assert SRC.count("abortedLastRun") == 1, (
         "the stale/aborted heuristic must live in exactly one place "
@@ -197,4 +203,37 @@ def test_graveyard_div_is_gone():
     assert "active-tasks-grid" not in OVERVIEW_HTML.read_text(encoding="utf-8"), (
         "the hidden #active-tasks-grid existed only so the dead renderer would "
         "not throw"
+    )
+
+
+# ── 6. A count never promises more than the panel will show ─────────────────
+def test_other_runtime_count_uses_the_visible_set():
+    """Verified live 2026-09-08 on app.clawmetry.com under ?runtime=codex.
+
+    The empty state read "489 tasks on other runtimes — switch runtime to see
+    them"; switching to all-runtimes rendered NOTHING, because all 489 had
+    finished more than an hour earlier and the panel's own recency rule excludes
+    them. The count was of every row the runtime filter removed, not of the rows
+    a user would actually see. An empty state that sends someone to an empty
+    view is its own small lie.
+    """
+    body = _body("loadOverviewTasks")
+    assert "_ovVisible(allAgents.filter(" in body, (
+        "the other-runtime count must be derived from _ovVisible (the rows that "
+        "actually render), not from a raw length difference"
+    )
+    assert "allAgents.length - agents.length" not in body, (
+        "counting raw filtered-out rows is what produced the false '489 tasks' "
+        "promise"
+    )
+
+
+def test_one_visibility_rule_for_counts_and_rendering():
+    assert SRC.count("function _ovVisible") == 1
+    assert SRC.count("function _ovRecentlyFinished") == 1, (
+        "one recency rule; a second copy is how a count and a list disagree"
+    )
+    body = _body("loadOverviewTasks")
+    assert "_ovVisible(agents)" in body, (
+        "the rendered buckets must come from the same splitter the counts use"
     )

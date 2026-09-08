@@ -129,6 +129,46 @@ console.log('_cmRuntimeOf (founder report: Codex sub-agent stamped OpenClaw)');
   eq(rtOf({ runtime: '12m' }), 'openclaw', 'a bare duration falls back to the default');
 }
 
+// ── _ovVisible: a count must never promise more than the list will show ────
+console.log('_ovVisible (founder-verified: "489 tasks on other runtimes" led to an EMPTY view)');
+{
+  const s = sandboxWith(['_ovVisible','_ovRecentlyFinished','_ovBucketOf','_ovEndedMs',
+                         '_cmIsWorkingStatus','_cmIsFailedStatus']);
+  vm.runInContext('var OV_RECENT_DONE_MS = 60*60*1000;', s);
+  const vis = s._ovVisible;
+  const NOW = 1_700_000_000_000;
+  const ago = ms => NOW - ms;
+
+  const running   = {status:'active'};
+  const doneNow   = {status:'stale', completionTs:new Date(ago(5*60*1000)).toISOString()};
+  const doneOld   = {status:'stale', completionTs:new Date(ago(6*24*3600*1000)).toISOString()};
+  const failedNow = {status:'failed', completionTs:new Date(ago(2*60*1000)).toISOString()};
+  const failedOld = {status:'failed', completionTs:new Date(ago(9*24*3600*1000)).toISOString()};
+  const neverRan  = {status:'failed', updatedAt:NOW, runtimeMs:0};
+
+  eq(vis([running], NOW).total, 1, 'a running task is always visible');
+  eq(vis([doneNow], NOW).total, 1, 'a task finished 5 min ago is visible');
+  eq(vis([doneOld], NOW).total, 0, 'a task finished 6 days ago is NOT visible');
+  eq(vis([failedNow], NOW).total, 1, 'a failure 2 min ago is visible');
+  eq(vis([failedOld], NOW).total, 0, 'a failure 9 days ago is NOT visible');
+  eq(vis([neverRan], NOW).total, 0, 'a never-ran spawn is not visible on a now-stamped updatedAt');
+
+  // THE BUG: counting raw rows said 489; only the visible ones may be promised.
+  const many = [doneOld, doneOld, doneOld, failedOld, neverRan];
+  eq(vis(many, NOW).total, 0,
+     'a pile of old tasks counts as ZERO — the empty state must not send someone to an empty view');
+  eq(vis(many.concat([running, doneNow]), NOW).total, 2,
+     'only the genuinely visible tasks are counted');
+
+  const mixed = vis([running, doneNow, failedNow, doneOld], NOW);
+  eq(mixed.running.length, 1, 'running bucket');
+  eq(mixed.done.length, 1, 'done bucket');
+  eq(mixed.failed.length, 1, 'failed bucket');
+
+  eq(vis(null, NOW).total, 0, 'null list does not throw');
+  eq(vis([], NOW).total, 0, 'empty list is zero');
+}
+
 console.log('');
 console.log(passed + ' passed, ' + failed + ' failed');
 process.exit(failed === 0 ? 0 : 1);
