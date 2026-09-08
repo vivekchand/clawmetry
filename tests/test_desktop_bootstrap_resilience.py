@@ -570,6 +570,41 @@ def test_no_python_is_installed_when_python_is_not_the_problem(
     assert sup._retry_on_known_good_python(1, output) == (1, output)
 
 
+def test_retry_failure_reports_the_interpreter_that_actually_ran(
+        tmp_path, monkeypatch):
+    """Field failure #5711: telemetry showed 'no_distribution' on Windows
+    py3.11 while the pinned interpreter is 3.12, which only happens if the
+    retry engaged, rebuilt on 3.12, failed again, and the failure was
+    classified from THAT output while bootstrap_python_version still said
+    the pre-retry interpreter. Once the venv is rebuilt on the pinned
+    interpreter, every pip run from then on — success or failure — is
+    against that interpreter, and the reported version must say so."""
+    sup = _sup(tmp_path)
+    _windows(monkeypatch)
+    sup.bootstrap_python_version = "3.11"
+    good = "C:\\Users\\x\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+    monkeypatch.setattr(dapp, "_winget_install_python", lambda log: None)
+    monkeypatch.setattr(dapp, "_known_good_python", lambda: good)
+    monkeypatch.setattr(sup, "_create_venv", lambda py: True)
+    still_broken = (
+        "ERROR: Could not find a version that satisfies the requirement "
+        "clawmetry>=0.12.826\n"
+        "ERROR: No matching distribution found for clawmetry>=0.12.826"
+    )
+    monkeypatch.setattr(sup, "_pip_install_clawmetry",
+                        lambda: (1, still_broken))
+
+    rc, out = sup._retry_on_known_good_python(1, _NO_WHEEL_FOR_INTERPRETER)
+
+    assert rc == 1
+    assert out == still_broken
+    assert sup.bootstrap_python_version == dapp.KNOWN_GOOD_PYTHON_MINOR, (
+        "the retry ran on the pinned interpreter, so the reported version "
+        "must reflect that even though the retry also failed — otherwise "
+        "the field-failure report blames the wrong Python"
+    )
+
+
 def test_no_retry_when_already_on_the_pinned_interpreter(tmp_path, monkeypatch):
     """Nothing left to try, so do not download Python to reinstall the
     interpreter we are already running on."""
