@@ -566,6 +566,7 @@ jobs:
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
             tests/test_repo_scan_daemon_wiring.py \
+            tests/test_guard_workspace_kinds.py \
             tests/test_hooks_claude_code.py \
             tests/test_hook_ownership_quoted_launcher.py \
             tests/test_hook_lifecycle.py \
@@ -791,6 +792,7 @@ jobs:
           python3 -m pytest \
             tests/test_otlp_daemon_free_intake.py \
             tests/test_otlp_logs.py \
+            tests/test_genai_cache_semconv.py \
             tests/test_otlp_metrics_edge_cases.py \
             tests/test_otlp_traces_cost.py \
             tests/test_otlp_json_no_protobuf.py \
