@@ -172,8 +172,9 @@ def _add_cors(response):
         # Belt and braces. Every rule in this blueprint is under /api/q/
         # today, and this makes sure a route added here later cannot
         # inherit cross-origin readability by accident. Key MANAGEMENT
-        # (minting, listing, revoking) deliberately lives in
-        # routes/infra.py, behind the dashboard's own same-origin gate.
+        # (minting, listing, revoking) deliberately lives in its own
+        # module, routes/apikeys_admin.py, behind the dashboard's own
+        # same-origin gate.
         return response
     record = getattr(g, _G_KEY, None)
     if record is not None:
