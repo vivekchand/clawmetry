@@ -1,5 +1,9 @@
 """routes/public_api.py -- the keyed, cross-origin read API custom UIs use.
 
+Requirement: "Build your own UI: a keyed, scoped read API for custom
+dashboards" (64c10afd-038d-4fde-9c55-ddca80aaff1e), blueprint
+0ea7523c-12b5-4033-84ea-bf1f46e20d70.
+
 This is the "build your own UI" surface (docs/BUILD_YOUR_OWN_UI.md). It
 serves the declared ``q/1`` query contract to anything holding a scoped
 API key: a page vibe-coded on v0 or Lovable, a Grafana-ish panel, a
