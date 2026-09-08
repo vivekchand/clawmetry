@@ -535,6 +535,7 @@ jobs:
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
             tests/test_local_query_dispatch_edge_cases.py \
+            tests/test_store_unreachable_is_not_empty.py \
             tests/test_session_context_ingest.py \
             tests/test_session_context_route.py \
             tests/test_tracing_reasoning_spans.py \

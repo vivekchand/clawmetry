@@ -20546,11 +20546,14 @@ def _session_row_cwd(session: dict) -> str:
 # repos re-reads nothing until one of those files changes.
 _REPO_SCAN_ON = "CLAWMETRY_REPO_SCAN"        # "0" disables the workspace scan
 _REPO_SCAN_CACHE_MAX = int(os.environ.get("CLAWMETRY_REPO_SCAN_CACHE_MAX", "500"))
-#: Files a scan actually reads. The stamp is built from these and nothing else,
-#: so an unrelated write inside the repo does not invalidate the cache.
+#: Fallback for a repo_scan too old to declare ``SCANNED_FILES``. The live list
+#: is DERIVED from the scanner (see ``_repo_scan_stamp``): a hand-kept copy here
+#: is how package.json ended up scanned but not stamped, which left a checkout
+#: poisoned after first sight invisible forever.
 _REPO_SCAN_STAMP_FILES = (
     os.path.join(".git", "config"),
     os.path.join(".vscode", "tasks.json"),
+    "package.json",
 )
 
 
@@ -20565,9 +20568,11 @@ def _repo_scan_stamp(workspace: str) -> tuple:
     try:
         from clawmetry import repo_scan as _rs
         hook_files = tuple(getattr(_rs, "_AGENT_HOOK_FILES", ()) or ())
+        scanned = tuple(getattr(_rs, "SCANNED_FILES", ()) or ())
     except Exception:  # noqa: BLE001
         hook_files = ()
-    names = list(_REPO_SCAN_STAMP_FILES)
+        scanned = ()
+    names = list(scanned or _REPO_SCAN_STAMP_FILES)
     for entry in hook_files:
         # _AGENT_HOOK_FILES entries are relative paths, or (path, ...) tuples.
         rel = entry[0] if isinstance(entry, (tuple, list)) and entry else entry

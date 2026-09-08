@@ -9310,6 +9310,60 @@ def _latency_probe_record(response):
     return response
 
 
+# Bodies bigger than this are left alone: the rewrite below exists for the
+# unreachable case, where a handler has almost nothing to say. A multi-MB
+# payload means the store answered.
+_STORE_FLAG_MAX_BYTES = 2 * 1024 * 1024
+
+
+@app.after_request
+def _stamp_store_available(response):
+    """Say so when a read in this request could not reach the local store.
+
+    Issue #5534: a daemon-proxy timeout ends as ``None`` in the handler and
+    renders as an EMPTY tab — "no sessions have a transcript yet" under a
+    header counting 61, ``{"models": []}`` over a store holding thousands.
+    An empty state is a positive claim about the user's own work; when the
+    truth is "I could not read it", that claim is false and reads exactly
+    like data loss.
+
+    The Cost and Efficiency Analytics blueprint already specifies the field
+    (``store_available``) and a handful of endpoints set it themselves. This
+    stamps it on every JSON object that did NOT answer the question, so a
+    fast path written tomorrow cannot reintroduce the confident empty —
+    there is no helper anyone has to remember to call.
+
+    Only ever adds ``false``. Silence stays silence: a handler that already
+    reports the fact keeps its own value, and a request where nothing failed
+    is untouched, so no existing response shape or snapshot test moves.
+    """
+    try:
+        from routes.local_query import store_available as _store_available
+        if _store_available():
+            return response
+        path = request.path or ""
+        if not (path.startswith("/api/") or path.startswith("/v1/")):
+            return response
+        # The header is the cheap universal signal: the frontend's banner
+        # reads it without paying to clone and parse every response body.
+        response.headers["X-CM-Store-Available"] = "false"
+        if response.direct_passthrough or response.is_streamed:
+            return response
+        if (response.mimetype or "") != "application/json":
+            return response
+        raw = response.get_data()
+        if not raw or len(raw) > _STORE_FLAG_MAX_BYTES:
+            return response
+        body = json.loads(raw.decode("utf-8"))
+        if not isinstance(body, dict) or "store_available" in body:
+            return response
+        body["store_available"] = False
+        response.set_data(json.dumps(body))
+    except Exception:
+        pass
+    return response
+
+
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
 
