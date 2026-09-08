@@ -528,6 +528,8 @@ def main() -> None:
         # schedule (which only fire on schedule, not push) carry exit(1) on
         # their own step -- this script must stay green on push so real failures
         # on main remain visible.
+        print("(Exiting 0 -- push-triggered runs are informational only. "
+              "See c6-health.yml / c6-schedule-heal.yml for the enforcing schedule.)")
         return
 
     # PAT / OAuth path: full apply + verify across all repos.
