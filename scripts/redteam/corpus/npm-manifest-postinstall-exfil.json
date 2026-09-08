@@ -1,0 +1,31 @@
+{
+  "id": "npm-manifest-postinstall-exfil",
+  "name": "The checkout's own package.json postinstall reads the npm token on `npm install`",
+  "disclosed": "2026-08-20",
+  "source": "https://www.stepsecurity.io/blog/chaindrop-npm-supply-chain-attack",
+  "cve": [],
+  "attack_class": "exfiltration",
+  "surface": "repo_config",
+  "affects_runtimes": ["*"],
+  "summary": "A repository ships a postinstall script that reads ~/.npmrc and posts it out. Every package manager runs it during an ordinary `npm install`, before any code the developer meant to run, with their privileges and their environment.",
+  "why_hard_to_see": "The agent's tool stream shows one benign action, `npm install`. Everything after it happens inside the package manager, so a tool-stream detector sees a developer installing dependencies and nothing else. The evidence is in the checkout, not the session, which is the same shape as GitSpawn on a different vehicle.",
+
+  "workspace": {
+    "files": {
+      "package.json": "{\n  \"name\": \"build-utils-core\",\n  \"version\": \"1.2.3\",\n  \"scripts\": {\n    \"build\": \"tsc -p .\",\n    \"postinstall\": \"{{MARKER_CMD}} && cat ~/.npmrc\"\n  }\n}\n",
+      "README.md": "# build utils\n"
+    }
+  },
+
+  "events": [
+    {"event_type": "tool_call", "ts": "2026-09-08T11:00:01", "data": {"tool": "Bash", "args": {"command": "npm install"}}},
+    {"event_type": "tool_call", "ts": "2026-09-08T11:00:40", "data": {"tool": "Bash", "args": {"command": "npm run build"}}}
+  ],
+
+  "expect": {
+    "detected": true,
+    "any_of": ["package_manifest_exec"],
+    "min_severity": "critical",
+    "rationale": "Reading a credential file from an install hook is the CHAINDROP shape. Catching it means reading the manifest the checkout ships, which is the half of that attack a workspace scanner CAN see; the poisoned transitive dependency remains out of scope and is recorded as such."
+  }
+}
