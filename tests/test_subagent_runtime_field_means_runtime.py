@@ -73,15 +73,30 @@ def test_no_ui_consumer_reads_runtime_as_a_duration():
             f"{bad!r} treats the runtime NAME as a duration; read "
             f"runtimeFormatted instead"
         )
-    assert "escHtml(agent.runtimeFormatted || '')" in APP_JS
-    assert "escHtml(sa.runtimeFormatted || '')" in APP_JS
+    # No consumer may interpolate a runtime-ish value into HTML unescaped.
+    # Expressed as an absence so it still holds if a consumer is deleted — the
+    # `agent.runtimeFormatted` one was, when the invisible Home widget went.
+    import re as _re
+    raw = _re.findall(r"\+ *(?:agent|sa|match)\.runtime[A-Za-z]* *\+", APP_JS)
+    assert not raw, f"unescaped interpolation of a runtime value: {raw}"
 
 
 def test_those_consumers_escape_their_output():
-    """Both interpolated the value raw before this change."""
-    assert "'<span class=\"subagent-runtime\">' + escHtml(" in APP_JS, (
-        "the sub-agent preview must escape the value it interpolates"
-    )
+    """Both interpolated the value raw before this change.
+
+    One of the two (the Home mini-widget) was later deleted outright as a fetch
+    rendering into a hidden element, so this asserts the surviving consumers
+    escape rather than naming a call site that may legitimately disappear.
+    """
+    import re as _re
+    for m in _re.finditer(r"(?:agent|sa)\.runtimeFormatted", APP_JS):
+        line_start = APP_JS.rfind("\n", 0, m.start()) + 1
+        line = APP_JS[line_start:APP_JS.index("\n", m.start())]
+        if line.lstrip().startswith("//"):
+            continue
+        assert "escHtml(" in line, (
+            f"runtimeFormatted interpolated without escaping: {line.strip()[:90]}"
+        )
 
 
 def test_the_task_modal_does_not_label_a_duration_as_runtime():

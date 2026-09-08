@@ -377,6 +377,14 @@ jobs:
       - name: A sub-agent's runtime field means a runtime
         run: python3 -m pytest tests/test_subagent_runtime_field_means_runtime.py -q
 
+      # Home must not fetch data it renders into a hidden element. The
+      # "Worker Bees" mini-widget fetched /api/subagents on every Home render
+      # and wrote into three ids inside overview.html's display:none block —
+      # one wasted round trip per load, invisible in exactly the way that keeps
+      # such a fetch alive. FLYWHEEL: performance is a feature AND a cost.
+      - name: Home makes no invisible fetch
+        run: python3 -m pytest tests/test_overview_no_invisible_fetch.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
