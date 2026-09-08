@@ -437,122 +437,7 @@ MAX_STORE_ENTRIES = 10_000
 STORE_RETENTION_DAYS = 14
 
 
-def _metrics_file_path():
-    """Get the path to the metrics persistence file."""
-    if METRICS_FILE:
-        return METRICS_FILE
-    if WORKSPACE:
-        return os.path.join(WORKSPACE, ".clawmetry-metrics.json")
-    return os.path.expanduser("~/.clawmetry-metrics.json")
-
-
-def _load_metrics_from_disk():
-    """Load persisted metrics on startup."""
-    global metrics_store, _otel_last_received
-    path = _metrics_file_path()
-    if not os.path.exists(path):
-        return
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            for key in metrics_store:
-                if key in data and isinstance(data[key], list):
-                    metrics_store[key] = data[key][-MAX_STORE_ENTRIES:]
-            _otel_last_received = data.get("_last_received", 0)
-        _expire_old_entries()
-    except json.JSONDecodeError as e:
-        print(f"[warn]  Warning: Failed to parse metrics file {path}: {e}")
-        # Create backup of corrupted file
-        backup_path = f"{path}.corrupted.{int(time.time())}"
-        try:
-            os.rename(path, backup_path)
-            print(f"💾 Corrupted file backed up to {backup_path}")
-        except OSError:
-            pass
-    except (IOError, OSError) as e:
-        print(f"[warn]  Warning: Failed to read metrics file {path}: {e}")
-    except Exception as e:
-        print(f"[warn]  Warning: Unexpected error loading metrics: {e}")
-
-
-def _save_metrics_to_disk():
-    """Persist metrics store to JSON file."""
-    path = _metrics_file_path()
-    try:
-        d = os.path.dirname(path)
-        if d:
-            os.makedirs(d, exist_ok=True)
-        data = {}
-        with _metrics_lock:
-            for k in metrics_store:
-                data[k] = list(metrics_store[k])
-        data["_last_received"] = _otel_last_received
-        data["_saved_at"] = time.time()
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f)
-        os.replace(tmp, path)
-    except OSError as e:
-        print(f"[warn]  Warning: Failed to save metrics to {path}: {e}")
-        if "No space left on device" in str(e):
-            print("💾 Disk full! Consider cleaning up old files or expanding storage.")
-    except json.JSONEncodeError as e:
-        print(f"[warn]  Warning: Failed to serialize metrics data: {e}")
-    except Exception as e:
-        print(f"[warn]  Warning: Unexpected error saving metrics: {e}")
-
-
-def _expire_old_entries():
-    """Remove entries older than STORE_RETENTION_DAYS."""
-    cutoff = time.time() - (STORE_RETENTION_DAYS * 86400)
-    with _metrics_lock:
-        for key in metrics_store:
-            metrics_store[key] = [
-                e for e in metrics_store[key] if e.get("timestamp", 0) > cutoff
-            ][-MAX_STORE_ENTRIES:]
-
-
-def _add_metric(category, entry):
-    """Add an entry to the metrics store (thread-safe)."""
-    global _otel_last_received
-    with _metrics_lock:
-        metrics_store[category].append(entry)
-        if len(metrics_store[category]) > MAX_STORE_ENTRIES:
-            metrics_store[category] = metrics_store[category][-MAX_STORE_ENTRIES:]
-        _otel_last_received = time.time()
-    # Check budget on cost entries
-    if category == "cost":
-        try:
-            _budget_check()
-        except Exception:
-            pass
-
-
-def _metrics_flush_loop():
-    """Background thread: save metrics to disk every 60 seconds."""
-    while True:
-        time.sleep(60)
-        try:
-            _expire_old_entries()
-            _save_metrics_to_disk()
-        except KeyboardInterrupt:
-            print("📊 Metrics flush loop shutting down...")
-            break
-        except Exception as e:
-            print(f"[warn]  Warning: Error in metrics flush loop: {e}")
             # Continue running despite errors
-
-
-def _start_metrics_flush_thread():
-    """Start the background metrics flush thread."""
-    t = threading.Thread(target=_metrics_flush_loop, daemon=True)
-    t.start()
-
-
-def _has_otel_data():
-    """Check if we have any OTLP metrics data."""
-    return any(len(metrics_store[k]) > 0 for k in metrics_store)
 
 
 # ── Multi-Node Fleet Database ───────────────────────────────────────────
@@ -561,254 +446,7 @@ import sqlite3 as _sqlite3
 _fleet_db_lock = threading.Lock()
 
 
-def _fleet_db_path():
-    """Get path to the fleet SQLite database.
-
-    Always uses ~/.clawmetry/fleet.db, creating the directory if needed.
-    The curl installer creates ~/.clawmetry/ but we must not rely on that --
-    this function is the authoritative path and ensures the dir exists.
-
-    Falls back to a workspace-relative path when WORKSPACE is set (dev mode).
-    """
-    if FLEET_DB_PATH:
-        return FLEET_DB_PATH
-    if WORKSPACE:
-        _ws_db = os.path.join(WORKSPACE, ".clawmetry-fleet.db")
-        # Only honour the workspace-relative path when we can actually write
-        # there. Under launchd the process starts with cwd="/", and the
-        # workspace auto-detect below falls back to os.getcwd(), so WORKSPACE
-        # becomes "/" on any machine with no detectable OpenClaw workspace.
-        # That resolved to "/.clawmetry-fleet.db" -- unwritable on macOS -- and
-        # the dashboard exited(1) on every launchd boot instead of falling
-        # through to the ~/.clawmetry path this function documents as
-        # authoritative. A dev-mode workspace stays honoured; only an
-        # unwritable one is skipped.
-        if os.access(os.path.dirname(_ws_db) or ".", os.W_OK):
-            return _ws_db
-    # Always use ~/.clawmetry/fleet.db -- create the dir if the installer
-    # has not run yet or this is a fresh pip install without curl | bash.
-    preferred_dir = os.path.expanduser("~/.clawmetry")
-    try:
-        os.makedirs(preferred_dir, exist_ok=True)
-    except OSError:
-        pass  # makedirs failed (permissions?), fall through to legacy path
-    if os.path.isdir(preferred_dir):
-        return os.path.join(preferred_dir, "fleet.db")
-    # Last resort: legacy flat file in home dir (pre-installer environments)
-    return os.path.expanduser("~/.clawmetry-fleet.db")
-
-
-def _fleet_db():
-    """Get a SQLite connection to the fleet database."""
-    path = _fleet_db_path()
-    # Ensure parent directory exists (defence-in-depth: guards against callers
-    # that bypass _fleet_init_db, and older code paths that skipped makedirs).
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    db = _sqlite3.connect(path, timeout=10)
-    db.row_factory = _sqlite3.Row
-    db.execute("PRAGMA journal_mode=WAL")
-    return db
-
-
-def _fleet_init_db():
-    """Initialize fleet database tables."""
-    path = _fleet_db_path()
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
-    db = _fleet_db()
-    db.executescript("""
-        CREATE TABLE IF NOT EXISTS nodes (
-            node_id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            hostname TEXT,
-            tags TEXT,
-            api_key_hash TEXT,
-            version TEXT,
-            registered_at REAL,
-            last_seen_at REAL,
-            status TEXT DEFAULT 'unknown'
-        );
-        CREATE TABLE IF NOT EXISTS node_metrics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            node_id TEXT NOT NULL,
-            timestamp REAL NOT NULL,
-            metrics_json TEXT NOT NULL,
-            FOREIGN KEY (node_id) REFERENCES nodes(node_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_node_metrics_node_ts
-            ON node_metrics(node_id, timestamp DESC);
-    """)
-    db.close()
-
-
-def _fleet_check_key(req):
-    """Validate fleet API key from request header. Returns True if valid."""
-    if not FLEET_API_KEY:
-        return True  # No key configured = open (for dev/testing)
-    key = req.headers.get("X-Fleet-Key", "")
-    return hmac.compare_digest(key, FLEET_API_KEY)
-
-
-def _fleet_update_statuses():
-    """Update node statuses based on last_seen_at."""
-    cutoff = time.time() - FLEET_NODE_TIMEOUT
-    with _fleet_db_lock:
-        db = _fleet_db()
-        db.execute(
-            "UPDATE nodes SET status = 'offline' WHERE last_seen_at < ? AND status != 'offline'",
-            (cutoff,),
-        )
-        db.commit()
-        db.close()
-
-
-def _fleet_prune_metrics():
-    """Remove metrics older than 7 days."""
-    cutoff = time.time() - (7 * 86400)
-    with _fleet_db_lock:
-        db = _fleet_db()
-        db.execute("DELETE FROM node_metrics WHERE timestamp < ?", (cutoff,))
-        db.commit()
-        db.close()
-
-
-def _fleet_maintenance_loop():
-    """Background thread: update statuses and prune old metrics."""
-    while True:
-        time.sleep(300)  # every 5 minutes
-        try:
-            _fleet_update_statuses()
-            _fleet_prune_metrics()
-        except Exception as e:
-            print(f"Warning: Fleet maintenance error: {e}")
-
-
-def _start_fleet_maintenance_thread():
-    """Start the background fleet maintenance thread."""
-    t = threading.Thread(target=_fleet_maintenance_loop, daemon=True)
-    t.start()
-
-
 # ── Budget & Alert Database ────────────────────────────────────────────
-
-
-def _budget_init_db():
-    """Initialize budget and alert tables in the fleet database."""
-    db = _fleet_db()
-    db.executescript("""
-        CREATE TABLE IF NOT EXISTS budget_config (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS alert_rules (
-            id TEXT PRIMARY KEY,
-            type TEXT NOT NULL,
-            threshold REAL NOT NULL,
-            channels TEXT NOT NULL,
-            cooldown_min INTEGER DEFAULT 30,
-            enabled INTEGER DEFAULT 1,
-            runtime TEXT DEFAULT 'all',
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS alert_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            rule_id TEXT,
-            type TEXT NOT NULL,
-            message TEXT NOT NULL,
-            channel TEXT NOT NULL,
-            fired_at REAL NOT NULL,
-            acknowledged INTEGER DEFAULT 0,
-            ack_at REAL,
-            FOREIGN KEY (rule_id) REFERENCES alert_rules(id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_alert_history_fired
-            ON alert_history(fired_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_alert_history_rule
-            ON alert_history(rule_id, fired_at DESC);
-    """)
-    try:
-        # Pre-0.12.639 DBs lack the per-runtime scope column. SQLite has no
-        # IF-NOT-EXISTS for columns; the duplicate-column error is the no-op.
-        db.execute("ALTER TABLE alert_rules ADD COLUMN runtime TEXT DEFAULT 'all'")
-        db.commit()
-    except Exception:
-        pass
-    try:
-        # Pre-0.12.711 DBs drop the cloud-vocabulary ``alert_type`` the
-        # Alerts tab POSTed, keeping only the mapped local ``type``. That
-        # made a rule un-round-trippable: on update we could no longer tell
-        # WHICH cloud type an ``anomaly`` row came from, so the DuckDB mirror
-        # could not be rebuilt and the daemon evaluator stayed blind to it.
-        db.execute("ALTER TABLE alert_rules ADD COLUMN alert_type TEXT DEFAULT ''")
-        db.commit()
-    except Exception:
-        pass
-    db.close()
-
-
-def _get_budget_config():
-    """Get all budget config as a dict."""
-    defaults = {
-        "daily_limit": 0,
-        "weekly_limit": 0,
-        "monthly_limit": 0,
-        "auto_pause_enabled": False,
-        "auto_pause_threshold_pct": 100,
-        "auto_pause_threshold_usd": 0,
-        "auto_pause_action": "pause",
-        "warning_threshold_pct": 80,
-        "telegram_bot_token": "",
-        "telegram_chat_id": "",
-        # Issue #555 Phase 1 — hard budget cap. Distinct from
-        # ``*_limit`` (soft, warning-thresholded). When ``*_cap_usd`` is
-        # > 0 and current spend meets/exceeds it, ``_is_over_cap()``
-        # returns True and the dashboard banner shows the resume CTA.
-        # ``session_cap_usd`` is accepted now and consumed by per-session
-        # accounting in Phase 2.
-        "daily_cap_usd": 0.0,
-        "monthly_cap_usd": 0.0,
-        "session_cap_usd": 0.0,
-    }
-    try:
-        with _fleet_db_lock:
-            db = _fleet_db()
-            rows = db.execute("SELECT key, value FROM budget_config").fetchall()
-            db.close()
-        for row in rows:
-            k = row["key"]
-            v = row["value"]
-            if k in defaults:
-                if isinstance(defaults[k], bool):
-                    defaults[k] = v.lower() in ("true", "1", "yes")
-                elif isinstance(defaults[k], (int, float)):
-                    try:
-                        defaults[k] = float(v)
-                    except ValueError:
-                        pass
-                else:
-                    defaults[k] = v
-    except Exception:
-        pass
-    return defaults
-
-
-def _set_budget_config(updates):
-    """Update budget config keys."""
-    now = time.time()
-    with _fleet_db_lock:
-        db = _fleet_db()
-        for k, v in updates.items():
-            db.execute(
-                "INSERT OR REPLACE INTO budget_config (key, value, updated_at) VALUES (?, ?, ?)",
-                (k, str(v), now),
-            )
-        db.commit()
-        db.close()
 
 
 def _default_alerts_webhook_config():
@@ -855,36 +493,6 @@ def _save_alerts_webhook_config(updates):
     except Exception:
         pass
     return cfg
-
-
-def _should_send_webhook_for_type(alert_type):
-    cfg = _load_alerts_webhook_config()
-    if alert_type in (
-        "cost_spike",
-        "daily_threshold_breached",
-        "weekly_threshold_breached",
-    ):
-        return bool(cfg.get("cost_spike_alerts", True))
-    if alert_type == "agent_error_rate":
-        return bool(cfg.get("agent_error_rate_alerts", True))
-    if alert_type == "security_posture_change":
-        return bool(cfg.get("security_posture_changes", True))
-    return True
-
-
-def _dispatch_configured_webhooks(alert_type, payload):
-    if not _should_send_webhook_for_type(alert_type):
-        return
-    cfg = _load_alerts_webhook_config()
-    generic_url = str(cfg.get("webhook_url", "")).strip()
-    slack_url = str(cfg.get("slack_webhook_url", "")).strip()
-    discord_url = str(cfg.get("discord_webhook_url", "")).strip()
-    if generic_url:
-        _send_webhook_alert(generic_url, payload, payload_type="generic")
-    if slack_url:
-        _send_webhook_alert(slack_url, payload, payload_type="slack")
-    if discord_url:
-        _send_webhook_alert(discord_url, payload, payload_type="discord")
 
 
 # ── DuckDB cost fallback (issue #1404) ────────────────────────────────
@@ -1842,51 +1450,6 @@ def _send_webhook_alert(url, alert_data, payload_type="generic"):
         pass
 
 
-def _get_alert_rules():
-    """Get all alert rules."""
-    try:
-        with _fleet_db_lock:
-            db = _fleet_db()
-            rows = db.execute(
-                "SELECT * FROM alert_rules ORDER BY created_at DESC"
-            ).fetchall()
-            db.close()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
-
-
-def _get_alert_history(limit=50):
-    """Get recent alert history."""
-    try:
-        with _fleet_db_lock:
-            db = _fleet_db()
-            rows = db.execute(
-                "SELECT * FROM alert_history ORDER BY fired_at DESC LIMIT ?", (limit,)
-            ).fetchall()
-            db.close()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
-
-
-def _get_active_alerts():
-    """Get unacknowledged alerts from last 24h."""
-    cutoff = time.time() - 86400
-    try:
-        with _fleet_db_lock:
-            db = _fleet_db()
-            rows = db.execute(
-                "SELECT * FROM alert_history WHERE acknowledged = 0 AND fired_at > ? "
-                "ORDER BY fired_at DESC LIMIT 20",
-                (cutoff,),
-            ).fetchall()
-            db.close()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
-
-
 _velocity_cache = {"ts": 0, "result": None, "mtimes": {}}
 
 def _compute_velocity_status():
@@ -2428,60 +1991,7 @@ def _budget_monitor_loop():
             print(f"Warning: Budget monitor error: {e}")
 
 
-def _start_budget_monitor_thread():
-    """Start the background budget monitor thread."""
-    t = threading.Thread(target=_budget_monitor_loop, daemon=True)
-    t.start()
-
-
 # ── OTLP Protobuf Helpers ──────────────────────────────────────────────
-
-
-def _otel_attr_value(val):
-    """Convert an OTel AnyValue to a Python value."""
-    if val.HasField("string_value"):
-        return val.string_value
-    if val.HasField("int_value"):
-        return val.int_value
-    if val.HasField("double_value"):
-        return val.double_value
-    if val.HasField("bool_value"):
-        return val.bool_value
-    return str(val)
-
-
-def _get_data_points(metric):
-    """Extract data points from a metric regardless of type."""
-    if metric.HasField("sum"):
-        return metric.sum.data_points
-    elif metric.HasField("gauge"):
-        return metric.gauge.data_points
-    elif metric.HasField("histogram"):
-        return metric.histogram.data_points
-    elif metric.HasField("summary"):
-        return metric.summary.data_points
-    return []
-
-
-def _get_dp_value(dp):
-    """Extract the numeric value from a data point."""
-    if hasattr(dp, "as_double") and dp.as_double:
-        return dp.as_double
-    if hasattr(dp, "as_int") and dp.as_int:
-        return dp.as_int
-    if hasattr(dp, "sum") and dp.sum:
-        return dp.sum
-    if hasattr(dp, "count") and dp.count:
-        return dp.count
-    return 0
-
-
-def _get_dp_attrs(dp):
-    """Extract attributes from a data point."""
-    attrs = {}
-    for attr in dp.attributes:
-        attrs[attr.key] = _otel_attr_value(attr.value)
-    return attrs
 
 
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
@@ -2698,18 +2208,6 @@ _OTEL_STATUS_CODE_NAMES = {
     1: "OK",
     2: "ERROR",
 }
-
-
-def _hex(b):
-    """OTel proto carries trace_id / span_id / parent_span_id as raw bytes.
-    DuckDB stores them as hex strings (matches the OTel spec's canonical
-    text form). ``b'' → ''`` so parent_span_id stays falsy for root spans."""
-    if not b:
-        return ""
-    try:
-        return b.hex() if isinstance(b, (bytes, bytearray)) else str(b)
-    except Exception:
-        return ""
 
 
 def _otel_to_row(span, resource_attrs):
@@ -3353,20 +2851,6 @@ def _get_otel_usage_data():
     }
 
 
-def _safe_date_ts(date_str):
-    """Parse a YYYY-MM-DD date string to a timestamp, returning 0 on failure."""
-    if not date_str or not isinstance(date_str, str):
-        return 0
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").timestamp()
-    except ValueError:
-        # Invalid date format - expected but handled gracefully
-        return 0
-    except Exception as e:
-        print(f"[warn]  Warning: Unexpected error parsing date '{date_str}': {e}")
-        return 0
-
-
 def _auto_detect_data_dir():
     """Auto-detect OpenClaw data directory, including Docker volume mounts."""
     # Standard locations
@@ -3690,24 +3174,6 @@ def _sync_scope_refresh():
         _SYNC_SCOPE_CACHE["runtimes"] = rows
         _SYNC_SCOPE_CACHE["running"] = False
     return rows
-
-
-def _detect_workspace_from_config():
-    """Try to read workspace from Moltbot/OpenClaw agent config."""
-    config_paths = [
-        os.path.expanduser("~/.clawdbot/agents/main/config.json"),
-        os.path.expanduser("~/.clawdbot/config.json"),
-    ]
-    for cp in config_paths:
-        try:
-            with open(cp) as f:
-                data = json.load(f)
-                ws = data.get("workspace") or data.get("workspaceDir")
-                if ws:
-                    return os.path.expanduser(ws)
-        except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            pass
-    return None
 
 
 def _detect_gateway_port():
@@ -5618,8 +5084,6 @@ def _dispatch_alert_to_all_sinks(alert_data: dict) -> list[str]:
     return sent
 
 
-
-
 def _session_runtime_of(sid):
     """Runtime id for a namespaced session id ('copilot:...' -> 'copilot');
     anything without a known family prefix is OpenClaw."""
@@ -6748,7 +6212,18 @@ def _otel_to_row(span, resource_attrs):
         or inferred from the model — same as the #2049 event path.
       * ``gen_ai.tool.name`` / ``tool.name`` / ``code.function`` → ``tool_name``
       * ``gen_ai.conversation.id`` / ``session.id`` / ``openclaw.session_id`` →
-        ``session_id``
+        ``session_id``; when an exporter sends NONE of them (the OTel GenAI
+        convention does not require one, and a plain SDK or OpenLLMetry on
+        defaults sends none), the span's own ``trace_id`` supplies it as
+        ``<agent_type>:trace:<trace_id>`` so the run still reaches Sessions /
+        Cost / Guard (#5691). One trace is one run: measured across 265 real
+        traces, ``trace_id`` maps to exactly one session and no session spans
+        more than one trace. The ``<agent_type>:`` head is required, not
+        cosmetic, because every session-id parser here reads the runtime from
+        the text before the first colon; ``trace:`` marks the id as derived
+        rather than sent. Not applied when ``agent_type`` is ``openclaw``,
+        whose sessions come from transcripts and whose spans keep a null
+        ``session_id``.
       * ``gen_ai.agent.id`` / ``agent.id`` / ``openclaw.agent_id`` (also from
         resource) → ``agent_id``
       * ``agent.type`` (also from resource) → ``agent_type``
@@ -6911,6 +6386,48 @@ def _otel_to_row(span, resource_attrs):
         # so the span joins the transcript session (WO-57). No profile: the
         # span keeps the bare id, as before.
         session_id = _prof.session_key(session_id)
+
+    # Issue #5691: no conversation id at all. The span lands in ``spans`` and
+    # no ``sessions`` row is ever produced, so the app is invisible to
+    # Sessions / Cost / Guard while its data sits in the store. Nothing
+    # errors, so nothing prompts anyone to look. Nothing in the GenAI
+    # convention REQUIRES a conversation id, and a plain OTel SDK or
+    # OpenLLMetry on defaults does not send one, so this is the common case.
+    #
+    # Fall back to the trace id. Measured on a live node before choosing it
+    # (see the issue): across 265 real traces, ``trace_id`` maps to exactly
+    # one session and no session spans more than one trace, so this
+    # reproduces the mapping conforming exporters already produce rather than
+    # inventing one. The feared "one trace per tool call" flood is not the
+    # shape of real data either: median 2 spans per trace, p90 231, p90
+    # duration ~2.4 h, which is a RUN, not a tool call.
+    #
+    # The key is ``<runtime>:trace:<id>``, NOT ``otlp:trace:<id>``. Every
+    # session-id parser in this codebase (``_sid_runtime`` and its siblings in
+    # sessions / bench / cohort / harness / health) takes the text before the
+    # FIRST colon as the runtime, so an ``otlp:`` prefix would file every one
+    # of these under a runtime literally named "otlp" instead of the app's own
+    # ``agent_type`` -- the exact mis-bucketing
+    # ``_otlp_service_name_to_agent_type`` exists to prevent, and a breach of
+    # the per-runtime honesty gate. Keeping ``trace:`` as the second segment
+    # marks the id as DERIVED, so a reader can tell it from a session id an
+    # exporter actually sent.
+    #
+    # Confined to foreign apps on purpose. ``agent_type == "openclaw"`` is the
+    # one population the materializer deliberately skips (OpenClaw sessions
+    # come from transcripts, WO-55's ghost-session guard), so minting a key
+    # there would put a session id on a span that joins NO session -- a
+    # phantom, which is a bug we have shipped before. Those spans keep the
+    # NULL they have today.
+    if not session_id and agent_type != "openclaw":
+        _tid = _hex(span.trace_id)
+        if _tid:
+            _derived = "trace:" + _tid
+            session_id = (
+                _prof.session_key(_derived)
+                if (_prof is not None and _prof.session_key_prefix)
+                else "{}:{}".format(agent_type, _derived)
+            )
 
     # Span events: array of {time_unix_nano, name, attributes}.
     events = []
@@ -8739,7 +8256,6 @@ def detect_config(args=None):
     # ────────────────────────────────────────────────────────────────────────
 
 
-
 def _detect_workspace_from_config():
     """Try to read workspace from Moltbot/OpenClaw agent config."""
     config_paths = [
@@ -9847,6 +9363,60 @@ def _latency_probe_record(response):
     return response
 
 
+# Bodies bigger than this are left alone: the rewrite below exists for the
+# unreachable case, where a handler has almost nothing to say. A multi-MB
+# payload means the store answered.
+_STORE_FLAG_MAX_BYTES = 2 * 1024 * 1024
+
+
+@app.after_request
+def _stamp_store_available(response):
+    """Say so when a read in this request could not reach the local store.
+
+    Issue #5534: a daemon-proxy timeout ends as ``None`` in the handler and
+    renders as an EMPTY tab — "no sessions have a transcript yet" under a
+    header counting 61, ``{"models": []}`` over a store holding thousands.
+    An empty state is a positive claim about the user's own work; when the
+    truth is "I could not read it", that claim is false and reads exactly
+    like data loss.
+
+    The Cost and Efficiency Analytics blueprint already specifies the field
+    (``store_available``) and a handful of endpoints set it themselves. This
+    stamps it on every JSON object that did NOT answer the question, so a
+    fast path written tomorrow cannot reintroduce the confident empty —
+    there is no helper anyone has to remember to call.
+
+    Only ever adds ``false``. Silence stays silence: a handler that already
+    reports the fact keeps its own value, and a request where nothing failed
+    is untouched, so no existing response shape or snapshot test moves.
+    """
+    try:
+        from routes.local_query import store_available as _store_available
+        if _store_available():
+            return response
+        path = request.path or ""
+        if not (path.startswith("/api/") or path.startswith("/v1/")):
+            return response
+        # The header is the cheap universal signal: the frontend's banner
+        # reads it without paying to clone and parse every response body.
+        response.headers["X-CM-Store-Available"] = "false"
+        if response.direct_passthrough or response.is_streamed:
+            return response
+        if (response.mimetype or "") != "application/json":
+            return response
+        raw = response.get_data()
+        if not raw or len(raw) > _STORE_FLAG_MAX_BYTES:
+            return response
+        body = json.loads(raw.decode("utf-8"))
+        if not isinstance(body, dict) or "store_available" in body:
+            return response
+        body["store_available"] = False
+        response.set_data(json.dumps(body))
+    except Exception:
+        pass
+    return response
+
+
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 
 
@@ -10646,194 +10216,6 @@ _usage_cache = {"data": None, "ts": 0}
 _USAGE_CACHE_TTL = 60  # seconds
 _sessions_cache = {"data": None, "ts": 0}
 _SESSIONS_CACHE_TTL = 10  # seconds
-
-
-def _get_sessions_dir():
-    base = SESSIONS_DIR or os.path.expanduser("~/.openclaw/agents/main/sessions")
-    if os.path.isdir(base):
-        return base
-    fallback = os.path.expanduser("~/.moltbot/agents/main/sessions")
-    return fallback if os.path.isdir(fallback) else base
-
-
-def _parse_event_timestamp(ts_val, fallback_ts=None):
-    if ts_val is None:
-        return fallback_ts
-    try:
-        if isinstance(ts_val, (int, float)):
-            return datetime.fromtimestamp(ts_val / 1000 if ts_val > 1e12 else ts_val)
-        if isinstance(ts_val, str):
-            return datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
-    except Exception:
-        pass
-    return fallback_ts
-
-
-def _extract_usage_metrics(obj):
-    """Best-effort usage extraction from mixed transcript schemas."""
-    message = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
-    usage = message.get("usage")
-    if not isinstance(usage, dict):
-        usage = obj.get("usage")
-    if not isinstance(usage, dict):
-        usage = obj.get("tokens_used")
-    if not isinstance(usage, dict):
-        return {
-            "tokens": 0, "cost": 0.0,
-            "input_tokens": 0, "output_tokens": 0,
-            "cache_read_tokens": 0, "cache_write_tokens": 0,
-            "input_cost": 0.0, "output_cost": 0.0,
-            "cache_read_cost": 0.0, "cache_write_cost": 0.0,
-        }
-
-    in_toks = usage.get("input", usage.get("input_tokens", 0)) or 0
-    out_toks = usage.get("output", usage.get("output_tokens", 0)) or 0
-    cache_read = usage.get("cacheRead", usage.get("cache_read_tokens", 0)) or 0
-    cache_write = usage.get("cacheWrite", usage.get("cache_write_tokens", 0)) or 0
-    total = usage.get("totalTokens", usage.get("total_tokens", 0)) or 0
-    if not total:
-        total = in_toks + out_toks + cache_read + cache_write
-
-    cost = 0.0
-    cost_input = 0.0
-    cost_output = 0.0
-    cost_cache_read = 0.0
-    cost_cache_write = 0.0
-    cost_data = usage.get("cost", {})
-    if isinstance(cost_data, dict):
-        raw = cost_data.get("total", cost_data.get("usd", 0))
-        try:
-            cost = float(raw or 0)
-        except Exception:
-            cost = 0.0
-        # Extract granular cost breakdown if available
-        cost_input = float(cost_data.get("input", 0) or 0)
-        cost_output = float(cost_data.get("output", 0) or 0)
-        cost_cache_read = float(cost_data.get("cacheRead", 0) or 0)
-        cost_cache_write = float(cost_data.get("cacheWrite", 0) or 0)
-    elif isinstance(cost_data, (int, float)):
-        cost = float(cost_data)
-
-    return {
-        "tokens": int(total or 0),
-        "cost": float(cost or 0.0),
-        "input_tokens": int(in_toks or 0),
-        "output_tokens": int(out_toks or 0),
-        "cache_read_tokens": int(cache_read or 0),
-        "cache_write_tokens": int(cache_write or 0),
-        "input_cost": float(cost_input),
-        "output_cost": float(cost_output),
-        "cache_read_cost": float(cost_cache_read),
-        "cache_write_cost": float(cost_cache_write),
-    }
-
-
-def _normalize_plugin_name(tool_name):
-    name = str(tool_name or "").strip().lower()
-    if not name:
-        return ""
-    for sep in ("/", ":", "."):
-        if sep in name:
-            name = name.split(sep, 1)[0]
-            break
-    return name[:64]
-
-
-def _extract_tool_plugins(obj):
-    """Extract plugin/tool names from known tool call locations."""
-    plugins = []
-    message = obj.get("message", {}) if isinstance(obj.get("message"), dict) else {}
-
-    # Newer format: message.content[{type:'toolCall', name:'...'}]
-    for part in message.get("content") or []:
-        if not isinstance(part, dict):
-            continue
-        if part.get("type") == "toolCall":
-            p = _normalize_plugin_name(part.get("name", ""))
-            if p:
-                plugins.append(p)
-
-    # OpenAI-like tool call array
-    for tc in obj.get("tool_calls") or []:
-        if not isinstance(tc, dict):
-            continue
-        p = _normalize_plugin_name(
-            tc.get("name") or (tc.get("function") or {}).get("name", "")
-        )
-        if p:
-            plugins.append(p)
-
-    # Alternate key
-    for tc in obj.get("tool_use") or []:
-        if not isinstance(tc, dict):
-            continue
-        p = _normalize_plugin_name(tc.get("name", ""))
-        if p:
-            plugins.append(p)
-
-    return plugins
-
-
-def _collect_cron_refs(obj, out_refs):
-    """Recursively collect explicit cron/job IDs from transcript event objects."""
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            lk = str(k).lower()
-            if lk in (
-                "cronid",
-                "cron_id",
-                "cronjobid",
-                "cron_job_id",
-                "jobid",
-                "job_id",
-                "scheduleid",
-                "schedule_id",
-            ):
-                if isinstance(v, (str, int, float)):
-                    sv = str(v).strip().lower()
-                    if sv:
-                        out_refs.add(sv)
-            _collect_cron_refs(v, out_refs)
-    elif isinstance(obj, list):
-        for it in obj:
-            _collect_cron_refs(it, out_refs)
-
-
-def _score_cron_match(session, job):
-    """Heuristic score for mapping a session to a cron job."""
-    refs = session.get("explicit_cron_refs", set())
-    text = session.get("search_text", "")
-    score = 0
-
-    jid = str(job.get("id", "")).strip().lower()
-    jname = str(job.get("name", job.get("label", ""))).strip().lower()
-
-    if jid and jid in refs:
-        score += 100
-    if jname and jname in refs:
-        score += 80
-    if jid and jid in text:
-        score += 30
-    if jname and len(jname) >= 4 and jname in text:
-        score += 20
-
-    payload = job.get("payload") or job.get("config") or {}
-    if isinstance(payload, dict):
-        prompt = (
-            str(
-                payload.get("prompt")
-                or payload.get("text")
-                or payload.get("message")
-                or ""
-            )
-            .strip()
-            .lower()
-        )
-        if prompt:
-            for w in [w for w in _re.split(r"[^a-z0-9_]+", prompt) if len(w) >= 5][:8]:
-                if w in text:
-                    score += 1
-    return score
 
 
 def _compute_transcript_analytics():
@@ -16123,7 +15505,6 @@ def _init_data_provider():
         )
     except Exception:
         return None
-
 
 
 def main():

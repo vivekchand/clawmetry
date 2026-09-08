@@ -1256,6 +1256,81 @@ class _ProxyUnavailable:
 PROXY_UNAVAILABLE = _ProxyUnavailable()
 
 
+# ── "Could the local store be read?" — one fact, one name (#5534) ─────────
+#
+# ``local_store_via_daemon`` flattens :data:`PROXY_UNAVAILABLE` to ``None``
+# so its ~490 callers can fall through to a direct open. That flattening is
+# right for control flow and wrong for the ANSWER: a handler that gets
+# ``None`` from every path emits ``{"models": []}`` / "no sessions have a
+# transcript yet" — a positive claim about the user's own work — when the
+# truth is "I could not reach the store". A spinner says wait, an error says
+# something is wrong; an empty state says YOU HAVE NO DATA, and when that is
+# false it is indistinguishable from data loss to the person reading it.
+#
+# The Cost and Efficiency Analytics blueprint already names the field that
+# carries the distinction: ``store_available``. Rather than convert 493 call
+# sites (the reason this sat unfixed), record the fact ONCE, here, on the
+# request, and let ``dashboard.py``'s ``after_request`` stamp it onto every
+# JSON object that did not answer the question itself. New fast paths are
+# then correct by default — there is no helper to remember to use.
+#
+# Deliberately narrow, so the flag means what it says:
+#   * only a round trip we actually ATTEMPTED and lost counts (timeout,
+#     stale port, or a daemon that refused the shape). No daemon at all, or
+#     being the daemon, is not unreachability — the direct open is the
+#     supported path there and it works;
+#   * a successful direct-open fallback CLEARS it, because the store demonstrably
+#     was readable from this process (dev boots, tests, a just-exited daemon).
+_STORE_UNREACHABLE_ATTR = "_cm_store_unreachable"
+
+
+def _request_g():
+    """Flask ``g`` when there is a request to scope to, else ``None``.
+
+    Outside a request there is no response to annotate and no natural
+    lifetime for the flag, so the trackers below no-op rather than leak
+    state across a worker thread's next job.
+    """
+    try:
+        from flask import g, has_request_context
+        if has_request_context():
+            return g
+    except Exception:
+        pass
+    return None
+
+
+def note_store_unreachable() -> None:
+    """Record that a read against the local store found it unreadable."""
+    g = _request_g()
+    if g is not None:
+        setattr(g, _STORE_UNREACHABLE_ATTR, True)
+
+
+def note_store_read_ok() -> None:
+    """Record that a read against the local store succeeded after all.
+
+    Call this from a fast path whose direct-open fallback answered: the
+    proxy hop may have failed, but the data reached the handler, so the
+    response is not the false-empty this flag exists to prevent.
+    """
+    g = _request_g()
+    if g is not None:
+        setattr(g, _STORE_UNREACHABLE_ATTR, False)
+
+
+def store_available() -> bool:
+    """False when a read in THIS request could not reach the local store.
+
+    The one name for the distinction between an EMPTY result and an
+    UNREADABLE one. Defaults to True: silence means nothing failed.
+    """
+    g = _request_g()
+    if g is None:
+        return True
+    return not getattr(g, _STORE_UNREACHABLE_ATTR, False)
+
+
 # ── Page-load fan-out collapse for the heavy event scans ──────────────────
 #
 # The Cost tab's roll-ups (token split, per-plugin, per-model, per-skill,
@@ -1396,13 +1471,20 @@ def _local_store_call_via_daemon_uncached(method_name: str, **kwargs):
     except (urllib.error.URLError, OSError, ValueError):
         # Stale port / daemon restarted / network gremlin (after retrying
         # timeouts) — drop the cache so the next call re-reads discovery.
+        # This is the timeout that used to render as a confident empty tab
+        # (#5534): we asked the process that owns the store and lost.
         _invalidate_daemon_cache()
+        note_store_unreachable()
         return PROXY_UNAVAILABLE
     if "error" in body:
         log.warning(
             "local_query: daemon refused %s(): %s",
             method_name, str(body.get("error"))[:200],
         )
+        # A daemon on an older build that has never heard of this shape is
+        # just as unreadable to the handler as a timeout — and reproduced
+        # the same false zeros on Cost (#5534).
+        note_store_unreachable()
         return PROXY_UNAVAILABLE
     return body.get("result")
 
