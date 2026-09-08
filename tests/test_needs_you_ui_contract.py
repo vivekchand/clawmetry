@@ -149,7 +149,7 @@ def test_queue_counts_as_confirmed(app_js):
 # ── wiring ──────────────────────────────────────────────────────────────────
 
 def test_strip_is_in_the_live_template(app_js):
-    """dashboard.py defines DASHBOARD_HTML twice and only the second renders.
+    """The last DASHBOARD_HTML assignment is the one that renders.
     The strip must live in the template that is actually included."""
     assert 'id="needs-you"' in OVERVIEW.read_text(encoding="utf-8")
     assert "loadNeedsYou" in app_js
