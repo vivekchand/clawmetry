@@ -46950,7 +46950,24 @@ _EMPTY_RUNTIME_DETECTION = {
     "detected_locked": [],
     "actionable_tier": None,
     "actionable_tier_label": None,
+    "detection": {"found": [], "found_count": 0, "blocked": [],
+                  "locations": [], "runtimes_checked": 0},
 }
+
+
+def _detection_report_safe(probe_mod, raw):
+    """``runtime_probe.detection_report`` that can never break the envelope.
+
+    This endpoint's contract is "never 5xx, always render", so a probe module
+    from an older wheel (no ``detection_report``) degrades to an empty report
+    rather than an exception.
+    """
+    try:
+        return probe_mod.detection_report(raw or [])
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("runtime detection report failed: %s", exc)
+        return {"found": [], "found_count": 0, "blocked": [],
+                "locations": [], "runtimes_checked": 0}
 
 
 @bp_entitlement.route("/api/entitlement/runtime-detection")
@@ -47048,6 +47065,14 @@ def api_entitlement_runtime_detection():
                 "allowed": bool(rid and rid in allowed_runtimes),
                 "required_tier": req_t,
                 "required_tier_label": req_lbl,
+                # #5716: where we looked, and what we were refused. A screen
+                # that can only say "nothing found" cannot tell a machine
+                # where no agent has run from one where the data is right
+                # there and we were denied access to it.
+                "checked": (p.get("checked") or []) if isinstance(p, dict) else [],
+                "unreadable": (p.get("unreadable") or []) if isinstance(p, dict) else [],
+                "env": (p.get("env") or "") if isinstance(p, dict) else "",
+                "env_set": bool(p.get("env_set")) if isinstance(p, dict) else False,
             }
         )
 
@@ -47104,6 +47129,9 @@ def api_entitlement_runtime_detection():
             "detected_locked": detected_locked,
             "actionable_tier": actionable_tier,
             "actionable_tier_label": actionable_tier_label,
+            # The first-run answer, pre-shaped: what was found, what is
+            # blocked and fixable, and where we looked for the rest (#5716).
+            "detection": _detection_report_safe(_probe, raw),
         }
     )
 

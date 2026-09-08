@@ -13286,6 +13286,49 @@ function _invCheckLockedDetected(detected, bodyEl) {
     }).catch(function () {});
 }
 
+// #5716: "where ClawMetry looked", for the Agents tab's empty state. Reads
+// the same /api/entitlement/runtime-detection envelope the locked-runtime
+// nudge already uses, so this costs no new endpoint and no extra fetch shape.
+// Degrades to leaving the stock copy alone: a screen that says less is far
+// better than one that says something wrong.
+function _invFillWhereWeLooked(bodyEl) {
+  fetch('/api/entitlement/runtime-detection')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var det = (d && d.detection) || {};
+      var blocked = det.blocked || [];
+      var locations = det.locations || [];
+      if (blocked.length) {
+        // Present but unreadable is the opposite conclusion from "nothing
+        // here", and it is actionable, so it gets the whole panel.
+        var rows = blocked.slice(0, 4).map(function (b) {
+          return '<div style="margin:6px 0;"><b>' + escHtml(b.label || b.runtime) + '</b> — '
+            + escHtml(b.reason || 'could not be read') + '<br>'
+            + '<code style="font-size:11px;opacity:.7;">' + escHtml(b.path || '') + '</code></div>';
+        }).join('');
+        bodyEl.innerHTML =
+          '<div style="color:#fbbf24;margin-bottom:8px;">Agent data looks present here, but ClawMetry could not read it.</div>'
+          + rows;
+        return;
+      }
+      if (!locations.length) return;  // keep the stock copy
+      var items = locations.slice(0, 6).map(function (l) {
+        return '<li style="margin:2px 0;"><span style="opacity:.85;">' + escHtml(l.label || l.runtime)
+          + '</span> <code style="font-size:11px;opacity:.7;">'
+          + (l.paths || []).slice(0, 2).map(escHtml).join('</code> <code style="font-size:11px;opacity:.7;">')
+          + '</code></li>';
+      }).join('');
+      var checked = det.runtimes_checked || locations.length;
+      bodyEl.innerHTML =
+        '<div style="margin-bottom:8px;">No agent has run on this machine yet, as far as ClawMetry can see. '
+        + 'It checked ' + checked + ' runtimes. Start an agent and this fills in on its own, with nothing to configure.</div>'
+        + '<details style="margin-top:6px;"><summary style="cursor:pointer;opacity:.8;">Where ClawMetry looked</summary>'
+        + '<ul style="margin:8px 0 0 0;padding-left:18px;list-style:none;">' + items + '</ul>'
+        + '</details>';
+    })
+    .catch(function () { /* keep the stock copy */ });
+}
+
 async function renderInventory() {
   var inv = await _invFetchData();
   var agents = (inv && inv.agents) || [];
@@ -13322,6 +13365,14 @@ async function renderInventory() {
         // is actively misleading there — surface the upgrade nudge that
         // used to live in the retired gateway-setup modal instead.
         _invCheckLockedDetected(detected, bodyEl);
+      } else if (bodyEl) {
+        // #5716: nothing detected. The stock copy ("ClawMetry watches ...
+        // the moment they run. Nothing to configure.") is true but gives a
+        // first-run user nothing to check, and it reads identically whether
+        // no agent has ever run here or ClawMetry was refused access to the
+        // data. Say where we looked, and lead with the blocked case, which
+        // is the one they can fix.
+        _invFillWhereWeLooked(bodyEl);
       }
       emptyEl.style.display = '';
     }

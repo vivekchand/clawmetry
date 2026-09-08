@@ -128,20 +128,70 @@ def test_render_single_paid_runtime_named_in_unlock_line():
     assert "sign in below" in joined and "license key" in joined
 
 
-def test_render_nothing_detected_is_silent():
+def test_render_nothing_detected_says_where_it_looked():
+    """Reversed deliberately (#5716).
+
+    This used to assert ``== []``: on a machine where nothing was detected
+    the wizard printed nothing at all, so a person watching an empty install
+    could not tell "no agent has run here" from "ClawMetry cannot read
+    them". Silence was the bug, not the contract.
+    """
     probes = [
-        {"id": "openclaw", "label": "OpenClaw", "free": True, "found": False},
+        {"id": "openclaw", "label": "OpenClaw", "free": True, "found": False,
+         "checked": [{"path": "/home/u/.openclaw", "exists": False}],
+         "unreadable": [], "env": "", "env_set": False},
     ]
-    assert render_detection_lines(probes) == []
+    out = "\n".join(render_detection_lines(probes))
+    assert "/home/u/.openclaw" in out, "must name the path it probed"
+    assert "checked" in out.lower()
+    assert "Start an agent" in out, "must say what to do next"
+
+
+def test_render_nothing_detected_leads_with_the_fixable_case():
+    """A refused read is the opposite conclusion from "nothing here", and it
+    is the one the reader can act on, so it takes the whole message."""
+    probes = [
+        {"id": "openclaw", "label": "OpenClaw", "free": True, "found": False,
+         "checked": [{"path": "/home/u/.openclaw", "exists": None,
+                      "unreadable": "Permission denied."}],
+         "unreadable": [{"path": "/home/u/.openclaw",
+                         "unreadable": "Permission denied."}],
+         "env": "", "env_set": False},
+    ]
+    out = "\n".join(render_detection_lines(probes))
+    assert "could not be read" in out
+    assert "Permission denied." in out
+    assert "Start an agent" not in out, (
+        "telling someone to start an agent when their agent data is right "
+        "there and we were refused is the wrong instruction")
 
 
 def test_probes_never_raise_when_probe_explodes(monkeypatch):
-    """A single broken probe answers found=False; the sweep never raises."""
+    """A single broken probe answers found=False; the sweep never raises.
+
+    Patches ``inspect``, which is what ``probe_runtimes`` actually calls
+    since #5716. It patched ``found`` before, and left that way the fault is
+    never injected at all: the sweep runs the REAL probes, some of which
+    legitimately find something, and the guard passes while guarding nothing.
+    """
     monkeypatch.setattr(
         runtime_probe.RuntimeProbe,
-        "found",
+        "inspect",
         lambda self: (_ for _ in ()).throw(OSError("boom")),
     )
     results = probe_runtimes()
     assert len(results) == len(RUNTIME_PROBES)
     assert all(p["found"] is False for p in results)
+    # And the new fields degrade to empty rather than vanishing, so a
+    # consumer can read them unconditionally.
+    assert all(p["checked"] == [] and p["unreadable"] == [] for p in results)
+
+
+def test_found_still_answers_one_bit_for_older_callers(monkeypatch):
+    """``found()`` is public and has other callers; it keeps its contract."""
+    monkeypatch.setattr(
+        runtime_probe.RuntimeProbe,
+        "inspect",
+        lambda self: (_ for _ in ()).throw(OSError("boom")),
+    )
+    assert RUNTIME_PROBES[0].found() is False

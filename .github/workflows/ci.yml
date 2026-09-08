@@ -564,6 +564,12 @@ jobs:
             tests/test_snapshot_transcripts_runtime_fair.py \
             tests/test_moat_perf_benchmark.py \
             tests/test_runtime_detection_snapshot.py \
+            tests/test_detection_says_where_it_looked.py \
+            tests/test_onboard_runtime_detection.py \
+            tests/test_entitlement_api_runtime_detection.py \
+            tests/test_inventory_empty_state_guidance.py \
+            tests/test_no_agent_detected_state.py \
+            tests/test_runtime_prefix_sets_in_lockstep.py \
             tests/test_family_runtime_ingest.py \
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \

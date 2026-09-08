@@ -21,6 +21,7 @@ per-OS; env overrides honoured where the adapter honours them.
 from __future__ import annotations
 
 import glob as _glob
+import sys as _sys
 import os
 from dataclasses import dataclass
 
@@ -37,6 +38,66 @@ except Exception:  # pragma: no cover - defensive; keep onboarding alive
     FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
 
 
+def _refusal_reason(expanded: str):
+    """Why an apparently-absent path is actually unreadable, or ``None``.
+
+    This exists because the obvious check does not work. ``glob.glob`` and
+    ``os.path.exists`` BOTH swallow ``PermissionError`` and answer ""/False,
+    so a directory we are refused is indistinguishable from one that was
+    never created -- which is the whole bug (#5716) and would have made a
+    "we were blocked" message dead code. Verified on macOS: against a
+    ``chmod 000`` directory, ``glob`` returns ``[]`` and ``exists`` returns
+    ``False``, while ``os.listdir`` / ``os.stat`` / ``os.scandir`` raise
+    ``PermissionError(errno 13)``.
+
+    So walk up to the nearest ancestor we can name and ask it a question that
+    is allowed to fail. Returns a plain-words reason, or ``None`` when the
+    path is simply not there.
+    """
+    try:
+        cur = os.path.dirname(expanded.rstrip(os.sep)) or os.sep
+        seen = 0
+        while cur and seen < 24:
+            seen += 1
+            try:
+                os.listdir(cur)
+                return None  # readable, so the target really is absent
+            except PermissionError as e:
+                return _permission_reason(e)
+            except NotADirectoryError:
+                return None
+            except FileNotFoundError:
+                parent = os.path.dirname(cur)
+                if not parent or parent == cur:
+                    return None
+                cur = parent
+                continue
+            except OSError as e:
+                return _permission_reason(e)
+    except Exception:
+        return None
+    return None
+
+
+def _permission_reason(exc: BaseException) -> str:
+    """A plain-words reason for a refused read, never an errno the reader
+    has to look up (FLYWHEEL: never show the user an upstream error code)."""
+    import errno as _errno
+
+    code = getattr(exc, "errno", None)
+    if code in (_errno.EACCES, _errno.EPERM):
+        if _sys.platform == "darwin":
+            return ("macOS blocked the read. Give your terminal (or the "
+                    "ClawMetry app) Full Disk Access in System Settings > "
+                    "Privacy & Security, then reopen it.")
+        return "Permission denied. Check that your user can read this path."
+    if code == _errno.ELOOP:
+        return "A symlink loop stopped the read."
+    if code == _errno.ENAMETOOLONG:
+        return "The path is too long for this filesystem."
+    return "Could not be read on this machine."
+
+
 @dataclass
 class RuntimeProbe:
     """One supported runtime: id, human label, and where its data lives."""
@@ -47,24 +108,113 @@ class RuntimeProbe:
     env: str = ""  # optional env var naming the data dir (adapter-honoured)
 
     def found(self) -> bool:
-        """True when any candidate location exists. Never raises."""
+        """True when any candidate location exists. Never raises.
+
+        Kept as the one-bit answer its existing callers expect; ``inspect``
+        is the same probe with its findings retained. The try/except is the
+        contract, not decoration: this is called from the installer path,
+        which must never hard-fail.
+        """
+        try:
+            return bool(self.inspect().get("found"))
+        except Exception:
+            return False
+
+    def inspect(self) -> dict:
+        """The same probe, but keeping what it learned. Never raises.
+
+        ``found()`` answers one bit and throws the rest away, which is why a
+        first-run user could not be told anything (#5716). Three outcomes are
+        collapsed into that single ``False``:
+
+          * the location genuinely is not there — nothing has run here;
+          * the location is there and we were REFUSED (macOS TDD / Full Disk
+            Access, a root-owned dir, a locked profile) — the runtime is
+            present and we are blind to it, which is the opposite conclusion;
+          * the path could not even be resolved because the env var it is
+            written against is unset.
+
+        Returns ``{found, checked, unreadable, env, env_set}``:
+
+          * ``checked``   - every candidate location, EXPANDED as the probe
+            actually looked at it, so a reader sees the real path on their own
+            machine rather than the tilde-form in our source;
+          * ``unreadable`` - the subset we were refused access to, each with
+            the reason. Non-empty means "present but blind", never "absent";
+          * ``env`` / ``env_set`` - the data-dir override this runtime
+            honours and whether it is set, so "I did set that" is checkable.
+        """
+        checked: list = []
+        unreadable: list = []
+        found = False
+
+        def _look(raw: str, expanded: str) -> None:
+            nonlocal found
+            entry = {"path": expanded}
+            if expanded != raw:
+                entry["pattern"] = raw
+            try:
+                if _glob.glob(expanded) or os.path.exists(expanded):
+                    entry["exists"] = True
+                    found = True
+                else:
+                    # "Not found" here can mean refused: see _refusal_reason.
+                    reason = _refusal_reason(expanded)
+                    if reason:
+                        entry["exists"] = None
+                        entry["unreadable"] = reason
+                        unreadable.append(entry)
+                    else:
+                        entry["exists"] = False
+            except PermissionError as e:
+                # The distinction the whole issue is about: refused is not
+                # absent. Report it as its own state so the UI can say
+                # "present, but ClawMetry was not allowed to read it".
+                entry["exists"] = None
+                entry["unreadable"] = _permission_reason(e)
+                unreadable.append(entry)
+            except OSError as e:
+                entry["exists"] = None
+                entry["unreadable"] = _permission_reason(e)
+                unreadable.append(entry)
+            except Exception:
+                entry["exists"] = None
+            checked.append(entry)
+
+        env_set = False
         try:
             if self.env:
                 root = os.environ.get(self.env)
-                if root and os.path.exists(os.path.expanduser(root)):
-                    return True
-            for p in self.paths:
+                env_set = bool(root)
+                if root:
+                    _look(root, os.path.expanduser(root))
+        except Exception:
+            pass
+
+        for raw in self.paths:
+            try:
                 # expandvars FIRST so "$XDG_DATA_HOME/..." resolves; an unset
                 # var stays literal and simply globs to nothing, which is the
                 # honest answer rather than a bare-root false positive.
-                expanded = os.path.expanduser(os.path.expandvars(p))
+                expanded = os.path.expanduser(os.path.expandvars(raw))
                 if "$" in expanded:
+                    # Unresolved because its variable is unset. Say so rather
+                    # than listing a path with a dollar sign in it as though
+                    # we had looked there.
+                    checked.append({"path": raw, "exists": False,
+                                    "unresolved_env": True})
                     continue
-                if _glob.glob(expanded):
-                    return True
-        except Exception:
-            return False
-        return False
+                _look(raw, expanded)
+            except Exception:
+                continue
+
+        return {
+            "found": found,
+            "checked": checked,
+            "unreadable": unreadable,
+            "env": self.env,
+            "env_set": env_set,
+        }
 
 
 # One entry per supported runtime. Keep ids in sync with the entitlement
@@ -216,35 +366,122 @@ RUNTIME_PROBES: tuple = (
 def probe_runtimes() -> list:
     """Presence-probe every supported runtime.
 
-    Returns ``[{id, label, free, found}]`` in catalogue order. Never raises.
+    Returns ``[{id, label, free, found, checked, unreadable, env, env_set}]``
+    in catalogue order. Never raises.
+
+    ``checked`` / ``unreadable`` are what makes a "nothing found" answer
+    actionable (#5716): this used to return the ``found`` bit alone, so no
+    endpoint, CLI or screen could tell a first-run user WHERE we looked, and
+    a runtime we were refused access to was reported exactly like one that
+    was never installed. The keys are additive, so every existing consumer
+    reading ``id`` / ``label`` / ``free`` / ``found`` is unaffected.
     """
     out = []
     for probe in RUNTIME_PROBES:
         try:
-            hit = probe.found()
+            info = probe.inspect()
         except Exception:
-            hit = False
+            info = {"found": False, "checked": [], "unreadable": [],
+                    "env": getattr(probe, "env", ""), "env_set": False}
         out.append(
             {
                 "id": probe.id,
                 "label": probe.label,
                 "free": probe.id in FREE_RUNTIMES,
-                "found": hit,
+                "found": bool(info.get("found")),
+                "checked": info.get("checked") or [],
+                "unreadable": info.get("unreadable") or [],
+                "env": info.get("env") or "",
+                "env_set": bool(info.get("env_set")),
             }
         )
     return out
+
+
+def detection_report(probes: list = None) -> dict:
+    """What a first-run screen needs to say instead of "you have no data".
+
+    Answers the three questions #5716 asks, from the probe results:
+
+      * WHERE we looked - ``locations``, the expanded candidate paths per
+        runtime, capped so the answer stays readable on a 30-runtime
+        catalogue;
+      * WHAT it needs - ``blocked``, the runtimes whose data is present but
+        unreadable, with a plain-words reason. This is the case that most
+        deserves saying out loud, because the user CAN fix it and the old
+        screen told them nothing;
+      * ``found`` - what was detected, so the caller can tell the
+        genuinely-empty machine from the partly-readable one.
+
+    Pure over its input, so a caller can pass planted probe results.
+    """
+    probes = probe_runtimes() if probes is None else probes
+    found = [p for p in probes if p.get("found")]
+    blocked = []
+    locations = []
+    for p in probes:
+        for entry in (p.get("unreadable") or []):
+            blocked.append({
+                "runtime": p.get("id"), "label": p.get("label"),
+                "path": entry.get("path"),
+                "reason": entry.get("unreadable"),
+            })
+        if p.get("found"):
+            continue
+        paths = [e.get("path") for e in (p.get("checked") or [])
+                 if e.get("path") and not e.get("unresolved_env")]
+        if paths:
+            locations.append({"runtime": p.get("id"), "label": p.get("label"),
+                              "paths": paths, "env": p.get("env") or ""})
+    return {
+        "found": [{"id": p.get("id"), "label": p.get("label")} for p in found],
+        "found_count": len(found),
+        "blocked": blocked,
+        "locations": locations,
+        "runtimes_checked": len(probes),
+    }
+
+
+def _render_nothing_detected(probes: list) -> list:
+    """Copy for the machine where no runtime was detected (#5716)."""
+    report = detection_report(probes)
+    blocked = report.get("blocked") or []
+    locations = report.get("locations") or []
+    lines: list = []
+    if blocked:
+        lines.append("Agent data looks present on this machine, but could not be read:")
+        for b in blocked[:4]:
+            lines.append(f"  {b.get('label') or b.get('runtime')}: {b.get('path')}")
+            lines.append(f"    {b.get('reason')}")
+        return lines
+    checked = report.get("runtimes_checked") or len(probes)
+    if not locations:
+        return [f"No agent runtime detected yet ({checked} checked)."]
+    lines.append(f"No agent runtime detected yet. ClawMetry checked {checked} runtimes, including:")
+    for loc in locations[:6]:
+        for pth in (loc.get("paths") or [])[:2]:
+            lines.append(f"  {loc.get('label')}: {pth}")
+    lines.append("")
+    lines.append("Start an agent and ClawMetry picks it up on its own. Nothing to configure.")
+    return lines
 
 
 def render_detection_lines(probes: list) -> list:
     """Plain-words onboarding copy for the probe results.
 
     Pure function (list of printable lines, no ANSI) so the wizard can style
-    it and tests can pin it. Empty list when nothing was detected: the
-    wizard then keeps its current copy.
+    it and tests can pin it.
+
+    When nothing was detected this used to return ``[]`` and the wizard
+    printed nothing at all, which is the same silence the dashboard's first
+    screen had (#5716): a person watching an empty install could not tell
+    "no agent has run here" from "ClawMetry cannot read them". Now it says
+    where it looked, and leads with the runtimes whose data is present but
+    unreadable, because that is the one the reader can fix.
     """
     found = [p for p in probes if p.get("found")]
     if not found:
-        return []
+        return _render_nothing_detected(probes)
     n = len(found)
     plural = "runtime" if n == 1 else "runtimes"
     lines = [f"Detected {n} AI agent {plural} on this machine:"]
