@@ -371,6 +371,31 @@ jobs:
       - name: Active Tasks panel tells the truth
         run: python3 -m pytest tests/test_active_tasks_honesty.py tests/test_active_tasks_units.py -q
 
+      # A [RELEASE] merge must pin the cloud to the version it just published.
+      # auto-deploy-cloud.yml's push trigger fires BEFORE the upload, reads
+      # PyPI's still-previous "latest", pins that, and nothing re-triggers it —
+      # so the release goes to PyPI and never deploys, silently, with every
+      # other artifact reporting success (measured on 0.12.829, 2026-09-08).
+      # test_release_canary_reachable.py is named here too: it guards the same
+      # "GITHUB_TOKEN activity does not cascade" rule and, until now, was
+      # referenced only in a comment and ran in NO job at all.
+      - name: A release actually reaches the cloud
+        run: python3 -m pytest tests/test_release_dispatches_cloud_deploy.py tests/test_release_canary_reachable.py -q
+
+      # `runtime` on a sub-agent record is the runtime's NAME. It used to hold
+      # a formatted duration, which made the generic client resolver read "12m"
+      # as a runtime name and file EVERY sub-agent under the openclaw default.
+      - name: A sub-agent's runtime field means a runtime
+        run: python3 -m pytest tests/test_subagent_runtime_field_means_runtime.py -q
+
+      # Home must not fetch data it renders into a hidden element. The
+      # "Worker Bees" mini-widget fetched /api/subagents on every Home render
+      # and wrote into three ids inside overview.html's display:none block —
+      # one wasted round trip per load, invisible in exactly the way that keeps
+      # such a fetch alive. FLYWHEEL: performance is a feature AND a cost.
+      - name: Home makes no invisible fetch
+        run: python3 -m pytest tests/test_overview_no_invisible_fetch.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
