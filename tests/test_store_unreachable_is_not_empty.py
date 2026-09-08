@@ -110,6 +110,34 @@ def test_a_direct_open_that_answers_clears_the_flag(ctx, monkeypatch):
     assert lq.store_available() is True
 
 
+def test_a_null_fallback_does_not_clear_the_flag(ctx, monkeypatch):
+    """The bug the unit tests missed and a live reproduction caught.
+
+    Under a standard install ``local_store.get_store()`` does not open DuckDB
+    at all — it hands back a ``_ProxyStore`` that forwards to the SAME daemon.
+    So a dead daemon reaches ``_ls_call``'s "direct-open fallback" as a silent
+    ``None``, and clearing on "no exception raised" cleared the very flag the
+    proxy had just set: against a SIGSTOPped daemon holding a real DuckDB,
+    ``/api/transcripts`` still answered ``{"transcripts": []}`` with no flag.
+    Only a non-``None`` result proves the store was readable.
+    """
+    import routes.local_query as lq
+    import routes.sessions as rs
+
+    lq.note_store_unreachable()
+
+    class _DeadProxyStore:
+        def query_sessions(self, **kw):
+            return None
+
+    monkeypatch.setattr(lq, "local_store_via_daemon", lambda *a, **k: None)
+    import clawmetry.local_store as ls
+    monkeypatch.setattr(ls, "get_store", lambda **kw: _DeadProxyStore())
+
+    assert rs._ls_call("query_sessions", limit=5) is None
+    assert lq.store_available() is False
+
+
 def test_the_flag_does_not_leak_between_requests(lq):
     """It is scoped to a request, so a worker thread's next job starts clean."""
     app = Flask(__name__)
