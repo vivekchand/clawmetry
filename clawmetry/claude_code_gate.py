@@ -239,8 +239,13 @@ def _hook_is_ours(hook: dict) -> bool:
 
     The mirror hook carries its own marker and is owned by
     ``_install_mirror``; the gate must not prune it.
+
+    Both tests run against ``hook_ownership.normalize_command``, never the
+    raw string: the launcher is shell-quoted whenever its path contains a
+    space, which puts a quote exactly where the marker expects a space.
+    See that function for what a raw-string test cost us.
     """
-    cmd = (hook or {}).get("command") or ""
+    cmd = hook_ownership.normalize_command((hook or {}).get("command") or "")
     if MIRROR_CMD_MARKER in cmd:
         return False
     return HOOK_CMD_MARKER in cmd
@@ -248,7 +253,7 @@ def _hook_is_ours(hook: dict) -> bool:
 
 def _entry_is_ours(entry: dict) -> bool:
     for h in (entry or {}).get("hooks") or []:
-        cmd = h.get("command") or ""
+        cmd = hook_ownership.normalize_command(h.get("command") or "")
         if MIRROR_CMD_MARKER in cmd:
             continue  # the mirror hook is owned by _install_mirror
         if HOOK_CMD_MARKER in cmd:
@@ -258,7 +263,8 @@ def _entry_is_ours(entry: dict) -> bool:
 
 def _entry_is_mirror(entry: dict) -> bool:
     for h in (entry or {}).get("hooks") or []:
-        if MIRROR_CMD_MARKER in (h.get("command") or ""):
+        cmd = hook_ownership.normalize_command(h.get("command") or "")
+        if MIRROR_CMD_MARKER in cmd:
             return True
     return False
 
@@ -271,17 +277,26 @@ def _cmd_binary_exists(cmd: str) -> bool:
     """
     if not cmd:
         return False
-    first = cmd.split()[0]
-    if os.path.isabs(first):
-        return os.access(first, os.X_OK)
-    return True
+    return hook_ownership.command_binary_exists(cmd)
+
+
+def _hook_is_stale_ours(hook: dict) -> bool:
+    """One of ours whose launcher is gone from disk.
+
+    This is the wreckage a broken uninstall leaves: an entry naming a binary
+    that no longer exists, so the runtime reports a hook error on every
+    single tool call. Whoever installs next is the only process still
+    running that can recognise it, so the installer clears it.
+    """
+    return _hook_is_ours(hook) and not _cmd_binary_exists(
+        (hook or {}).get("command") or "")
 
 
 def _entry_is_foreign_clawmetry(entry: dict) -> bool:
     for h in (entry or {}).get("hooks") or []:
-        cmd = h.get("command") or ""
+        cmd = hook_ownership.normalize_command(h.get("command") or "")
         if any(m in cmd for m in _FOREIGN_CLAWMETRY_MARKERS):
-            if _cmd_binary_exists(cmd):
+            if _cmd_binary_exists(h.get("command") or ""):
                 return True
     return False
 
@@ -508,11 +523,37 @@ def _install_mirror() -> None:
         pass
 
 
+def _mirror_hook_is_ours(hook: dict) -> bool:
+    cmd = hook_ownership.normalize_command((hook or {}).get("command") or "")
+    return MIRROR_CMD_MARKER in cmd
+
+
 def _uninstall_mirror() -> None:
     st = _read_json(_MIRROR_STATE_PATH)
-    if not st.get("installed"):
-        return  # never installed by us — never touch a foreign hook
     path = st.get("settings_path") or _settings_path()
+    if not st.get("installed"):
+        # No record of installing, so a LIVE mirror entry is not ours to
+        # remove. A dead one is — same reasoning as _uninstall's stale
+        # sweep: our state dir can be purged out from under an entry that
+        # then errors on every permission prompt with nobody to clean it.
+        settings = _read_json(path)
+        hooks = settings.get("hooks") or {}
+        entries = hooks.get("PermissionRequest")
+        if isinstance(entries, list):
+            kept, n = hook_ownership.prune_our_hooks(
+                entries, (MIRROR_CMD_MARKER,),
+                ours_pred=lambda h: (_mirror_hook_is_ours(h)
+                                     and not _cmd_binary_exists(
+                                         (h or {}).get("command") or "")))
+            if n:
+                if kept:
+                    hooks["PermissionRequest"] = kept
+                else:
+                    hooks.pop("PermissionRequest", None)
+                if not hooks:
+                    settings.pop("hooks", None)
+                _write_json_atomic(path, settings)
+        return
     settings = _read_json(path)
     hooks = settings.get("hooks") or {}
     entries = hooks.get("PermissionRequest")
@@ -612,30 +653,72 @@ def _install(policies) -> None:
     })
 
 
-def _uninstall() -> None:
-    st = _read_state()
-    if not st.get("installed"):
-        # We never installed (or already removed) — never touch a hook the
-        # operator (or `clawmetry hooks install`) put there themselves.
-        return
-    path = st.get("settings_path") or _settings_path()
+def _prune_pretool(path: str, ours_pred) -> int:
+    """Remove the hooks *ours_pred* claims from ``PreToolUse`` in *path*.
+
+    Returns how many hooks were removed. Hook-level throughout, so an entry
+    shared with a co-installed writer keeps that writer's command.
+    """
     settings = _read_json(path)
     hooks = settings.get("hooks") or {}
     pretool = hooks.get("PreToolUse")
-    if isinstance(pretool, list):
-        kept, n_removed = hook_ownership.prune_our_hooks(
-            pretool, (HOOK_CMD_MARKER,), ours_pred=_hook_is_ours)
-        if n_removed:
-            if kept:
-                hooks["PreToolUse"] = kept
-            else:
-                hooks.pop("PreToolUse", None)
-            if not hooks:
-                settings.pop("hooks", None)
-            _write_json_atomic(path, settings)
+    if not isinstance(pretool, list):
+        return 0
+    kept, n_removed = hook_ownership.prune_our_hooks(
+        pretool, (HOOK_CMD_MARKER,), ours_pred=ours_pred)
+    if not n_removed:
+        return 0
+    if kept:
+        hooks["PreToolUse"] = kept
+    else:
+        hooks.pop("PreToolUse", None)
+    if not hooks:
+        settings.pop("hooks", None)
+    _write_json_atomic(path, settings)
+    return n_removed
+
+
+def _uninstall() -> None:
+    st = _read_state()
+    path = st.get("settings_path") or _settings_path()
+    if st.get("installed"):
+        _prune_pretool(path, _hook_is_ours)
+    else:
+        # We have no record of installing — so we do NOT remove a live hook
+        # the operator (or `clawmetry hooks install`) put there themselves.
+        #
+        # A DEAD one is a different matter. Our state lives in
+        # ``~/.clawmetry``, which an uninstall purges, and the desktop app's
+        # runtime venv goes with the .app: delete either and the state that
+        # proves ownership is gone while the entry naming the vanished
+        # binary stays behind, erroring on every tool call with nothing left
+        # that will ever clean it up. An entry carrying our marker AND
+        # pointing at a launcher that no longer exists can only be ours, and
+        # it cannot do anything but fail, so it goes.
+        _prune_pretool(path, _hook_is_stale_ours)
     if st.get("marker_written"):
         _remove_marker_if_ours()
     _clear_state()
+
+
+def uninstall_all_hooks() -> dict:
+    """Remove every Claude Code settings.json hook this module installs.
+
+    ``clawmetry uninstall`` drains the ``clawmetry.hooks`` registry, but the
+    gate and the mirror are installed by this module and were never in that
+    registry — so a full uninstall left both behind pointing at the binary
+    it had just deleted. Called from the uninstall path; safe to call when
+    nothing is installed.
+    """
+    out = {"gate": False, "mirror": False, "errors": []}
+    for key, fn in (("gate", _uninstall), ("mirror", _uninstall_mirror)):
+        try:
+            fn()
+            out[key] = True
+        except Exception as exc:  # noqa: BLE001 — one failure must not
+            # strand the other hook; the caller prints what could not go.
+            out["errors"].append(f"{key}: {exc}")
+    return out
 
 
 def _utcnow() -> str:

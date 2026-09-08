@@ -50,16 +50,22 @@ bp_attention = Blueprint("attention", __name__)
 #: end up rendering as certain on one surface and hedged on another.
 CONFIRMED_SIGNALS = frozenset({"hook", "queue"})
 
-#: How recently a session must have moved to count as "working".
+#: "Working" and "quiet" are NOT defined here.
 #:
-#: Not merely "not ended". Sessions routinely never receive an ``ended_at`` --
-#: the process is killed, the machine sleeps, the runtime crashes -- so a
-#: status-only test counts long-dead sessions as busy. Measured on a real
-#: install mid-build: all 6 sessions that a status-only test called "working"
-#: had last moved between 30 minutes and 24 hours earlier. "6 agents working"
-#: under a reassuring "nothing needs you" would have been confidently wrong
-#: in the one place this feature must not be.
-WORKING_RECENT_MINUTES = 15
+#: They are the buckets ``routes/sessions._live_state`` already computes for
+#: ``/api/live-sessions``, and the strip imports them rather than restating
+#: them. Both components render on the Overview at the same time, so a second
+#: definition is a second answer to one question on one screen: this module
+#: used to call anything that moved in the last 15 minutes "working" while the
+#: hero used 2 minutes, so a node with three sessions could truthfully be told
+#: "4 agents working" and "3 sessions are working right now" in adjacent rows.
+#:
+#: The old constant's reasoning still holds and now lives with the buckets:
+#: recency, not status, decides. Sessions routinely never receive an
+#: ``ended_at`` (the process is killed, the machine sleeps, the runtime
+#: crashes), so a status-only test reports long-dead sessions as busy --
+#: measured on a real install, all 6 sessions a status-only test called
+#: "working" had last moved between 30 minutes and 24 hours earlier.
 
 #: Runtimes with no per-tool approval gate at all. Saying "none waiting" for
 #: these would imply we looked and found nothing, when in truth there is
@@ -168,36 +174,44 @@ def build_attention(runtime: str = "") -> dict:
     if rows is None:
         # We could not read at all — that is "can't tell", not "all clear".
         return {
-            "items": [], "waiting": 0, "working": 0,
+            "items": [], "waiting": 0, "working": 0, "quiet": 0,
             "fresh": False, "reason": "unavailable",
             "daemon_age_seconds": -1, "runtimes_without_approval": [],
         }
 
+    # Late import: the sessions module owns these three definitions, so the
+    # strip and the hero can never drift apart on what a runtime is, which
+    # sessions count, or what "working" means.
+    from routes.sessions import _live_state, is_listable_session, session_runtime
+
     rt = (runtime or "").strip().lower()
-    items, working, seen_runtimes = [], 0, set()
+    items, working, quiet, seen_runtimes = [], 0, 0, set()
     for r in rows:
         if not isinstance(r, dict):
             continue
-        row_rt = str(r.get("agent_type") or "").lower()
+        # NOT ``agent_type`` — that column reads "openclaw" for every family
+        # runtime, so filtering on it dropped every Claude Code, Codex and
+        # Cursor row, blocked ones included. See ``session_runtime``.
+        row_rt = session_runtime(r)
         if rt and rt != "all" and row_rt != rt:
             continue
         seen_runtimes.add(row_rt)
         state = r.get("attention_state") or ""
         if not state:
-            # Sessions that are RECENTLY ACTIVE and not blocked are quietly
-            # working — the number that makes "nothing needs you" reassuring
-            # instead of ambiguous (nothing waiting because nothing is
-            # running at all). The recency test is load-bearing: a session
-            # that was killed, slept, or crashed often keeps status='active'
-            # forever, so counting on status alone reports long-dead sessions
-            # as busy.
-            if not r.get("ended_at") and str(
-                r.get("status") or "").lower() not in (
-                    "ended", "completed", "stopped", "failed"):
-                idle = _iso_age_seconds(
-                    r.get("last_active_at") or r.get("started_at"))
-                if 0 <= idle <= WORKING_RECENT_MINUTES * 60:
+            # Sessions that are alive and not blocked are quietly working —
+            # the number that makes "nothing needs you" reassuring instead of
+            # ambiguous (nothing waiting because nothing is running at all).
+            # Sub-agents and ClawMetry's own sessions are excluded here for
+            # the same reason the hero excludes them: a count that includes
+            # them cannot match the list beside it.
+            if is_listable_session(r.get("session_id") or ""):
+                live, _age = _live_state(
+                    r.get("last_active_at") or r.get("started_at"),
+                    r.get("status"))
+                if live == "working":
                     working += 1
+                elif live == "waiting":
+                    quiet += 1
             continue
         since_ms = r.get("attention_since")
         waiting_s = 0
@@ -234,6 +248,10 @@ def build_attention(runtime: str = "") -> dict:
         "items":   items if fresh else [],
         "waiting": len(items) if fresh else 0,
         "working": working,
+        # Open but silent — the hero's "gone quiet" bucket. Reported so the
+        # strip's sub-line cannot say "No agents running" beneath a hero
+        # naming the sessions that are still open.
+        "quiet":   quiet,
         "fresh":   fresh,
         "reason":  "" if fresh else "daemon_not_running",
         "daemon_age_seconds": age,
@@ -352,7 +370,7 @@ def api_attention():
         log.warning("attention: build failed: %s", e)
         # Degrade to "can't tell", never to a confident empty list.
         return jsonify({
-            "items": [], "waiting": 0, "working": 0, "fresh": False,
-            "reason": "error", "daemon_age_seconds": -1,
+            "items": [], "waiting": 0, "working": 0, "quiet": 0,
+            "fresh": False, "reason": "error", "daemon_age_seconds": -1,
             "runtimes_without_approval": [],
         })

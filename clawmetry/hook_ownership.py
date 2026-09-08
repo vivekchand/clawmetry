@@ -27,7 +27,80 @@ write.**
 """
 from __future__ import annotations
 
+import os
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
+
+_QUOTE_CHARS = ("'", '"')
+
+
+def normalize_command(cmd: str) -> str:
+    """The form of a hook command line that marker tests must run against.
+
+    Ownership is decided by looking for a marker substring — say
+    ``clawmetry hook claude-code`` — inside the installed command.  The
+    command we write quotes its launcher, because ``sys.executable`` and the
+    console script routinely sit under a path containing a space, so the raw
+    text reads::
+
+        '/…/Application Support/ClawMetry/…/bin/clawmetry' hook claude-code …
+
+    and the marker does **not** match: there is a closing quote where the
+    marker expects a space.  Two things then break at once, and both were
+    live:
+
+    * the installer no longer recognises its OWN previous entry, so instead
+      of replacing it, it appends another — once per install pass, forever;
+    * the uninstaller no longer recognises it either, so it survives the
+      uninstall pointing at a binary that has been deleted, and the runtime
+      errors on every tool call.
+
+    That is not an exotic path.  It is every macOS desktop-app install
+    (``~/Library/Application Support/ClawMetry``), every Windows install
+    under ``C:\\Program Files``, and every user whose home directory
+    contains a space.
+
+    Stripping the shell quoting (and the Windows ``.exe`` suffix, which sits
+    between the launcher name and the subcommand for the same reason) makes
+    ownership independent of *where* the launcher lives.
+    """
+    if not isinstance(cmd, str):
+        return ""
+    out = cmd
+    for q in _QUOTE_CHARS:
+        out = out.replace(q, "")
+    return out.replace(".exe", "")
+
+
+def command_binary(cmd: str) -> str:
+    """The launcher path from a hook command line, shell-quoting honoured.
+
+    ``cmd.split()[0]`` returns ``'/Users/me/Application`` for a quoted path
+    with a space in it, so every "does this binary still exist?" test built
+    on it answered the wrong question for exactly the installs that needed
+    it most.
+    """
+    if not isinstance(cmd, str) or not cmd.strip():
+        return ""
+    try:
+        import shlex
+        parts = shlex.split(cmd, posix=(os.name != "nt"))
+    except ValueError:          # unbalanced quotes — fall back to raw split
+        parts = cmd.split()
+    return parts[0] if parts else ""
+
+
+def command_binary_exists(cmd: str) -> bool:
+    """True when the command's launcher is runnable.
+
+    Only absolute paths are checked; a bare name resolves through ``PATH`` at
+    execution time and cannot be pre-judged here, so it is treated as live.
+    """
+    first = command_binary(cmd)
+    if not first:
+        return False
+    if not os.path.isabs(first):
+        return True
+    return os.path.exists(first) if os.name == "nt" else os.access(first, os.X_OK)
 
 
 def hook_is_ours(hook: dict, markers: Sequence[str]) -> bool:
@@ -37,7 +110,8 @@ def hook_is_ours(hook: dict, markers: Sequence[str]) -> bool:
     cmd = hook.get("command") or ""
     if not isinstance(cmd, str):
         return False
-    return any(m in cmd for m in markers)
+    norm = normalize_command(cmd)
+    return any(m in norm for m in markers)
 
 
 def split_entry(entry: dict, markers: Sequence[str],

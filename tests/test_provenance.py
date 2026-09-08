@@ -354,13 +354,18 @@ def test_the_js_and_python_vocabularies_say_the_same_words():
 # ── No dead UI ──────────────────────────────────────────────────────────────
 
 def test_the_component_is_loaded_by_the_live_dashboard_before_app_js():
-    """``dashboard.py`` defines DASHBOARD_HTML twice and only the SECOND one
-    renders. A script tag in the dead first block ships nothing."""
+    """The LAST DASHBOARD_HTML assignment is the one that renders.
+
+    There used to be two and a script tag in the dead first block shipped
+    nothing; that duplicate was deleted 2026-09-08. Taking the last keeps this
+    correct either way — the number of definitions is asserted by
+    tests/test_dashboard_html_defined_once.py, not here.
+    """
     text = open(os.path.join(REPO, "dashboard.py"), encoding="utf-8").read()
     blocks = [m.start() for m in re.finditer(r"^DASHBOARD_HTML = r\"\"\"",
                                              text, re.M)]
-    assert len(blocks) == 2, "the two-DASHBOARD_HTML shape changed; re-check"
-    live = text[blocks[1]:]
+    assert blocks, "no DASHBOARD_HTML definition found in dashboard.py"
+    live = text[blocks[-1]:]
     prov_at = live.find("js/provenance.js")
     app_at = live.find("js/app.js', v=version")
     assert prov_at != -1, "provenance.js is not loaded by the LIVE template"

@@ -225,6 +225,15 @@ def _coerce_args(shape: str, raw: dict) -> dict:
         }
     if shape == "health":
         return {}
+    if shape == "similar_sessions":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("similar_sessions shape requires session_id")
+        return {
+            "session_id":  sid,
+            "window_days": _safe_int(raw.get("window_days"), default=30, lo=1, hi=365),
+            "limit":       _safe_int(raw.get("limit"), default=10, lo=1, hi=50),
+        }
     if shape == "spans":
         return {
             "trace_id":   raw.get("trace_id"),
@@ -293,6 +302,15 @@ def _coerce_args(shape: str, raw: dict) -> dict:
         return {
             "session_id": sid,
             "limit": _safe_int(raw.get("limit"), default=2000, lo=1, hi=10000),
+        }
+    if shape == "session_context":
+        sid = raw.get("session_id")
+        if not sid:
+            raise ValueError("session_context shape requires session_id")
+        return {
+            "session_id": sid,
+            "agent_type": raw.get("agent_type") or None,
+            "limit": _safe_int(raw.get("limit"), default=200, lo=1, hi=1000),
         }
     raise ValueError(f"unknown shape: {shape}")
 
@@ -367,13 +385,15 @@ def _dispatch(shape: str, args: dict) -> dict:
         body = _proxy_dispatch(shape, args)
         body["_via"] = "daemon_proxy"
         body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+        if shape == "sessions":
+            _attach_nondeterminism(body)
         return body
     except Exception:
         pass
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -385,7 +405,66 @@ def _dispatch(shape: str, args: dict) -> dict:
     body["_shape"] = shape
     body["_via"] = "direct"
     body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
+    if shape == "sessions":
+        _attach_nondeterminism(body, store=store)
     return body
+
+
+# Replay agreement is written by an opt-in scheduler and changes at most a
+# few times an hour, so one cached read serves every sessions call in the
+# window instead of a second store hop per request (perf is a cost).
+_ND_CACHE: dict = {"ts": 0.0, "rows": {}}
+_ND_TTL_SEC = 60.0
+
+
+def _replay_stats_map(store=None) -> dict:
+    now = time.monotonic()
+    if (now - float(_ND_CACHE.get("ts") or 0)) < _ND_TTL_SEC:
+        return _ND_CACHE.get("rows") or {}
+    rows = None
+    try:
+        if store is not None:
+            rows = store.query_session_replay_stats(limit=2000)
+        else:
+            rows = local_store_via_daemon("query_session_replay_stats", limit=2000)
+            if rows is None:
+                rows = _store().query_session_replay_stats(limit=2000)
+    except Exception:
+        rows = None
+    out = {}
+    for r in rows or []:
+        if isinstance(r, dict) and r.get("session_id"):
+            out[str(r["session_id"])] = r
+    _ND_CACHE["ts"] = now
+    _ND_CACHE["rows"] = out
+    return out
+
+
+def _attach_nondeterminism(body: dict, store=None) -> None:
+    """Add ``nondeterminism`` to every session row: ``None`` when never
+    measured (the honest default), else ``{runs, agreement_pct}``. Free on
+    every plan; the run-by-run compare view stays behind ``per_run_compare``.
+    Never raises; a failure leaves the rows untouched except for the null."""
+    try:
+        rows = body.get("rows") if isinstance(body, dict) else None
+        if not isinstance(rows, list) or not rows:
+            return
+        stats = _replay_stats_map(store)
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            sid = str(row.get("session_id") or row.get("sessionId") or row.get("id") or "")
+            st = stats.get(sid) if sid else None
+            if st and st.get("runs"):
+                row["nondeterminism"] = {
+                    "runs": int(st.get("runs") or 0),
+                    "agreement_pct": st.get("agreement_pct"),
+                    "measured_at": st.get("updated_at"),
+                }
+            else:
+                row.setdefault("nondeterminism", None)
+    except Exception:
+        return
 
 
 # ── HTTP routes ────────────────────────────────────────────────────────────
@@ -601,7 +680,26 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    # Cohort compare + similar runs (WO-60): routes/cohort.py reads both
+    # through the proxy; the similarity walk runs in the daemon process.
+    "query_cohort_sessions",
+    "query_similar_sessions",
     "query_events",
+    # Same rows as query_events with the two bulk ``data`` keys dropped
+    # (content / tool_calls). The Cost-tab roll-ups scan 20k-50k events and
+    # the full shape marshals ~38 MB per call, which is what starves sibling
+    # reads until they trip _PROXY_TIMEOUTS and render a false empty tab.
+    "query_events_slim",
+    # Inputs & context: /api/sessions/<id>/context reads the session_context
+    # table (system prompt, tools, runtime setup) through the daemon.
+    "query_session_context",
+    # Trail (schema v15): per-session intent + git outcome join. Read by
+    # routes/sessions.py (/api/transcript, /api/sessions/<id>/git-outcomes)
+    # from the dashboard process while the daemon holds the writer lock.
+    "get_session_intent",
+    "query_session_intents",
+    "query_session_git_outcomes",
+    "query_session_git_counts",
     # Runtime event counts. NemoClawAdapter.detect() used to run
     # ``store._fetch("SELECT COUNT(*) ...")``, which _ProxyStore refuses
     # (private helpers would be arbitrary SQL over the RPC), so on every
@@ -619,12 +717,23 @@ _DAEMON_METHODS = frozenset({
     # simply never appear.
     "set_session_attention",
     "clear_session_attention",
+    # Lifecycle facts from runtime hooks (WO-61). The intake in
+    # routes/hooks.py runs in the DASHBOARD process; an unlisted writer is a
+    # silent no-op, so the trail would simply never show a denial.
+    "ingest_lifecycle_events",
+    "upsert_session_instructions",
+    "get_session_instructions",
+    "query_lifecycle_events",
     # Agent-Inventory roster (#task-12): ``sync._build_runtime_summary`` runs
     # in the DASHBOARD process when /api/inventory composes locally; without
     # this method the proxy returned None, ``by_runtime``/``by_runtime_model``
     # came back empty, and every roster row showed 0 conversations / $0 even
     # though the store had real sessions (live-hit 2026-07-29).
     "query_model_rollup",
+    # #5643: fair per-runtime session picks for the cloud snapshot's
+    # transcript slots. Also read by tests/diagnostics from the
+    # dashboard process, which has no writer lock.
+    "query_recent_sessions_by_runtime",
     "query_sessions",
     "query_sessions_table",
     "query_aggregates",
@@ -1025,6 +1134,48 @@ _DAEMON_METHODS = frozenset({
     # fan-out stats. Unlisted -> the proxy 400s, the fast path returns
     # None, and the bench silently shows every harness as unseen.
     "query_subagent_stats_by_runtime",
+    # Behaviour Signals (WO-58, clawmetry/behaviour_signals.py). The daemon
+    # writes turns + matches on its tick; the Signals tab, the alert rule
+    # and the snapshot read grouped counts back through the same proxy
+    # because the daemon holds the writer lock. Unlisted -> 400 -> the tab
+    # shows "no daemon" instead of numbers.
+    "record_signal_turns",
+    "query_signal_grouped",
+    "query_signal_coverage",
+    "query_signal_sessions",
+    "query_signal_rate_window",
+    # Signal shifts + briefs (WO-62, clawmetry/signal_shifts.py, briefs.py).
+    # Issues are written by the daemon tick and transitioned by the operator
+    # from the Signals tab; briefs are edited from the tab and run by the
+    # daemon scheduler. Same proxy for the same reason as above.
+    "query_signal_shift_inputs",
+    "query_signal_shift_breakdown",
+    "upsert_signal_issue",
+    "get_signal_issue",
+    "query_signal_issues",
+    "set_signal_issue_status",
+    "list_briefs",
+    "get_brief",
+    "upsert_brief",
+    "delete_brief",
+    "mark_brief_run",
+    "dives_table_columns",
+    # Non-determinism (replay agreement) + silent-failure delivery latch.
+    # Read by routes/guard.py and the sessions-shape enrichment below.
+    "query_session_replay_stats",
+    "query_incident_alerts",
+    # ── Agent self-diagnostics (WO-59) ───────────────────────────────────
+    # The MCP ``report_to_operator`` tool runs in the agent's own process
+    # and writes through the daemon (which owns the writer lock); the
+    # dashboard's /api/self-reports and the MCP read tools read the same
+    # way. An unlisted method here is a silent 400 -> "no reports".
+    "ingest_self_report",
+    "query_self_reports",
+    "query_self_report_counts",
+    "query_self_report_honesty",
+    "query_guard_incidents",
+    "query_session_denials",
+    "find_session_by_cwd",
 })
 
 
@@ -1105,6 +1256,82 @@ class _ProxyUnavailable:
 PROXY_UNAVAILABLE = _ProxyUnavailable()
 
 
+# ── Page-load fan-out collapse for the heavy event scans ──────────────────
+#
+# The Cost tab's roll-ups (token split, per-plugin, per-model, per-skill,
+# runtime summary) live behind SEPARATE endpoints that the browser fires
+# concurrently, and each one independently asks the daemon for the newest
+# 20k-50k events. Ten such scans per page load, every one marshalled as JSON
+# across the RPC, is what saturates the daemon's single DuckDB connection
+# until sibling reads exceed ``_PROXY_TIMEOUTS`` and their handlers return
+# ``None`` — which the tabs render as a confident EMPTY ("no sessions have a
+# transcript yet" over a store holding thousands).
+#
+# The daemon's own ``_READ_CACHE`` cannot fix this: it spares the SQL, not
+# the per-call marshalling, and the dashboard still pays a round trip each
+# time. So memoise HERE, and single-flight it — concurrent callers asking
+# for the same scan share one in-flight RPC instead of queueing N of them.
+#
+# Deliberately narrow: only shapes named in ``_RPC_MEMO_METHODS`` are
+# eligible, so this can never serve a stale answer to a shape that did not
+# opt in. TTL matches the store's own ``CLAWMETRY_AGG_CACHE_TTL`` contract
+# (a roll-up may lag by seconds; a wrong number is worse than a late one).
+import threading as _threading
+
+_RPC_MEMO_METHODS = frozenset({"query_events_slim"})
+try:
+    _RPC_MEMO_TTL = float(_os.environ.get("CLAWMETRY_RPC_MEMO_TTL", "10") or "0")
+except ValueError:
+    _RPC_MEMO_TTL = 10.0
+_RPC_MEMO_MAX = 8
+_RPC_MEMO: dict = {}
+_RPC_MEMO_LOCK = _threading.Lock()
+_RPC_INFLIGHT: dict = {}
+
+
+def _rpc_memo_key(method_name: str, kwargs: dict):
+    return (method_name, tuple(sorted((k, repr(v)) for k, v in kwargs.items())))
+
+
+def invalidate_rpc_memo() -> None:
+    """Drop every memoised scan. For tests and for callers that just wrote."""
+    with _RPC_MEMO_LOCK:
+        _RPC_MEMO.clear()
+
+
+def _rpc_memoized(method_name: str, kwargs: dict, compute):
+    """Serve ``compute()`` from the bounded per-shape memo, single-flighted."""
+    if _RPC_MEMO_TTL <= 0 or method_name not in _RPC_MEMO_METHODS:
+        return compute()
+    key = _rpc_memo_key(method_name, kwargs)
+    with _RPC_MEMO_LOCK:
+        hit = _RPC_MEMO.get(key)
+        if hit is not None and (time.monotonic() - hit[0]) < _RPC_MEMO_TTL:
+            return hit[1]
+        flight = _RPC_INFLIGHT.get(key)
+        if flight is None:
+            flight = _threading.Lock()
+            if len(_RPC_INFLIGHT) < _RPC_MEMO_MAX:
+                _RPC_INFLIGHT[key] = flight
+    # One caller runs the RPC; the rest block here and then read the memo the
+    # leader just filled, rather than firing duplicate 8 MB round trips.
+    with flight:
+        with _RPC_MEMO_LOCK:
+            hit = _RPC_MEMO.get(key)
+            if hit is not None and (time.monotonic() - hit[0]) < _RPC_MEMO_TTL:
+                return hit[1]
+        result = compute()
+        # Never memoise the unavailable sentinel: the daemon being down for
+        # one call must not blind the next one for the whole TTL.
+        if result is not PROXY_UNAVAILABLE:
+            with _RPC_MEMO_LOCK:
+                if len(_RPC_MEMO) >= _RPC_MEMO_MAX:
+                    oldest = min(_RPC_MEMO, key=lambda k: _RPC_MEMO[k][0])
+                    _RPC_MEMO.pop(oldest, None)
+                _RPC_MEMO[key] = (time.monotonic(), result)
+        return result
+
+
 def local_store_via_daemon(method_name: str, **kwargs):
     """Cross-process LocalStore call.
 
@@ -1133,6 +1360,14 @@ def local_store_call_via_daemon(method_name: str, **kwargs):
     errored. Use this whenever ``None`` / ``{}`` / ``[]`` is a legitimate
     result and you need to know whether to fall back to a direct store.
     """
+    return _rpc_memoized(
+        method_name, kwargs,
+        lambda: _local_store_call_via_daemon_uncached(method_name, **kwargs),
+    )
+
+
+def _local_store_call_via_daemon_uncached(method_name: str, **kwargs):
+    """The real round trip. Split out so :func:`_rpc_memoized` can wrap it."""
     # Loop-break: when local_server is hosted in THIS process (the daemon)
     # the proxy hop is pointless — talk to the LocalStore directly.
     try:

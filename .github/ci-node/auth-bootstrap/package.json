@@ -1,0 +1,10 @@
+{
+  "name": "clawmetry-ci-auth-bootstrap",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned Playwright for the Auth Bootstrap Guard workflow's smoke test. CI-only: nothing here ships in the clawmetry wheel or is imported by the dashboard.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "playwright": "1.59.1"
+  }
+}

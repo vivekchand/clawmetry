@@ -465,6 +465,69 @@ def api_onboarding_complete():
     return jsonify({"ok": True, "state": choice})
 
 
+@bp_onboarding.route("/api/onboarding/free-only", methods=["POST"])
+def api_onboarding_free_only():
+    """Record the gate's free-runtimes escape: no account, no cloud, no trial.
+
+    Spec: REQ "Free Answer at the Gate, and a Visible Paywall"
+    (cd0b3dc3-ca5c-49ad-a4c0-dec01f122d12), AC-FREE-001.
+
+    Why this exists: both cards on the gate demand an identity before the
+    dashboard opens, and the funnel says that is where the installs go. In
+    the 30 days to 2026-09-06 prod saw 798 first launches and 38 completed
+    choices — 4.8%. A user who only runs OpenClaw, NVIDIA NemoClaw or Goose
+    owes us no account at all (those three are FREE_RUNTIMES, free forever
+    by design), so making them sign in to see their own free data is a wall
+    with nothing behind it.
+
+    ``selfhost_free`` was already a RECORDED choice (the CLI wizard's
+    no-account branch writes it) but deliberately not postable through
+    ``/api/onboarding/complete``, because a generic POST could claim it with
+    no flow behind it and skip the gate. That reasoning still holds; this
+    endpoint is the flow. It does the two things the CLI branch does — flip
+    free-only mode on and write the nocloud marker — so the recorded state
+    is backed by real local configuration, exactly like every other choice
+    the gate accepts.
+
+    Free-only mode is the same marker the expired-trial paywall writes
+    (``trial_enforcement.set_free_only_mode``): free runtimes keep working,
+    paid ones stay locked until the user upgrades. Reversible from Settings
+    and by ``POST /api/trial/exit-free``.
+
+    NOT the deferred gate. "Look First, Choose Later" (REQ-OGV-DG-*) is a
+    different, still-unbuilt design in which free runtimes render with **no
+    choice on record** and the gate is deferred to a later trigger (a locked
+    card click, a paid feature, 3 loads or 24h). This endpoint leaves the
+    hard gate exactly as it is, answered immediately and recorded
+    immediately, and only makes one of its answers free of a signup. Whoever
+    builds the deferred gate should treat this as an existing answer to
+    carry over, not as a partial implementation of that requirement.
+    """
+    try:
+        from clawmetry import trial_enforcement as _te
+
+        _te.set_free_only_mode(True)
+    except Exception as exc:
+        # A marker we could not write means paid runtimes would stay
+        # blocked-by-default with no record of why. Fail loudly rather than
+        # record a choice the install cannot honour.
+        log.warning("onboarding: free-only marker failed: %s", exc)
+        return jsonify({"ok": False,
+                        "error": "Could not save your choice. Try again."}), 500
+
+    _write_choice_file("selfhost_free")
+    _apply_marker_semantics("selfhost_free")
+    _ensure_daemon_for_choice("selfhost_free")
+    _ping_onboarded("selfhost_free")
+    try:
+        from clawmetry import entitlements as _ent
+
+        _ent.invalidate()
+    except Exception:
+        pass
+    return jsonify({"ok": True, "state": "selfhost_free"})
+
+
 @bp_onboarding.route("/api/onboarding/activate-license", methods=["POST"])
 def api_onboarding_activate_license():
     data = request.get_json(silent=True) or {}

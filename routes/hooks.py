@@ -37,12 +37,13 @@ would surface as "no opinion" anyway), an unentitled node gets an explicit
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
 import time
 import uuid
+
+from clawmetry import nonsecret_hash as _nsh
 
 from flask import Blueprint, jsonify, request
 
@@ -141,7 +142,7 @@ def _ls_read(method_name: str, **kwargs):
 
 
 def _input_hash(tool_input: dict) -> str:
-    return hashlib.md5(
+    return _nsh.md5(
         json.dumps(tool_input, sort_keys=True, default=str).encode()
     ).hexdigest()
 
@@ -382,8 +383,8 @@ def _pretooluse_impl(runtime: str):
             "id": uuid.uuid4().hex,
             "requestor_session_id": f"{runtime}:{session_id}" if session_id
                                     else None,
-            "action": f"{tool_name}: "
-                      f"{ap._extract_command(tool_name, tool_input)[:140]}",
+            "action": ap.action_label(
+                tool_name, ap._extract_command(tool_name, tool_input)[:140]),
             "args": {"source": "pretooluse-hook", "runtime": runtime,
                      "tool_input": tool_input},
             "status": "simulated",
@@ -433,7 +434,7 @@ def _pretooluse_impl(runtime: str):
         "id": approval_id,
         "requestor_session_id": f"{runtime}:{session_id}" if session_id
                                 else None,
-        "action": f"{tool_name}: {cmd_preview}",
+        "action": ap.action_label(tool_name, cmd_preview),
         # Meta rides in the args blob so resume requests are stateless:
         # the row itself knows its policy window and timeout action.
         "args": {
@@ -930,7 +931,7 @@ def api_hook_claude_code_permissionrequest():
         "id": approval_id,
         "requestor_session_id": f"claude_code:{session_id}" if session_id
                                 else None,
-        "action": f"{tool_name}: {cmd_preview}",
+        "action": ap.action_label(tool_name, cmd_preview),
         "args": {
             "_cm_risk": mirror_risk,
             "source": "permissionrequest-hook",
@@ -1026,6 +1027,153 @@ def _wait_mirror(approval_id: str, row: dict, tool_name: str):
                                       "kind": "permission_prompt"})
     return _mirror_answer("ask", approval_id,
                           "no answer in the mirror window")
+
+
+# ── lifecycle intake (WO-61) ───────────────────────────────────────────────
+#
+# The seven observe-only Claude Code hooks (tool failures, subagent start
+# and stop, permission denials, compactions, session start, instructions
+# loaded) each map their payload to a typed event in the hook process
+# (clawmetry/hooks_claude_code.py::map_lifecycle_event) and POST it here.
+# This handler validates the shape, forwards the rows to the daemon (the
+# only DuckDB writer) and answers 200 whatever happened: the hook is async
+# on the runtime side, and a failed badge is never worth an agent's turn.
+# Dedupe is the store's INSERT OR IGNORE on the deterministic event id.
+
+_LIFECYCLE_TYPES = frozenset({
+    "tool.failed", "subagent.started", "subagent.stopped",
+    "permission.denied", "context.compacted", "session.started",
+    "instructions.loaded",
+})
+_LIFECYCLE_MAX_EVENTS = 50
+
+
+def _lifecycle_node_id() -> str:
+    try:
+        from clawmetry.hooks_claude_code import _node_id
+        nid = _node_id()
+        if nid:
+            return nid
+    except Exception:
+        pass
+    import socket
+    return socket.gethostname() or "unknown"
+
+
+def _clean_lifecycle_event(raw: dict) -> "dict | None":
+    if not isinstance(raw, dict):
+        return None
+    etype = str(raw.get("event_type") or "").strip()
+    sid = str(raw.get("session_id") or "").strip()
+    eid = str(raw.get("id") or "").strip()
+    if etype not in _LIFECYCLE_TYPES or not sid or not eid:
+        return None
+    data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+    out = {
+        "id": eid[:64],
+        "session_id": sid[:200],
+        "event_type": etype,
+        "ts": str(raw.get("ts") or _utcnow())[:40],
+        "data": data,
+    }
+    instr = raw.get("instructions")
+    if etype == "instructions.loaded" and isinstance(instr, dict):
+        content = instr.get("content")
+        if isinstance(content, str):
+            out["instructions"] = {
+                "content": content,
+                "sha256": str(instr.get("sha256") or "")[:64],
+                "bytes": instr.get("bytes"),
+                "truncated": bool(instr.get("truncated")),
+            }
+    return out
+
+
+@bp_hooks.route("/api/hooks/claude-code/lifecycle", methods=["POST"])
+def api_hook_claude_code_lifecycle():
+    """Intake for the seven lifecycle hooks. Body: ``{"events": [...]}``.
+
+    Loopback-only like every hook receiver. Always 200 with
+    ``{ok, accepted, stored}``; ``stored`` reports whether the daemon write
+    went through, because a hook wired against an older daemon whose proxy
+    allowlist lacks the method would otherwise fail silently.
+    """
+    if request.remote_addr not in ("127.0.0.1", "::1", None):
+        return jsonify({"ok": False, "error": "loopback only"}), 403
+    try:
+        body = request.get_json(silent=True) or {}
+        raw_events = body.get("events") if isinstance(body, dict) else None
+        if not isinstance(raw_events, list):
+            return jsonify({"ok": False, "error": "events must be a list",
+                            "accepted": 0, "stored": False}), 200
+        events = []
+        for raw in raw_events[:_LIFECYCLE_MAX_EVENTS]:
+            ev = _clean_lifecycle_event(raw)
+            if ev:
+                events.append(ev)
+        if not events:
+            return jsonify({"ok": True, "accepted": 0, "stored": False}), 200
+        node_id = _lifecycle_node_id()
+        stored = _ls_write("ingest_lifecycle_events", events=events,
+                           node_id=node_id, agent_type="claude_code")
+        instr_ok = True
+        for ev in events:
+            info = ev.get("instructions")
+            if not info:
+                continue
+            ok = _ls_write("upsert_session_instructions", row={
+                "session_id": ev["session_id"],
+                "instruction_path": str(ev["data"].get("instruction_path") or ""),
+                "instruction_type": str(ev["data"].get("instruction_type") or ""),
+                "load_reason": str(ev["data"].get("load_reason") or ""),
+                "sha256": info.get("sha256") or "",
+                "bytes": info.get("bytes"),
+                "truncated": bool(info.get("truncated")),
+                "content": info.get("content") or "",
+                "loaded_at": ev["ts"],
+            }, agent_type="claude_code")
+            instr_ok = instr_ok and bool(ok)
+        return jsonify({"ok": True, "accepted": len(events),
+                        "stored": bool(stored) and instr_ok}), 200
+    except Exception as e:  # noqa: BLE001
+        log_warn = getattr(sys.stderr, "write", None)
+        if log_warn:
+            try:
+                log_warn(f"lifecycle intake failed: {str(e)[:200]}\n")
+            except Exception:
+                pass
+        return jsonify({"ok": False, "accepted": 0, "stored": False}), 200
+
+
+@bp_hooks.route("/api/sessions/<session_id>/instructions", methods=["GET"])
+def api_session_instructions(session_id):
+    """The instructions files a session ran under, as the agent saw them:
+    redacted, capped, and hashed. ``{session_id, instructions: [...]}``."""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return jsonify({"session_id": "", "instructions": []})
+    rows = _ls_read("get_session_instructions", session_id=sid)
+    rows = rows if isinstance(rows, list) else []
+    return jsonify({"session_id": sid, "instructions": rows,
+                    "cap_bytes": 32 * 1024})
+
+
+@bp_hooks.route("/api/lifecycle/coverage", methods=["GET"])
+def api_lifecycle_coverage():
+    """Which lifecycle facts each runtime can put on the trail.
+
+    ``?runtime=<id>`` narrows to one runtime and adds the ready-to-render
+    ``lines``; without it every runtime is returned. The declaration lives
+    in ``clawmetry/lifecycle_coverage.py`` and is the single source the
+    local and hosted dashboards read.
+    """
+    from clawmetry import lifecycle_coverage as _lc
+    rt = (request.args.get("runtime") or "").strip().lower()
+    if rt:
+        return jsonify(_lc.summarise(rt))
+    return jsonify({"facts": list(_lc.FACTS), "labels": _lc.FACT_LABELS,
+                    "event_types": _lc.EVENT_TYPES,
+                    "runtimes": _lc.coverage_table()})
 
 
 def _utcnow() -> str:

@@ -373,9 +373,10 @@ def test_dedup_migration_is_idempotent(tmp_path, monkeypatch):
     assert after_second == after_first
 
 
-def test_dedup_migration_creates_perf_index(tmp_path, monkeypatch):
-    """The v7 migration brings a new (session_id, ts, event_type) index for
-    future analytical queries that scan a session timeline by event_type."""
+def test_dedup_migration_leaves_no_range_index(tmp_path, monkeypatch):
+    """The v7 migration used to add a (session_id, ts, event_type) index;
+    #5500 dropped it (the (session_id, ts) index plus zone maps serve the
+    same scans) and the boot DDL sheds it from stores that still carry it."""
     db_path = tmp_path / "clawmetry.duckdb"
     _seed_old_schema_dupes(db_path)
 
@@ -389,7 +390,7 @@ def test_dedup_migration_creates_perf_index(tmp_path, monkeypatch):
         "SELECT index_name FROM duckdb_indexes() "
         "WHERE table_name='events' AND index_name='idx_events_session_ts_type'"
     ).fetchall()
-    assert len(rows) == 1
+    assert len(rows) == 0
     conn.close()
     store.stop(flush=False)
 
