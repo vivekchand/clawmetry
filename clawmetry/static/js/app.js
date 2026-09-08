@@ -10459,7 +10459,11 @@ var LOOP_KIND_LABEL = {
   privilege_change: 'Asked for admin rights',
   rate_limited: 'Being rate limited by its provider',
   blocked_on_user: 'Waiting for you to answer',
-  crashed: 'Crashed and restarted'
+  crashed: 'Crashed and restarted',
+  // Not the agent's behaviour: what was in the folder it was pointed at.
+  // Mirrors clawmetry/repo_scan.py WORKSPACE_KINDS.
+  repo_config_exec: 'This folder is set up to run a program',
+  agent_config_tamper: 'An agent hook config in this folder was changed'
 };
 
 // What ignoring this is estimated to cost. Blank when we do not know, because
@@ -30783,8 +30787,42 @@ var GUARD_KIND_LABEL = {
   // Silent failure: it stopped, and nobody was told.
   rate_limited: 'Rate limited by the provider',
   blocked_on_user: 'Waiting on you',
-  crashed: 'Crashed and restarted'
+  crashed: 'Crashed and restarted',
+  // Workspace: what is in the folder this agent was pointed at. Not a
+  // behaviour, which is why these two sort on their own axis and why the
+  // policy form makes you name them rather than folding them into "any
+  // signal". Keys mirror clawmetry/repo_scan.py WORKSPACE_KINDS.
+  repo_config_exec: 'Repo config runs a program',
+  agent_config_tamper: 'Agent hook config changed'
 };
+
+// The workspace half of GUARD_KIND_LABEL, so a renderer can tell the two
+// questions apart without hard-coding kind strings a second time.
+var GUARD_WORKSPACE_KINDS = ['repo_config_exec', 'agent_config_tamper'];
+
+// The policy form's condition list, built from GUARD_KIND_LABEL rather than
+// re-typed. A hand-kept second copy is how a new kind ends up renderable but
+// not selectable, which is the shape of the bug that hid the two workspace
+// kinds from every Guard surface.
+//
+// "any signal" deliberately excludes the workspace kinds, matching
+// policy_engine: a rule written about runaway agents must not start acting on
+// a property of a checkout because both happen to be critical. The option text
+// says so, because a rule you cannot see the boundary of is a rule you will
+// misuse.
+function guardKindOptions() {
+  var html = '<option value="">any signal about the agent</option>';
+  Object.keys(GUARD_KIND_LABEL).forEach(function (k) {
+    if (GUARD_WORKSPACE_KINDS.indexOf(k) >= 0) return;
+    html += '<option value="' + guardEsc(k) + '">' + guardEsc(GUARD_KIND_LABEL[k]) + '</option>';
+  });
+  html += '<optgroup label="The workspace (must be named)">';
+  GUARD_WORKSPACE_KINDS.forEach(function (k) {
+    html += '<option value="' + guardEsc(k) + '">' + guardEsc(GUARD_KIND_LABEL[k]) + '</option>';
+  });
+  html += '</optgroup>';
+  return html;
+}
 
 // Money first: "$1.20 at risk" is the number that decides what to open next.
 function guardMoney(n) {
@@ -31052,10 +31090,22 @@ function loadGuardSessions() {
       } else {
         statusCell = '<span class="pill pill-ok">Running</span>';
       }
+      // What is in the FOLDER this agent was pointed at. A second pill rather
+      // than a replacement: "looping" and "the checkout runs its own code"
+      // are different questions and an operator needs both. It carries no
+      // money, so the At risk column stays blank for it, and the tooltip says
+      // what was found rather than implying we stopped it.
+      var ws = s.workspace;
+      if (ws) {
+        if (!inc) flagged++;
+        statusCell += ' <span class="pill ' + guardSeverityClass(ws.severity) + '" title="' +
+          guardEsc(ws.detail || '') + '">' +
+          guardEsc(GUARD_KIND_LABEL[ws.kind] || ws.kind) + '</span>';
+      }
       // Listed from the live process probe, so it can be stopped now, but the
       // sync daemon has not read its transcript yet. Say that rather than let
       // the blank cost and missing detector status read as "nothing to see".
-      if (!inc && s.pending_ingest) {
+      if (!inc && !ws && s.pending_ingest) {
         statusCell += ' <span class="muted" title="This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.">&middot; just started</span>';
       }
       // The estimate says what it is: a burn-rate figure and a
@@ -31457,18 +31507,7 @@ function guardShowPolicyForm() {
   el.innerHTML =
     '<div class="form-row"><label>Name</label><input id="gp-name" placeholder="Pause loopers"></div>' +
     '<div class="form-row"><label>When</label><select id="gp-kind">' +
-      '<option value="">any signal</option>' +
-      '<option value="stuck_loop">Looping</option>' +
-      '<option value="no_progress">Not progressing</option>' +
-      '<option value="repeated_tool_failure">Tool failing repeatedly</option>' +
-      '<option value="action_discrepancy">Continued after a failure</option>' +
-      '<option value="file_blast_radius">Wide or destructive file changes</option>' +
-      '<option value="credential_access">Read credentials</option>' +
-      '<option value="network_egress">Unusual network destination</option>' +
-      '<option value="privilege_change">Privilege change</option>' +
-      '<option value="rate_limited">Rate limited by the provider</option>' +
-      '<option value="blocked_on_user">Waiting on you</option>' +
-      '<option value="crashed">Crashed and restarted</option>' +
+      guardKindOptions() +
     '</select></div>' +
     '<div class="form-row"><label>At least this severe</label><select id="gp-severity">' +
       '<option value="info">info</option>' +
