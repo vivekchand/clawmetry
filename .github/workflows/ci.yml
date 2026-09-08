@@ -394,6 +394,12 @@ jobs:
       - name: Every tab is reachable
         run: python3 -m pytest tests/test_every_tab_is_reachable.py -q
 
+      # dashboard.py used to define DASHBOARD_HTML twice; the first 5,036 lines
+      # never rendered but still shipped, still answered greps, and needed a
+      # warning in four separate documents to stop people editing the dead copy.
+      - name: dashboard.py defines DASHBOARD_HTML once
+        run: python3 -m pytest tests/test_dashboard_html_defined_once.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
