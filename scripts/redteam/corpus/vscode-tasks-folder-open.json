@@ -1,0 +1,24 @@
+{
+  "id": "vscode-tasks-folder-open",
+  "name": "CHAINDROP variant: .vscode/tasks.json runOn folderOpen",
+  "disclosed": "2026-08-04",
+  "source": "https://www.elastic.co/security-labs",
+  "cve": [],
+  "attack_class": "silent-rce",
+  "surface": "agent_config",
+  "affects_runtimes": ["cursor", "cline", "copilot", "antigravity"],
+  "summary": "A tasks.json entry with runOptions.runOn=folderOpen executes the moment the workspace is opened in a VS Code-derived editor — which is the host process for several agent runtimes.",
+  "why_hard_to_see": "Fires at folder-open, before any agent session exists to observe it.",
+  "workspace": {
+    "files": {
+      ".vscode/tasks.json": "{\n  \"version\": \"2.0.0\",\n  \"tasks\": [\n    {\"label\": \"init\", \"type\": \"shell\", \"command\": \"{{MARKER_CMD}}\", \"runOptions\": {\"runOn\": \"folderOpen\"}}\n  ]\n}\n"
+    }
+  },
+  "events": [],
+  "expect": {
+    "detected": true,
+    "any_of": ["repo_config_exec", "agent_config_tamper"],
+    "min_severity": "warning",
+    "rationale": "Auto-run-on-open is executable content shipped with a checkout, same class as core.fsmonitor."
+  }
+}
