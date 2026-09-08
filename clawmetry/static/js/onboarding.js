@@ -34,6 +34,7 @@
   }
 
   function _hide() {
+    _stopIngestPoll();
     var o = _overlay();
     if (o) o.style.display = 'none';
     if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
@@ -519,6 +520,67 @@
       }).catch(function () {});
   }
 
+
+  // ── the live ingest strip ────────────────────────────────────────────
+  // A user who installs ClawMetry and sees an empty dashboard cannot tell
+  // "nothing is running" from "it is broken", and that question is what
+  // kills setup funnels. So the gate says, out loud and from real data,
+  // whether anything has arrived -- and when nothing has, what to do
+  // about it. Never blocks: it is a confirmation, not a step.
+  var _ingestTimer = null;
+
+  function _esc(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function _renderIngest(d) {
+    var box = $('obg-ingest');
+    var text = $('obg-ingest-text');
+    if (!box || !text) return;
+
+    if (!d || !d.connected) {
+      box.className = 'obg-ingest';
+      text.innerHTML = 'Waiting for events. Agents on this machine are '
+        + 'picked up automatically. Running somewhere else \u2014 CI, a '
+        + 'container, a server? Run <code>clawmetry setup-prompt</code> '
+        + 'and paste the result into your agent.';
+      return;
+    }
+
+    box.className = 'obg-ingest is-live';
+    var names = (d.runtimes || []).slice(0, 3).map(function (r) {
+      return _esc(r.runtime);
+    });
+    var more = Math.max(0, (d.runtimes || []).length - names.length);
+    var who = names.length
+      ? ' from <b>' + names.join('</b>, <b>') + '</b>'
+        + (more > 0 ? ' and ' + more + ' more' : '')
+      : '';
+    text.innerHTML = 'Connected \u2014 <b>'
+      + Number(d.events_total || 0).toLocaleString() + '</b> events'
+      + who + '.';
+  }
+
+  function _pollIngest() {
+    fetch('/api/onboarding/ingest-status')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(_renderIngest)
+      .catch(function () { /* a poll that fails says nothing, not a lie */ });
+  }
+
+  function _startIngestPoll() {
+    if (_ingestTimer) return;
+    _pollIngest();
+    _ingestTimer = setInterval(_pollIngest, 3000);
+  }
+
+  function _stopIngestPoll() {
+    if (!_ingestTimer) return;
+    clearInterval(_ingestTimer);
+    _ingestTimer = null;
+  }
+
   function _boot() {
     if (window.CLOUD_MODE) return;
     if (!_overlay()) return;
@@ -533,6 +595,7 @@
         var f = $('obg-free-btn');
         if (f) f.addEventListener('click', _startFreeOnly);
         _fillDetection();
+        _startIngestPoll();
         _show();
       })
       .catch(function () {});

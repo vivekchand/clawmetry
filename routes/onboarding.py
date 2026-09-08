@@ -11,6 +11,9 @@ Owns ``bp_onboarding``:
   POST /api/onboarding/activate-license — activate a CLAW1 key and record
                                           the selfhost_license choice in one
                                           call (the gate's license branch)
+  GET  /api/onboarding/ingest-status    — is data actually arriving? The
+                                          answer to "did it work?", which is
+                                          the question that kills setup
 
 Why a gate: ``pip install clawmetry && clawmetry`` used to land straight on
 the dashboard with no identity and no explicit choice, so the funnel had no
@@ -443,6 +446,138 @@ def api_onboarding_state():
                         "source": "error"})
 
 
+#: The ingest-status answer, memoised. Polled while the setup step is open.
+_INGEST_STATUS_CACHE: dict = {"at": 0.0, "body": None}
+_INGEST_STATUS_TTL = 2.0
+@bp_onboarding.route("/api/onboarding/ingest-status")
+def api_onboarding_ingest_status():
+    """Is data actually arriving? (#5680)
+
+    A user who installs ClawMetry and sees an empty dashboard has no way
+    to tell "nothing is running" from "it is broken", and that question
+    is what kills setup funnels -- we have the numbers: 285 launches
+    produced 13 choices in 14 days on the old gate.
+
+    Everything here is read through ``routes.local_query._dispatch``, not
+    from raw files, so it answers identically on a laptop and in cloud.
+    Reading JSONL inside a handler works locally and returns empty in a
+    container that has no ``~/.openclaw``.
+
+    Two clocks, kept apart on purpose:
+
+    * ``events`` comes from DuckDB and survives a restart. This is the
+      honest "has anything ever arrived" answer.
+    * ``otlp_receiver`` is the in-process receiver's own view, and it
+      resets when the dashboard restarts. It is reported separately and
+      labelled, because presenting a counter that zeroes on restart as
+      "records we hold" is how a working install gets told it is broken.
+
+    Cheap enough to poll: two rollup reads, both already materialised.
+    """
+    import time as _time
+
+    from routes.local_query import _dispatch
+
+    # Polled every couple of seconds while the setup step is open, and each
+    # call is two rollup reads that take a few hundred milliseconds against
+    # a real store. A short memo keeps the poll honest without turning it
+    # into load: the answer to "has anything arrived" does not need to be
+    # fresher than this, and a stale-by-two-seconds yes is still a yes.
+    now = _time.monotonic()
+    cached = _INGEST_STATUS_CACHE.get("at"), _INGEST_STATUS_CACHE.get("body")
+    if cached[1] is not None and (now - (cached[0] or 0)) < _INGEST_STATUS_TTL:
+        return jsonify(cached[1])
+
+    def _rows(shape, args=None):
+        try:
+            res = _dispatch(shape, args or {})
+        except Exception as exc:
+            log.warning("ingest-status: %s read failed: %s", shape, exc)
+            return []
+        rows = res.get("rows") if isinstance(res, dict) else res
+        return rows if isinstance(rows, list) else []
+
+    days = _rows("aggregates")
+    events_total = 0
+    last_day = ""
+    for row in days:
+        try:
+            events_total += int(row.get("event_count") or 0)
+        except (TypeError, ValueError):
+            pass
+        day = str(row.get("day") or "")
+        if day > last_day:
+            last_day = day
+
+    # The rollup is one row per runtime PER DAY, so a runtime that has been
+    # sending for a week appears seven times. The question this endpoint
+    # answers is "which sources are sending", so collapse to one row each
+    # and keep the most recent day seen.
+    by_runtime: dict = {}
+    for row in _rows("runtimes", {"limit": 200}):
+        try:
+            tokens = int(row.get("tokens") or 0)
+            sessions = int(row.get("sessions") or 0)
+        except (TypeError, ValueError):
+            tokens = sessions = 0
+        if not (tokens or sessions):
+            # A runtime row with nothing in it is a runtime we know about,
+            # not a source that is sending. Listing it would answer the
+            # user's question ("is anything arriving?") with a yes it has
+            # not earned.
+            continue
+        name = row.get("runtime") or ""
+        if not name:
+            continue
+        agg = by_runtime.setdefault(
+            name, {"runtime": name, "last_day": "", "sessions": 0, "tokens": 0}
+        )
+        agg["sessions"] += sessions
+        agg["tokens"] += tokens
+        day = str(row.get("day") or "")
+        if day > agg["last_day"]:
+            agg["last_day"] = day
+    runtimes = sorted(
+        by_runtime.values(),
+        key=lambda r: (r["tokens"], r["sessions"]),
+        reverse=True,
+    )
+
+    otlp = {"available": False, "protobuf": False, "last_received": None}
+    try:
+        import dashboard as _d
+
+        otlp = {
+            "available": True,
+            "protobuf": bool(_d._HAS_OTEL_PROTO),
+            # In-memory, since this process started. Named so nobody reads
+            # it as a durable count.
+            "last_received": _d._otel_last_received,
+            "has_data_this_process": bool(_d._has_otel_data()),
+        }
+    except Exception as exc:
+        log.warning("ingest-status: OTLP receiver status unavailable: %s", exc)
+
+    body = {
+        "connected": events_total > 0,
+        "events_total": events_total,
+        "last_event_day": last_day,
+        "runtimes": runtimes,
+        "otlp_receiver": otlp,
+        # What to do when connected is false. The endpoint that answers
+        # "did it work?" should also answer "what now?", or the user is
+        # back where they started.
+        "next_step": (
+            "" if events_total > 0 else
+            "Nothing has arrived yet. If the agent runs on this machine it "
+            "is detected automatically -- give it a moment, or run one "
+            "task. If it runs somewhere else, it has to push: "
+            "clawmetry setup-prompt <runtime>"
+        ),
+    }
+    _INGEST_STATUS_CACHE["at"] = now
+    _INGEST_STATUS_CACHE["body"] = body
+    return jsonify(body)
 @bp_onboarding.route("/api/onboarding/complete", methods=["POST"])
 def api_onboarding_complete():
     data = request.get_json(silent=True) or {}
