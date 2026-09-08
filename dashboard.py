@@ -6212,7 +6212,18 @@ def _otel_to_row(span, resource_attrs):
         or inferred from the model — same as the #2049 event path.
       * ``gen_ai.tool.name`` / ``tool.name`` / ``code.function`` → ``tool_name``
       * ``gen_ai.conversation.id`` / ``session.id`` / ``openclaw.session_id`` →
-        ``session_id``
+        ``session_id``; when an exporter sends NONE of them (the OTel GenAI
+        convention does not require one, and a plain SDK or OpenLLMetry on
+        defaults sends none), the span's own ``trace_id`` supplies it as
+        ``<agent_type>:trace:<trace_id>`` so the run still reaches Sessions /
+        Cost / Guard (#5691). One trace is one run: measured across 265 real
+        traces, ``trace_id`` maps to exactly one session and no session spans
+        more than one trace. The ``<agent_type>:`` head is required, not
+        cosmetic, because every session-id parser here reads the runtime from
+        the text before the first colon; ``trace:`` marks the id as derived
+        rather than sent. Not applied when ``agent_type`` is ``openclaw``,
+        whose sessions come from transcripts and whose spans keep a null
+        ``session_id``.
       * ``gen_ai.agent.id`` / ``agent.id`` / ``openclaw.agent_id`` (also from
         resource) → ``agent_id``
       * ``agent.type`` (also from resource) → ``agent_type``
@@ -6375,6 +6386,48 @@ def _otel_to_row(span, resource_attrs):
         # so the span joins the transcript session (WO-57). No profile: the
         # span keeps the bare id, as before.
         session_id = _prof.session_key(session_id)
+
+    # Issue #5691: no conversation id at all. The span lands in ``spans`` and
+    # no ``sessions`` row is ever produced, so the app is invisible to
+    # Sessions / Cost / Guard while its data sits in the store. Nothing
+    # errors, so nothing prompts anyone to look. Nothing in the GenAI
+    # convention REQUIRES a conversation id, and a plain OTel SDK or
+    # OpenLLMetry on defaults does not send one, so this is the common case.
+    #
+    # Fall back to the trace id. Measured on a live node before choosing it
+    # (see the issue): across 265 real traces, ``trace_id`` maps to exactly
+    # one session and no session spans more than one trace, so this
+    # reproduces the mapping conforming exporters already produce rather than
+    # inventing one. The feared "one trace per tool call" flood is not the
+    # shape of real data either: median 2 spans per trace, p90 231, p90
+    # duration ~2.4 h, which is a RUN, not a tool call.
+    #
+    # The key is ``<runtime>:trace:<id>``, NOT ``otlp:trace:<id>``. Every
+    # session-id parser in this codebase (``_sid_runtime`` and its siblings in
+    # sessions / bench / cohort / harness / health) takes the text before the
+    # FIRST colon as the runtime, so an ``otlp:`` prefix would file every one
+    # of these under a runtime literally named "otlp" instead of the app's own
+    # ``agent_type`` -- the exact mis-bucketing
+    # ``_otlp_service_name_to_agent_type`` exists to prevent, and a breach of
+    # the per-runtime honesty gate. Keeping ``trace:`` as the second segment
+    # marks the id as DERIVED, so a reader can tell it from a session id an
+    # exporter actually sent.
+    #
+    # Confined to foreign apps on purpose. ``agent_type == "openclaw"`` is the
+    # one population the materializer deliberately skips (OpenClaw sessions
+    # come from transcripts, WO-55's ghost-session guard), so minting a key
+    # there would put a session id on a span that joins NO session -- a
+    # phantom, which is a bug we have shipped before. Those spans keep the
+    # NULL they have today.
+    if not session_id and agent_type != "openclaw":
+        _tid = _hex(span.trace_id)
+        if _tid:
+            _derived = "trace:" + _tid
+            session_id = (
+                _prof.session_key(_derived)
+                if (_prof is not None and _prof.session_key_prefix)
+                else "{}:{}".format(agent_type, _derived)
+            )
 
     # Span events: array of {time_unix_nano, name, attributes}.
     events = []
@@ -9305,6 +9358,60 @@ def _latency_probe_record(response):
             elapsed_ms = (_t.perf_counter() - start) * 1000.0
             from clawmetry import latency_tracker as _lt
             _lt.record(request.endpoint or path, elapsed_ms)
+    except Exception:
+        pass
+    return response
+
+
+# Bodies bigger than this are left alone: the rewrite below exists for the
+# unreachable case, where a handler has almost nothing to say. A multi-MB
+# payload means the store answered.
+_STORE_FLAG_MAX_BYTES = 2 * 1024 * 1024
+
+
+@app.after_request
+def _stamp_store_available(response):
+    """Say so when a read in this request could not reach the local store.
+
+    Issue #5534: a daemon-proxy timeout ends as ``None`` in the handler and
+    renders as an EMPTY tab — "no sessions have a transcript yet" under a
+    header counting 61, ``{"models": []}`` over a store holding thousands.
+    An empty state is a positive claim about the user's own work; when the
+    truth is "I could not read it", that claim is false and reads exactly
+    like data loss.
+
+    The Cost and Efficiency Analytics blueprint already specifies the field
+    (``store_available``) and a handful of endpoints set it themselves. This
+    stamps it on every JSON object that did NOT answer the question, so a
+    fast path written tomorrow cannot reintroduce the confident empty —
+    there is no helper anyone has to remember to call.
+
+    Only ever adds ``false``. Silence stays silence: a handler that already
+    reports the fact keeps its own value, and a request where nothing failed
+    is untouched, so no existing response shape or snapshot test moves.
+    """
+    try:
+        from routes.local_query import store_available as _store_available
+        if _store_available():
+            return response
+        path = request.path or ""
+        if not (path.startswith("/api/") or path.startswith("/v1/")):
+            return response
+        # The header is the cheap universal signal: the frontend's banner
+        # reads it without paying to clone and parse every response body.
+        response.headers["X-CM-Store-Available"] = "false"
+        if response.direct_passthrough or response.is_streamed:
+            return response
+        if (response.mimetype or "") != "application/json":
+            return response
+        raw = response.get_data()
+        if not raw or len(raw) > _STORE_FLAG_MAX_BYTES:
+            return response
+        body = json.loads(raw.decode("utf-8"))
+        if not isinstance(body, dict) or "store_available" in body:
+            return response
+        body["store_available"] = False
+        response.set_data(json.dumps(body))
     except Exception:
         pass
     return response
