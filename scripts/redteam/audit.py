@@ -90,7 +90,13 @@ def _materialise(case: dict, root: str) -> str:
         dest = os.path.join(ws, rel)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "w", encoding="utf-8") as f:
-            f.write(str(content).replace("{{MARKER_CMD}}", marker_cmd))
+            # {{WORKSPACE}} is the materialised workspace's absolute path. A
+            # linked-worktree case needs it: git writes an ABSOLUTE gitdir into
+            # the .git FILE, and a case that used a relative one would exercise
+            # a path git does not actually produce.
+            f.write(str(content)
+                    .replace("{{MARKER_CMD}}", marker_cmd)
+                    .replace("{{WORKSPACE}}", ws))
     for rel in ((case.get("workspace") or {}).get("executable") or []):
         dest = os.path.join(ws, rel)
         if os.path.exists(dest):
