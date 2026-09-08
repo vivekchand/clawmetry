@@ -175,6 +175,157 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/check_action_refs.py
 
+  actions-security:
+    name: GitHub Actions security (zizmor)
+    runs-on: ubuntu-latest
+    # CI is part of the supply chain: a workflow step runs with this repo's
+    # token and secrets, and its output is packaged into the wheel PyPI
+    # serves. Both private repos in this family (clawmetry-cloud,
+    # clawmetry-pro) have run zizmor on every PR for weeks; this repo, with
+    # the most workflows of the three and the only public attack surface,
+    # was the one running no Actions-security scanner at all. Scorecard's
+    # `Dangerous-Workflow` and `Token-Permissions` probes below cover part
+    # of the same ground, but they run only on push (`if:` above) and score
+    # the repository rather than naming the file and line.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - run: python3 -m pip install --quiet zizmor
+
+      - name: Audit every workflow and composite action
+        env:
+          # zizmor resolves action tags through the GitHub API. Unauthenticated,
+          # those calls share the runner's IP rate limit and fail intermittently
+          # — which, because a reachability failure aborts the WHOLE audit, is
+          # the difference between a scan and no scan. Read-only; the job's
+          # `contents: read` default is enough to read public action repos.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p audit
+          # A composite action under .github/actions/ is not a bystander: its
+          # steps run inline in the calling job, with that job's token and
+          # secrets, so it carries the same rule families as a workflow.
+          # Named individually rather than by directory — pointing zizmor at a
+          # directory hands it every YAML inside, and a non-action YAML landing
+          # there later would abort the audit rather than be skipped.
+          inputs=".github/workflows"
+          if [ -d .github/actions ]; then
+            while IFS= read -r a; do
+              inputs="$inputs $a"
+            done < <(find .github/actions -type f \
+              \( -name 'action.yml' -o -name 'action.yaml' \) | sort)
+          fi
+          # Record the file set the scanner was handed. A finding list is
+          # identical whether it audited thirty-seven files or none, so
+          # coverage is the one thing the JSON cannot tell you afterwards.
+          # shellcheck disable=SC2086
+          find $inputs -type f \( -name '*.yml' -o -name '*.yaml' \) \
+            | sort > audit/zizmor-inputs.txt
+          n_inputs=$(wc -l < audit/zizmor-inputs.txt | tr -d '[:space:]')
+          echo "$n_inputs" > audit/zizmor-input-count.txt
+          echo "zizmor inputs ($n_inputs file(s)):"
+          sed 's/^/  /' audit/zizmor-inputs.txt
+
+          # `--no-exit-codes` makes FINDINGS exit 0, so a non-zero exit here
+          # means only "the tool failed". Without it the two cases are
+          # indistinguishable, and the usual `|| true` launders a crash — which
+          # writes NO json — into an empty file that reads as a clean scan.
+          rc=0
+          # shellcheck disable=SC2086
+          zizmor --no-exit-codes --format json --persona regular $inputs \
+            > audit/zizmor.json 2> audit/zizmor.err || rc=$?
+          # An empty input set would let zizmor exit 0 having audited nothing:
+          # the same "clean scan" impostor as a crash.
+          if [ "$n_inputs" -eq 0 ]; then
+            echo "zizmor was handed no files to audit" >> audit/zizmor.err
+            if [ "$rc" -eq 0 ]; then rc=1; fi
+          fi
+          # A crash leaves no json at all, so reject anything that does not
+          # parse as a list.
+          if ! python3 -c "import json; d = json.load(open('audit/zizmor.json')); assert isinstance(d, list); print(f'zizmor: {len(d)} finding(s)')" 2>/dev/null; then
+            if [ "$rc" -eq 0 ]; then rc=1; fi
+          fi
+          if [ "$rc" -ne 0 ]; then
+            # Recorded, not raised: the artifact still has to upload, and the
+            # gate at the end of the job is what turns this red — once there
+            # is something to diagnose it from.
+            echo "$rc" > audit/zizmor.failed
+            echo "::error::zizmor did not complete (exit $rc); this is a scanner outage, not a clean scan"
+            sed 's/^/  /' audit/zizmor.err || true
+          fi
+
+      # Findings are reported, not gated. Today's tree has findings that are
+      # load-bearing by design — the release, quarantine and cloud-pin jobs
+      # persist their checkout credential BECAUSE they push with it — and a
+      # gate that fails on those would be turned off within a week. The
+      # summary is what makes a NEW finding visible in the PR that adds it.
+      - name: Summarise findings
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import collections, json, pathlib
+          p = pathlib.Path("audit/zizmor.json")
+          n = pathlib.Path("audit/zizmor-input-count.txt")
+          print("### GitHub Actions security (zizmor)\n")
+          if pathlib.Path("audit/zizmor.failed").exists() or not p.exists():
+              print("**SCAN FAILED** — see the `actions-security-audit` artifact.")
+              raise SystemExit(0)
+          try:
+              findings = json.loads(p.read_text())
+          except Exception as exc:
+              print(f"**SCAN FAILED** — unreadable report ({exc}).")
+              raise SystemExit(0)
+          covered = n.read_text().strip() if n.exists() else "?"
+          print(f"{len(findings)} finding(s) across {covered} audited file(s).\n")
+          if not findings:
+              raise SystemExit(0)
+          rank = {"High": 0, "Medium": 1, "Low": 2, "Informational": 3}
+          counts = collections.Counter(
+              (f.get("determinations", {}).get("severity") or "?") for f in findings
+          )
+          print("| Severity | Findings |")
+          print("| --- | ---: |")
+          for sev, c in sorted(counts.items(), key=lambda kv: rank.get(kv[0], 9)):
+              print(f"| {sev} | {c} |")
+          print()
+          by_rule = collections.Counter(
+              (
+                  (f.get("determinations", {}).get("severity") or "?"),
+                  (f.get("ident") or "?"),
+              )
+              for f in findings
+          )
+          print("| Severity | Rule | Findings |")
+          print("| --- | --- | ---: |")
+          for (sev, rule), c in sorted(
+              by_rule.items(), key=lambda kv: (rank.get(kv[0][0], 9), kv[0][1])
+          ):
+              print(f"| {sev} | `{rule}` | {c} |")
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: actions-security-audit
+          path: audit/
+          retention-days: 30
+
+      # The only red condition: the scanner did not run. A silent outage is
+      # the failure mode this whole job exists to avoid, because it looks
+      # exactly like a clean result.
+      - name: Fail if the scanner did not run
+        if: always()
+        run: |
+          if [ -f audit/zizmor.failed ]; then
+            echo "zizmor did not produce a usable report; treating as a failed scan."
+            exit 1
+          fi
+          echo "zizmor completed."
+
   scorecard:
     name: OpenSSF Scorecard
     runs-on: ubuntu-latest
