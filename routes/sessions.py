@@ -73,9 +73,19 @@ def _ls_call(method_name, **kwargs):
     try:
         from clawmetry import local_store
         store = local_store.get_store(read_only=True)
-        return getattr(store, method_name)(**kwargs)
+        out = getattr(store, method_name)(**kwargs)
     except Exception:
         return None
+    # The direct open answered, so whatever the proxy did, the store WAS
+    # readable from this process — clear any unreachability the proxy hop
+    # recorded so this request doesn't warn about data it actually has
+    # (#5534).
+    try:
+        from routes.local_query import note_store_read_ok
+        note_store_read_ok()
+    except Exception:
+        pass
+    return out
 
 
 def _infer_session_type(session):

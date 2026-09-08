@@ -240,9 +240,17 @@ def _ls_call(method_name, **kwargs):
     if store is None:
         return None
     try:
-        return getattr(store, method_name)(**kwargs)
+        out = getattr(store, method_name)(**kwargs)
     except Exception:
         return None
+    # A direct open that answers proves the store was readable here; drop
+    # any unreachability the proxy hop recorded (#5534).
+    try:
+        from routes.local_query import note_store_read_ok
+        note_store_read_ok()
+    except Exception:
+        pass
+    return out
 
 
 def _scan_events_slim(**kwargs):
