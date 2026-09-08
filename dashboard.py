@@ -2829,8 +2829,11 @@ def _otel_to_row(span, resource_attrs):
     # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
     # stored as typed columns — they ride the attributes blob — but read here
     # so the derived cost below is cache-aware (matches the #2049 event path).
-    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
-    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens") or 0
+    cache_read = _pick_int("gen_ai.usage.cache_read.input_tokens",
+                           "gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
+    cache_write = _pick_int("gen_ai.usage.cache_creation.input_tokens",
+                            "gen_ai.usage.cache_creation_input_tokens",
+                            "cache_creation_input_tokens") or 0
     # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
     provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
     cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
@@ -6842,9 +6845,24 @@ def _otel_to_row(span, resource_attrs):
     # spans (WO-57); the aliases are data, the mapping stays generic.
     _prof = _otel_profile_for_resource(resource_attrs)
     _al = (_prof.span_attr_aliases if _prof is not None else {}) or {}
-    cache_read = _pick_int("gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens",
+    # Two spellings, both live in the wild. The CURRENT OTel GenAI semantic
+    # convention puts a dot before the noun --
+    # ``gen_ai.usage.cache_read.input_tokens`` -- and that is what an
+    # exporter emits once it opts in with
+    # OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental, which is
+    # what the migration guidance tells people to set. Reading only the
+    # underscore spelling meant those spans reported ZERO cached tokens,
+    # so the cache-aware cost path had nothing to be aware of and the
+    # session's cost came out wrong -- and on a long agent session cache
+    # reads are usually the majority of input tokens (#5685).
+    #
+    # ``_pick`` takes the first non-None, so a span carrying both forms is
+    # counted once and nothing double-counts.
+    cache_read = _pick_int("gen_ai.usage.cache_read.input_tokens",
+                           "gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens",
                            *(_al.get("cache_read") or ())) or 0
-    cache_write = _pick_int("gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens",
+    cache_write = _pick_int("gen_ai.usage.cache_creation.input_tokens",
+                            "gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens",
                             *(_al.get("cache_write") or ())) or 0
     # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
     provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
@@ -7708,13 +7726,23 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                             "cursor.output_tokens", "output_tokens",
                             "gen_ai.usage.output_tokens",
                         )
+                        # The GenAI semconv names are not a guess -- they are
+                        # the spec, in both the current dotted spelling and the
+                        # earlier underscore one -- so they belong on the list
+                        # alongside Cursor's own. Without them a cloud agent
+                        # exporting standard semconv had its cached tokens
+                        # dropped here too (#5685).
                         c_cr = _f(
                             attrs, "cursor.api.request.cache_read_tokens",
                             "cursor.cache_read_tokens", "cache_read_tokens",
+                            "gen_ai.usage.cache_read.input_tokens",
+                            "gen_ai.usage.cache_read_input_tokens",
                         )
                         c_cw = _f(
                             attrs, "cursor.api.request.cache_creation_tokens",
                             "cursor.cache_write_tokens", "cache_creation_tokens",
+                            "gen_ai.usage.cache_creation.input_tokens",
+                            "gen_ai.usage.cache_creation_input_tokens",
                         )
                         if any(v is not None for v in (c_in, c_out, c_cr, c_cw)):
                             _delegated_record_otel(

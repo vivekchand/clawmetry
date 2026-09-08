@@ -355,6 +355,16 @@ def _live_only_rows(store_rows: list) -> list:
 _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 
 
+# The two kinds ``clawmetry.repo_scan`` emits. Imported from where they are
+# declared so this route cannot drift from the daemon; the literal fallback
+# exists because the Guard tab must render on a cloud instance where the
+# scanner module may be absent, and a missing import must not blank the tab.
+try:  # pragma: no cover - trivial fallback
+    from clawmetry.repo_scan import WORKSPACE_KINDS as _WORKSPACE_KINDS
+except Exception:  # noqa: BLE001
+    _WORKSPACE_KINDS = ("repo_config_exec", "agent_config_tamper")
+
+
 def _incident_rank(inc) -> tuple:
     """Sort key for one incident: money, then severity, then size.
 
@@ -396,7 +406,14 @@ def api_guard_sessions():
                        since_minutes=30) or []
 
     # Newest incident per session wins; a session can trip several detectors.
+    #
+    # Workspace findings are kept in their OWN map rather than competing here.
+    # They carry no spend (a poisoned checkout is not a stretch of expensive
+    # tokens), so on the money ranking they would lose to every behavioural
+    # incident and vanish behind it. Two fields, two questions: "what is this
+    # agent doing" and "what is in the folder you pointed it at".
     incident_by_session = {}
+    workspace_by_session = {}
     for sig in signals:
         if not isinstance(sig, dict):
             continue
@@ -437,6 +454,11 @@ def api_guard_sessions():
         # severity and then to count when no cost is known — the same order
         # ``detectors.incident_rank`` uses, so the tab and the daemon agree on
         # which finding is the loudest.
+        if candidate["kind"] in _WORKSPACE_KINDS:
+            prev_ws = workspace_by_session.get(sid)
+            if prev_ws is None or _incident_rank(candidate) > _incident_rank(prev_ws):
+                workspace_by_session[sid] = candidate
+            continue
         if prev is None or _incident_rank(candidate) > _incident_rank(prev):
             incident_by_session[sid] = candidate
 
@@ -461,12 +483,21 @@ def api_guard_sessions():
         runtime = _session_runtime(sid, s.get("agent_type") or "")
         meta = s.get("metadata")
         meta = meta if isinstance(meta, dict) else {}
+        # ``sessions.cwd`` is the COLUMN the rest of the product keys on, and
+        # reading only ``metadata`` here meant every runtime that fills the
+        # column and not the blob handed ``runtime_control_support`` an empty
+        # cwd, which is what it promotes to find a pid. Same bug, same class,
+        # as the one fixed in ``sync._detector_session_facts``.
         cwd = ""
-        for key in ("cwd", "workspace", "project_dir", "working_dir", "path"):
-            val = meta.get(key)
-            if isinstance(val, str) and val.strip():
-                cwd = val.strip()
-                break
+        col = s.get("cwd")
+        if isinstance(col, str) and col.strip():
+            cwd = col.strip()
+        else:
+            for key in ("cwd", "workspace", "project_dir", "working_dir", "path"):
+                val = meta.get(key)
+                if isinstance(val, str) and val.strip():
+                    cwd = val.strip()
+                    break
         try:
             cost = round(float(s.get("cost_usd") or 0), 4)
         except (TypeError, ValueError):
@@ -485,6 +516,10 @@ def api_guard_sessions():
             "message_count": int(s.get("message_count") or 0),
             "cwd": cwd,
             "incident": incident_by_session.get(sid),
+            # What is in the folder this agent was pointed at, when anything is.
+            # Separate from ``incident`` on purpose: it is not ranked against
+            # money, because it is not a cost.
+            "workspace": workspace_by_session.get(sid),
             "controllable": support["controllable"],
             "control_reason": support.get("reason", ""),
             # Why it is not controllable, in one machine-readable word (see
@@ -514,13 +549,23 @@ def api_guard_sessions():
     # only breaks exact ties among flagged rows — but it decides the whole
     # unflagged group, which is what puts a just-started session at the top of
     # it instead of at the bottom of a 50-row table.
+    #
+    # A workspace finding sorts on its OWN axis, ahead of the money one. This
+    # is the one deliberate exception to "ranked by spend at risk", and it is
+    # not a fudge of the money model: the alternative was to invent a dollar
+    # figure so a critical finding would sort well, which is exactly what
+    # ``annotate_spend`` refuses to do. A poisoned checkout has no cost
+    # attached because it has no cost; it is a property of the machine, and
+    # burying it under every session that happens to be spending would make it
+    # unreachable in a 50-row table.
     out.sort(key=lambda r: (
-        1 if r.get("incident") else 0,
+        1 if (r.get("incident") or r.get("workspace")) else 0,
+        1 if r.get("workspace") else 0,
         _incident_rank(r.get("incident")),
         _ts_epoch(r.get("last_active_at")),
     ), reverse=True)
 
-    flagged = [r for r in out if r.get("incident")]
+    flagged = [r for r in out if r.get("incident") or r.get("workspace")]
     return jsonify({
         "sessions": out,
         "count": len(out),

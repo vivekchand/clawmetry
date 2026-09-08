@@ -38,6 +38,17 @@ import os
 import re
 from typing import Optional
 
+#: The incident kinds this module can emit. Declared here, where they are
+#: produced, and re-exported as ``detectors.WORKSPACE_KINDS`` so every surface
+#: that renders or matches an incident reads ONE list. ``DETECTOR_KINDS`` exists
+#: precisely so a new detector cannot be added without the surfaces noticing;
+#: these two kinds bypassed it once by living outside ``detectors``, and the
+#: Guard tab rendered them as "unknown".
+WORKSPACE_KINDS = (
+    "repo_config_exec",      # the checkout's own config names a program
+    "agent_config_tamper",   # an agent hook config was changed under us
+)
+
 # Git config keys whose VALUE is a program git will execute. Section+key, lowered.
 # Sourced from git-config(1); the wildcard forms cover per-name subsections.
 _EXEC_KEYS = (
