@@ -657,8 +657,10 @@ def _ls_compute_anomalies():
     """Shared rolling-baseline anomaly detection over events. Used by both
     /api/usage/anomalies and /api/anomalies. Buckets recent (24h) sessions
     and flags any whose cost exceeds 2x the 7-day rolling session-cost
-    baseline. Returns ``(anomalies, baseline_avg)`` or ``(None, None)`` to
-    defer."""
+    baseline. Returns ``(anomalies, baselines_dict)`` or ``(None, None)`` to
+    defer. The dict carries the same baseline keys the fallback emits, because
+    the Overview card reads those names and renders a permanent "Collecting
+    baseline data..." placeholder when they are missing."""
     store = _ls_get_store()
     if store is None:
         return None, None
@@ -684,6 +686,8 @@ def _ls_compute_anomalies():
         enriched.append({
             "session_id": s.get("session_id"),
             "cost_usd": float(s.get("cost_usd") or 0.0),
+            # Needed for the tokens baseline the Overview card renders.
+            "token_count": int(s.get("token_count") or 0),
             "start_ts": _to_epoch(s.get("started_at")),
         })
 
@@ -721,20 +725,55 @@ def _ls_compute_anomalies():
             })
 
     anomalies.sort(key=lambda a: a.get("ratio", 0), reverse=True)
-    baseline_costs = [s["cost_usd"] for s in enriched
-                      if s["start_ts"] >= week_ago and s["cost_usd"] > 0]
+
+    # The BASELINES the Overview "Anomaly Detection" card renders. This used to
+    # return the cost average alone, surfaced under the key ``cost_7d_avg_usd``
+    # — a name the frontend never reads. app.js checks ``baseline_cost_7d``,
+    # ``baseline_tokens_7d`` and ``baseline_sessions_per_day_7d``, so with this
+    # fast path serving (which it does whenever the local store is enabled)
+    # every one was undefined and the card fell through to its placeholder:
+    # "Collecting baseline data..." FOREVER, however much data the node had.
+    # Founder screenshot 2026-09-07 shows exactly that, beside an "all clear"
+    # badge.
+    #
+    # Same class as the false-empty-tab burn: a store fast path returning a
+    # NARROWER shape than the fallback it replaced. These are the fallback's own
+    # key names (dashboard.py::_detect_and_store_anomalies), computed for real
+    # from the same session rows.
+    week_sessions = [s for s in enriched if s["start_ts"] >= week_ago]
+    baseline_costs = [s["cost_usd"] for s in week_sessions if s["cost_usd"] > 0]
     baseline_avg = (sum(baseline_costs) / float(len(baseline_costs))) if baseline_costs else 0.0
-    return anomalies, baseline_avg
+    token_vals = [s["token_count"] for s in week_sessions if s["token_count"] > 0]
+    tokens_avg = (sum(token_vals) / float(len(token_vals))) if token_vals else 0.0
+    # Days actually covered, not a flat 7: on a node three days old, dividing by
+    # 7 would under-report sessions/day by more than half.
+    if week_sessions:
+        span_days = max(now_ts - min(s["start_ts"] for s in week_sessions), 86400.0) / 86400.0
+    else:
+        span_days = 1.0
+    baselines = {
+        "baseline_cost_7d": round(baseline_avg, 6),
+        "baseline_tokens_7d": round(tokens_avg, 2),
+        "baseline_sessions_per_day_7d": round(len(week_sessions) / span_days, 2),
+        "session_count_7d": len(week_sessions),
+        # Kept so anything written against the old fast-path key still works.
+        "cost_7d_avg_usd": round(baseline_avg, 6),
+        # NOT emitted: baseline_error_rate_7d / recent_error_rate_24h. The
+        # fallback derives those from stored error events, which this path does
+        # not read. Returning 0.0 would render as "0% errors" — a claim, not a
+        # gap. Absent is the honest answer until this path can measure it.
+    }
+    return anomalies, baselines
 
 
 def _try_local_store_usage_anomalies():
     """Fast path for /api/usage/anomalies."""
-    anomalies, baseline_avg = _ls_compute_anomalies()
+    anomalies, baselines = _ls_compute_anomalies()
     if anomalies is None:
         return None
     return {
         "anomalies": anomalies,
-        "baseline_7d_avg_usd": round(baseline_avg or 0.0, 6),
+        "baseline_7d_avg_usd": round((baselines or {}).get("baseline_cost_7d") or 0.0, 6),
         "threshold_multiplier": 2.0,
         "_source": "local_store",
     }
@@ -743,7 +782,7 @@ def _try_local_store_usage_anomalies():
 def _try_local_store_anomalies():
     """Fast path for /api/anomalies. The legacy handler stores acks in a
     sqlite db so we mirror its empty/no-ack defaults."""
-    anomalies, baseline_avg = _ls_compute_anomalies()
+    anomalies, baselines = _ls_compute_anomalies()
     if anomalies is None:
         return None
     # Match the legacy response shape (anomaly id + ack + severity), even
@@ -769,7 +808,7 @@ def _try_local_store_anomalies():
         "anomalies": out,
         "active_count": len(active),
         "has_active": bool(active),
-        "baselines": {"cost_7d_avg_usd": round(baseline_avg or 0.0, 6)},
+        "baselines": baselines or {},
         "threshold_cost_multiplier": 2.0,
         "threshold_token_multiplier": 2.0,
         "threshold_error_multiplier": 3.0,

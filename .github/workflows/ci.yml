@@ -388,6 +388,28 @@ jobs:
       - name: Home makes no invisible fetch
         run: python3 -m pytest tests/test_overview_no_invisible_fetch.py -q
 
+      # A tab the runtime switcher toggles must be reachable by SOMEONE — a nav
+      # entry or an in-app switchTab() call. The Sub-Agents & Queue Lanes tab
+      # had neither: a template, three loaders, an agent stop control and a 5s
+      # poller shipped in every wheel with zero callers of
+      # switchTab('subagents') in OSS or cloud. Nothing could fail, because
+      # nobody could reach the thing that would fail.
+      - name: Every tab is reachable
+        run: python3 -m pytest tests/test_every_tab_is_reachable.py -q
+
+      # dashboard.py used to define DASHBOARD_HTML twice; the first 5,036 lines
+      # never rendered but still shipped, still answered greps, and needed a
+      # warning in four separate documents to stop people editing the dead copy.
+      - name: dashboard.py defines DASHBOARD_HTML once
+        run: python3 -m pytest tests/test_dashboard_html_defined_once.py -q
+
+      # The Anomaly Detection card read baselines the serving path never sent,
+      # so it showed "Collecting baseline data..." forever on a node with 162
+      # sessions of history. The guard is derived from app.js, so a baseline
+      # key added to the card later is covered without editing the test.
+      - name: Anomaly baselines reach the card
+        run: python3 -m pytest tests/test_anomaly_baselines_reach_the_card.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
@@ -546,6 +568,7 @@ jobs:
             tests/test_family_runtime_ingest.py \
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
+            tests/test_repo_scan_daemon_wiring.py \
             tests/test_hooks_claude_code.py \
             tests/test_hook_ownership_quoted_launcher.py \
             tests/test_hook_lifecycle.py \
@@ -683,6 +706,52 @@ jobs:
         run: pip install flask waitress cryptography duckdb pytest requests psutil
       - name: Run compression/cache-safety eval suite
         run: python3 -m pytest tests/test_compression_safety_eval.py -q
+
+  # ── Red-team corpus (disclosed attacks we claim to catch) ────────────────────
+  # scripts/redteam/corpus/*.json holds one entry per publicly disclosed agent
+  # attack, each naming the detector that must fire and at what severity. The
+  # day GitSpawn stops being detected this job goes red, instead of a customer
+  # finding out. Proven to fail: dropping `core.fsmonitor` from
+  # `repo_scan._EXEC_KEYS` reds three cases (see the PR that added this job).
+  #
+  # Named explicitly because this repo's CI runs FILE LISTS: a test file nobody
+  # names runs in no job at all. That has bitten us before (five guard files in
+  # zero jobs), so if you add a red-team test file, add it here too.
+  #
+  # The audit re-runs the same corpus through scripts/redteam/audit.py to print
+  # the per-case verdicts into the job summary, and to hold the exit-code
+  # contract: 0 = clean, 1 = gaps (with --strict), 2 = a CONTROL failed or a
+  # payload executed. Exit 2 is not "gaps found" -- a control failure means the
+  # audit cannot vouch for any of its other verdicts that day.
+  redteam-corpus:
+    name: Red-team corpus (disclosed attacks)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install flask waitress cryptography duckdb pytest requests psutil
+      - name: Run red-team corpus regression suite
+        run: python3 -m pytest tests/test_redteam_corpus.py -v --tb=short
+      - name: Replay the corpus through the audit (exit-code contract)
+        run: |
+          set +e
+          python3 scripts/redteam/audit.py --strict --summary "$GITHUB_STEP_SUMMARY"
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "audit clean" ;;
+            2) echo "::error::Red-team audit CONTROL FAILURE (exit 2): a control case failed or a corpus payload executed. Every other verdict in this run is untrustworthy."; exit 1 ;;
+            1) echo "::error::Red-team audit found gaps (exit 1): a disclosed attack in the corpus is no longer detected."; exit 1 ;;
+            *) echo "::error::Red-team audit exited $code (unexpected)"; exit 1 ;;
+          esac
 
   # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────
   # The ONLY job that installs opentelemetry-proto. Without it every OTLP

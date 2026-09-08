@@ -20502,6 +20502,148 @@ def _guard_enforcement_allowed() -> bool:
 # or where its workspace root is — and all three change what an incident MEANS.
 # The daemon already touches every candidate session on this tick, so gathering
 # them here is free, where a per-session store read would not be.
+def _session_cwd(session: dict) -> str:
+    """The directory a session ran in, or "" when the runtime never recorded one.
+
+    ``sessions.cwd`` is the COLUMN every cwd-aware consumer keys on
+    (``query_repo_activity`` filters on it, ``process_control`` promotes it to
+    find a pid). Reading only ``metadata`` — which this helper replaced — meant
+    every runtime that fills the column and not the blob looked like it had no
+    workspace at all: on this machine that was cursor, goose, opencode, pi and
+    qwen_code, i.e. every session the column exists for.
+
+    The metadata keys stay as the fallback: some adapters put it there and
+    nowhere else, and a runtime that records neither honestly has no cwd.
+    """
+    if not isinstance(session, dict):
+        return ""
+    val = session.get("cwd")
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    meta = session.get("metadata")
+    if not isinstance(meta, dict):
+        return ""
+    for key in ("cwd", "workspace", "project_dir", "working_dir", "path"):
+        val = meta.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+# ── Workspace scan: the attack surface the tool stream cannot see ──────────
+#
+# Every behavioural detector reads what the agent CHOSE to do. GitSpawn is the
+# proof that this is a partial view: a poisoned `.git/config` makes *git* spawn
+# the payload during the `git status` the runtime fires on open, the agent calls
+# no tool, and `detectors.run_all` sees a clean session. `clawmetry.repo_scan`
+# reads the workspace instead, which is the only place that attack is visible.
+#
+# Honesty about what this buys: for GitSpawn the payload has usually ALREADY RUN
+# by the time a session exists, so this is not prevention. It tells the operator
+# the machine may be compromised — which today they never learn at all — and on
+# runtimes with a pre-tool gate it can hold the NEXT action. `clawmetry
+# scan-repo` stays the preventive path, run before an agent opens the folder.
+#
+# Cost: the scan is a handful of file reads, and the cache below keys on the
+# mtime+size of exactly the files it reads, so a fleet of 200 sessions in 50
+# repos re-reads nothing until one of those files changes.
+_REPO_SCAN_ON = "CLAWMETRY_REPO_SCAN"        # "0" disables the workspace scan
+_REPO_SCAN_CACHE_MAX = int(os.environ.get("CLAWMETRY_REPO_SCAN_CACHE_MAX", "500"))
+#: Files a scan actually reads. The stamp is built from these and nothing else,
+#: so an unrelated write inside the repo does not invalidate the cache.
+_REPO_SCAN_STAMP_FILES = (
+    os.path.join(".git", "config"),
+    os.path.join(".vscode", "tasks.json"),
+)
+
+
+def _repo_scan_stamp(workspace: str) -> tuple:
+    """``(path, mtime_ns, size)`` for every file a scan reads; missing = None.
+
+    Cheap enough to run per session per tick (a few ``stat`` calls) and exact
+    enough that a re-scan happens the moment one of those files changes —
+    including the case that matters most, a repo poisoned after it was first
+    seen clean.
+    """
+    try:
+        from clawmetry import repo_scan as _rs
+        hook_files = tuple(getattr(_rs, "_AGENT_HOOK_FILES", ()) or ())
+    except Exception:  # noqa: BLE001
+        hook_files = ()
+    names = list(_REPO_SCAN_STAMP_FILES)
+    for entry in hook_files:
+        # _AGENT_HOOK_FILES entries are relative paths, or (path, ...) tuples.
+        rel = entry[0] if isinstance(entry, (tuple, list)) and entry else entry
+        if isinstance(rel, str) and rel:
+            names.append(rel)
+    out = []
+    for rel in names:
+        try:
+            st = os.stat(os.path.join(workspace, rel))
+            out.append((rel, st.st_mtime_ns, st.st_size))
+        except Exception:  # noqa: BLE001 — absent is a state, not an error
+            out.append((rel, None, None))
+    return tuple(out)
+
+
+def _workspace_incidents(state: dict, cwd: str, session_id: str,
+                         runtime: str, now: float) -> list:
+    """Workspace findings for ``cwd``, scanned once per (cwd, file stamp).
+
+    Returns incidents in ``detectors.run_all`` shape, re-stamped with THIS
+    session's id and runtime — the cache holds one scan per directory, not one
+    per session, which is the whole point of it.
+    """
+    if os.environ.get(_REPO_SCAN_ON, "1").strip().lower() in ("0", "false", "no"):
+        return []
+    if not cwd:
+        return []
+    try:
+        root = os.path.realpath(cwd)
+    except Exception:  # noqa: BLE001
+        return []
+    if not os.path.isdir(root):
+        return []
+
+    memo = state.setdefault("repo_scan_memo", {})
+    if not isinstance(memo, dict):
+        memo = {}
+        state["repo_scan_memo"] = memo
+
+    stamp = _repo_scan_stamp(root)
+    entry = memo.get(root)
+    if isinstance(entry, dict) and entry.get("stamp") == stamp:
+        entry["ts"] = now
+        findings = entry.get("findings") or []
+    else:
+        try:
+            from clawmetry import repo_scan as _rs
+            findings = _rs.scan_workspace(root) or []
+        except Exception as e:  # noqa: BLE001 — a scan must never stop ingest
+            log.debug("repo-scan: %s failed: %s", root, e)
+            findings = []
+        memo[root] = {"stamp": stamp, "findings": findings, "ts": now}
+        if findings:
+            log.info("repo-scan: %d finding(s) in %s", len(findings), root)
+        # Bound the cache: a long-lived daemon on a busy machine must not hold
+        # a row per directory it has ever seen.
+        if len(memo) > _REPO_SCAN_CACHE_MAX:
+            for stale in sorted(memo, key=lambda k: memo[k].get("ts", 0)
+                                )[:len(memo) - _REPO_SCAN_CACHE_MAX]:
+                memo.pop(stale, None)
+
+    out = []
+    for f in findings:
+        if not isinstance(f, dict):
+            continue
+        inc = dict(f)
+        inc["session_id"] = session_id
+        inc["runtime"] = runtime or inc.get("runtime") or "unknown"
+        inc["workspace"] = root
+        out.append(inc)
+    return out
+
+
 def _detector_session_facts(sessions: list, state: dict, now: float,
                             store=None) -> dict:
     """``session_id -> {cost_usd, bad_for_seconds, session_seconds, cwd,
@@ -20523,14 +20665,7 @@ def _detector_session_facts(sessions: list, state: dict, now: float,
         sid = str(s.get("session_id") or "")
         if not sid:
             continue
-        meta = s.get("metadata")
-        meta = meta if isinstance(meta, dict) else {}
-        cwd = ""
-        for key in ("cwd", "workspace", "project_dir", "working_dir", "path"):
-            val = meta.get(key)
-            if isinstance(val, str) and val.strip():
-                cwd = val.strip()
-                break
+        cwd = _session_cwd(s)
         try:
             cost = float(s.get("cost_usd") or 0)
         except (TypeError, ValueError):
@@ -21150,15 +21285,34 @@ def _emit_detector_incidents(store, state: dict) -> int:
                                      thresholds=thresholds, steps=steps) or []
         except Exception as e:  # noqa: BLE001
             log.warning("detectors: run_all errored for %s: %s", sid, e)
-            continue
+            incidents = []
+        if incidents:
+            all_incidents.extend(incidents)
+            # Remember when this session FIRST looked wrong, so the next tick
+            # can say how long it has been that way (and price the stretch).
+            # Behavioural incidents only: a poisoned repo is a property of the
+            # FOLDER, not a stretch of the session going off track, and letting
+            # it start the clock would inflate the spend at risk of a real
+            # trajectory incident found later.
+            bad_sessions.add(sid)
+            first_seen_memo.setdefault(sid, now)
+
+        # The workspace surface: what the tool stream cannot see (a poisoned
+        # .git/config, an autorun task, a tampered agent hook). Same incident
+        # shape, same loop_signals row, same Guard tab.
+        #
+        # Deliberately NOT added to all_incidents, which is what the policy
+        # pass reads: a policy with trigger_kind "" matches ANY kind, so
+        # feeding workspace findings in today would let an existing
+        # "pause anything critical" rule pause a session because of a property
+        # of its folder, with no way to express "except that". Teaching the
+        # policy engine and the Guard policy form these two kinds is its own
+        # change (clawmetry-pro#223); until then the operator is TOLD and
+        # nothing is signalled.
+        incidents = list(incidents) + _workspace_incidents(
+            state, facts.get("cwd") or "", sid, runtime or "unknown", now)
         if not incidents:
             continue
-        all_incidents.extend(incidents)
-
-        # Remember when this session FIRST looked wrong, so the next tick can
-        # say how long it has been that way (and price the stretch).
-        bad_sessions.add(sid)
-        first_seen_memo.setdefault(sid, now)
 
         # Fold the LOUDEST incident into the heartbeat slice. run_all orders by
         # spend at risk first and severity second, so on a session with a known
