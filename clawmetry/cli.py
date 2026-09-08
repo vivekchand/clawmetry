@@ -4719,6 +4719,12 @@ def _cmd_mcp(args) -> None:
 def _cmd_key(args) -> None:
     """`clawmetry key ...` -- scoped read keys for custom UIs.
 
+    Spec: blueprint 0ea7523c-12b5-4033-84ea-bf1f46e20d70, "API Surface" ->
+    "Command line". Four subcommands, each also taking --json:
+    create (mints one, prints the secret once), list (names, scopes,
+    origins, last use), revoke (effective on that key's next request),
+    scopes (what each grants).
+
     The point of these keys is that someone can build their own view of
     their own agents without forking the dashboard: create a key, say what
     it may read and which site may read it, paste it into whatever they
