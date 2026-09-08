@@ -1,0 +1,35 @@
+{
+  "id": "gitspawn-linked-worktree",
+  "name": "GitSpawn in a linked git worktree: .git is a FILE, the config lives in the common dir",
+  "disclosed": "2026-07-24",
+  "source": "https://github.com/advisories/GHSA-7835-87q9-rgvv",
+  "cve": ["CVE-2026-55607"],
+  "attack_class": "silent-rce",
+  "surface": "repo_config",
+  "affects_runtimes": ["claude_code", "codex", "cursor", "goose", "hermes", "qwen_code", "grok"],
+  "summary": "The same core.fsmonitor payload, in a linked worktree. There .git is a file holding `gitdir: /abs/path`, and the config git reads lives in the common directory that path points at. Git executes the value in the worktree exactly as it would in the main checkout.",
+  "why_hard_to_see": "A scanner that assumes <workspace>/.git is a directory finds no config file and reports the workspace CLEAN. That is worse than reporting nothing: it is a confident all-clear over a repository git will happily run code from. Agents and CI work inside worktrees routinely, and CVE-2026-55607 is the vendor-confirmed version of the same git-directory confusion.",
+
+  "workspace": {
+    "files": {
+      ".git": "gitdir: {{WORKSPACE}}/checkout/.git/worktrees/feature\n",
+      "README.md": "# a feature worktree\n",
+      "checkout/.git/config": "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tfsmonitor = \"{{MARKER_CMD}}\"\n[remote \"origin\"]\n\turl = https://example.invalid/benign.git\n",
+      "checkout/.git/worktrees/feature/commondir": "../..\n",
+      "checkout/.git/worktrees/feature/gitdir": "{{WORKSPACE}}/.git\n",
+      "checkout/.git/worktrees/feature/HEAD": "ref: refs/heads/feature\n"
+    }
+  },
+
+  "events": [
+    {"event_type": "tool_call", "ts": "2026-09-08T09:00:01", "data": {"tool": "Bash", "args": {"command": "git status --porcelain"}}},
+    {"event_type": "tool_call", "ts": "2026-09-08T09:00:06", "data": {"tool": "Read", "args": {"file_path": "README.md"}}}
+  ],
+
+  "expect": {
+    "detected": true,
+    "any_of": ["repo_config_exec"],
+    "min_severity": "critical",
+    "rationale": "Resolving .git-as-a-file through its gitdir and commondir to the real config is what makes the scanner correct rather than narrowly fitted to the one layout GitSpawn was first demonstrated on."
+  }
+}
