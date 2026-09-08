@@ -199,3 +199,50 @@ def test_every_declared_spelling_is_named_in_the_mapper(spelling):
         f"{spelling} is no longer read by dashboard.py. If that is "
         "deliberate, delete the case here too."
     )
+
+
+# ── the OTLP logs lane ──────────────────────────────────────────────────
+
+def test_delegated_cursor_lane_reads_the_semconv_spellings(monkeypatch):
+    """The same bug, one lane over.
+
+    Cursor cloud-agent usage arrives as OTel *log* records and is filed
+    against the delegating agent. That lane already carried cache
+    counters, but only under Cursor's own attribute names and a bare
+    ``cache_read_tokens`` -- so a cloud agent exporting standard GenAI
+    semconv had its cached tokens dropped there too, with the same
+    consequence for cost.
+    """
+    pytest.importorskip("opentelemetry.proto.collector.logs.v1.logs_service_pb2")
+    from opentelemetry.proto.collector.logs.v1 import logs_service_pb2
+    from opentelemetry.proto.logs.v1 import logs_pb2
+
+    recorded = []
+    monkeypatch.setattr(
+        _d, "_delegated_record_otel",
+        lambda agent_id, tin, tout, cr, cw, model, ts: recorded.append(
+            {"cache_read": cr, "cache_write": cw}),
+    )
+    monkeypatch.setattr(_d, "_delegated_is_agent_id", lambda sid: True)
+
+    rec = logs_pb2.LogRecord(time_unix_nano=1_757_300_000_000_000_000)
+    rec.event_name = "cursor.api_request"
+    rec.attributes.extend([
+        _kv("gen_ai.conversation.id", s="bc-abc123"),
+        _kv("gen_ai.request.model", s="claude-opus-5"),
+        _kv("gen_ai.usage.input_tokens", i=1240),
+        _kv("gen_ai.usage.output_tokens", i=312),
+        _kv("gen_ai.usage.cache_read.input_tokens", i=9000),
+        _kv("gen_ai.usage.cache_creation.input_tokens", i=400),
+    ])
+    req = logs_service_pb2.ExportLogsServiceRequest(resource_logs=[
+        logs_pb2.ResourceLogs(scope_logs=[logs_pb2.ScopeLogs(log_records=[rec])])
+    ])
+    _d._process_otlp_logs(req.SerializeToString())
+
+    assert recorded, "the delegated lane recorded nothing for this record"
+    assert recorded[0]["cache_read"] == 9000, (
+        f"cache_read came through as {recorded[0]['cache_read']!r}. A Cursor "
+        "cloud agent on standard GenAI semconv loses its cached tokens."
+    )
+    assert recorded[0]["cache_write"] == 400

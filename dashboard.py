@@ -7726,13 +7726,23 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                             "cursor.output_tokens", "output_tokens",
                             "gen_ai.usage.output_tokens",
                         )
+                        # The GenAI semconv names are not a guess -- they are
+                        # the spec, in both the current dotted spelling and the
+                        # earlier underscore one -- so they belong on the list
+                        # alongside Cursor's own. Without them a cloud agent
+                        # exporting standard semconv had its cached tokens
+                        # dropped here too (#5685).
                         c_cr = _f(
                             attrs, "cursor.api.request.cache_read_tokens",
                             "cursor.cache_read_tokens", "cache_read_tokens",
+                            "gen_ai.usage.cache_read.input_tokens",
+                            "gen_ai.usage.cache_read_input_tokens",
                         )
                         c_cw = _f(
                             attrs, "cursor.api.request.cache_creation_tokens",
                             "cursor.cache_write_tokens", "cache_creation_tokens",
+                            "gen_ai.usage.cache_creation.input_tokens",
+                            "gen_ai.usage.cache_creation_input_tokens",
                         )
                         if any(v is not None for v in (c_in, c_out, c_cr, c_cw)):
                             _delegated_record_otel(
