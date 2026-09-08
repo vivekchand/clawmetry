@@ -471,13 +471,44 @@ def test_rate_limit_is_per_key(client, ak, monkeypatch):
 
 @pytest.fixture
 def admin(ak):
+    """A client for the key-MANAGEMENT blueprint.
+
+    Separate from ``client`` on purpose, and asserted to be a different
+    blueprint below: minting must never be reachable from the surface the
+    minted keys open.
+    """
     from flask import Flask
 
-    import routes.infra as infra
+    import routes.apikeys_admin as adm
 
     app = Flask(__name__)
-    app.register_blueprint(infra.bp_security)
+    app.register_blueprint(adm.bp_apikeys_admin)
     return app.test_client()
+
+
+def test_key_management_is_not_on_the_keyed_blueprint():
+    """The two surfaces must stay apart.
+
+    ``public_api`` answers cross-origin reads; ``apikeys_admin`` mints the
+    credentials that open it. Registering a management route on the keyed
+    blueprint would put it behind that blueprint's CORS handler, so this
+    asserts the separation directly rather than trusting the path guard
+    alone.
+    """
+    import routes.apikeys_admin as adm
+    import routes.public_api as pub
+
+    from flask import Flask
+
+    app = Flask(__name__)
+    app.register_blueprint(pub.bp_public_api)
+    app.register_blueprint(adm.bp_apikeys_admin)
+    for rule in app.url_map.iter_rules():
+        owner = rule.endpoint.split(".")[0]
+        if str(rule).startswith("/api/apikeys"):
+            assert owner == "apikeys_admin", f"{rule} is served by {owner}"
+        elif str(rule).startswith("/api/q/"):
+            assert owner == "public_api", f"{rule} is served by {owner}"
 
 
 def test_management_mint_list_revoke(admin):

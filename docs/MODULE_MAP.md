@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-231 modules, 82 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+232 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -29,6 +29,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/advisor.py` | medium | `bp_advisor` | `/api/advisor` | ClawMetry Advisor: natural-language Q&A over your agent. |
 | `routes/agents.py` | medium | `bp_agents` | `/api/agents` | Multi-agent adapter endpoints. |
 | `routes/alerts.py` | large | `bp_alerts`, `bp_budget` | `/api/_harness`, `/api/agents`, `/api/alert-channels`, `/api/alerts`, `/api/budget`, `/api/emergency-stop` | Budget + Alerts endpoints. |
+| `routes/apikeys_admin.py` | small | `bp_apikeys_admin` | `/api/apikeys` | create, list and revoke the node's API keys. |
 | `routes/approval_routing.py` | small | `bp_approval_routing` | `/a`, `/a/decide`, `/api/approvals` | OSS stub after the impl moved to clawmetry-pro. |
 | `routes/assets.py` | small | `bp_assets` | `/api/assets` | OSS asset registry API. |
 | `routes/attention.py` | medium | `bp_attention` | `/api/attention`, `/api/hooks` | "which of my agents needs me right now". |
@@ -57,7 +58,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/heartbeat.py` | medium | `bp_heartbeat` | `/api/heartbeat`, `/api/heartbeat-loops` | Heartbeat liveness panel API endpoint (#686). |
 | `routes/hitl.py` | medium | `bp_hitl` | `/api/hitl` | Human-in-the-loop (HITL) pause API. |
 | `routes/hooks.py` | large | `bp_hooks` | `/api/hooks`, `/api/lifecycle`, `/api/sessions` | local receiver for runtime pre-tool hooks. |
-| `routes/infra.py` | large | `bp_config`, `bp_logs`, `bp_memory`, `bp_security` | `/api/apikeys`, `/api/automation-analysis`, `/api/context-anatomy`, `/api/cost-optimization`, `/api/cost-optimizer`, `/api/file`, `/api/flow`, `/api/flow-events`, `/api/llmfit`, `/api/logs`, `/api/logs-stream`, `/api/memory`, `/api/memory-access`, `/api/memory-analytics`, `/api/memory-files`, `/api/memory-rag`, `/api/numbat`, `/api/security` | Infrastructure / security / config / logs endpoints. |
+| `routes/infra.py` | large | `bp_config`, `bp_logs`, `bp_memory`, `bp_security` | `/api/automation-analysis`, `/api/context-anatomy`, `/api/cost-optimization`, `/api/cost-optimizer`, `/api/file`, `/api/flow`, `/api/flow-events`, `/api/llmfit`, `/api/logs`, `/api/logs-stream`, `/api/memory`, `/api/memory-access`, `/api/memory-analytics`, `/api/memory-files`, `/api/memory-rag`, `/api/numbat`, `/api/security` | Infrastructure / security / config / logs endpoints. |
 | `routes/insights.py` | medium | `bp_insights` | `/api/insights`, `/insights` | Weekly Insights Digest endpoints. |
 | `routes/inventory.py` | medium | `bp_inventory` | `/api/inventory` | Agent Inventory tab API. |
 | `routes/local_query.py` | large | `bp_local_query` | `/__local_query__`, `/api/local` | coherent local query API over the DuckDB store. |
