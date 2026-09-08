@@ -10127,6 +10127,87 @@ class LocalStore(TrailStoreMixin):
         except Exception:
             return []
 
+    def query_recent_sessions_by_runtime(
+        self,
+        *,
+        per_runtime: int = 2,
+        max_runtimes: int = 40,
+    ) -> list[dict[str, Any]]:
+        """The most-recently-active session ids for EVERY runtime on the box.
+
+        One window-function pass over the events table, partitioned by runtime,
+        so a low-volume runtime is never starved by a high-volume one. This is
+        the fair counterpart to a plain "newest N sessions" scan: on a machine
+        with 1866 claude_code sessions and 16 codex ones, the newest-N scan
+        returns claude_code 500 times and codex never (#5643 - the cloud
+        Sessions tab said "no Codex sessions have a transcript yet" under a
+        header that counted 15 of them).
+
+        Only sessions with at least one RENDERABLE turn are returned: a session
+        with nothing but plumbing rows builds an empty transcript, so handing
+        one back would burn a snapshot slot on a row the UI drops anyway.
+
+        ``runtime`` buckets identically to ``query_model_rollup`` and
+        ``sync._runtime_of_session`` (session-id prefix when it names a known
+        non-OpenClaw runtime, else ``openclaw``).
+
+        Returns ``[{runtime, session_id, last_ms}]``, most-recent first within
+        each runtime. Best-effort: any failure yields ``[]`` so the caller keeps
+        whatever it selected on its own.
+        """
+        try:
+            per_runtime = max(0, int(per_runtime or 0))
+            if not per_runtime:
+                return []
+            prefixes = list(_NON_OPENCLAW_RUNTIME_PREFIXES)
+            placeholders = ", ".join(["?"] * len(prefixes))
+            rt_case = (
+                f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders}) "
+                f"THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
+            )
+            renderable_in = _sql_in_clause(_RENDERABLE_EVENT_TYPES)
+            sql = f"""
+                WITH per_session AS (
+                    SELECT session_id,
+                           {rt_case} AS runtime,
+                           MAX(epoch_ms(TRY_CAST(ts AS TIMESTAMPTZ))) AS last_ms
+                    FROM events
+                    WHERE session_id IS NOT NULL AND session_id != ''
+                      AND event_type IN {renderable_in}
+                    GROUP BY 1, 2
+                ),
+                ranked AS (
+                    SELECT runtime, session_id, last_ms,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY runtime
+                               ORDER BY last_ms DESC NULLS LAST, session_id DESC
+                           ) AS rn
+                    FROM per_session
+                )
+                SELECT runtime, session_id, last_ms
+                FROM ranked
+                WHERE rn <= ?
+                ORDER BY last_ms DESC NULLS LAST
+            """
+            rows = self._fetch(sql, list(prefixes) + [per_runtime])
+            out: list[dict[str, Any]] = []
+            seen_runtimes: set[str] = set()
+            for r in rows:
+                rt = r[0] or "openclaw"
+                if rt not in seen_runtimes:
+                    if len(seen_runtimes) >= max(0, int(max_runtimes or 0)):
+                        continue
+                    seen_runtimes.add(rt)
+                out.append({
+                    "runtime": rt,
+                    "session_id": r[1] or "",
+                    "last_ms": int(r[2] or 0),
+                })
+            return out
+        except Exception as exc:
+            log.debug("query_recent_sessions_by_runtime failed: %s", exc)
+            return []
+
     def query_model_rollup(self) -> dict[str, Any]:
         """Per-runtime and per-(runtime, model) aggregates over the FULL events
         table — the uncapped source for the cloud Models / runtimeSummary

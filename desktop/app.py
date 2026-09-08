@@ -417,6 +417,44 @@ def _desktop_version() -> str:
         return "dev"
 
 
+def _version_tuple(v: str) -> Optional[tuple]:
+    """A comparable tuple for a dotted numeric version, or None when the
+    string is not one ("dev", "installed", a pre-release suffix). One
+    parser, because the floor check and the dist-info picker have to
+    order versions the same way to agree about what "older" means."""
+    parts = (v or "").strip().split(".")
+    if not parts or not all(x.isdigit() for x in parts):
+        return None
+    return tuple(int(x) for x in parts)
+
+
+# The lowest clawmetry the shell will accept from pip, handed to pip as
+# `clawmetry>=<floor>`.
+#
+# Without a floor, `pip install --upgrade clawmetry` does not fail when a
+# dependency has no wheel for the interpreter — it backtracks *clawmetry
+# itself* until the graph resolves, and installs whatever ancient release
+# predates that dependency. Measured against live PyPI on py3.11 with the
+# `--only-binary=:all:` this shell uses on Windows (issue #5639): a win32
+# interpreter resolves clawmetry 0.12.163, from before duckdb was a
+# dependency at all, and a win-arm64 one resolves 0.12.793. Nothing
+# errors, the entry point exists, the splash clears, and the user runs a
+# 664-release-old ClawMetry against a current cloud — a failure no field
+# report can see, because from here the install succeeded.
+#
+# The bundle's own stamped version is the floor: this shell was BUILT at
+# that release, so PyPI demonstrably has it. A developer checkout carries
+# no stamp ("dev") and gets no floor, which is the old behaviour.
+def _pip_version_floor() -> str:
+    v = _desktop_version()
+    return v if _version_tuple(v) else ""
+
+
+def _pip_requirement() -> str:
+    floor = _pip_version_floor()
+    return f"clawmetry>={floor}" if floor else "clawmetry"
+
+
 def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip() not in ("", "0", "false", "False")
 
@@ -910,6 +948,9 @@ class RuntimeSupervisor:
         self.runtime = _runtime_dir()
         self.venv = self.runtime / "venv"
         self.stamp_file = self.runtime / "last-upgrade.json"
+        # Which stranded version the old-version heal has already been
+        # attempted for (see _is_stranded_on_an_old_version).
+        self.heal_file = self.runtime / "version-heal.json"
         self.log_file = self.runtime / "bootstrap.log"
         # {"app_pid": ..., "daemon_pid": ..., "port": ...} of the live
         # instance — the single-instance guard and orphan cleanup key.
@@ -978,6 +1019,46 @@ class RuntimeSupervisor:
         except OSError:
             pass
 
+    def _is_stranded_on_an_old_version(self, installed: str) -> bool:
+        """Whether the venv's clawmetry is OLDER than the shell that is
+        booting it — and worth one reinstall attempt to heal.
+
+        The floor above stops pip creating this state; this is what
+        rescues the machines already in it. A silent backtrack leaves a
+        COMPLETE, importable install, so the warm-launch short-circuit
+        accepted it and booted an ancient ClawMetry on every relaunch
+        forever — the same shape as the package-corpse bug, one step
+        removed (#5639).
+
+        Latched on disk, and deliberately: the heal reruns pip on the
+        boot path, and on Windows a floored failure now provisions an
+        interpreter, so a check that fired every launch would mean a pip
+        run (and possibly a winget install) on every launch of a machine
+        it cannot fix. One attempt per stranded version, then the launch
+        is allowed to proceed on the old install — a ClawMetry that is
+        behind still beats a shell that will not open."""
+        floor = _version_tuple(_pip_version_floor())
+        have = _version_tuple(installed)
+        if not floor or not have or have >= floor:
+            return False
+        try:
+            tried = json.loads(self.heal_file.read_text()).get("from", "")
+        except Exception:
+            tried = ""
+        if tried == installed:
+            self._log(f"clawmetry {installed} is older than this shell "
+                      f"({_pip_version_floor()}) and the reinstall already "
+                      f"ran for it — continuing on the old version")
+            return False
+        try:
+            self.heal_file.write_text(json.dumps({"from": installed}))
+        except OSError:
+            pass
+        self._log(f"clawmetry {installed} is older than this shell "
+                  f"({_pip_version_floor()}) — pip resolved a backtracked "
+                  f"release (see #5639); reinstalling with a version floor")
+        return True
+
     def _get_installed_version(self) -> Optional[str]:
         """Version of clawmetry installed in the runtime venv, read
         straight from the dist-info directory name — no interpreter
@@ -998,10 +1079,7 @@ class RuntimeSupervisor:
 
         def _ver_key(d: Path):
             v = d.name[len("clawmetry-"):-len(".dist-info")]
-            try:
-                return tuple(int(x) for x in v.split("."))
-            except ValueError:
-                return (-1,)
+            return _version_tuple(v) or (-1,)
 
         try:
             infos = [
@@ -1126,8 +1204,12 @@ class RuntimeSupervisor:
         except subprocess.TimeoutExpired:
             self._log("pip self-upgrade timed out; continuing with bundled pip")
         base = [vpy, "-m", "pip", "install", "--upgrade", *self._PIP_FLAGS]
-        attempts = [base + ["clawmetry"],
-                    base + ["--no-cache-dir", "clawmetry"]]
+        # Floored, never bare: a bare `clawmetry` lets pip satisfy the
+        # requirement by backtracking to a release old enough to predate
+        # the dependency that has no wheel here (#5639).
+        req = _pip_requirement()
+        attempts = [base + [req],
+                    base + ["--no-cache-dir", req]]
         rc, out = 1, ""
         for i, argv in enumerate(attempts):
             try:
@@ -1293,11 +1375,14 @@ class RuntimeSupervisor:
             # COMPLETE install (dist-info with RECORD — a directory glob,
             # so the healthy warm launch stays spawn-free and fast) and
             # fall through to the normal install path when it is absent.
-            if self._get_installed_version() is not None:
-                return True
-            self._log("entry point exists but no complete clawmetry "
-                      "dist-info — package corpse from a half-failed "
-                      "in-place update; reinstalling")
+            installed = self._get_installed_version()
+            if installed is not None:
+                if not self._is_stranded_on_an_old_version(installed):
+                    return True
+            else:
+                self._log("entry point exists but no complete clawmetry "
+                          "dist-info — package corpse from a half-failed "
+                          "in-place update; reinstalling")
 
         cache = self.runtime / "bootstrap-python.json"
         py = _bootstrap_python(cache)

@@ -16659,7 +16659,39 @@ def _cap_transcript_messages(msgs, msg_cap):
 # reused instead of re-fetched and re-rendered. Bounded FIFO — the daemon is
 # long-lived and sessions churn.
 _TRANSCRIPT_SNAP_CACHE: dict = {}
-_TRANSCRIPT_SNAP_CACHE_MAX = 32
+# Sized for the GLOBAL slots plus the per-runtime slots (#5643): a
+# many-runtime box now builds ~8 + 2 x <runtimes> transcripts per cycle,
+# and a cache smaller than that rebuilds every one of them every cycle
+# (FLYWHEEL 1e, the daemon CPU budget).
+_TRANSCRIPT_SNAP_CACHE_MAX = 128
+
+
+# How many sessions PER RUNTIME the snapshot carries beyond the global
+# most-recent window, and how many messages each of those carries. The global
+# window is picked on node-wide recency alone, so on a box where one runtime
+# dominates (1866 claude_code sessions vs 16 codex) every other runtime is
+# starved out of it and the cloud Sessions tab renders empty under a header
+# that counts them (#5643). These reserved slots guarantee every runtime with
+# activity reaches the cloud, and are capped shorter than the global slots so
+# they cost a few hundred KB rather than megabytes: measured on a box carrying
+# every family adapter, +121 KB raw / +27 KB gzipped at cap 12, against
+# +427 KB raw at cap 24. The replay pages the rest through
+# ``_oldest_contiguous_ts``. Set the count to 0 to restore the old
+# global-only behaviour.
+def _snapshot_per_runtime_sessions() -> int:
+    try:
+        return max(0, int(os.environ.get(
+            "CLAWMETRY_SNAPSHOT_PER_RUNTIME_SESSIONS", "2")))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _snapshot_per_runtime_msg_cap() -> int:
+    try:
+        return max(1, int(os.environ.get(
+            "CLAWMETRY_SNAPSHOT_PER_RUNTIME_MSG_CAP", "12")))
+    except (TypeError, ValueError):
+        return 12
 
 
 def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
@@ -16676,6 +16708,19 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
     outside the most-recent-N window — e.g. ACTIVE sub-agents, so the cloud
     Active Tasks click-through ("see what this sub-agent is doing") has a
     transcript to render. Best-effort -> {}.
+
+    Selection is TWO passes (#5643):
+
+    1. ``limit_sessions`` slots on node-wide recency, at ``msg_cap`` messages.
+    2. Reserved slots for every runtime the first pass missed
+       (``_snapshot_per_runtime_sessions`` each, at
+       ``_snapshot_per_runtime_msg_cap`` messages).
+
+    Pass 1 alone is a starvation bug on any box with a dominant runtime: with
+    1866 claude_code sessions and 16 codex ones, all 8 global slots go to
+    claude_code forever, so the cloud Sessions tab shows "No Codex sessions
+    have a transcript yet" while the header (fed by the uncapped
+    ``/ingest/sessions`` push) counts 15 of them.
     """
     try:
         from clawmetry import local_store as _ls
@@ -16700,10 +16745,32 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
             sid = (sid or "").strip()
             if sid and sid not in recent_sids:
                 recent_sids.append(sid)
-        if not recent_sids:
+        # sid -> message cap. Dict order IS the build order, so the global
+        # (richer) slots are built first and a session that qualifies for both
+        # passes keeps the bigger cap.
+        plan: dict = {sid: msg_cap for sid in recent_sids}
+        # Pass 2: reserved per-runtime slots so a low-volume runtime is never
+        # starved out of the snapshot by a high-volume one.
+        per_rt = _snapshot_per_runtime_sessions()
+        if per_rt:
+            try:
+                rt_cap = _snapshot_per_runtime_msg_cap()
+                for row in (store.query_recent_sessions_by_runtime(
+                        per_runtime=per_rt) or []):
+                    sid = (row.get("session_id") or "").strip()
+                    # Already planned (the usual case for the dominant
+                    # runtime, whose newest sessions fill the global window).
+                    if not sid or sid in plan:
+                        continue
+                    if hide_clawmetry_session(sid):
+                        continue
+                    plan[sid] = rt_cap
+            except Exception as _rte:
+                log.debug("per-runtime transcript slots failed: %s", _rte)
+        if not plan:
             return {}
         out = {}
-        for sid in recent_sids:
+        for sid, cap in plan.items():
             # Perf: a snapshot cycle used to re-fetch up to 10k events and
             # re-render the transcript for EVERY recent session, every cycle,
             # even when nothing changed. Probe the newest (ts, id) with a
@@ -16720,7 +16787,7 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
             except Exception:
                 fp = None
             cached = _TRANSCRIPT_SNAP_CACHE.get(sid)
-            if fp and cached and cached.get("fp") == fp                     and cached.get("cap") == msg_cap:
+            if fp and cached and cached.get("fp") == fp                     and cached.get("cap") == cap:
                 out[sid] = cached["t"]
                 continue
             try:
@@ -16731,7 +16798,7 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
             if t and t.get("messages"):
                 msgs = t["messages"]
                 # ChatGPT-style title: derive from the first user message on the
-                # FULL message list (before we cap to the last msg_cap turns —
+                # FULL message list (before we cap to the last `cap` turns —
                 # otherwise long sessions lose their title because the opening
                 # prompt got dropped). +~60 bytes per session in the snapshot;
                 # well under the field-bloat budget, see
@@ -16742,7 +16809,7 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                 except Exception:
                     title = ""
                 msgs, _was_capped, _oldest_tail_ts = _cap_transcript_messages(
-                    msgs, msg_cap)
+                    msgs, cap)
                 if _was_capped:
                     t = dict(t)
                     t["messages"] = msgs
@@ -16767,7 +16834,7 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
                 out[sid] = t
                 if fp:
                     _TRANSCRIPT_SNAP_CACHE[sid] = {
-                        "fp": fp, "cap": msg_cap, "t": t}
+                        "fp": fp, "cap": cap, "t": t}
                     while len(_TRANSCRIPT_SNAP_CACHE) > _TRANSCRIPT_SNAP_CACHE_MAX:
                         _TRANSCRIPT_SNAP_CACHE.pop(
                             next(iter(_TRANSCRIPT_SNAP_CACHE)))
