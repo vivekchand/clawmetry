@@ -14369,7 +14369,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/nemoclaw.html' %}
 
 <!-- SUB-AGENT TREE (theme 2) -->
-{% include 'tabs/subagents.html' %}
 
 <!-- SKILLS FIDELITY (#687) -->
 {% include 'tabs/skills.html' %}
