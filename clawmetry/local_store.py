@@ -3152,7 +3152,12 @@ class _ProxyStore:
                         "through the daemon — returning %r", name, len(args), _empty,
                     )
                     return _empty
-                return local_store_via_daemon(name, **call_kwargs)
+                result = local_store_via_daemon(name, **call_kwargs)
+                # local_store_via_daemon returns None when daemon is
+                # unreachable (it swallows exceptions internally).  For
+                # query_* methods substitute [] so callers that iterate
+                # the result don't crash with TypeError.
+                return result if result is not None else _empty
             except Exception:
                 return _empty
         return _forward
