@@ -10463,7 +10463,8 @@ var LOOP_KIND_LABEL = {
   // Not the agent's behaviour: what was in the folder it was pointed at.
   // Mirrors clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'This folder is set up to run a program',
-  agent_config_tamper: 'An agent hook config in this folder was changed'
+  agent_config_tamper: 'An agent hook config in this folder was changed',
+  package_manifest_exec: 'Installing this folder\'s dependencies runs its own code'
 };
 
 // What ignoring this is estimated to cost. Blank when we do not know, because
@@ -30793,12 +30794,14 @@ var GUARD_KIND_LABEL = {
   // policy form makes you name them rather than folding them into "any
   // signal". Keys mirror clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'Repo config runs a program',
-  agent_config_tamper: 'Agent hook config changed'
+  agent_config_tamper: 'Agent hook config changed',
+  package_manifest_exec: 'Installing deps runs its code'
 };
 
 // The workspace half of GUARD_KIND_LABEL, so a renderer can tell the two
 // questions apart without hard-coding kind strings a second time.
-var GUARD_WORKSPACE_KINDS = ['repo_config_exec', 'agent_config_tamper'];
+var GUARD_WORKSPACE_KINDS = ['repo_config_exec', 'agent_config_tamper',
+                             'package_manifest_exec'];
 
 // The policy form's condition list, built from GUARD_KIND_LABEL rather than
 // re-typed. A hand-kept second copy is how a new kind ends up renderable but
