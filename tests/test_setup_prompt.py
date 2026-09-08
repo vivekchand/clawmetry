@@ -281,3 +281,39 @@ def test_every_registered_subcommand_is_reachable():
         f"fall through to the dashboard parser and fail with 'invalid "
         f"choice': {sorted(missing)}"
     )
+
+
+def test_meta_module_index_matches_its_actual_routes():
+    """``routes/meta.py`` opens with a per-blueprint route index. Keep it true.
+
+    It had drifted to ``bp_otel (3)`` while the blueprint served six
+    routes -- ``/v1/logs`` and ``/api/setup-prompt`` among them. That is
+    not a cosmetic staleness: the index is the first ~20 lines of a
+    2000-line module, so it is what a reader sees, and it is what tools
+    that sample the head of a file see. Drift Bot read it and reported
+    ``/api/setup-prompt`` as "not implemented" while the endpoint was
+    live at line 1355 and returning 200.
+
+    So the count in the index is checked against the decorators below it.
+    """
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           / "routes" / "meta.py").read_text()
+    head = src[:src.index('"""', 3)]
+
+    documented = {
+        name: int(count)
+        for name, count in re.findall(r"bp_(\w+)\s+\((\d+)\)", head)
+    }
+    assert documented, "the route index is gone from routes/meta.py's docstring"
+
+    for name, claimed in documented.items():
+        actual = len(re.findall(r"@bp_%s\.route\(" % re.escape(name), src))
+        assert actual == claimed, (
+            f"the index says bp_{name} has {claimed} route(s); it has "
+            f"{actual}. Update the docstring at the top of routes/meta.py -- "
+            "a route missing from that index reads as a route that does not "
+            "exist, to a person and to a tool."
+        )

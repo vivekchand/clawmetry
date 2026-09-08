@@ -2,15 +2,21 @@
 routes/meta.py — Auth / gateway / OTLP / version / version-impact.
 
 Extracted from dashboard.py as Phase 5.12 of the incremental modularisation.
-Six small Blueprints bundled into one file because each is tiny (1-3 routes)
-and they are all auth/meta/observability plumbing:
+Several small Blueprints bundled into one file because they are all
+auth/meta/observability plumbing. Keep this index accurate: it is the
+first thing a reader (human or tool) sees, and a route missing from it
+reads as a route that does not exist.
 
-  bp_version        (2)  — /api/version, /api/update
+  bp_version        (4)  — /api/version, /api/update, ...
   bp_gateway        (3)  — /api/gw/{config,invoke,rpc}
-  bp_auth           (3)  — /api/auth/check, /auth, /  (main page)
-  bp_otel           (3)  — /v1/metrics, /v1/traces, /api/otel-status
+  bp_auth           (5)  — /api/auth/check, /auth, /  (main page), ...
+  bp_otel           (6)  — /v1/metrics, /v1/traces, /v1/logs (the OTLP
+                           receiver), /api/setup-prompt (the prompt that
+                           points an off-box agent here, #5681),
+                           /api/otel-status, /api/otel/rollup
   bp_version_impact (1)  — /api/version-impact
   bp_cloud_relay    (1)  — /api/cloud/subscribe
+  bp_otlp_traces    (1)  — OTLP trace query surface
 
 Module-level helpers (``_auto_discover_gateway``, ``_gw_invoke_docker``,
 ``_gw_invoke``, ``_gw_ws_rpc``, ``_load_gw_config``, ``_ext_emit``,
