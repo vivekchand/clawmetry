@@ -518,9 +518,19 @@ jobs:
           # a failed dispatch must not fail the release. auto-deploy's own
           # no-downgrade guard makes a duplicate or out-of-order run a no-op.
           echo "▸ Dispatching auto-deploy-cloud.yml so the cloud pins ${{ steps.bump.outputs.new }}"
+          # -f version=... is load-bearing, not a convenience. Dispatching
+          # after the upload is NOT late enough on its own: PyPI's
+          # `info.version` metadata endpoint lags the upload by minutes, so
+          # auto-deploy re-deriving the target from the index reads the
+          # PREVIOUS release and its no-downgrade guard skips. Measured
+          # 2026-09-08 on 0.12.831 — the dispatch fired correctly at 04:19:08
+          # and the run logged "Latest published OSS version: 0.12.830", eight
+          # minutes after this job started. We know the version we published;
+          # passing it removes the re-derivation and the race with it.
           gh workflow run auto-deploy-cloud.yml \
             --repo ${{ github.repository }} \
             --ref main \
+            -f version="${{ steps.bump.outputs.new }}" \
             || echo "⚠ auto-deploy-cloud dispatch failed (non-blocking; cloud will lag until the next OSS push)"
 
           echo "▸ Dispatching desktop-artifacts.yml against $NEW_TAG"

@@ -29,6 +29,13 @@ on:
     workflows: ["Auto-release on [RELEASE] merge"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Exact version to pin. release-on-merge passes the version it just
+          published; leave blank on a manual run to use PyPI's latest.
+        required: false
+        type: string
 
 # Every cross-repo action below (checkout of clawmetry-cloud, branch push, PR
 # create/close/merge) authenticates as `secrets.CLOUD_REPO_PAT`, which this
@@ -66,14 +73,31 @@ jobs:
         # pin never advances at all). The Dockerfile installs from PyPI,
         # so the published version is exactly what a pin means.
         run: |
-          # Downloaded to a file and then parsed, rather than piped straight
-          # into an interpreter. The payload is data either way, but `curl |
-          # python3` is indistinguishable from piping remote code into a shell
-          # to any reader or scanner looking at this line.
-          curl -fsSL https://pypi.org/pypi/clawmetry/json -o /tmp/pypi-clawmetry.json
-          VERSION=$(python3 -c "import json; print(json.load(open('/tmp/pypi-clawmetry.json'))['info']['version'])")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Latest published OSS version: $VERSION"
+          # An explicit input always wins. release-on-merge passes the version
+          # it just published, which removes the last timing hazard here:
+          # dispatching AFTER the upload is still not late enough, because
+          # PyPI's `info.version` metadata endpoint lags the upload by minutes.
+          # Measured 2026-09-08 on 0.12.831 — the post-upload dispatch fired
+          # correctly at 04:19:08 and this step read "0.12.830" eight minutes
+          # after the release job started, so the no-downgrade guard skipped and
+          # the cloud stayed a release behind, which is the exact symptom the
+          # dispatch was added to cure. The publisher knows its own version;
+          # asking a lagging index to re-derive it is what created the race.
+          VERSION="${{ inputs.version }}"
+          if [ -n "$VERSION" ]; then
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "Pinning the version passed by the publisher: $VERSION"
+          else
+            # Manual or push-triggered run: fall back to the latest published
+            # version. Downloaded to a file and then parsed, rather than piped
+            # straight into an interpreter. The payload is data either way, but
+            # `curl | python3` is indistinguishable from piping remote code into
+            # a shell to any reader or scanner looking at this line.
+            curl -fsSL https://pypi.org/pypi/clawmetry/json -o /tmp/pypi-clawmetry.json
+            VERSION=$(python3 -c "import json; print(json.load(open('/tmp/pypi-clawmetry.json'))['info']['version'])")
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "Latest published OSS version: $VERSION"
+          fi
 
       # The cloud Dockerfile does `pip install clawmetry==<version>`, and the
       # cloud PR's CI also installs it to audit routes. On a release commit this

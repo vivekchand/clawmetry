@@ -70,6 +70,54 @@ def test_the_dispatch_happens_after_the_upload():
     )
 
 
+def test_the_dispatch_passes_the_published_version():
+    """Dispatching after the upload is NOT late enough on its own.
+
+    Measured 2026-09-08 on release 0.12.831: the post-upload dispatch fired
+    correctly and unaided at 04:19:08, and the run it started logged
+    ``Latest published OSS version: 0.12.830`` at 04:19:16 — eight minutes
+    after the release job began. PyPI's ``info.version`` metadata endpoint lags
+    the upload by minutes, so auto-deploy re-derived the PREVIOUS release, the
+    no-downgrade guard skipped, and the cloud stayed a version behind: the exact
+    symptom the dispatch was added to cure.
+
+    Ordering fixed *which run* pins; only passing the version fixes *what it
+    pins*. The publisher knows the version it produced, so it passes it and
+    nothing re-derives it.
+    """
+    tail = RELEASE_SRC[RELEASE_SRC.index("gh workflow run auto-deploy-cloud.yml"):][:700]
+    assert "-f version=" in tail, (
+        "the dispatch must pass the published version explicitly; without it "
+        "auto-deploy re-reads PyPI, whose metadata lags the upload, and pins "
+        "the previous release"
+    )
+    assert "steps.bump.outputs.new" in tail, (
+        "the version passed must be the one this job published, not a re-read"
+    )
+
+
+def test_the_deploy_prefers_the_passed_version_over_the_index():
+    assert "inputs:" in DEPLOY_SRC and "version:" in DEPLOY_SRC, (
+        "auto-deploy-cloud.yml must accept an explicit version input"
+    )
+    head = DEPLOY_SRC[:DEPLOY_SRC.index("Wait for version on PyPI")]
+    passed = head.index("inputs.version")
+    reread = head.index("pypi.org/pypi/clawmetry/json")
+    assert passed < reread, (
+        "the explicit input must be preferred; the PyPI read is the fallback "
+        "for manual and push-triggered runs only"
+    )
+
+
+def test_the_installability_wait_survives():
+    """Passing the version answers WHICH; the wait still answers WHETHER."""
+    assert "pip download" in DEPLOY_SRC, (
+        "the pip-installability wait must remain: knowing the target version "
+        "is a different question from the wheel being resolvable yet, and the "
+        "cloud pin PR's own CI installs it"
+    )
+
+
 def test_the_dispatch_cannot_fail_the_release():
     tail = RELEASE_SRC[RELEASE_SRC.index("gh workflow run auto-deploy-cloud.yml"):][:400]
     assert "|| echo" in tail, (
