@@ -243,8 +243,12 @@ def _ls_call(method_name, **kwargs):
         out = getattr(store, method_name)(**kwargs)
     except Exception:
         return None
-    # A direct open that answers proves the store was readable here; drop
-    # any unreachability the proxy hop recorded (#5534).
+    # A direct open that ANSWERS proves the store was readable here; drop
+    # any unreachability the proxy hop recorded (#5534). ``None`` is not an
+    # answer — ``_ls_get_store()`` returns a _ProxyStore back onto the same
+    # daemon under a standard install.
+    if out is None:
+        return None
     try:
         from routes.local_query import note_store_read_ok
         note_store_read_ok()

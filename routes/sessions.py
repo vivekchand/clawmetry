@@ -76,10 +76,15 @@ def _ls_call(method_name, **kwargs):
         out = getattr(store, method_name)(**kwargs)
     except Exception:
         return None
-    # The direct open answered, so whatever the proxy did, the store WAS
+    # The direct open ANSWERED, so whatever the proxy did, the store was
     # readable from this process — clear any unreachability the proxy hop
     # recorded so this request doesn't warn about data it actually has
-    # (#5534).
+    # (#5534). ``None`` is not an answer: under a standard install
+    # ``get_store()`` hands back a _ProxyStore that forwards to the SAME
+    # daemon, so a dead daemon reaches here as a silent None and must not
+    # clear the flag it just raised.
+    if out is None:
+        return None
     try:
         from routes.local_query import note_store_read_ok
         note_store_read_ok()
