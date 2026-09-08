@@ -11336,7 +11336,11 @@ var _CM_SECURITY_CLOUD_HIDDEN = [
   'security-findings-panel',
   'policy-events-panel',
   'credential-scan-panel',
-  'security-catalog-panel'
+  'security-catalog-panel',
+  // API keys live in ~/.clawmetry on the machine the agent runs on. The
+  // cloud container has no such file, so the panel would list nothing
+  // under a "New key" button that could not mint one.
+  'apikeys-panel'
 ];
 
 function _cmSecurityCloudTrim() {
@@ -11347,6 +11351,219 @@ function _cmSecurityCloudTrim() {
   });
   var note = document.getElementById('security-cloud-note');
   if (note) note.style.display = '';
+}
+
+// ── API keys: build your own UI (docs/BUILD_YOUR_OWN_UI.md) ──────────────
+//
+// A key here is read-only and scoped. The panel's job is to make the two
+// things that keep it safe impossible to skip past: you must say WHICH
+// site may use the key, and reading the turns themselves (read:content)
+// has to be ticked on purpose.
+
+var _cmApiKeyScopes = [];
+
+function _cmApiKeysEl(id) { return document.getElementById(id); }
+
+async function loadApiKeys() {
+  if (window.CLOUD_MODE) return;
+  var list = _cmApiKeysEl('apikeys-list');
+  if (!list) return;
+  var data;
+  try {
+    data = await fetchJsonWithTimeout('/api/apikeys', 10000);
+  } catch (e) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);">'
+      + 'ClawMetry could not read its key file just now. Reload the page to try again.'
+      + '</div>';
+    return;
+  }
+  if (!data || data.ok === false) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);">'
+      + escapeHtmlSafe((data && data.error) || 'ClawMetry could not read its key file.')
+      + '</div>';
+    return;
+  }
+  _cmApiKeyScopes = data.scopes || [];
+  _cmRenderApiKeyScopeChoices();
+  var keys = (data.keys || []).filter(function(k) { return !k.revoked_at; });
+  if (!keys.length) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--text-muted);line-height:1.6;">'
+      + 'No keys yet. A key lets you build your own view of this data: a cost '
+      + 'chart on a wall screen, a status page for your team, a panel inside a '
+      + 'tool you already use. Press <strong>New key</strong>, then point a '
+      + 'coding agent at the generated API guide.'
+      + '</div>';
+    return;
+  }
+  list.innerHTML = keys.map(_cmRenderApiKeyRow).join('');
+}
+
+function _cmRenderApiKeyRow(k) {
+  var scopes = (k.scopes || []).map(function(s) {
+    var sensitive = (s === 'read:content');
+    return '<span style="font-size:10px;padding:2px 7px;border-radius:10px;'
+      + 'background:' + (sensitive ? 'rgba(245,158,11,0.15)' : 'var(--bg-primary)') + ';'
+      + 'color:' + (sensitive ? '#fbbf24' : 'var(--text-muted)') + ';'
+      + 'border:1px solid var(--border);">' + escapeHtmlSafe(s) + '</span>';
+  }).join(' ');
+  var origins = (k.origins || []).length
+    ? (k.origins || []).map(escapeHtmlSafe).join(', ')
+    : 'Not used from a web page';
+  var used = k.last_used_at
+    ? ('Last used ' + _cmApiKeyAgo(k.last_used_at) + ' · ' + (k.use_count || 0) + ' requests')
+    : 'Never used';
+  return '<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 12px;'
+    + 'border:1px solid var(--border);border-radius:8px;background:var(--bg-primary);">'
+    + '<div style="flex:1;min-width:0;">'
+    +   '<div style="font-size:12px;font-weight:700;color:var(--text-primary);">'
+    +     escapeHtmlSafe(k.name || '(unnamed)')
+    +     '<span style="font-weight:400;color:var(--text-muted);font-size:11px;"> · ' + escapeHtmlSafe(k.id || '') + '</span>'
+    +   '</div>'
+    +   '<div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap;">' + scopes + '</div>'
+    +   '<div style="font-size:11px;color:var(--text-muted);margin-top:5px;">' + origins + '</div>'
+    +   '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + escapeHtmlSafe(used) + '</div>'
+    + '</div>'
+    + '<button class="refresh-btn" onclick="revokeApiKey(\'' + escapeHtmlSafe(k.id || '') + '\')">Revoke</button>'
+    + '</div>';
+}
+
+function _cmApiKeyAgo(ts) {
+  var delta = Math.floor(Date.now() / 1000) - Number(ts || 0);
+  if (delta < 60) return 'just now';
+  if (delta < 3600) return Math.floor(delta / 60) + 'm ago';
+  if (delta < 86400) return Math.floor(delta / 3600) + 'h ago';
+  return Math.floor(delta / 86400) + 'd ago';
+}
+
+function _cmRenderApiKeyScopeChoices() {
+  var box = _cmApiKeysEl('apikey-scopes');
+  if (!box) return;
+  box.innerHTML = (_cmApiKeyScopes || []).map(function(s, i) {
+    var warn = s.sensitive
+      ? '<div style="font-size:10px;color:#fbbf24;margin-top:2px;">Keep this one server-side. Do not ship it in a page.</div>'
+      : '';
+    return '<label style="display:flex;gap:8px;align-items:flex-start;padding:7px 9px;'
+      + 'border:1px solid var(--border);border-radius:6px;background:var(--bg-primary);cursor:pointer;">'
+      + '<input type="checkbox" class="apikey-scope-box" value="' + escapeHtmlSafe(s.scope) + '"'
+      +   (i === 0 ? ' checked' : '') + ' style="margin-top:2px;" />'
+      + '<span style="flex:1;min-width:0;">'
+      +   '<span style="font-size:12px;color:var(--text-primary);font-weight:600;">' + escapeHtmlSafe(s.scope) + '</span>'
+      +   '<div style="font-size:11px;color:var(--text-muted);margin-top:1px;">' + escapeHtmlSafe(s.doc) + '</div>'
+      +   warn
+      + '</span></label>';
+  }).join('');
+}
+
+function toggleApiKeyForm(show) {
+  var form = _cmApiKeysEl('apikeys-form');
+  if (!form) return;
+  var open = (show === undefined) ? form.hidden : !!show;
+  form.hidden = !open;
+  if (open) {
+    _cmRenderApiKeyScopeChoices();
+    var err = _cmApiKeysEl('apikey-form-error');
+    if (err) err.textContent = '';
+    var name = _cmApiKeysEl('apikey-name');
+    if (name) name.focus();
+  }
+}
+
+function onApiKeyBrowserToggle() {
+  var box = _cmApiKeysEl('apikey-nobrowser');
+  var origins = _cmApiKeysEl('apikey-origins');
+  if (!box || !origins) return;
+  origins.disabled = box.checked;
+  origins.placeholder = box.checked
+    ? 'Not needed: this key is not used from a web page'
+    : 'http://localhost:3000';
+}
+
+async function createApiKey() {
+  var err = _cmApiKeysEl('apikey-form-error');
+  if (err) err.textContent = '';
+  var name = (_cmApiKeysEl('apikey-name') || {}).value || '';
+  var originsRaw = (_cmApiKeysEl('apikey-origins') || {}).value || '';
+  var noBrowser = !!((_cmApiKeysEl('apikey-nobrowser') || {}).checked);
+  var scopes = Array.prototype.slice
+    .call(document.querySelectorAll('.apikey-scope-box'))
+    .filter(function(b) { return b.checked; })
+    .map(function(b) { return b.value; });
+  var body = {
+    name: name.trim(),
+    scopes: scopes,
+    browser: !noBrowser,
+    origins: originsRaw.split(/[\s,]+/).filter(Boolean)
+  };
+  var res, data;
+  try {
+    res = await fetch('/api/apikeys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    data = await res.json();
+  } catch (e) {
+    if (err) err.textContent = 'ClawMetry did not answer. Is the dashboard still running?';
+    return;
+  }
+  if (!data || data.ok === false) {
+    if (err) err.textContent = (data && data.error) || 'The key could not be created.';
+    return;
+  }
+  toggleApiKeyForm(false);
+  _cmShowApiKeySecret(data.key, data.record || {});
+  loadApiKeys();
+}
+
+function _cmShowApiKeySecret(key, record) {
+  var box = _cmApiKeysEl('apikey-reveal');
+  var val = _cmApiKeysEl('apikey-reveal-value');
+  var next = _cmApiKeysEl('apikey-reveal-next');
+  if (!box || !val) return;
+  val.textContent = key;
+  if (next) {
+    var base = window.location.origin;
+    next.innerHTML = 'Try it, then hand the same URL to a coding agent:<br>'
+      + '<code style="font-size:11px;">curl -H "Authorization: Bearer &lt;key&gt;" '
+      + escapeHtmlSafe(base) + '/api/q/1/llms.txt</code>';
+  }
+  box.hidden = false;
+}
+
+function copyApiKey() {
+  var val = _cmApiKeysEl('apikey-reveal-value');
+  if (!val) return;
+  var text = val.textContent || '';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text);
+  } else {
+    // Older / non-secure contexts: select it so ctrl-C works.
+    var r = document.createRange();
+    r.selectNodeContents(val);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+}
+
+function dismissApiKeyReveal() {
+  var box = _cmApiKeysEl('apikey-reveal');
+  var val = _cmApiKeysEl('apikey-reveal-value');
+  if (val) val.textContent = '';
+  if (box) box.hidden = true;
+}
+
+async function revokeApiKey(id) {
+  if (!id) return;
+  var ok = window.confirm(
+    'Revoke this key?\n\nAnything using it stops working on its next request. '
+    + 'This cannot be undone; you would have to create a new key.'
+  );
+  if (!ok) return;
+  try {
+    await fetch('/api/apikeys/' + encodeURIComponent(id), { method: 'DELETE' });
+  } catch (e) { /* the reload below tells the truth either way */ }
+  loadApiKeys();
 }
 
 async function loadSecurityPosture() {
@@ -11445,6 +11662,7 @@ async function loadSecurityPosture() {
 }
 
 async function loadSecurityPage(silent) {
+  loadApiKeys();
   if (window.CLOUD_MODE) {
     // Threat/policy/credential scans read this machine's event history, which
     // the cloud container does not have. Their panels go; integrity and the
