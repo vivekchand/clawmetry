@@ -284,6 +284,43 @@ def _file_issue(case: dict, result: dict, fp: str, dry: bool) -> None:
             print(f"    [error] could not file issue: {e2}")
 
 
+_VERDICT_ICON = {
+    "PASS": "ok",
+    "MISS": "MISS",
+    "FALSE-POSITIVE": "FALSE POSITIVE",
+    "UNDER-SEVERITY": "UNDER SEVERITY",
+    "UNSAFE-CORPUS": "UNSAFE CORPUS",
+}
+
+
+def _write_summary(path: str, results: list, misses: list, bad_controls: list) -> None:
+    """Append a markdown verdict table (one row per case) to ``path``.
+
+    Written for ``$GITHUB_STEP_SUMMARY`` so a scheduled run is readable from the
+    Actions tab without opening the log: every case, what fired, and the verdict.
+    A summary nobody can read is the same as no audit.
+    """
+    lines = ["## Red-team detection audit", ""]
+    ok = len(results) - len(misses) - len(bad_controls)
+    lines.append(f"**{ok}/{len(results)} pass** - "
+                 f"{len(misses)} gap(s), {len(bad_controls)} control failure(s)")
+    lines.append("")
+    lines.append("| Case | Surface | Verdict | Detectors that fired | Detail |")
+    lines.append("|---|---|---|---|---|")
+    for r in results:
+        name = r["id"] + (" (control)" if r.get("control") else "")
+        fired = ", ".join(f"`{d}`" for d in (r.get("fired") or [])) or "none"
+        detail = str(r.get("detail", "")).replace("|", "\\|")
+        lines.append(f"| {name} | {r.get('surface', '?')} | "
+                     f"{_VERDICT_ICON.get(r['verdict'], r['verdict'])} | {fired} | {detail} |")
+    lines.append("")
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as e:  # a summary is a nicety; never fail the audit over it
+        print(f"[warn] could not write summary to {path}: {e}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--case", help="run a single corpus case by id")
@@ -292,6 +329,9 @@ def main() -> int:
                     help=f"open a sec-gap issue per MISS in {ISSUE_REPO}")
     ap.add_argument("--strict", action="store_true",
                     help="exit non-zero on any MISS (default: only on control failure)")
+    ap.add_argument("--summary",
+                    help="append a markdown verdict table to this path "
+                         "(point it at $GITHUB_STEP_SUMMARY in CI)")
     args = ap.parse_args()
 
     cases = _load_corpus(args.case)
@@ -327,6 +367,9 @@ def main() -> int:
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         print(f"\nReport written to {args.json}")
+
+    if args.summary:
+        _write_summary(args.summary, results, misses, bad_controls)
 
     if misses:
         print(f"\nGaps ({len(misses)}):")

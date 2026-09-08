@@ -33,9 +33,9 @@ REPO = Path(__file__).resolve().parent.parent
 APP_JS = (REPO / "clawmetry" / "static" / "js" / "app.js").read_text(encoding="utf-8")
 DASHBOARD = (REPO / "dashboard.py").read_text(encoding="utf-8")
 
-# dashboard.py defines DASHBOARD_HTML twice; the SECOND one wins and is what
-# actually serves. The first is dead (see the dead-blob row in the cleanup
-# ledger), so a nav entry found only there would be a false pass.
+# The LAST DASHBOARD_HTML assignment is what serves. There used to be a dead
+# first one whose nav entries rendered for nobody; it was deleted 2026-09-08.
+# `rindex` keeps this correct either way.
 _LIVE_HTML = DASHBOARD[DASHBOARD.rindex('DASHBOARD_HTML = r"""'):]
 
 
