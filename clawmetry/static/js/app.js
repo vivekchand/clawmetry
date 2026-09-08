@@ -1,4 +1,96 @@
 // ─────────────────────────────────────────────────────────────────────────
+// "Can't reach the collector" — the banner that stops an empty tab lying.
+//
+// Issue #5534: when a read through the daemon query proxy times out, the
+// handler gets ``None`` and the tab renders EMPTY — "no sessions have a
+// transcript yet" under a header counting 61 of them, ``0 models`` over a
+// store holding thousands. A spinner says wait and an error says something
+// is wrong, but an empty state is a positive claim about the user's own
+// work. When the truth is "I could not read it", that claim is false and is
+// indistinguishable from data loss to the person reading it.
+//
+// The server now says so: any ``/api/*`` response from a request whose store
+// read was unreachable carries ``X-CM-Store-Available: false`` (and, on JSON
+// objects, ``store_available: false``). Reading the HEADER is deliberate —
+// inspecting bodies would mean cloning and re-parsing every API response,
+// including the multi-MB event scans, which is exactly the request-cost
+// regression FLYWHEEL forbids. One header read, no body touched.
+//
+// Self-healing: the next healthy ``/api/*`` response clears it, so a
+// transient contended read shows the banner for one poll and then goes away
+// on its own.
+// ─────────────────────────────────────────────────────────────────────────
+(function initStoreReachabilityBanner() {
+  if (window._cmStoreBannerInstalled) return;
+  window._cmStoreBannerInstalled = true;
+  window._cmStoreUnreachable = false;
+
+  function _banner() { return document.getElementById('store-unreachable-banner'); }
+
+  function _paint() {
+    var el = _banner();
+    if (!el) return;
+    el.style.display = window._cmStoreUnreachable ? 'flex' : 'none';
+  }
+
+  window.cmStoreUnreachable = function () { return !!window._cmStoreUnreachable; };
+
+  // The sentence a tab shows INSTEAD of its empty state. Never "you have no
+  // data" when we could not look.
+  window.cmStoreUnreachableHtml = function (extraStyle) {
+    var msg = (typeof t === 'function')
+      ? t('common.store_unreachable_panel', null,
+           "Can't reach the collector on this machine, so this list can't be read right now. Nothing has been lost \u2014 it reappears as soon as the connection is back.")
+      : "Can't reach the collector on this machine, so this list can't be read right now. Nothing has been lost \u2014 it reappears as soon as the connection is back.";
+    var esc = (typeof escHtml === 'function') ? escHtml : function (x) { return String(x); };
+    return '<div style="padding:16px;color:#fbbf24;' + (extraStyle || '') + '">' + esc(msg)
+      + ' <button type="button" onclick="cmRetryStoreRead()" style="background:transparent;color:#fbbf24;border:1px solid #fbbf24;border-radius:6px;padding:2px 10px;font-size:12px;cursor:pointer;margin-left:6px;">'
+      + esc((typeof t === 'function') ? t('common.retry', null, 'Retry') : 'Retry') + '</button></div>';
+  };
+
+  // The retry affordance. Re-runs the tab the user is actually looking at
+  // when the dashboard exposes a reloader for it; a full reload otherwise.
+  window.cmRetryStoreRead = function () {
+    window._cmStoreUnreachable = false;
+    _paint();
+    try {
+      if (typeof window.reloadActiveTab === 'function') { window.reloadActiveTab(); return; }
+    } catch (e) {}
+    try { location.reload(); } catch (e) {}
+  };
+
+  function _note(unreachable) {
+    if (window._cmStoreUnreachable === unreachable) return;
+    window._cmStoreUnreachable = unreachable;
+    _paint();
+  }
+
+  var _origFetch = (typeof window.fetch === 'function') ? window.fetch.bind(window) : null;
+  if (!_origFetch) return;
+  window.fetch = function (input, init) {
+    return _origFetch(input, init).then(function (res) {
+      try {
+        var url = '';
+        if (typeof input === 'string') url = input;
+        else if (input && input.url) url = input.url;
+        if (res && res.headers && /(^|\/)(api|v1)\//.test(url)) {
+          var flag = res.headers.get('X-CM-Store-Available');
+          if (flag === 'false') _note(true);
+          else if (res.ok) _note(false);
+        }
+      } catch (e) {}
+      return res;
+    });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _paint);
+  } else {
+    _paint();
+  }
+})();
+
+// ─────────────────────────────────────────────────────────────────────────
 // Trial-end hard-block overlay.
 //
 // Fires when ``/api/trial/status`` returns ``hard_blocked: true`` (the daemon
@@ -10188,6 +10280,15 @@ async function loadBrainPage(silent) {
       _renderBrainHistoryCap(false);
       return;
     }
+    // #5534: an unreadable store answers with the same {events: []} a quiet
+    // machine does. Say which one this is rather than draw an empty stream
+    // over a store full of activity.
+    if (data && data.store_available === false) {
+      var _bhUnEl = document.getElementById('brain-stream');
+      if (_bhUnEl) _bhUnEl.innerHTML = cmStoreUnreachableHtml('margin:12px;');
+      _renderBrainHistoryCap(false);
+      return;
+    }
     var events = (data.events || []).slice().sort(function(a,b){
       var ta = a.time ? new Date(a.time).getTime() : 0;
       var tb = b.time ? new Date(b.time).getTime() : 0;
@@ -10463,7 +10564,8 @@ var LOOP_KIND_LABEL = {
   // Not the agent's behaviour: what was in the folder it was pointed at.
   // Mirrors clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'This folder is set up to run a program',
-  agent_config_tamper: 'An agent hook config in this folder was changed'
+  agent_config_tamper: 'An agent hook config in this folder was changed',
+  package_manifest_exec: 'Installing this folder\'s dependencies runs its own code'
 };
 
 // What ignoring this is estimated to cost. Blank when we do not know, because
@@ -18241,7 +18343,7 @@ async function loadUsage() {
     } else {
       otelExtra.style.display = 'none';
     }
-    renderPluginPieChart(byPlugin.plugins || []);
+    renderPluginPieChart(byPlugin.plugins || [], byPlugin.store_available === false);
     // Load session cost breakdown
     fetch('/api/sessions/cost-breakdown').then(r => r.json()).then(function(cbd) {
       window._sessionCostData = cbd.top10 || [];
@@ -18972,7 +19074,7 @@ function renderSessionCostChart() {
   }
 }
 
-function renderPluginPieChart(rows) {
+function renderPluginPieChart(rows, storeUnreachable) {
   var canvas = document.getElementById('usage-plugin-pie');
   var legend = document.getElementById('usage-plugin-legend');
   if (!canvas || !legend) return;
@@ -18981,7 +19083,11 @@ function renderPluginPieChart(rows) {
   if (!data.length) {
     var ctxEmpty = canvas.getContext('2d');
     ctxEmpty.clearRect(0, 0, canvas.width, canvas.height);
-    legend.innerHTML = '<div style="color:var(--text-muted);">' + t("app.no_plugin_tool_call_attribution_detected_yet", null, "No plugin tool-call attribution detected yet.") + '</div>';
+    // #5534: "no attribution detected yet" is a finding. An unreachable
+    // store produced no finding at all.
+    legend.innerHTML = storeUnreachable
+      ? cmStoreUnreachableHtml('padding:0;')
+      : '<div style="color:var(--text-muted);">' + t("app.no_plugin_tool_call_attribution_detected_yet", null, "No plugin tool-call attribution detected yet.") + '</div>';
     return;
   }
 
@@ -19111,6 +19217,21 @@ async function loadModelAttribution() {
     var _maRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
     var _maQ = (_maRt && _maRt !== 'all') ? ('?runtime=' + encodeURIComponent(_maRt)) : '';
     var data = await fetch('/api/model-attribution' + _maQ).then(function(r) { return r.json(); });
+    // #5534: a store we could not read answers with the same {models: []} an
+    // idle machine does. Rendering "0 models / 0 turns / --" over a store
+    // holding thousands of turns is a wrong answer dressed as a fact, so say
+    // which of the two this is and change no number.
+    if (data && data.store_available === false) {
+      ['model-primary', 'model-primary-pct', 'model-count', 'model-total-turns',
+       'model-fallback-rate', 'model-fallback-detail'].forEach(function(id) {
+        document.querySelectorAll('#' + id).forEach(function(el) { el.textContent = '\u2014'; });
+      });
+      var _maChart = document.getElementById('model-mix-chart');
+      if (_maChart) _maChart.innerHTML = cmStoreUnreachableHtml();
+      var _maTbl = document.getElementById('model-sessions-table');
+      if (_maTbl) _maTbl.innerHTML = '';
+      return;
+    }
     var models = data.models || [];
     var switches = data.switches || [];
     var totalTurns = data.total_turns || 0;
@@ -19560,7 +19681,11 @@ async function loadTranscripts() {
     if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
     var plumbBtn = document.getElementById('transcript-plumbing-btn');
     if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
-    var emptyMsg = _txWinEmpty
+    var emptyMsg = (data && data.store_available === false)
+      // #5534: the store could not be read, so "no transcripts" would be a
+      // claim about the user's sessions we have no standing to make.
+      ? cmStoreUnreachableHtml()
+      : _txWinEmpty
       ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this window. Try a wider window — or note that only recently synced sessions are listed here.') + '</div>'
       : _rtNoTx
       ? _cmRuntimeEmptyMsg(_rtFilter)
@@ -25087,6 +25212,11 @@ async function loadOverviewTasks() {
     // than claiming the machine is idle — other runtimes may be flat out.
     var _rtName = (_atRt === 'all') ? '' : _cmRuntimeLabel(_atRt);
     function _emptyState() {
+      // #5534: "The AI is idle." is a claim about the user's agents. When the
+      // store could not be read we have no standing to make it — an
+      // unreachable collector answers with the same empty list an idle
+      // machine does.
+      if (data && data.store_available === false) return cmStoreUnreachableHtml('text-align:center;padding:40px 20px;');
       var head = _rtName ? ('No active tasks for ' + escHtml(_rtName)) : 'No active tasks';
       var sub  = _hiddenOther > 0
         ? (_hiddenOther + ' task' + (_hiddenOther === 1 ? '' : 's') + ' on other runtimes — switch runtime to see them.')
@@ -30793,12 +30923,14 @@ var GUARD_KIND_LABEL = {
   // policy form makes you name them rather than folding them into "any
   // signal". Keys mirror clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'Repo config runs a program',
-  agent_config_tamper: 'Agent hook config changed'
+  agent_config_tamper: 'Agent hook config changed',
+  package_manifest_exec: 'Installing deps runs its code'
 };
 
 // The workspace half of GUARD_KIND_LABEL, so a renderer can tell the two
 // questions apart without hard-coding kind strings a second time.
-var GUARD_WORKSPACE_KINDS = ['repo_config_exec', 'agent_config_tamper'];
+var GUARD_WORKSPACE_KINDS = ['repo_config_exec', 'agent_config_tamper',
+                             'package_manifest_exec'];
 
 // The policy form's condition list, built from GUARD_KIND_LABEL rather than
 // re-typed. A hand-kept second copy is how a new kind ends up renderable but
