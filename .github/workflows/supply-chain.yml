@@ -182,8 +182,8 @@ jobs:
     # token and secrets, and its output is packaged into the wheel PyPI
     # serves. Both private repos in this family (clawmetry-cloud,
     # clawmetry-pro) have run zizmor on every PR for weeks; this repo, with
-    # the most workflows of the three and the only public attack surface,
-    # was the one running no Actions-security scanner at all. Scorecard's
+    # the most workflow definitions of the three and the only public attack
+    # surface, was the one running no Actions-security scanner. Scorecard's
     # `Dangerous-Workflow` and `Token-Permissions` probes below cover part
     # of the same ground, but they run only on push (`if:` above) and score
     # the repository rather than naming the file and line.
@@ -196,7 +196,7 @@ jobs:
           python-version: "3.11"
       - run: python3 -m pip install --quiet zizmor
 
-      - name: Audit every workflow and composite action
+      - name: Audit every workflow definition
         env:
           # zizmor resolves action tags through the GitHub API. Unauthenticated,
           # those calls share the runner's IP rate limit and fail intermittently
@@ -206,19 +206,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p audit
-          # A composite action under .github/actions/ is not a bystander: its
-          # steps run inline in the calling job, with that job's token and
-          # secrets, so it carries the same rule families as a workflow.
-          # Named individually rather than by directory — pointing zizmor at a
-          # directory hands it every YAML inside, and a non-action YAML landing
-          # there later would abort the audit rather than be skipped.
+          # Workflow definitions only, which is the scope the SecurityAuditScanner
+          # component describes.
+          #
+          # The composite action under .github/actions/ is a real gap and is NOT
+          # covered here: its steps run inline in the calling job, with that job's
+          # token and secrets, so it carries the same rule families a workflow
+          # does, and nothing scans it today. Widening this input set to include
+          # it is a one-line change, but it is a scope the blueprint does not
+          # describe, so it needs the product record first rather than arriving
+          # as a side effect of turning the scanner on. Tracked as follow-up.
           inputs=".github/workflows"
-          if [ -d .github/actions ]; then
-            while IFS= read -r a; do
-              inputs="$inputs $a"
-            done < <(find .github/actions -type f \
-              \( -name 'action.yml' -o -name 'action.yaml' \) | sort)
-          fi
           # Record the file set the scanner was handed. A finding list is
           # identical whether it audited thirty-seven files or none, so
           # coverage is the one thing the JSON cannot tell you afterwards.
