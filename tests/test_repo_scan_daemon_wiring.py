@@ -8,8 +8,9 @@ path. This file pins the four properties that wiring has to keep:
 * a poisoned repo produces a ``repo_config_exec`` loop_signals row,
 * the scan is cached on the mtime of exactly the files it reads (a 50-repo
   fleet must not re-read them every tick) and re-runs the moment one changes,
-* workspace findings do NOT reach the policy pass (a ``trigger_kind: ""``
-  policy would otherwise pause a session over a property of its folder),
+* workspace findings reach the policy pass, so a policy that names the kind
+  can act on them (the catch-all exclusion is pinned in
+  ``tests/test_guard_workspace_kinds.py``),
 * the cwd comes from the ``sessions.cwd`` COLUMN, which is where every
   cwd-aware consumer already keys.
 """
@@ -40,15 +41,33 @@ def _poisoned_repo(tmp_path, name="repo"):
 
 
 # ── the cwd the scan keys on ────────────────────────────────────────────────
-def test_session_cwd_prefers_the_column_over_metadata():
+def test_session_row_cwd_prefers_the_column_over_metadata():
     """Regression: reading only ``metadata`` hid the column every cwd-aware
     consumer already uses, so cursor/goose/opencode/pi/qwen_code sessions all
-    looked like they had no workspace."""
-    assert _sync._session_cwd({"cwd": "/tmp/a", "metadata": {"cwd": "/tmp/b"}}) == "/tmp/a"
-    assert _sync._session_cwd({"cwd": None, "metadata": {"cwd": "/tmp/b"}}) == "/tmp/b"
-    assert _sync._session_cwd({"cwd": "  ", "metadata": {"project_dir": "/tmp/c"}}) == "/tmp/c"
-    assert _sync._session_cwd({"metadata": {}}) == ""
-    assert _sync._session_cwd(None) == ""
+    looked like they had no workspace.
+
+    Named ``_session_row_cwd`` because ``_session_cwd`` was already taken by
+    the alias-based reader for raw adapter dicts; sharing the name silently
+    replaced that one for all three of its callers.
+    """
+    assert _sync._session_row_cwd({"cwd": "/tmp/a", "metadata": {"cwd": "/tmp/b"}}) == "/tmp/a"
+    assert _sync._session_row_cwd({"cwd": None, "metadata": {"cwd": "/tmp/b"}}) == "/tmp/b"
+    assert _sync._session_row_cwd({"cwd": "  ", "metadata": {"project_dir": "/tmp/c"}}) == "/tmp/c"
+    assert _sync._session_row_cwd({"metadata": {}}) == ""
+    assert _sync._session_row_cwd(None) == ""
+    # The metadata fallback goes through the SAME twelve-alias set the raw
+    # reader uses, so a runtime that spells it `workingDir` or `directory` is
+    # found. Reading two keys is what the shadowing accident reduced it to.
+    assert _sync._session_row_cwd({"metadata": {"workingDir": "/tmp/d"}}) == "/tmp/d"
+    assert _sync._session_row_cwd({"metadata": {"directory": "/tmp/e"}}) == "/tmp/e"
+
+
+def test_the_alias_reader_still_answers_for_raw_dicts():
+    """``_session_cwd`` is the OTHER helper: a raw adapter/gateway dict read by
+    alias. Its three callers are why the shadowing mattered."""
+    assert _sync._session_cwd({"workingDir": "/tmp/w"}) == "/tmp/w"
+    assert _sync._session_cwd({"directory": "/tmp/d"}) == "/tmp/d"
+    assert _sync._session_cwd({"folder": "/tmp/f"}) == "/tmp/f"
 
 
 def test_detector_facts_carry_the_column_cwd():
@@ -199,17 +218,20 @@ def test_emit_writes_a_loop_signal_for_a_poisoned_workspace(tmp_path, _quiet,
     assert sig["details"]["spend_basis"] == "unknown"
 
 
-def test_workspace_findings_never_reach_the_policy_pass(tmp_path, _quiet,
-                                                        monkeypatch):
-    """A policy with ``trigger_kind: ""`` matches any kind. Until the policy
-    form can express these two kinds (clawmetry-pro#223), a poisoned folder
-    must not be able to pause the session that opened it."""
+def test_workspace_findings_reach_the_policy_pass(tmp_path, _quiet,
+                                                 monkeypatch):
+    """They are handed to the pass so a policy that NAMES the kind can act.
+    The safety property lives in ``policy_engine`` instead, where an empty
+    ``trigger_kind`` excludes them: see
+    ``tests/test_guard_workspace_kinds.py``, which pins that a catch-all rule
+    cannot fire on a poisoned checkout."""
     seen = []
     monkeypatch.setattr(_sync, "_apply_guard_policies",
-                        lambda store, state, incs, facts: seen.append(list(incs)))
+                        lambda store, state, incs, facts: seen.append(
+                            [i["kind"] for i in incs]))
     store = _EmitStore(_poisoned_repo(tmp_path))
     _sync._emit_detector_incidents(store, {})
-    assert seen == [], f"workspace findings reached the policy pass: {seen}"
+    assert seen == [["repo_config_exec"]]
 
 
 def test_a_clean_workspace_emits_nothing(tmp_path, _quiet, monkeypatch):
