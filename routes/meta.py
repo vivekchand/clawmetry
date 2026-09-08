@@ -1352,6 +1352,43 @@ def otlp_logs():
     return _otlp_receive("logs", _d._process_otlp_logs)
 
 
+@bp_otel.route("/api/setup-prompt")
+def api_setup_prompt():
+    """The copy-paste prompt for pointing an off-box agent at this
+    ClawMetry (#5681).
+
+    Rendered from ``clawmetry.ingest_contract`` so it cannot drift from
+    what the server actually accepts -- a setup prompt that names a
+    header we do not take is worse than no prompt, because the agent
+    writes it confidently and the failure is invisible.
+
+    The prompt carries a placeholder, never a key. Secrets are stored
+    only as a SHA-256, so a real one could not be substituted here even
+    if that were desirable -- and it is not: an endpoint that hands back
+    a working key is a way to read one out. The prompt tells the agent
+    the placeholder is a placeholder and to ask for the real key rather
+    than invent one, which is the failure mode worth designing against.
+    """
+    from clawmetry import setup_prompt as _sp
+
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime and not _sp.VALID_RUNTIME.match(runtime):
+        return jsonify({
+            "error": "bad_runtime",
+            "message": "runtime must be a short name like claude_code or "
+                       "my-engine: lower-case letters, digits, underscore "
+                       "and dash, 40 characters at most.",
+        }), 400
+
+    endpoint = request.host_url.rstrip("/")
+    text = _sp.render(runtime, endpoint=endpoint)
+    return jsonify({
+        "runtime": runtime,
+        "endpoint": endpoint,
+        "prompt": text,
+    })
+
+
 @bp_otel.route("/api/otel-status")
 def api_otel_status():
     """Return OTLP receiver + exporter status."""

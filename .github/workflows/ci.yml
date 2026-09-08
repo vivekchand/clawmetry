@@ -549,6 +549,7 @@ jobs:
             tests/test_public_api_keys.py \
             tests/test_ingest_key.py \
             tests/test_ingest_contract_drift.py \
+            tests/test_setup_prompt.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
             tests/test_duckdb_invalidated_recovery.py \

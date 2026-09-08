@@ -4926,6 +4926,44 @@ def _cmd_key(args) -> None:
     raise SystemExit(1)
 
 
+def _cmd_setup_prompt(args) -> None:
+    """`clawmetry setup-prompt [runtime]` -- the prompt you hand your agent.
+
+    ClawMetry detects agents on this machine with no configuration. This
+    is for the other case: an agent in CI, a container, a serverless
+    function or on someone else's laptop, which has to push instead.
+
+    The text is generated from the ingest contract, so it cannot tell an
+    agent to send a header the server does not read -- which is the
+    failure worth designing against, because an agent writes a wrong
+    header confidently and the request fails where nobody is looking.
+    """
+    from clawmetry import setup_prompt as _sp
+
+    runtime = (getattr(args, "runtime", "") or "").strip().lower()
+    if runtime and not _sp.VALID_RUNTIME.match(runtime):
+        print(
+            f"{runtime!r} is not a runtime name. Use a short name like "
+            "claude_code or my-engine: lower-case letters, digits, "
+            "underscore and dash, 40 characters at most."
+        )
+        raise SystemExit(1)
+
+    port = getattr(args, "port", None) or 8900
+    endpoint = (getattr(args, "endpoint", "") or f"http://localhost:{port}").rstrip("/")
+    print(_sp.render(runtime, endpoint=endpoint))
+    print("")
+    print("-" * 68)
+    print("Copy everything above into your coding agent.")
+    print("")
+    print("It needs a key. Create one, and paste it in place of the")
+    print("placeholder:")
+    print("")
+    print("    clawmetry key create --name ci --scope write:ingest")
+    print("")
+    print("Reference: docs/INGEST.md")
+
+
 def _cmd_reports(args) -> None:
     """Open the reports browser (refs #1005)."""
     import webbrowser
@@ -8372,6 +8410,20 @@ def main() -> None:
     )
 
     # reports — open the reports browser (refs #1005)
+    p_setup_prompt = sub.add_parser(
+        "setup-prompt",
+        help="Print the prompt that points an off-box agent at this ClawMetry",
+    )
+    p_setup_prompt.add_argument(
+        "runtime", nargs="?", default="",
+        help="Runtime being pointed here (claude_code, my-engine, ...)",
+    )
+    p_setup_prompt.add_argument(
+        "--endpoint", default="",
+        help="Where the agent should send data (default http://localhost:<port>)",
+    )
+    p_setup_prompt.add_argument("--port", type=int, default=8900)
+
     p_reports = sub.add_parser(
         "reports",
         help="Open the reports browser (renders ~/.clawmetry/reports/*.md + DuckDB SQL)",
@@ -9119,6 +9171,7 @@ def main() -> None:
         "reports",
         "eval",
         "key",
+        "setup-prompt",
         "mcp",
         "update",
         "uninstall",
@@ -9239,6 +9292,8 @@ def main() -> None:
             _cmd_mcp(args)
         elif args.cmd == "key":
             _cmd_key(args)
+        elif args.cmd == "setup-prompt":
+            _cmd_setup_prompt(args)
         elif args.cmd == "update":
             _cmd_update(args)
         elif args.cmd == "uninstall":

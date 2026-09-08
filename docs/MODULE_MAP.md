@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-234 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+235 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -62,7 +62,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/insights.py` | medium | `bp_insights` | `/api/insights`, `/insights` | Weekly Insights Digest endpoints. |
 | `routes/inventory.py` | medium | `bp_inventory` | `/api/inventory` | Agent Inventory tab API. |
 | `routes/local_query.py` | large | `bp_local_query` | `/__local_query__`, `/api/local` | coherent local query API over the DuckDB store. |
-| `routes/meta.py` | large | `bp_auth`, `bp_cloud_relay`, `bp_gateway`, `bp_otel`, `bp_otlp_traces`, `bp_version`, `bp_version_impact` | `/.well-known/security.txt`, `/api/anon-auth-fail-ping`, `/api/auth`, `/api/cloud`, `/api/export`, `/api/gw`, `/api/install-age`, `/api/otel`, `/api/otel-status`, `/api/update`, `/api/version`, `/api/version-impact`, `/auth`, `/v1/logs`, `/v1/metrics`, `/v1/traces` | Auth / gateway / OTLP / version / version-impact. |
+| `routes/meta.py` | large | `bp_auth`, `bp_cloud_relay`, `bp_gateway`, `bp_otel`, `bp_otlp_traces`, `bp_version`, `bp_version_impact` | `/.well-known/security.txt`, `/api/anon-auth-fail-ping`, `/api/auth`, `/api/cloud`, `/api/export`, `/api/gw`, `/api/install-age`, `/api/otel`, `/api/otel-status`, `/api/setup-prompt`, `/api/update`, `/api/version`, `/api/version-impact`, `/auth`, `/v1/logs`, `/v1/metrics`, `/v1/traces` | Auth / gateway / OTLP / version / version-impact. |
 | `routes/nemoclaw.py` | small | `bp_nemoclaw` | `/api/nemoclaw` | OSS stub after the impl moved to clawmetry-pro. |
 | `routes/onboarding.py` | medium | `bp_onboarding` | `/api/account`, `/api/onboarding` | the first-run onboarding gate state machine. |
 | `routes/org_analytics.py` | small | `bp_org_analytics` | `/api/org-analytics` | OSS stub after the impl lives in clawmetry-pro. |
@@ -230,6 +230,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/selfhosted.py` | small | clawmetry.selfhosted — ClawMetry Enterprise single-tenant server mode. |
 | `clawmetry/session_context.py` | medium | Inputs & context: what the agent was actually given, per session. |
 | `clawmetry/session_titles.py` | medium | ChatGPT-style session titles from the first real user prompt. |
+| `clawmetry/setup_prompt.py` | small | the copy-paste prompt you hand your agent. |
 | `clawmetry/siem.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
 | `clawmetry/signal_shifts.py` | medium | Signal shifts (WO-62): notice when a behaviour-signal rate moves, explain |
 | `clawmetry/span_reconstruct.py` | medium | Runtime-agnostic span reconstruction for family runtimes (Agent Graph WS-A). |
