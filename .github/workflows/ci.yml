@@ -371,6 +371,12 @@ jobs:
       - name: A release actually reaches the cloud
         run: python3 -m pytest tests/test_release_dispatches_cloud_deploy.py tests/test_release_canary_reachable.py -q
 
+      # `runtime` on a sub-agent record is the runtime's NAME. It used to hold
+      # a formatted duration, which made the generic client resolver read "12m"
+      # as a runtime name and file EVERY sub-agent under the openclaw default.
+      - name: A sub-agent's runtime field means a runtime
+        run: python3 -m pytest tests/test_subagent_runtime_field_means_runtime.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})

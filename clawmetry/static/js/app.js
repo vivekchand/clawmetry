@@ -6860,7 +6860,11 @@ async function loadSubAgents() {
         previewHtml += '<div class="subagent-item">';
         previewHtml += '<span style="font-size:10px;">' + icon + '</span>';
         previewHtml += '<span class="subagent-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(name) + '</span>';
-        previewHtml += '<span class="subagent-runtime">' + agent.runtime + '</span>';
+        // runtimeFormatted, not runtime: this slot shows how long the spawn has
+        // been going. `runtime` used to carry that duration and now carries the
+        // runtime's NAME, like every other record in the product. Escaped —
+        // it was interpolated raw.
+        previewHtml += '<span class="subagent-runtime">' + escHtml(agent.runtimeFormatted || '') + '</span>';
         previewHtml += '</div>';
       });
       
@@ -13942,7 +13946,9 @@ async function loadSessions() {
         html += '<details style="margin-bottom:4px;">';
         html += '<summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:4px 0;">';
         html += statusIcon + ' <strong>' + escHtml(sa.displayName) + '</strong>';
-        html += ' <span style="color:var(--text-muted);font-size:11px;">' + sa.runtime + '</span>';
+        // Elapsed time, so runtimeFormatted — `runtime` is the runtime's name
+        // now. Escaped; it was interpolated raw.
+        html += ' <span style="color:var(--text-muted);font-size:11px;">' + escHtml(sa.runtimeFormatted || '') + '</span>';
         html += '</summary>';
         html += '<div style="padding:6px 0 6px 20px;font-size:12px;color:var(--text-muted);">';
         if (sa.recentTools && sa.recentTools.length > 0) {
@@ -27822,11 +27828,22 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     }
     var meta = [];
     if (startedAt) meta.push(['Started', startedAt]);
-    // Prefer the child's actual runtime (from OpenClaw completion event) over
-    // our "time since spawn" calculation — runtimeFormatted is e.g. "1s",
-    // match.runtime is e.g. "72h 49m" which is misleading for a 1-second run.
-    var rtDisplay = match.runtimeFormatted || match.runtime || '';
-    if (rtDisplay) meta.push(['Runtime', rtDisplay]);
+    // Prefer the child's actual elapsed time (from the OpenClaw completion
+    // event) over our "time since spawn" calculation: runtimeFormatted is e.g.
+    // "1s" where the spawn-derived figure can read "72h 49m" for a one-second
+    // run. No `|| match.runtime` fallback any more — that field is the
+    // runtime's NAME now, so it would print "codex" where a duration belongs.
+    //
+    // Labelled "Duration", not "Runtime". This row said Runtime and showed a
+    // duration, in a product where "runtime" means Codex / Claude Code /
+    // OpenClaw everywhere else — the same collision that made the Home task
+    // pill claim OpenClaw for a Codex task (2026-09-07).
+    var rtDisplay = match.runtimeFormatted || '';
+    if (rtDisplay) meta.push(['Duration', rtDisplay]);
+    // Now that `runtime` carries the name, show it — "which runtime ran this?"
+    // is the question that started this whole thread. Shown only when known.
+    var rtName = match.runtime || match.runtimeName || '';
+    if (rtName) meta.push(['Runtime', _cmRuntimeLabel(String(rtName).toLowerCase())]);
     if (match.model && match.model !== 'unknown') meta.push(['Model', match.model]);
     if (match.parent) meta.push(['Parent', match.parent]);
     if (match.runId) meta.push(['Run ID', match.runId]);
