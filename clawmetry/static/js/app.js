@@ -5124,8 +5124,14 @@ async function loadMiniWidgets(overview, usage) {
   }
   document.getElementById('model-breakdown').textContent = modelBreakdown;
   
-  // 🐝 Worker Bees (Sub-Agents)
-  loadSubAgents();
+  // The "Worker Bees (Sub-Agents)" mini-widget used to be fetched here, on
+  // every Home render. Its three targets — #subagents-count, #subagents-status,
+  // #subagents-preview — all live inside overview.html's `display:none`
+  // "elements referenced by existing JS" block, so the whole result was
+  // invisible: one extra /api/subagents round trip per Home load (a 500-record
+  // payload on a busy node) rendering into nothing. FLYWHEEL, "performance is a
+  // feature — and a cost": before adding any fetch, ask whether it needs to run
+  // on every tab. This one did not need to run at all.
 
   // Issue #1619 Phase 1 — eval score tile. Lazy, non-blocking; tile shows
   // a dash on miss so a slow daemon doesn't gate the overview render.
@@ -6812,69 +6818,6 @@ async function saveEvalRubric() {
     setTimeout(closeEvalRubricModal, 1200);
   } catch (e) {
     if (status) status.textContent = t("app.save_failed_2", null, "Save failed: ") + e.message;
-  }
-}
-
-async function loadSubAgents() {
-  try {
-    var _saResp = await fetch('/api/subagents').then(async function(r) { return {s: r.status, b: await r.json()}; });
-    var data = _saResp.b || {};
-    // Issue #1804: show outage banner when ingest is offline (503 envelope).
-    if (_saResp.s === 503 && data && data.error === 'local_store ingest is offline') {
-      document.getElementById('subagents-status').textContent = t("app.ingest_offline", null, "Ingest offline");
-      var _saPrev = document.getElementById('subagents-preview');
-      if (_saPrev) _saPrev.innerHTML = '<div style="background:#fff7ed;border:1px solid #f59e0b;color:#92400e;padding:12px 16px;border-radius:6px;font-size:12px;"><strong>' + t("app.ingest_temporarily_offline", null, "Ingest temporarily offline.") + '</strong> Sub-agent data unavailable; the local_store writer is not responding.</div>';
-      return;
-    }
-    var counts = data.counts;
-    var subagents = data.subagents;
-
-    // Update main counter
-    document.getElementById('subagents-count').textContent = counts.total;
-    
-    // Update status text
-    var statusText = '';
-    if (counts.active > 0) {
-      statusText = counts.active + ' active';
-      if (counts.idle > 0) statusText += ', ' + counts.idle + ' idle';
-      if (counts.stale > 0) statusText += ', ' + counts.stale + ' stale';
-    } else if (counts.total === 0) {
-      statusText = 'No sub-agents spawned';
-    } else {
-      statusText = 'All idle/stale';
-    }
-    document.getElementById('subagents-status').textContent = statusText;
-    
-    // Update preview with top sub-agents (human-readable)
-    var previewHtml = '';
-    if (subagents.length === 0) {
-      previewHtml = '<div style="font-size:11px;color:#666;">No active tasks</div>';
-    } else {
-      // Show active ones first
-      var activeFirst = subagents.filter(function(a){return _cmIsWorkingStatus(a.status);}).concat(subagents.filter(function(a){return !_cmIsWorkingStatus(a.status);}));
-      var topAgents = activeFirst.slice(0, 3);
-      topAgents.forEach(function(agent) {
-        var icon = _cmIsWorkingStatus(agent.status) ? '🔄' : agent.status === 'idle' ? '✅' : '⬜';
-        var name = cleanTaskName(agent.displayName);
-        if (name.length > 40) name = name.substring(0, 37) + '…';
-        previewHtml += '<div class="subagent-item">';
-        previewHtml += '<span style="font-size:10px;">' + icon + '</span>';
-        previewHtml += '<span class="subagent-name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(name) + '</span>';
-        previewHtml += '<span class="subagent-runtime">' + agent.runtime + '</span>';
-        previewHtml += '</div>';
-      });
-      
-      if (subagents.length > 3) {
-        previewHtml += '<div style="font-size:9px;color:#555;margin-top:4px;">+' + (subagents.length - 3) + ' more</div>';
-      }
-    }
-    
-    document.getElementById('subagents-preview').innerHTML = previewHtml;
-    
-  } catch(e) {
-    document.getElementById('subagents-count').textContent = '?';
-    document.getElementById('subagents-status').textContent = t("app.error_loading_sub_agents", null, "Error loading sub-agents");
-    document.getElementById('subagents-preview').innerHTML = '<div style="color:#e74c3c;font-size:11px;">' + t("app.failed_to_load_workforce", null, "Failed to load workforce") + '</div>';
   }
 }
 
@@ -13942,7 +13885,9 @@ async function loadSessions() {
         html += '<details style="margin-bottom:4px;">';
         html += '<summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);padding:4px 0;">';
         html += statusIcon + ' <strong>' + escHtml(sa.displayName) + '</strong>';
-        html += ' <span style="color:var(--text-muted);font-size:11px;">' + sa.runtime + '</span>';
+        // Elapsed time, so runtimeFormatted — `runtime` is the runtime's name
+        // now. Escaped; it was interpolated raw.
+        html += ' <span style="color:var(--text-muted);font-size:11px;">' + escHtml(sa.runtimeFormatted || '') + '</span>';
         html += '</summary>';
         html += '<div style="padding:6px 0 6px 20px;font-size:12px;color:var(--text-muted);">';
         if (sa.recentTools && sa.recentTools.length > 0) {
@@ -27822,11 +27767,22 @@ async function _renderModalSpawnInfo(sessionIdOrKey, reason) {
     }
     var meta = [];
     if (startedAt) meta.push(['Started', startedAt]);
-    // Prefer the child's actual runtime (from OpenClaw completion event) over
-    // our "time since spawn" calculation — runtimeFormatted is e.g. "1s",
-    // match.runtime is e.g. "72h 49m" which is misleading for a 1-second run.
-    var rtDisplay = match.runtimeFormatted || match.runtime || '';
-    if (rtDisplay) meta.push(['Runtime', rtDisplay]);
+    // Prefer the child's actual elapsed time (from the OpenClaw completion
+    // event) over our "time since spawn" calculation: runtimeFormatted is e.g.
+    // "1s" where the spawn-derived figure can read "72h 49m" for a one-second
+    // run. No `|| match.runtime` fallback any more — that field is the
+    // runtime's NAME now, so it would print "codex" where a duration belongs.
+    //
+    // Labelled "Duration", not "Runtime". This row said Runtime and showed a
+    // duration, in a product where "runtime" means Codex / Claude Code /
+    // OpenClaw everywhere else — the same collision that made the Home task
+    // pill claim OpenClaw for a Codex task (2026-09-07).
+    var rtDisplay = match.runtimeFormatted || '';
+    if (rtDisplay) meta.push(['Duration', rtDisplay]);
+    // Now that `runtime` carries the name, show it — "which runtime ran this?"
+    // is the question that started this whole thread. Shown only when known.
+    var rtName = match.runtime || match.runtimeName || '';
+    if (rtName) meta.push(['Runtime', _cmRuntimeLabel(String(rtName).toLowerCase())]);
     if (match.model && match.model !== 'unknown') meta.push(['Model', match.model]);
     if (match.parent) meta.push(['Parent', match.parent]);
     if (match.runId) meta.push(['Run ID', match.runId]);

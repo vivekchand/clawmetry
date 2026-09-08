@@ -2369,13 +2369,24 @@ def _try_local_store_subagents(_rows=None):
                    or (r.get("task") or "")[:80] or sid[:20])
         model = extra.get("model") or "unknown"
 
+        # ``runtime_label`` — NOT ``runtime``. Everywhere else in this product
+        # (alerts, attention, guard, live sessions) a field called ``runtime``
+        # is the AGENT RUNTIME'S NAME. This shaper used the same word for a
+        # formatted duration and emitted it as ``"runtime"``, which is how the
+        # generic client-side resolver ``_cmRuntimeOf`` — which reads
+        # ``o.runtime`` — took "12m" for a runtime name, failed to match it,
+        # and filed EVERY sub-agent under the ``openclaw`` default. A Codex
+        # user then saw an OpenClaw pill on their own task (2026-09-07).
         elapsed_s = runtime_ms // 1000
         if elapsed_s < 60:
-            runtime = f"{elapsed_s}s"
+            runtime_label = f"{elapsed_s}s"
         elif elapsed_s < 3600:
-            runtime = f"{elapsed_s // 60}m"
+            runtime_label = f"{elapsed_s // 60}m"
         else:
-            runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+            runtime_label = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+        # The runtime's NAME, from the stored record. `extra["runtime"]` is the
+        # name on the stored side; only this shaper's old local shadowed it.
+        runtime_name = extra.get("runtime") or r.get("agent_type") or ""
 
         counts["total"] += 1
         counts[status] = counts.get(status, 0) + 1
@@ -2389,7 +2400,10 @@ def _try_local_store_subagents(_rows=None):
             "parent":           r.get("parent_session_id") or extra.get("spawnedBy"),
             "totalTokens":      token_count,
             "costUsd":          round(float(r.get("cost_usd") or 0.0), 4),
-            "runtime":          runtime,
+            # The runtime's NAME, consistent with every other record this
+            # product emits. The formatted duration lives in
+            # ``runtimeFormatted`` (display) and ``runtimeMs`` (numeric).
+            "runtime":          runtime_name,
             "runtimeMs":        runtime_ms,
             "startedAt":        spawned_at_ms or updated_at_ms,
             "updatedAt":        updated_at_ms,
@@ -2398,7 +2412,7 @@ def _try_local_store_subagents(_rows=None):
             "completionResult": extra.get("completionResult") or "",
             "completionStatus": extra.get("completionStatus") or "",
             "completionTs":     extra.get("completionTs") or "",
-            "runtimeFormatted": extra.get("runtimeFormatted") or runtime,
+            "runtimeFormatted": extra.get("runtimeFormatted") or runtime_label,
             "tokensIn":         int(extra.get("tokensIn") or 0),
             "tokensOut":        int(extra.get("tokensOut") or 0),
             "spawnAck":         extra.get("spawnAck") or "",
@@ -2425,7 +2439,9 @@ def _try_local_store_subagents(_rows=None):
             "agentsRunning":    int(extra.get("agentsRunning") or 0),
             "agentsDone":       int(extra.get("agentsDone") or 0),
             "agentsFailed":     int(extra.get("agentsFailed") or 0),
-            "runtimeName":      extra.get("runtime") or r.get("agent_type") or "",
+            # Retained as an explicit alias of ``runtime`` so any consumer
+            # written against the disambiguated name keeps working.
+            "runtimeName":      runtime_name,
         })
 
     # "running" is the daemon's own word for "active"; without it the
@@ -2627,13 +2643,26 @@ def api_subagents():
         display = s.get("displayName") or s.get("label") or sid[:20]
         started = s.get("startedAt") or s.get("updatedAt") or now_ms
         elapsed_ms = max(0, int(now_ms - started))
+        # ``runtime_label`` is the DURATION; ``runtime`` means the runtime's
+        # NAME everywhere else in this product. See the note in
+        # _try_local_store_subagents — emitting the duration under the name
+        # ``runtime`` is what made every sub-agent resolve to openclaw.
         elapsed_s = elapsed_ms // 1000
         if elapsed_s < 60:
-            runtime = f"{elapsed_s}s"
+            runtime_label = f"{elapsed_s}s"
         elif elapsed_s < 3600:
-            runtime = f"{elapsed_s // 60}m"
+            runtime_label = f"{elapsed_s // 60}m"
         else:
-            runtime = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+            runtime_label = f"{elapsed_s // 3600}h {(elapsed_s % 3600) // 60}m"
+        # These records come from the gateway registry / session roster, which
+        # carry no runtime field, so derive the name from the session-id prefix
+        # the same way the rest of the product does. Empty when unknown — never
+        # a guess, because a wrong runtime label is what this row exists to fix.
+        try:
+            from clawmetry import waste_flags as _wf_rt
+            runtime_name = _wf_rt.runtime_from_session_id(key or sid) or ""
+        except Exception:
+            runtime_name = ""
         counts["total"] += 1
         counts[status] += 1
         # Enrich from the spawn scan by childKey — this gives us the task
@@ -2651,7 +2680,8 @@ def api_subagents():
             "depth": depth,
             "parent": parent,
             "totalTokens": tokens,
-            "runtime": runtime,         # formatted string (legacy)
+            "runtime": runtime_name,    # the runtime's NAME (was: a duration)
+            "runtimeName": runtime_name,  # explicit alias
             "runtimeMs": elapsed_ms,    # numeric ms — used by Active Tasks card
             "startedAt": started,
             "updatedAt": s.get("updatedAt") or s.get("lastActiveMs", 0),
@@ -2666,7 +2696,10 @@ def api_subagents():
             "completionResult": s.get("completionResult") or sp_match.get("completionResult") or "",
             "completionStatus": s.get("completionStatus") or sp_match.get("completionStatus") or "",
             "completionTs":     s.get("completionTs")     or sp_match.get("completionTs") or "",
-            "runtimeFormatted": s.get("runtimeFormatted") or sp_match.get("runtimeFormatted") or "",
+            # Falls back to the duration computed above: the upstream field is
+            # OpenClaw's reported completion runtime and is frequently absent,
+            # and this is now the ONLY field carrying a display duration.
+            "runtimeFormatted": s.get("runtimeFormatted") or sp_match.get("runtimeFormatted") or runtime_label,
             "tokensIn":  s.get("tokensIn")  or sp_match.get("tokensIn")  or 0,
             "tokensOut": s.get("tokensOut") or sp_match.get("tokensOut") or 0,
             "spawnAck":  s.get("spawnAck")  or sp_match.get("spawnAck")  or "",
