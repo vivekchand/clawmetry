@@ -519,13 +519,14 @@ def main() -> None:
         print("Action needed (takes ~30 seconds) to make these checks required on main:")
         print("  bash scripts/close-c6.sh")
         print("  (Or: Actions > 'Apply required E2E status checks (C6 -- one-shot)' > Run workflow)")
-        # Exit 1 so the apply-required-checks.yml workflow shows RED in the GitHub
-        # Actions UI until C6 is configured. The module-level docstring specifies
-        # this: "exit 1 if not configured (red badge = forcing signal)". Once the
-        # admin runs scripts/close-c6.sh, the next push to main goes green and
-        # stays green permanently. This workflow is NOT in REQUIRED_CHECKS, so
-        # it cannot block PR merges; it only creates a visible badge on main.
-        sys.exit(1)
+        # Exit 0 on the push/GITHUB_TOKEN path. A forcing-signal exit(1) here
+        # turned main red on every push (#4553), hiding real CI failures behind
+        # a permanent red badge. Push-triggered runs are informational only.
+        # The c6-health.yml daily schedule and the c6-schedule-heal.yml 2-hourly
+        # schedule (which only fire on schedule, not push) carry exit(1) on
+        # their own step -- this script must stay green on push so real failures
+        # on main remain visible.
+        return
 
     # PAT / OAuth path: full apply + verify across all repos.
     checks = _checks_to_apply()
