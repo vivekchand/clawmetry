@@ -38,6 +38,23 @@ import os
 import re
 from typing import Optional
 
+#: Every file a scan READS, relative to the workspace. Declared here so the
+#: daemon's cache stamp cannot miss one: the stamp is what decides whether a
+#: repo is re-scanned, so a file the scanner reads but the stamp ignores means
+#: a checkout poisoned AFTER first sight stays invisible forever. That is
+#: exactly what happened when package.json scanning was added and the stamp's
+#: hand-kept list was not, and it is why this list lives beside the scanners
+#: rather than beside the cache.
+#:
+#: ``.git/config`` is the ordinary-layout spelling; a linked worktree's real
+#: config is resolved at scan time and is deliberately NOT stamped, because it
+#: lives outside the workspace and is shared by every worktree of that repo.
+SCANNED_FILES = (
+    os.path.join(".git", "config"),
+    os.path.join(".vscode", "tasks.json"),
+    "package.json",
+)
+
 #: The incident kinds this module can emit. Declared here, where they are
 #: produced, and re-exported as ``detectors.WORKSPACE_KINDS`` so every surface
 #: that renders or matches an incident reads ONE list. ``DETECTOR_KINDS`` exists
