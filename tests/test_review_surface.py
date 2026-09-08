@@ -16,7 +16,7 @@ These tests pin the two halves of making that reachable:
    and the surface tells a cloud user "nothing waiting" when the truth is
    "cannot see". FLYWHEEL §0a.1 forbids exactly that.
 2. The Spot-check panel exists in the LIVE template (§0a.4: dashboard.py
-   defines DASHBOARD_HTML twice and only the second one renders).
+   the last DASHBOARD_HTML assignment is the one that renders).
 """
 from __future__ import annotations
 

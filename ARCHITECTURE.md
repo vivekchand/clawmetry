@@ -443,8 +443,9 @@ on its own:
 
 The UI is served from `clawmetry/static/css/dashboard.css`,
 `clawmetry/static/js/app.js` and `clawmetry/templates/tabs/*.html`.
-`dashboard.py` defines `DASHBOARD_HTML` twice and the **second** definition
-wins; the inline copy earlier in the file is dead code.
+`dashboard.py` holds exactly one `DASHBOARD_HTML`, and it only includes those
+files. It used to be defined twice, with the first 5,036 lines never
+rendering; that duplicate was deleted 2026-09-08.
 
 ### Entitlements & open-core
 
