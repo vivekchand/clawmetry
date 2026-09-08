@@ -18,9 +18,17 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Published version to verify (e.g. 0.12.843)'
-        required: true
+        description: 'Published version to verify (blank = latest on PyPI)'
+        required: false
         type: string
+  # Self-test: a change to the verifier or this workflow runs it on all three
+  # platforms against the latest published release. Path-scoped, so it does not
+  # add a cross-platform job to every unrelated PR -- but a broken verifier can
+  # never be merged on the strength of one developer's macOS run.
+  pull_request:
+    paths:
+      - scripts/verify_published_wheel.py
+      - .github/workflows/verify-published-wheel.yml
 
 permissions:
   contents: read
@@ -60,5 +68,21 @@ jobs:
       # directory of the child process -- dashboard.py here would shadow the
       # installed wheel and the run would verify the wrong program. The script
       # enforces that itself; this step only invokes it.
+      # Blank input (or a PR self-test) verifies whatever is currently latest
+      # on PyPI, so the workflow always has something real to check.
+      - name: Resolve version
+        id: ver
+        shell: python
+        run: |
+          import json, os, urllib.request
+          want = "${{ github.event.inputs.version }}".strip()
+          if not want:
+              with urllib.request.urlopen(
+                      "https://pypi.org/pypi/clawmetry/json", timeout=30) as r:
+                  want = json.load(r)["info"]["version"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"version={want}\n")
+          print(f"verifying clawmetry=={want}")
+
       - name: Verify the published wheel
-        run: python scripts/verify_published_wheel.py --version "${{ github.event.inputs.version }}"
+        run: python scripts/verify_published_wheel.py --version "${{ steps.ver.outputs.version }}"
