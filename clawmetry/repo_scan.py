@@ -38,15 +38,34 @@ import os
 import re
 from typing import Optional
 
+#: Every file a scan READS, relative to the workspace. Declared here so the
+#: daemon's cache stamp cannot miss one: the stamp is what decides whether a
+#: repo is re-scanned, so a file the scanner reads but the stamp ignores means
+#: a checkout poisoned AFTER first sight stays invisible forever. That is
+#: exactly what happened when package.json scanning was added and the stamp's
+#: hand-kept list was not, and it is why this list lives beside the scanners
+#: rather than beside the cache.
+#:
+#: ``.git/config`` is the ordinary-layout spelling; a linked worktree's real
+#: config is resolved at scan time and is deliberately NOT stamped, because it
+#: lives outside the workspace and is shared by every worktree of that repo.
+SCANNED_FILES = (
+    os.path.join(".git", "config"),
+    os.path.join(".vscode", "tasks.json"),
+    "package.json",
+)
+
 #: The incident kinds this module can emit. Declared here, where they are
 #: produced, and re-exported as ``detectors.WORKSPACE_KINDS`` so every surface
 #: that renders or matches an incident reads ONE list. ``DETECTOR_KINDS`` exists
 #: precisely so a new detector cannot be added without the surfaces noticing;
-#: these two kinds bypassed it once by living outside ``detectors``, and the
-#: Guard tab rendered them as "unknown".
+#: the first two kinds bypassed it once by living outside ``detectors``, and the
+#: Guard tab rendered them as "unknown". Adding the third was the mechanism
+#: working: the JS label guard refused to pass until both label maps knew it.
 WORKSPACE_KINDS = (
     "repo_config_exec",      # the checkout's own config names a program
     "agent_config_tamper",   # an agent hook config was changed under us
+    "package_manifest_exec", # the checkout runs its own code on `npm install`
 )
 
 # Git config keys whose VALUE is a program git will execute. Section+key, lowered.
@@ -502,6 +521,136 @@ def scan_agent_hooks(workspace: str, session_id: str = "",
     return out
 
 
+# ── package manifests: code that runs on `npm install` ──────────────────────
+#
+# Same predicate as .git/config, different file. A package.json lifecycle hook
+# is a program the checkout names and a package manager runs, without consent,
+# as part of an action the developer thinks is "fetch dependencies". It is the
+# CHAINDROP delivery vehicle.
+#
+# Only the hooks that run on INSTALL. Measured across 189 real package.json
+# files on a working machine: prepublishOnly appears 36 times and prepack /
+# postpack once each, and NONE of them run on install -- they run when you
+# publish. Including them would have quadrupled the noise for no coverage.
+# The four below appear in 14 of those 189 manifests, which is a rate a
+# graded signal can carry.
+_INSTALL_HOOKS = ("preinstall", "install", "postinstall", "prepare")
+
+# Tools that legitimately own an install hook. A recognised one is reported as
+# a warning that says which tool it is, never suppressed: husky's own mechanism
+# is the one CHAINDROP abused, and an operator reading "husky" learns something
+# an empty screen does not tell them.
+_KNOWN_INSTALL_TOOLS = {
+    "husky": "husky", "patch-package": "patch-package",
+    "lefthook": "lefthook", "only-allow": "only-allow",
+    "simple-git-hooks": "simple-git-hooks", "is-ci": "is-ci",
+    "node-gyp": "node-gyp", "prisma": "prisma",
+}
+
+# Shapes that make an install hook worth waking someone for, rather than
+# merely worth knowing about. Each one is a step an ordinary build does not
+# take: fetching code and running it, decoding a blob, or reading a secret.
+_HOOK_CRITICAL = (
+    ("fetches code and pipes it to a shell",
+     re.compile(r"\b(?:curl|wget|iwr|invoke-webrequest)\b[^|;&]*[|]\s*(?:ba)?sh", re.I)),
+    ("decodes a blob and runs it",
+     re.compile(r"base64\s+(?:-d|--decode)|atob\(|FromBase64String", re.I)),
+    ("runs code from the command line rather than a file",
+     re.compile(r"\b(?:node|python3?|ruby|perl)\s+-(?:e|c)\b", re.I)),
+    ("reads a credential file",
+     re.compile(r"\.npmrc|\.pypirc|\.netrc|\.git-credentials|"
+                r"\.aws/credentials|id_[rde]sa\b|\.env\b(?!\.example)", re.I)),
+    ("reads publishing or cloud tokens from the environment",
+     re.compile(r"\$\{?(?:NPM_TOKEN|GITHUB_TOKEN|GH_TOKEN|AWS_SECRET[A-Z_]*|"
+                r"OPENAI_API_KEY|ANTHROPIC_API_KEY)\b", re.I)),
+)
+
+
+def _hook_tool(command: str):
+    """The recognised tool an install hook runs, or None."""
+    for token in str(command or "").replace("&&", " ").split():
+        base = os.path.basename(token.strip("\"'")).lower()
+        if base in _KNOWN_INSTALL_TOOLS:
+            return _KNOWN_INSTALL_TOOLS[base]
+    return None
+
+
+def _hook_alarm(command: str):
+    """Why this hook is critical rather than merely notable, or None."""
+    for why, rx in _HOOK_CRITICAL:
+        if rx.search(str(command or "")):
+            return why
+    return None
+
+
+def scan_package_manifest(workspace: str, session_id: str = "",
+                          runtime: str = "unknown") -> list:
+    """Flag install-time lifecycle scripts in the checkout's own package.json.
+
+    Scope, stated because the gap it does NOT close matters: this reads the
+    manifest the checkout ships. It catches "the repo you just cloned runs its
+    own code when you install its dependencies". It does NOT catch a poisoned
+    TRANSITIVE dependency, which is where CHAINDROP actually lived; that needs
+    the lockfile, and the measurement says a lockfile signal is not shippable
+    yet (73 lockfiles here carry 2-13 install-script packages each, dominated
+    by fsevents and esbuild, so an incident per lockfile would be noise).
+    """
+    path = os.path.join(workspace, "package.json")
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            data = json.load(f)
+    except Exception:
+        return []
+    scripts = data.get("scripts") if isinstance(data, dict) else None
+    if not isinstance(scripts, dict):
+        return []
+
+    hits = []
+    for hook in _INSTALL_HOOKS:
+        command = scripts.get(hook)
+        if not isinstance(command, str) or not command.strip():
+            continue
+        hits.append({"hook": hook, "command": _sketch(command),
+                     "tool": _hook_tool(command), "alarm": _hook_alarm(command)})
+    if not hits:
+        return []
+
+    alarms = [h for h in hits if h["alarm"]]
+    hooks = sorted({h["hook"] for h in hits})
+    if alarms:
+        why = alarms[0]["alarm"]
+        return [_finding(
+            "package_manifest_exec", "critical",
+            f"package.json {alarms[0]['hook']} script {why}",
+            f"This checkout's package.json runs a `{alarms[0]['hook']}` script "
+            f"that {why}. npm, pnpm, bun and yarn all run it during an ordinary "
+            "`install`, before any code you meant to run, with your privileges "
+            "and your environment. Read the script in package.json before "
+            "installing here; `npm install --ignore-scripts` skips every "
+            "lifecycle hook for one command.",
+            {"hooks": hooks, "hits": hits[:5], "manifest": "package.json",
+             "observed": "package_manifest"},
+            session_id, runtime)]
+
+    tools = sorted({h["tool"] for h in hits if h["tool"]})
+    tool_note = (f", via {', '.join(tools)}" if tools else "")
+    return [_finding(
+        "package_manifest_exec", "warning",
+        f"package.json runs its own code on install: {', '.join(hooks)}"
+        f"{tool_note}",
+        "Installing this project's dependencies also runs the "
+        f"{', '.join(hooks)} script(s) it ships"
+        f"{tool_note}. That is ordinary for many projects and it is also the "
+        "mechanism the npm supply-chain attacks use, so it is worth knowing "
+        "the code came with the clone. `npm install --ignore-scripts` skips "
+        "them if you would rather read first.",
+        {"hooks": hooks, "hits": hits[:5], "manifest": "package.json",
+         "tools": tools, "observed": "package_manifest"},
+        session_id, runtime)]
+
+
 def scan_workspace(workspace: str, session_id: str = "",
                    runtime: str = "unknown") -> list:
     """Run every workspace check. Never raises; a broken check costs its finding.
@@ -510,7 +659,8 @@ def scan_workspace(workspace: str, session_id: str = "",
     tab, the policy engine and the red-team audit all consume one vocabulary.
     """
     findings: list = []
-    for check in (scan_git_config, scan_autorun_tasks, scan_agent_hooks):
+    for check in (scan_git_config, scan_autorun_tasks, scan_agent_hooks,
+                  scan_package_manifest):
         try:
             findings.extend(check(workspace, session_id, runtime) or [])
         except Exception:
