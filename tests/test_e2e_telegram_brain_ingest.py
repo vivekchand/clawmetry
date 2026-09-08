@@ -104,6 +104,12 @@ def env(tmp_path, monkeypatch):
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
+    # Force this process to act as the DuckDB writer owner so get_store()
+    # opens the real LocalStore against the tmp DB rather than returning
+    # a _ProxyStore (which silently no-ops all writes when no daemon is
+    # present — the failure mode on CI where local_query.json may exist
+    # from a sibling job).
+    ls.mark_writer_owner()
     import clawmetry.sync as sync_mod
     importlib.reload(sync_mod)
     import routes.brain as br
