@@ -51,16 +51,19 @@ from typing import Any, Optional
 
 logger = logging.getLogger("clawmetry.ingest_auth")
 
-#: Presented by the pusher. Lower-case on the wire; HTTP header lookup is
-#: case-insensitive, but every example we publish uses this spelling so a
-#: copy-paste and a grep agree.
-HEADER_KEY = "x-clawmetry-key"
-HEADER_RUNTIME = "x-clawmetry-runtime"
-HEADER_ENV = "x-clawmetry-env"
-
-#: Body cap. Published, enforced, and returned as 413 rather than a 500
-#: from somewhere deep in a protobuf parser.
-MAX_BODY_BYTES = 10 * 1024 * 1024
+# The header names and the body cap are declared ONCE, in
+# ``clawmetry/ingest_contract.py``, and re-exported here. The doc, the
+# setup prompts and the landing reference are generated from that same
+# declaration, so the thing the server enforces and the thing we tell
+# people to send cannot drift apart -- which matters most for the setup
+# prompts, where a wrong header name is a silent failure an agent will
+# write confidently.
+from clawmetry.ingest_contract import (  # noqa: F401  (re-exported)
+    HEADER_ENV,
+    HEADER_KEY,
+    HEADER_RUNTIME,
+    MAX_BODY_BYTES,
+)
 
 #: A runtime name we have never heard of is allowed -- in-house engines
 #: are a supported case -- but it still has to be a name, not a payload.
