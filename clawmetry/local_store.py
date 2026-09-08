@@ -3142,18 +3142,19 @@ class _ProxyStore:
             return lambda *a, **k: None
 
         def _forward(*args, **kwargs):
+            _empty = [] if name.startswith("query_") else None
             try:
                 from routes.local_query import local_store_via_daemon
                 call_kwargs = _proxy_call_kwargs(name, args, kwargs)
                 if call_kwargs is None:
                     log.warning(
                         "local_store: cannot proxy %s(%d positional arg(s)) "
-                        "through the daemon — returning None", name, len(args),
+                        "through the daemon — returning %r", name, len(args), _empty,
                     )
-                    return None
+                    return _empty
                 return local_store_via_daemon(name, **call_kwargs)
             except Exception:
-                return None
+                return _empty
         return _forward
 
     def health(self):
