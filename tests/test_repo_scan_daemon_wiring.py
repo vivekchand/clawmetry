@@ -8,8 +8,9 @@ path. This file pins the four properties that wiring has to keep:
 * a poisoned repo produces a ``repo_config_exec`` loop_signals row,
 * the scan is cached on the mtime of exactly the files it reads (a 50-repo
   fleet must not re-read them every tick) and re-runs the moment one changes,
-* workspace findings do NOT reach the policy pass (a ``trigger_kind: ""``
-  policy would otherwise pause a session over a property of its folder),
+* workspace findings reach the policy pass, so a policy that names the kind
+  can act on them (the catch-all exclusion is pinned in
+  ``tests/test_guard_workspace_kinds.py``),
 * the cwd comes from the ``sessions.cwd`` COLUMN, which is where every
   cwd-aware consumer already keys.
 """
@@ -199,17 +200,20 @@ def test_emit_writes_a_loop_signal_for_a_poisoned_workspace(tmp_path, _quiet,
     assert sig["details"]["spend_basis"] == "unknown"
 
 
-def test_workspace_findings_never_reach_the_policy_pass(tmp_path, _quiet,
-                                                        monkeypatch):
-    """A policy with ``trigger_kind: ""`` matches any kind. Until the policy
-    form can express these two kinds (clawmetry-pro#223), a poisoned folder
-    must not be able to pause the session that opened it."""
+def test_workspace_findings_reach_the_policy_pass(tmp_path, _quiet,
+                                                 monkeypatch):
+    """They are handed to the pass so a policy that NAMES the kind can act.
+    The safety property lives in ``policy_engine`` instead, where an empty
+    ``trigger_kind`` excludes them: see
+    ``tests/test_guard_workspace_kinds.py``, which pins that a catch-all rule
+    cannot fire on a poisoned checkout."""
     seen = []
     monkeypatch.setattr(_sync, "_apply_guard_policies",
-                        lambda store, state, incs, facts: seen.append(list(incs)))
+                        lambda store, state, incs, facts: seen.append(
+                            [i["kind"] for i in incs]))
     store = _EmitStore(_poisoned_repo(tmp_path))
     _sync._emit_detector_incidents(store, {})
-    assert seen == [], f"workspace findings reached the policy pass: {seen}"
+    assert seen == [["repo_config_exec"]]
 
 
 def test_a_clean_workspace_emits_nothing(tmp_path, _quiet, monkeypatch):

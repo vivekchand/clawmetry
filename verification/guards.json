@@ -120,6 +120,16 @@
       "path": "tests/test_ac_coverage_guard.py",
       "why": "Pins the AC gate's declaration rule. Without it the first draft's loophole returns, where a file naming a criterion it does NOT cover marks that criterion covered.",
       "min_bytes": 3000
+    },
+    {
+      "path": "tests/test_repo_scan_daemon_wiring.py",
+      "why": "Pins that the daemon actually RUNS the workspace scanner, cached per directory. repo_scan shipped for weeks with no caller: a detector nobody runs protects nobody, and nothing failed while that was true.",
+      "min_bytes": 4000
+    },
+    {
+      "path": "tests/test_guard_workspace_kinds.py",
+      "why": "Pins that a policy must NAME a workspace kind to act on it. Without it a catch-all 'pause anything critical' rule silently acquires power over every poisoned checkout, which is the shape of the preset that paused 280 sessions in 22 minutes.",
+      "min_bytes": 4000
     }
   ],
   "ratchets": {
