@@ -93,7 +93,16 @@ def api_keys_create():
             note=body.get("note") or "",
         )
     except _ak.ApiKeyError as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 400
+        # The sentence comes from apikeys.REFUSAL_REASONS, keyed by the
+        # refusal code, NOT from str(exc). The CLI does print the exception
+        # (it names the offending value, which is worth more than it costs
+        # in a terminal); an HTTP response must not carry exception-derived
+        # text to a caller who may not be the operator.
+        return jsonify({
+            "ok": False,
+            "reason": exc.reason,
+            "error": _ak.message_for(exc.reason),
+        }), 400
     except Exception as exc:
         logger.warning("apikeys create failed: %s", exc)
         return jsonify({
