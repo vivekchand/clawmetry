@@ -9156,59 +9156,6 @@ def _missing_bundle_row_at_body(row: dict, list_key: str) -> dict:
         fold_key: list(row.get(fold_key) or []),
     }
 
-def _parse_aggregate_bundles_body(body, key: str = "bundles"):
-    """Extract a list of aggregate 5-axis bundle dicts from a JSON POST body.
-
-    Unlike :func:`_parse_bundles_body` (which expects list-of-list-of-
-    strings for the single-axis feature / runtime bundle batches), each
-    row here is a dict carrying up to five keys -- ``features``,
-    ``runtimes``, ``channels``, ``retention_days``, ``nodes`` -- matching
-    the ``/api/entitlement/required-tier-batch`` GET query args on a
-    per-bundle basis. This is the parser for the aggregate
-    ``/required-tier-bundle-batch`` family.
-
-    Accepts::
-
-        {"bundles": [
-            {"features": ["fleet"], "runtimes": ["claude_code"]},
-            {"channels": 5, "retention_days": 30},
-            {}
-        ]}
-
-    Plus a single-bundle shorthand ``{"bundles": {"features": [...]}}``
-    (a bare dict) so the caller does not have to wrap a single bundle in
-    a list. Missing / non-list / non-dict-and-non-list values follow the
-    same error posture as :func:`_parse_bundles_body`:
-
-    * ``None`` / missing ``bundles`` -- ``([], "missing")``
-    * scalar / non-list-non-dict -- ``([], "bundles_must_be_list")``
-    * empty ``[]`` -- ``([], "empty")``
-
-    Non-dict row entries (e.g. a bare list or scalar inside ``bundles``)
-    collapse to an empty ``{}`` dict so the aggregate fold still emits a
-    stable row rather than a 500 -- matches the never-crash posture of
-    :func:`_parse_bundles_body`. Returns ``(bundles, err)`` with ``err``
-    ``None`` on success.
-    """
-    if not isinstance(body, dict):
-        return [], "bundles_must_be_list"
-    raw = body.get(key)
-    if raw is None:
-        return [], "missing"
-    if isinstance(raw, dict):
-        return [dict(raw)], None
-    if not isinstance(raw, (list, tuple)):
-        return [], "bundles_must_be_list"
-    if not raw:
-        return [], "empty"
-    out = []
-    for bundle in raw:
-        if isinstance(bundle, dict):
-            out.append(dict(bundle))
-        else:
-            out.append({})
-    return out, None
-
 def _min_tier_for_all_row_to_body(row: dict) -> dict:
     """Rename the aggregate batch helper's ``required_tier*`` keys through
     unchanged (they already match the endpoint body), coerce the axis
