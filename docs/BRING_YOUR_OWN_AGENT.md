@@ -1,6 +1,6 @@
 # Bring your own agent: OpenTelemetry ingestion end to end
 
-ClawMetry ships adapters for 30 agent runtimes with local footprints (Claude Code, Codex, Cursor, OpenClaw and friends). This guide covers everything else: **any agent that speaks OpenTelemetry**, including fleets you do not run on your laptop.
+ClawMetry ships adapters for 31 agent runtimes with local footprints (Claude Code, Codex, Cursor, OpenClaw and friends). This guide covers everything else: **any agent that speaks OpenTelemetry**, including fleets you do not run on your laptop.
 
 Who this is for:
 

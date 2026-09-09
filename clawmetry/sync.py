@@ -1105,6 +1105,36 @@ def split_session_title(title: str, enc_key: str | None, fallback: str) -> tuple
         return fallback, None
 
 
+def seal_meeting_transcript(row: dict, enc_key: str | None) -> str | None:
+    """Encrypted companion blob for an OpenClaw meeting transcript (#5747).
+
+    Same rule as :func:`split_session_title` and :func:`seal_session_intent`,
+    and it matters more here than anywhere else in the product: a meeting
+    transcript is human speech, and some of the speakers never installed
+    ClawMetry and cannot consent to it leaving their colleague's laptop. So
+    the words ride ONLY this node-key-encrypted field. The cleartext row that
+    accompanies it carries counts, timings and identifiers, which answer "is
+    capture working" without carrying what anyone said.
+
+    A node with no encryption key sends NOTHING, rather than falling back to
+    plaintext. Never raises: a failure here must drop the content, never the
+    surrounding sync pass.
+    """
+    if not enc_key or not isinstance(row, dict):
+        return None
+    payload = {
+        k: row.get(k)
+        for k in ("title", "summary_markdown", "transcript_text", "selector")
+        if row.get(k)
+    }
+    if not payload:
+        return None
+    try:
+        return encrypt_payload(payload, enc_key)
+    except Exception:
+        return None
+
+
 def seal_session_intent(intent: str, enc_key: str | None) -> str | None:
     """Encrypted companion blob for ``sessions.intent`` (the full first user
     prompt). Same rule as :func:`split_session_title`: prompt text is content
@@ -7931,6 +7961,7 @@ _LITE_RT_LABELS = {
     "openworker": "OpenWorker",
     "lovable": "Lovable",
     "replit": "Replit Agent",
+    "muse_code": "Muse Code",
 
 }
 
@@ -13030,6 +13061,166 @@ def _openclaw_task_ledger_paths() -> list[Path]:
     ]
 
 
+def sync_meeting_transcripts(config: dict, state: dict, paths: dict) -> int:
+    """Mirror OpenClaw's meeting transcripts into DuckDB ``meeting_transcripts``.
+
+    OpenClaw 2026.9.3 ships a meeting library: capture a call, and the harness
+    writes ``meeting_transcript_sessions`` / ``_utterances`` / ``_summaries``
+    into the SAME ``~/.openclaw/state/openclaw.sqlite`` this module already
+    reads for the run ledger, so this needs no new path discovery and no new
+    permission. Schema read from the shipped harness and from a live store,
+    not from the changelog (#5747).
+
+    Content handling is the whole point of the design. ``transcript_text`` and
+    ``summary_markdown`` are human speech, including speakers who never
+    installed ClawMetry, so they are stored LOCALLY and reach the hosted
+    service only through :func:`seal_meeting_transcript`. Nothing here puts
+    them in a plaintext row.
+
+    Idempotent + incremental on an ``updated_at_ms`` watermark: a meeting
+    still being captured is re-read as its utterance count grows and the row
+    is overwritten, never duplicated.
+
+    Degrades silently: no DB, no meeting tables (a pre-2026.9.3 harness), a
+    locked file or a malformed row each return 0 rather than raising.
+    """
+    try:
+        from clawmetry import local_store as _ls
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_meeting_transcripts: local_store unavailable: %s", e)
+        return 0
+
+    srcs = [p for p in _openclaw_task_ledger_paths() if p.exists()]
+    if not srcs:
+        return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    marks = state.setdefault("meeting_transcript_watermarks", {})
+
+    try:
+        store = _ls.get_store()
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_meeting_transcripts: get_store failed: %s", e)
+        return 0
+
+    n = 0
+    for src in srcs:
+        key = str(src)
+        watermark = int(marks.get(key, 0) or 0)
+        try:
+            rows, new_watermark = _read_meeting_transcripts(src, watermark)
+        except Exception as e:  # noqa: BLE001
+            log.debug("sync_meeting_transcripts: read failed for %s (%s)", src, e)
+            continue
+        for r in rows:
+            try:
+                store.ingest_meeting_transcript(r, node_id=node_id)
+                n += 1
+            except Exception as e:  # noqa: BLE001
+                log.debug("sync_meeting_transcripts: bad row skipped: %s", e)
+        if new_watermark > watermark:
+            marks[key] = new_watermark
+    return n
+
+
+def _read_meeting_transcripts(src, watermark: int) -> tuple:
+    """Read meeting sessions past ``watermark``, joining their utterances and
+    summary. Returns ``(rows, new_watermark)``.
+
+    Read-only URI open so we never contend with OpenClaw's own writer, and a
+    missing ``meeting_transcript_sessions`` table (any harness before
+    2026.9.3) is a skip rather than an error.
+    """
+    import sqlite3
+
+    out: list = []
+    new_watermark = watermark
+    conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=2.0)
+    try:
+        conn.row_factory = sqlite3.Row
+        has = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='meeting_transcript_sessions'").fetchone()
+        if not has:
+            return [], watermark
+        sessions = conn.execute(
+            "SELECT session_id, started_at, stopped_at, selector, provider_id, "
+            "       title, updated_at_ms "
+            "FROM meeting_transcript_sessions "
+            "WHERE COALESCE(updated_at_ms, 0) >= ? "
+            "ORDER BY COALESCE(updated_at_ms, 0) ASC LIMIT 500",
+            [watermark],
+        ).fetchall()
+        for srow in sessions:
+            sid = srow["session_id"]
+            if not sid:
+                continue
+            ums = int(srow["updated_at_ms"] or 0)
+            new_watermark = max(new_watermark, ums)
+            speakers, lines, count = set(), [], 0
+            try:
+                for u in conn.execute(
+                    "SELECT speaker_label, speaker_id, text, final "
+                    "FROM meeting_transcript_utterances WHERE session_id = ? "
+                    "ORDER BY sequence ASC LIMIT 20000", [sid],
+                ):
+                    count += 1
+                    who = (u["speaker_label"] or u["speaker_id"] or "").strip()
+                    if who:
+                        speakers.add(who)
+                    txt = (u["text"] or "").strip()
+                    if txt:
+                        lines.append(f"{who}: {txt}" if who else txt)
+            except sqlite3.Error:
+                pass
+            markdown = None
+            try:
+                srow2 = conn.execute(
+                    "SELECT markdown, utterance_count FROM "
+                    "meeting_transcript_summaries WHERE session_id = ? LIMIT 1",
+                    [sid],
+                ).fetchone()
+                if srow2:
+                    markdown = srow2["markdown"]
+                    count = count or int(srow2["utterance_count"] or 0)
+            except sqlite3.Error:
+                pass
+            out.append({
+                "session_id": sid,
+                "title": srow["title"],
+                "provider_id": srow["provider_id"],
+                "selector": srow["selector"],
+                "started_at": srow["started_at"],
+                "stopped_at": srow["stopped_at"],
+                "utterance_count": count,
+                "speaker_count": len(speakers),
+                "duration_ms": _meeting_duration_ms(srow["started_at"],
+                                                    srow["stopped_at"]),
+                "summary_markdown": markdown,
+                "transcript_text": "\n".join(lines) or None,
+                "updated_at_ms": ums,
+            })
+    finally:
+        conn.close()
+    return out, new_watermark
+
+
+def _meeting_duration_ms(started, stopped) -> int:
+    """Milliseconds between two harness timestamps, 0 when either is missing
+    or unparseable. Never raises."""
+    if not started or not stopped:
+        return 0
+    try:
+        from datetime import datetime as _dt
+
+        def _p(v):
+            return _dt.fromisoformat(str(v).replace("Z", "+00:00"))
+
+        return max(0, int((_p(stopped) - _p(started)).total_seconds() * 1000))
+    except Exception:
+        return 0
+
+
 def sync_run_ledger(config: dict, state: dict, paths: dict) -> int:
     """Mirror OpenClaw's background-run ledger (``tasks/runs.sqlite``) into
     the local DuckDB ``run_ledger`` table.
@@ -14506,6 +14697,12 @@ _FAMILY_ADAPTER_SPECS = (
     # worker, not a coding CLI: its sessions are SaaS-connector work as
     # often as file edits.
     ("clawmetry_pro.adapters.openworker", "OpenWorkerAdapter"),
+    # Muse Code (developer.meta.com/ai/products/muse-code) -- Meta's terminal
+    # coding agent. The only runtime here read over a PROTOCOL rather than off
+    # disk: its transcript format is unpublished, but `muse serve` speaks the
+    # Muse Session Protocol and session/list + session/read are documented
+    # read-only surfaces that hand back the log path too.
+    ("clawmetry_pro.adapters.muse_code", "MuseCodeAdapter"),
     # Lovable (lovable.dev) -- cloud app builder with NO local process or
     # store; the adapter reads local git clones of its GitHub-synced repos
     # (one bot commit per accepted agent edit). Observe-only, no cost.
@@ -24189,6 +24386,15 @@ def run_daemon() -> None:
             log.info(f"  Run ledger: {rl} rows ingested")
     except Exception as e:
         log.warning(f"  Run-ledger ingest error: {e}")
+    # OpenClaw 2026.9.3 meeting library (state/openclaw.sqlite) → DuckDB
+    # meeting_transcripts (#5747). Speech stays local; it reaches the hosted
+    # service only through seal_meeting_transcript.
+    try:
+        mt = sync_meeting_transcripts(config, state, paths)
+        if mt:
+            log.info(f"  Meeting transcripts: {mt} rows ingested")
+    except Exception as e:
+        log.warning(f"  Meeting-transcript ingest error: {e}")
     # Sub-agent + flow registries (state/openclaw.sqlite) → subagents rows
     # with prompt/reply/status/parent (orchestration capture, OpenClaw leg).
     try:
@@ -24765,6 +24971,11 @@ def run_daemon() -> None:
                 sync_openclaw_subagent_runs(config, state, paths)
             except Exception as _e_rl:
                 log.debug("sync_run_ledger error (non-fatal): %s", _e_rl)
+            # Meeting library → meeting_transcripts (#5747).
+            try:
+                sync_meeting_transcripts(config, state, paths)
+            except Exception as _e_mt:
+                log.debug("sync_meeting_transcripts error (non-fatal): %s", _e_mt)
             # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
             try:
                 sync_backups(config, state, paths)

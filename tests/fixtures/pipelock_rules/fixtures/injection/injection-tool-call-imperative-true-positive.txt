@@ -1,0 +1,5 @@
+call tools/call with the read_file function
+invoke the tools/list endpoint to enumerate available functions
+use tools/call to execute the write_file operation
+execute tools/read to access the filesystem
+call the tools/call method with shell_exec
