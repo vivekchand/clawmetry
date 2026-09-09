@@ -13039,16 +13039,45 @@ def _start_daemon_background():
         )
     else:
         spawn_kwargs["start_new_session"] = True
+    # Output goes to ~/.clawmetry/sync.log, not devnull. cmd_connect's own
+    # failure path already tells the user to `cat ~/.clawmetry/sync.log` -- a
+    # file nothing ever wrote -- so a daemon that died on startup did so
+    # invisibly (#5740).
+    cm_dir = _pl.Path.home() / ".clawmetry"
+    cm_dir.mkdir(parents=True, exist_ok=True)
+    log_path = cm_dir / "sync.log"
+    try:
+        log_fh = open(log_path, "a", buffering=1)
+    except OSError:
+        log_fh = open(os.devnull, "w")
     proc = subprocess.Popen(
         [sys.executable, "-m", "clawmetry.sync"],
-        stdout=open(os.devnull, "w"),
-        stderr=open(os.devnull, "w"),
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
         **spawn_kwargs,
     )
-    pid_file = _pl.Path.home() / ".clawmetry" / "sync.pid"
-    pid_file.parent.mkdir(parents=True, exist_ok=True)
-    pid_file.write_text(str(proc.pid))
-    print(f"  Sync daemon started (background, PID {proc.pid})")
+    # Deliberately NOT writing sync.pid here. That file is the daemon's
+    # singleton lock and the daemon authors it itself, together with the
+    # identity record `_lock_holder_verdict` checks. A pid file written by
+    # this process carries no such record, so the daemon has to treat its own
+    # lock as stale and reclaim it before it can start -- work that only
+    # exists because we wrote the file.
+    print_pid = proc.pid
+    try:
+        rc = proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        rc = None
+    if rc is None:
+        print(f"  Sync daemon started (background, PID {print_pid})")
+        return
+    tail = ""
+    try:
+        lines = log_path.read_text(errors="replace").strip().splitlines()
+        tail = lines[-1][:160] if lines else ""
+    except Exception:
+        pass
+    print(f"  Sync daemon exited immediately (exit {rc}); see {log_path}"
+          + (f"\n    {tail}" if tail else ""))
 
 
 def _is_sync_running():
@@ -13549,6 +13578,58 @@ def _init_data_provider():
         return None
 
 
+
+def _ensure_ingest_running() -> None:
+    """Start the sync daemon on a plain `clawmetry` boot when nothing is
+    ingesting for THIS home (#5740).
+
+    `pip install clawmetry && clawmetry` is the command in the README, on the
+    homepage and in every install doc, and it starts only the dashboard.
+    Ingest is the daemon's job, and every other `_start_daemon_background()`
+    call site sits in the cloud-connect flow -- so a user who followed the
+    documented quickstart got a dashboard that told them it had detected their
+    runtime and then showed zero sessions, with no error to search for.
+    Reproduced on the published wheel and on main with a real Goose store:
+    the probe found Goose, /api/overview reported 0 sessions, and one manual
+    `python -m clawmetry.sync` turned it into 4.
+
+    Deliberately HOME-scoped. The obvious check, `_is_sync_running()`, shells
+    out to `pgrep -f "clawmetry.*sync"`, which matches a daemon belonging to
+    ANOTHER home serving a DIFFERENT store -- on a developer machine that is
+    the normal case, and it would make this skip exactly where it is needed.
+    `local_store._daemon_registered()` reads a file scoped to this home.
+
+    Never raises, never blocks the boot, and `CLAWMETRY_AUTO_INGEST=0` turns
+    it off entirely.
+    """
+    if str(os.environ.get("CLAWMETRY_AUTO_INGEST", "1")).strip().lower() in (
+        "0", "false", "no", "off",
+    ):
+        return
+    # Sample mode serves a synthetic store; ingesting real sessions into it
+    # would defeat the isolation the sample depends on.
+    try:
+        from clawmetry import sample_data as _sample_data
+        if _sample_data.is_sample_mode():
+            return
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store as _ls
+        if _ls._daemon_registered():
+            return  # something already owns this home's store
+    except Exception:
+        return  # cannot tell -> do nothing rather than risk a second writer
+    try:
+        _start_daemon_background()
+    except Exception as exc:
+        # A failure here must never stop the dashboard serving -- but it must
+        # not be silent either, or we are back to an empty screen with no
+        # explanation.
+        print(f"  Could not start the sync daemon ({exc}). The dashboard will "
+              f"show no sessions until one runs: python3 -m clawmetry.sync")
+
+
 def main():
     # Enterprise TLS/proxy bootstrap (idempotent; also runs in cli.main).
     # Covers direct `python3 dashboard.py` runs so telemetry/cloud-proxy
@@ -13717,6 +13798,9 @@ def main():
             print()
         except (ValueError, OSError):
             pass
+        # The dashboard renders what the daemon collects; without one, a
+        # machine full of agent sessions renders empty (#5740).
+        _ensure_ingest_running()
         _run_server(args)
 
 
