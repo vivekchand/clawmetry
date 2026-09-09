@@ -1,0 +1,13 @@
+  - id: injection-chinese-core-override
+    type: injection
+    status: experimental
+    name: "Chinese Core Override"
+    description: "Detects prompt injection override attempts in Chinese"
+    severity: high
+    confidence: high
+    references:
+      - "https://arxiv.org/abs/2512.23684"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:忽略|无视|不要理会)(?:之前|以前|上面|先前)(?:的)?(?:所有)?(?:指示|指令|规则|提示)'
