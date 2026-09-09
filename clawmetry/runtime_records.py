@@ -231,8 +231,8 @@ RUNTIME_RECORDS: dict[str, dict] = {
     ),
     "muse_code": _e(
         ON_DISK, DERIVED, ON_DISK,
-        "Per-model-call token counters ride each transcript item, tagged with "
-        "the session's model",
+        "Token counts are the counted-once session totals MSP itself reports, "
+        "tagged with the model that produced them",
         note="Muse Code publishes no on-disk record format; the transcript is "
              "served over the Muse Session Protocol, and every model call "
              "carries a verbatim provider usage block (input/output/cached/"

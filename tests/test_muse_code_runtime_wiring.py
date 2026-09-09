@@ -239,11 +239,36 @@ def test_cost_is_declared_derived_not_recorded():
     assert rec["model"] == ON_DISK
 
 
-def test_the_note_names_the_counted_once_gap():
-    """The one place our token figure is knowingly not MSP's best number."""
+def test_the_note_says_tokens_are_the_counted_once_totals():
+    """Our token figure IS MSP's own counted-once total, not a reconstruction.
+    The first cut of this adapter summed the folded item usage instead, which
+    is empty on a real machine, and reported $0.00 for real paid sessions."""
     from clawmetry.runtime_records import RUNTIME_RECORDS
     note = RUNTIME_RECORDS[RUNTIME]["note"]
     assert "counted-once" in note
+
+
+def test_meta_cached_input_has_its_own_rate():
+    """Cached tokens sit inside the input count (verified on muse 1.0.3), so
+    the cached slice must be swapped onto the published cached rate. A flat
+    multiplier cannot serve both tiers: standard's cached rate is 0.12x its
+    input rate, contributor's is 0.02x."""
+    from clawmetry.providers_pricing import _meta_cached_rate
+    assert _meta_cached_rate("muse-spark-1.3") == 0.15
+    assert _meta_cached_rate("muse-spark-1.3-contributor") == 0.002
+    assert _meta_cached_rate("gpt-5.4") is None
+
+
+def test_cached_input_is_cheaper_than_flat_input():
+    """The regression that matters: on the measured turn, 82.7% of input was
+    cache reads and pricing it flat over-charged by 5.1x."""
+    from clawmetry.providers_pricing import estimate_event_cost_usd
+    kw = {"input_tokens": 161408, "output_tokens": 694}
+    flat = estimate_event_cost_usd("muse-spark-1.3-contributor", **kw)
+    cached = estimate_event_cost_usd("muse-spark-1.3-contributor",
+                                     cache_read_tokens=133429, **kw)
+    assert cached == pytest.approx(0.003204, rel=1e-3)
+    assert flat / cached > 5
 
 
 def test_context_coverage_does_not_excuse_this_runtime():
