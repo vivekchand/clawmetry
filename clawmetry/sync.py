@@ -396,6 +396,30 @@ def _acquire_pid_lock() -> bool:
     return False
 
 
+# A sync cycle is about a minute. An hour without one completing is not a slow
+# machine, it is a daemon that is alive and not working: the failure mode that
+# has no supervisor at all, because the process is up and every liveness probe
+# in the stack says so.
+_STALLED_INGEST_SECS = float(os.environ.get("CLAWMETRY_STALLED_INGEST_SECS", "") or 3600)
+
+
+def _report_if_ingest_stalled() -> None:
+    """detectors.py ships ``no_progress`` to tell a customer their agent has
+    stopped getting anywhere. This is the same question asked about ourselves,
+    from the watchdog thread, which keeps running when the ingest loop does
+    not. Throttled to one report per six hours by the field-report stamp.
+    """
+    try:
+        from clawmetry import field_report as _fr
+
+        age = _fr.last_sync_age_secs()
+        if age is not None and age > _STALLED_INGEST_SECS:
+            _fr.report_daemon_failure("daemon_ingest_stalled",
+                                      version=_get_version())
+    except Exception as e:  # noqa: BLE001 - the watchdog must never die
+        log.debug("stall check skipped: %s", e)
+
+
 def _start_lock_heartbeat(interval_secs: float = 30.0) -> threading.Thread:
     """Tick the lock heartbeat on a fixed cadence for as long as this process
     can run Python.
@@ -409,6 +433,7 @@ def _start_lock_heartbeat(interval_secs: float = 30.0) -> threading.Thread:
     def _beat() -> None:
         while True:
             touch_lock_heartbeat()
+            _report_if_ingest_stalled()
             time.sleep(interval_secs)
 
     th = threading.Thread(target=_beat, daemon=True, name="lock-heartbeat")
@@ -23833,6 +23858,24 @@ def run_daemon() -> None:
         print(
             "[clawmetry-sync] Another instance is already running. Exiting.", flush=True
         )
+        # Refusing the lock is USUALLY correct and frequent: a double start, or
+        # someone running `python -m clawmetry.sync` beside the service. What
+        # is not normal is refusing it while nothing is ingesting, which is the
+        # 2026-09-08 field failure: a supervisor restarting into this branch
+        # every 30 seconds for twelve hours with no data moving and, because
+        # this path exits before the error handler and the auto-updater
+        # initialise, no trace of it anywhere but a local log file.
+        try:
+            from clawmetry import field_report as _fr
+
+            age = _fr.last_sync_age_secs()
+            if age is not None and age > _STALLED_INGEST_SECS:
+                # Inline, not a background thread: the process exits on the
+                # next line and the interpreter would take the thread with it.
+                _fr.report_daemon_failure("daemon_lock_refused",
+                                          version=_get_version(), blocking=True)
+        except Exception as _fr_e:  # noqa: BLE001 - never delay a failing start
+            log.debug("field report skipped: %s", _fr_e)
         sys.exit(0)
     import atexit
 

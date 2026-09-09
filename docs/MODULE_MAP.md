@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-230 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+231 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -163,6 +163,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/event_shape.py` | small | ONE normalizer for every stored event shape. |
 | `clawmetry/event_shape_classify.py` | medium | Event-shape classifier implementation (private to :mod:`clawmetry.event_shape`). |
 | `clawmetry/extensions.py` | medium | ClawMetry extension/plugin system. |
+| `clawmetry/field_report.py` | medium | Field-failure reports from the sync daemon (Requirement: Field Failure |
 | `clawmetry/flow_trace.py` | medium | Flow trace assembly for the Harness Engineering tab (REQ-HB-006). |
 | `clawmetry/gateway_protocol.py` | small | the single source of the OpenClaw gateway |
 | `clawmetry/gateway_tap.py` | medium | live OpenClaw gateway WebSocket subscriber. |

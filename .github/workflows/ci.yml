@@ -442,6 +442,15 @@ jobs:
       - name: The daemon lock cannot lock the daemon out
         run: python3 -m pytest tests/test_pid_lock_reclaim.py tests/test_status_daemon_truth.py tests/test_pid_liveness_windows.py -q
 
+      # The field-failure pipeline (desktop shell -> cloud sink -> deduped
+      # issue -> hourly fixer) had ONE producer, the installer, so a daemon
+      # that stopped working reported to nobody: it exits before the error
+      # handler and the auto-updater initialise, and a dead daemon sends no
+      # heartbeat, so the node just goes quiet. Pins the daemon as the second
+      # producer, and pins the privacy contract key by key.
+      - name: The daemon reports the failures that stop it working
+        run: python3 -m pytest tests/test_daemon_field_report.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
