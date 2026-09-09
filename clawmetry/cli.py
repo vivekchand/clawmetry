@@ -7081,6 +7081,43 @@ def _cmd_diagnose(args) -> None:
     if payload.get("cache_error"):
         _row("Cache error:", payload["cache_error"])
 
+    _diagnose_runtime_paths()
+
+
+def _diagnose_runtime_paths() -> None:
+    """Where ClawMetry looked for each runtime.
+
+    The first-run panel says HOW MANY runtimes were checked and sends the
+    reader here for the list. The map lands in a local command rather than
+    in the dashboard because a screen ships with every install and appears
+    in every screenshot of a fresh machine, while this output is something a
+    person runs and chooses to share. Paths are home-collapsed by the probe
+    itself, so pasting this into an issue names nobody.
+
+    Never raises: an older probe module simply prints nothing.
+    """
+    try:
+        from clawmetry import runtime_probe as _rp
+        probes = _rp.probe_runtimes()
+    except Exception:
+        return
+    if not probes:
+        return
+    found = [p for p in probes if p.get("found")]
+    print()
+    print(f"Runtimes: {len(found)} detected of {len(probes)} checked")
+    print()
+    print("  Where ClawMetry looked:")
+    for p in probes:
+        mark = "found" if p.get("found") else "-"
+        print(f"    [{mark:>5}] {p.get('label')}")
+        for pth in (p.get("paths") or []):
+            print(f"            {pth}")
+    print()
+    print("  On macOS, reading some of these needs Full Disk Access for your")
+    print("  terminal. A runtime that stores its sessions elsewhere can be")
+    print("  pointed at ClawMetry with the env vars in docs/compatibility.md.")
+
 
 
 def _cmd_extensions(args) -> None:
