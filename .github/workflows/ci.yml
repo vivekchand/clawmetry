@@ -162,6 +162,14 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
+      # Named explicitly because this repo's CI runs FILE LISTS, not
+      # `pytest tests/`. /api/runtime-summary claimed to mirror the daemon's
+      # runtimeSummary slice but re-implemented it as a capped raw-event scan:
+      # it billed the OpenClaw v3 assistant/model.completed twin twice and let
+      # a loud runtime starve quiet ones out of the response. Pins both.
+      - name: /api/runtime-summary reads the deduped uncapped rollup
+        run: python3 -m pytest tests/test_runtime_summary_uncapped_dedup.py -q
+
       - name: Published provider pricing and cache accounting
         run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
 
@@ -385,12 +393,14 @@ jobs:
       - name: Home makes no invisible fetch
         run: python3 -m pytest tests/test_overview_no_invisible_fetch.py -q
 
-      # A tab the runtime switcher toggles must be reachable by SOMEONE — a nav
-      # entry or an in-app switchTab() call. The Sub-Agents & Queue Lanes tab
-      # had neither: a template, three loaders, an agent stop control and a 5s
-      # poller shipped in every wheel with zero callers of
-      # switchTab('subagents') in OSS or cloud. Nothing could fail, because
-      # nobody could reach the thing that would fail.
+      # EVERY tab the wheel ships must be reachable by SOMEONE — a nav entry or
+      # a switchTab() call in any bundle under static/js. Two were not.
+      # Sub-Agents & Queue Lanes: a template, three loaders, an agent stop
+      # control and a 5s poller, zero callers in OSS or cloud. Session
+      # Clusters: a switchTab() branch and a renderer reading four fields
+      # /api/sessions/clusters no longer emits. Nothing could fail, because
+      # nobody could reach the thing that would fail. Scoped to the shipped
+      # templates rather than _CM_RT_ALL_TABS, which never listed clusters.
       - name: Every tab is reachable
         run: python3 -m pytest tests/test_every_tab_is_reachable.py -q
 
@@ -611,6 +621,7 @@ jobs:
             tests/test_overview_claims_are_evidenced.py \
             tests/test_obs_gap_nemoclaw_vllm_5579.py \
             tests/test_obs_gap_openclaw_reply_recovery_5620.py \
+            tests/test_sample_data.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
