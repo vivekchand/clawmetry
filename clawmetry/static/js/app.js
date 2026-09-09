@@ -32405,7 +32405,7 @@ async function renderFirstRunReport(overview) {
   // at: it probes local runtime paths and prescribes `clawmetry connect` /
   // `clawmetry --sample`. On a hosted node page the probe runs inside the
   // cloud container, which has no runtimes and never will, so it reported
-  // "No supported runtime was detected ... checked 30 runtimes" about the
+  // "No supported runtime was detected ... checked 31 runtimes" about the
   // server while the reader was looking at their own laptop's sessions.
   // A local-machine diagnostic has no honest answer to give here.
   if (window.CLOUD_MODE) { el.style.display = 'none'; return; }
