@@ -222,6 +222,23 @@ RUNTIME_LANDING_PATHS = {
 
 }
 
+# The runtimes named by name in *short* copy — the GitHub "About" blurb, the
+# PyPI summary, the README tagline, a tweet. Ordered by how much of the
+# audience recognises the name, not alphabetically, and deliberately short:
+# everything after it is "& N more", where N is derived, never typed.
+#
+# This exists so that "N more" has one definition. Before it, the README said
+# "& 26 more" next to "30 runtimes" (4 named) while the GitHub About said 26
+# total and named 11 — two surfaces, two arithmetics, both hand-maintained.
+#
+# Kept a subset of ALL_RUNTIMES by tests/test_supported_runtimes_file.py.
+RUNTIME_MARQUEE: tuple[str, ...] = (
+    "openclaw",
+    "nemoclaw",
+    "claude_code",
+    "codex",
+)
+
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
 # same order the sync daemon walks them (``clawmetry/sync.py``
 # ``_CHANNEL_DIRS``). Every channel is FREE -- there is no paid-channel
