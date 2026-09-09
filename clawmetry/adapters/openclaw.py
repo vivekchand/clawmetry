@@ -174,6 +174,68 @@ def _openclaw_doctor_findings() -> list:
         return []
 
 
+def _openclaw_update_pipeline_state(events: list) -> dict:
+    """Return update-pipeline metadata from gateway log events.
+
+    OpenClaw 2026.9.3's safer-update pipeline (#136997, #138839, #141109,
+    #141175, #141562) rehearses core/plugin changes in an isolated candidate
+    state before activation and can recover abandoned update records without
+    stopping a healthy Gateway.  These state transitions appear in the gateway
+    log; surfacing them lets ClawMetry flag agents stuck in a half-activated or
+    abandoned update state.
+
+    Scans the already-fetched events list (no extra I/O).  Matches:
+    - candidate state: msg contains "candidate" + ("update" | "activat")
+    - abandoned update recovery: msg contains "abandon" + ("update" | "recover")
+    - activation event: msg contains "activation" + "update"
+
+    Returns a dict with one or more of:
+    - ``updatePipelineStateDetected`` (bool): True when any update event found
+    - ``updatePipelineCandidateState`` (bool): True when candidate-state found
+    - ``updatePipelineAbandoned`` (bool): True when abandoned-update recovery found
+    - ``updatePipelineMsg`` (str): the first matching event's msg
+    - ``updatePipelineTs`` (str): the first matching event's ts, if present
+
+    Returns ``{}`` when no update-pipeline event is found.
+    Never raises (closes #5749).
+    """
+    try:
+        if not events:
+            return {}
+        result: dict = {}
+        for evt in events:
+            if not isinstance(evt, dict):
+                continue
+            raw_msg = evt.get("msg", "")
+            msg = str(raw_msg).lower()
+            if not msg:
+                continue
+            is_candidate = "candidate" in msg and (
+                "update" in msg or "activat" in msg
+            )
+            is_abandoned = "abandon" in msg and (
+                "update" in msg or "recover" in msg
+            )
+            is_activation = "activation" in msg and "update" in msg
+            if not (is_candidate or is_abandoned or is_activation):
+                continue
+            if not result:
+                result = {
+                    "updatePipelineStateDetected": True,
+                    "updatePipelineMsg": str(raw_msg),
+                }
+                ts = evt.get("ts")
+                if ts is not None:
+                    result["updatePipelineTs"] = ts
+            if is_candidate and not result.get("updatePipelineCandidateState"):
+                result["updatePipelineCandidateState"] = True
+            if is_abandoned and not result.get("updatePipelineAbandoned"):
+                result["updatePipelineAbandoned"] = True
+        return result
+    except Exception:
+        return {}
+
+
 def _clawrouter_detect() -> dict:
     """Detect the ClawRouter bundled provider plugin (OpenClaw 2026.7.1, #99658).
 
@@ -2717,6 +2779,15 @@ class OpenClawAdapter(AgentAdapter):
             _backup = _backup_outcome_events(_gw_events)
             if _backup:
                 meta.update(_backup)
+            # Update-pipeline state detection (#5749): OpenClaw 2026.9.3's safer-
+            # update pipeline rehearses core/plugin changes in candidate state before
+            # activation and can recover abandoned updates without stopping a healthy
+            # Gateway. Surface updatePipelineStateDetected (and optionally
+            # updatePipelineCandidateState / updatePipelineAbandoned) so the
+            # dashboard can flag agents stuck in a half-activated or abandoned state.
+            _upd = _openclaw_update_pipeline_state(_gw_events)
+            if _upd:
+                meta.update(_upd)
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by
