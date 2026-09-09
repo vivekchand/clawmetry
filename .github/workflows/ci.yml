@@ -577,6 +577,7 @@ jobs:
             tests/test_tab_template_page_wrapper.py \
             tests/test_grok_bot_runtime_wiring.py \
             tests/test_lovable_runtime_wiring.py \
+            tests/test_muse_code_runtime_wiring.py \
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
             tests/test_meeting_transcripts.py \

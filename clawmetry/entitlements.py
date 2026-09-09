@@ -129,6 +129,10 @@ PAID_RUNTIMES = frozenset(
         # transcript journals into the Repl workspace filesystem, where the
         # daemon reads them (in-Repl install or a local clone).
         "replit",
+        # Muse Code (developer.meta.com/ai/products/muse-code) -- Meta's
+        # terminal coding agent on Muse Spark. NOT the consumer Muse personal
+        # agent, which runs wholly inside Meta's cloud VM and is unobservable.
+        "muse_code",
     }
 )
 
@@ -177,6 +181,7 @@ RUNTIME_LABELS = {
     "openworker": "OpenWorker",
     "lovable": "Lovable",
     "replit": "Replit Agent",
+    "muse_code": "Muse Code",
 
 }
 
@@ -219,6 +224,7 @@ RUNTIME_LANDING_PATHS = {
     "openworker": "/runtimes/openworker",
     "lovable": "/runtimes/lovable",
     "replit": "/runtimes/replit",
+    "muse_code": "/runtimes/muse-code",
 
 }
 
