@@ -253,11 +253,17 @@ def test_context_coverage_does_not_excuse_this_runtime():
     assert "muse_code" not in text
 
 
-def test_probe_keys_on_the_settings_file_not_the_shared_config_dir():
-    """~/.config exists on nearly every machine; keying on it would report
-    Muse Code installed for users who have never run it."""
+def test_probe_looks_in_the_real_data_home_not_only_the_config_dir():
+    """Verified against muse 1.0.3: the session store lives under
+    ~/.local/share/muse (XDG, even on macOS), while ~/.config/muse holds only
+    settings and credentials. Probing the config dir alone would miss the
+    evidence that Muse actually ran."""
     from clawmetry.runtime_probe import RUNTIME_PROBES
     probe = next(p for p in RUNTIME_PROBES if p.id == RUNTIME)
-    assert any(path.endswith("settings.json") for path in probe.paths)
-    # The bare ~/.config/muse directory is NOT evidence on its own.
-    assert not any(path.rstrip("/").endswith("muse") for path in probe.paths)
+    assert probe.paths[0] == "~/.local/share/muse/session-index.db"
+    assert any(".config/muse" in path for path in probe.paths)
+    # macOS uses XDG here, so an Application Support path would be wrong.
+    assert not any("Application Support" in path for path in probe.paths)
+    # The bare ~/.config/muse directory is created by a FAILED first launch,
+    # so it is not evidence and must not be probed.
+    assert not any(path.rstrip("/").endswith("/muse") for path in probe.paths)
