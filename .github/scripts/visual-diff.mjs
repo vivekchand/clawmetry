@@ -73,6 +73,13 @@ const VIEWS = [
   },
 ];
 
+// Deterministic epoch for clock freeze. The value is arbitrary -- what matters
+// is that BASE and HEAD both see the same performance.now() baseline, so that
+// animation loops computing phase as `performance.now() % period` return an
+// identical offset in both captures. 2025-01-01T00:00:00Z is chosen for human
+// readability when inspecting screenshots; any constant works equally well.
+const FIXED_TIME = new Date("2025-01-01T00:00:00.000Z").getTime();
+
 const slugify = (t) =>
   t === "overview" ? "root" : t.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
 
@@ -91,8 +98,8 @@ async function reachable(url) {
  *
  * This is called before the screenshot loop to provide an early diagnostic
  * message. A failure no longer aborts the run -- we continue screenshotting
- * so the PR comment always has images (showing the overlay) rather than
- * "no screenshots". The error is collected into
+ * so the PR comment always has diagnostic images (showing the overlay) rather
+ * than "no screenshots". The error is collected into
  * preflightFailed[] and merged into authGaps at the end so the workflow
  * still exits 3 to signal the auth problem.
  */
@@ -158,6 +165,17 @@ async function shoot(browser, baseUrl, view, tab, file) {
   let ok = true;
   let httpStatus = 0;
   try {
+    // Freeze Date.now()/performance.now() at a deterministic value BEFORE
+    // page scripts run. Canvas animation loops that calculate phase as
+    // `performance.now() % period` return the same value on BASE and HEAD
+    // even when they captured the original requestAnimationFrame reference
+    // before our post-render override (window.requestAnimationFrame = () => 0).
+    // Without this, the flow tab's dashed-edge canvas animation advances its
+    // phase between BASE and HEAD captures, producing a 100% pixel diff on a
+    // frame a human reviewer cannot distinguish from no change.
+    // page.clock requires Playwright >= 1.45.
+    await page.clock.setFixedTime(FIXED_TIME);
+
     // The dashboard opens long-lived SSE streams (logs/brain/health), so
     // waiting for `networkidle` deadlocks. Use `domcontentloaded` and rely
     // on the explicit overlay-wait + scroll loop below to settle content.
