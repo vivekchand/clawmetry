@@ -38,6 +38,17 @@ except Exception:  # pragma: no cover - defensive; keep onboarding alive
     FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
 
 
+def _tilde(path: str) -> str:
+    """``/Users/ada/.codex`` -> ``~/.codex``. Never widens a path."""
+    try:
+        home = os.path.expanduser("~")
+        if home and home != os.sep and path.startswith(home):
+            return "~" + path[len(home):]
+    except Exception:
+        pass
+    return path
+
+
 def _refusal_reason(expanded: str):
     """Why an apparently-absent path is actually unreadable, or ``None``.
 
@@ -150,7 +161,13 @@ class RuntimeProbe:
 
         def _look(raw: str, expanded: str) -> None:
             nonlocal found
-            entry = {"path": expanded}
+            # Home-collapsed, ALWAYS. An absolute path carries the account
+            # name, and everything that renders one ends up in a screenshot,
+            # a screen-share or a pasted issue. ``~/.claude/projects`` is
+            # exactly as checkable and names nobody. Mirrors the rule the
+            # detector surface already holds itself to (AC-OBS-RSO-030.7:
+            # no report carries a full filesystem path).
+            entry = {"path": _tilde(expanded)}
             if expanded != raw:
                 entry["pattern"] = raw
             try:
@@ -420,11 +437,18 @@ def detection_report(probes: list = None) -> dict:
     blocked = []
     locations = []
     for p in probes:
+        seen_reasons = set()
         for entry in (p.get("unreadable") or []):
+            reason = entry.get("unreadable")
+            if reason in seen_reasons:
+                continue
+            seen_reasons.add(reason)
+            # No path. A blocked read is actionable from the runtime name and
+            # the reason alone ("give your terminal Full Disk Access"); the
+            # path would only add the account name to a screenshot.
             blocked.append({
                 "runtime": p.get("id"), "label": p.get("label"),
-                "path": entry.get("path"),
-                "reason": entry.get("unreadable"),
+                "reason": reason,
             })
         if p.get("found"):
             continue
@@ -442,28 +466,54 @@ def detection_report(probes: list = None) -> dict:
     }
 
 
-def _render_nothing_detected(probes: list) -> list:
-    """Copy for the machine where no runtime was detected (#5716)."""
+def detection_summary(probes: list = None) -> dict:
+    """The SERVABLE half of :func:`detection_report`: no paths, ever.
+
+    ``detection_report`` carries ``locations``, which is the full per-runtime
+    probe map for all 30 runtimes. That belongs in ``clawmetry diagnose`` --
+    a local command whose output a person chooses to share -- and not in an
+    HTTP response, where it becomes a tidy copy-pasteable detection map that
+    ships with every install and lands in every screenshot of the empty
+    state. The paths are readable in this file either way; a finished map
+    rendered in the product is a different artefact from a table in source.
+
+    So the endpoint serves the counts and the blocked reasons, which is
+    everything a screen needs to stop saying "you have no data" when the
+    truth is "I was refused".
+    """
     report = detection_report(probes)
+    return {
+        "found": report["found"],
+        "found_count": report["found_count"],
+        "blocked": report["blocked"],
+        "runtimes_checked": report["runtimes_checked"],
+    }
+
+
+def _render_nothing_detected(probes: list) -> list:
+    """Copy for the machine where no runtime was detected (#5716).
+
+    The onboarding wizard is a screen, so it gets the same treatment as the
+    dashboard: the count and the blocked case, no probed paths. ``clawmetry
+    diagnose`` is where the map lives.
+    """
+    report = detection_summary(probes)
     blocked = report.get("blocked") or []
-    locations = report.get("locations") or []
     lines: list = []
     if blocked:
         lines.append("Agent data looks present on this machine, but could not be read:")
         for b in blocked[:4]:
-            lines.append(f"  {b.get('label') or b.get('runtime')}: {b.get('path')}")
-            lines.append(f"    {b.get('reason')}")
+            lines.append(f"  {b.get('label') or b.get('runtime')}: {b.get('reason')}")
+        lines.append("")
+        lines.append("Run 'clawmetry diagnose' to see exactly where ClawMetry looked.")
         return lines
     checked = report.get("runtimes_checked") or len(probes)
-    if not locations:
-        return [f"No agent runtime detected yet ({checked} checked)."]
-    lines.append(f"No agent runtime detected yet. ClawMetry checked {checked} runtimes, including:")
-    for loc in locations[:6]:
-        for pth in (loc.get("paths") or [])[:2]:
-            lines.append(f"  {loc.get('label')}: {pth}")
-    lines.append("")
-    lines.append("Start an agent and ClawMetry picks it up on its own. Nothing to configure.")
-    return lines
+    return [
+        f"No agent runtime detected yet. ClawMetry checked {checked} runtimes and found none.",
+        "Run 'clawmetry diagnose' to see exactly where it looked.",
+        "",
+        "Start an agent and ClawMetry picks it up on its own. Nothing to configure.",
+    ]
 
 
 def render_detection_lines(probes: list) -> list:

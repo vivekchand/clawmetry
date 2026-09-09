@@ -523,41 +523,37 @@
   // nothing was detected. This used to `return` and leave the generic
   // "One quick choice and your dashboard is ready", which tells someone
   // staring at an empty product exactly nothing: they cannot tell "no agent
-  // has run here" from "ClawMetry cannot read them". Say where we looked,
-  // and say the one thing they can act on.
+  // has run here" from "ClawMetry cannot read them".
+  //
+  // Says the count and the blocked case, and NO probed paths. The full map
+  // of where we look for all 30 runtimes lives in `clawmetry diagnose`, a
+  // local command whose output a person chooses to share -- not on the
+  // screen that appears in every screenshot of a fresh install, carrying
+  // the account name in every path.
   function _fillNothingDetected(d) {
     var el = $('obg-detect');
     if (!el) return;
     var det = (d && d.detection) || {};
     var blocked = det.blocked || [];
-    var locations = det.locations || [];
+    var checked = det.runtimes_checked || 0;
 
     // Blocked comes first and alone: it is the case the person can actually
     // fix, and it means their agent data IS here and we were refused.
     if (blocked.length) {
-      var b = blocked[0];
-      el.innerHTML = '<b>' + _esc(b.label || b.runtime) + '</b> looks like it is on this machine, '
-        + 'but ClawMetry could not read it.<br>'
-        + '<span style="opacity:.85;">' + _esc(b.reason || '') + '</span><br>'
-        + '<code style="font-size:11px;opacity:.75;">' + _esc(b.path || '') + '</code>';
+      var names = blocked.slice(0, 3).map(function (b) {
+        return _esc(b.label || b.runtime);
+      }).join(', ');
+      el.innerHTML = '<b>' + names + '</b> ' + (blocked.length === 1 ? 'looks' : 'look')
+        + ' present on this machine, but ClawMetry could not read '
+        + (blocked.length === 1 ? 'it' : 'them') + '.<br>'
+        + '<span style="opacity:.85;">' + _esc(blocked[0].reason || '') + '</span>';
       return;
     }
-    if (!locations.length) {
-      el.textContent = 'No agent activity on this machine yet. Start an agent and this fills in on its own.';
-      return;
-    }
-    var shown = locations.slice(0, 3);
-    var paths = [];
-    shown.forEach(function (l) {
-      (l.paths || []).slice(0, 2).forEach(function (pth) { paths.push(pth); });
-    });
-    var more = (det.runtimes_checked || locations.length) - shown.length;
-    el.innerHTML = 'No agent activity here yet. ClawMetry checked '
-      + (det.runtimes_checked || locations.length) + ' runtimes, including:<br>'
-      + '<span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;opacity:.8;">'
-      + paths.slice(0, 4).map(_esc).join('<br>') + '</span><br>'
-      + '<span style="opacity:.85;">Start an agent (OpenClaw, Claude Code, Codex, Cursor, and more) '
-      + 'and this fills in on its own. Nothing to configure.</span>';
+    el.textContent = checked
+      ? ('No agent activity here yet. ClawMetry checked ' + checked
+         + ' runtimes and found none. Start an agent and this fills in on its '
+         + 'own, with nothing to configure.')
+      : 'No agent activity on this machine yet. Start an agent and this fills in on its own.';
   }
 
   function _esc(x) {

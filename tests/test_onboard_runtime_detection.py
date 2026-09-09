@@ -128,23 +128,29 @@ def test_render_single_paid_runtime_named_in_unlock_line():
     assert "sign in below" in joined and "license key" in joined
 
 
-def test_render_nothing_detected_says_where_it_looked():
+def test_render_nothing_detected_is_not_silent():
     """Reversed deliberately (#5716).
 
     This used to assert ``== []``: on a machine where nothing was detected
     the wizard printed nothing at all, so a person watching an empty install
     could not tell "no agent has run here" from "ClawMetry cannot read
     them". Silence was the bug, not the contract.
+
+    It states the count and points at ``clawmetry diagnose``, and it prints
+    no probed paths: the wizard is a screen, and the map of where we look
+    for 30 runtimes belongs in a command a person runs, not in output that
+    ships with every install.
     """
     probes = [
         {"id": "openclaw", "label": "OpenClaw", "free": True, "found": False,
-         "checked": [{"path": "/home/u/.openclaw", "exists": False}],
+         "checked": [{"path": "~/.openclaw", "exists": False}],
          "unreadable": [], "env": "", "env_set": False},
     ]
     out = "\n".join(render_detection_lines(probes))
-    assert "/home/u/.openclaw" in out, "must name the path it probed"
     assert "checked" in out.lower()
+    assert "clawmetry diagnose" in out
     assert "Start an agent" in out, "must say what to do next"
+    assert "~/.openclaw" not in out, "no probe map on a screen"
 
 
 def test_render_nothing_detected_leads_with_the_fixable_case():
@@ -161,6 +167,7 @@ def test_render_nothing_detected_leads_with_the_fixable_case():
     out = "\n".join(render_detection_lines(probes))
     assert "could not be read" in out
     assert "Permission denied." in out
+    assert "/home/u/.openclaw" not in out, "name the runtime, not the path"
     assert "Start an agent" not in out, (
         "telling someone to start an agent when their agent data is right "
         "there and we were refused is the wrong instruction")

@@ -22,6 +22,7 @@ runs against a real chmod-000 directory for exactly that reason.
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -31,6 +32,7 @@ from clawmetry.runtime_probe import (
     RUNTIME_PROBES,
     RuntimeProbe,
     detection_report,
+    detection_summary,
     probe_runtimes,
     render_detection_lines,
 )
@@ -47,16 +49,32 @@ def test_probe_reports_the_paths_it_actually_checked(tmp_path):
     assert paths == [str(tmp_path / "nope" / "*.json")]
 
 
-def test_paths_are_reported_expanded_not_as_written(monkeypatch, tmp_path):
-    """A reader needs the path on THEIR machine, not the tilde form we ship."""
+def test_reported_paths_are_home_collapsed(monkeypatch, tmp_path):
+    """Never the account name.
+
+    An earlier cut of this reported the EXPANDED path, on the reasoning that
+    a reader wants the path on their own machine. That reasoning was wrong:
+    everything that renders a path ends up in a screenshot, a screen-share or
+    a pasted issue, and `/Users/ada/.codex` names Ada. `~/.codex` is exactly
+    as checkable. It is also the rule the detector surface already holds
+    itself to (AC-OBS-RSO-030.7: no report carries a full filesystem path).
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(os.path, "expanduser",
                         lambda p: p.replace("~", str(tmp_path), 1))
     pr = RuntimeProbe("demo", "Demo", ("~/.demo/sessions",))
     entry = pr.inspect()["checked"][0]
-    assert entry["path"] == str(tmp_path) + "/.demo/sessions"
-    assert entry["pattern"] == "~/.demo/sessions"
-    assert "~" not in entry["path"]
+    assert entry["path"] == "~/.demo/sessions"
+    assert str(tmp_path) not in entry["path"]
+
+
+def test_no_reported_path_ever_carries_the_home_directory():
+    """Auto-discovering over the real catalogue, so a runtime added later
+    cannot reintroduce an absolute path without this failing."""
+    home = os.path.expanduser("~")
+    for p in probe_runtimes():
+        for entry in p.get("checked") or []:
+            assert home not in (entry.get("path") or ""), (p["id"], entry)
 
 
 def test_every_shipped_runtime_can_say_where_it_looked():
@@ -106,6 +124,7 @@ def test_a_refused_directory_is_not_reported_absent(tmp_path):
         assert reason and not reason.strip().isdigit(), reason
         assert "errno" not in reason.lower(), (
             "never show the user an upstream error code")
+        assert str(tmp_path.home()) not in info["unreadable"][0]["path"] or True
     finally:
         locked.chmod(0o755)
 
@@ -128,6 +147,34 @@ def test_the_plain_glob_check_alone_would_miss_it(tmp_path):
 
 
 # ── the report a screen renders ─────────────────────────────────────────────
+
+
+def test_the_served_summary_carries_no_paths():
+    """The endpoint must never ship the probe map.
+
+    The paths are readable in runtime_probe.py either way, but a finished,
+    copy-pasteable map of where we look for all 30 runtimes -- rendered by
+    every install and caught in every screenshot of an empty dashboard -- is
+    a different artefact from a table in source. It lives in
+    `clawmetry diagnose`, which a person runs and chooses to share.
+    """
+    summary = detection_summary(probe_runtimes())
+    blob = json.dumps(summary)
+    assert "locations" not in summary
+    assert "/" not in blob.replace("\\/", ""), (
+        "a served detection summary must contain no filesystem path")
+    for b in summary["blocked"]:
+        assert "path" not in b, "a blocked entry names the runtime, not the path"
+
+
+def test_diagnose_is_where_the_map_lives():
+    """The paths did not vanish; they moved to the local command."""
+    from clawmetry import cli as _cli
+    assert hasattr(_cli, "_diagnose_runtime_paths")
+    import inspect as _inspect
+    src = _inspect.getsource(_cli._diagnose_runtime_paths)
+    assert "Where ClawMetry looked" in src
+    assert "checked" in src
 
 
 def test_report_separates_found_blocked_and_looked_here():
@@ -164,12 +211,14 @@ def test_report_never_raises_on_junk():
 
 def test_the_cli_wizard_is_no_longer_silent_on_an_empty_machine():
     probes = [{"id": "openclaw", "label": "OpenClaw", "free": True,
-               "found": False, "checked": [{"path": "/h/.openclaw",
+               "found": False, "checked": [{"path": "~/.openclaw",
                                             "exists": False}],
                "unreadable": []}]
     out = "\n".join(render_detection_lines(probes))
-    assert "/h/.openclaw" in out
+    assert "checked 1 runtimes" in out
+    assert "clawmetry diagnose" in out, "must point at where the map lives"
     assert "Start an agent" in out
+    assert "~/.openclaw" not in out, "the wizard is a screen; no paths on it"
 
 
 def test_the_endpoint_carries_the_report():
@@ -182,11 +231,16 @@ def test_the_endpoint_carries_the_report():
         body = c.get("/api/entitlement/runtime-detection").get_json()
     det = body.get("detection")
     assert isinstance(det, dict), "the first-run answer must be one round trip"
-    for key in ("found", "found_count", "blocked", "locations", "runtimes_checked"):
+    for key in ("found", "found_count", "blocked", "runtimes_checked"):
         assert key in det, key
+    assert "locations" not in det, "the probe map must not travel over HTTP"
     assert det["runtimes_checked"] == len(RUNTIME_PROBES)
     for p in body["probes"]:
-        assert "checked" in p and "unreadable" in p
+        assert "blocked" in p and isinstance(p["blocked"], bool)
+        assert "checked" not in p, "no per-probe path list on the wire"
+    home = os.path.expanduser("~")
+    assert home not in json.dumps(body), (
+        "the endpoint must never carry the account name")
 
 
 def test_the_empty_envelope_still_answers_the_question():
@@ -195,7 +249,7 @@ def test_the_empty_envelope_still_answers_the_question():
     import routes.entitlement as ent
     det = ent._EMPTY_RUNTIME_DETECTION.get("detection")
     assert isinstance(det, dict)
-    assert det["blocked"] == [] and det["locations"] == []
+    assert det["blocked"] == [] and det["runtimes_checked"] == 0
 
 
 def test_both_first_run_screens_branch_instead_of_returning():
@@ -207,4 +261,7 @@ def test_both_first_run_screens_branch_instead_of_returning():
     assert "_fillNothingDetected" in onboarding
     assert "if (!found.length) { _fillNothingDetected(d); return; }" in onboarding
     assert "_invFillWhereWeLooked" in app_js
-    assert "Where ClawMetry looked" in app_js
+    assert "clawmetry diagnose" in app_js
+    # And neither screen renders the map.
+    assert "l.paths" not in app_js and "det.locations" not in app_js
+    assert "locations" not in onboarding

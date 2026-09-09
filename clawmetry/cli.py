@@ -6952,6 +6952,53 @@ def _cmd_diagnose(args) -> None:
     if payload.get("cache_error"):
         _row("Cache error:", payload["cache_error"])
 
+    _diagnose_runtime_paths()
+
+
+def _diagnose_runtime_paths() -> None:
+    """Where ClawMetry looked for each runtime, and what it was refused.
+
+    #5716 asked the first screen to say where we looked. The paths land HERE
+    rather than in the dashboard: this is a local command whose output a
+    person chooses to run and share, where the dashboard's empty state ships
+    with every install and appears in every screenshot of a fresh machine.
+    Paths are home-collapsed (``~/.codex/sessions``) by the probe itself, so
+    pasting this into an issue names nobody.
+
+    Never raises: a probe module from an older wheel simply prints nothing.
+    """
+    try:
+        from clawmetry import runtime_probe as _rp
+        probes = _rp.probe_runtimes()
+    except Exception:
+        return
+    found = [p for p in probes if p.get("found")]
+    blocked = [p for p in probes if p.get("unreadable")]
+    print()
+    print(f"Runtimes: {len(found)} detected of {len(probes)} checked")
+    if blocked:
+        print()
+        print("  Present but UNREADABLE (this is fixable):")
+        for p in blocked:
+            print(f"    {p.get('label')}")
+            for entry in (p.get("unreadable") or [])[:3]:
+                print(f"      {entry.get('path')}")
+                print(f"        {entry.get('unreadable')}")
+    print()
+    print("  Where ClawMetry looked:")
+    for p in probes:
+        mark = "found" if p.get("found") else "-"
+        paths = [e.get("path") for e in (p.get("checked") or [])
+                 if e.get("path") and not e.get("unresolved_env")]
+        if not paths:
+            continue
+        print(f"    [{mark:>5}] {p.get('label')}")
+        for pth in paths:
+            print(f"            {pth}")
+        if p.get("env"):
+            state = "set" if p.get("env_set") else "unset"
+            print(f"            ${p.get('env')} ({state})")
+
 
 
 def _cmd_extensions(args) -> None:
