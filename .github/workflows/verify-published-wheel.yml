@@ -73,16 +73,35 @@ jobs:
       - name: Resolve version
         id: ver
         shell: python
+        # The dispatch input is bound here rather than expanded inside the
+        # script. A `${{ }}` expansion is pasted into the program text before
+        # the interpreter runs, so the value becomes part of the program; an
+        # env var is data the program only ever reads. This step is the taint
+        # root for the whole job -- the verify step below reads
+        # `steps.ver.outputs.version`, which is this value.
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          import json, os, urllib.request
-          want = "${{ github.event.inputs.version }}".strip()
+          import json, os, re, urllib.request
+          want = os.environ.get("INPUT_VERSION", "").strip()
           if not want:
               with urllib.request.urlopen(
                       "https://pypi.org/pypi/clawmetry/json", timeout=30) as r:
                   want = json.load(r)["info"]["version"]
+          # Belt to the env-binding's braces: what goes into GITHUB_OUTPUT is a
+          # bare version and nothing else, so a later step cannot inherit a
+          # newline (which would forge a second output) or shell metacharacters.
+          if not re.fullmatch(r"[0-9A-Za-z.+!-]{1,64}", want):
+              raise SystemExit(f"not a version string, refusing to continue: {want!r}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
               fh.write(f"version={want}\n")
           print(f"verifying clawmetry=={want}")
 
+      # `shell: bash` is explicit because this runs on the Windows leg too,
+      # where the default shell is pwsh and `$VERSION` would silently read as
+      # an unset PowerShell variable rather than the environment variable.
       - name: Verify the published wheel
-        run: python scripts/verify_published_wheel.py --version "${{ steps.ver.outputs.version }}"
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: python scripts/verify_published_wheel.py --version "$VERSION"
