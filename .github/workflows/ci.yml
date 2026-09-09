@@ -588,8 +588,11 @@ jobs:
             tests/test_tab_template_page_wrapper.py \
             tests/test_grok_bot_runtime_wiring.py \
             tests/test_lovable_runtime_wiring.py \
+            tests/test_muse_code_runtime_wiring.py \
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
+            tests/test_otel_discovery.py \
+            tests/test_meeting_transcripts.py \
             tests/test_harness_audit_reads_whole_adapter.py \
             tests/test_otlp_sessionless_spans.py \
             tests/test_local_query_dispatch_edge_cases.py \
@@ -652,6 +655,13 @@ jobs:
             tests/test_process_control_windows.py \
             tests/test_detector_incident_delivery.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
+            tests/test_detectors.py \
+            tests/test_detectors_behavioural.py \
+            tests/test_detectors_ngram.py \
+            tests/test_detectors_secret_value_corpus.py \
+            tests/test_guard_escalation_ladder.py \
+            tests/test_guard_policies_api_ladder.py \
+            tests/test_guard_policy_enforcement.py \
             tests/test_waste_flags_free_default.py \
             tests/test_alert_rule_types_new.py \
             tests/test_regression_replay_optin.py \
@@ -672,6 +682,7 @@ jobs:
             tests/test_first_run_report.py \
             tests/test_e2e_invariants.py \
             tests/test_e2e_telegram_brain_ingest.py \
+            tests/test_rollup_session_runtime_attribution.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────

@@ -1072,6 +1072,23 @@ _DDL = [
     # the sub-agent fan-out tree (``parent_task_id``/``child_session_key``),
     # and the cron run log. ``runtime`` IS the OpenClaw queue lane.
     """
+    CREATE TABLE IF NOT EXISTS meeting_transcripts (
+        session_id        VARCHAR PRIMARY KEY,
+        node_id           VARCHAR,
+        title             VARCHAR,
+        provider_id       VARCHAR,
+        selector          VARCHAR,
+        started_at        VARCHAR,
+        stopped_at        VARCHAR,
+        utterance_count   BIGINT DEFAULT 0,
+        speaker_count     BIGINT DEFAULT 0,
+        duration_ms       BIGINT DEFAULT 0,
+        summary_markdown  VARCHAR,
+        transcript_text   VARCHAR,
+        updated_at_ms     BIGINT DEFAULT 0,
+        ingested_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS run_ledger (
         task_id               VARCHAR PRIMARY KEY,
         node_id               VARCHAR,
@@ -3411,6 +3428,28 @@ _DEDUPED_EVENTS_CTE = """
     WHERE NOT (r._envelope_rank = 1 AND bm._max_rank = 2)
   )
 """
+
+
+def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:
+    """Runtime a session belongs to, from its ``<runtime>:<uuid>`` id prefix.
+
+    The Python twin of the ``CASE WHEN split_part(session_id, ':', 1) IN (...)``
+    expression ``query_model_rollup`` / ``query_recent_sessions_by_runtime``
+    already use, and of ``sync._runtime_of_session``. The prefix is checked
+    against :data:`_NON_OPENCLAW_RUNTIME_PREFIXES`, so a genuine OpenClaw
+    session id that happens to contain a colon can never be read as a runtime.
+
+    Why the id and not ``agent_type``: family sessions are written to the
+    ``sessions`` table with ``agent_type='openclaw'`` by construction (the
+    column predates multi-runtime and several readers still filter on it), and
+    the runtime lives authoritatively in the id prefix. Deriving the rollup's
+    runtime from ``agent_type`` therefore filed every paid runtime under
+    ``openclaw``.
+    """
+    prefix = str(session_id or "").split(":", 1)[0].strip().lower()
+    if prefix and prefix in _NON_OPENCLAW_RUNTIME_PREFIXES:
+        return prefix
+    return fallback or "openclaw"
 
 
 class LocalStore(TrailStoreMixin):
@@ -6287,6 +6326,99 @@ class LocalStore(TrailStoreMixin):
         "started_at", "ended_at", "last_event_at", "cleanup_after", "error",
         "progress_summary", "terminal_summary", "terminal_outcome",
     )
+
+    def ingest_meeting_transcript(self, r: dict[str, Any], *, node_id: str = "") -> None:
+        """Upsert one OpenClaw meeting transcript (#5747).
+
+        Source is ``meeting_transcript_sessions`` / ``_utterances`` /
+        ``_summaries`` in ``~/.openclaw/state/openclaw.sqlite``, joined by
+        ``sync._read_meeting_transcripts``.
+
+        ``transcript_text`` and ``summary_markdown`` are HUMAN SPEECH, and
+        some of the humans never installed ClawMetry. They are stored locally
+        because that is what the user asked the product to observe, and they
+        leave the machine ONLY through the node-key-encrypted blob
+        (``sync.seal_meeting_transcript``), never in a plaintext cloud row.
+        Same rule the product already applies to a session title and intent
+        (REQ-OBS-RSO-032): content rides the encrypted field, the cleartext
+        row carries counts and identifiers.
+
+        Idempotent on ``session_id``: a meeting still being captured is
+        re-read as its utterance count grows, so the daemon keeps an
+        ``updated_at_ms`` watermark and overwrites rather than duplicating.
+        """
+        sid = r.get("session_id")
+        if not sid:
+            raise ValueError("meeting transcript row must include 'session_id'")
+
+        def _s(key, cap=0):
+            v = r.get(key)
+            if v is None:
+                return None
+            v = str(v)
+            return v[:cap] if cap and len(v) > cap else v
+
+        def _i(key):
+            try:
+                return int(r.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        with self._write_lock:
+            self._conn.execute(
+            """
+            INSERT INTO meeting_transcripts (
+                session_id, node_id, title, provider_id, selector,
+                started_at, stopped_at, utterance_count, speaker_count,
+                duration_ms, summary_markdown, transcript_text, updated_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (session_id) DO UPDATE SET
+                node_id          = EXCLUDED.node_id,
+                title            = EXCLUDED.title,
+                provider_id      = EXCLUDED.provider_id,
+                selector         = EXCLUDED.selector,
+                started_at       = EXCLUDED.started_at,
+                stopped_at       = EXCLUDED.stopped_at,
+                utterance_count  = EXCLUDED.utterance_count,
+                speaker_count    = EXCLUDED.speaker_count,
+                duration_ms      = EXCLUDED.duration_ms,
+                summary_markdown = EXCLUDED.summary_markdown,
+                transcript_text  = EXCLUDED.transcript_text,
+                updated_at_ms    = EXCLUDED.updated_at_ms
+            """,
+            [
+                str(sid), str(node_id or ""), _s("title", 500),
+                _s("provider_id", 120), _s("selector", 500),
+                _s("started_at", 64), _s("stopped_at", 64),
+                _i("utterance_count"), _i("speaker_count"), _i("duration_ms"),
+                _s("summary_markdown", 200000), _s("transcript_text", 2000000),
+                _i("updated_at_ms"),
+            ],
+            )
+
+    def query_meeting_transcripts(self, *, limit: int = 100,
+                                  include_text: bool = False) -> list:
+        """Recent meetings, newest first.
+
+        ``include_text`` defaults to FALSE so a caller has to ask for the
+        speech explicitly. Counts and timings answer "is capture working",
+        which is what most readers want, and a default that ships transcript
+        text to every incidental caller is how content leaks into a surface
+        nobody audited.
+        """
+        cols = ("session_id, node_id, title, provider_id, selector, started_at, "
+                "stopped_at, utterance_count, speaker_count, duration_ms")
+        if include_text:
+            cols += ", summary_markdown, transcript_text"
+        try:
+            rows = self._fetch(
+                f"SELECT {cols} FROM meeting_transcripts "
+                "ORDER BY COALESCE(stopped_at, started_at) DESC NULLS LAST "
+                "LIMIT ?", [int(limit)])
+        except Exception:
+            return []
+        keys = [c.strip() for c in cols.split(",")]
+        return [dict(zip(keys, r)) for r in rows]
 
     def ingest_run_ledger_row(self, r: dict[str, Any], *, node_id: str = "") -> None:
         """Upsert one OpenClaw run-ledger row (from ``tasks/runs.sqlite``).
@@ -11300,7 +11432,8 @@ class LocalStore(TrailStoreMixin):
                 session.get("stuck") or session.get("stuck_flag") or False
             )
             rollup_params.append([
-                sid, atype, session.get("title"), session.get("status"),
+                sid, _runtime_of_session_id(sid, atype),
+                session.get("title"), session.get("status"),
                 started, last_active,
                 int(session.get("total_tokens") or 0),
                 float(session.get("cost_usd") or 0),
@@ -19229,7 +19362,7 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
     "qm", "deepseek_harness", "exo", "kimi", "devin", "gemini_cli",
     "cline", "openhands", "openworker", "grok_bot", "lovable", "replit",
-
+    "muse_code",
 )
 
 # Epoch-ms of the outcome-classifier fix (2026-08-15). Any failure label
@@ -19407,7 +19540,7 @@ def _sql_in_clause(values: tuple[str, ...]) -> str:
 # call sites (and tests) have always reached for it via ``local_store``.
 #
 # The old implementation knew exactly two numbers, both Anthropic's, and
-# measured all 30 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
+# measured all 31 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
 # blown" (GPT-5 is 400K, so it was at 75%), and a genuinely blown 130K
 # DeepSeek turn read as a comfortable 65%. See that module's docstring.
 from clawmetry.context_windows import (  # noqa: E402  (kept near its callers)

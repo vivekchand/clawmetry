@@ -21,6 +21,15 @@ When a number here is legitimately *not* the supported-runtime count (a tier
 bullet counting free runtimes, a dated changelog line, a capacity estimate),
 add it to :data:`EXEMPT` with the reason rather than reshaping the prose.
 
+It also writes **SUPPORTED_RUNTIMES.txt** at the repo root: the one
+machine-readable export of the catalogue (id, label, tier, landing path,
+plus the derived count and the canonical one-line blurb). That file is what
+every *other* repo reads — clawmetry-pro, clawmetry-cloud and
+clawmetry-landing each fetch it by raw URL instead of keeping their own
+hand-typed list, which is how they ended up quoting 22, 14 and 12 runtimes
+respectively while this repo said 30. It is generated, never hand-edited;
+``--check`` fails when it is stale.
+
 The same script also checks the **chat-channel** count against
 ``ALL_CHANNELS``, which drifted the same way and for the same reason
 (2026-09-05: ``ALL_CHANNELS`` had 23, CLAUDE.md / FLYWHEEL.md / AGENTS.md
@@ -82,12 +91,31 @@ EXEMPT: list[tuple[str, str, str]] = [
     ("clawmetry/sync.py", "10 runtimes", "rollup sizing estimate, not the catalogue"),
     ("docs/WHAT_USERS_WANT.md", "18 runtimes total", "dated research note"),
     ("clawmetry/runtime_memory.py", "other 17 runtimes", "historic bug narrative, means all-but-one"),
+    ("clawmetry/entitlements.py", '"& 26 more" next to "30 runtimes"',
+     "historic bug narrative: what the README ACTUALLY said before the "
+     "marquee existed. Rewriting the 30 makes the sentence describe a state "
+     "that never happened, which is worse than a stale number"),
+    (".github/workflows/sync-github-about.yml", "26 AI agent runtimes",
+     "quotes the stale blurb that workflow exists to prevent"),
 ]
 
-# The English README pairs the count with "OpenClaw, NemoClaw, Claude Code,
-# OpenAI Codex & N more", so N is the total minus the four named runtimes.
-NAMED_IN_TAGLINE = 4
+# The English README pairs the count with the marquee names and "& N more",
+# so N is the total minus however many names the marquee prints. Derived
+# rather than typed: it was a literal 4 while the marquee grew, which is the
+# same class of bug one layer down.
 MORE_RE = re.compile(r"& \d{1,3} more\b")
+
+# The generated export every other repo reads. See :func:`render_export`.
+EXPORT_PATH = REPO / "SUPPORTED_RUNTIMES.txt"
+EXPORT_RAW_URL = (
+    "https://raw.githubusercontent.com/vivekchand/clawmetry/main/SUPPORTED_RUNTIMES.txt"
+)
+
+# GitHub caps a repository description at 350 characters, and silently
+# truncates past it. The blurb is asserted under this by
+# tests/test_supported_runtimes_file.py so a long runtime name cannot quietly
+# cut the sentence in half on the repo page.
+GITHUB_ABOUT_LIMIT = 350
 
 # The same phrase exists in the translated READMEs, but the wording differs per
 # language ("y 10 mas", "et 10 autres", "kai 10 akoma", ...) and a regex sweep
@@ -116,6 +144,207 @@ def catalogue_count() -> int:
     if total < 2:
         raise SystemExit("parsed an implausible runtime count from entitlements.py")
     return total
+
+
+def _entitlements_src() -> str:
+    return (REPO / "clawmetry" / "entitlements.py").read_text(encoding="utf-8")
+
+
+def _parse_block(src: str, pattern: str, what: str) -> str:
+    m = re.search(pattern, src, re.S)
+    if not m:
+        raise SystemExit(f"could not parse {what} from entitlements.py")
+    return m.group(1)
+
+
+def catalogue() -> list[dict[str, str]]:
+    """The full runtime catalogue, parsed (not imported) from entitlements.py.
+
+    Parsed for the same reason :func:`catalogue_count` is: ``setup.py`` runs
+    this before the package is importable, and importing ``entitlements``
+    drags in nothing heavy today but has no guarantee not to tomorrow.
+
+    Rows are sorted free-first, then by id, so the generated file has a
+    stable diff — a new runtime shows up as one added line, not a reshuffle.
+    """
+    src = _entitlements_src()
+    free = re.findall(
+        r'"([a-z0-9_]+)"',
+        _parse_block(src, r"FREE_RUNTIMES = frozenset\(\{(.*?)\}\)", "FREE_RUNTIMES"),
+    )
+    paid = re.findall(
+        r'"([a-z0-9_]+)"',
+        _parse_block(
+            src, r"PAID_RUNTIMES = frozenset\(\s*\{(.*?)\}\s*\)", "PAID_RUNTIMES"
+        ),
+    )
+    labels = dict(
+        re.findall(
+            r'"([a-z0-9_]+)": "([^"]+)"',
+            _parse_block(src, r"RUNTIME_LABELS = \{(.*?)\n\}", "RUNTIME_LABELS"),
+        )
+    )
+    paths = dict(
+        re.findall(
+            r'"([a-z0-9_]+)": "(/[^"]+)"',
+            _parse_block(
+                src, r"RUNTIME_LANDING_PATHS = \{(.*?)\n\}", "RUNTIME_LANDING_PATHS"
+            ),
+        )
+    )
+    rows = []
+    for tier, ids in (("free", free), ("paid", paid)):
+        for rid in sorted(ids):
+            missing = [
+                name
+                for name, table in (("RUNTIME_LABELS", labels), ("RUNTIME_LANDING_PATHS", paths))
+                if rid not in table
+            ]
+            if missing:
+                raise SystemExit(f"runtime {rid!r} is missing from {', '.join(missing)}")
+            rows.append(
+                {"id": rid, "label": labels[rid], "tier": tier, "path": paths[rid]}
+            )
+    if len(rows) < 2:
+        raise SystemExit("parsed an implausible catalogue from entitlements.py")
+    return rows
+
+
+def marquee() -> list[str]:
+    """Runtime ids named by name in short copy (RUNTIME_MARQUEE)."""
+    src = _entitlements_src()
+    ids = re.findall(
+        r'"([a-z0-9_]+)"',
+        _parse_block(
+            src, r"RUNTIME_MARQUEE: tuple\[str, \.\.\.\] = \((.*?)\)", "RUNTIME_MARQUEE"
+        ),
+    )
+    if not ids:
+        raise SystemExit("RUNTIME_MARQUEE parsed empty")
+    return ids
+
+
+def blurb(rows: list[dict[str, str]] | None = None) -> str:
+    """The canonical one-line product description.
+
+    This exact string is the GitHub repository "About" text, the PyPI
+    summary and the landing meta description. It said "26 AI agent
+    runtimes" on GitHub for weeks after the catalogue reached 30, because
+    a repo description is *metadata* — no file, no diff, no CI. Now it is
+    derived here and pushed by ``.github/workflows/sync-github-about.yml``.
+    """
+    rows = catalogue() if rows is None else rows
+    labels = {r["id"]: r["label"] for r in rows}
+    named = [labels[rid] for rid in marquee() if rid in labels]
+    # NemoClaw is "NVIDIA NemoClaw" and Codex is "OpenAI Codex" in copy aimed
+    # at people who have not heard of either; the catalogue label is the
+    # in-product one, which is shorter.
+    vendor = {"NemoClaw": "NVIDIA NemoClaw", "Codex": "OpenAI Codex"}
+    named = [vendor.get(n, n) for n in named]
+    return (
+        "See your agent think. Zero-config observability & governance for "
+        f"{len(rows)} AI agent runtimes: {', '.join(named)} & {len(rows) - len(named)} "
+        "more. Live token costs, sessions, tool calls, crons."
+    )
+
+
+def render_export(rows: list[dict[str, str]] | None = None) -> str:
+    """Render SUPPORTED_RUNTIMES.txt.
+
+    Grammar, kept boring on purpose so a five-line parser in any language
+    can read it (clawmetry-cloud parses it in Python, clawmetry-landing in
+    node):
+
+    * ``#`` comment lines and blank lines are ignored.
+    * A line with no TAB is metadata: ``KEY = value``.
+    * A line with TABs is a runtime: ``id<TAB>label<TAB>tier<TAB>path``.
+
+    ``COUNT`` is written out even though it equals the number of runtime
+    rows, because the consumers that only want the number should not have
+    to parse the rows to get it.
+    """
+    rows = catalogue() if rows is None else rows
+    free = [r for r in rows if r["tier"] == "free"]
+    paid = [r for r in rows if r["tier"] == "paid"]
+    out = [
+        "# ClawMetry — the supported agent runtimes, and nothing else.",
+        "#",
+        "# GENERATED FILE — do not edit by hand; your edit will be overwritten.",
+        "#",
+        "# Source of truth:  clawmetry/entitlements.py",
+        "#                   (FREE_RUNTIMES, PAID_RUNTIMES, RUNTIME_LABELS,",
+        "#                    RUNTIME_LANDING_PATHS, RUNTIME_MARQUEE)",
+        "# Regenerate:       python3 scripts/sync_runtime_count.py",
+        "# Verify:           python3 scripts/sync_runtime_count.py --check",
+        "#",
+        "# Every other ClawMetry repo (clawmetry-pro, clawmetry-cloud,",
+        "# clawmetry-landing) reads THIS file rather than keeping its own list.",
+        "# Fetch it at:",
+        f"#   {EXPORT_RAW_URL}",
+        "#",
+        "# Format",
+        "# ------",
+        "#   '#' comment, blank line          -> ignore",
+        "#   line with no TAB                 -> metadata, 'KEY = value'",
+        "#   line with TABs                   -> id <TAB> label <TAB> tier <TAB> landing_path",
+        "#",
+        "# 'tier' is 'free' (readable by the OSS package alone) or 'paid'",
+        "# (read by the closed-source clawmetry-pro companion). 'landing_path'",
+        "# is relative to https://clawmetry.com.",
+        "",
+        f"COUNT = {len(rows)}",
+        f"FREE_COUNT = {len(free)}",
+        f"PAID_COUNT = {len(paid)}",
+        f"BLURB = {blurb(rows)}",
+        "",
+    ]
+    for r in rows:
+        out.append("\t".join((r["id"], r["label"], r["tier"], r["path"])))
+    return "\n".join(out) + "\n"
+
+
+def parse_export(text: str) -> tuple[dict[str, str], list[dict[str, str]]]:
+    """Reference parser for SUPPORTED_RUNTIMES.txt — (metadata, runtimes).
+
+    Lives here so the grammar has an executable definition the other repos
+    can copy, and so the round-trip is testable.
+    """
+    meta: dict[str, str] = {}
+    rows: list[dict[str, str]] = []
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "\t" in line:
+            rid, label, tier, path = line.split("\t")
+            rows.append({"id": rid, "label": label, "tier": tier, "path": path})
+        else:
+            key, _, value = line.partition("=")
+            meta[key.strip()] = value.strip()
+    return meta, rows
+
+
+def check_export() -> str | None:
+    """Return an explanation if SUPPORTED_RUNTIMES.txt is stale, else None."""
+    want = render_export()
+    if not EXPORT_PATH.exists():
+        return "SUPPORTED_RUNTIMES.txt is missing"
+    have = EXPORT_PATH.read_text(encoding="utf-8")
+    if have == want:
+        return None
+    _, have_rows = parse_export(have)
+    _, want_rows = parse_export(want)
+    have_ids = {r["id"] for r in have_rows}
+    want_ids = {r["id"] for r in want_rows}
+    added = sorted(want_ids - have_ids)
+    removed = sorted(have_ids - want_ids)
+    detail = []
+    if added:
+        detail.append(f"catalogue adds {added}")
+    if removed:
+        detail.append(f"catalogue drops {removed}")
+    if not detail:
+        detail.append("labels, tiers, paths or the blurb changed")
+    return "SUPPORTED_RUNTIMES.txt is stale: " + "; ".join(detail)
 
 
 def channel_count() -> int:
@@ -200,7 +429,7 @@ def check(expected: int | None = None) -> list[tuple[str, int, str, str]]:
                     drift.append((rel, n, m.group(0), line.strip()))
             if rel == "README.md":
                 for m in MORE_RE.finditer(line):
-                    if m.group(0) != f"& {expected - NAMED_IN_TAGLINE} more":
+                    if m.group(0) != f"& {expected - len(marquee())} more":
                         drift.append((rel, n, m.group(0), line.strip()))
 
         if path.suffix in PROSE_SUFFIXES:
@@ -224,7 +453,7 @@ def check_translated_taglines(expected: int | None = None) -> list[tuple[str, in
     addition on 35 translations.
     """
     expected = catalogue_count() if expected is None else expected
-    want = expected - NAMED_IN_TAGLINE
+    want = expected - len(marquee())
     stale = []
     for path in sorted((REPO / "docs" / "i18n").rglob("README.md")):
         rel = str(path.relative_to(REPO))
@@ -260,7 +489,7 @@ def fix(expected: int | None = None) -> list[str]:
                 continue
             new = COUNT_RE.sub(lambda m: f"{expected}{m.group(2)} {m.group(3)}", line)
             if rel == "README.md":
-                new = MORE_RE.sub(f"& {expected - NAMED_IN_TAGLINE} more", new)
+                new = MORE_RE.sub(f"& {expected - len(marquee())} more", new)
             changed |= new != line
             out.append(new)
         joined = "".join(out)
@@ -284,7 +513,16 @@ def fix(expected: int | None = None) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="report drift, do not rewrite")
+    ap.add_argument(
+        "--about",
+        action="store_true",
+        help="print the canonical one-line blurb (GitHub About / PyPI summary) and exit",
+    )
     args = ap.parse_args()
+
+    if args.about:
+        print(blurb())
+        return 0
 
     expected = catalogue_count()
 
@@ -292,7 +530,7 @@ def main() -> int:
         stale = check_translated_taglines(expected)
         if stale:
             print(f"\nnote: {len(stale)} translated tagline(s) still say the old "
-                  f"'and N more' (want {expected - NAMED_IN_TAGLINE}); these are "
+                  f"'and N more' (want {expected - len(marquee())}); these are "
                   "never rewritten automatically:")
             for rel, n, found in stale:
                 print(f"  {rel}:{n}: {found}")
@@ -322,9 +560,20 @@ def main() -> int:
                 print(f"  {rel}:{n}: {found!r}\n      {line}")
             print(f"\n{len(drift)} stale mention(s). Fix with: python3 {Path(__file__).relative_to(REPO)}")
             rc = 1
+        stale_export = check_export()
+        if stale_export:
+            print(f"\n{stale_export}\n  regenerate with: python3 "
+                  f"{Path(__file__).relative_to(REPO)}")
+            rc = 1
+        else:
+            print(f"SUPPORTED_RUNTIMES.txt in sync at {expected} runtimes")
         rc |= _report_channels()
         _report_translations()
         return rc
+
+    if check_export():
+        EXPORT_PATH.write_text(render_export(), encoding="utf-8")
+        print(f"wrote {EXPORT_PATH.relative_to(REPO)} ({expected} runtimes)")
 
     touched = fix(expected)
     if not touched:

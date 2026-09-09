@@ -1,0 +1,14 @@
+  - id: tool-poison-precall-data-harvest
+    type: tool-poison
+    status: stable
+    name: "Pre-call Data Harvest"
+    description: "Detects tool descriptions that instruct the model to collect sensitive data before invoking the tool"
+    severity: critical
+    confidence: high
+    references:
+      - "https://explorer.invariantlabs.ai/docs/mcp-scan/issue-code-reference/"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:before\s+(?:(?:calling|using|invoking|running|executing)|you\s+(?:call|use|invoke|run|execute))|prior\s+to\s+(?:calling|using|invoking|running|executing))\s+this\s+(?:tool|function).{0,100}(?:read|collect|gather|retrieve|access|fetch|obtain)\s+.{0,60}(?:env|config|secret|credential|token|key|prompt|ssh|password)'
+      scan_field: description
