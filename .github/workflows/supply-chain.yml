@@ -176,7 +176,7 @@ jobs:
         run: python3 scripts/check_action_refs.py
 
   actions-security:
-    name: GitHub Actions security (zizmor)
+    name: Security audit (workflows, package-lock, Python source)
     runs-on: ubuntu-latest
     # CI is part of the supply chain: a workflow step runs with this repo's
     # token and secrets, and its output is packaged into the wheel PyPI
@@ -187,6 +187,19 @@ jobs:
     # `Dangerous-Workflow` and `Token-Permissions` probes below cover part
     # of the same ground, but they run only on push (`if:` above) and score
     # the repository rather than naming the file and line.
+    #
+    # Three scanning responsibilities, matching the SecurityAuditScanner the
+    # private repos already run:
+    #   1. workflow definitions        -> zizmor
+    #   2. dependency manifests        -> pip-audit (the `python-deps` job
+    #      above, on requirements.txt) + `npm audit` here, on every committed
+    #      package-lock.json. The npm half is the one that had no scanner at
+    #      all: this repo's largest dependency tree is `frontend/`, and it
+    #      ships into `clawmetry/static/`.
+    #   3. Python source               -> bandit
+    # pip-audit stays in `python-deps` rather than moving here: it has its own
+    # SBOM artifact and its own red condition, and splitting a passing job to
+    # tidy the layout is churn, not hardening.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -194,7 +207,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - run: python3 -m pip install --quiet zizmor
+      - run: python3 -m pip install --quiet zizmor bandit
 
       - name: Audit every workflow definition
         env:
@@ -256,6 +269,61 @@ jobs:
             sed 's/^/  /' audit/zizmor.err || true
           fi
 
+      # Responsibility 3: static analysis on this repo's Python source.
+      # Scorecard's SAST probe with teeth — it scores the repository, this
+      # names the file and line.
+      - name: Scan Python source (bandit)
+        run: |
+          # -ll: medium severity and above. Low-severity bandit over a tree
+          # this size is thousands of `assert` and `subprocess` notes, which
+          # buries the findings that matter.
+          #
+          # bandit exits 1 on FINDINGS and on failure alike, so — same
+          # reasoning as the zizmor step above — the exit code cannot tell a
+          # finding from an outage. The report is what separates them: a real
+          # run writes a dict with a `results` list, a crash writes nothing.
+          bandit -r . -f json -o audit/bandit.json -ll \
+            -x ./node_modules,./.venv,./venv,./tests,./frontend,./.git || true
+          if ! python3 -c "import json; d = json.load(open('audit/bandit.json')); print(f\"bandit: {len(d['results'])} finding(s)\")" 2>/dev/null; then
+            echo 1 > audit/bandit.failed
+            echo "::error::bandit did not produce a usable report; this is a scanner outage, not a clean scan"
+          fi
+
+      # Responsibility 2 (the package-lock half). Every committed lockfile,
+      # not just frontend/: /tests/e2e, /.github/scripts and the rest are all
+      # installed by CI jobs that run with this repo's token, and auditing one
+      # lockfile would report "clean" for the ones nobody scanned.
+      - name: Scan npm dependencies (package-lock)
+        run: |
+          locks=$(find . -name package-lock.json -not -path '*/node_modules/*' -not -path './.git/*' | sort)
+          if [ -z "$locks" ]; then
+            echo "no package-lock.json — nothing to audit"
+            exit 0
+          fi
+          while IFS= read -r lock; do
+            dir=$(dirname "$lock")
+            # `.github/scripts` -> `github-scripts`: one report per lockfile,
+            # named after the directory it audited.
+            slug=$(printf '%s' "${dir#./}" | tr '/' '-' | tr -d '.')
+            if [ "$dir" = "." ]; then slug="root"; fi
+            out="audit/npm-audit-$slug.json"
+            err="audit/npm-audit-$slug.err"
+            echo "auditing $lock -> $out"
+            # `npm audit` exits non-zero BOTH when it finds vulnerabilities and
+            # when it fails outright, so `|| true` on its own launders a
+            # registry error into what reads as a clean scan. The shape of the
+            # output is what separates them: a real result carries
+            # .metadata.vulnerabilities.total, an error response carries
+            # .message instead.
+            ( cd "$dir" && npm audit --package-lock-only --json ) > "$out" 2> "$err" || true
+            if ! python3 -c "import json; d=json.load(open('$out')); t=d['metadata']['vulnerabilities']['total']; assert isinstance(t, int); print(f'  npm audit ($lock): {t} vulnerability(ies)')" 2>/dev/null; then
+              echo 1 > audit/npm-audit.failed
+              echo "::error::npm audit did not produce a result for $lock; this is a scanner outage, not a clean scan"
+              python3 -c "import json; print('  registry said:', json.load(open('$out')).get('message', '<no message>'))" 2>/dev/null || true
+              sed 's/^/  /' "$err" 2>/dev/null || true
+            fi
+          done <<< "$locks"
+
       # Findings are reported, not gated. Today's tree has findings that are
       # load-bearing by design — the release, quarantine and cloud-pin jobs
       # persist their checkout credential BECAUSE they push with it — and a
@@ -266,18 +334,79 @@ jobs:
         run: |
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import collections, json, pathlib
+
+          print("### Security audit\n")
+          print("| Scanner | Scope | Findings |")
+          print("| --- | --- | ---: |")
+
+          def bandit_row():
+              if pathlib.Path("audit/bandit.failed").exists():
+                  return "**SCAN FAILED**"
+              try:
+                  return str(len(json.loads(pathlib.Path("audit/bandit.json").read_text())["results"]))
+              except Exception:
+                  return "**SCAN FAILED**"
+
+          def npm_rows():
+              if pathlib.Path("audit/npm-audit.failed").exists():
+                  yield "npm audit", "package-lock", "**SCAN FAILED**"
+              for f in sorted(pathlib.Path("audit").glob("npm-audit-*.json")):
+                  try:
+                      t = json.loads(f.read_text())["metadata"]["vulnerabilities"]["total"]
+                  except Exception:
+                      t = "**SCAN FAILED**"
+                  yield "npm audit", f"`{f.stem[len('npm-audit-'):]}`", str(t)
+
           p = pathlib.Path("audit/zizmor.json")
           n = pathlib.Path("audit/zizmor-input-count.txt")
-          print("### GitHub Actions security (zizmor)\n")
-          if pathlib.Path("audit/zizmor.failed").exists() or not p.exists():
+          covered = n.read_text().strip() if n.exists() else "?"
+          zizmor_failed = pathlib.Path("audit/zizmor.failed").exists() or not p.exists()
+          findings = []
+          if not zizmor_failed:
+              try:
+                  findings = json.loads(p.read_text())
+              except Exception:
+                  zizmor_failed = True
+          print(
+              f"| zizmor | workflow definitions ({covered} file(s)) | "
+              + ("**SCAN FAILED**" if zizmor_failed else str(len(findings)))
+              + " |"
+          )
+          for name, scope, count in npm_rows():
+              print(f"| {name} | {scope} | {count} |")
+          print(f"| bandit | Python source (medium+) | {bandit_row()} |")
+          print("\nFull reports: the `actions-security-audit` artifact.\n")
+
+          # bandit's total is a baseline number on a tree this size; the
+          # severity/confidence split is what says whether anything in it
+          # needs reading today.
+          try:
+              b = json.loads(pathlib.Path("audit/bandit.json").read_text())["results"]
+          except Exception:
+              b = []
+          if b:
+              print("#### Python source (bandit)\n")
+              brank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+              by_test = collections.Counter(
+                  (r.get("issue_severity") or "?", r.get("issue_confidence") or "?",
+                   r.get("test_id") or "?", r.get("test_name") or "?")
+                  for r in b
+              )
+              print("| Severity | Confidence | Rule | Findings |")
+              print("| --- | --- | --- | ---: |")
+              for (sev, conf, tid, tname), c in sorted(
+                  by_test.items(),
+                  key=lambda kv: (brank.get(kv[0][0], 9), brank.get(kv[0][1], 9), kv[0][2]),
+              ):
+                  print(f"| {sev} | {conf} | `{tid}` {tname} | {c} |")
+              print()
+
+          # The zizmor breakdown below is the part a reviewer reads to spot a
+          # NEW workflow finding in the PR that introduced it.
+          print("#### GitHub Actions security (zizmor)\n")
+          if zizmor_failed:
               print("**SCAN FAILED** — see the `actions-security-audit` artifact.")
               raise SystemExit(0)
-          try:
-              findings = json.loads(p.read_text())
-          except Exception as exc:
-              print(f"**SCAN FAILED** — unreadable report ({exc}).")
-              raise SystemExit(0)
-          covered = n.read_text().strip() if n.exists() else "?"
           print(f"{len(findings)} finding(s) across {covered} audited file(s).\n")
           if not findings:
               raise SystemExit(0)
@@ -315,14 +444,18 @@ jobs:
       # The only red condition: the scanner did not run. A silent outage is
       # the failure mode this whole job exists to avoid, because it looks
       # exactly like a clean result.
-      - name: Fail if the scanner did not run
+      - name: Fail if a scanner did not run
         if: always()
         run: |
-          if [ -f audit/zizmor.failed ]; then
-            echo "zizmor did not produce a usable report; treating as a failed scan."
-            exit 1
-          fi
-          echo "zizmor completed."
+          rc=0
+          for s in zizmor bandit npm-audit; do
+            if [ -f "audit/$s.failed" ]; then
+              echo "$s did not produce a usable report; treating as a failed scan."
+              rc=1
+            fi
+          done
+          if [ "$rc" -eq 0 ]; then echo "every scanner completed."; fi
+          exit "$rc"
 
   scorecard:
     name: OpenSSF Scorecard
