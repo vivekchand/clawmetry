@@ -3142,18 +3142,24 @@ class _ProxyStore:
             return lambda *a, **k: None
 
         def _forward(*args, **kwargs):
+            _empty = [] if name.startswith("query_") else None
             try:
                 from routes.local_query import local_store_via_daemon
                 call_kwargs = _proxy_call_kwargs(name, args, kwargs)
                 if call_kwargs is None:
                     log.warning(
                         "local_store: cannot proxy %s(%d positional arg(s)) "
-                        "through the daemon — returning None", name, len(args),
+                        "through the daemon — returning %r", name, len(args), _empty,
                     )
-                    return None
-                return local_store_via_daemon(name, **call_kwargs)
+                    return _empty
+                result = local_store_via_daemon(name, **call_kwargs)
+                # local_store_via_daemon returns None when daemon is
+                # unreachable (it swallows exceptions internally).  For
+                # query_* methods substitute [] so callers that iterate
+                # the result don't crash with TypeError.
+                return result if result is not None else _empty
             except Exception:
-                return None
+                return _empty
         return _forward
 
     def health(self):
@@ -13112,7 +13118,7 @@ class LocalStore(TrailStoreMixin):
                 "sender_name", "body", "ts", "direction", "session_key",
                 "raw_blob"]
         out: list[dict[str, Any]] = []
-        for r in self._fetch(sql, params):
+        for r in (self._fetch(sql, params) or []):
             d = dict(zip(cols, r))
             raw = d.get("raw_blob")
             if raw is not None:
