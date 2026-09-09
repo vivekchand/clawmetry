@@ -37,6 +37,12 @@ and the guard is an explicit username comparison rather than waiting for
 ``AccessDenied``. Measured why: ``psutil.Process(0).environ()`` on macOS
 returns ``{}`` and raises NOTHING, so an implementation that relies on the
 exception has no boundary at all where the kernel task is concerned.
+
+Product record: requirement "OpenTelemetry Emitter Discovery"
+(8c1ea52d-df48-4b74-b0d2-cbe0488535ad), a child of Local Agent Observability.
+Repo-side design: ``docs/blueprints/otel-sdk-and-ingest.md``, component
+``#OtelEmitterDiscovery``, ADR-005. The three measured facts above are
+AC-OTD-001.1, .3 and .7 there, recorded so they are not re-assumed next time.
 """
 
 from __future__ import annotations
