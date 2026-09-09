@@ -1841,7 +1841,7 @@ def cloud_proxy(cloud_path):
 
     Used by the Alerts tab (and anything else that needs cloud-side data) so
     the cm_ token never has to leave the OSS dashboard. The token is read from
-    ~/.openclaw/openclaw.json.cloudToken and injected as Bearer.
+    ~/.clawmetry/config.json -> api_key and injected as Bearer.
 
     Returns 401 if no cloud token is configured (UI shows the "Sign up for
     Cloud" CTA in that case).

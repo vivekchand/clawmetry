@@ -472,3 +472,199 @@ def test_detect_gateway_endpoint_reads_openclaw_json(tap_env):
 def test_detect_gateway_endpoint_returns_none_when_no_config(tap_env):
     url, token = tap_env["tap"]._detect_gateway_endpoint()
     assert (url, token) == (None, None)
+
+
+# ── 7. Stale gateway token self-heal ────────────────────────────────────
+#
+# Field report 2026-09-09 (Steven M. Alper): after a gateway restart the tap
+# logged `token_mismatch` "every minute indefinitely" and only a full
+# reinstall fixed it. Cause: the token was read once at daemon start and
+# cached on the instance; every reconnect replayed the dead credential.
+
+
+def _write_gw_config(oc_home, token, port=18789):
+    (oc_home / "openclaw.json").write_text(json.dumps({
+        "gateway": {"port": port, "auth": {"token": token}},
+    }))
+
+
+def test_auth_rejection_is_classified(tap_env):
+    """The gateway is inconsistent about where it puts the reason —
+    ``error.code`` on current OpenClaw, ``error.message`` on older
+    builds. Both must read as "your credentials are wrong"."""
+    gw = tap_env["tap"]
+    assert gw._is_auth_rejection("token_mismatch", "")
+    assert gw._is_auth_rejection("", "Token mismatch")
+    assert gw._is_auth_rejection("UNAUTHORIZED", "")
+    assert gw._is_auth_rejection("", "invalid token supplied")
+    # ...and a busy/unhealthy gateway must NOT be, or we would re-read
+    # the config on every ordinary blip.
+    assert not gw._is_auth_rejection("protocol-mismatch", "")
+    assert not gw._is_auth_rejection("", "server is shutting down")
+    assert not gw._is_auth_rejection("", "")
+
+
+def test_refresh_credentials_picks_up_a_rotated_token(tap_env):
+    """The core fix: a token rotated on disk is adopted."""
+    oc_home = tap_env["oc_home"]
+    _write_gw_config(oc_home, "old-token")
+    tap = tap_env["tap"].GatewayTap(
+        url="ws://127.0.0.1:18789", token="old-token",
+        store=tap_env["store"], node_id="n",
+    )
+
+    assert tap._refresh_credentials() is False, "unchanged token → no churn"
+
+    _write_gw_config(oc_home, "new-token")
+    assert tap._refresh_credentials() is True
+    assert tap.token == "new-token"
+    assert tap.token_reloads == 1
+
+
+def test_refresh_credentials_follows_a_moved_port(tap_env):
+    """A gateway that comes back on a different port is followed too."""
+    oc_home = tap_env["oc_home"]
+    _write_gw_config(oc_home, "t", port=19999)
+    tap = tap_env["tap"].GatewayTap(
+        url="ws://127.0.0.1:18789", token="t",
+        store=tap_env["store"], node_id="n",
+    )
+    assert tap._refresh_credentials() is True
+    assert tap.url == "ws://127.0.0.1:19999"
+
+
+def test_refresh_never_clears_a_working_token(tap_env):
+    """``openclaw doctor --fix`` swaps the config file out from under us;
+    a read that lands mid-swap must not downgrade a working tap to
+    anonymous — that would turn a recoverable blip into a silent
+    permanent degrade."""
+    tap = tap_env["tap"].GatewayTap(
+        url="ws://127.0.0.1:18789", token="still-good",
+        store=tap_env["store"], node_id="n",
+    )
+    # No config file at all → _detect_gateway_endpoint returns (None, None).
+    assert tap._refresh_credentials() is False
+    assert tap.token == "still-good"
+
+
+def test_connect_rejection_raises_gateway_auth_error(tap_env, monkeypatch):
+    """A rejected connect that blames the token surfaces as
+    ``GatewayAuthError`` so ``_run`` knows re-reading the config could
+    help — a plain RuntimeError would just sleep and replay the dead
+    credential."""
+    gw = tap_env["tap"]
+
+    def _reject(received_send: str) -> str:
+        msg = json.loads(received_send)
+        return json.dumps({
+            "type": "res", "id": msg["id"], "ok": False,
+            "error": {"code": "token_mismatch", "message": "token mismatch"},
+        })
+
+    class _RejectWS(_StubWS):
+        def recv(self):
+            if self.sent:
+                return _reject(self.sent[-1])
+            raise ConnectionError("nothing sent yet")
+
+    class _Mod:
+        def create_connection(self, _url, timeout=None):
+            return _RejectWS([])
+
+    monkeypatch.setitem(sys.modules, "websocket", _Mod())
+    tap = gw.GatewayTap(
+        url="ws://127.0.0.1:18789", token="stale",
+        store=tap_env["store"], node_id="n",
+    )
+    with pytest.raises(gw.GatewayAuthError):
+        tap._run_once()
+
+
+def test_run_loop_recovers_when_the_token_rotates(tap_env, monkeypatch):
+    """End to end for the reported bug: the tap is holding a dead token,
+    the gateway rejects it, the user's config now carries the new one —
+    the loop must adopt it and connect WITHOUT a daemon restart."""
+    gw = tap_env["tap"]
+    oc_home = tap_env["oc_home"]
+    _write_gw_config(oc_home, "rotated-token")
+
+    attempts: list[str] = []
+
+    class _ScriptedWS(_StubWS):
+        def recv(self):
+            if not self.sent:
+                raise ConnectionError("nothing sent yet")
+            msg = json.loads(self.sent[-1])
+            token = (msg.get("params", {}).get("auth") or {}).get("token")
+            attempts.append(token)
+            if token != "rotated-token":
+                return json.dumps({
+                    "type": "res", "id": msg["id"], "ok": False,
+                    "error": {"code": "token_mismatch"},
+                })
+            # Correct token: accept, then close so _run_once returns.
+            raise ConnectionError("accepted then closed")
+
+    class _Mod:
+        def create_connection(self, _url, timeout=None):
+            return _ScriptedWS([])
+
+    monkeypatch.setitem(sys.modules, "websocket", _Mod())
+    tap = gw.GatewayTap(
+        url="ws://127.0.0.1:18789", token="dead-token",
+        store=tap_env["store"], node_id="n",
+    )
+
+    # First attempt: the tap still believes in the dead token only if it
+    # never re-reads. It does re-read, so it should present the rotated one.
+    try:
+        tap._run_once()
+    except Exception:
+        pass
+
+    assert attempts and attempts[-1] == "rotated-token", (
+        "the tap must present the token currently on disk, not the one it "
+        "cached at daemon start — otherwise the user reinstalls to recover"
+    )
+    assert tap.token == "rotated-token"
+    assert tap.token_reloads == 1
+
+
+def test_repeated_identical_auth_failures_are_not_logged_every_minute(
+    tap_env, monkeypatch, caplog
+):
+    """The user-visible half of the report: "misfiring every minute".
+    The first rejection is a loud, actionable WARNING; identical repeats
+    drop to DEBUG so the daemon log stays readable."""
+    import logging
+
+    gw = tap_env["tap"]
+    _write_gw_config(tap_env["oc_home"], "same-stale-token")
+
+    tap = gw.GatewayTap(
+        url="ws://127.0.0.1:18789", token="same-stale-token",
+        store=tap_env["store"], node_id="n",
+    )
+    calls = {"n": 0}
+
+    def _always_reject():
+        calls["n"] += 1
+        if calls["n"] > 3:
+            tap._stop.set()
+            return
+        raise gw.GatewayAuthError("gateway connect rejected: token_mismatch")
+
+    monkeypatch.setattr(tap, "_run_once", _always_reject)
+    monkeypatch.setattr(gw, "_BACKOFF_INITIAL_SEC", 0.0)
+    monkeypatch.setattr(gw, "_BACKOFF_MAX_SEC", 0.0)
+
+    with caplog.at_level(logging.DEBUG, logger="clawmetry-sync"):
+        tap._run()
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1, (
+        f"expected exactly one WARNING for a repeating rejection, got "
+        f"{[r.getMessage() for r in warnings]}"
+    )
+    assert "no reinstall needed" in warnings[0].getMessage()
+    assert tap.auth_failures == 3

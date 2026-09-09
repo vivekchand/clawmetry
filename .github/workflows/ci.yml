@@ -394,6 +394,19 @@ jobs:
       - name: Active Tasks panel tells the truth
         run: python3 -m pytest tests/test_active_tasks_honesty.py tests/test_active_tasks_units.py -q
 
+      # ClawMetry wrote its cm_ bearer as a top-level `clawmetry` key inside
+      # OpenClaw's own ~/.openclaw/openclaw.json. That key is not in OpenClaw's
+      # schema, so the write left OpenClaw's config failing validation and its
+      # next CLI run fired `doctor --fix` -- restoring the last-known-good
+      # config and restarting the gateway, killing the user's live session
+      # (field report 2026-09-09: twice on one machine). The gateway WS tap
+      # then could not recover, because it cached the token at daemon start and
+      # replayed the dead credential on every reconnect -- `token_mismatch`
+      # once a minute forever, fixable only by a daemon restart the user had no
+      # reason to know about. Named here because this job runs FILE LISTS.
+      - name: ClawMetry keeps its config in its own file, and heals a rotated token
+        run: python3 -m pytest tests/test_never_writes_openclaws_config.py tests/test_read_cloud_token_fallback.py tests/test_apply_cm_key_fallback_persist.py tests/test_gateway_tap.py -q
+
       # A [RELEASE] merge must pin the cloud to the version it just published.
       # auto-deploy-cloud.yml's push trigger fires BEFORE the upload, reads
       # PyPI's still-previous "latest", pins that, and nothing re-triggers it —
