@@ -170,17 +170,6 @@ jobs:
       - name: /api/runtime-summary reads the deduped uncapped rollup
         run: python3 -m pytest tests/test_runtime_summary_uncapped_dedup.py -q
 
-      # Named explicitly because this repo's CI runs FILE LISTS, not
-      # `pytest tests/`. Family sessions carry agent_type='openclaw' by
-      # construction and the runtime lives in the <runtime>:<uuid> id prefix.
-      # rollup_session.runtime was derived from agent_type, so on a real node
-      # all 188 rollup rows read 'openclaw' while the session ids carried 10+
-      # distinct runtimes -- query_rollup_sessions(runtime=...) returned
-      # nothing and the per-team join (tm.key_value = rs.runtime) matched no
-      # mapping. Silent, because every other surface derives from the prefix.
-      - name: rollup_session is attributed to the real runtime
-        run: python3 -m pytest tests/test_rollup_session_runtime_attribution.py -q
-
       # Guards that e2e-nightly.yml exports the gateway token via the
       # setup-openclaw action, not a hardcoded literal. The user's 2026-05-17
       # report ("other screens blank") traced to this missing export: without it
@@ -650,6 +639,7 @@ jobs:
             tests/test_sample_data.py \
             tests/test_e2e_invariants.py \
             tests/test_e2e_telegram_brain_ingest.py \
+            tests/test_rollup_session_runtime_attribution.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
