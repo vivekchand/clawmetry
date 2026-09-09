@@ -3142,18 +3142,24 @@ class _ProxyStore:
             return lambda *a, **k: None
 
         def _forward(*args, **kwargs):
+            _empty = [] if name.startswith("query_") else None
             try:
                 from routes.local_query import local_store_via_daemon
                 call_kwargs = _proxy_call_kwargs(name, args, kwargs)
                 if call_kwargs is None:
                     log.warning(
                         "local_store: cannot proxy %s(%d positional arg(s)) "
-                        "through the daemon — returning None", name, len(args),
+                        "through the daemon — returning %r", name, len(args), _empty,
                     )
-                    return None
-                return local_store_via_daemon(name, **call_kwargs)
+                    return _empty
+                result = local_store_via_daemon(name, **call_kwargs)
+                # local_store_via_daemon returns None when daemon is
+                # unreachable (it swallows exceptions internally).  For
+                # query_* methods substitute [] so callers that iterate
+                # the result don't crash with TypeError.
+                return result if result is not None else _empty
             except Exception:
-                return None
+                return _empty
         return _forward
 
     def health(self):
@@ -3177,7 +3183,49 @@ def get_store(read_only: bool = False) -> "LocalStore":
     handle to the same file in the same process). All read-paths on
     LocalStore work the same regardless of mode; ingest() raises in RO mode.
     """
-    global _store_rw, _store_ro, _store_proxy
+    global _store_rw, _store_ro, _store_proxy, DB_PATH
+    # Sample mode (``clawmetry --sample``) is its own world: a separate
+    # DuckDB under ~/.clawmetry/sample/ holding synthetic sessions. Two things
+    # have to be true and neither is the default path's behaviour.
+    #
+    #   1. NEVER proxy to a running daemon. The proxy branch below fires
+    #      whenever a daemon is registered, and it would serve the user's REAL
+    #      sessions under a banner saying "sample data" -- the worst possible
+    #      outcome, since a demo would then show a stranger's machine.
+    #   2. Open the writer here. The sample store has no daemon behind it, so
+    #      this process owns it; ``read_only=True`` callers share that handle
+    #      exactly as they do in single-process mode.
+    #
+    # DB_PATH is re-pointed defensively: it is read from the environment at
+    # import time, and sample mode may have been enabled after some other
+    # module already imported this one.
+    try:
+        from clawmetry import sample_data as _sample_data
+        _sample = _sample_data.is_sample_mode()
+    except Exception:
+        _sample = False
+    if _sample:
+        with _store_lock:
+            want = _sample_data.sample_db_path()
+            if DB_PATH != want:
+                DB_PATH = want
+                DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                if _store_rw is not None or _store_ro is not None:
+                    # A handle on the real store was opened before sample mode
+                    # turned on. Drop it rather than serve real data.
+                    for _name in ("_store_rw", "_store_ro"):
+                        _st = globals().get(_name)
+                        if _st is not None:
+                            try:
+                                _st.stop(flush=False)
+                            except Exception:
+                                pass
+                    _store_rw = None
+                    _store_ro = None
+            if _store_rw is None:
+                _store_rw = LocalStore(read_only=False)
+                _store_rw.start()
+            return _store_rw
     # Writer-owner (daemon) or single-process boot already holds the writer.
     if _store_rw is not None:
         return _store_rw
@@ -13079,7 +13127,7 @@ class LocalStore(TrailStoreMixin):
                 "sender_name", "body", "ts", "direction", "session_key",
                 "raw_blob"]
         out: list[dict[str, Any]] = []
-        for r in self._fetch(sql, params):
+        for r in (self._fetch(sql, params) or []):
             d = dict(zip(cols, r))
             raw = d.get("raw_blob")
             if raw is not None:
