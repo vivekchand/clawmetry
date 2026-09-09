@@ -245,6 +245,7 @@ CLAWMETRY_FAMILY_SESSION_LIMIT=50      # Max sessions/runtime to ingest for Clau
 CLAWMETRY_UPDATE_CHECK_SECS=60         # Daemon PyPI update-check cadence (default 60s; fleet tracks the latest release within minutes)
 CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS=0   # Stability window before a silent install (default 0 = absolute latest; raise to be conservative)
 CLAWMETRY_AUTO_UPDATE=0                # Hard kill switch for unattended upgrades
+CLAWMETRY_LOCK_STALE_SECS=900          # Daemon lock: how long a holder may miss its heartbeat before the next start takes over (default 900s)
 CLAWMETRY_HOOK_TIMEOUT_MAX_S=28800     # Ceiling on an INSTALLED hook timeout (8h; 0 = unbounded). Bounds how long a runtime waits on a wedged gate — docs/HOOK_COEXISTENCE.md
 CLAWMETRY_GIT_OUTCOMES=0               # Turn OFF repository reading entirely (default on)
 CLAWMETRY_GIT_SCAN_INTERVAL=900        # Seconds between repo scans (merges are not tool calls)
