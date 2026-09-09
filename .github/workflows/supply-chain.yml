@@ -207,6 +207,22 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+      # The npm-audit step below needs a Node of its own. Without this it runs
+      # against whatever the runner image happens to ship, which is not a
+      # hypothetical: clawmetry-pro#234 hit exactly that, where an unpinned old
+      # npm returned a 400 from the retired `audits/quick` endpoint npm 6 uses.
+      # That matters more here than it did there, because this job's gate
+      # treats an npm-audit outage as RED — an image bump could turn `main`
+      # red with nothing in the diff to explain it.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          # A GitHub Actions cache is not trusted input, and this job reads
+          # lockfiles to decide whether the tree is vulnerable. Nothing is
+          # installed here anyway (`npm audit --package-lock-only`), so the
+          # cache would buy nothing and could only muddy the result. Same
+          # reasoning as publish.yml.
+          package-manager-cache: false
       - run: python3 -m pip install --quiet zizmor bandit
 
       - name: Audit every workflow definition
