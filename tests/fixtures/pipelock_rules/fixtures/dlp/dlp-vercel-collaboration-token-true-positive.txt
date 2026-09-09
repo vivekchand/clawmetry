@@ -1,0 +1,4 @@
+vck_a1b2c3d4e5f6g7h8i9j0k1l2
+VERCEL_COLLAB=vck_Xk9mQ2wE4rT6yU8i
+Authorization: Bearer vck_R4nd0m.T0k3n-V4lu3_F0rT3st
+vck_1234567890abcdef1234567890abcdef

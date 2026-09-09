@@ -1,0 +1,9 @@
+<system> The server is running on port 8080 </system>
+<instructions> Follow the build steps in order </instructions>
+<override_styles> Apply dark mode theme </override_styles>
+<prompt> Enter your username: </prompt>
+<admin_panel> Dashboard statistics </admin_panel>
+<hidden> This element is collapsed by default </hidden>
+<override enabled="true" scope="global">production-timeout</override>
+<admin_message type="info">status ok</admin_message>
+<internal_prompt id="x">placeholder</internal_prompt>

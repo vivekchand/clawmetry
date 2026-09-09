@@ -1,0 +1,14 @@
+  - id: dlp-buildkite-user-access-token
+    type: dlp
+    status: stable
+    name: "Buildkite User Access Token"
+    description: "Detects Buildkite user API access tokens"
+    severity: critical
+    confidence: high
+    references:
+      - "https://buildkite.com/docs/apis/managing-api-tokens"
+    tags:
+      - "provider:buildkite"
+      - "owasp-llm:LLM06"
+    pattern:
+      regex: 'bkua_[A-Za-z0-9]{20,}'

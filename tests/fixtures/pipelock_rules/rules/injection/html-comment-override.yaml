@@ -1,0 +1,13 @@
+  - id: injection-html-comment-override
+    type: injection
+    status: stable
+    name: "HTML Comment Override"
+    description: "Detects prompt injection hidden inside HTML comments"
+    severity: high
+    confidence: high
+    references:
+      - "https://owasp.org/www-community/attacks/PromptInjection"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '<!--[\s\S]{0,400}(?:ignore|disregard|override|forget)\s+(?:all\s+)?(?:previous|prior|above|system|your)\s+(?:instructions|rules|guidelines|prompt)[\s\S]{0,400}-->'
