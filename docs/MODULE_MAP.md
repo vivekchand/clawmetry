@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-235 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+236 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -224,6 +224,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/runtime_memory.py` | large | Per-runtime Memory & Skills file browser. |
 | `clawmetry/runtime_probe.py` | medium | zero-dependency presence probes for every |
 | `clawmetry/runtime_records.py` | medium | What each runtime actually records — so a surface can say "not recorded" |
+| `clawmetry/sample_data.py` | medium | Synthetic sample sessions, so a fresh install is never an empty product. |
 | `clawmetry/secure.py` | medium | clawmetry secure — one-command numbat (Perplexity agent-EDR) setup. |
 | `clawmetry/security_posture.py` | large | Runtime-aware security posture registry. |
 | `clawmetry/self_diagnostics.py` | medium | Agent self-diagnostics: reports an agent files about its own trouble, and |
