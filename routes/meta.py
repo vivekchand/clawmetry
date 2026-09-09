@@ -1237,6 +1237,16 @@ def index():
     # ("1", "true", "yes") flips the legacy template branch on.
     legacy_nav_raw = request.args.get("legacy_nav", "")
     legacy_nav = legacy_nav_raw.lower() in ("1", "true", "yes", "on")
+    # ``clawmetry --sample`` serves synthetic sessions from a separate store.
+    # The banner is server-rendered rather than fetched, so it cannot be a
+    # moment late: a screenshot taken before a fetch resolved would show
+    # invented numbers with nothing marking them as invented.
+    try:
+        from clawmetry import sample_data as _sample_data
+        sample_mode = _sample_data.is_sample_mode()
+        sample_banner = _sample_data.SAMPLE_BANNER
+    except Exception:
+        sample_mode, sample_banner = False, ""
     resp = make_response(
         render_template_string(
             _d.DASHBOARD_HTML,
@@ -1244,6 +1254,8 @@ def index():
             v2_enabled=v2_enabled,
             is_pro=is_pro,
             legacy_nav=legacy_nav,
+            sample_mode=sample_mode,
+            sample_banner=sample_banner,
         )
     )
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
