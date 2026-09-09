@@ -11,6 +11,10 @@ The pipeline that should have caught it already existed and had one producer,
 the installer. These tests pin the daemon as its second: that it reports the
 failure, that it does NOT report the normal cases, that it cannot spam, and
 that the report carries aggregates and nothing else.
+
+Requirement: Daemon Field-Failure Reporting (AC-FFR-005.1 through AC-FFR-005.7;
+AC-FFR-005.8 and AC-FFR-005.9 are the cloud sink's half, pinned in
+clawmetry-cloud tests/test_desktop_opens.py).
 """
 import json
 import time
@@ -39,6 +43,7 @@ def sent(monkeypatch):
 
 # ── the privacy contract, key by key ─────────────────────────────────────────
 def test_the_report_is_a_closed_dict_of_aggregates():
+    """AC-FFR-005.3: a closed key set, checked key by key."""
     p = fr.daemon_failure_payload("daemon_lock_refused", version="0.12.845")
     assert set(p) == {
         "install_id", "stage", "session_id", "failure_class",
@@ -60,7 +65,7 @@ def test_the_server_side_key_is_one_row_per_class_per_day():
 
 
 def test_the_report_carries_no_identifying_values(home, monkeypatch):
-    """A machine's paths, users, hostname and node id must never be on the
+    """AC-FFR-005.3. A machine's paths, users, hostname and node id must never be on the
     wire. Asserted over the SERIALISED body, so a nested value cannot smuggle
     one past a key check."""
     import getpass
@@ -91,7 +96,7 @@ def test_python_version_is_the_family_not_the_build():
                                  "CLAWMETRY_SELF_HOSTED"])
 def test_an_air_gapped_or_self_hosted_install_sends_nothing(home, monkeypatch,
                                                             sent, var):
-    """The narrow ``is_custom_endpoint()`` check misses both of these: an
+    """AC-FFR-005.4. The narrow ``is_custom_endpoint()`` check misses both of these: an
     air-gapped node sets no endpoint, and a self-hosted server IS the endpoint
     so it never sets one either. A report about a broken daemon is exactly the
     kind of well-meant call that gets shipped past an air gap."""
@@ -127,7 +132,7 @@ def test_the_second_report_inside_the_window_is_dropped(sent):
 
 
 def test_the_throttle_survives_a_restart(home, sent):
-    """The restart-loop case is a NEW process every 30 seconds, so in-memory
+    """AC-FFR-005.5. The restart-loop case is a NEW process every 30 seconds, so in-memory
     throttling would throttle nothing. The stamp is on disk."""
     assert fr.report_daemon_failure("daemon_lock_refused") is True
     import importlib
@@ -165,7 +170,7 @@ def test_a_hanging_post_still_stamps(home, monkeypatch):
 
 
 def test_blocking_send_is_bounded(monkeypatch):
-    """The failing path exits the process next; it may not hang there."""
+    """AC-FFR-005.6. The failing path exits the process next; it may not hang there."""
     monkeypatch.setattr(fr, "_send", lambda p: time.sleep(5))
     monkeypatch.setattr(fr, "BLOCKING_TIMEOUT_SEC", 0.1)
     t0 = time.time()
@@ -184,7 +189,7 @@ def _state(home, monkeypatch, last_sync):
 
 
 def test_a_node_that_never_synced_is_not_called_broken(home, monkeypatch):
-    """A fresh install has no timestamp. Unknown is not the same as stalled,
+    """AC-FFR-005.7. A fresh install has no timestamp. Unknown is not the same as stalled,
     and reporting every new install as a field failure would bury the real
     ones."""
     _state(home, monkeypatch, None)
@@ -220,7 +225,7 @@ def test_a_healthy_daemon_reports_nothing(home, monkeypatch, sent):
 
 
 def test_a_wedged_daemon_reports_itself(home, monkeypatch, sent):
-    """The process is up, the watchdog thread is scheduling, and no cycle has
+    """AC-FFR-005.2. The process is up, the watchdog thread is scheduling, and no cycle has
     completed in an hour. Every liveness probe in the stack says fine."""
     import clawmetry.sync as sync
 
@@ -230,7 +235,7 @@ def test_a_wedged_daemon_reports_itself(home, monkeypatch, sent):
 
 
 def test_the_stall_check_never_raises(monkeypatch):
-    """It runs inside the watchdog thread; an exception there would silently
+    """AC-FFR-005.2: the watchdog must survive it. It runs inside the watchdog thread; an exception there would silently
     stop the heartbeat and cost us the lock."""
     import clawmetry.sync as sync
 

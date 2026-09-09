@@ -1,5 +1,8 @@
-"""Field-failure reports from the sync daemon (Requirement: Field Failure
-Reporting and Auto-Triage, AC-FFR).
+"""Field-failure reports from the sync daemon.
+
+Requirement: Daemon Field-Failure Reporting (AC-FFR-005), a child of Field
+Failure Reporting and Auto-Triage, whose pipeline this joins as its second
+producer.
 
 We already run this loop end to end for ONE class of failure. The desktop
 shell classifies a bootstrap that never completed, posts an aggregate ping,
