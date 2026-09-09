@@ -335,6 +335,16 @@ jobs:
       - name: Trial pill + upgrade modal
         run: python3 -m pytest tests/test_trial_pill_wiring.py -q
 
+      # First-run report gate (#5766). The panel that tells a user nothing was
+      # detected is the single most damaging thing to show somebody whose data
+      # IS syncing: it renders under a header counting their sessions and tells
+      # them to reinstall. It fired on every hosted node page because the gate
+      # read a count key the cloud payload does not carry and scored the miss
+      # as zero. Node-based, ~50ms, named explicitly because this job runs FILE
+      # LISTS -- the sibling test_appjs_units.py is the cautionary tale.
+      - name: First-run report gate
+        run: python3 -m pytest tests/test_first_run_gate_js.py -q
+
       # Trail page + session-first landing: the live HTML must include
       # tabs/trail.html (Jinja render, not a template grep), the default
       # active page must be the Sessions list, and every Trail string must
@@ -580,6 +590,7 @@ jobs:
             tests/test_lovable_runtime_wiring.py \
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
+            tests/test_harness_audit_reads_whole_adapter.py \
             tests/test_otlp_sessionless_spans.py \
             tests/test_local_query_dispatch_edge_cases.py \
             tests/test_store_unreachable_is_not_empty.py \
