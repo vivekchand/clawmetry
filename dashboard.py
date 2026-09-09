@@ -8825,7 +8825,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/version-impact.html' %}
 
 <!-- SESSION CLUSTERS -->
-{% include 'tabs/clusters.html' %}
 
 <!-- HISTORY -->
 
