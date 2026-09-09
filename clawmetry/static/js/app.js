@@ -2207,6 +2207,7 @@ function switchTab(name) {
     if (typeof loadTrailTab === 'function') loadTrailTab();
   }
   if (name === 'version-impact') loadVersionImpact();
+  if (name === 'clusters') loadClusters();
   if (name === 'flow') initFlow();
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
@@ -4900,6 +4901,7 @@ async function loadAll() {
     window._cmOverview = overview;
     try { renderOauthBanner(overview); } catch(e) {}
     try { _renderOverviewHero(); } catch(e) {}
+    try { renderFirstRunReport(overview); } catch(e) {}
 
     // Start only critical secondary panels immediately. Expensive/non-critical
     // cards are staggered below so the initial widget load does not stampede
@@ -12262,7 +12264,7 @@ var _CM_RT_NODEWIDE = {
   // what pushed a redundant per-tab runtime picker into the page.
   crons: 1, security: 1, selfevolve: 1,
   policy: 1, nemoclaw: 1, notifications: 1,
-  actions: 1,
+  clusters: 1, actions: 1,
   // logs + version-impact are NOT node-wide: logs stream a specific runtime's
   // log source (LOGS capability), version-impact correlates OpenClaw releases.
   // Both are capability-gated below instead of carrying a false scope note.
@@ -22892,6 +22894,56 @@ async function loadVersionImpact() {
   }
 }
 
+// ── Session Clusters Panel ─────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadClusters() {
+  var el = document.getElementById('clusters-content');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.analyzing_session_patterns", null, "Analyzing session patterns...") + '</div>';
+  try {
+    var data = await fetch('/api/sessions/clusters').then(r => r.json());
+    if (!data.clusters || data.clusters.length === 0) {
+      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:13px;color:var(--text-muted);">' + t("app.no_sessions_found_to_cluster", null, "No sessions found to cluster.") + '</div></div>';
+      return;
+    }
+    var clusterColors = {'browsing-heavy':'#60a5fa','code-heavy':'#34d399','messaging':'#f472b6','doc-analysis':'#a78bfa','mixed-research':'#fbbf24','cron-light':'#94a3b8','expensive-outlier':'#ef4444','general':'#6b7280'};
+    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:16px;">';
+    data.clusters.forEach(function(cl) {
+      var color = clusterColors[cl.label] || '#6b7280';
+      var errorPct = (cl.error_rate * 100).toFixed(0);
+      html += '<div class="card" style="padding:16px;border-top:3px solid ' + color + ';">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">';
+      html += '<div><div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + escHtml(cl.label) + '</div>';
+      html += '<div style="font-size:12px;color:var(--text-muted);">' + cl.session_count + ' session' + (cl.session_count !== 1 ? 's' : '') + '</div></div>';
+      html += '<div style="background:' + color + '22;color:' + color + ';padding:4px 8px;border-radius:12px;font-size:11px;font-weight:600;">' + cl.session_count + '</div>';
+      html += '</div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">';
+      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Avg cost:</span> <span style="font-weight:600;color:var(--text-primary);">$' + cl.avg_cost.toFixed(4) + '</span></div>';
+      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Avg tokens:</span> <span style="font-weight:600;color:var(--text-primary);">' + (cl.avg_tokens / 1000).toFixed(1) + 'K</span></div>';
+      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Error rate:</span> <span style="font-weight:600;">' + errorPct + '%</span></div>';
+      if (cl.rep_session) {
+        html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Top session:</span> <span style="font-family:monospace;color:var(--text-accent);" title="' + escHtml(cl.rep_session.id) + '">' + escHtml(cl.rep_session.id.substring(0,8)) + '</span></div>';
+      }
+      html += '</div>';
+      if (cl.rep_session && cl.rep_session.tools && cl.rep_session.tools.length > 0) {
+        html += '<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">';
+        cl.rep_session.tools.slice(0,5).forEach(function(t) {
+          html += '<span style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;font-size:10px;padding:2px 6px;color:var(--text-muted);">' + escHtml(t) + '</span>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    var total = data.clusters.reduce(function(s, c) { return s + c.session_count; }, 0);
+    html += '<div class="card" style="padding:12px 16px;font-size:12px;color:var(--text-muted);">Total: <strong style="color:var(--text-primary);">' + total + ' sessions</strong> across <strong style="color:var(--text-primary);">' + data.clusters.length + ' clusters</strong></div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">' + t("app.failed_to_load_clusters", null, "Failed to load clusters") + '</div>';
+  }
+}
+
 var _overviewRefreshRunning = false;
 function startOverviewRefresh() {
   // Don't fire loadAll() immediately -- bootDashboard already called it
@@ -32336,4 +32388,110 @@ function signalsDeleteBrief(id) {
     fetch('/api/briefs/' + encodeURIComponent(id), { method: 'DELETE' })
       .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); }),
     _sigT('signals.brief_delete_err', null, 'Could not delete the brief.'));
+}
+
+
+// ── First-run report (#5716) ────────────────────────────────────────────────
+// A dashboard with nothing on it reads as a broken install. When there is
+// genuinely nothing to show, say where we looked, what would change the
+// answer, and offer the sample: rather than rendering an empty shell.
+//
+// Deliberately conservative about WHEN it appears: only with zero sessions
+// AND zero events. A user whose agents are simply idle today has data, and
+// telling them "nothing detected" would be wrong.
+function _frrCount(overview, keys) {
+  for (var i = 0; i < keys.length; i++) {
+    var v = overview && overview[keys[i]];
+    if (typeof v === 'number') return v;
+    if (Array.isArray(v)) return v.length;
+  }
+  return 0;
+}
+
+async function renderFirstRunReport(overview) {
+  var el = document.getElementById('first-run-report');
+  if (!el) return;
+  var sessions = _frrCount(overview, ['sessions', 'session_count', 'total_sessions']);
+  var events = _frrCount(overview, ['events', 'event_count', 'total_events']);
+  if (sessions > 0 || events > 0) { el.style.display = 'none'; return; }
+
+  var d = null;
+  try {
+    d = await fetch('/api/entitlement/runtime-detection', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); });
+  } catch (e) { d = null; }
+  var probes = (d && d.probes) || [];
+  var found = probes.filter(function (p) { return p.found; });
+
+  var h = '<div style="display:flex;align-items:center;gap:9px;margin-bottom:10px;">'
+        + '<span style="font-size:17px;" aria-hidden="true">&#128269;</span>'
+        + '<b style="font-size:15px;color:var(--text-primary);">No agent sessions on this machine yet</b></div>';
+
+  // Nothing is ingesting -> nothing will EVER appear, and no amount of
+  // agent activity changes that. Saying "run some work through the agent"
+  // here would send the user to do something that cannot help (#5740).
+  var noIngest = d && d.ingest_running === false;
+
+  if (noIngest) {
+    h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
+       + (found.length
+          ? 'ClawMetry detected <b>' + found.map(function (p) { return escHtml(p.label || p.id); }).join(', ')
+            + '</b> on this machine, but '
+          : 'No sessions are being read, because ')
+       + '<b>nothing is reading ' + (found.length === 1 ? 'it' : 'them')
+       + ' into the local store yet.</b> '
+       + 'The dashboard displays what the sync daemon collects, and the daemon '
+       + 'is not running on this machine. Start it and this page fills in:</p>'
+       + '<pre style="margin:0 0 12px;padding:10px 12px;background:var(--bg-primary);'
+       + 'border:1px solid var(--border-secondary);border-radius:6px;overflow-x:auto;'
+       + 'font-size:12.5px;">clawmetry connect   <span style="color:var(--text-muted);">'
+       + '# or: python3 -m clawmetry.sync</span></pre>';
+  } else if (found.length) {
+    // Runtimes are here and ingest is running; their session stores are empty
+    // or not yet read. Say that, rather than implying nothing is installed.
+    var names = found.map(function (p) { return escHtml(p.label || p.id); }).join(', ');
+    h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
+       + 'ClawMetry detected <b>' + names + '</b> on this machine, but has not read any '
+       + 'sessions from ' + (found.length === 1 ? 'it' : 'them') + ' yet. Run some work '
+       + 'through the agent and this fills in within a minute.</p>';
+    var locked = found.filter(function (p) { return !p.allowed; });
+    if (locked.length && d && !d.pending) {
+      h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
+         + escHtml(locked.map(function (p) { return p.label || p.id; }).join(', '))
+         + ' need the ' + escHtml((d && d.actionable_tier_label) || 'Starter')
+         + ' plan\u2019s adapters before their sessions can be read.</p>';
+    }
+  } else if (!noIngest) {
+    h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
+       + 'No supported runtime was detected. That is a real answer, not an error. '
+       + 'Here is exactly where ClawMetry looked, so you can tell us if it looked '
+       + 'in the wrong place.</p>';
+  }
+
+  // Where we looked. Collapsed by default: it is reassurance, not the message.
+  var rows = probes.slice(0, 40).map(function (p) {
+    var paths = (p.paths || []).map(function (x) { return escHtml(x); }).join('<br>');
+    return '<tr><td style="padding:3px 12px 3px 0;white-space:nowrap;color:var(--text-primary);">'
+         + (p.found ? '\u2713 ' : '\u00b7 ') + escHtml(p.label || p.id)
+         + '</td><td style="padding:3px 0;color:var(--text-muted);font-family:ui-monospace,monospace;font-size:11.5px;">'
+         + (paths || '<i>no default location</i>') + '</td></tr>';
+  }).join('');
+  if (rows) {
+    h += '<details style="margin:0 0 12px;"><summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);">'
+       + 'Where ClawMetry looked (' + probes.length + ' runtimes)</summary>'
+       + '<div style="overflow-x:auto;margin-top:8px;"><table style="border-collapse:collapse;font-size:12.5px;">'
+       + rows + '</table></div>'
+       + '<p style="margin:8px 0 0;font-size:12.5px;color:var(--text-muted);">'
+       + 'On macOS, reading some of these needs Full Disk Access for your terminal. '
+       + 'A runtime storing its sessions somewhere else can be pointed at ClawMetry '
+       + 'with the environment variables in docs/compatibility.md.</p></details>';
+  }
+
+  h += '<div style="border-top:1px solid var(--border-secondary);padding-top:11px;font-size:13.5px;color:var(--text-secondary);">'
+     + 'Want to see what this looks like with data? Restart with '
+     + '<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">clawmetry --sample</code>'
+     + ' for three labelled synthetic sessions, including one that is stuck.</div>';
+
+  el.innerHTML = h;
+  el.style.display = 'block';
 }

@@ -46,6 +46,29 @@ class RuntimeProbe:
     paths: tuple  # candidate globs, relative to ~ unless absolute / env-based
     env: str = ""  # optional env var naming the data dir (adapter-honoured)
 
+    def checked_paths(self) -> list:
+        """The locations :meth:`found` actually looks at, expanded.
+
+        An empty state that says "nothing detected" without saying WHERE it
+        looked is indistinguishable from a broken install, and the user has no
+        way to tell us we searched the wrong place. A candidate whose
+        environment variable is unset stays literal (``$GOOSE_PATH_ROOT/...``)
+        rather than being silently dropped: "we looked here and that variable
+        is not set" is the honest answer.
+        """
+        out = []
+        try:
+            if self.env:
+                root = os.environ.get(self.env)
+                out.append(
+                    os.path.expanduser(root) if root else f"${self.env} (unset)"
+                )
+            for p in self.paths:
+                out.append(os.path.expanduser(os.path.expandvars(p)))
+        except Exception:
+            return out
+        return out
+
     def found(self) -> bool:
         """True when any candidate location exists. Never raises."""
         try:
@@ -216,7 +239,9 @@ RUNTIME_PROBES: tuple = (
 def probe_runtimes() -> list:
     """Presence-probe every supported runtime.
 
-    Returns ``[{id, label, free, found}]`` in catalogue order. Never raises.
+    Returns ``[{id, label, free, found, paths, env}]`` in catalogue order.
+    ``paths`` is what was actually checked, so a caller can show the user
+    where we looked instead of only that we found nothing. Never raises.
     """
     out = []
     for probe in RUNTIME_PROBES:
@@ -224,12 +249,18 @@ def probe_runtimes() -> list:
             hit = probe.found()
         except Exception:
             hit = False
+        try:
+            checked = probe.checked_paths()
+        except Exception:
+            checked = []
         out.append(
             {
                 "id": probe.id,
                 "label": probe.label,
                 "free": probe.id in FREE_RUNTIMES,
                 "found": hit,
+                "paths": checked,
+                "env": probe.env or "",
             }
         )
     return out
