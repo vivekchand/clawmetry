@@ -50,47 +50,370 @@ def _pid_file() -> Path:
     return Path(os.path.expanduser("~/.clawmetry/sync.pid"))
 
 
-def _acquire_pid_lock() -> bool:
-    """Atomically claim the PID file. Return False if another instance is
-    already running. Uses ``O_CREAT|O_EXCL`` to win the create race when
-    two daemons start simultaneously — the previous ``exists()`` then
-    ``write_text()`` pattern had a TOCTOU window where both processes
-    could pass the check and both write their PIDs.
+# The lock records WHO holds it, not just a number. A bare pid is not an
+# identity: the OS recycles pids, so a daemon that dies without running its
+# atexit hook (SIGKILL, panic, power loss) leaves a file naming a number that
+# some unrelated process will eventually be handed. ``is_alive()`` then says
+# "yes" forever and every respawn exits — the daemon is locked out of its own
+# lock with no way back except a human deleting the file.
+#
+# Burned 2026-09-08 on a Pro node: sync stopped at 19:32 and never resumed.
+# launchd (KeepAlive, ThrottleInterval 30) respawned it ~1,400 times overnight,
+# each one printing "Another instance is already running. Exiting.", while
+# ``clawmetry status`` still showed a green daemon and a 12-hour-old "Last sync".
+#
+# So: identity is ``(pid, start-time-token)``, verified through the same
+# ``process_control.verify_pid`` pid-reuse guard the Guard actuators use before
+# they signal anything. A holder we cannot positively identify as our own
+# daemon is a stale lock, and stale locks are reclaimed.
+_LOCK_OWNER = "clawmetry-sync"
 
-    Identified by @dumko2001 in #512.
+# How long a holder may go without ticking its heartbeat before the next
+# respawn treats it as wedged and takes the lock. Generous by default: a
+# healthy daemon ticks every 30s, so 15 min is 30 missed ticks.
+_LOCK_STALE_SECS_DEFAULT = 900.0
+
+
+def _lock_heartbeat_file() -> Path:
+    return Path(os.path.expanduser("~/.clawmetry/sync.heartbeat"))
+
+
+def _lock_identity_file() -> Path:
+    """Who the lock holder is, alongside the pid file rather than inside it.
+
+    ``sync.pid`` stays a bare integer because several things already read it
+    that way (``daemon_registration._is_sync_running``, the dashboard's
+    background spawn, ``install.sh``'s sandbox teardown). Putting the identity
+    record in a sidecar buys pid-reuse detection without breaking any of them;
+    a missing or mismatched sidecar simply falls back to the command-line check.
+    """
+    return Path(os.path.expanduser("~/.clawmetry/sync.lock.json"))
+
+
+def _lock_stale_secs() -> float:
+    try:
+        v = float(os.environ.get("CLAWMETRY_LOCK_STALE_SECS", "") or 0)
+        return v if v > 0 else _LOCK_STALE_SECS_DEFAULT
+    except (TypeError, ValueError):
+        return _LOCK_STALE_SECS_DEFAULT
+
+
+def _proc_start_token_safe(pid: int):
+    """The process's start-time token, or None when it cannot be read.
+
+    Thin wrapper so this module never hard-depends on process_control's
+    private helper and tests have one seam to reach for.
+    """
+    try:
+        from clawmetry.process_control import _proc_start_token
+        return _proc_start_token(int(pid))
+    except Exception:  # noqa: BLE001 - dead pid / perm / unsupported platform
+        return None
+
+
+def touch_lock_heartbeat() -> None:
+    """Prove this process is still scheduling threads.
+
+    Written by the daemon's watchdog on a fixed tick, independent of how long
+    an ingest cycle takes, so a legitimately slow backfill is never mistaken
+    for a wedge. Only a process whose interpreter has stopped running (frozen,
+    SIGSTOPped, deadlocked) lets this file go stale.
+    """
+    try:
+        hb = _lock_heartbeat_file()
+        hb.parent.mkdir(parents=True, exist_ok=True)
+        hb.write_text(str(int(time.time())))
+    except Exception as e:  # noqa: BLE001 - never take the daemon down for this
+        log.debug("lock heartbeat not written: %s", e)
+
+
+def _write_lock_identity() -> None:
+    """Record who took the lock, so the next start can tell a live daemon from
+    a recycled pid. Best-effort: without it the lock still works, it just falls
+    back to identifying the holder by its command line."""
+    try:
+        f = _lock_identity_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({
+            "pid": os.getpid(),
+            "start": _proc_start_token_safe(os.getpid()),
+            "owner": _LOCK_OWNER,
+            "since": int(time.time()),
+        }))
+    except Exception as e:  # noqa: BLE001
+        log.debug("lock identity not written: %s", e)
+
+
+def _read_lock_record(pid_path: Path):
+    """Parse the lock. Returns ``{"pid": int, "start": str|None}`` or None.
+
+    The pid comes from ``sync.pid`` (a bare int, or a JSON object should a
+    future release write one). The start-time token comes from the sidecar,
+    and only when it names the same pid: a sidecar left behind by an earlier
+    holder must not be used to identify the current one.
+    """
+    try:
+        raw = pid_path.read_text().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    pid = None
+    if raw.startswith("{"):
+        try:
+            pid = int(json.loads(raw).get("pid"))
+        except (ValueError, TypeError):
+            return None
+    else:
+        try:
+            pid = int(raw)
+        except ValueError:
+            return None
+    start = None
+    try:
+        ident = json.loads(_lock_identity_file().read_text())
+        if int(ident.get("pid")) == pid:
+            start = ident.get("start") or None
+    except (OSError, ValueError, TypeError):
+        pass
+    return {"pid": pid, "start": start}
+
+
+def _holder_cmdline_verdict(pid: int) -> str:
+    """Identify a lock holder by its command line: ``"ours"``, ``"foreign"`` or
+    ``"unknown"``.
+
+    The fallback for a legacy bare-int lock file, which carries no start token.
+    ``"unknown"`` is a real answer and must stay distinct from ``"foreign"``:
+    ``_proc_cmdline`` reads nothing on a Windows host without psutil, and
+    treating "I could not look" as "not ours" there would let an upgrade
+    reclaim a lock a perfectly healthy daemon still holds.
+    """
+    try:
+        from clawmetry.process_control import _proc_cmdline
+        blob = " ".join(_proc_cmdline(int(pid))).lower()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    if not blob:
+        return "unknown"
+    if "clawmetry" in blob and ("sync" in blob or "daemon" in blob):
+        return "ours"
+    return "foreign"
+
+
+def _started_after_the_lock(pid: int, pid_path: Path) -> bool:
+    """True when ``pid`` began AFTER the lock file was written.
+
+    A process that did not exist when the lock was taken cannot be the process
+    that took it, so this is proof of pid reuse that needs no command line and
+    no recorded token: it is the only identity check available on a Windows
+    host without psutil, where ``_proc_cmdline`` reads nothing.
+
+    Conservative in both directions. Returns False whenever either timestamp is
+    unavailable, and allows a few seconds of slack because the daemon starts
+    fractionally before it writes its lock.
+    """
+    try:
+        from clawmetry.process_control import _proc_start_epoch
+
+        started = _proc_start_epoch(int(pid))
+        if started is None:
+            return False
+        return started > pid_path.stat().st_mtime + 5.0
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _lock_holder_verdict(rec, pid_path: Path = None) -> tuple:
+    """Decide what the current lock holder is. Returns ``(verdict, why)`` where
+    verdict is ``"held"`` (a live daemon owns it), ``"stale"`` (reclaim it) or
+    ``"wedged"`` (ours, but frozen: stop it, then reclaim)."""
+    if not rec:
+        return "stale", "unreadable_lock_file"
+    pid = rec.get("pid")
+    if not pid or pid <= 0:
+        return "stale", "no_pid_in_lock_file"
+    if int(pid) == os.getpid():
+        # A caller that pre-wrote our own pid must not lock us out of our own
+        # lock (the #5740 spawn race). Ours by definition.
+        return "stale", "lock_names_this_process"
+
+    from clawmetry.process_control import is_alive as _pid_alive
+
+    if not _pid_alive(int(pid)):
+        return "stale", "pid_not_alive"
+
+    recorded_start = rec.get("start")
+    if recorded_start:
+        from clawmetry.process_control import verify_pid as _verify_pid
+
+        ok, why = _verify_pid(int(pid), recorded_start)
+        if not ok:
+            # Alive, but not the process that took the lock: recycled number.
+            return "stale", f"pid_recycled({why})"
+    elif pid_path is not None and _started_after_the_lock(int(pid), pid_path):
+        # It cannot have written a file that predates it.
+        return "stale", "pid_recycled(started_after_lock)"
+    elif _holder_cmdline_verdict(int(pid)) == "foreign":
+        # Legacy bare-int file and the live holder is somebody else entirely.
+        return "stale", "pid_recycled(cmdline_mismatch)"
+
+    # It is genuinely our daemon. Is it still running, or frozen? Only a
+    # heartbeat that EXISTS and has gone stale condemns it: a daemon from
+    # before this change never writes one, and absence must not shoot a
+    # healthy process during an upgrade.
+    try:
+        hb = _lock_heartbeat_file()
+        if hb.exists():
+            age = time.time() - hb.stat().st_mtime
+            if age > _lock_stale_secs():
+                return "wedged", f"no_heartbeat_for_{int(age)}s"
+    except OSError:
+        pass
+    return "held", "daemon_running"
+
+
+def _process_is_gone(pid: int) -> bool:
+    """True when ``pid`` can no longer run code.
+
+    ``is_alive`` is deliberately a "can I address this pid" probe, and on POSIX
+    the signal-0 probe behind it succeeds for a ZOMBIE: a process that has
+    exited but whose parent has not reaped it. For "did my signal actually
+    work?" a zombie counts as gone.
+    """
+    from clawmetry.process_control import is_alive as _pid_alive
+
+    if not _pid_alive(int(pid)):
+        return True
+    try:  # reap it if it happens to be our own child
+        os.waitpid(int(pid), os.WNOHANG)
+    except (ChildProcessError, OSError, AttributeError):
+        pass
+    if not _pid_alive(int(pid)):
+        return True
+    try:
+        import psutil  # type: ignore
+
+        return psutil.Process(int(pid)).status() == psutil.STATUS_ZOMBIE
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 - no such process / access
+        return True
+    if os.name == "nt":
+        return False
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "state=", "-p", str(int(pid))],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return out.startswith("Z") or not out
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _stop_wedged_holder(pid: int) -> bool:
+    """Stop a frozen holder so its lock can be reclaimed. TERM, then KILL."""
+    try:
+        import signal as _signal
+
+        if os.name == "nt":
+            from clawmetry.process_control import _win_terminate
+            _win_terminate(int(pid))
+        else:
+            os.kill(int(pid), _signal.SIGTERM)
+        for _ in range(50):
+            if _process_is_gone(pid):
+                return True
+            time.sleep(0.1)
+        if os.name != "nt":
+            os.kill(int(pid), _signal.SIGKILL)
+            for _ in range(20):
+                if _process_is_gone(pid):
+                    return True
+                time.sleep(0.1)
+        return _process_is_gone(pid)
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not stop wedged daemon pid %s: %s", pid, e)
+        return False
+
+
+def _acquire_pid_lock() -> bool:
+    """Atomically claim the PID file. Return False only when a *live, verified*
+    sync daemon already holds it.
+
+    Uses ``O_CREAT|O_EXCL`` to win the create race when two daemons start
+    simultaneously — the previous ``exists()`` then ``write_text()`` pattern had
+    a TOCTOU window where both processes could pass the check and both write
+    their PIDs. Identified by @dumko2001 in #512.
+
+    A holder that is not alive, not us, or not identifiable as our daemon is a
+    stale lock and gets reclaimed. See the note above ``_LOCK_OWNER``.
     """
     pid_path = _pid_file()
     pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_str = str(os.getpid()).encode()
-    while True:
+    payload = str(os.getpid()).encode()
+    # Bounded: each pass either returns or removes one stale file, so a
+    # pathological loop (another process recreating it) gives up rather than
+    # spinning forever.
+    for _ in range(8):
         try:
             fd = os.open(str(pid_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
-                os.write(fd, pid_str)
+                os.write(fd, payload)
             finally:
                 os.close(fd)
+            _write_lock_identity()
+            touch_lock_heartbeat()
             return True
         except FileExistsError:
-            try:
-                existing_pid = int(pid_path.read_text().strip())
-            except (ValueError, OSError):
-                try:
-                    pid_path.unlink()
-                except OSError:
-                    return False
-                continue
-            # os.kill(pid, 0) is not a liveness probe on Windows (never
-            # raises for dead pids -> a stale lock file would block the
-            # daemon from ever starting again). is_alive() is portable.
-            from clawmetry.process_control import is_alive as _pid_alive
-
-            if _pid_alive(existing_pid):
+            rec = _read_lock_record(pid_path)
+            verdict, why = _lock_holder_verdict(rec, pid_path)
+            if verdict == "held":
                 return False
+            if verdict == "wedged":
+                held_pid = (rec or {}).get("pid")
+                log.warning(
+                    "sync.pid held by a wedged daemon (pid=%s, %s) — stopping it "
+                    "and taking over", held_pid, why
+                )
+                if not _stop_wedged_holder(int(held_pid)):
+                    return False
+            else:
+                log.warning(
+                    "reclaiming stale sync.pid (pid=%s, %s)",
+                    (rec or {}).get("pid"), why
+                )
             try:
                 pid_path.unlink()
-            except OSError:
+            except FileNotFoundError:
                 pass
-                continue
+            except OSError as e:
+                log.warning("could not remove stale sync.pid: %s", e)
+                return False
+        except OSError as e:
+            log.warning("could not claim sync.pid: %s", e)
+            return False
+    return False
+
+
+def _start_lock_heartbeat(interval_secs: float = 30.0) -> threading.Thread:
+    """Tick the lock heartbeat on a fixed cadence for as long as this process
+    can run Python.
+
+    Deliberately independent of the ingest cycle: a backfill that takes ten
+    minutes is healthy and must keep its lock, so the heartbeat measures
+    "interpreter still scheduling", not "cycle completed". A stalled *cycle*
+    is a different failure and is surfaced by ``clawmetry status``, which
+    reports the age of the last completed sync rather than killing anything.
+    """
+    def _beat() -> None:
+        while True:
+            touch_lock_heartbeat()
+            time.sleep(interval_secs)
+
+    th = threading.Thread(target=_beat, daemon=True, name="lock-heartbeat")
+    th.start()
+    return th
 
 
 def _release_pid_lock() -> None:
@@ -98,6 +421,14 @@ def _release_pid_lock() -> None:
         _pid_file().unlink(missing_ok=True)
     except Exception:
         pass
+    # Leave no misleading artefacts behind a clean exit: an orphaned heartbeat
+    # could only ever make a later holder look wedged, and an orphaned identity
+    # record only ever describes a process that is gone.
+    for _f in (_lock_heartbeat_file, _lock_identity_file):
+        try:
+            _f().unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # ── Graceful shutdown — drain ring buffer on SIGTERM/SIGINT/atexit (#1593) ──
@@ -23514,6 +23845,7 @@ def run_daemon() -> None:
     # racing supervisor restart sees the lock held until the flush is
     # done, instead of starting a second daemon mid-drain.
     _install_shutdown_handlers()
+    _start_lock_heartbeat()
 
     # Open-core plugin discovery. dashboard.py runs this at import time so the
     # dashboard process picks up entry-point plugins (clawmetry-pro adapters,
