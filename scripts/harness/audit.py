@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -100,17 +101,57 @@ def _harness_surface(clone: str) -> str:
     return "\n".join(out)[:32000]
 
 
-def _adapter_source(h: dict) -> str:
-    """Read the FULL ClawMetry adapter for this runtime. Read the whole file (up
-    to 60k) — truncating drops the tail, and capabilities()/cost-derivation often
-    live at the BOTTOM of the adapter, which caused false-positive gaps (e.g.
-    aider's conditional COST at line ~527 was cut, so the audit wrongly flagged
-    'no COST').
+# Big enough for every adapter this repo audits today, with headroom. The cap
+# is not the safety mechanism -- ``_adapter_source`` refuses to lie about
+# trimming, and ``tests/test_harness_audit_reads_whole_adapter.py`` fails if an
+# adapter outgrows it -- but a runaway file must not blow the model's context.
+_ADAPTER_BUDGET = 400000
+
+
+def _adapter_index(src: str) -> str:
+    """Every definition and env var in the WHOLE file, one per line.
+
+    The auditor's job is to decide what the adapter does NOT do. That makes it
+    uniquely vulnerable to truncation: absence of evidence in a clipped file
+    reads exactly like evidence of absence, and the model has no way to tell.
+    This index is small, complete, and always built from the full source, so a
+    claim like "no code path reads NEMOCLAW_TRACE_FILE" can be checked against
+    it even in the (now guarded) case where the body had to be trimmed.
+    """
+    names = sorted(set(re.findall(r"^\s*(?:async\s+)?def\s+(\w+)", src, re.M)))
+    envs = sorted(set(re.findall(r"[\"\']([A-Z][A-Z0-9_]{4,})[\"\']", src)))
+    return ("DEFINITIONS (complete, from the whole file):\n  "
+            + ", ".join(names)
+            + "\n\nUPPER_CASE STRINGS / ENV VARS (complete, from the whole file):\n  "
+            + ", ".join(envs))
+
+
+def _adapter_source(h: dict) -> tuple:
+    """Read the ClawMetry adapter for this runtime. Returns ``(source, trimmed)``.
+
+    Truncating drops the tail, and capabilities()/cost-derivation often live at
+    the BOTTOM of the adapter, which caused false-positive gaps (e.g. aider's
+    conditional COST at line ~527 was cut, so the audit wrongly flagged 'no
+    COST'). The cap was raised to 60k for that, and then ``openclaw.py`` grew to
+    193k -- so 69% of the adapter went unread again, silently, for BOTH runtimes
+    this audit covers, while the prompt kept asserting the file was "provided in
+    full". That is how #5750 was filed at severity high against a
+    ``NEMOCLAW_TRACE_FILE`` reader sitting at line 1690, roughly 18k characters
+    past the cut.
+
+    Two changes, because raising a number is not a fix for a file that grows:
+    the budget is now far above any adapter here, and when it IS exceeded the
+    caller is told, so the prompt can say the source was trimmed instead of
+    claiming it was complete.
 
     OSS audits only the FREE runtimes (openclaw + nemoclaw), whose adapters are in
     this repo. The 12 closed pro adapters are audited by clawmetry-pro's own
     private copy of this script, so no closed adapter path is referenced here."""
-    return _read(os.path.join(REPO_ROOT, h["adapter"]), 60000)
+    path = os.path.join(REPO_ROOT, h["adapter"])
+    src = _read(path, _ADAPTER_BUDGET + 1)
+    if len(src) > _ADAPTER_BUDGET:
+        return src[:_ADAPTER_BUDGET], True
+    return src, False
 
 
 def _capabilities_enum() -> str:
@@ -144,11 +185,22 @@ def _channel_coverage_context() -> str:
     return "\n".join(parts)
 
 
-def _build_prompt(h: dict, surface: str, adapter: str, caps: str, channel_ctx: str = "") -> str:
+def _build_prompt(h: dict, surface: str, adapter: str, caps: str, channel_ctx: str = "",
+                  trimmed: bool = False) -> str:
     _channel_block = (
         f"\nClawMetry channel-ingest coverage (sync daemon _CHANNEL_DIRS + HTTP routes — "
         f"a channel present here is already handled; do NOT report it as a gap):\n```\n{channel_ctx}\n```"
     ) if channel_ctx else ""
+    _index = _adapter_index(adapter)
+    # Never assert completeness we cannot guarantee. The model is being asked to
+    # report ABSENCE, so an unqualified "provided in full" over a clipped file
+    # is the one sentence most likely to manufacture a false positive.
+    _completeness = (
+        "NOTE: the adapter body above was TRIMMED to fit. Absence from it is NOT "
+        "evidence the adapter lacks something. Use the complete index below."
+        if trimmed else
+        "The adapter above is the COMPLETE file, start to end."
+    )
     return f"""You audit observability coverage for ClawMetry, which monitors AI agent runtimes.
 
 RUNTIME: {h['runtime']} ({h.get('display', h['runtime'])})
@@ -163,6 +215,9 @@ ClawMetry's adapter that observes this runtime (what it ACTUALLY captures today)
 ```
 {adapter}
 ```
+{_completeness}
+
+{_index}
 {_channel_block}
 The upstream harness — its observable surface (recent commits + data/telemetry files):
 ```
@@ -176,8 +231,11 @@ storage format, a new feature that emits data. Ground EVERY gap in a real file o
 path you can point to in the harness; if you can't point to where the harness
 exposes it, DO NOT include it (no speculation).
 
-CRITICAL — verify against the FULL adapter above before reporting (it is provided
-in full): do NOT flag something the adapter already handles. In particular check
+CRITICAL — verify against the adapter above before reporting: do NOT flag
+something the adapter already handles. Check the DEFINITIONS and ENV VARS index,
+which is COMPLETE for the whole file even when the body above was trimmed: if a
+symbol or env var you are about to call missing appears there, it is NOT a gap.
+In particular check
 ``capabilities()`` (capabilities are often added CONDITIONALLY at the bottom of
 the file), any ``derive_cost_usd`` / cost-derivation, and the field mapping. If
 the adapter already captures or derives it, it is NOT a gap.
@@ -313,8 +371,12 @@ def main() -> int:
         if not surface:
             print(f"  [skip] no clone at {clone} — run scripts/harness/sync.sh first")
             continue
-        adapter = _adapter_source(h)
-        raw = _run_claude(_build_prompt(h, surface, adapter, caps, channel_ctx))
+        adapter, trimmed = _adapter_source(h)
+        if trimmed:
+            print(f"  [warn] {h['adapter']} exceeded the source budget and was "
+                  f"trimmed; the prompt says so and carries a complete index")
+        raw = _run_claude(_build_prompt(h, surface, adapter, caps, channel_ctx,
+                                        trimmed=trimmed))
         gaps = _extract_json_array(raw)
         print(f"  {len(gaps)} gap(s) reported")
         # Ground (anti-hallucination), severity-sort, drop low, cap per runtime so a
