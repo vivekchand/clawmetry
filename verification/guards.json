@@ -130,6 +130,11 @@
       "path": "tests/test_guard_workspace_kinds.py",
       "why": "Pins that a policy must NAME a workspace kind to act on it. Without it a catch-all 'pause anything critical' rule silently acquires power over every poisoned checkout, which is the shape of the preset that paused 280 sessions in 22 minutes.",
       "min_bytes": 4000
+    },
+    {
+      "path": "tests/test_every_tab_is_reachable.py",
+      "why": "Pins that every tab the wheel ships can be opened by someone. Two could not: subagents (nav pulled 2026-05-18 for being stuck on Loading..., body left behind) and clusters (a renderer reading four fields /api/sessions/clusters stopped emitting). An unreachable surface still ships and can never report that it is broken. Scans EVERY bundle under static/js, not app.js alone -- trail is reached only from trail.js, and a rule that flags a live tab gets deleted rather than fixed.",
+      "min_bytes": 4000
     }
   ],
   "ratchets": {
