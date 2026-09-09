@@ -17,6 +17,11 @@ Two independent faults, one guarded here per fault:
     container, so it answered for the server while the reader was looking at
     their laptop. It must not render there at all.
 
+Recorded as ADR-006 on the Sample Mode and First-Run Report blueprint
+(89dfab4d-d6c1-4c72-9222-0e68acd0eeaa), which also carries the amended
+scope contract: local dashboards only, and only on a payload that
+positively reports zero.
+
 The Node suite is a required gate here rather than a sibling of
 ``test_appjs_units.py``: that file is green locally and named in no CI job,
 which is how a guard rots without anyone noticing.
