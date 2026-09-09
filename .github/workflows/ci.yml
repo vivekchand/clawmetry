@@ -396,12 +396,14 @@ jobs:
       - name: Home makes no invisible fetch
         run: python3 -m pytest tests/test_overview_no_invisible_fetch.py -q
 
-      # A tab the runtime switcher toggles must be reachable by SOMEONE — a nav
-      # entry or an in-app switchTab() call. The Sub-Agents & Queue Lanes tab
-      # had neither: a template, three loaders, an agent stop control and a 5s
-      # poller shipped in every wheel with zero callers of
-      # switchTab('subagents') in OSS or cloud. Nothing could fail, because
-      # nobody could reach the thing that would fail.
+      # EVERY tab the wheel ships must be reachable by SOMEONE — a nav entry or
+      # a switchTab() call in any bundle under static/js. Two were not.
+      # Sub-Agents & Queue Lanes: a template, three loaders, an agent stop
+      # control and a 5s poller, zero callers in OSS or cloud. Session
+      # Clusters: a switchTab() branch and a renderer reading four fields
+      # /api/sessions/clusters no longer emits. Nothing could fail, because
+      # nobody could reach the thing that would fail. Scoped to the shipped
+      # templates rather than _CM_RT_ALL_TABS, which never listed clusters.
       - name: Every tab is reachable
         run: python3 -m pytest tests/test_every_tab_is_reachable.py -q
 
