@@ -1,0 +1,5 @@
+shpat_0123456789abcdef01234567
+shppa_aabbccdd00112233aabbccdd
+X-Shopify-Access-Token: shpca_deadbeef01234567deadbeef
+shpua_a0b1c2d3e4f5a6b7c8d9e0f1
+shpss_abcdef0123456789abcdef01

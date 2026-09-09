@@ -1,0 +1,13 @@
+  - id: injection-tool-call-imperative
+    type: injection
+    status: stable
+    name: "Tool Call Imperative"
+    description: "Detects injected instructions commanding direct MCP tool invocations"
+    severity: high
+    confidence: high
+    references:
+      - "https://explorer.invariantlabs.ai/docs/mcp-scan/issue-code-reference/"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:call|invoke|use|execute)\s+(?:the\s+)?tools/(?:call|list|read)\b'
