@@ -549,11 +549,14 @@
         + '<span style="opacity:.85;">' + _esc(blocked[0].reason || '') + '</span>';
       return;
     }
-    el.textContent = checked
+    el.innerHTML = (checked
       ? ('No agent activity here yet. ClawMetry checked ' + checked
          + ' runtimes and found none. Start an agent and this fills in on its '
          + 'own, with nothing to configure.')
-      : 'No agent activity on this machine yet. Start an agent and this fills in on its own.';
+      : 'No agent activity on this machine yet. Start an agent and this fills in on its own.')
+      + '<br><span style="opacity:.75;font-size:12px;">Want to see it working first? '
+      + 'Run <code>clawmetry --sample</code> for three synthetic sessions, or '
+      + '<code>clawmetry diagnose</code> to see exactly where it looked.</span>';
   }
 
   function _esc(x) {

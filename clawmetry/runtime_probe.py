@@ -510,7 +510,8 @@ def _render_nothing_detected(probes: list) -> list:
     checked = report.get("runtimes_checked") or len(probes)
     return [
         f"No agent runtime detected yet. ClawMetry checked {checked} runtimes and found none.",
-        "Run 'clawmetry diagnose' to see exactly where it looked.",
+        "Run 'clawmetry --sample' to see a working dashboard on synthetic sessions,",
+        "or 'clawmetry diagnose' to see exactly where it looked.",
         "",
         "Start an agent and ClawMetry picks it up on its own. Nothing to configure.",
     ]

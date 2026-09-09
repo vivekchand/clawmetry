@@ -217,6 +217,7 @@ def test_the_cli_wizard_is_no_longer_silent_on_an_empty_machine():
     out = "\n".join(render_detection_lines(probes))
     assert "checked 1 runtimes" in out
     assert "clawmetry diagnose" in out, "must point at where the map lives"
+    assert "clawmetry --sample" in out, "must offer a way to see it working"
     assert "Start an agent" in out
     assert "~/.openclaw" not in out, "the wizard is a screen; no paths on it"
 
@@ -262,6 +263,10 @@ def test_both_first_run_screens_branch_instead_of_returning():
     assert "if (!found.length) { _fillNothingDetected(d); return; }" in onboarding
     assert "_invFillWhereWeLooked" in app_js
     assert "clawmetry diagnose" in app_js
+    # The issue's third bullet: a way to see the product working. Sample
+    # mode landed in #5726, so this is no longer blocked.
+    assert "clawmetry --sample" in app_js
+    assert "clawmetry --sample" in onboarding
     # And neither screen renders the map.
     assert "l.paths" not in app_js and "det.locations" not in app_js
     assert "locations" not in onboarding

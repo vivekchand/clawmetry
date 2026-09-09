@@ -13318,8 +13318,9 @@ function _invFillWhereWeLooked(bodyEl) {
         '<div>No agent has run on this machine yet, as far as ClawMetry can see. '
         + 'It checked ' + checked + ' runtimes. Start an agent and this fills in on its own, '
         + 'with nothing to configure.</div>'
-        + '<div style="margin-top:8px;opacity:.75;font-size:12px;">To see exactly where it looked, run '
-        + '<code>clawmetry diagnose</code>.</div>';
+        + '<div style="margin-top:8px;opacity:.75;font-size:12px;">Want to see it working first? '
+        + 'Run <code>clawmetry --sample</code> for three synthetic sessions. '
+        + 'To see exactly where it looked, run <code>clawmetry diagnose</code>.</div>';
     })
     .catch(function () { /* keep the stock copy */ });
 }

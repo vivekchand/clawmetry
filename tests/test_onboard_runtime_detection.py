@@ -149,6 +149,7 @@ def test_render_nothing_detected_is_not_silent():
     out = "\n".join(render_detection_lines(probes))
     assert "checked" in out.lower()
     assert "clawmetry diagnose" in out
+    assert "clawmetry --sample" in out
     assert "Start an agent" in out, "must say what to do next"
     assert "~/.openclaw" not in out, "no probe map on a screen"
 
