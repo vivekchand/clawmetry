@@ -1,0 +1,15 @@
+  - id: injection-hidden-html-override
+    type: injection
+    status: stable
+    name: "Hidden HTML Override"
+    description: "Detects prompt injection hidden in invisible HTML elements"
+    severity: high
+    confidence: high
+    references:
+      - "https://genai.owasp.org/llmrisk/llm01-prompt-injection/"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      # Match exact hidden/aria-hidden attributes, including HTML5 unquoted
+      # true, without treating class names such as hidden-label as attributes.
+      regex: '<(?:div|span|p|input)(?:[^>]*(?:display\s*:\s*none|visibility\s*:\s*hidden)[^>]*|[^>]*aria-hidden\s*=\s*(?:"true"[^>]*|''true''[^>]*|true(?:\s+[^>]*)?)|[^>]*\shidden(?:\s+[^>]*)?)>[^<]{0,500}(?:ignore|disregard|override|forget)\s+(?:all\s+)?(?:previous|prior|system|your)\s+(?:instructions|rules|prompt)'

@@ -1,0 +1,14 @@
+  - id: tool-poison-cross-tool-replacement
+    type: tool-poison
+    status: stable
+    name: "Cross-tool Replacement"
+    description: "Detects tool descriptions claiming to replace or override other tools"
+    severity: high
+    confidence: high
+    references:
+      - "https://explorer.invariantlabs.ai/docs/mcp-scan/issue-code-reference/"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:this\s+tool\s+(?:replaces|overrides|supersedes)|ignore\s+(?:any\s+)?other\s+tool|use\s+this\s+(?:instead|in\s+place)\s+of)'
+      scan_field: description
