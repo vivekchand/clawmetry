@@ -21,6 +21,10 @@ the dashboard. Two reasons, both load-bearing:
 
 The panel still says HOW MANY runtimes were checked, which is what makes
 "nothing detected" trustworthy, and points at the command for the list.
+
+Recorded in the product record as ADR-005 on the Sample Mode and First-Run
+Report blueprint, and in the requirement's Capability 2, so the spec and the
+code agree on where the map is allowed to appear.
 """
 from __future__ import annotations
 
