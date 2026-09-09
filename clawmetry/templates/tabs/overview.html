@@ -6,6 +6,10 @@
        cm-cloud-attention serves it from the snapshot's sessions slice, which
        already carries the attention_* fields). Hidden until the first load
        resolves so it never flashes a wrong answer. -->
+  <!-- First-run report (#5716). Shown only when the dashboard has nothing to
+       show: a blank screen is indistinguishable from a broken install, so
+       this says where we looked, what we need, and offers the sample. -->
+  <div id="first-run-report" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:20px 22px;margin:0 0 14px;box-shadow:var(--card-shadow);"></div>
   <div id="needs-you" class="cm-needs" style="display:none;" aria-live="polite"></div>
 
   <!-- Human-first hero (FLYWHEEL vision): a newcomer should grasp "is my agent

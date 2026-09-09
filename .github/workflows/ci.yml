@@ -407,6 +407,15 @@ jobs:
       - name: Anomaly baselines reach the card
         run: python3 -m pytest tests/test_anomaly_baselines_reach_the_card.py -q
 
+      # A Pro node stopped syncing for 12 hours (2026-09-08) because sync.pid
+      # named a pid the OS had recycled onto an unrelated process: every
+      # launchd respawn read "alive" and exited, and `clawmetry status` still
+      # printed a green daemon over a 12-hour-old last sync. These pin both
+      # halves -- the lock reclaims a holder it cannot identify as our daemon,
+      # and status reports whether data is actually moving.
+      - name: The daemon lock cannot lock the daemon out
+        run: python3 -m pytest tests/test_pid_lock_reclaim.py tests/test_status_daemon_truth.py tests/test_pid_liveness_windows.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
@@ -615,6 +624,11 @@ jobs:
             tests/test_needs_you_ui_contract.py \
             tests/test_overview_claims_are_evidenced.py \
             tests/test_obs_gap_nemoclaw_vllm_5579.py \
+            tests/test_sample_data.py \
+            tests/test_daemon_spawn_pid_lock.py \
+            tests/test_first_run_report.py \
+            tests/test_e2e_invariants.py \
+            tests/test_e2e_telegram_brain_ingest.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
