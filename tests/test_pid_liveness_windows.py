@@ -35,6 +35,21 @@ def _spawn_sleeper():
     return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
 
 
+def _spawn_daemon_lookalike():
+    """A live process whose command line identifies it as the sync daemon.
+
+    The lock stopped trusting a bare pid number in 2026-09: a live pid that is
+    not our daemon is a pid the OS recycled, and refusing to start because of
+    one is what stranded a customer's node for 12 hours. A stand-in sleeper is
+    therefore no longer a stand-in for "the daemon is running" -- it has to
+    look like the daemon.
+    """
+    return subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)",
+         "clawmetry.sync", "--daemon"]
+    )
+
+
 def _spawn_dead():
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait()
@@ -92,7 +107,7 @@ def test_acquire_pid_lock_respects_live_lock(monkeypatch, tmp_path):
     """A genuinely running instance must still win the lock."""
     import clawmetry.sync as sync
 
-    live = _spawn_sleeper()
+    live = _spawn_daemon_lookalike()
     try:
         pid_file = tmp_path / "sync.pid"
         pid_file.write_text(str(live.pid))
