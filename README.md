@@ -1,20 +1,38 @@
 # 🦞 ClawMetry
 
-[![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
-[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
-[![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
-[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
-[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
+**See your agent think.** Real-time observability and governance for **30 AI agent runtimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 more.
 
-<a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
+## What does it do?
 
-**See your agent think.** Real-time observability for **30 AI agent runtimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 more. One dashboard for your whole agent fleet.
+ClawMetry sits beside your agent runtimes, reads their session files and logs without modifying them, and shows you cost, context usage, tool calls, and alerts as work happens. One command installs it; zero configuration is required.
 
-> 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
+## What will I see?
 
-One command. Zero config. Auto-detects everything.
+- **Sessions & transcripts**: what each agent did, turn by turn, with replay
+- **Cost & tokens**: per runtime, model, session and day, with anomaly flags
+- **Flow**: live diagram of messages moving through channels, models and tools
+- **Brain**: the reasoning and tool-call event stream as it happens
+- **Context blowout**: window utilization sized per provider, compaction vs forced overflow, plus a per-runtime map of what we *can't* see ([how](docs/CONTEXT_BLOWOUT.md))
+- **Memory & skills**: the files and skills each runtime actually loaded
+- **Health & logs**: disk, memory, error rates, rate limits, live log stream
+- **Alerts**: budget caps, error spikes, agent-offline, routed to Slack, Discord, PagerDuty, Telegram, Email
+- **Approvals**: pause risky tool calls *before* they run and approve from your phone ([how](docs/APPROVALS.md))
+
+## What is free?
+
+The MIT core is free forever: **[OpenClaw](https://github.com/openclaw/openclaw)**, **[NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw)**, and **[Goose](https://clawmetry.com/runtimes/goose)** — all dashboard features, local only, no account required.
+
+Other runtimes (Claude Code, Cursor, Copilot, Codex, Gemini CLI and 24 more) need a paid companion. During a free trial you get the full set; when a trial ends, the paid-runtime tabs switch to read-only previews showing the last snapshot — they do not erase your data, and the free runtimes keep working.
+
+| Plan | What it covers | Price |
+|---|---|---|
+| **Free** | OpenClaw + NVIDIA NemoClaw + Goose, full dashboard, local only | $0 |
+| **Starter** | Every other runtime above, fleet view, cloud sync | $9 per node / month |
+| **Pro** | Starter + control and evaluation: approvals, tool-risk policies, evals, anomaly detection, cost optimizer, OTel export, tamper-evident audit log | $19 per node / month |
+
+Annual plans, Enterprise and the current numbers live at **[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Self-hosted license keys work without the cloud (`clawmetry license`). The exact free/paid split is in [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
+
+## How do I start?
 
 ```bash
 pip install clawmetry && clawmetry
@@ -24,6 +42,16 @@ Opens at **http://localhost:8900**. Zero config: it finds the agent runtimes
 you already have, reads them read-only, and changes nothing about how they run.
 
 ![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
+
+## What leaves my machine?
+
+**Nothing from your sessions** unless you run `clawmetry connect` — no prompts, replies, tool arguments, file contents or log lines. When you do connect, the snapshot is end-to-end encrypted with a key that never leaves your machine.
+
+Two things do run by default before you connect, both opt-out and neither carrying session data: an anonymous install ping and a version check against PyPI. Every destination, what it carries and how to switch it off is in [docs/EGRESS.md](docs/EGRESS.md).
+
+→ [Runtime compatibility](docs/compatibility.md) · [Egress: every outbound call](docs/EGRESS.md)
+
+---
 
 ## Works with 30 agent runtimes
 
@@ -36,18 +64,6 @@ switcher re-scopes every tab to one of them.
 
 Built your own agent on an SDK instead? The interceptor tracks its LLM calls
 too. See [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
-
-## What you get
-
-- **Sessions & transcripts**: what each agent did, turn by turn, with replay
-- **Cost & tokens**: per runtime, model, session and day, with anomaly flags
-- **Flow**: live diagram of messages moving through channels, models and tools
-- **Brain**: the reasoning and tool-call event stream as it happens
-- **Context blowout**: window utilization sized per provider, compaction vs forced overflow, plus a per-runtime map of what we *can't* see ([how](docs/CONTEXT_BLOWOUT.md))
-- **Memory & skills**: the files and skills each runtime actually loaded
-- **Health & logs**: disk, memory, error rates, rate limits, live log stream
-- **Alerts**: budget caps, error spikes, agent-offline, routed to Slack, Discord, PagerDuty, Telegram, Email
-- **Approvals**: pause risky tool calls *before* they run and approve from your phone ([how](docs/APPROVALS.md))
 
 ## Context blowout, and what watching costs
 
@@ -103,19 +119,6 @@ knowing: the proxy costs about seven times more on Windows than on Linux, and
 the daemon currently sustains about 12% of one core, over our own 5-10%
 budget. The raw JSON, the method, and what is still unmeasured are in
 [docs/OVERHEAD.md](docs/OVERHEAD.md).
-
-## Pricing
-
-| Plan | What it covers | Price |
-|---|---|---|
-| **Free** | OpenClaw + NVIDIA NemoClaw + Goose, full dashboard, local only | $0 |
-| **Starter** | Every other runtime above, fleet view, cloud sync | $9 per node / month |
-| **Pro** | Starter + control and evaluation: approvals, tool-risk policies, evals, anomaly detection, cost optimizer, OTel export, tamper-evident audit log | $19 per node / month |
-
-Annual plans, Enterprise and the current numbers live at
-**[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Self-hosted license
-keys work without the cloud (`clawmetry license`). The exact free/paid split is
-in [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
 
 ## Your data stays on your machine
 
@@ -272,6 +275,20 @@ More, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
  <img alt="Star History Chart" src="https://api.star-history.com/image?repos=vivekchand/clawmetry&type=date&legend=top-left" />
  </picture>
 </a>
+
+---
+
+[![PyPI version](https://img.shields.io/pypi/v/clawmetry?color=E5443A&label=version)](https://pypi.org/project/clawmetry/)
+[![PyPI Downloads](https://static.pepy.tech/badge/clawmetry)](https://clickpy.clickhouse.com/dashboard/clawmetry)
+[![GitHub stars](https://img.shields.io/github/stars/vivekchand/clawmetry?style=flat&color=E5443A)](https://github.com/vivekchand/clawmetry/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/vivekchand/clawmetry/badge)](https://scorecard.dev/viewer/?uri=github.com/vivekchand/clawmetry)
+[![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
+[![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
+
+<a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
+
+> 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
 
 ## License
 
