@@ -1,0 +1,14 @@
+  - id: injection-explicit-http-exfil
+    type: injection
+    status: stable
+    name: "Explicit HTTP Exfiltration"
+    description: "Detects instructions to send sensitive data to external HTTP endpoints"
+    severity: critical
+    confidence: high
+    references:
+      - "https://genai.owasp.org/llmrisk/llm01-prompt-injection/"
+    tags:
+      - "owasp-llm:LLM01"
+      - "mitre-atlas:AML.T0048"
+    pattern:
+      regex: '(?:send|post|forward|upload|transmit|exfiltrate|transfer)\s+(?:the\s+)?(?:api\s+key|credentials?|password|secret|token|conversation|user\s+data|private\s+key|ssh\s+key|environment|config)\s+(?:to|at|via|over)\s+https?://'

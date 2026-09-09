@@ -31184,6 +31184,14 @@ function loadGuardSessions() {
           guardEsc(ws.detail || '') + '">' +
           guardEsc(GUARD_KIND_LABEL[ws.kind] || ws.kind) + '</span>';
       }
+      // #5746 — this session's transcript is published to a read-only public
+      // link that anyone holding it can open, and which keeps receiving new
+      // conversation text. Strictly `=== true`: `null` means the daemon never
+      // got a verdict (no gateway to ask), and drawing anything for that would
+      // turn "we do not know" into a claim.
+      if (s.public_share === true) {
+        statusCell += ' <span class="pill pill-warn" title="This session is published to a read-only public link. Anyone with the link can read its conversation text, including messages sent from now on. Revoke it from the OpenClaw session menu.">Public link</span>';
+      }
       // Listed from the live process probe, so it can be stopped now, but the
       // sync daemon has not read its transcript yet. Say that rather than let
       // the blank cost and missing detector status read as "nothing to see".
