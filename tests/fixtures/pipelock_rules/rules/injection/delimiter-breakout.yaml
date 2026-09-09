@@ -1,0 +1,13 @@
+  - id: injection-delimiter-breakout
+    type: injection
+    status: stable
+    name: "Delimiter Breakout"
+    description: "Detects fake section delimiters designed to break out of user content boundaries"
+    severity: high
+    confidence: medium
+    references:
+      - "https://arxiv.org/abs/2404.13208"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:-{3,}\s*(?:END|BEGIN|START)\s+(?:OF\s+)?(?:CONTEXT|INSTRUCTIONS?|SYSTEM|PROMPT|RULES)\s*-{3,}|={3,}\s*(?:SYSTEM|ADMIN|OVERRIDE|NEW)\s+(?:MESSAGE|INSTRUCTIONS?|CONTEXT)\s*={3,})'

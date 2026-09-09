@@ -32,6 +32,7 @@ from clawmetry.config import is_local_store_read_enabled
 
 from clawmetry.adapters import registry
 from clawmetry.adapters import phase as _phase
+from clawmetry.adapters import openclaw_share
 from clawmetry._gate import require_runtime
 
 bp_agents = Blueprint("agents", __name__)
@@ -52,6 +53,26 @@ def _ls_call(method_name, **kwargs):
         return getattr(store, method_name)(**kwargs)
     except Exception:
         return None
+
+
+def _stored_metadata(name: str, limit: int = 100) -> dict:
+    """``{session_id: metadata}`` from the typed sessions table.
+
+    Only used by the adapter path, which runs when the local-store read is
+    disabled or has no rows for this runtime. Returns ``{}`` when the store
+    is unreachable — the share stamp then leaves every session unmarked,
+    which is the honest reading of "we do not know" (#5746).
+    """
+    rows = _ls_call("query_sessions_table", agent_type=name, limit=limit)
+    if not rows:
+        return {}
+    out: dict = {}
+    for r in rows:
+        sid = r.get("session_id")
+        meta = r.get("metadata")
+        if sid and isinstance(meta, dict):
+            out[str(sid)] = meta
+    return out
 
 
 def _durable_phases(name: str, session_ids) -> dict:
@@ -177,6 +198,8 @@ def _try_local_store_agent_sessions(name: str, limit: int):
             "costUsd": float(r.get("cost_usd")) if r.get("cost_usd") is not None else None,
             "costStatus": meta.get("cost_status") or "",
             "endReason": meta.get("end_reason") or "",
+            # Popped by apply_share_state_to_payloads below; never goes out.
+            "_metadata": meta,
         })
     # Phase, on every row. Derived here from the stored timestamps so a store
     # that has rows but no phase record yet still answers, then overlaid with
@@ -202,6 +225,10 @@ def _try_local_store_agent_sessions(name: str, limit: int):
         if verdict.end_reason and not s.get("endReason"):
             s["endReason"] = verdict.end_reason
         _apply_phase(s, durable.get(s["id"]) or {})
+    # Share state (#5746) rides on the stored metadata the daemon wrote; a
+    # session the daemon could not probe carries no verdict and is left
+    # unstamped rather than reported "not shared".
+    openclaw_share.apply_share_state_to_payloads(sessions)
     return {"sessions": sessions, "_source": "local_store"}
 
 
@@ -253,6 +280,8 @@ def api_agent_sessions(name: str):
             s.resolve_phase(now=now)
         except Exception:  # never let one odd session sink the listing
             pass
+    if name == "openclaw":
+        openclaw_share.apply_share_state(sessions, _stored_metadata(name, limit))
     durable = _durable_phases(name, [s.id for s in sessions])
     payload = []
     for s in sessions:

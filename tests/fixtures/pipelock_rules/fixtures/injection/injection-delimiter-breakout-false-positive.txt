@@ -1,0 +1,6 @@
+--- yaml document separator
+=== Test Results ===
+--- END OF FILE ---
+------------ section break ------------
+The system uses a message queue for processing
+Instructions for building are in the Makefile
