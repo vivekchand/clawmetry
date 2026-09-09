@@ -88,7 +88,7 @@ Each row describes one user-visible feature. **Surface** is where the user encou
 | **History** | Time-series metrics over 1h/6h/24h/7d/30d (requires SQLite history backend) | Sub-tab | Both | free | `history.py`, `routes/fleet_history.py` |
 | **Version Impact** | Diff agent behaviour between two model versions | Sub-tab | Both | free | `routes/meta.py:bp_version_impact` |
 | **NemoClaw** | Per-sandbox governance, policy editor, sandbox health | Tab | Cloud only | **Pro** | `routes/nemoclaw.py` |
-| **Clusters** | Cluster sessions by behavioural similarity | Sub-tab | Both | free | `templates/tabs/clusters.html` |
+| **Trace Clusters** | Cluster sessions by behavioural similarity (tool pattern, cost tier, model family) | Panel inside **Usage** | Both | free | `routes/usage.py` → `/api/sessions/clusters`, rendered by `renderTraceClusters` |
 
 ### 4.2 Sync daemon — what gets shipped to cloud
 
