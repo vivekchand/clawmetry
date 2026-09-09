@@ -7082,6 +7082,42 @@ def _cmd_diagnose(args) -> None:
         _row("Cache error:", payload["cache_error"])
 
     _diagnose_runtime_paths()
+    _diagnose_otel_emitters()
+
+
+def _diagnose_otel_emitters() -> None:
+    """Applications on this machine already emitting OpenTelemetry (#4784).
+
+    Surfaced here rather than only as a snapshot slice, so the discovery has a
+    reader from the first commit. A slice nothing renders is the shape that
+    left /api/run-ledger with zero consumers.
+
+    Read-only and suggestion-only (ADR-005): it prints the line a person can
+    apply, and never edits another application's environment.
+    """
+    try:
+        from clawmetry import otel_discovery as _od
+        r = _od.discover_otel_emitters()
+    except Exception:
+        return
+    apps = r.get("apps") or []
+    print()
+    print("OpenTelemetry on this machine:")
+    if not apps and not r.get("degraded"):
+        ports = ", ".join(str(p) for p in r.get("checked_ports") or [])
+        print(f"  Nothing found. Checked ports {ports} and this user's processes.")
+    for a in apps:
+        tag = " (this is ClawMetry)" if a.get("is_clawmetry_receiver") else ""
+        how = "port" if a.get("evidence") == "port_probe" else "env"
+        print(f"    [{how:>4}] {a.get('name')} -> {a.get('endpoint')}{tag}")
+    if r.get("degraded"):
+        print(f"  Partial: {r.get('degraded_reason')}")
+    suggestable = r.get("suggestable") or []
+    if suggestable:
+        print()
+        print("  To send a copy here, start the app with:")
+        print(f"    {_od.redirect_instruction()}")
+        print("  ClawMetry never edits another application's configuration.")
 
 
 def _diagnose_runtime_paths() -> None:
