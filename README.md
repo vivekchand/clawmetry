@@ -8,9 +8,12 @@
 [![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
 [![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
-<a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
+**An agent can make a hundred tool calls without making progress.** ClawMetry
+reads the session files your coding agents already write, and puts the timeline,
+the tool calls and whatever token and cost data the runtime exposes into one
+view — so you can tell a long run that is working from one that is stuck.
 
-**See your agent think.** Real-time observability for **30 AI agent runtimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 more. One dashboard for your whole agent fleet.
+Works with **30 AI agent runtimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 more. One dashboard for your whole agent fleet.
 
 > 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
 
@@ -24,6 +27,22 @@ Opens at **http://localhost:8900**. Zero config: it finds the agent runtimes
 you already have, reads them read-only, and changes nothing about how they run.
 
 ![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
+
+## Before you install
+
+| | |
+|---|---|
+| **What it does** | Reads the session files and logs your agents already write. No SDK, no code change, no instrumentation in your app. |
+| **What you see** | Session timeline, tool-by-tool replay, token and cost breakdown, and trajectory signals (looping, repeated failures) — per runtime. |
+| **What's free** | `pip install clawmetry` reads **OpenClaw, NVIDIA NemoClaw and Goose** with no account, no key and no network call. The other 27 — Claude Code, Codex, Cursor and the rest — are read by the closed-source `clawmetry-pro` companion, which arrives with the 7-day trial or a plan — see [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) for the exact split. |
+| **How to start** | `pip install clawmetry && clawmetry`, then open localhost:8900. No agents on this machine yet? `clawmetry --sample` opens on three labelled synthetic sessions. |
+| **What leaves your machine** | No session data, unless you run `clawmetry connect`. Two things do run by default, both opt-out and neither carrying session content: an anonymous install ping and a PyPI version check. Every destination is inventoried in [docs/EGRESS.md](docs/EGRESS.md), rebuilt from a wire capture rather than from reading comments. |
+
+Two limits worth knowing before you judge the output: runtimes expose very
+different data (some publish no cost at all — [the matrix](docs/compatibility.md)
+says which, per runtime), and observing an action is not the same as being able
+to block it ([which controls are real, per runtime](docs/APPROVALS.md)).
+
 
 ## Works with 30 agent runtimes
 
@@ -262,6 +281,11 @@ for an approve or a deny.
 ![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
 More, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
+
+## Recognition
+
+<a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
+
 
 ## Star History
 
