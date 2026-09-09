@@ -1,0 +1,14 @@
+  - id: tool-poison-concealment
+    type: tool-poison
+    status: stable
+    name: "Tool Concealment"
+    description: "Detects tool descriptions instructing the model to hide actions from the user"
+    severity: critical
+    confidence: high
+    references:
+      - "https://explorer.invariantlabs.ai/docs/mcp-scan/issue-code-reference/"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:do\s+not|don[''’]t|never|must\s+not)\s+(?:tell|inform|notify|reveal|show|mention|display)\s+.{0,40}(?:user|human|operator|caller)'
+      scan_field: description
