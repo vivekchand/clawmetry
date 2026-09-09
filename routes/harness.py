@@ -41,6 +41,7 @@ _NON_OPENCLAW_PREFIXES = frozenset({
     "grok_bot",
     "lovable",
     "replit",
+    "muse_code",
 })
 
 

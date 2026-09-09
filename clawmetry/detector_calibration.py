@@ -145,6 +145,8 @@ RUNTIME_PROFILES: dict = {
     # exclusively through them looks like it made no progress at all. It also
     # drives a shell (``run_shell``), which the shell-mutation rule covers.
     "openworker": {"write_tools": ("replace_in_file", "apply_unified_diff")},
+    # Muse Code's edit tools, as named in the toolCall items MSP serves.
+    "muse_code": {"write_tools": ("edit_file", "write_file", "apply_patch")},
     # Replit Agent writes through ``write``/``edit`` (both match the module
     # defaults) and shells through ``bash`` (covered by the shell-mutation
     # rule) — vocabulary verified against real in-workspace journals (pro
