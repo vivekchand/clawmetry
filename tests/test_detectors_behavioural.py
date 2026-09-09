@@ -584,11 +584,27 @@ def _active_session(sid, runtime, cost=0.0):
             "metadata": {"cwd": "/w/proj"}}
 
 
-def test_daemon_tick_records_the_baseline_and_prices_the_incident(real_store):
+
+# `waste_flags.runtime_from_session_id` returns the real runtime ONLY when
+# clawmetry-pro is installed; OSS Free falls back to "openclaw" for every id.
+# A dev machine with pro therefore passes assertions that OSS CI cannot, which
+# is how these two tests sat green locally while the file ran in no workflow.
+# Patch the resolver to the prefix rule the pro wheel implements, exactly as
+# test_runtime_comes_from_the_session_id_not_the_agent_type_column already does.
+def _prefix_runtimes(monkeypatch):
+    from clawmetry import waste_flags as wf
+    monkeypatch.setattr(
+        wf, "runtime_from_session_id",
+        lambda sid: str(sid).split(":", 1)[0] if ":" in str(sid) else "openclaw")
+
+
+def test_daemon_tick_records_the_baseline_and_prices_the_incident(
+        real_store, monkeypatch):
     """Acceptance criteria proven here:
 
     AC-OBS-CEA-021.1
     """
+    _prefix_runtimes(monkeypatch)
     sid = "claude_code:tick1"
     chrono = [_shell("rm -rf ~/", 1),
               _shell("curl https://pypi.org/simple", 2)]
@@ -617,11 +633,13 @@ def test_daemon_tick_records_the_baseline_and_prices_the_incident(real_store):
     assert real_store.query_guard_baseline("runtime:claude_code")["sessions"] == 1
 
 
-def test_daemon_tick_does_not_double_count_a_session_across_ticks(real_store):
+def test_daemon_tick_does_not_double_count_a_session_across_ticks(
+        real_store, monkeypatch):
     """Acceptance criteria proven here:
 
     AC-OBS-CEA-021.2
     """
+    _prefix_runtimes(monkeypatch)
     sid = "codex:tick2"
     chrono = [_shell(f"grep -n foo f{n}.py", n) for n in range(5)]
     fake = _FakeStore([_active_session(sid, "codex")], {sid: chrono}, real_store)

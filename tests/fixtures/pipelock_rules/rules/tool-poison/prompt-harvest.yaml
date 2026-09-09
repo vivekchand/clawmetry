@@ -1,0 +1,14 @@
+  - id: tool-poison-prompt-harvest
+    type: tool-poison
+    status: stable
+    name: "Prompt Harvest"
+    description: "Detects tool descriptions attempting to extract system prompts or internal state"
+    severity: critical
+    confidence: high
+    references:
+      - "https://hiddenlayer.com/innovation-hub/beyond-mcp-expanding-agentic-function-parameter-abuse/"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:system\s+prompt|developer\s+message|chain\s+of\s+thought|hidden\s+instructions?|internal\s+(?:state|context)).{0,60}(?:return|send|export|reveal|collect|extract|include|forward)'
+      scan_field: description
