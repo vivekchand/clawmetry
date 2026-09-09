@@ -37,6 +37,24 @@ except Exception:  # pragma: no cover - defensive; keep onboarding alive
     FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
 
 
+def _tilde(path: str) -> str:
+    """``/Users/ada/.codex`` -> ``~/.codex``. Never widens a path.
+
+    Every rendered path ends up somewhere it was not written for: a
+    screenshot, a screen-share, a support ticket, a pasted issue. An absolute
+    path carries the account name and buys nothing, because ``~/.codex`` is
+    exactly as checkable. This is the rule the detector surface already holds
+    itself to (AC-OBS-RSO-030.7: no report carries a full filesystem path).
+    """
+    try:
+        home = os.path.expanduser("~")
+        if home and home != os.sep and path.startswith(home):
+            return "~" + path[len(home):]
+    except Exception:
+        pass
+    return path
+
+
 @dataclass
 class RuntimeProbe:
     """One supported runtime: id, human label, and where its data lives."""
@@ -61,10 +79,11 @@ class RuntimeProbe:
             if self.env:
                 root = os.environ.get(self.env)
                 out.append(
-                    os.path.expanduser(root) if root else f"${self.env} (unset)"
+                    _tilde(os.path.expanduser(root)) if root
+                    else f"${self.env} (unset)"
                 )
             for p in self.paths:
-                out.append(os.path.expanduser(os.path.expandvars(p)))
+                out.append(_tilde(os.path.expanduser(os.path.expandvars(p))))
         except Exception:
             return out
         return out

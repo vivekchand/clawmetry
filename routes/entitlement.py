@@ -47018,10 +47018,14 @@ def api_entitlement_runtime_detection():
                 "allowed": bool(p.get("free")),
                 "required_tier": None,
                 "required_tier_label": None,
-                # Where we actually looked. A first-run screen that says
-                # "nothing detected" without this is indistinguishable from a
-                # broken install (#5716).
-                "paths": list(p.get("paths") or []),
+                # NOT the probed paths. A first-run screen needs to know
+                # THAT we looked and how widely, which the runtime list and
+                # its count already say. Serving the expanded location of
+                # every runtime turns each install into a copy-pasteable map
+                # of our whole detection strategy, and carries the account
+                # name into every screenshot of an empty dashboard. The map
+                # lives in `clawmetry diagnose`, a local command whose output
+                # a person runs and chooses to share.
                 "env": p.get("env") or "",
             }
             for p in raw
@@ -47078,8 +47082,8 @@ def api_entitlement_runtime_detection():
                 "allowed": bool(rid and rid in allowed_runtimes),
                 "required_tier": req_t,
                 "required_tier_label": req_lbl,
-                # Where we actually looked (#5716).
-                "paths": list(p.get("paths") or []) if isinstance(p, dict) else [],
+                # No probed paths on the wire: see the note on the other
+                # payload shape above (#5716).
                 "env": (p.get("env") or "") if isinstance(p, dict) else "",
             }
         )

@@ -32412,27 +32412,34 @@ async function renderFirstRunReport(overview) {
   } else if (!noIngest) {
     h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
        + 'No supported runtime was detected. That is a real answer, not an error. '
-       + 'Here is exactly where ClawMetry looked, so you can tell us if it looked '
-       + 'in the wrong place.</p>';
+       + 'If you think it looked in the wrong place, the command below prints '
+       + 'every location it checked.</p>';
   }
 
-  // Where we looked. Collapsed by default: it is reassurance, not the message.
-  var rows = probes.slice(0, 40).map(function (p) {
-    var paths = (p.paths || []).map(function (x) { return escHtml(x); }).join('<br>');
-    return '<tr><td style="padding:3px 12px 3px 0;white-space:nowrap;color:var(--text-primary);">'
-         + (p.found ? '\u2713 ' : '\u00b7 ') + escHtml(p.label || p.id)
-         + '</td><td style="padding:3px 0;color:var(--text-muted);font-family:ui-monospace,monospace;font-size:11.5px;">'
-         + (paths || '<i>no default location</i>') + '</td></tr>';
-  }).join('');
-  if (rows) {
-    h += '<details style="margin:0 0 12px;"><summary style="cursor:pointer;font-size:13px;color:var(--text-secondary);">'
-       + 'Where ClawMetry looked (' + probes.length + ' runtimes)</summary>'
-       + '<div style="overflow-x:auto;margin-top:8px;"><table style="border-collapse:collapse;font-size:12.5px;">'
-       + rows + '</table></div>'
-       + '<p style="margin:8px 0 0;font-size:12.5px;color:var(--text-muted);">'
-       + 'On macOS, reading some of these needs Full Disk Access for your terminal. '
+  // How widely we looked, and where to get the detail.
+  //
+  // This used to render the expanded probe path for all 30 runtimes. Two
+  // problems with putting that on a screen. It carries the account name
+  // (`/Users/<name>/...`) into every screenshot, screen-share and pasted
+  // issue of an empty dashboard, which is the rule the detector surface
+  // already holds itself to (AC-OBS-RSO-030.7: no report carries a full
+  // filesystem path). And a complete, copy-pasteable map of where we look
+  // for every supported runtime is a different artefact from the same table
+  // sitting in a source file: it ships with every install and lands in every
+  // screenshot of a fresh machine.
+  //
+  // So the panel says HOW MANY runtimes were checked, which is what makes
+  // "nothing detected" trustworthy, and points at `clawmetry diagnose` for
+  // the list. That is a local command whose output a person runs and chooses
+  // to share.
+  if (probes.length) {
+    h += '<p style="margin:0 0 12px;font-size:12.5px;color:var(--text-muted);">'
+       + 'ClawMetry checked <b>' + probes.length + ' runtimes</b> in their default locations. '
+       + 'To see exactly where it looked, run '
+       + '<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">clawmetry diagnose</code>.'
+       + '<br>On macOS, reading some of them needs Full Disk Access for your terminal. '
        + 'A runtime storing its sessions somewhere else can be pointed at ClawMetry '
-       + 'with the environment variables in docs/compatibility.md.</p></details>';
+       + 'with the environment variables in docs/compatibility.md.</p>';
   }
 
   h += '<div style="border-top:1px solid var(--border-secondary);padding-top:11px;font-size:13.5px;color:var(--text-secondary);">'
