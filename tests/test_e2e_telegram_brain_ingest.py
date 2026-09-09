@@ -410,8 +410,12 @@ def test_two_channels_at_once(env):
     # Single call drains every provider in _CHANNEL_DIRS.
     _ingest(env)
 
-    tg_rows = env["store"].query_channel_messages(provider="telegram", limit=10)
-    sg_rows = env["store"].query_channel_messages(provider="signal", limit=10)
+    # Filter by sender_name unique to this test — belt-and-suspenders
+    # in case the sys.modules eviction in the fixture is imperfect.
+    all_tg = env["store"].query_channel_messages(provider="telegram", limit=20)
+    all_sg = env["store"].query_channel_messages(provider="signal", limit=20)
+    tg_rows = [r for r in all_tg if r.get("sender_name") == "tester-tg"]
+    sg_rows = [r for r in all_sg if r.get("sender_name") == "tester-sg"]
     assert len(tg_rows) == 1, f"telegram count wrong: {len(tg_rows)}"
     assert len(sg_rows) == 1, f"signal count wrong: {len(sg_rows)}"
     assert tg_rows[0]["body"] == "from telegram"
@@ -446,7 +450,9 @@ def test_duplicate_ingest_is_idempotent(env):
     _ingest(env)  # first pass
     _ingest(env)  # second pass — must be a no-op
 
-    rows = env["store"].query_channel_messages(provider="telegram", limit=20)
+    # Filter by sender_name unique to this test as belt-and-suspenders.
+    all_rows = env["store"].query_channel_messages(provider="telegram", limit=20)
+    rows = [r for r in all_rows if r.get("sender_name") == "tester-dedup"]
     assert len(rows) == 1, (
         f"idempotency broken: {len(rows)} rows after two identical ingests "
         f"(expected 1)"
