@@ -1,8 +1,7 @@
-"""Field-failure reports from the sync daemon.
+"""Field-failure reports from the sync daemon (Requirement: Daemon Field-Failure Reporting, AC-FFR-005).
 
-Requirement: Daemon Field-Failure Reporting (AC-FFR-005), a child of Field
-Failure Reporting and Auto-Triage, whose pipeline this joins as its second
-producer. The blueprint of the same name carries the decisions behind the
+That requirement is a child of Field Failure Reporting and Auto-Triage, whose
+pipeline this joins as its second producer. The blueprint of the same name carries the decisions behind the
 three choices here that look arbitrary and are not: reporting from above the
 gate (ADR-001), sending inline on a path that exits (ADR-002), and deriving
 the session id rather than fixing it (ADR-003).

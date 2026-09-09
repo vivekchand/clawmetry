@@ -451,6 +451,14 @@ jobs:
       - name: The daemon reports the failures that stop it working
         run: python3 -m pytest tests/test_daemon_field_report.py -q
 
+      # The module map is generated from each module's docstring, and the
+      # generator took the first LINE, so a docstring whose opening sentence
+      # wrapped produced a row cut mid-clause. Nothing failed: the generator
+      # and its --check gate agreed with each other on a truncated string.
+      # Thirteen modules were in that state before this guard existed.
+      - name: Module map rows are whole sentences
+        run: python3 -m pytest tests/test_module_map_summaries_are_whole.py -q
+
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
     name: API Tests (${{ matrix.os }})
