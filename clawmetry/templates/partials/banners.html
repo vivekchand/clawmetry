@@ -1,3 +1,14 @@
+{% if sample_mode %}
+<!-- Sample-data banner. Deliberately NOT dismissable and NOT JS-driven: every
+     number on screen in this mode is synthetic, so the label must be present
+     in the first painted frame and must stay there. -->
+<div id="cm-sample-banner" role="status" style="display:flex; align-items:center; gap:10px; padding:9px 16px; background:#3b2f0b; border-bottom:2px solid #eab308; color:#fde68a; font-size:13px; font-weight:600;">
+  <span style="font-size:15px;" aria-hidden="true">&#9888;</span>
+  <span style="flex:1;">{{ sample_banner }}</span>
+  <code style="background:rgba(0,0,0,0.28); padding:2px 7px; border-radius:4px; font-size:12px; font-weight:500;">clawmetry</code>
+</div>
+{% endif %}
+
 <!-- Agent Builder cross-sell pill (dismissable, centered). ONE announcement
      pill at a time: this replaced the desk-device pill, it does not stack. -->
 <div id="cm-device-pill" style="display:none; justify-content:center; align-items:center; padding:8px 16px; background:#0b0d12; border-bottom:1px solid rgba(124,140,255,0.18);">
