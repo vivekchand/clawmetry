@@ -408,3 +408,38 @@ def test_two_channels_at_once(env):
     assert len(sg_rows) == 1, f"signal count wrong: {len(sg_rows)}"
     assert tg_rows[0]["body"] == "from telegram"
     assert sg_rows[0]["body"] == "from signal"
+
+
+# --------------------------------------------------------------------------- #
+# Bonus: idempotent ingest (duplicate-protection)
+# --------------------------------------------------------------------------- #
+def test_duplicate_ingest_is_idempotent(env):
+    """Calling ``sync_channel_messages`` twice against the same JSONL file
+    must NOT create duplicate rows. The ingest path must upsert (or
+    deduplicate) on ``(chat_id, ts)`` so replaying a journal is safe.
+    This was a silent data-corruption class before the idempotency fix."""
+    chat_id = "9000000006"
+    event = {
+        "ts": "2026-05-13T23:05:00Z",
+        "chat_id": f"telegram:{chat_id}",
+        "sender_name": "tester-dedup",
+        "sender_id": chat_id,
+        "text": "dedup me",
+        "provider": "telegram",
+        "direction": "in",
+    }
+    _seed_chat_file(
+        env["openclaw_home"],
+        provider="telegram",
+        chat_id=chat_id,
+        events=[event],
+    )
+
+    _ingest(env)  # first pass
+    _ingest(env)  # second pass — must be a no-op
+
+    rows = env["store"].query_channel_messages(provider="telegram", limit=20)
+    assert len(rows) == 1, (
+        f"idempotency broken: {len(rows)} rows after two identical ingests "
+        f"(expected 1)"
+    )
