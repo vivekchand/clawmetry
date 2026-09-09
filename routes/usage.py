@@ -3283,53 +3283,125 @@ def api_runtime_summary():
     store = _ls_get_store() if is_local_store_read_enabled() else None
     out = {}
     if store is not None:
-        try:
-            evs = _scan_events_slim(limit=20000) or []
-            agg = {}
-            for ev in evs:
-                rt = _runtime_of(ev.get("session_id"))
-                a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
-                                        "models": {}, "sessions": set(),
-                                        "last_ms": 0})
-                sid = ev.get("session_id") or ""
-                if sid:
-                    a["sessions"].add(sid)
-                ts = str(ev.get("ts") or "")
-                if ts:
-                    try:
-                        _p = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        a["last_ms"] = max(a["last_ms"],
-                                           int(_p.timestamp() * 1000))
-                    except (ValueError, OSError, OverflowError):
-                        pass
-                try:
-                    a["tokens"] += int(ev.get("token_count") or 0)
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    a["cost"] += float(ev.get("cost_usd") or 0.0)
-                except (TypeError, ValueError):
-                    pass
-                m = (ev.get("model") or "").strip()
-                if m:
-                    a["turns"] += 1
-                    a["models"][m] = a["models"].get(m, 0) + 1
-            for rt, a in agg.items():
-                sorted_models = sorted(a["models"].items(), key=lambda x: -x[1])
-                out[rt] = {
-                    "sessions": len(a["sessions"]),
-                    "turns": a["turns"],
-                    "tokens": a["tokens"],
-                    "cost_usd": round(a["cost"], 4),
-                    "primary_model": sorted_models[0][0] if sorted_models else "",
-                    "total_turns": sum(a["models"].values()),
-                    # Epoch-ms recency for the Overview hero alive-state (main
-                    # sessions don't appear in /api/subagents).
-                    "last_activity_ms": a["last_ms"],
-                }
-        except Exception:
-            out = {}
+        out = _rts_from_rollup()
+        if out is None:
+            # Older daemon that does not answer query_model_rollup yet. The
+            # dashboard and the daemon restart independently, so an upgraded
+            # dashboard can ask a not-yet-restarted daemon for a method it
+            # doesn't have. Fall back to the legacy capped scan rather than
+            # rendering a confident EMPTY Overview: stale beats blank.
+            out = _rts_from_event_scan()
     return jsonify({"runtimes": out, "_source": "local_store"})
+
+
+def _rts_from_rollup():
+    """Per-runtime totals from the uncapped, envelope-deduped SQL rollup.
+
+    Returns ``None`` when the store cannot answer ``query_model_rollup`` so the
+    caller can fall back; returns ``{}`` for a genuinely empty store.
+
+    This is the same source ``sync._build_runtime_summary`` uses to build the
+    ``runtimeSummary`` snapshot slice, which is what this route claims to
+    mirror. Two things the old event scan got wrong and this does not:
+
+    * **No 20k cap.** ``query_events(limit=20000)`` took the most-recent 20k
+      events GLOBALLY, so once one runtime passed that budget the quieter ones
+      were starved out of the response entirely and the loud one was itself
+      undercounted.
+    * **No double-count.** OpenClaw v3 emits BOTH an ``assistant``/``message``
+      row and a sibling ``model.completed`` row per turn, same cost on each.
+      Summing raw events counts that turn twice. The rollup reads through the
+      shared envelope-dedup CTE, so a turn counts once — the same contract
+      ``query_aggregates`` / ``query_sessions_table`` already honour.
+    """
+    rollup = _ls_call("query_model_rollup")
+    if not isinstance(rollup, dict):
+        return None
+    by_runtime = rollup.get("by_runtime") or {}
+    by_rtm = rollup.get("by_runtime_model") or []
+    # rt -> {model: turns}; model-bearing rows only, mirroring the old scan's
+    # "only count an event as a turn when it names a model" rule.
+    rt_models = {}
+    for r in by_rtm:
+        m = (r.get("model") or "").strip()
+        if not m:
+            continue
+        rt = r.get("runtime") or "openclaw"
+        rt_models.setdefault(rt, {})[m] = (
+            rt_models.setdefault(rt, {}).get(m, 0) + int(r.get("turns") or 0)
+        )
+    out = {}
+    for rt, agg in by_runtime.items():
+        models = rt_models.get(rt, {})
+        sorted_models = sorted(models.items(), key=lambda x: -x[1])
+        total_turns = sum(models.values())
+        out[rt] = {
+            "sessions": int(agg.get("sessions") or 0),
+            "turns": total_turns,
+            "tokens": int(agg.get("tokens") or 0),
+            "cost_usd": round(float(agg.get("cost_usd") or 0.0), 4),
+            "primary_model": sorted_models[0][0] if sorted_models else "",
+            "total_turns": total_turns,
+            "last_activity_ms": int(agg.get("last_activity_ms") or 0),
+        }
+    return out
+
+
+def _rts_from_event_scan():
+    """Legacy capped-scan fallback for a daemon without ``query_model_rollup``.
+
+    Kept verbatim (cap and all) so an upgrade-skew window degrades to the old
+    numbers instead of an empty Overview. Prefer :func:`_rts_from_rollup`.
+    """
+    out = {}
+    try:
+        evs = _scan_events_slim(limit=20000) or []
+        agg = {}
+        for ev in evs:
+            rt = _runtime_of(ev.get("session_id"))
+            a = agg.setdefault(rt, {"turns": 0, "tokens": 0, "cost": 0.0,
+                                    "models": {}, "sessions": set(),
+                                    "last_ms": 0})
+            sid = ev.get("session_id") or ""
+            if sid:
+                a["sessions"].add(sid)
+            ts = str(ev.get("ts") or "")
+            if ts:
+                try:
+                    _p = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    a["last_ms"] = max(a["last_ms"],
+                                       int(_p.timestamp() * 1000))
+                except (ValueError, OSError, OverflowError):
+                    pass
+            try:
+                a["tokens"] += int(ev.get("token_count") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                a["cost"] += float(ev.get("cost_usd") or 0.0)
+            except (TypeError, ValueError):
+                pass
+            m = (ev.get("model") or "").strip()
+            if m:
+                a["turns"] += 1
+                a["models"][m] = a["models"].get(m, 0) + 1
+        for rt, a in agg.items():
+            sorted_models = sorted(a["models"].items(), key=lambda x: -x[1])
+            out[rt] = {
+                "sessions": len(a["sessions"]),
+                "turns": a["turns"],
+                "tokens": a["tokens"],
+                "cost_usd": round(a["cost"], 4),
+                "primary_model": sorted_models[0][0] if sorted_models else "",
+                "total_turns": sum(a["models"].values()),
+                # Epoch-ms recency for the Overview hero alive-state (main
+                # sessions don't appear in /api/subagents).
+                "last_activity_ms": a["last_ms"],
+            }
+    except Exception:
+        out = {}
+    return out
+
 
 
 @bp_usage.route('/api/model-attribution')
