@@ -63,7 +63,7 @@ Een gebruikspercentage is alleen zo eerlijk als waar het door gedeeld wordt.
 ClawMetry bepaalt de venstergrootte per provider vanuit [een tabel die je
 kunt lezen en waar je een PR op kunt indienen](clawmetry/context_windows.py),
 met dekking voor Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen,
-Mistral, Llama en GLM. Het meet niet alle 30 runtimes met de liniaal van
+Mistral, Llama en GLM. Het meet niet alle 31 runtimes met de liniaal van
 één leverancier. Dat is belangrijk: een beurt van 300K tokens bij GPT-5,
 afgezet tegen Anthropics 200K, leest als ">100%, geblazen" terwijl het in
 werkelijkheid op 75% van GPT-5's 400K zit. Diezelfde liniaal verbergt een
@@ -84,7 +84,7 @@ betekent, zegt dat ook. [Volledige details](docs/CONTEXT_BLOWOUT.md)
 
 | Pad | Toegevoegd aan je agent | Standaard? |
 |---|---|---|
-| Session-file tailing (alle 30 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
+| Session-file tailing (alle 31 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
 | HTTP-interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** per LLM-aanroep, oftewel 0,009% van een aanroep van 5 s | uit |
 | Pre-tool hook gate (warme cache) | **+44 ms** per gepoorte tool-aanroep, boven op een interpretervloer van 36 ms | uit |
 | Enforcement proxy | **+9,7 ms** per LLM-aanroep | uit |

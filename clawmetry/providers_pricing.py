@@ -218,12 +218,32 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("moonshot", "moonshot-v1-128k"): (2.00, 5.00),
     ("deepseek", "deepseek-v4-flash"): (0.14, 0.28),
     ("deepseek", "deepseek-v4-pro"): (0.435, 0.87),
-    # Meta muse-spark (ClawHub/npm standalone distribution), per-token rates not
-    # yet officially published — $1.00/$3.00 per 1M is a best-effort placeholder.
-    # Update once Meta publishes official pricing. Encrypted reasoning-replay
-    # turns are counted as regular output tokens (no separate rate known).
-    ("meta", "muse-spark-1.1"): (1.00, 3.00),
-    ("meta", "muse-spark"): (1.00, 3.00),
+    # Meta muse-spark. These were a $1.00/$3.00 placeholder while Meta published
+    # no rates; the rates below are the published Meta Model API figures
+    # (developer.meta.com/ai/models/muse-spark, corroborated by OpenRouter's
+    # listings), so the placeholder comment's condition is now met.
+    #
+    # The two 1.3 variants are NOT close: contributor is 12.5x cheaper on input
+    # and ~21x on output, bought by letting Meta train on the traffic. Pricing
+    # both from one family rate would misreport whichever tier the user is not
+    # on, so the longer, more specific prefix is listed first-class and wins
+    # under _get_rates' longest-prefix rule.
+    #
+    # Cache: Meta publishes a cached-input rate ($0.15/1M standard,
+    # $0.002/1M contributor) but estimate_event_cost_usd only applies cache
+    # adjustments for the anthropic and openai conventions, so cached tokens
+    # are not separately priced here. That is deliberate rather than an
+    # oversight: MSP reports muse-spark usage with `cachedTokens` only (the
+    # split `cacheReadTokens`/`cacheWriteTokens` appear "only when the provider
+    # distinguishes writes/reads", which Meta does not), so there is nothing to
+    # apply a cache rate TO without first knowing whether cached sits inside or
+    # beside inputTokens — the ambiguity MSP's counted-once `promptTokens`
+    # exists to resolve. Wiring a rate on a guessed convention would move real
+    # dollars on a guess. See clawmetry_pro/adapters/muse_code.py.
+    ("meta", "muse-spark-1.3-contributor"): (0.10, 0.20),
+    ("meta", "muse-spark-1.3"): (1.25, 4.25),
+    ("meta", "muse-spark-1.1"): (1.25, 4.25),
+    ("meta", "muse-spark"): (1.25, 4.25),
 }
 
 

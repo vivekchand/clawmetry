@@ -13,7 +13,7 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Δες τον agent σου να σκέφτεται.** Παρατήρηση σε πραγματικό χρόνο για **30 runtimes AI agent**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 ακόμη. Ένας πίνακας ελέγχου για ολόκληρο τον στόλο σου από agents.
+**Δες τον agent σου να σκέφτεται.** Παρατήρηση σε πραγματικό χρόνο για **31 runtimes AI agent**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 ακόμη. Ένας πίνακας ελέγχου για ολόκληρο τον στόλο σου από agents.
 
 > 🌐 **Διάβασέ το στα:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [περισσότερα →](docs/i18n/)
 
@@ -27,7 +27,7 @@ pip install clawmetry && clawmetry
 
 ![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## Λειτουργεί με 30 runtimes agent
+## Λειτουργεί με 31 runtimes agent
 
 **Δωρεάν στην open source εφαρμογή:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
@@ -56,7 +56,7 @@ pip install clawmetry && clawmetry
 **Πώς χειρίζεται το context-window blowout σε διαφορετικά runtimes;**
 
 Ένα ποσοστό αξιοποίησης είναι τόσο ειλικρινές όσο και το μέγεθος με το οποίο διαιρεί. Το ClawMetry προσαρμόζει το μέγεθος του παραθύρου ανά provider από [έναν πίνακα που μπορείς να διαβάσεις και να στείλεις PR](clawmetry/context_windows.py), που καλύπτει Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama και GLM. Δεν μετρά και τα 30 runtimes με τον χάρακα ενός προμηθευτή. Αυτό έχει σημασία: ένας γύρος 300K GPT-5 βαθμολογημένος με βάση τα 200K της Anthropic διαβάζεται ως ">100%, blown" ενώ στην πραγματικότητα βρίσκεται στο 75% των 400K του GPT-5. Ο ίδιος χάρακας κρύβει έναν πραγματικά υπερχειλισμένο γύρο 130K DeepSeek ως ένα άνετο 65%.
+DeepSeek, Kimi, Qwen, Mistral, Llama και GLM. Δεν μετρά και τα 31 runtimes με τον χάρακα ενός προμηθευτή. Αυτό έχει σημασία: ένας γύρος 300K GPT-5 βαθμολογημένος με βάση τα 200K της Anthropic διαβάζεται ως ">100%, blown" ενώ στην πραγματικότητα βρίσκεται στο 75% των 400K του GPT-5. Ο ίδιος χάρακας κρύβει έναν πραγματικά υπερχειλισμένο γύρο 130K DeepSeek ως ένα άνετο 65%.
 
 Κάθε παράθυρο συνοδεύεται από την προέλευσή του: `model_table`, `explicit_marker`,
 `observed_floor`, ή ένα ειλικρινές `default` όταν δεν γνωρίζουμε το μοντέλο. Ένα μετρητικό στοιχείο χτισμένο πάνω σε μια εικασία δεν αποδίδεται ποτέ με την ίδια αξιοπιστία όσο ένα χτισμένο πάνω σε αναζήτηση.
@@ -68,7 +68,7 @@ DeepSeek, Kimi, Qwen, Mistral, Llama και GLM. Δεν μετρά και τα 3
 
 | Διαδρομή | Προστίθεται στον agent σου | Προεπιλογή; |
 |---|---|---|
-| Session-file tailing (και τα 30 runtimes) | **0**. Ξεχωριστή διεργασία, καθόλου κώδικας ClawMetry μέσα στον agent σου | ναι |
+| Session-file tailing (και τα 31 runtimes) | **0**. Ξεχωριστή διεργασία, καθόλου κώδικας ClawMetry μέσα στον agent σου | ναι |
 | HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** ανά κλήση LLM, ή 0.009% μιας κλήσης 5s | όχι |
 | Pre-tool hook gate (θερμή cache) | **+44 ms** ανά ελεγχόμενη κλήση εργαλείου, πάνω από ένα κατώφλι interpreter 36 ms | όχι |
 | Enforcement proxy | **+9.7 ms** ανά κλήση LLM | όχι |

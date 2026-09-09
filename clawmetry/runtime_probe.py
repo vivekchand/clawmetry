@@ -198,6 +198,15 @@ RUNTIME_PROBES: tuple = (
     # files rather than the directory: the dir alone is created by a first
     # launch that never recorded a session, and ~/.config is shared with
     # every other tool, so a bare-dir probe is the weakest possible evidence.
+    # Muse Code keys on the settings FILE, not the directory: ~/.config is
+    # shared with every other tool, and Muse's own docs make settings.json
+    # mandatory (it must carry schema_version or the app refuses to start), so
+    # the file existing is real evidence that Muse was configured here.
+    RuntimeProbe("muse_code", "Muse Code",
+                 ("~/.config/muse/settings.json",
+                  "~/.config/muse/auth.json",
+                  "~/AppData/Roaming/muse/settings.json"),
+                 env="CLAWMETRY_MUSE_HOME"),
     RuntimeProbe("openworker", "OpenWorker",
                  ("~/.config/coworker/coworker.db",
                   "~/.config/coworker/conversations",

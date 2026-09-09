@@ -7931,6 +7931,7 @@ _LITE_RT_LABELS = {
     "openworker": "OpenWorker",
     "lovable": "Lovable",
     "replit": "Replit Agent",
+    "muse_code": "Muse Code",
 
 }
 
@@ -14506,6 +14507,12 @@ _FAMILY_ADAPTER_SPECS = (
     # worker, not a coding CLI: its sessions are SaaS-connector work as
     # often as file edits.
     ("clawmetry_pro.adapters.openworker", "OpenWorkerAdapter"),
+    # Muse Code (developer.meta.com/ai/products/muse-code) -- Meta's terminal
+    # coding agent. The only runtime here read over a PROTOCOL rather than off
+    # disk: its transcript format is unpublished, but `muse serve` speaks the
+    # Muse Session Protocol and session/list + session/read are documented
+    # read-only surfaces that hand back the log path too.
+    ("clawmetry_pro.adapters.muse_code", "MuseCodeAdapter"),
     # Lovable (lovable.dev) -- cloud app builder with NO local process or
     # store; the adapter reads local git clones of its GitHub-synced repos
     # (one bot commit per accepted agent edit). Observe-only, no cost.

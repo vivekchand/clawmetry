@@ -13,7 +13,7 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Regardez votre agent réfléchir.** Observabilité en temps réel pour **30 runtimes d'agents IA** : [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex et 26 autres. Un seul tableau de bord pour toute votre flotte d'agents.
+**Regardez votre agent réfléchir.** Observabilité en temps réel pour **31 runtimes d'agents IA** : [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex et 26 autres. Un seul tableau de bord pour toute votre flotte d'agents.
 
 > 🌐 **Lire ceci en :** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [plus →](docs/i18n/)
 
@@ -28,7 +28,7 @@ d'agents que vous avez déjà, les lit en lecture seule, et ne change rien à le
 
 ![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## Compatible avec 30 runtimes d'agents
+## Compatible avec 31 runtimes d'agents
 
 **Gratuit dans l'application open source :** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
@@ -64,7 +64,7 @@ de comparaison d'agents.
 Un pourcentage d'utilisation n'est honnête que si son dénominateur l'est. ClawMetry
 dimensionne la fenêtre par fournisseur à partir d'[une table que vous pouvez lire et
 proposer en PR](clawmetry/context_windows.py), couvrant Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama et GLM. Il ne mesure pas les 30
+DeepSeek, Kimi, Qwen, Mistral, Llama et GLM. Il ne mesure pas les 31
 runtimes avec la règle d'un seul fournisseur. C'est important : un tour GPT-5 de 300K
 comparé aux 200K d'Anthropic affiche ">100%, explosé" alors qu'il n'est en réalité qu'à 75% des
 400K de GPT-5. La même règle masque un tour DeepSeek de 130K réellement en dépassement
@@ -84,7 +84,7 @@ aveugle le dit clairement. [Détail complet](docs/CONTEXT_BLOWOUT.md)
 
 | Chemin | Ajouté à votre agent | Par défaut ? |
 |---|---|---|
-| Suivi des fichiers de session (les 30 runtimes) | **0**. Processus séparé, aucun code ClawMetry dans votre agent | activé |
+| Suivi des fichiers de session (les 31 runtimes) | **0**. Processus séparé, aucun code ClawMetry dans votre agent | activé |
 | Intercepteur HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** par appel LLM, soit 0,009% d'un appel de 5s | désactivé |
 | Passerelle de hook pré-outil (cache chaud) | **+44 ms** par appel d'outil filtré, au-delà d'un plancher d'interpréteur de 36 ms | désactivé |
 | Proxy d'application des règles | **+9,7 ms** par appel LLM | désactivé |

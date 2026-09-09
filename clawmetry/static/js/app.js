@@ -5854,6 +5854,7 @@ var _Q_RUNTIME_NAMES = {
   kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
+  muse_code: 'Muse Code',
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -12113,6 +12114,7 @@ var _CM_RT_LABEL = {
   deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
+  muse_code: 'Muse Code',
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -29069,7 +29071,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 30 runtimes side by side. Respects the global
+// the headline demo path — the 31 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -32464,7 +32466,7 @@ async function renderFirstRunReport(overview) {
 
   // How widely we looked, and where to get the detail.
   //
-  // This used to render the expanded probe path for all 30 runtimes. Two
+  // This used to render the expanded probe path for all 31 runtimes. Two
   // problems with putting that on a screen. It carries the account name
   // (`/Users/<name>/...`) into every screenshot, screen-share and pasted
   // issue of an empty dashboard, which is the rule the detector surface

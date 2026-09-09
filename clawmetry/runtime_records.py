@@ -53,7 +53,7 @@ _STATES = frozenset({ON_DISK, DERIVED, UNAVAILABLE, UNKNOWN, PARTIAL})
 
 # Signals a surface can ask about. Deliberately short: these are the three the
 # broken-looking panels actually depend on. Adding a fourth means being able to
-# answer it for all 30 runtimes, which is the bar that keeps this table true.
+# answer it for all 31 runtimes, which is the bar that keeps this table true.
 SIGNALS = ("tokens", "cost", "model")
 
 
@@ -228,6 +228,20 @@ RUNTIME_RECORDS: dict[str, dict] = {
              "workspace. Transcripts and tool calls are complete; spend is "
              "not observable here at all, so no figure is derived and times "
              "come from file mtimes with the basis declared.",
+    ),
+    "muse_code": _e(
+        ON_DISK, DERIVED, ON_DISK,
+        "Per-model-call token counters ride each transcript item, tagged with "
+        "the session's model",
+        note="Muse Code publishes no on-disk record format; the transcript is "
+             "served over the Muse Session Protocol, and every model call "
+             "carries a verbatim provider usage block (input/output/cached/"
+             "reasoning). Muse writes no dollars, so cost is always derived "
+             "from the pricing table. One honest gap: MSP's counted-once "
+             "prompt total, which resolves whether cached tokens sit inside "
+             "or beside the input count, rides a live view notification that "
+             "a cold read does not serve — so the input figure is the raw "
+             "provider counter and cached tokens are never added to it.",
     ),
     "openworker": _e(
         ON_DISK, DERIVED, ON_DISK,
