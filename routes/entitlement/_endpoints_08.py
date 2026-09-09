@@ -4096,6 +4096,7 @@ def api_entitlement_runtime_detection():
         env["detected_locked"] = [
             r["id"] for r in env["probes"] if r["found"] and not r["allowed"]
         ]
+        env["ingest_running"] = _shared._ingest_is_running()
         return _shared.jsonify(env)
 
     try:
@@ -4143,6 +4144,7 @@ def api_entitlement_runtime_detection():
                 "allowed": bool(rid and rid in allowed_runtimes),
                 "required_tier": req_t,
                 "required_tier_label": req_lbl,
+                "env": (p.get("env") or "") if isinstance(p, dict) else "",
             }
         )
 
@@ -4187,6 +4189,7 @@ def api_entitlement_runtime_detection():
         pending = _ent.plan_pending()
     except Exception:
         pending = False
+    ingest_running = _shared._ingest_is_running()
     return _shared.jsonify(
         {
             "current_tier": current_tier,
@@ -4199,6 +4202,7 @@ def api_entitlement_runtime_detection():
             "detected_locked": detected_locked,
             "actionable_tier": actionable_tier,
             "actionable_tier_label": actionable_tier_label,
+            "ingest_running": ingest_running,
         }
     )
 
