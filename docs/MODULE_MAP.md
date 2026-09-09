@@ -163,7 +163,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/event_shape.py` | small | ONE normalizer for every stored event shape. |
 | `clawmetry/event_shape_classify.py` | medium | Event-shape classifier implementation (private to :mod:`clawmetry.event_shape`). |
 | `clawmetry/extensions.py` | medium | ClawMetry extension/plugin system. |
-| `clawmetry/field_report.py` | medium | Field-failure reports from the sync daemon (Requirement: Field Failure |
+| `clawmetry/field_report.py` | medium | Field-failure reports from the sync daemon. |
 | `clawmetry/flow_trace.py` | medium | Flow trace assembly for the Harness Engineering tab (REQ-HB-006). |
 | `clawmetry/gateway_protocol.py` | small | the single source of the OpenClaw gateway |
 | `clawmetry/gateway_tap.py` | medium | live OpenClaw gateway WebSocket subscriber. |
