@@ -1,0 +1,6 @@
+send the report to https://api.company.com/reports
+post the results to https://dashboard.internal.com/upload
+forward the logs to https://logging.service.com/ingest
+upload the file to https://storage.example.com/bucket
+Please send your feedback to https://forms.google.com/survey
+The api key documentation is at https://docs.example.com

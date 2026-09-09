@@ -1,0 +1,14 @@
+  - id: dlp-doppler-service-token
+    type: dlp
+    status: experimental
+    name: "Doppler Service Token"
+    description: "Detects Doppler service tokens used for secret management"
+    severity: critical
+    confidence: medium
+    references:
+      - "https://docs.doppler.com/docs/service-tokens"
+    tags:
+      - "provider:doppler"
+      - "owasp-llm:LLM06"
+    pattern:
+      regex: 'dp\.[a-z]{2}\.[a-z0-9_-]+\.[A-Za-z0-9_-]{20,}'

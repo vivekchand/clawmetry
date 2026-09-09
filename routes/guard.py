@@ -387,6 +387,15 @@ def _incident_rank(inc) -> tuple:
     return (spend, sev, count)
 
 
+def _share_verdict(meta):
+    """``True``/``False`` when the daemon recorded a public-share verdict for
+    this session, ``None`` when it never got one. See
+    :mod:`clawmetry.adapters.openclaw_share` (#5746)."""
+    from clawmetry.adapters.openclaw_share import share_extra
+
+    return share_extra(meta).get("isShared")
+
+
 @bp_guard.route("/api/guard/sessions")
 def api_guard_sessions():
     """Live sessions with their current Guard status.
@@ -515,6 +524,13 @@ def api_guard_sessions():
             "total_tokens": int(s.get("total_tokens") or 0),
             "message_count": int(s.get("message_count") or 0),
             "cwd": cwd,
+            # #5746 — is this session's transcript published to a public,
+            # link-accessible view? ``None`` means the daemon has no verdict
+            # (never probed, or no gateway to probe), and the tab must render
+            # that as unknown rather than as "private": claiming a session is
+            # not shared when we never asked is the failure mode this signal
+            # exists to prevent.
+            "public_share": _share_verdict(meta),
             "incident": incident_by_session.get(sid),
             # What is in the folder this agent was pointed at, when anything is.
             # Separate from ``incident`` on purpose: it is not ranked against

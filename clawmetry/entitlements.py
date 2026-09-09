@@ -222,6 +222,33 @@ RUNTIME_LANDING_PATHS = {
 
 }
 
+# The runtimes named by name in *short* copy — the GitHub "About" blurb, the
+# PyPI summary, the README tagline, a tweet. Ordered by how much of the
+# audience recognises the name, not alphabetically, and deliberately short:
+# everything after it is "& N more", where N is derived, never typed.
+#
+# This exists so that "N more" has one definition. Before it, the README said
+# "& 26 more" next to "30 runtimes" (4 named) while the GitHub About said 26
+# total and named 11 — two surfaces, two arithmetics, both hand-maintained.
+#
+# Kept a subset of ALL_RUNTIMES by tests/test_supported_runtimes_file.py.
+# Ordered for conversion, not for history: the first names a stranger reads
+# should be the ones they came searching for. Claude Code and Codex lead
+# because they are what people type into a search box; OpenClaw trails
+# because someone who knows OpenClaw already knows us. NVIDIA NemoClaw is
+# deliberately NOT here — it is a strong logo but a weak search term, and
+# every name in this tuple costs one from the "& N more" tail.
+#
+# Muse Code is added by the runtime PR that lands it (#5761), not here: an
+# id in this tuple must exist in the catalogue, or the blurb names a runtime
+# nobody can install.
+RUNTIME_MARQUEE: tuple[str, ...] = (
+    "claude_code",
+    "codex",
+    "hermes",
+    "openclaw",
+)
+
 # Canonical list of chat-channel adapters observable by ClawMetry, in the
 # same order the sync daemon walks them (``clawmetry/sync.py``
 # ``_CHANNEL_DIRS``). Every channel is FREE -- there is no paid-channel
