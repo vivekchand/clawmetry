@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import sys
 import time
 
 import pytest
@@ -110,6 +111,13 @@ def env(tmp_path, monkeypatch):
     blueprint mounted on a fresh Flask app."""
     openclaw_home, clawmetry_home = _isolated_env(tmp_path, monkeypatch)
 
+    # Expel the cached module so the next import re-executes module-level
+    # code (including DB_PATH resolution from CLAWMETRY_LOCAL_STORE_PATH)
+    # from scratch. Without this, all tests in the MOAT job share the same
+    # local_store singleton — the same pattern used by test_brain_time_range,
+    # test_detectors, test_stuck_detection, and others.
+    sys.modules.pop("clawmetry.local_store", None)
+    sys.modules.pop("clawmetry.sync", None)
     import clawmetry.local_store as ls
     importlib.reload(ls)
     # Force this process to act as the DuckDB writer owner so get_store()
@@ -320,7 +328,7 @@ def test_unicode_emoji_byte_identical(env):
     """Emoji + non-ASCII must survive the disk → DuckDB → query roundtrip
     byte-for-byte. UTF-8 mishandling is a classic ingest bug."""
     chat_id = "9000000003"
-    payload = "wave 👋 unicode café — naïve façade"
+    payload = "wave \U0001f44b unicode café — naïve façade"
     _seed_chat_file(
         env["openclaw_home"],
         provider="telegram",
