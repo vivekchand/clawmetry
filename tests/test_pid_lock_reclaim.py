@@ -184,3 +184,50 @@ def test_a_fresh_heartbeat_protects_the_holder(home, lookalike_daemon, monkeypat
     (home / ".clawmetry" / "sync.heartbeat").write_text("1")
     assert sync._acquire_pid_lock() is False
     assert lookalike_daemon.poll() is None
+
+
+# ── identity without a command line (the Windows-without-psutil path) ────────
+def test_a_holder_that_started_after_the_lock_is_a_recycled_pid(
+        home, lookalike_daemon, monkeypatch):
+    """Proof of reuse that needs neither a recorded token nor a command line:
+    a process cannot have written a file that predates it.
+
+    This is the only identity check available on a Windows host without psutil,
+    where the command line reads back empty. The start epoch is injected
+    because it is unavailable on a Mac without psutil too (``_proc_start_epoch``
+    returns None there and this layer simply does not fire); what is pinned
+    here is the DECISION, not the platform primitive.
+    """
+    path = _write_lock(home, str(lookalike_daemon.pid))
+    old_time = time.time() - 3600
+    os.utime(path, (old_time, old_time))
+    monkeypatch.setattr("clawmetry.process_control._proc_start_epoch",
+                        lambda pid: time.time())
+    # Even a process whose command line says "clawmetry.sync" is not the writer
+    # if it started an hour after the file was written.
+    assert sync._acquire_pid_lock() is True
+
+
+def test_a_holder_older_than_its_lock_file_is_left_alone(
+        home, lookalike_daemon, monkeypatch):
+    """The mirror case: a daemon that started before it wrote its lock is
+    exactly what a healthy holder looks like."""
+    path = _write_lock(home, str(lookalike_daemon.pid))
+    os.utime(path, None)
+    monkeypatch.setattr("clawmetry.process_control._proc_start_epoch",
+                        lambda pid: time.time() - 3600)
+    assert sync._acquire_pid_lock() is False
+
+
+def test_an_unreadable_command_line_does_not_condemn_the_holder(home,
+                                                                lookalike_daemon,
+                                                                monkeypatch):
+    """"I could not look" must not be read as "not ours": on a Windows host
+    without psutil the command line is unreadable for every process, and
+    treating that as foreign would let an upgrade reclaim a live daemon's lock.
+    """
+    monkeypatch.setattr(sync, "_holder_cmdline_verdict", lambda pid: "unknown")
+    path = _write_lock(home, str(lookalike_daemon.pid))
+    # Lock file written now, so the started-after-lock proof does not apply.
+    os.utime(path, None)
+    assert sync._acquire_pid_lock() is False

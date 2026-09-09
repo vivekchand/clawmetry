@@ -179,24 +179,52 @@ def _read_lock_record(pid_path: Path):
     return {"pid": pid, "start": start}
 
 
-def _holder_looks_like_our_daemon(pid: int) -> bool:
-    """True when ``pid``'s command line is a clawmetry sync daemon.
+def _holder_cmdline_verdict(pid: int) -> str:
+    """Identify a lock holder by its command line: ``"ours"``, ``"foreign"`` or
+    ``"unknown"``.
 
-    The fallback identity check for a legacy bare-int lock file, which carries
-    no start token. A command line we cannot read at all belongs to a process
-    we do not own, which our daemon never is.
+    The fallback for a legacy bare-int lock file, which carries no start token.
+    ``"unknown"`` is a real answer and must stay distinct from ``"foreign"``:
+    ``_proc_cmdline`` reads nothing on a Windows host without psutil, and
+    treating "I could not look" as "not ours" there would let an upgrade
+    reclaim a lock a perfectly healthy daemon still holds.
     """
     try:
         from clawmetry.process_control import _proc_cmdline
         blob = " ".join(_proc_cmdline(int(pid))).lower()
     except Exception:  # noqa: BLE001
-        return False
+        return "unknown"
     if not blob:
+        return "unknown"
+    if "clawmetry" in blob and ("sync" in blob or "daemon" in blob):
+        return "ours"
+    return "foreign"
+
+
+def _started_after_the_lock(pid: int, pid_path: Path) -> bool:
+    """True when ``pid`` began AFTER the lock file was written.
+
+    A process that did not exist when the lock was taken cannot be the process
+    that took it, so this is proof of pid reuse that needs no command line and
+    no recorded token: it is the only identity check available on a Windows
+    host without psutil, where ``_proc_cmdline`` reads nothing.
+
+    Conservative in both directions. Returns False whenever either timestamp is
+    unavailable, and allows a few seconds of slack because the daemon starts
+    fractionally before it writes its lock.
+    """
+    try:
+        from clawmetry.process_control import _proc_start_epoch
+
+        started = _proc_start_epoch(int(pid))
+        if started is None:
+            return False
+        return started > pid_path.stat().st_mtime + 5.0
+    except (OSError, ValueError, TypeError):
         return False
-    return "clawmetry" in blob and ("sync" in blob or "daemon" in blob)
 
 
-def _lock_holder_verdict(rec) -> tuple:
+def _lock_holder_verdict(rec, pid_path: Path = None) -> tuple:
     """Decide what the current lock holder is. Returns ``(verdict, why)`` where
     verdict is ``"held"`` (a live daemon owns it), ``"stale"`` (reclaim it) or
     ``"wedged"`` (ours, but frozen: stop it, then reclaim)."""
@@ -223,7 +251,10 @@ def _lock_holder_verdict(rec) -> tuple:
         if not ok:
             # Alive, but not the process that took the lock: recycled number.
             return "stale", f"pid_recycled({why})"
-    elif not _holder_looks_like_our_daemon(int(pid)):
+    elif pid_path is not None and _started_after_the_lock(int(pid), pid_path):
+        # It cannot have written a file that predates it.
+        return "stale", "pid_recycled(started_after_lock)"
+    elif _holder_cmdline_verdict(int(pid)) == "foreign":
         # Legacy bare-int file and the live holder is somebody else entirely.
         return "stale", "pid_recycled(cmdline_mismatch)"
 
@@ -336,7 +367,7 @@ def _acquire_pid_lock() -> bool:
             return True
         except FileExistsError:
             rec = _read_lock_record(pid_path)
-            verdict, why = _lock_holder_verdict(rec)
+            verdict, why = _lock_holder_verdict(rec, pid_path)
             if verdict == "held":
                 return False
             if verdict == "wedged":
