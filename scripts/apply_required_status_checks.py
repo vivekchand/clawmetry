@@ -18,9 +18,11 @@ Token types
 GITHUB_TOKEN from Actions (prefix ghs_):
   Can read branch protection state but CANNOT write it. The script detects
   this automatically: it verifies current state (read-only, scoped to the
-  current repo only) and exits 1 if not configured (red badge = forcing
-  signal), exits 0 when already configured (self-heals to green on the
-  next push after admin action). Push-triggered runs use this path.
+  current repo only) and exits 0 regardless of configuration state -- push-
+  triggered runs are informational only (see #4553: exit(1) here turned main
+  red on every push, hiding real CI failures). The daily c6-health.yml and
+  2-hourly c6-schedule-heal.yml schedules carry the forcing-signal exit(1)
+  on their own step. Push-triggered runs use this path.
   Note: requesting administration:write in the workflow permissions block is
   invalid for GITHUB_TOKEN and causes 0-job workflow failures -- do not add it.
 
@@ -519,13 +521,16 @@ def main() -> None:
         print("Action needed (takes ~30 seconds) to make these checks required on main:")
         print("  bash scripts/close-c6.sh")
         print("  (Or: Actions > 'Apply required E2E status checks (C6 -- one-shot)' > Run workflow)")
-        # Exit 1 so the apply-required-checks.yml workflow shows RED in the GitHub
-        # Actions UI until C6 is configured. The module-level docstring specifies
-        # this: "exit 1 if not configured (red badge = forcing signal)". Once the
-        # admin runs scripts/close-c6.sh, the next push to main goes green and
-        # stays green permanently. This workflow is NOT in REQUIRED_CHECKS, so
-        # it cannot block PR merges; it only creates a visible badge on main.
-        sys.exit(1)
+        # Exit 0 on the push/GITHUB_TOKEN path. A forcing-signal exit(1) here
+        # turned main red on every push (#4553), hiding real CI failures behind
+        # a permanent red badge. Push-triggered runs are informational only.
+        # The c6-health.yml daily schedule and the c6-schedule-heal.yml 2-hourly
+        # schedule (which only fire on schedule, not push) carry exit(1) on
+        # their own step -- this script must stay green on push so real failures
+        # on main remain visible.
+        print("(Exiting 0 -- push-triggered runs are informational only. "
+              "See c6-health.yml / c6-schedule-heal.yml for the enforcing schedule.)")
+        return
 
     # PAT / OAuth path: full apply + verify across all repos.
     checks = _checks_to_apply()
