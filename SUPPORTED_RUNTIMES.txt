@@ -26,7 +26,7 @@
 COUNT = 30
 FREE_COUNT = 3
 PAID_COUNT = 27
-BLURB = See your agent think. Zero-config observability & governance for 30 AI agent runtimes: OpenClaw, NVIDIA NemoClaw, Claude Code, OpenAI Codex & 26 more. Live token costs, sessions, tool calls, crons.
+BLURB = See your agent think. Zero-config observability & governance for 30 AI agent runtimes: Claude Code, OpenAI Codex, Hermes, OpenClaw & 26 more. Live token costs, sessions, tool calls, crons.
 
 goose	Goose	free	/runtimes/goose
 nemoclaw	NemoClaw	free	/nemoclaw

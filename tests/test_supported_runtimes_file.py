@@ -119,3 +119,25 @@ def test_export_round_trips_through_the_reference_parser(sync):
         assert "\t" not in r["label"] and "\n" not in r["label"], r
         assert r["tier"] in {"free", "paid"}
         assert r["path"].startswith("/")
+
+
+def test_readme_tagline_names_the_marquee_in_order(sync):
+    """The tagline and the blurb are the same sentence in two places. If they
+    can name different runtimes, the "& N more" arithmetic silently stops
+    matching what the reader just counted."""
+    import re
+
+    from clawmetry.entitlements import RUNTIME_LABELS, RUNTIME_MARQUEE
+
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    m = re.search(r"^Works with \*\*\d+ AI agent runtimes\*\* — (.+?) & \d+ more\.", readme, re.M)
+    assert m, "README.md lost its 'Works with N AI agent runtimes — ... & N more.' tagline"
+
+    named = [n.strip() for n in m.group(1).split(",")]
+    vendor = {"NemoClaw": "NVIDIA NemoClaw", "Codex": "OpenAI Codex"}
+    want = [vendor.get(RUNTIME_LABELS[r], RUNTIME_LABELS[r]) for r in RUNTIME_MARQUEE]
+    assert named == want, (
+        f"README tagline names {named}; RUNTIME_MARQUEE says {want}. "
+        "Reorder the tagline, not the marquee — the marquee is what the "
+        "GitHub About blurb and the PyPI summary read."
+    )

@@ -95,9 +95,10 @@ EXEMPT: list[tuple[str, str, str]] = [
      "quotes the stale blurb that workflow exists to prevent"),
 ]
 
-# The English README pairs the count with "OpenClaw, NemoClaw, Claude Code,
-# OpenAI Codex & N more", so N is the total minus the four named runtimes.
-NAMED_IN_TAGLINE = 4
+# The English README pairs the count with the marquee names and "& N more",
+# so N is the total minus however many names the marquee prints. Derived
+# rather than typed: it was a literal 4 while the marquee grew, which is the
+# same class of bug one layer down.
 MORE_RE = re.compile(r"& \d{1,3} more\b")
 
 # The generated export every other repo reads. See :func:`render_export`.
@@ -424,7 +425,7 @@ def check(expected: int | None = None) -> list[tuple[str, int, str, str]]:
                     drift.append((rel, n, m.group(0), line.strip()))
             if rel == "README.md":
                 for m in MORE_RE.finditer(line):
-                    if m.group(0) != f"& {expected - NAMED_IN_TAGLINE} more":
+                    if m.group(0) != f"& {expected - len(marquee())} more":
                         drift.append((rel, n, m.group(0), line.strip()))
 
         if path.suffix in PROSE_SUFFIXES:
@@ -448,7 +449,7 @@ def check_translated_taglines(expected: int | None = None) -> list[tuple[str, in
     addition on 35 translations.
     """
     expected = catalogue_count() if expected is None else expected
-    want = expected - NAMED_IN_TAGLINE
+    want = expected - len(marquee())
     stale = []
     for path in sorted((REPO / "docs" / "i18n").rglob("README.md")):
         rel = str(path.relative_to(REPO))
@@ -484,7 +485,7 @@ def fix(expected: int | None = None) -> list[str]:
                 continue
             new = COUNT_RE.sub(lambda m: f"{expected}{m.group(2)} {m.group(3)}", line)
             if rel == "README.md":
-                new = MORE_RE.sub(f"& {expected - NAMED_IN_TAGLINE} more", new)
+                new = MORE_RE.sub(f"& {expected - len(marquee())} more", new)
             changed |= new != line
             out.append(new)
         joined = "".join(out)
@@ -525,7 +526,7 @@ def main() -> int:
         stale = check_translated_taglines(expected)
         if stale:
             print(f"\nnote: {len(stale)} translated tagline(s) still say the old "
-                  f"'and N more' (want {expected - NAMED_IN_TAGLINE}); these are "
+                  f"'and N more' (want {expected - len(marquee())}); these are "
                   "never rewritten automatically:")
             for rel, n, found in stale:
                 print(f"  {rel}:{n}: {found}")
