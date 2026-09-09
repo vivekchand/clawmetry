@@ -7922,6 +7922,12 @@ def main() -> None:
         type=str,
         help="OpenClaw config directory (default: ~/.openclaw). Env: CLAWMETRY_OPENCLAW_DIR",
     )
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="Open the dashboard on three synthetic sample sessions instead "
+             "of your own data (a separate store; your data is untouched)",
+    )
     sub = parser.add_subparsers(dest="cmd")
 
     # onboard — first-time setup wizard (called by install.sh)
@@ -8894,6 +8900,32 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
         parser.print_help()
         sys.exit(0)
+
+    # --sample: load synthetic sessions instead of the user's own, so a fresh
+    # install on a machine with no agent history is never an empty product.
+    # This has to happen BEFORE `from dashboard import ...` below, because
+    # local_store reads CLAWMETRY_LOCAL_STORE_PATH into its module-level
+    # DB_PATH at import time -- setting it afterwards would open the real
+    # store and then serve it under a "sample data" banner.
+    if "--sample" in sys.argv:
+        sys.argv = [a for a in sys.argv if a != "--sample"]
+        try:
+            from clawmetry import sample_data as _sample_data
+            _sample_path = _sample_data.enable_sample_mode()
+            _n_sessions, _n_events = _sample_data.ensure_built()
+            if _n_sessions:
+                print(f"Sample data built: {_n_sessions} sessions, "
+                      f"{_n_events} events -> {_sample_path}")
+            else:
+                print(f"Sample data ready -> {_sample_path}")
+            print("This is synthetic data, not your machine. "
+                  "Restart without --sample for your own agents.")
+        except Exception as _e:
+            # Never make --sample a way to fail to start.
+            print(f"Could not build sample data ({_e}); "
+                  "starting on your real store instead.", file=sys.stderr)
+            os.environ.pop("CLAWMETRY_SAMPLE", None)
+            os.environ.pop("CLAWMETRY_LOCAL_STORE_PATH", None)
 
     # Tag this process as the dashboard BEFORE importing dashboard, so every
     # get_store() in dashboard.py (module-level + handlers) is barred from the

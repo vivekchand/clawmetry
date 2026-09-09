@@ -162,6 +162,22 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
+      # Named explicitly because this repo's CI runs FILE LISTS, not
+      # `pytest tests/`. /api/runtime-summary claimed to mirror the daemon's
+      # runtimeSummary slice but re-implemented it as a capped raw-event scan:
+      # it billed the OpenClaw v3 assistant/model.completed twin twice and let
+      # a loud runtime starve quiet ones out of the response. Pins both.
+      - name: /api/runtime-summary reads the deduped uncapped rollup
+        run: python3 -m pytest tests/test_runtime_summary_uncapped_dedup.py -q
+
+      # Guards that e2e-nightly.yml exports the gateway token via the
+      # setup-openclaw action, not a hardcoded literal. The user's 2026-05-17
+      # report ("other screens blank") traced to this missing export: without it
+      # the dashboard never received a valid auth token. Named here because this
+      # job runs FILE LISTS (pyyaml already installed above).
+      - name: E2E nightly workflow gateway-token wiring
+        run: python3 -m pytest tests/test_e2e_nightly_workflow.py -q
+
       - name: Published provider pricing and cache accounting
         run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
 
@@ -223,6 +239,14 @@ jobs:
       # with its own health report is the same bug aimed at what reaches main.
       - name: Required-checks list has one source of truth
         run: python3 -m pytest tests/test_c6_required_checks_single_source.py -q
+
+      # Regression guard for PR #4553: the C6 push path must exit 0, never 1.
+      # Before the fix apply_required_status_checks.py called sys.exit(1) on
+      # every push, turning main red whenever branch protection was not yet
+      # configured -- hiding real failures behind a permanent red badge.
+      # Named here because this job runs FILE LISTS.
+      - name: C6 push path is non-blocking (must exit 0 on push)
+        run: python3 -m pytest tests/test_c6_push_non_blocking.py -q
 
       # Every merge-blocking check must have a path to green WITHOUT privileged
       # secrets. A gated check that requires one leaves forks, outside
@@ -385,12 +409,14 @@ jobs:
       - name: Home makes no invisible fetch
         run: python3 -m pytest tests/test_overview_no_invisible_fetch.py -q
 
-      # A tab the runtime switcher toggles must be reachable by SOMEONE — a nav
-      # entry or an in-app switchTab() call. The Sub-Agents & Queue Lanes tab
-      # had neither: a template, three loaders, an agent stop control and a 5s
-      # poller shipped in every wheel with zero callers of
-      # switchTab('subagents') in OSS or cloud. Nothing could fail, because
-      # nobody could reach the thing that would fail.
+      # EVERY tab the wheel ships must be reachable by SOMEONE — a nav entry or
+      # a switchTab() call in any bundle under static/js. Two were not.
+      # Sub-Agents & Queue Lanes: a template, three loaders, an agent stop
+      # control and a 5s poller, zero callers in OSS or cloud. Session
+      # Clusters: a switchTab() branch and a renderer reading four fields
+      # /api/sessions/clusters no longer emits. Nothing could fail, because
+      # nobody could reach the thing that would fail. Scoped to the shipped
+      # templates rather than _CM_RT_ALL_TABS, which never listed clusters.
       - name: Every tab is reachable
         run: python3 -m pytest tests/test_every_tab_is_reachable.py -q
 
@@ -616,6 +642,9 @@ jobs:
             tests/test_needs_you_ui_contract.py \
             tests/test_overview_claims_are_evidenced.py \
             tests/test_obs_gap_nemoclaw_vllm_5579.py \
+            tests/test_sample_data.py \
+            tests/test_e2e_invariants.py \
+            tests/test_e2e_telegram_brain_ingest.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
