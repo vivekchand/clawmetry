@@ -220,6 +220,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/runtime_memory.py` | large | Per-runtime Memory & Skills file browser. |
 | `clawmetry/runtime_probe.py` | medium | zero-dependency presence probes for every |
 | `clawmetry/runtime_records.py` | medium | What each runtime actually records — so a surface can say "not recorded" |
+| `clawmetry/sample_data.py` | medium | Synthetic sample sessions, so a fresh install is never an empty product. |
 | `clawmetry/secure.py` | medium | clawmetry secure — one-command numbat (Perplexity agent-EDR) setup. |
 | `clawmetry/security_posture.py` | large | Runtime-aware security posture registry. |
 | `clawmetry/self_diagnostics.py` | medium | Agent self-diagnostics: reports an agent files about its own trouble, and |
