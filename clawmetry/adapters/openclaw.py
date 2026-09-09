@@ -22,6 +22,7 @@ import time as _time
 from typing import List, Optional, Set
 
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
+from .openclaw_reply_recovery import _reply_recovery_events  # noqa: F401
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
 
@@ -899,62 +900,6 @@ def _backup_outcome_events(events: list) -> dict:
                 result["backupCorruptArchiveRejected"] = True
             return result
         return {}
-    except Exception:
-        return {}
-
-
-def _reply_recovery_events(events: list) -> dict:
-    """Return reply-recovery metadata when gateway logs show restart-triggered
-    reply recovery.
-
-    OpenClaw 2026.9.2+ ('Replies survive restarts') recovers active, queued,
-    and delegated replies after Gateway restarts, guards against one completed
-    reply discarding another's recovery marker, and preserves continuation
-    instructions through compaction and retry attempts.  Per-turn
-    ``recoveryMarker`` and ``retryAttempt`` fields are read from session
-    transcripts separately; this function surfaces the gateway-level restart
-    recovery signal for the dashboard meta view.
-
-    Scans the already-fetched gateway log events (no extra I/O). Returns a
-    dict with:
-    - ``replyRecoveryDetected`` (bool True) — at least one recovery event found
-    - ``replyRecoveryCount`` (int) — number of matching events in the log window
-    - ``lastReplyRecoveryTs`` (str, optional) — timestamp of the most recent event
-
-    Returns ``{}`` when no recovery events are found. Never raises (closes #5620).
-    """
-    _RECOVERY_KEYWORDS = (
-        "reply recovery",
-        "recovery marker",
-        "reply restored",
-        "reply resumed",
-        "recover reply",
-        "restart recover",
-        "reply requeued",
-        "reply recovered",
-    )
-    try:
-        if not events:
-            return {}
-        recovery_events = []
-        for evt in events:
-            if not isinstance(evt, dict):
-                continue
-            msg = str(evt.get("msg", "")).lower()
-            if not msg:
-                continue
-            if any(kw in msg for kw in _RECOVERY_KEYWORDS):
-                recovery_events.append(evt)
-        if not recovery_events:
-            return {}
-        result: dict = {
-            "replyRecoveryDetected": True,
-            "replyRecoveryCount": len(recovery_events),
-        }
-        last_ts = recovery_events[-1].get("ts")
-        if last_ts is not None:
-            result["lastReplyRecoveryTs"] = last_ts
-        return result
     except Exception:
         return {}
 
