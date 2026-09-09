@@ -42,7 +42,8 @@ Product record: requirement "OpenTelemetry Emitter Discovery"
 (8c1ea52d-df48-4b74-b0d2-cbe0488535ad), a child of Local Agent Observability.
 Repo-side design: ``docs/blueprints/otel-sdk-and-ingest.md``, component
 ``#OtelEmitterDiscovery``, ADR-005. The three measured facts above are
-AC-OTD-001.1, .3 and .7 there, recorded so they are not re-assumed next time.
+AC-OTD-001.1, .3 and .7 there, and blueprint ADR-001/002/004, recorded so they
+are not re-assumed next time.
 """
 
 from __future__ import annotations
