@@ -32347,21 +32347,59 @@ function signalsDeleteBrief(id) {
 // Deliberately conservative about WHEN it appears: only with zero sessions
 // AND zero events. A user whose agents are simply idle today has data, and
 // telling them "nothing detected" would be wrong.
+//
+// Two ways that conservatism was not conservative enough (#5766):
+//
+//   1. A MISSING key was read as zero. `/api/overview` does not have one
+//      canonical session-count field: OSS serves `sessions` + `sessionCount`,
+//      while the cloud node page builds the payload client-side out of the
+//      encrypted snapshot and ships `sessionCount` ONLY: no `sessions`, no
+//      events keys at all. So the probe fell off the end of its key list,
+//      returned 0, and declared a machine with 1,281 synced sessions empty,
+//      directly under a header reading "Claude Code · 1281 sessions".
+//      Absence of a count is "unknown", never "zero": with no count field
+//      present at all we say nothing rather than accuse the install.
+//   2. `sessionsToday` is legitimately 0 on a busy machine that has not run
+//      anything since midnight, so the answer is the MAX over the keys the
+//      payload actually carries, not the first one found.
+var _FRR_SESSION_KEYS = ['sessions', 'sessionCount', 'session_count',
+                         'total_sessions', 'sessionsToday'];
+var _FRR_EVENT_KEYS = ['events', 'event_count', 'total_events'];
+
+// Highest count across the keys the payload actually carries, or null when it
+// carries none of them (unknown, not empty).
 function _frrCount(overview, keys) {
+  var best = null;
   for (var i = 0; i < keys.length; i++) {
     var v = overview && overview[keys[i]];
-    if (typeof v === 'number') return v;
-    if (Array.isArray(v)) return v.length;
+    var n = null;
+    if (typeof v === 'number' && isFinite(v)) n = v;
+    else if (Array.isArray(v)) n = v.length;
+    if (n !== null && (best === null || n > best)) best = n;
   }
-  return 0;
+  return best;
+}
+
+// Only a payload that positively reports zero earns the panel.
+function _frrLooksEmpty(overview) {
+  var sessions = _frrCount(overview, _FRR_SESSION_KEYS);
+  var events = _frrCount(overview, _FRR_EVENT_KEYS);
+  if (sessions === null && events === null) return false;
+  return (sessions || 0) <= 0 && (events || 0) <= 0;
 }
 
 async function renderFirstRunReport(overview) {
   var el = document.getElementById('first-run-report');
   if (!el) return;
-  var sessions = _frrCount(overview, ['sessions', 'session_count', 'total_sessions']);
-  var events = _frrCount(overview, ['events', 'event_count', 'total_events']);
-  if (sessions > 0 || events > 0) { el.style.display = 'none'; return; }
+  // Every sentence in this panel is about the machine the reader is sitting
+  // at: it probes local runtime paths and prescribes `clawmetry connect` /
+  // `clawmetry --sample`. On a hosted node page the probe runs inside the
+  // cloud container, which has no runtimes and never will, so it reported
+  // "No supported runtime was detected ... checked 30 runtimes" about the
+  // server while the reader was looking at their own laptop's sessions.
+  // A local-machine diagnostic has no honest answer to give here.
+  if (window.CLOUD_MODE) { el.style.display = 'none'; return; }
+  if (!_frrLooksEmpty(overview)) { el.style.display = 'none'; return; }
 
   var d = null;
   try {
