@@ -403,9 +403,14 @@ jobs:
       # then could not recover, because it cached the token at daemon start and
       # replayed the dead credential on every reconnect -- `token_mismatch`
       # once a minute forever, fixable only by a daemon restart the user had no
-      # reason to know about. Named here because this job runs FILE LISTS.
+      # reason to know about. The self-heal cases are their own file rather
+      # than an appendix to tests/test_gateway_tap.py, because that suite
+      # drives a real DuckDB store: it needs duckdb (which this job does not
+      # install) and three of its cases only pass in isolation. Nothing here
+      # writes a row, so a fake store keeps the whole set hermetic.
+      # Named here because this job runs FILE LISTS.
       - name: ClawMetry keeps its config in its own file, and heals a rotated token
-        run: python3 -m pytest tests/test_never_writes_openclaws_config.py tests/test_read_cloud_token_fallback.py tests/test_apply_cm_key_fallback_persist.py -q
+        run: python3 -m pytest tests/test_never_writes_openclaws_config.py tests/test_read_cloud_token_fallback.py tests/test_apply_cm_key_fallback_persist.py tests/test_gateway_tap_token_selfheal.py -q
 
       # A [RELEASE] merge must pin the cloud to the version it just published.
       # auto-deploy-cloud.yml's push trigger fires BEFORE the upload, reads
@@ -658,7 +663,6 @@ jobs:
             tests/test_detector_incident_delivery.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
             tests/test_detectors.py \
-            tests/test_gateway_tap.py \
             tests/test_detectors_behavioural.py \
             tests/test_detectors_ngram.py \
             tests/test_detectors_secret_value_corpus.py \
