@@ -118,14 +118,35 @@ _BACKOFF_MAX_SEC = 60.0
 _ENABLE_ENV = "CLAWMETRY_ENABLE_WS_TAP"
 
 
-# Gateway `connect` rejections that mean "your credentials are wrong",
-# as opposed to "the gateway is busy/unhealthy". Matched case-insensitively
-# against the error code AND message of the rejected `connect` response.
-# The whole point of the list is to decide whether re-reading the token
-# off disk could possibly help; anything unrecognised is treated as a
-# transient failure and retried with the credentials we already hold.
+# Gateway `connect` rejections that mean "your credentials are wrong", as
+# opposed to "the gateway is busy/unhealthy". The whole point of the list is
+# to decide whether re-reading the token off disk could possibly help;
+# anything unrecognised is a transient failure, retried with what we hold.
+#
+# Captured off the wire from a live OpenClaw gateway (2026-09-10) rather than
+# guessed, because the top-level `code` is USELESS here — a bad token comes
+# back as the generic `INVALID_REQUEST`, and the machine-readable answer is
+# one level down in `error.details`:
+#
+#   bad token → {"code": "INVALID_REQUEST",
+#                "message": "unauthorized: gateway token mismatch (...)",
+#                "details": {"code": "AUTH_TOKEN_MISMATCH",
+#                            "authReason": "token_mismatch",
+#                            "recommendedNextStep": "update_auth_credentials"}}
+#   no token  → {"code": "NOT_PAIRED", "message": "device identity required",
+#                "details": {"code": "DEVICE_IDENTITY_REQUIRED"}}
+#
+# So we flatten code + message + details before matching. Matching the prose
+# alone would work today and break the first time upstream rewords or
+# localises that sentence.
 _AUTH_REJECT_MARKERS = (
+    # details.code / details.authReason — the durable, machine-readable form.
+    "auth_token_mismatch",
     "token_mismatch",
+    "device_identity_required",
+    "not_paired",
+    "update_auth_credentials",
+    # message prose — older builds and other gateway implementations.
     "token mismatch",
     "unauthorized",
     "unauthenticated",
@@ -151,15 +172,37 @@ class GatewayAuthError(RuntimeError):
     """
 
 
-def _is_auth_rejection(code: str, message: str) -> bool:
+def _is_auth_rejection(error: dict | None) -> bool:
     """True when a rejected `connect` blames our credentials.
 
-    The gateway is not consistent about where it puts the reason: older
-    builds send ``error.message = "token mismatch"``, current OpenClaw sends
-    ``error.code = "token_mismatch"``. Check both, case-insensitively.
+    Takes the WHOLE ``error`` object because the answer is spread across it:
+    a live OpenClaw puts the generic ``INVALID_REQUEST`` in ``code`` and the
+    real reason in ``details.code`` / ``details.authReason``. We flatten the
+    lot and match case-insensitively, so a build that moves the marker
+    between those fields still classifies correctly.
     """
-    blob = f"{code} {message}".lower()
+    if not isinstance(error, dict):
+        return False
+    try:
+        blob = json.dumps(error, default=str).lower()
+    except Exception:  # noqa: BLE001 — an unserialisable error is still text
+        blob = str(error).lower()
     return any(marker in blob for marker in _AUTH_REJECT_MARKERS)
+
+
+def _auth_next_step(error: dict | None) -> str:
+    """The gateway's own remediation hint, '' when it offers none.
+
+    A live gateway sends ``details.recommendedNextStep`` (e.g.
+    ``update_auth_credentials``). Quoting it beats inventing our own advice.
+    """
+    if not isinstance(error, dict):
+        return ""
+    details = error.get("details")
+    if not isinstance(details, dict):
+        return ""
+    step = details.get("recommendedNextStep") or details.get("authReason") or ""
+    return str(step) if step else ""
 
 
 def _gateway_config_hint() -> str:
@@ -598,10 +641,13 @@ class GatewayTap:
             if r.get("type") == "res" and r.get("id") == cid:
                 if not r.get("ok"):
                     err = r.get("error") or {}
-                    code = str(err.get("code") or "")
-                    message = str(err.get("message") or "") or "unknown"
-                    detail = f"gateway connect rejected: {code or message}"
-                    if _is_auth_rejection(code, message):
+                    message = str(err.get("message") or "").strip()
+                    code = str(err.get("code") or "").strip()
+                    detail = f"gateway connect rejected: {message or code or 'unknown'}"
+                    if _is_auth_rejection(err):
+                        step = _auth_next_step(err)
+                        if step:
+                            detail = f"{detail} [gateway suggests: {step}]"
                         raise GatewayAuthError(detail)
                     raise RuntimeError(detail)
                 granted = (

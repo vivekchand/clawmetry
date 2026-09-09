@@ -488,20 +488,73 @@ def _write_gw_config(oc_home, token, port=18789):
     }))
 
 
-def test_auth_rejection_is_classified(tap_env):
-    """The gateway is inconsistent about where it puts the reason —
-    ``error.code`` on current OpenClaw, ``error.message`` on older
-    builds. Both must read as "your credentials are wrong"."""
+#: Captured verbatim off a LIVE OpenClaw gateway on 2026-09-10 by sending a
+#: deliberately wrong token to 127.0.0.1:18789. Not invented: the top-level
+#: `code` for a bad token is the generic INVALID_REQUEST, and matching only
+#: that would classify a credential failure as a transient one. The durable
+#: signal is `details.code` / `details.authReason`.
+_LIVE_BAD_TOKEN_ERROR = {
+    "code": "INVALID_REQUEST",
+    "message": (
+        "unauthorized: gateway token mismatch (use this gateway's "
+        "gateway.auth.token or pair the device)"
+    ),
+    "details": {
+        "code": "AUTH_TOKEN_MISMATCH",
+        "authReason": "token_mismatch",
+        "canRetryWithDeviceToken": False,
+        "recommendedNextStep": "update_auth_credentials",
+    },
+}
+
+#: Same probe, connecting with no `auth` block at all.
+_LIVE_NO_TOKEN_ERROR = {
+    "code": "NOT_PAIRED",
+    "message": "device identity required",
+    "details": {"code": "DEVICE_IDENTITY_REQUIRED"},
+}
+
+
+def test_auth_rejection_is_classified_from_the_real_wire(tap_env):
+    """The live gateway's bad-token rejection must classify as a credential
+    failure, and it must do so on `details`, not on the prose — the prose
+    can be reworded or localised, the detail code cannot."""
     gw = tap_env["tap"]
-    assert gw._is_auth_rejection("token_mismatch", "")
-    assert gw._is_auth_rejection("", "Token mismatch")
-    assert gw._is_auth_rejection("UNAUTHORIZED", "")
-    assert gw._is_auth_rejection("", "invalid token supplied")
-    # ...and a busy/unhealthy gateway must NOT be, or we would re-read
-    # the config on every ordinary blip.
-    assert not gw._is_auth_rejection("protocol-mismatch", "")
-    assert not gw._is_auth_rejection("", "server is shutting down")
-    assert not gw._is_auth_rejection("", "")
+    assert gw._is_auth_rejection(_LIVE_BAD_TOKEN_ERROR)
+    assert gw._is_auth_rejection(_LIVE_NO_TOKEN_ERROR)
+
+    # Strip the message entirely: `details` alone must still be enough.
+    details_only = {
+        "code": "INVALID_REQUEST",
+        "details": dict(_LIVE_BAD_TOKEN_ERROR["details"]),
+    }
+    assert gw._is_auth_rejection(details_only), (
+        "classification must not depend on the human-readable sentence"
+    )
+
+    # And the reverse, for older builds that send prose and no details.
+    assert gw._is_auth_rejection({"message": "Token mismatch"})
+    assert gw._is_auth_rejection({"code": "UNAUTHORIZED"})
+    assert gw._is_auth_rejection({"message": "invalid token supplied"})
+
+    # A busy/unhealthy gateway must NOT be, or we would re-read the config
+    # on every ordinary blip.
+    assert not gw._is_auth_rejection({"code": "protocol-mismatch"})
+    assert not gw._is_auth_rejection({"message": "server is shutting down"})
+    assert not gw._is_auth_rejection({})
+    assert not gw._is_auth_rejection(None)
+
+
+def test_auth_rejection_quotes_the_gateways_own_next_step(tap_env):
+    """The gateway tells us what to do (`recommendedNextStep`). Quoting it
+    beats inventing our own advice in a log line."""
+    gw = tap_env["tap"]
+    assert gw._auth_next_step(_LIVE_BAD_TOKEN_ERROR) == "update_auth_credentials"
+    # No recommendation → fall back to the reason, then to nothing.
+    assert gw._auth_next_step({"details": {"authReason": "token_mismatch"}}) == "token_mismatch"
+    assert gw._auth_next_step(_LIVE_NO_TOKEN_ERROR) == ""
+    assert gw._auth_next_step({}) == ""
+    assert gw._auth_next_step(None) == ""
 
 
 def test_refresh_credentials_picks_up_a_rotated_token(tap_env):
@@ -558,7 +611,7 @@ def test_connect_rejection_raises_gateway_auth_error(tap_env, monkeypatch):
         msg = json.loads(received_send)
         return json.dumps({
             "type": "res", "id": msg["id"], "ok": False,
-            "error": {"code": "token_mismatch", "message": "token mismatch"},
+            "error": _LIVE_BAD_TOKEN_ERROR,
         })
 
     class _RejectWS(_StubWS):
@@ -600,7 +653,7 @@ def test_run_loop_recovers_when_the_token_rotates(tap_env, monkeypatch):
             if token != "rotated-token":
                 return json.dumps({
                     "type": "res", "id": msg["id"], "ok": False,
-                    "error": {"code": "token_mismatch"},
+                    "error": _LIVE_BAD_TOKEN_ERROR,
                 })
             # Correct token: accept, then close so _run_once returns.
             raise ConnectionError("accepted then closed")
