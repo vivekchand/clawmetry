@@ -1,0 +1,13 @@
+bash
+curl
+wget
+ssh
+sudo
+eval
+exec
+nc
+rm
+powershell
+cmd
+chmod
+cat

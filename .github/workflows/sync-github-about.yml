@@ -1,0 +1,77 @@
+# The repository "About" blurb is metadata, not a file: no diff, no review,
+# no CI. It sat at "26 AI agent runtimes" while the catalogue said 30 and
+# every in-repo guard was green, because nothing in the repo could see it.
+#
+# This pushes the derived blurb (scripts/sync_runtime_count.py --about, from
+# clawmetry/entitlements.py via SUPPORTED_RUNTIMES.txt) whenever the
+# catalogue changes on main. It is a no-op when the text already matches.
+name: Sync GitHub About
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - clawmetry/entitlements.py
+      - SUPPORTED_RUNTIMES.txt
+      - scripts/sync_runtime_count.py
+      - .github/workflows/sync-github-about.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-github-about
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Render the canonical blurb
+        id: blurb
+        run: |
+          set -euo pipefail
+          BLURB="$(python3 scripts/sync_runtime_count.py --about)"
+          echo "Rendered: $BLURB"
+          # GitHub silently truncates past 350 chars; fail loudly instead.
+          # tests/test_supported_runtimes_file.py asserts the same ceiling, so
+          # this only fires if someone ships past a red test.
+          if [ "${#BLURB}" -gt 350 ]; then
+            echo "::error::blurb is ${#BLURB} chars, over GitHub's 350 limit"
+            exit 1
+          fi
+          {
+            echo "text<<CM_EOF"
+            echo "$BLURB"
+            echo "CM_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Push it to the repository description
+        env:
+          # A PAT with repo admin scope: the default GITHUB_TOKEN cannot edit
+          # repository metadata even with `administration: write` requested.
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
+          BLURB: ${{ steps.blurb.outputs.text }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::REPO_ADMIN_TOKEN is not set; the About blurb was not updated."
+            echo "Set it (a fine-grained PAT with Administration: read+write on this repo)"
+            echo "or paste this by hand at the repo's About gear:"
+            echo "  $BLURB"
+            exit 0
+          fi
+          CURRENT="$(gh repo view "$GITHUB_REPOSITORY" --json description -q .description)"
+          if [ "$CURRENT" = "$BLURB" ]; then
+            echo "About blurb already in sync."
+            exit 0
+          fi
+          echo "was: $CURRENT"
+          echo "now: $BLURB"
+          gh repo edit "$GITHUB_REPOSITORY" --description "$BLURB"

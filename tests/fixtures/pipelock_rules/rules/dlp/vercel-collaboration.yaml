@@ -1,0 +1,14 @@
+  - id: dlp-vercel-collaboration-token
+    type: dlp
+    status: stable
+    name: "Vercel Collaboration Token"
+    description: "Detects Vercel collaboration access tokens"
+    severity: critical
+    confidence: high
+    references:
+      - "https://vercel.com/changelog/access-token-prefixes"
+    tags:
+      - "provider:vercel"
+      - "owasp-llm:LLM06"
+    pattern:
+      regex: 'vck_[A-Za-z0-9._-]{16,}'

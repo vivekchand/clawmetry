@@ -1,0 +1,13 @@
+  - id: injection-french-core-override
+    type: injection
+    status: experimental
+    name: "French Core Override"
+    description: "Detects prompt injection override attempts in French"
+    severity: high
+    confidence: high
+    references:
+      - "https://arxiv.org/abs/2512.23684"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:ignorez|oubliez|abandonnez|rejetez)\s+(?:toutes?\s+)?(?:les\s+)?(?:instructions|r[eè]gles|directives|consignes)\s+(?:pr[eé]c[eé]dentes|ant[eé]rieures|ci-dessus)'
