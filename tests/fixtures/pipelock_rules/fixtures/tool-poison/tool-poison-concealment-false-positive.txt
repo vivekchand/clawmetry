@@ -1,0 +1,6 @@
+Returns the user profile information as JSON.
+Do not use this tool for batch operations.
+This tool will notify the user when the operation completes.
+Never call this tool without first validating the input.
+Display the results to the user in a formatted table.
+Tell the user if any errors occurred during processing.

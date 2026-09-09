@@ -1,0 +1,5 @@
+<!-- This comment explains the override mechanism in the CSS -->
+<!-- TODO: ignore this section for now, previous author left it incomplete -->
+<!-- The previous instructions for building are in README.md -->
+<!-- Override styles for the navigation component -->
+<!-- See system guidelines at https://example.com -->
