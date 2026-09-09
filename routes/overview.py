@@ -1160,6 +1160,33 @@ def _try_local_store_overview():
     }
 
 
+
+# #4784: the discovery costs ~86 ms of CPU, which is fine on the daemon's
+# snapshot timer and NOT fine on every /api/overview poll. Memoised so a
+# dashboard refreshing every few seconds pays it at most once a minute.
+_OTEL_DISCOVERY_TTL_S = 60.0
+_otel_discovery_cache: dict = {"at": 0.0, "value": None}
+
+
+def _detected_otel_apps_cached() -> dict:
+    """Discovery result for the overview payload, memoised. Never raises."""
+    import time as _t
+    now = _t.monotonic()
+    hit = _otel_discovery_cache.get("value")
+    if hit is not None and (now - _otel_discovery_cache["at"]) < _OTEL_DISCOVERY_TTL_S:
+        return hit
+    try:
+        from clawmetry import sync as _sync
+        val = _sync._build_detected_otel_apps()
+    except Exception:
+        val = {"apps": [], "suggestable": [], "degraded": False,
+               "degradedReason": None, "checkedPorts": [],
+               "instruction": "", "scannedAtMs": 0}
+    _otel_discovery_cache["at"] = now
+    _otel_discovery_cache["value"] = val
+    return val
+
+
 @bp_overview.route("/api/overview")
 def api_overview():
     import dashboard as _d
@@ -1243,6 +1270,12 @@ def api_overview():
         {
             "model": model_name,
             "provider": _d._infer_provider_from_model(model_name),
+            # #4784: apps on this machine already emitting OpenTelemetry
+            # somewhere else. Served here as well as in the cloud snapshot,
+            # because the first-run panel reads THIS payload on a local
+            # dashboard: building only the snapshot slice made the prompt
+            # appear on the hosted dashboard and never on localhost.
+            "detectedOtelApps": _detected_otel_apps_cached(),
             "sessionCount": len(sessions),
             "sessions": len(sessions),  # alias for E2E compatibility
             "activeSessions": len([s for s in sessions if s.get("active")]),
