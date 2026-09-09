@@ -23858,6 +23858,8 @@ def run_daemon() -> None:
         print(
             "[clawmetry-sync] Another instance is already running. Exiting.", flush=True
         )
+        # ADR-001 of the Daemon Field-Failure Reporting blueprint: a failure
+        # report must not depend on machinery downstream of the failure.
         # Refusing the lock is USUALLY correct and frequent: a double start, or
         # someone running `python -m clawmetry.sync` beside the service. What
         # is not normal is refusing it while nothing is ingesting, which is the

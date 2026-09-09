@@ -2,7 +2,10 @@
 
 Requirement: Daemon Field-Failure Reporting (AC-FFR-005), a child of Field
 Failure Reporting and Auto-Triage, whose pipeline this joins as its second
-producer.
+producer. The blueprint of the same name carries the decisions behind the
+three choices here that look arbitrary and are not: reporting from above the
+gate (ADR-001), sending inline on a path that exits (ADR-002), and deriving
+the session id rather than fixing it (ADR-003).
 
 We already run this loop end to end for ONE class of failure. The desktop
 shell classifies a bootstrap that never completed, posts an aggregate ping,
@@ -161,7 +164,7 @@ def daemon_failure_payload(failure_class: str, version: str = "") -> dict:
     return {
         "install_id": _install_id(),
         "stage": STAGE,
-        # The sink's event log is keyed UNIQUE (install_id, session_id, stage)
+        # ADR-003. The sink's event log is keyed UNIQUE (install_id, session_id, stage)
         # with ON CONFLICT DO NOTHING, so a fixed value would record the first
         # daemon failure this install ever had and silently discard every one
         # after it: last_seen would freeze and a second failure class would
