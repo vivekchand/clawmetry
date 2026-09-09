@@ -22570,6 +22570,37 @@ def _build_bench_slice(store, *, days: int = 30) -> dict:
     return out
 
 
+def _build_detected_otel_apps() -> dict:
+    """The ``detectedOtelApps`` snapshot slice (#4784).
+
+    Runs on the daemon's snapshot timer, never per request, and costs about
+    86 ms of CPU (0.14% of one core at a 60 second cadence). Never raises: a
+    suggestion that can break the snapshot carrying it is worse than no
+    suggestion, so a failure degrades to an empty slice.
+
+    ``suggestable`` is the list a prompt renders. It excludes any port
+    ClawMetry may itself hold, so the dashboard never tells someone to
+    redirect their app to ClawMetry from ClawMetry.
+    """
+    try:
+        from clawmetry import otel_discovery as _od
+        r = _od.discover_otel_emitters()
+        return {
+            "apps": r.get("apps") or [],
+            "suggestable": r.get("suggestable") or [],
+            "degraded": bool(r.get("degraded")),
+            "degradedReason": r.get("degraded_reason"),
+            "checkedPorts": r.get("checked_ports") or [],
+            "instruction": _od.redirect_instruction(),
+            "scannedAtMs": r.get("scanned_at_ms"),
+        }
+    except Exception as e:  # noqa: BLE001
+        log.debug("detectedOtelApps slice failed: %s", e)
+        return {"apps": [], "suggestable": [], "degraded": False,
+                "degradedReason": None, "checkedPorts": [],
+                "instruction": "", "scannedAtMs": 0}
+
+
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     """Push system info + subagent data as encrypted snapshot.
 
@@ -23475,6 +23506,13 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
         "runtimeSummary": _runtime_summary,
+        # Applications on this machine that already emit OpenTelemetry but do
+        # not send it here (#4784). Rides the ENCRYPTED snapshot, never the
+        # plaintext heartbeat: an OTEL_SERVICE_NAME is the user's own name for
+        # their own service ("acme-billing-prod"), which is theirs to see and
+        # not ours to hold in the clear. A node with no key uploads nothing at
+        # all, by the same no-key rule the rest of this payload obeys.
+        "detectedOtelApps": _build_detected_otel_apps(),
         # What each runtime actually records (clawmetry/runtime_records.py).
         # Rides the snapshot so the HOSTED dashboard can tell "this runtime
         # was idle" apart from "this runtime keeps no cost record" — without
