@@ -4895,6 +4895,35 @@ def _session_agent_type(row: dict, session_id: str) -> str:
     return "openclaw"
 
 
+def _annotate_public_share(rows: list) -> None:
+    """Stamp ``shared`` / ``share_created_at`` onto OpenClaw session rows.
+
+    Probes the gateway once per session key (see
+    :mod:`clawmetry.adapters.openclaw_share` for why a list call cannot
+    answer this, and why the share token is never carried). Rows the probe
+    could not answer for are left untouched, so "unknown" stays distinct
+    from "not shared" all the way to Guard.
+
+    Off with ``CLAWMETRY_OPENCLAW_SHARE=0``. Never raises.
+    """
+    if os.environ.get("CLAWMETRY_OPENCLAW_SHARE", "1").strip() == "0":
+        return
+    if not rows:
+        return
+    keys = [r.get("session_key") for r in rows if r.get("session_key")]
+    if not keys:
+        return
+    from clawmetry.adapters.openclaw_share import fetch_share_state
+
+    state = fetch_share_state(keys)
+    if not state:
+        return
+    for r in rows:
+        fields = state.get(r.get("session_key") or "")
+        if fields:
+            r.update(fields)
+
+
 def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
     """Mirror a batch of session rows (the same dicts we push to /ingest/sessions)
     into the local DuckDB ``sessions`` table. Batched: ONE
@@ -4922,9 +4951,20 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
         meta_extras = {
             k: v for k, v in s.items()
             if k in ("channel", "chat_type", "subject", "recent_model",
-                     "session_key", "end_reason", "runtime", "thinking_level")
+                     "session_key", "end_reason", "runtime", "thinking_level",
+                     # #5746 public-share verdict. ``shared`` is a bool, so
+                     # the ``and v`` filter below would drop a stored False —
+                     # which is a real answer ("we asked; it is not
+                     # published"), not a missing one. Handled explicitly
+                     # after this comprehension.
+                     "share_created_at")
             and v
         }
+        # ``shared`` carries meaning when False, so it bypasses the
+        # truthiness filter above. Absent stays absent: a session the daemon
+        # could not probe must not be recorded as "not shared" (#5746).
+        if isinstance(s.get("shared"), bool):
+            meta_extras["shared"] = s["shared"]
         session_rows.append({
             "agent_type": _session_agent_type(s, sid),
             "session_id": sid,
@@ -13676,6 +13716,16 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 for s in rows:
                     if not s.get("model"):
                         s["model"] = fallback
+            # #5746 — public-share verdict, before the rows are written
+            # anywhere. Daemon-side on purpose: it is one gateway RPC per
+            # session (``publicShare`` is stripped from every session-list
+            # projection upstream), which belongs on the sync cycle and not
+            # in a request handler. Cloud containers have no gateway, so
+            # this is also the only place the signal can be captured at all.
+            try:
+                _annotate_public_share(rows)
+            except Exception as _e:
+                log.debug("openclaw share probe skipped: %s", _e)
             # Local-first: write through to ~/.clawmetry/events.duckdb FIRST.
             # Best-effort — never blocks cloud sync on a local-store failure.
             try:

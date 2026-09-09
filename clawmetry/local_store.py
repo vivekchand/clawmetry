@@ -3413,6 +3413,28 @@ _DEDUPED_EVENTS_CTE = """
 """
 
 
+def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:
+    """Runtime a session belongs to, from its ``<runtime>:<uuid>`` id prefix.
+
+    The Python twin of the ``CASE WHEN split_part(session_id, ':', 1) IN (...)``
+    expression ``query_model_rollup`` / ``query_recent_sessions_by_runtime``
+    already use, and of ``sync._runtime_of_session``. The prefix is checked
+    against :data:`_NON_OPENCLAW_RUNTIME_PREFIXES`, so a genuine OpenClaw
+    session id that happens to contain a colon can never be read as a runtime.
+
+    Why the id and not ``agent_type``: family sessions are written to the
+    ``sessions`` table with ``agent_type='openclaw'`` by construction (the
+    column predates multi-runtime and several readers still filter on it), and
+    the runtime lives authoritatively in the id prefix. Deriving the rollup's
+    runtime from ``agent_type`` therefore filed every paid runtime under
+    ``openclaw``.
+    """
+    prefix = str(session_id or "").split(":", 1)[0].strip().lower()
+    if prefix and prefix in _NON_OPENCLAW_RUNTIME_PREFIXES:
+        return prefix
+    return fallback or "openclaw"
+
+
 class LocalStore(TrailStoreMixin):
     """Thread-safe local event store with a background batched flusher.
 
@@ -11300,7 +11322,8 @@ class LocalStore(TrailStoreMixin):
                 session.get("stuck") or session.get("stuck_flag") or False
             )
             rollup_params.append([
-                sid, atype, session.get("title"), session.get("status"),
+                sid, _runtime_of_session_id(sid, atype),
+                session.get("title"), session.get("status"),
                 started, last_active,
                 int(session.get("total_tokens") or 0),
                 float(session.get("cost_usd") or 0),

@@ -1,0 +1,13 @@
+  - id: injection-spanish-core-override
+    type: injection
+    status: experimental
+    name: "Spanish Core Override"
+    description: "Detects prompt injection override attempts in Spanish"
+    severity: high
+    confidence: high
+    references:
+      - "https://arxiv.org/abs/2512.23684"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '(?:ignora|olvida|desecha|descarta)\s+(?:todas?\s+)?(?:las?\s+)?(?:instrucciones|reglas|directivas|restricciones)\s+(?:anteriores|previas|de\s+antes)'

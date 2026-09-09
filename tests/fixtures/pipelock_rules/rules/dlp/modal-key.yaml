@@ -1,0 +1,14 @@
+  - id: dlp-modal-workspace-key
+    type: dlp
+    status: experimental
+    name: "Modal Workspace Key"
+    description: "Detects Modal workspace API keys"
+    severity: high
+    confidence: medium
+    references:
+      - "https://modal.com/docs/guide/webhooks"
+    tags:
+      - "provider:modal"
+      - "owasp-llm:LLM06"
+    pattern:
+      regex: 'wk-[A-Za-z0-9]{16,}'
