@@ -579,6 +579,7 @@ jobs:
             tests/test_lovable_runtime_wiring.py \
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
+            tests/test_meeting_transcripts.py \
             tests/test_harness_audit_reads_whole_adapter.py \
             tests/test_otlp_sessionless_spans.py \
             tests/test_local_query_dispatch_edge_cases.py \
