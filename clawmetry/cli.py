@@ -3402,6 +3402,112 @@ def _status_snapshot(args) -> dict:
     return snap
 
 
+def _print_stall_advice(log_tail: str = "") -> None:
+    """Say, in one human sentence, that sync has stopped and what to do.
+
+    Prints nothing when the last sync is recent (or unknown), so a healthy node
+    stays quiet.
+    """
+    try:
+        import json as _j
+
+        from clawmetry.sync import STATE_FILE as _state_file
+
+        if not _state_file.exists():
+            return
+        st = _j.loads(_state_file.read_text())
+    except Exception:  # noqa: BLE001 - never fail status over its own advice
+        return
+    age_txt, stale = _sync_age((st or {}).get("last_sync") or "")
+    if not stale:
+        return
+    print()
+    print(f"  ⚠️   Nothing has synced for {(age_txt or '').replace(' ago', '')}, "
+          "so the dashboard is showing old data.")
+    if "Another instance is already running" in (log_tail or ""):
+        # The signature of a leftover lock file: the helper starts, finds a
+        # lock naming a pid that is no longer it, and exits, over and over.
+        print("      The background helper keeps finding a leftover lock file "
+              "from an earlier run.")
+        print("      Updating clears it automatically:  pip install -U clawmetry")
+    else:
+        print("      Restart the background helper:  clawmetry sync --restart")
+    print("      Still stuck? Send us ~/.clawmetry/sync.log and we will "
+          "take it from there.")
+
+
+def _launchd_job_state(listing: str) -> dict:
+    """Parse ``launchctl list <label>`` output into what it actually means.
+
+    ``launchctl list`` exits 0 for a job that is merely REGISTERED, so its exit
+    code says nothing about whether a process is up. The truth is the ``PID``
+    key: present means running, absent means launchd has the job loaded and
+    nothing is alive right now. ``LastExitStatus`` says how the last attempt
+    ended, which is the difference between "starting up" and "crash looping".
+    """
+    state = {"registered": True, "pid": None, "last_exit": None}
+    for line in (listing or "").splitlines():
+        line = line.strip().rstrip(";")
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip().strip('"')
+        val = val.strip().strip('"')
+        if key == "PID":
+            try:
+                state["pid"] = int(val)
+            except ValueError:
+                pass
+        elif key == "LastExitStatus":
+            try:
+                state["last_exit"] = int(val)
+            except ValueError:
+                pass
+    return state
+
+
+def _humanize_age(seconds: float) -> str:
+    """A short, plain-language age. No jargon, no decimals."""
+    seconds = max(0, int(seconds))
+    if seconds < 90:
+        return f"{seconds}s ago"
+    minutes = seconds // 60
+    if minutes < 90:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours}h ago"
+    return f"{hours // 24}d ago"
+
+
+# A sync cycle is about a minute. Fifteen means something is wrong, not slow.
+SYNC_STALE_SECS = 900
+
+
+def _sync_age(last_sync_iso: str, now: float = None) -> tuple:
+    """Return ``(age_text, is_stale)`` for a recorded last-sync timestamp.
+
+    ``(None, False)`` when the timestamp is missing or unparseable: we would
+    rather say nothing than accuse a healthy node on a bad parse.
+    """
+    if not last_sync_iso:
+        return None, False
+    try:
+        import datetime as _dt
+
+        raw = str(last_sync_iso).strip().replace("Z", "+00:00")
+        ts = _dt.datetime.fromisoformat(raw)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=_dt.timezone.utc)
+        age = (now if now is not None else _dt.datetime.now(
+            _dt.timezone.utc).timestamp()) - ts.timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return None, False
+    if age < 0:
+        return None, False
+    return _humanize_age(age), age > SYNC_STALE_SECS
+
+
 def _cmd_status(args) -> None:
     """clawmetry status — show local + cloud sync status."""
     if getattr(args, "live", False):
@@ -3520,7 +3626,12 @@ def _cmd_status(args) -> None:
             import json
 
             st = json.loads(STATE_FILE.read_text())
-            print(f"  Last sync:   {(st.get('last_sync') or '?')[:19]}")
+            _ls_raw = st.get("last_sync") or ""
+            _age_txt, _stale = _sync_age(_ls_raw)
+            _age_note = f"  ({_age_txt})" if _age_txt else ""
+            if _stale:
+                _age_note += "  ⚠️   nothing new since then"
+            print(f"  Last sync:   {(_ls_raw or '?')[:19]}{_age_note}")
             print(f"  Files seen:  {len(st.get('last_event_ids', {}))}")
         except Exception:
             pass
@@ -3737,7 +3848,17 @@ def _cmd_status(args) -> None:
             ["launchctl", "list", "com.clawmetry.sync"], capture_output=True, text=True
         )
         if r.returncode == 0:
-            print("  Daemon:      ✅  Running (launchd)")
+            # Exit 0 only means launchd has the job REGISTERED. A registered
+            # job with no PID is a job that is not running right now, and one
+            # that keeps exiting is a restart loop the user cannot see.
+            _job = _launchd_job_state(r.stdout)
+            if _job.get("pid"):
+                print(f"  Daemon:      ✅  Running (launchd, pid {_job['pid']})")
+            else:
+                _exit = _job.get("last_exit")
+                _why = f", last exit {_exit}" if _exit is not None else ""
+                print("  Daemon:      ⚠️   Set up but not running right now "
+                      f"(launchd keeps retrying{_why})")
         else:
             print("  Daemon:      ○  Not running")
     elif system == "Linux":
@@ -3770,12 +3891,20 @@ def _cmd_status(args) -> None:
             f"  Daemon:      {'✅  Running' + _how if running else '○  Not running'}"
         )
 
+    _log_tail = ""
     if LOG_FILE.exists():
         print(f"  Log:         {LOG_FILE}")
+        _log_tail = LOG_FILE.read_text(errors="replace")[-8000:]
         # Last 3 lines
-        lines = LOG_FILE.read_text(errors="replace").splitlines()[-3:]
+        lines = _log_tail.splitlines()[-3:]
         for ln in lines:
             print(f"    {ln}")
+
+    # One plain sentence when nothing is flowing. Everything above this point
+    # reports how the node is CONFIGURED, and configuration stays green while
+    # ingestion is dead: that gap is what let a Pro node sit stalled for 12
+    # hours behind a screen of ticks (2026-09-08).
+    _print_stall_advice(_log_tail)
 
     # NemoClaw sandbox nodes (if docker + kubectl available)
     _print_nemoclaw_nodes(args)
@@ -6952,6 +7081,43 @@ def _cmd_diagnose(args) -> None:
     if payload.get("cache_error"):
         _row("Cache error:", payload["cache_error"])
 
+    _diagnose_runtime_paths()
+
+
+def _diagnose_runtime_paths() -> None:
+    """Where ClawMetry looked for each runtime.
+
+    The first-run panel says HOW MANY runtimes were checked and sends the
+    reader here for the list. The map lands in a local command rather than
+    in the dashboard because a screen ships with every install and appears
+    in every screenshot of a fresh machine, while this output is something a
+    person runs and chooses to share. Paths are home-collapsed by the probe
+    itself, so pasting this into an issue names nobody.
+
+    Never raises: an older probe module simply prints nothing.
+    """
+    try:
+        from clawmetry import runtime_probe as _rp
+        probes = _rp.probe_runtimes()
+    except Exception:
+        return
+    if not probes:
+        return
+    found = [p for p in probes if p.get("found")]
+    print()
+    print(f"Runtimes: {len(found)} detected of {len(probes)} checked")
+    print()
+    print("  Where ClawMetry looked:")
+    for p in probes:
+        mark = "found" if p.get("found") else "-"
+        print(f"    [{mark:>5}] {p.get('label')}")
+        for pth in (p.get("paths") or []):
+            print(f"            {pth}")
+    print()
+    print("  On macOS, reading some of these needs Full Disk Access for your")
+    print("  terminal. A runtime that stores its sessions elsewhere can be")
+    print("  pointed at ClawMetry with the env vars in docs/compatibility.md.")
+
 
 
 def _cmd_extensions(args) -> None:
@@ -7921,6 +8087,12 @@ def main() -> None:
         "--openclaw-dir",
         type=str,
         help="OpenClaw config directory (default: ~/.openclaw). Env: CLAWMETRY_OPENCLAW_DIR",
+    )
+    parser.add_argument(
+        "--sample",
+        action="store_true",
+        help="Open the dashboard on three synthetic sample sessions instead "
+             "of your own data (a separate store; your data is untouched)",
     )
     sub = parser.add_subparsers(dest="cmd")
 
@@ -8894,6 +9066,32 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
         parser.print_help()
         sys.exit(0)
+
+    # --sample: load synthetic sessions instead of the user's own, so a fresh
+    # install on a machine with no agent history is never an empty product.
+    # This has to happen BEFORE `from dashboard import ...` below, because
+    # local_store reads CLAWMETRY_LOCAL_STORE_PATH into its module-level
+    # DB_PATH at import time -- setting it afterwards would open the real
+    # store and then serve it under a "sample data" banner.
+    if "--sample" in sys.argv:
+        sys.argv = [a for a in sys.argv if a != "--sample"]
+        try:
+            from clawmetry import sample_data as _sample_data
+            _sample_path = _sample_data.enable_sample_mode()
+            _n_sessions, _n_events = _sample_data.ensure_built()
+            if _n_sessions:
+                print(f"Sample data built: {_n_sessions} sessions, "
+                      f"{_n_events} events -> {_sample_path}")
+            else:
+                print(f"Sample data ready -> {_sample_path}")
+            print("This is synthetic data, not your machine. "
+                  "Restart without --sample for your own agents.")
+        except Exception as _e:
+            # Never make --sample a way to fail to start.
+            print(f"Could not build sample data ({_e}); "
+                  "starting on your real store instead.", file=sys.stderr)
+            os.environ.pop("CLAWMETRY_SAMPLE", None)
+            os.environ.pop("CLAWMETRY_LOCAL_STORE_PATH", None)
 
     # Tag this process as the dashboard BEFORE importing dashboard, so every
     # get_store() in dashboard.py (module-level + handlers) is barred from the
