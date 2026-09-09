@@ -647,6 +647,7 @@ jobs:
             tests/test_obs_gap_nemoclaw_vllm_5579.py \
             tests/test_sample_data.py \
             tests/test_daemon_spawn_pid_lock.py \
+            tests/test_first_run_report.py \
             tests/test_e2e_invariants.py \
             tests/test_e2e_telegram_brain_ingest.py \
             -q

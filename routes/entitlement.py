@@ -464,6 +464,30 @@ _MINIMAL_OSS_FREE_SNAPSHOT = {
 }
 
 
+
+def _ingest_is_running() -> bool:
+    """True when something is actually writing the local store.
+
+    The first-run panel must not tell a user to "run some work through the
+    agent" when the real reason they see nothing is that nothing is reading
+    it. `clawmetry` alone starts the dashboard only: every
+    `_start_daemon_background()` call site sits in the cloud-connect flow, so
+    a plain `pip install clawmetry && clawmetry` never ingests (#5740).
+
+    Best effort, and it fails toward silence: an error answers True so the
+    panel says nothing about ingest rather than accusing a healthy install.
+    """
+    try:
+        from clawmetry import local_store as _ls
+        if getattr(_ls, "_writer_owner", False):
+            return True
+        if _ls._daemon_registered():
+            return True
+        return _ls.DB_PATH.exists()
+    except Exception:
+        return True
+
+
 @bp_entitlement.route("/api/entitlement")
 def api_entitlement():
     try:
@@ -46994,10 +47018,16 @@ def api_entitlement_runtime_detection():
                 "allowed": bool(p.get("free")),
                 "required_tier": None,
                 "required_tier_label": None,
+                # Where we actually looked. A first-run screen that says
+                # "nothing detected" without this is indistinguishable from a
+                # broken install (#5716).
+                "paths": list(p.get("paths") or []),
+                "env": p.get("env") or "",
             }
             for p in raw
         ]
         env["counts"] = _runtime_detection_counts(env["probes"])
+        env["ingest_running"] = _ingest_is_running()
         env["detected_locked"] = [
             r["id"] for r in env["probes"] if r["found"] and not r["allowed"]
         ]
@@ -47048,12 +47078,16 @@ def api_entitlement_runtime_detection():
                 "allowed": bool(rid and rid in allowed_runtimes),
                 "required_tier": req_t,
                 "required_tier_label": req_lbl,
+                # Where we actually looked (#5716).
+                "paths": list(p.get("paths") or []) if isinstance(p, dict) else [],
+                "env": (p.get("env") or "") if isinstance(p, dict) else "",
             }
         )
 
     detected_locked = [
         r["id"] for r in probes_out if r["found"] and not r["allowed"] and r["id"]
     ]
+    ingest_running = _ingest_is_running()
 
     actionable_tier = None
     actionable_tier_label = None
@@ -47101,6 +47135,8 @@ def api_entitlement_runtime_detection():
             "pending": pending,
             "probes": probes_out,
             "counts": _runtime_detection_counts(probes_out),
+            # Whether anything is actually writing the local store (#5740).
+            "ingest_running": ingest_running,
             "detected_locked": detected_locked,
             "actionable_tier": actionable_tier,
             "actionable_tier_label": actionable_tier_label,
