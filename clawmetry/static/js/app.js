@@ -32353,7 +32353,7 @@ function signalsDeleteBrief(id) {
 //   1. A MISSING key was read as zero. `/api/overview` does not have one
 //      canonical session-count field: OSS serves `sessions` + `sessionCount`,
 //      while the cloud node page builds the payload client-side out of the
-//      encrypted snapshot and ships `sessionCount` ONLY — no `sessions`, no
+//      encrypted snapshot and ships `sessionCount` ONLY: no `sessions`, no
 //      events keys at all. So the probe fell off the end of its key list,
 //      returned 0, and declared a machine with 1,281 synced sessions empty,
 //      directly under a header reading "Claude Code · 1281 sessions".
@@ -32367,7 +32367,7 @@ var _FRR_SESSION_KEYS = ['sessions', 'sessionCount', 'session_count',
 var _FRR_EVENT_KEYS = ['events', 'event_count', 'total_events'];
 
 // Highest count across the keys the payload actually carries, or null when it
-// carries none of them (unknown — not empty).
+// carries none of them (unknown, not empty).
 function _frrCount(overview, keys) {
   var best = null;
   for (var i = 0; i < keys.length; i++) {
