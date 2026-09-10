@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import pathlib
 import sys
 
@@ -118,14 +119,39 @@ def band(lines: int) -> str:
     return BAND_HUGE
 
 
+# A sentence end, ignoring the two things that look like one and are not: a
+# version or section number ("0.12.845.", "REQ-OBS-033.") and an initial.
+_SENTENCE_END = re.compile(r"(?<![0-9A-Z])[.!?](?=\s|$)")
+# Long enough for a real sentence, short enough to stay a table cell.
+_SUMMARY_MAX = 200
+
+
 def _summary(tree: ast.Module) -> str:
-    """First sentence-ish line of the module docstring, one line, no pipes."""
+    """The module docstring's first SENTENCE, joined onto one line, no pipes.
+
+    Deliberately not "the first line". A docstring whose opening sentence wraps
+    produced a row cut mid-clause, silently, and the table read as though the
+    module were undocumented: 13 modules were in that state when this was
+    fixed, and Drift Bot reported the 14th as a missing entry (2026-09-09).
+    Wrapping a line is a formatting choice and must not change the generated
+    documentation.
+    """
     doc = ast.get_docstring(tree) or ""
-    first = ""
+    # The first paragraph, unwrapped. Stopping at the blank line keeps a long
+    # docstring's later prose out of a table cell.
+    para: list = []
     for raw in doc.splitlines():
-        if raw.strip():
-            first = raw.strip()
-            break
+        if not raw.strip():
+            if para:
+                break
+            continue
+        para.append(raw.strip())
+    first = " ".join(para)
+    match = _SENTENCE_END.search(first)
+    if match:
+        first = first[: match.end()]
+    if len(first) > _SUMMARY_MAX:
+        first = first[:_SUMMARY_MAX].rsplit(" ", 1)[0] + "…"
     # Most docstrings open by restating the module path ("routes/alerts.py --
     # Budget + Alerts endpoints"). The path is already the first column, so
     # drop the restatement rather than printing it twice.

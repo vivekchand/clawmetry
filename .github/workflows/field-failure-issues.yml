@@ -93,26 +93,52 @@ jobs:
             events=$(jq -r .events <<<"$sig")
             last=$(jq -r .last_seen <<<"$sig")
             ver=$(jq -r .latest_desktop_version <<<"$sig")
+            # Absent on a sink that predates the daemon producer.
+            stage=$(jq -r '.stage // "bootstrap_failed"' <<<"$sig")
 
             pysuffix=""
             [ -n "$py" ] && pysuffix=" (py $py)"
-            TITLE="[field-failure] $cls on $os$pysuffix"
+            # The title is the DEDUPE KEY, and the aggregate groups by stage x
+            # class x OS x Python. Leaving stage out of the key collapses two
+            # different signatures onto one issue: a daemon that stopped
+            # ingesting and an install that never started would share a title,
+            # so whichever arrived second would only "refresh" the first and
+            # its lede would describe the wrong failure entirely.
+            #
+            # bootstrap_failed keeps the historical shape verbatim. Changing it
+            # would orphan every open issue, which is the one thing the title
+            # contract forbids; a new stage gets a new prefix instead.
+            stagelabel=""
+            [ "$stage" != "bootstrap_failed" ] && stagelabel="${stage%_failed}: "
+            TITLE="[field-failure] ${stagelabel}$cls on $os$pysuffix"
             printf '%s\n' "$TITLE" >> /tmp/live-titles.txt
 
+            # An install that never started and a daemon that stopped working
+            # need different first questions, and a body that says "bootstrap"
+            # over a runtime failure sends the fixer to the wrong file.
+            if [ "$stage" = "daemon_failed" ]; then
+              LEDE="A running node's sync daemon reported that it could not do its job. This is a RUNTIME failure on a machine that installed successfully: ingestion has stopped there, so that customer's dashboard is showing stale data right now."
+              WHERE="\`clawmetry/field_report.py\` classifies these; \`clawmetry/sync.py\` is where each class is raised."
+            else
+              LEDE="Aggregated desktop bootstrap-failure telemetry crossed the reporting threshold for this signature."
+              WHERE="The class is the same one \`_explain_pip_failure\` shows on the machine's splash; \`desktop/app.py\` maps each class to its likely fix surface."
+            fi
+
             ISSUE_BODY=$(printf '%s\n' \
-              "Aggregated desktop bootstrap-failure telemetry crossed the reporting threshold for this signature." \
+              "$LEDE" \
               "" \
               "| signature | value |" \
               "|---|---|" \
+              "| stage | \`$stage\` |" \
               "| failure class | \`$cls\` |" \
               "| OS | $os |" \
-              "| bootstrap Python | ${py:-unknown} |" \
+              "| Python | ${py:-unknown} |" \
               "| distinct installs (30d) | $installs |" \
               "| events (30d) | $events |" \
               "| last seen | $last |" \
               "| latest shell version seen | ${ver:-unknown} |" \
               "" \
-              "These are aggregates over a closed enum — no machine ever sends paths, usernames, or log text. The class is the same one \`_explain_pip_failure\` shows on the machine's splash; \`desktop/app.py\` maps each class to its likely fix surface." \
+              "These are aggregates over a closed enum — no machine ever sends paths, usernames, or log text. $WHERE" \
               "" \
               "Live view: https://app.clawmetry.com/api/desktop/_failures" \
               "" \
