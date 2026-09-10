@@ -94,4 +94,4 @@ jobs:
             echo "This single context, **E2E Gate (required)**, is the only name"
             echo "in branch protection. Everything above is aggregated through it."
           } >> "$GITHUB_STEP_SUMMARY"
-# ci-trigger (auto-mergeability sweep 2026-08-14)
+# ci-trigger (auto-mergeability sweep 2026-09-08)

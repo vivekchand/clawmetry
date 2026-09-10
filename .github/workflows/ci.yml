@@ -162,6 +162,24 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
+      # WorkflowIntegrityGuard. Written for ADR-005 ("a CI step that cannot
+      # fail is worse than no CI step") and, until #5744, run by NO job at all
+      # -- the exact trap this repo's own convention warns about, on the guard
+      # whose whole subject is guards that do nothing. It also now rejects a
+      # `${{ }}` expansion of a workflow input inside a `run:` body, the
+      # template-injection shape #5673 fixed in auto-deploy-cloud.yml and
+      # #5744 fixed again here.
+      - name: Workflow integrity (dead steps, unreachable triggers, input injection)
+        run: python3 -m pytest tests/test_ci_workflow_invocations_are_real.py -q
+
+      # #5739: the field-failure filer could open and refresh an issue but
+      # never close one, so a signature that stopped occurring left its issue
+      # open forever under a "Still occurring" comment. Runs the reconcile
+      # step's real shell against a fake gh -- including the case where the
+      # endpoint is unreachable, which must close nothing.
+      - name: Field-failure issues close when the signature stops
+        run: python3 -m pytest tests/test_field_failure_autoclose.py -q
+
       # Named explicitly because this repo's CI runs FILE LISTS, not
       # `pytest tests/`. /api/runtime-summary claimed to mirror the daemon's
       # runtimeSummary slice but re-implemented it as a capped raw-event scan:
@@ -190,6 +208,17 @@ jobs:
       # interpreter has no pytest before that step.
       - name: Architecture docs name modules that exist
         run: python3 -m pytest tests/test_module_map_drift.py -q
+
+      # Every `uses:` reference -- workflows AND the composite actions under
+      # .github/actions/, whose own `uses:` lines run with the calling job's
+      # token -- must stay pinned to a full commit SHA. A tag is mutable: its
+      # owner can repoint it at code that then runs with our credentials, and
+      # several of these workflows hold `contents: write` or publish to PyPI.
+      # scripts/check_action_refs.py makes the same check, but only in
+      # supply-chain.yml; this line is what applies the ratchet to every PR.
+      # Named explicitly because this job runs FILE LISTS.
+      - name: Action references stay pinned to a commit SHA
+        run: python3 -m pytest tests/test_action_refs_pinned.py -q
 
       # Red-team corpus: every publicly disclosed agent attack we claim to
       # catch, we still catch. Named explicitly because this job runs FILE
@@ -273,7 +302,7 @@ jobs:
         run: |
           python3 -c "
           import glob, re, sys
-          pat = re.compile(r'sys\.(stdout|stderr)\s*=\s*io\.TextIOWrapper\(', re.S)
+          pat = re.compile(r'sys\\.(stdout|stderr)\\s*=\\s*io\\.TextIOWrapper\\(', re.S)
           bad = []
           for f in (
               ['dashboard.py']
@@ -386,6 +415,9 @@ jobs:
       - name: Hosted Security tab shows only what it can fill
         run: python3 -m pytest tests/test_security_tab_cloud_honesty.py -q
 
+      - name: Werkzeug debugger only on loopback bind
+        run: python3 -m pytest tests/test_debugger_loopback_only.py -q
+
       # The Overview "Active Tasks" panel told four lies on one screen under
       # ?runtime=codex: a hardcoded personal-project pill said OpenClaw, no
       # runtime filter at all, a FAILED sub-agent drawn with a green tick, and
@@ -393,6 +425,24 @@ jobs:
       # this job runs FILE LISTS.
       - name: Active Tasks panel tells the truth
         run: python3 -m pytest tests/test_active_tasks_honesty.py tests/test_active_tasks_units.py -q
+
+      # ClawMetry wrote its cm_ bearer as a top-level `clawmetry` key inside
+      # OpenClaw's own ~/.openclaw/openclaw.json. That key is not in OpenClaw's
+      # schema, so the write left OpenClaw's config failing validation and its
+      # next CLI run fired `doctor --fix` -- restoring the last-known-good
+      # config and restarting the gateway, killing the user's live session
+      # (field report 2026-09-09: twice on one machine). The gateway WS tap
+      # then could not recover, because it cached the token at daemon start and
+      # replayed the dead credential on every reconnect -- `token_mismatch`
+      # once a minute forever, fixable only by a daemon restart the user had no
+      # reason to know about. The self-heal cases are their own file rather
+      # than an appendix to tests/test_gateway_tap.py, because that suite
+      # drives a real DuckDB store: it needs duckdb (which this job does not
+      # install) and three of its cases only pass in isolation. Nothing here
+      # writes a row, so a fake store keeps the whole set hermetic.
+      # Named here because this job runs FILE LISTS.
+      - name: ClawMetry keeps its config in its own file, and heals a rotated token
+        run: python3 -m pytest tests/test_never_writes_openclaws_config.py tests/test_read_cloud_token_fallback.py tests/test_apply_cm_key_fallback_persist.py tests/test_gateway_tap_token_selfheal.py -q
 
       # A [RELEASE] merge must pin the cloud to the version it just published.
       # auto-deploy-cloud.yml's push trigger fires BEFORE the upload, reads
@@ -451,6 +501,33 @@ jobs:
       # and status reports whether data is actually moving.
       - name: The daemon lock cannot lock the daemon out
         run: python3 -m pytest tests/test_pid_lock_reclaim.py tests/test_status_daemon_truth.py tests/test_pid_liveness_windows.py -q
+
+      # The field-failure pipeline (desktop shell -> cloud sink -> deduped
+      # issue -> hourly fixer) had ONE producer, the installer, so a daemon
+      # that stopped working reported to nobody: it exits before the error
+      # handler and the auto-updater initialise, and a dead daemon sends no
+      # heartbeat, so the node just goes quiet. Pins the daemon as the second
+      # producer, and pins the privacy contract key by key.
+      - name: The daemon reports the failures that stop it working
+        run: python3 -m pytest tests/test_daemon_field_report.py -q
+
+      # Field failures #5800/#5801 (daemon_ingest_stalled on Darwin py3.14 and
+      # Linux py3.12): six ingest calls in the steady-state sync cycle ran
+      # bare, unlike every neighbouring call in that loop. A persistent
+      # exception in any one of them aborted the whole cycle before it ever
+      # reached `state["last_sync"] = ...`, and since the next cycle reloads
+      # the same on-disk state, one bad source froze last_sync forever while
+      # the separate heartbeat thread kept reporting the daemon as alive.
+      - name: The sync cycle isolates every ingest call
+        run: python3 -m pytest tests/test_sync_cycle_fault_isolation.py -q
+
+      # The module map is generated from each module's docstring, and the
+      # generator took the first LINE, so a docstring whose opening sentence
+      # wrapped produced a row cut mid-clause. Nothing failed: the generator
+      # and its --check gate agreed with each other on a truncated string.
+      # Thirteen modules were in that state before this guard existed.
+      - name: Module map rows are whole sentences
+        run: python3 -m pytest tests/test_module_map_summaries_are_whole.py -q
 
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
@@ -531,7 +608,7 @@ jobs:
         # Quarantined tests still run daily in quarantine-sweep.yml.
         run: python3 -m pytest tests/test_api.py -v --tb=short -m 'not quarantine'
 
-  # ── MOAT verifier (hermetic, hard-fail) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  # ── MOAT verifier (hermetic, hard-fail) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
   # is caught BEFORE merge." These files exercise the
   # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
@@ -577,8 +654,12 @@ jobs:
             tests/test_tab_template_page_wrapper.py \
             tests/test_grok_bot_runtime_wiring.py \
             tests/test_lovable_runtime_wiring.py \
+            tests/test_muse_code_runtime_wiring.py \
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
+            tests/test_rollup_session_runtime_backfill.py \
+            tests/test_otel_discovery.py \
+            tests/test_meeting_transcripts.py \
             tests/test_harness_audit_reads_whole_adapter.py \
             tests/test_otlp_sessionless_spans.py \
             tests/test_local_query_dispatch_edge_cases.py \
@@ -587,10 +668,16 @@ jobs:
             tests/test_session_context_route.py \
             tests/test_tracing_reasoning_spans.py \
             tests/test_obs_gap_openclaw_response_steered_5578.py \
+            tests/test_obs_gap_openclaw_reply_recovery_5620.py \
+            tests/test_obs_gap_openclaw_update_pipeline_5749.py \
             tests/test_trail_coverage_route.py \
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
             tests/test_cohort_compare.py \
+            tests/test_outcome_classifier.py \
+            tests/test_session_live_state.py \
+            tests/test_outcome_trend.py \
+            tests/test_otel_export_sessions_shape.py \
             tests/test_query_contract_drift.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
@@ -654,6 +741,7 @@ jobs:
             tests/test_insights_outcome_templates.py \
             tests/test_event_shape.py \
             tests/test_schema_v15_migration.py \
+            tests/test_session_cost_intel.py \
             tests/test_session_intent.py \
             tests/test_session_git_outcomes_route.py \
             tests/test_self_diagnostics.py \
@@ -741,7 +829,7 @@ jobs:
             tests/test_license_scalar_accessors.py \
             -q
 
-  # ── Compression / cache-safety eval (Tier-1, deterministic) ──────────────────────────────
+  # ── Compression / cache-safety eval (Tier-1, deterministic) ───────────────────────────────
   # Issue #2844 (epic #2837): port Headroom's eval rigor so we can claim
   # "compression-safe" with proof. This Tier-1 gate is pure-Python and spends
   # ZERO API budget — it proves CCR payload compression is byte-for-byte
@@ -767,7 +855,7 @@ jobs:
       - name: Run compression/cache-safety eval suite
         run: python3 -m pytest tests/test_compression_safety_eval.py -q
 
-  # ── Red-team corpus (disclosed attacks we claim to catch) ────────────────────
+  # ── Red-team corpus (disclosed attacks we claim to catch) ─────────────────────────────
   # scripts/redteam/corpus/*.json holds one entry per publicly disclosed agent
   # attack, each naming the detector that must fire and at what severity. The
   # day GitSpawn stops being detected this job goes red, instead of a customer
@@ -813,7 +901,7 @@ jobs:
             *) echo "::error::Red-team audit exited $code (unexpected)"; exit 1 ;;
           esac
 
-  # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────
+  # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────────────────
   # The ONLY job that installs opentelemetry-proto. Without it every OTLP
   # protobuf test in this repo is importorskip'd, so the receiver an
   # enterprise points 500 machines at had zero CI coverage — the failure mode
@@ -868,7 +956,7 @@ jobs:
           # dashboard over HTTP (BASE_URL), which this job does not boot. It
           # runs in the api-tests job, which does.
 
-  # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────────────────────
+  # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ────────────────────────────────────
   # Implements `docs/MOAT_BAR.md` Section 5 acceptance criterion #1:
   # `keystone_e2e.py --no-drive` exits 0 on every PR. The keystone is the
   # canonical 13-endpoint verifier (PR #1672) that asserts every
@@ -1066,7 +1154,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ── pip install smoke test across platforms ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  # ── pip install smoke test across platforms ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   pip-install:
     name: pip install (${{ matrix.os }}, py${{ matrix.python-version }})
     needs: lint
@@ -1205,7 +1293,7 @@ jobs:
           fi
           echo "✅ /static/js/app.js served from installed wheel"
 
-  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ──────────────────────────────
+  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ────────────────────────────────
   # Runs ClawMetry's own golden suite (tests/data/golden_ci.yaml) through
   # the `clawmetry eval` CLI on every PR. Catches regressions in:
   #   * eval_suite_runner.py YAML parsing / runner loop
@@ -1296,7 +1384,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ── Live OpenClaw E2E ────────────────────────────────────────────────────────────────────────────────────────────────────────
+  # ── Live OpenClaw E2E ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   # Closes #1544. Boots a real openclaw gateway, sends a real message
   # through `openclaw agent --local`, drives the daemon's
   # sync_sessions_recent over the on-disk JSONL, and asserts every

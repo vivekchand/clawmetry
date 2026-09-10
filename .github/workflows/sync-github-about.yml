@@ -28,8 +28,14 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job never pushes with the job credential -- it reads the tree
+          # and writes the blurb through the API with REPO_ADMIN_TOKEN. Leaving
+          # GITHUB_TOKEN in .git/config would hand it to every later step for
+          # no reason.
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.11'
 

@@ -625,7 +625,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # A heartbeat row is a liveness ping, not a transport envelope. The daemon's
 # heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
@@ -1072,6 +1072,23 @@ _DDL = [
     # the sub-agent fan-out tree (``parent_task_id``/``child_session_key``),
     # and the cron run log. ``runtime`` IS the OpenClaw queue lane.
     """
+    CREATE TABLE IF NOT EXISTS meeting_transcripts (
+        session_id        VARCHAR PRIMARY KEY,
+        node_id           VARCHAR,
+        title             VARCHAR,
+        provider_id       VARCHAR,
+        selector          VARCHAR,
+        started_at        VARCHAR,
+        stopped_at        VARCHAR,
+        utterance_count   BIGINT DEFAULT 0,
+        speaker_count     BIGINT DEFAULT 0,
+        duration_ms       BIGINT DEFAULT 0,
+        summary_markdown  VARCHAR,
+        transcript_text   VARCHAR,
+        updated_at_ms     BIGINT DEFAULT 0,
+        ingested_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS run_ledger (
         task_id               VARCHAR PRIMARY KEY,
         node_id               VARCHAR,
@@ -2382,6 +2399,8 @@ def _apply_migrations(conn) -> None:
         _migrate_policy_actions_ladder(conn)
     if "session_context" in existing_tables:
         _migrate_session_context_runtime(conn)
+    if "rollup_session" in existing_tables:
+        _migrate_rollup_session_runtime(conn)
 
 
 def _migrate_session_context_runtime(conn) -> None:
@@ -2447,6 +2466,51 @@ def _migrate_session_context_runtime(conn) -> None:
           AND session_id LIKE '%:%'
           AND split_part(session_id, ':', 1) <> ''
     """)
+
+
+def _migrate_rollup_session_runtime(conn) -> None:
+    """Heal ``rollup_session.runtime`` rows that pre-date the #5743 write fix.
+
+    #5743 changed the WRITE path so a new rollup derives its runtime from the
+    session id prefix instead of ``agent_type`` (which the family ingest never
+    sets, so every paid runtime landed as ``openclaw``). It repaired nothing
+    already in the table, and the rows do not heal on their own:
+    ``_mirror_session_rollups_locked`` rewrites a row only when its session is
+    re-ingested, and ended sessions are skipped by the family high-water mark
+    by design. So a session that finished before the upgrade keeps its wrong
+    runtime forever.
+
+    Measured on a node running 0.12.849, which carries the write fix, 76
+    minutes after restart: 2279 rows, 179 correct, **2100 stale** (2070 of
+    them ended ``claude_code`` sessions that will never be re-read), and ZERO
+    rows genuinely OpenClaw. Independently reproduced on a second node: 2305
+    rows, 205 correct, 2100 stale, same per-runtime breakdown.
+
+    The consequence is not cosmetic: ``query_rollup_sessions(runtime=...)``
+    returns 92% fewer rows than it should, and ``query_usage_by_team`` joins
+    ``tm.key_value = rs.runtime``, so historical per-team spend collapses
+    under ``openclaw``.
+
+    The predicate is :data:`_NON_OPENCLAW_RUNTIME_PREFIXES`, the same list
+    :func:`_runtime_of_session_id` checks, so the migration and the write path
+    cannot drift. That list is also what makes this safe: a genuine OpenClaw
+    id carries no runtime prefix, and one that merely contains a colon can
+    never match a known runtime name.
+
+    Idempotent. The ``WHERE`` makes a second run a no-op, and a row only ever
+    moves from a wrong label to the runtime its own id already names.
+    """
+    prefixes = ", ".join("'" + p + "'" for p in _NON_OPENCLAW_RUNTIME_PREFIXES)
+    if not prefixes:
+        return
+    conn.execute(
+        f"""
+        UPDATE rollup_session
+           SET runtime = split_part(session_id, ':', 1)
+         WHERE split_part(session_id, ':', 1) IN ({prefixes})
+           AND runtime IS DISTINCT FROM split_part(session_id, ':', 1)
+        """
+    )
 
 
 def _migrate_policy_actions_ladder(conn) -> None:
@@ -5340,7 +5404,16 @@ class LocalStore(TrailStoreMixin):
                 [session_id],
             )
             appr_rows = [{"id": a[0], "status": a[1]} for a in approvals]
-            outcome, conf = classify_session(evs, meta, approvals=appr_rows)
+            # Ask the process, not the transcript, whether this is running.
+            # ``ongoing``/``waiting`` are the only labels whose truth decays,
+            # and inferring them from "an event landed recently" is what let a
+            # dead session read "Still running" for nine hours (#5563).
+            # ``None`` means this node cannot tell for this runtime, and the
+            # classifier keeps its time heuristic — it must never be confused
+            # with "dead".
+            live = _probe_session_live(session_id, agent_type)
+            outcome, conf = classify_session(evs, meta, approvals=appr_rows,
+                                             live=live)
         except Exception:
             return (None, None)
         now_ms = int(time.time() * 1000)
@@ -6309,6 +6382,99 @@ class LocalStore(TrailStoreMixin):
         "started_at", "ended_at", "last_event_at", "cleanup_after", "error",
         "progress_summary", "terminal_summary", "terminal_outcome",
     )
+
+    def ingest_meeting_transcript(self, r: dict[str, Any], *, node_id: str = "") -> None:
+        """Upsert one OpenClaw meeting transcript (#5747).
+
+        Source is ``meeting_transcript_sessions`` / ``_utterances`` /
+        ``_summaries`` in ``~/.openclaw/state/openclaw.sqlite``, joined by
+        ``sync._read_meeting_transcripts``.
+
+        ``transcript_text`` and ``summary_markdown`` are HUMAN SPEECH, and
+        some of the humans never installed ClawMetry. They are stored locally
+        because that is what the user asked the product to observe, and they
+        leave the machine ONLY through the node-key-encrypted blob
+        (``sync.seal_meeting_transcript``), never in a plaintext cloud row.
+        Same rule the product already applies to a session title and intent
+        (REQ-OBS-RSO-032): content rides the encrypted field, the cleartext
+        row carries counts and identifiers.
+
+        Idempotent on ``session_id``: a meeting still being captured is
+        re-read as its utterance count grows, so the daemon keeps an
+        ``updated_at_ms`` watermark and overwrites rather than duplicating.
+        """
+        sid = r.get("session_id")
+        if not sid:
+            raise ValueError("meeting transcript row must include 'session_id'")
+
+        def _s(key, cap=0):
+            v = r.get(key)
+            if v is None:
+                return None
+            v = str(v)
+            return v[:cap] if cap and len(v) > cap else v
+
+        def _i(key):
+            try:
+                return int(r.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        with self._write_lock:
+            self._conn.execute(
+            """
+            INSERT INTO meeting_transcripts (
+                session_id, node_id, title, provider_id, selector,
+                started_at, stopped_at, utterance_count, speaker_count,
+                duration_ms, summary_markdown, transcript_text, updated_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (session_id) DO UPDATE SET
+                node_id          = EXCLUDED.node_id,
+                title            = EXCLUDED.title,
+                provider_id      = EXCLUDED.provider_id,
+                selector         = EXCLUDED.selector,
+                started_at       = EXCLUDED.started_at,
+                stopped_at       = EXCLUDED.stopped_at,
+                utterance_count  = EXCLUDED.utterance_count,
+                speaker_count    = EXCLUDED.speaker_count,
+                duration_ms      = EXCLUDED.duration_ms,
+                summary_markdown = EXCLUDED.summary_markdown,
+                transcript_text  = EXCLUDED.transcript_text,
+                updated_at_ms    = EXCLUDED.updated_at_ms
+            """,
+            [
+                str(sid), str(node_id or ""), _s("title", 500),
+                _s("provider_id", 120), _s("selector", 500),
+                _s("started_at", 64), _s("stopped_at", 64),
+                _i("utterance_count"), _i("speaker_count"), _i("duration_ms"),
+                _s("summary_markdown", 200000), _s("transcript_text", 2000000),
+                _i("updated_at_ms"),
+            ],
+            )
+
+    def query_meeting_transcripts(self, *, limit: int = 100,
+                                  include_text: bool = False) -> list:
+        """Recent meetings, newest first.
+
+        ``include_text`` defaults to FALSE so a caller has to ask for the
+        speech explicitly. Counts and timings answer "is capture working",
+        which is what most readers want, and a default that ships transcript
+        text to every incidental caller is how content leaks into a surface
+        nobody audited.
+        """
+        cols = ("session_id, node_id, title, provider_id, selector, started_at, "
+                "stopped_at, utterance_count, speaker_count, duration_ms")
+        if include_text:
+            cols += ", summary_markdown, transcript_text"
+        try:
+            rows = self._fetch(
+                f"SELECT {cols} FROM meeting_transcripts "
+                "ORDER BY COALESCE(stopped_at, started_at) DESC NULLS LAST "
+                "LIMIT ?", [int(limit)])
+        except Exception:
+            return []
+        keys = [c.strip() for c in cols.split(",")]
+        return [dict(zip(keys, r)) for r in rows]
 
     def ingest_run_ledger_row(self, r: dict[str, Any], *, node_id: str = "") -> None:
         """Upsert one OpenClaw run-ledger row (from ``tasks/runs.sqlite``).
@@ -19252,7 +19418,7 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
     "qm", "deepseek_harness", "exo", "kimi", "devin", "gemini_cli",
     "cline", "openhands", "openworker", "grok_bot", "lovable", "replit",
-
+    "muse_code",
 )
 
 # Epoch-ms of the outcome-classifier fix (2026-08-15). Any failure label
@@ -19265,12 +19431,55 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
 _CLASSIFIER_FIX_EPOCH_MS = 1_786_838_400_000  # 2026-08-15T00:00:00Z
 _STALE_OUTCOMES = ("cognitive_loop", "tool_call_stuck", "stuck", "looping")
 
+# ``ongoing`` and ``waiting`` describe a PROCESS, so they expire on their own.
+# Every other label describes a transcript and reads the same tomorrow. Ten
+# seconds is short enough that the badge tracks the agent and long enough that
+# a burst of readers does not re-scan the same session once per request.
+_LIVE_LABEL_TTL_MS = 10_000
+_DECAYING_OUTCOMES = ("ongoing", "waiting")
+
+
+def _probe_session_live(session_id: str, agent_type: str = "openclaw"):
+    """This session's live process state, or ``None`` if unknowable here.
+
+    Thin, never-raising wrapper over ``process_control.session_live_state`` so
+    the store keeps working on an install where ``process_control`` is absent
+    or the probe throws — an unlabelled session is a smaller failure than a
+    store that cannot answer a query.
+    """
+    try:
+        from clawmetry import process_control as _pc
+        return _pc.session_live_state(agent_type, session_id)
+    except Exception:  # noqa: BLE001 — a probe must never break a read
+        return None
+
 
 def _is_stale_classification(row: dict[str, Any]) -> bool:
-    """True for a failure label written by the pre-fix classifier."""
-    if (row.get("outcome") or "") not in _STALE_OUTCOMES:
-        return False
+    """True when this row's stored label must be re-resolved before it is read.
+
+    Two independent reasons:
+
+    * The label is one of ``_DECAYING_OUTCOMES``. ``ongoing`` and ``waiting``
+      are claims about a running process; the moment it exits they are false,
+      and nothing writes to a finished session's transcript to trigger a
+      re-stamp. Before this, ``reclassify_session_outcome`` fired only on a
+      ``session.ended`` event — which the family runtimes never emit — so the
+      first label a Claude Code session ever got was also its last. Measured
+      on one node: 43 rows read "Still running", 3 of them were.
+    * The label is a failure written by the pre-2026-08-15 classifier, whose
+      failure branch fired on text similarity alone.
+    """
+    outcome = row.get("outcome") or ""
     ts = row.get("outcome_classified_at")
+    if outcome in _DECAYING_OUTCOMES:
+        if ts is None:
+            return True
+        try:
+            return (int(time.time() * 1000) - int(ts)) > _LIVE_LABEL_TTL_MS
+        except (TypeError, ValueError):
+            return True
+    if outcome not in _STALE_OUTCOMES:
+        return False
     if ts is None:
         return True
     try:
@@ -19430,7 +19639,7 @@ def _sql_in_clause(values: tuple[str, ...]) -> str:
 # call sites (and tests) have always reached for it via ``local_store``.
 #
 # The old implementation knew exactly two numbers, both Anthropic's, and
-# measured all 30 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
+# measured all 31 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
 # blown" (GPT-5 is 400K, so it was at 75%), and a genuinely blown 130K
 # DeepSeek turn read as a comfortable 65%. See that module's docstring.
 from clawmetry.context_windows import (  # noqa: E402  (kept near its callers)

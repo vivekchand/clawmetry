@@ -165,6 +165,12 @@ _HINTS: Dict[str, Dict[str, str]] = {
                 "(the IDE and CLI flavours share one store under ~/.gemini).",
         "source": "clawmetry adapter: ~/.gemini/antigravity*/brain/<uuid>",
     },
+    "muse_code": {
+        "command": "muse --resume <session_id>",
+        "note": "Muse Code resumes a stored session by id; `muse` with no "
+                "argument starts a new one in the current workspace.",
+        "source": "clawmetry adapter: MSP session/resume over `muse serve`",
+    },
     "openworker": {
         "command": "",
         "note": "OpenWorker is a desktop app. Reopen the conversation in the "

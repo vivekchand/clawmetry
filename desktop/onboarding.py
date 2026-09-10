@@ -288,18 +288,20 @@ def stored_credentials_state(app_base: Optional[str] = None, *, timeout: float =
     """
     home = Path.home()
     token = ""
-    # Same resolution order as the dashboard's _read_cloud_token.
+    # Same resolution order as the dashboard's _read_cloud_token: ClawMetry's
+    # own config first, then the retired ~/.openclaw/openclaw.json mirror for
+    # installs that predate it.
     try:
-        oc = json.loads((home / ".openclaw" / "openclaw.json").read_text())
-        token = ((oc.get("clawmetry") or {}).get("cloudToken") or "").strip()
+        cfg = json.loads((home / ".clawmetry" / "config.json").read_text())
+        k = (cfg.get("api_key") or "").strip()
+        if k.startswith("cm_"):
+            token = k
     except Exception:
         pass
     if not token:
         try:
-            cfg = json.loads((home / ".clawmetry" / "config.json").read_text())
-            k = (cfg.get("api_key") or "").strip()
-            if k.startswith("cm_"):
-                token = k
+            oc = json.loads((home / ".openclaw" / "openclaw.json").read_text())
+            token = ((oc.get("clawmetry") or {}).get("cloudToken") or "").strip()
         except Exception:
             pass
     if not token:
@@ -405,13 +407,20 @@ def _fallback_persist_cm_key(cm_key: str) -> bool:
     clearly signed in (founder report 2026-08-12).
 
     Write the key to the same location ``dashboard._write_cloud_token``
-    uses (``~/.openclaw/openclaw.json → clawmetry.cloudToken``) so the
-    dashboard's ``_read_cloud_token`` / ``_cloud_connected`` / cloud-cta
-    status recognize this machine as paired. That's enough to satisfy
-    the onboarding gate; the daemon / Pro-wheel side gets retried by
-    the shell's watcher and the daemon-registration path in
+    uses (``~/.clawmetry/config.json → api_key``) so the dashboard's
+    ``_read_cloud_token`` / ``_cloud_connected`` / cloud-cta status
+    recognize this machine as paired. That's enough to satisfy the
+    onboarding gate; the daemon / Pro-wheel side gets retried by the
+    shell's watcher and the daemon-registration path in
     ``routes/onboarding.py::_ensure_daemon_for_choice`` when the
     dashboard writes the choice file.
+
+    This used to write ``clawmetry.cloudToken`` into OpenClaw's own
+    ``~/.openclaw/openclaw.json``. It no longer touches that file: the key
+    is not in OpenClaw's schema, so the write made OpenClaw's config fail
+    validation and its next CLI run fired ``doctor --fix``, restoring the
+    last-known-good config and restarting the gateway mid-session. See the
+    comment block in ``clawmetry/config.py``.
 
     Best-effort — returns True on success, False on any failure. Never
     raises: this runs on an already-failing path, we do not want the
@@ -420,20 +429,19 @@ def _fallback_persist_cm_key(cm_key: str) -> bool:
     if not (cm_key or "").startswith("cm_"):
         return False
     try:
-        openclaw_path = Path.home() / ".openclaw" / "openclaw.json"
-        openclaw_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg_path = Path.home() / ".clawmetry" / "config.json"
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            data = json.loads(openclaw_path.read_text())
+            data = json.loads(cfg_path.read_text())
             if not isinstance(data, dict):
                 data = {}
         except (FileNotFoundError, ValueError):
             data = {}
-        cm = data.get("clawmetry")
-        if not isinstance(cm, dict):
-            cm = {}
-        cm["cloudToken"] = cm_key
-        data["clawmetry"] = cm
-        openclaw_path.write_text(json.dumps(data, indent=2))
+        # Merge — the daemon's node_id / encryption_key live in this file too.
+        data["api_key"] = cm_key
+        tmp = cfg_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        os.replace(tmp, cfg_path)
     except OSError:
         return False
 
@@ -586,7 +594,7 @@ CROSS_SELL_SLIDES = [
         "eyebrow": "You just installed ClawMetry.",
         "title": "Every AI agent on this machine, in one dashboard.",
         "body": (
-            "Watch spend, sessions, and errors across 30+ runtimes in real time. "
+            "Watch spend, sessions, and errors across 31+ runtimes in real time. "
             "Cost breakdowns per model, per skill, per session. Loop detection. "
             "Budget alerts. All read-only, all local, all yours."
         ),

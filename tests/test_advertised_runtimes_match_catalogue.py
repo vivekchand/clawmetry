@@ -42,6 +42,7 @@ EXPECTED_PAID_RUNTIMES = frozenset({
     "grok_bot",
     "lovable",
     "replit",
+    "muse_code",
 })
 EXPECTED_ALL_RUNTIMES = EXPECTED_FREE_RUNTIMES | EXPECTED_PAID_RUNTIMES
 
