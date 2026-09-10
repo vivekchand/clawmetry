@@ -6,6 +6,14 @@ gateway-level restart-recovery signal so the dashboard meta view can report it.
 
 Kept in its own module so Drift Bot can find it at the head of a short file
 rather than buried deep inside the main adapter.
+
+One of four gateway-log scanners, recorded together as "Gateway-log scanners:
+what the harness did that the transcript never shows" in the Runtime and
+Session Observability blueprint. That section carries the contracts they all
+share -- no I/O of their own, ``{}`` and never raise when nothing is found,
+keys additive and absent when undetected, each naming the OpenClaw version
+whose behaviour it detects -- and the ADR for why these are keyword scans over
+prose rather than parsers.
 """
 from __future__ import annotations
 
