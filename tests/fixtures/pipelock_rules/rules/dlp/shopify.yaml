@@ -1,0 +1,14 @@
+  - id: dlp-shopify-token-family
+    type: dlp
+    status: experimental
+    name: "Shopify Token Family"
+    description: "Detects Shopify access tokens across all token types (admin, partner, custom app, user, storefront)"
+    severity: critical
+    confidence: medium
+    references:
+      - "https://community.shopify.dev/t/x-shopify-access-token-format-has-changed/5398"
+    tags:
+      - "provider:shopify"
+      - "owasp-llm:LLM06"
+    pattern:
+      regex: 'shp(at|pa|ca|ua|ss)_[A-Fa-f0-9]{16,}'

@@ -1,0 +1,61 @@
+# ClawMetry — the supported agent runtimes, and nothing else.
+#
+# GENERATED FILE — do not edit by hand; your edit will be overwritten.
+#
+# Source of truth:  clawmetry/entitlements.py
+#                   (FREE_RUNTIMES, PAID_RUNTIMES, RUNTIME_LABELS,
+#                    RUNTIME_LANDING_PATHS, RUNTIME_MARQUEE)
+# Regenerate:       python3 scripts/sync_runtime_count.py
+# Verify:           python3 scripts/sync_runtime_count.py --check
+#
+# Every other ClawMetry repo (clawmetry-pro, clawmetry-cloud,
+# clawmetry-landing) reads THIS file rather than keeping its own list.
+# Fetch it at:
+#   https://raw.githubusercontent.com/vivekchand/clawmetry/main/SUPPORTED_RUNTIMES.txt
+#
+# Format
+# ------
+#   '#' comment, blank line          -> ignore
+#   line with no TAB                 -> metadata, 'KEY = value'
+#   line with TABs                   -> id <TAB> label <TAB> tier <TAB> landing_path
+#
+# 'tier' is 'free' (readable by the OSS package alone) or 'paid'
+# (read by the closed-source clawmetry-pro companion). 'landing_path'
+# is relative to https://clawmetry.com.
+
+COUNT = 31
+FREE_COUNT = 3
+PAID_COUNT = 28
+BLURB = See your agent think. Zero-config observability & governance for 31 AI agent runtimes: Claude Code, OpenAI Codex, Hermes, OpenClaw & 27 more. Live token costs, sessions, tool calls, crons.
+
+goose	Goose	free	/runtimes/goose
+nemoclaw	NemoClaw	free	/nemoclaw
+openclaw	OpenClaw	free	/runtimes/openclaw
+aider	Aider	paid	/runtimes/aider
+antigravity	Antigravity	paid	/runtimes/antigravity
+claude_code	Claude Code	paid	/runtimes/claude-code
+cline	Cline	paid	/runtimes/cline
+codex	Codex	paid	/runtimes/codex
+copilot	GitHub Copilot	paid	/runtimes/copilot
+cursor	Cursor	paid	/runtimes/cursor
+deepagents	Deep Agents	paid	/runtimes/deep-agents
+deepseek_harness	DeepSeek Harness	paid	/runtimes/deepseek-harness
+devin	Devin	paid	/runtimes/devin
+exo	Exo	paid	/runtimes/exo
+gemini_cli	Gemini CLI	paid	/runtimes/gemini-cli
+grok	Grok Build	paid	/runtimes/grok
+grok_bot	Grok Bot	paid	/runtimes/grok-bot
+hermes	Hermes	paid	/runtimes/hermes
+kimi	Kimi CLI	paid	/runtimes/kimi
+lovable	Lovable	paid	/runtimes/lovable
+muse_code	Muse Code	paid	/runtimes/muse-code
+n8n	n8n	paid	/runtimes/n8n
+nanoclaw	NanoClaw	paid	/runtimes/nanoclaw
+opencode	opencode	paid	/runtimes/opencode
+openhands	OpenHands	paid	/runtimes/openhands
+openworker	OpenWorker	paid	/runtimes/openworker
+pi	Pi	paid	/runtimes/pi
+picoclaw	PicoClaw	paid	/runtimes/picoclaw
+qm	QM	paid	/runtimes/qm
+qwen_code	Qwen Code	paid	/runtimes/qwen-code
+replit	Replit Agent	paid	/runtimes/replit
