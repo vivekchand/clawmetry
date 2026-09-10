@@ -1,0 +1,15 @@
+  - id: tool-poison-exfil-url-description
+    type: tool-poison
+    status: stable
+    name: "Exfiltration URL in Description"
+    description: "Detects tool descriptions instructing the model to send data to external URLs"
+    severity: critical
+    confidence: high
+    references:
+      - "https://hiddenlayer.com/innovation-hub/beyond-mcp-expanding-agentic-function-parameter-abuse/"
+    tags:
+      - "owasp-llm:LLM01"
+      - "mitre-atlas:AML.T0048"
+    pattern:
+      regex: '(?:send|post|forward|upload|submit|transmit|exfiltrate|relay)\s+.{0,60}https?://'
+      scan_field: description

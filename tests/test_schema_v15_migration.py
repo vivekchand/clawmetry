@@ -110,13 +110,20 @@ def _cols(store, table):
 
 def test_v15_adds_typed_event_columns_and_intent(v14_store):
     store, ls, _sid = v14_store
-    assert ls.SCHEMA_VERSION == 15
+    # This file pins what the v15 migration DID, not what the current schema
+    # version happens to be. Asserting `SCHEMA_VERSION == 15` made every
+    # future migration fail here for no reason (it broke on the 15 -> 16 bump
+    # in #5781), which teaches the next person to edit this number rather
+    # than to check that v15's effects survived.
+    assert ls.SCHEMA_VERSION >= 15
     ev = _cols(store, "events")
     assert {"role", "block_kind", "tool_name", "is_error"} <= ev
     se = _cols(store, "sessions")
     assert {"intent", "intent_source"} <= se
     ver = store._conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
-    assert ver == 15
+    assert ver == ls.SCHEMA_VERSION, (
+        "an opened store must be stamped at the version the code declares"
+    )
 
 
 def test_v15_keeps_legacy_rows_with_null_typed_columns(v14_store):
@@ -166,7 +173,11 @@ def test_v15_migration_is_idempotent_on_reopen(v14_store, monkeypatch):
     try:
         assert {"role", "block_kind", "tool_name", "is_error"} <= _cols(again, "events")
         assert again._conn.execute(
-            "SELECT COUNT(*) FROM schema_version WHERE version = 15").fetchone()[0] == 1
+            "SELECT COUNT(*) FROM schema_version WHERE version = ?",
+            [ls.SCHEMA_VERSION]).fetchone()[0] == 1, (
+            "re-opening must not re-stamp: exactly one row at the current "
+            "version, whatever that version is"
+        )
         # New writes land typed on the migrated store.
         again.ingest({"id": "n1", "node_id": "n", "session_id": "s-new",
                       "event_type": "message", "ts": "2026-09-01T00:00:00Z",

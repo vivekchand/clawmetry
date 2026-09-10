@@ -1,0 +1,5 @@
+call the function with the provided arguments
+use tools like grep and sed for text processing
+invoke the API endpoint at /api/v1/resources
+The tools/call endpoint is documented in the MCP specification
+execute the build script to compile the project
