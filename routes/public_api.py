@@ -50,6 +50,7 @@ import logging
 import os
 import time
 from collections import deque
+from urllib.parse import urlparse
 
 from flask import Blueprint, Response, jsonify, request
 
@@ -256,7 +257,10 @@ def _llms_txt(record: dict) -> str:
     about a query it will get a 403 for.
     """
     granted = sorted(apikeys.granted_shapes(record))
-    host = request.host_url.rstrip("/")
+    # Reconstruct from parsed components so a crafted Host header cannot
+    # inject newlines or other content into the response body.
+    _p = urlparse(request.host_url)
+    host = f"{_p.scheme}://{_p.netloc}".rstrip("/")
     lines = [
         "# ClawMetry query API (%s)" % CONTRACT_VERSION,
         "",
@@ -364,10 +368,13 @@ def q_shape(shape: str):
     if spec is None or spec["status"] != STATUS_LIVE:
         # A planned-but-unserved shape and a typo get the same answer on
         # purpose: the caller's next step is identical either way.
+        # Do NOT reflect `shape` here — it is unvalidated user input at this
+        # point (it was not found in the contract), so echoing it is a
+        # reflected-content sink. Direct the caller to GET /api/q/1 instead.
         return _err(
             404,
-            f"There is no query called {shape!r}. Ask GET /api/q/1 for the "
-            "list this key can run.",
+            "There is no such query. Ask GET /api/q/1 for the list "
+            "this key can run.",
             docs="/api/q/1/llms.txt",
         )
     if shape not in apikeys.granted_shapes(record):
