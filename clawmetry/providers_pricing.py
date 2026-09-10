@@ -218,12 +218,26 @@ MODEL_OVERRIDES: dict[tuple[str, str], tuple[float, float]] = {
     ("moonshot", "moonshot-v1-128k"): (2.00, 5.00),
     ("deepseek", "deepseek-v4-flash"): (0.14, 0.28),
     ("deepseek", "deepseek-v4-pro"): (0.435, 0.87),
-    # Meta muse-spark (ClawHub/npm standalone distribution), per-token rates not
-    # yet officially published — $1.00/$3.00 per 1M is a best-effort placeholder.
-    # Update once Meta publishes official pricing. Encrypted reasoning-replay
-    # turns are counted as regular output tokens (no separate rate known).
-    ("meta", "muse-spark-1.1"): (1.00, 3.00),
-    ("meta", "muse-spark"): (1.00, 3.00),
+    # Meta muse-spark. These were a $1.00/$3.00 placeholder while Meta published
+    # no rates; the rates below are the published Meta Model API figures
+    # (developer.meta.com/ai/models/muse-spark, corroborated by OpenRouter's
+    # listings), so the placeholder comment's condition is now met.
+    #
+    # The two 1.3 variants are NOT close: contributor is 12.5x cheaper on input
+    # and ~21x on output, bought by letting Meta train on the traffic. Pricing
+    # both from one family rate would misreport whichever tier the user is not
+    # on, so the longer, more specific prefix is listed first-class and wins
+    # under _get_rates' longest-prefix rule.
+    #
+    # Cache: Meta publishes a cached-input rate and it MATTERS — see
+    # _META_CACHED_RATES below. Muse Code reports both `cacheReadTokens` and
+    # the counted-once `promptTokens`, and on a real measured turn 82.7% of
+    # input was cache reads, so pricing input at the flat rate over-charged
+    # by 5.1x.
+    ("meta", "muse-spark-1.3-contributor"): (0.10, 0.20),
+    ("meta", "muse-spark-1.3"): (1.25, 4.25),
+    ("meta", "muse-spark-1.1"): (1.25, 4.25),
+    ("meta", "muse-spark"): (1.25, 4.25),
 }
 
 
@@ -327,6 +341,35 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
 _LOCAL_MODEL_HINTS = (
     "llama", "phi", "gemma", "codellama",
 )
+
+# Meta cached-input rates per 1M, from the same published Meta Model API
+# table as MODEL_OVERRIDES above. A flat multiplier cannot express these: the
+# standard tier's cached rate is 0.12x its input rate while the contributor
+# tier's is 0.02x, so one multiplier would misprice one of them by ~6x.
+#
+# Convention, VERIFIED against muse 1.0.3 rather than assumed: cached tokens
+# sit INSIDE inputTokens, the OpenAI convention. The proof is in the wire —
+# each `session/tokenUsage` leg's `cumulative.promptTokens` delta equals that
+# leg's `inputTokens` exactly, cache included. So the cached slice REPLACES
+# its ordinary input charge (as for openai) rather than adding to it (as for
+# anthropic). Longest matching prefix wins, as in MODEL_OVERRIDES.
+_META_CACHED_RATES: dict[str, float] = {
+    "muse-spark-1.3-contributor": 0.002,
+    "muse-spark-1.3": 0.15,
+    "muse-spark-1.1": 0.15,
+    "muse-spark": 0.15,
+}
+
+
+def _meta_cached_rate(model: str) -> float | None:
+    """Published cached-input rate per 1M for a Meta model, or None."""
+    name = (model or "").lower().split("/", 1)[-1]
+    best, best_len = None, -1
+    for prefix, rate in _META_CACHED_RATES.items():
+        if name.startswith(prefix) and len(prefix) > best_len:
+            best, best_len = rate, len(prefix)
+    return best
+
 
 # Anthropic prompt-cache multipliers, relative to the input rate:
 # cache reads are ~0.1x input; 5-minute cache writes are ~1.25x input.
@@ -541,6 +584,14 @@ def estimate_event_cost_usd(
         if prov == "anthropic":
             cost += (max(0, int(cache_read_tokens)) / 1_000_000) * input_rate * _CACHE_READ_MULT
             cost += (max(0, int(cache_write_tokens)) / 1_000_000) * input_rate * _CACHE_WRITE_MULT
+        elif prov == "meta":
+            # Cached tokens are inside input_tokens (verified, see
+            # _META_CACHED_RATES): swap the cached slice onto the cached rate.
+            cached_rate = _meta_cached_rate(model)
+            if cached_rate is not None:
+                total_input = max(0, int(input_tokens))
+                cached = min(total_input, max(0, int(cache_read_tokens)))
+                cost += cached / 1_000_000 * (cached_rate - input_rate)
         elif prov == "openai":
             prices = _openai_prices(model)
             if prices is not None:
