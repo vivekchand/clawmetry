@@ -1,0 +1,14 @@
+  - id: tool-poison-binary-name-mimicry
+    type: tool-poison
+    status: experimental
+    name: "Binary Name Mimicry"
+    description: "Detects MCP tools named after system binaries, which may confuse the model into granting elevated trust"
+    severity: high
+    confidence: medium
+    references:
+      - "https://explorer.invariantlabs.ai/docs/mcp-scan/"
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '^(?:bash|sh|zsh|exec|eval|curl|wget|nc|netcat|ssh|scp|cat|rm|mv|cp|chmod|chown|sudo|su|kill|dd|crontab|powershell|cmd)$'
+      scan_field: name

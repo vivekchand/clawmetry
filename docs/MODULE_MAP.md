@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-230 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+232 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -191,6 +191,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/numbat_ingest.py` | medium | map Perplexity numbat NDJSON records into ClawMetry rows. |
 | `clawmetry/onboarding_state.py` | small | the ONE writer for the first-run gate's |
 | `clawmetry/org_key.py` | small | The organisation key: one secret, shared by the people in one organisation. |
+| `clawmetry/otel_discovery.py` | medium | Find applications on this machine that already emit OpenTelemetry (#4784). |
 | `clawmetry/otel_exporter.py` | medium | Outbound OTLP trace exporter for ClawMetry. |
 | `clawmetry/otel_profiles.py` | small | OTel runtime profiles — the seam between the generic OTLP receiver and |
 | `clawmetry/otel_push.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
@@ -260,6 +261,7 @@ The runtime adapters that ship in open source. The paid ones live in `clawmetry-
 | `clawmetry/adapters/goose.py` | medium | GooseAdapter — read Goose (Block / block/goose) sessions from its SQLite store. |
 | `clawmetry/adapters/nemo.py` | large | NeMoAdapter — push-mode telemetry exporter for NVIDIA's NeMo Agent Toolkit. |
 | `clawmetry/adapters/openclaw.py` | large | This adapter does NOT re-implement OpenClaw session parsing. It delegates |
+| `clawmetry/adapters/openclaw_share.py` | medium | OpenClaw public-share state (issue #5746). |
 | `clawmetry/adapters/phase.py` | medium | The session phase model: one state machine, every runtime. |
 | `clawmetry/adapters/registry.py` | small | Process-wide adapter registry. |
 

@@ -1,0 +1,6 @@
+Fetches data from https://api.example.com/v1/resources
+Sends a GET request to https://api.weather.com/current
+Downloads the file from https://cdn.example.com/assets
+Connects to https://database.internal.com/query for read operations
+See https://docs.example.com/api for the full specification
+Returns results from https://search.example.com/query

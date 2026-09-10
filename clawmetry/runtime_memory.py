@@ -1213,6 +1213,35 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── Muse Code (developer.meta.com/ai/products/muse-code) ────────
+    # Project instructions: Muse searches UP from the workspace root to the
+    # nearest .git boundary and takes the FIRST of AGENTS.md, CLAUDE.md,
+    # .agents/AGENTS.md, .claude/CLAUDE.md at each level — so all four are
+    # real roots here, in that order. Memory is a MEMORY.md index plus topic
+    # files; the committed half lives at <repo>/.agents/memory/ and the
+    # personal half is off-repo. MCP servers are declared inside settings.json
+    # (an mcp_servers block), not a file of their own.
+    muse_home = _env_root("CLAWMETRY_MUSE_HOME",
+                          os.path.expanduser("~/.config/muse"))
+    catalog.append(RuntimeCatalogEntry(
+        id="muse_code", label="Muse Code", roots=(
+            RootSpec("memory", os.path.join(ws, "AGENTS.md"),
+                     label="Project AGENTS.md", scope="project"),
+            RootSpec("memory", os.path.join(ws, "CLAUDE.md"),
+                     label="Project CLAUDE.md", scope="project"),
+            RootSpec("memory", os.path.join(ws, ".agents", "AGENTS.md"),
+                     label="Project .agents/AGENTS.md", scope="project"),
+            RootSpec("memory", os.path.join(ws, ".claude", "CLAUDE.md"),
+                     label="Project .claude/CLAUDE.md", scope="project"),
+            RootSpec("memory", os.path.join(ws, ".agents", "memory"),
+                     ("MEMORY.md", "*.md"), "Project memory", "project"),
+            RootSpec("mcp", os.path.join(muse_home, "settings.json"),
+                     label="settings.json (mcp_servers)", scope="global"),
+            RootSpec("hooks", os.path.join(ws, ".muse", "hooks.json"),
+                     label="hooks.json", scope="project"),
+        ),
+    ))
+
     # ── OpenWorker (github.com/andrewyng/openworker) ────────────────
     # Instructions are AGENTS.md, and OpenWorker reads BOTH a project one and a
     # user-global one it keeps in its own state dir (coworker/project.py returns
@@ -1674,7 +1703,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 30 runtimes would be a wall of
+    because listing every absent root for 31 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
