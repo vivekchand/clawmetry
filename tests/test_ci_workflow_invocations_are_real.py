@@ -172,3 +172,94 @@ def test_pypi_wait_polls_the_index_pip_reads():
     assert "pip download" in src or "pip index versions" in src, (
         "the PyPI wait must prove installability through pip's own index"
     )
+
+
+# ------------------------------------------- template injection into run: bodies
+
+# Contexts an actor who is not a repository writer can influence, or that a
+# writer can set to arbitrary text through a form field. A `${{ }}` naming one
+# of these is pasted into the step body BEFORE the interpreter starts, so the
+# value arrives as program SOURCE rather than as a value.
+_UNTRUSTED_CONTEXTS = (
+    "github.event.inputs.",
+    "inputs.",
+    "github.head_ref",
+    "github.event.issue.",
+    "github.event.pull_request.",
+    "github.event.comment.",
+    "github.event.review.",
+    "github.event.discussion.",
+    "github.event.workflow_run.head_branch",
+)
+_EXPR_RE = re.compile(r"\$\{\{\s*(?P<expr>[^}]+?)\s*\}\}")
+
+
+def _run_steps():
+    """Every `run:` step body in every workflow, with where it came from.
+
+    Scope is derived from the workflow files, so a new workflow is covered
+    without editing this test.
+    """
+    yaml = pytest.importorskip("yaml")
+    for wf in WORKFLOWS:
+        try:
+            doc = yaml.safe_load(_read(wf))
+        except Exception as exc:  # a malformed workflow is its own test's problem
+            pytest.fail("{}: {}".format(os.path.basename(wf), exc))
+        if not isinstance(doc, dict):
+            continue
+        for job_name, job in (doc.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                if isinstance(step, dict) and isinstance(step.get("run"), str):
+                    yield wf, job_name, step
+
+
+def test_no_workflow_expands_an_input_into_a_step_body():
+    """#5744, and #5673 before it: a workflow input is data, never program text.
+
+    `verify-published-wheel.yml` expanded its `workflow_dispatch` `version`
+    input straight into a `shell: python` program, which is the template
+    injection class `zizmor` flags and Scorecard reports as DangerousWorkflow.
+    #5673 had already closed the identical shape in `auto-deploy-cloud.yml`;
+    nothing recorded the rule, so it came back. This is the check that stops a
+    third occurrence, rather than a third reviewer having to recognise it.
+
+    The fix is always the same: bind the value with `env:` and read it with
+    `os.environ` / `$VAR`, where it is unambiguously a value.
+    """
+    checked = 0
+    for wf, job_name, step in _run_steps():
+        checked += 1
+        for expr in _EXPR_RE.findall(step["run"]):
+            bad = [c for c in _UNTRUSTED_CONTEXTS if c in expr]
+            if not bad:
+                continue
+            raise AssertionError(
+                "{}: job {!r}, step {!r} expands ${{{{ {} }}}} directly into "
+                "its `run:` body. The expansion happens before the "
+                "interpreter starts, so that value arrives as program source, "
+                "not as a value. Bind it with `env:` and read it from the "
+                "environment instead. See 'A workflow input is data, never "
+                "program text' in the Release Verification and Merge Gating "
+                "blueprint.".format(
+                    os.path.basename(wf), job_name,
+                    step.get("name") or "(unnamed)", expr,
+                )
+            )
+    assert checked > 0, "no run: steps discovered to check"
+
+
+def test_the_guard_would_have_caught_the_defect_it_was_written_for():
+    """Proving the check goes RED on the unfixed shape.
+
+    A guard nobody has seen fail is indistinguishable from one that cannot
+    (ADR-005 on that blueprint), so the pattern this test rejects is asserted
+    against the exact construct #5744 removed.
+    """
+    unfixed = 'want = "${{ github.event.inputs.version }}".strip()'
+    assert any(c in m for m in _EXPR_RE.findall(unfixed)
+               for c in _UNTRUSTED_CONTEXTS), unfixed
+    fixed = 'want = os.environ.get("INPUT_VERSION", "").strip()'
+    assert not _EXPR_RE.findall(fixed)

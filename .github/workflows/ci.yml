@@ -162,6 +162,24 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
+      # WorkflowIntegrityGuard. Written for ADR-005 ("a CI step that cannot
+      # fail is worse than no CI step") and, until #5744, run by NO job at all
+      # -- the exact trap this repo's own convention warns about, on the guard
+      # whose whole subject is guards that do nothing. It also now rejects a
+      # `${{ }}` expansion of a workflow input inside a `run:` body, the
+      # template-injection shape #5673 fixed in auto-deploy-cloud.yml and
+      # #5744 fixed again here.
+      - name: Workflow integrity (dead steps, unreachable triggers, input injection)
+        run: python3 -m pytest tests/test_ci_workflow_invocations_are_real.py -q
+
+      # #5739: the field-failure filer could open and refresh an issue but
+      # never close one, so a signature that stopped occurring left its issue
+      # open forever under a "Still occurring" comment. Runs the reconcile
+      # step's real shell against a fake gh -- including the case where the
+      # endpoint is unreachable, which must close nothing.
+      - name: Field-failure issues close when the signature stops
+        run: python3 -m pytest tests/test_field_failure_autoclose.py -q
+
       # Named explicitly because this repo's CI runs FILE LISTS, not
       # `pytest tests/`. /api/runtime-summary claimed to mirror the daemon's
       # runtimeSummary slice but re-implemented it as a capped raw-event scan:
@@ -386,6 +404,9 @@ jobs:
       - name: Hosted Security tab shows only what it can fill
         run: python3 -m pytest tests/test_security_tab_cloud_honesty.py -q
 
+      - name: Werkzeug debugger only on loopback bind
+        run: python3 -m pytest tests/test_debugger_loopback_only.py -q
+
       # The Overview "Active Tasks" panel told four lies on one screen under
       # ?runtime=codex: a hardcoded personal-project pill said OpenClaw, no
       # runtime filter at all, a FAILED sub-agent drawn with a green tick, and
@@ -598,6 +619,7 @@ jobs:
             tests/test_muse_code_runtime_wiring.py \
             tests/test_delegated_usage.py \
             tests/test_local_query_api.py \
+            tests/test_rollup_session_runtime_backfill.py \
             tests/test_otel_discovery.py \
             tests/test_meeting_transcripts.py \
             tests/test_harness_audit_reads_whole_adapter.py \
@@ -675,6 +697,7 @@ jobs:
             tests/test_insights_outcome_templates.py \
             tests/test_event_shape.py \
             tests/test_schema_v15_migration.py \
+            tests/test_session_cost_intel.py \
             tests/test_session_intent.py \
             tests/test_session_git_outcomes_route.py \
             tests/test_self_diagnostics.py \
