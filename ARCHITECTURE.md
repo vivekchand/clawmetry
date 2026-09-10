@@ -14,7 +14,7 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Your Machine                                                        │
 │                                                                      │
-│   30 agent runtimes            ClawMetry                             │
+│   31 agent runtimes            ClawMetry                             │
 │  ┌──────────────────┐        ┌───────────────────────────────────┐   │
 │  │ OpenClaw         │  files │  Sync daemon (clawmetry sync)     │   │
 │  │ Claude Code      │───────►│  • reads sessions, logs, hooks    │   │
@@ -96,7 +96,7 @@ C4Context
 title C1: ClawMetry (open source) system context
 
 Person(dev, "Developer / Operator", "Runs AI agents; wants to see what they do, what they cost, and to stop one that has gone wrong")
-System(clawmetry, "ClawMetry", "Local-first observability and governance for 30 agent runtimes. Reads what your agents already write; acts on them only through the five gated surfaces above.")
+System(clawmetry, "ClawMetry", "Local-first observability and governance for 31 agent runtimes. Reads what your agents already write; acts on them only through the five gated surfaces above.")
 
 System_Ext(runtimes, "AI Agent Runtimes", "OpenClaw, NVIDIA NemoClaw and Goose are free in OSS; the other 27 (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Hermes, Aider, opencode, ...) come with the optional Pro plugin")
 System_Ext(gateway, "OpenClaw Gateway", "WebSocket control plane (JSON-RPC, :18789) for live data + cron RPC")

@@ -1,0 +1,14 @@
+  - id: dlp-pulumi-access-token
+    type: dlp
+    status: stable
+    name: "Pulumi Access Token"
+    description: "Detects Pulumi personal and team access tokens"
+    severity: critical
+    confidence: high
+    references:
+      - "https://www.pulumi.com/blog/scanning-logs-for-secrets/"
+    tags:
+      - "provider:pulumi"
+      - "owasp-llm:LLM06"
+    pattern:
+      regex: 'pul-[A-Za-z0-9]{20,}'
