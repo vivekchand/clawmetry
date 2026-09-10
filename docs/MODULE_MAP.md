@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-239 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+242 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -102,15 +102,15 @@ The entitlement API surface, split from a single 47k-line file into a package: a
 
 | Module | Size | Blueprints | Serves | Purpose |
 |---|---|---|---|---|
-| `routes/entitlement/_endpoints_01.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement .. api_entitlement_has_runtimes_at_batch. |
-| `routes/entitlement/_endpoints_02.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_missing_features_at_path .. api_entitlement_affordable_tiers_at. |
-| `routes/entitlement/_endpoints_03.py` | large |  | `/api/entitlement`, `/api/features`, `/api/license`, `/api/runtimes`, `/api/tiers` | endpoint handlers api_entitlement_min_tier .. api_license_is_valid_at. |
-| `routes/entitlement/_endpoints_04.py` | large |  | `/api/entitlement`, `/api/license`, `/api/paywall` | endpoint handlers api_license_state_at .. api_entitlement_previous_tier_capacity_headroom_at_batch. |
-| `routes/entitlement/_endpoints_05.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_next_tier_spec .. api_entitlement_feature_catalog_at_path. |
-| `routes/entitlement/_endpoints_06.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_feature_catalog_at_path_batch .. api_entitlement_channel_catalog_at_path_batch. |
-| `routes/entitlement/_endpoints_07.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_lock_reason_at_path .. api_entitlement_min_tier_for_retention_window_at_batch. |
-| `routes/entitlement/_endpoints_08.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_min_tier_for_features_batch .. api_entitlement_has_retention_window_at_batch. |
-| `routes/entitlement/_shared.py` | huge | `bp_entitlement` |  | imports, constants, the blueprint and |
+| `routes/entitlement/_endpoints_01.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement .. |
+| `routes/entitlement/_endpoints_02.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_missing_features_at_path .. |
+| `routes/entitlement/_endpoints_03.py` | large |  | `/api/entitlement`, `/api/features`, `/api/license`, `/api/runtimes`, `/api/tiers` | endpoint handlers api_entitlement_min_tier .. |
+| `routes/entitlement/_endpoints_04.py` | large |  | `/api/entitlement`, `/api/license`, `/api/paywall` | endpoint handlers api_license_state_at .. |
+| `routes/entitlement/_endpoints_05.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_next_tier_spec .. |
+| `routes/entitlement/_endpoints_06.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_feature_catalog_at_path_batch .. |
+| `routes/entitlement/_endpoints_07.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_lock_reason_at_path .. |
+| `routes/entitlement/_endpoints_08.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_min_tier_for_features_batch .. |
+| `routes/entitlement/_shared.py` | huge | `bp_entitlement` |  | imports, constants, the blueprint and every non-handler helper the endpoint modules call. |
 
 ## Shared helpers (`helpers/`)
 
