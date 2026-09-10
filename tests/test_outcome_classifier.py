@@ -37,14 +37,14 @@ def test_classify_success_terminal_session_ended():
     from clawmetry.outcome_classifier import classify_session, OUTCOME_SUCCESS
 
     events = [
-        {"event_type": "session.started", "ts": "2026-05-17T10:00:00Z"},
+        {"event_type": "session.started", "ts": _recent_iso(0)},
         {"event_type": "prompt.submitted", "ts": "2026-05-17T10:00:05Z",
          "data": {"finalPromptText": "list files"}},
         {"event_type": "tool.result", "ts": "2026-05-17T10:00:10Z",
          "data": {"name": "bash", "output": "a.txt b.txt", "status": "ok"}},
-        {"event_type": "model.completed", "ts": "2026-05-17T10:00:12Z",
+        {"event_type": "model.completed", "ts": _recent_iso(12),
          "data": {"modelId": "claude-opus-4", "text": "Here are the files."}},
-        {"event_type": "session.ended", "ts": "2026-05-17T10:00:13Z"},
+        {"event_type": "session.ended", "ts": _recent_iso(13)},
     ]
     outcome, conf = classify_session(events, {})
     assert outcome == OUTCOME_SUCCESS
@@ -56,13 +56,13 @@ def test_classify_failed_tool_error_at_tail():
     from clawmetry.outcome_classifier import classify_session, OUTCOME_FAILED
 
     events = [
-        {"event_type": "session.started", "ts": "2026-05-17T10:00:00Z"},
+        {"event_type": "session.started", "ts": _recent_iso(0)},
         {"event_type": "model.completed", "ts": "2026-05-17T10:00:05Z",
          "data": {"modelId": "claude-opus-4", "text": "Let me try."}},
         {"event_type": "tool.result", "ts": "2026-05-17T10:00:10Z",
          "data": {"name": "bash", "error": True,
                   "error_message": "command not found"}},
-        {"event_type": "session.ended", "ts": "2026-05-17T10:00:11Z"},
+        {"event_type": "session.ended", "ts": _recent_iso(11)},
     ]
     outcome, conf = classify_session(events, {})
     assert outcome == OUTCOME_FAILED
@@ -74,11 +74,11 @@ def test_classify_failed_assistant_text_pattern():
     from clawmetry.outcome_classifier import classify_session, OUTCOME_FAILED
 
     events = [
-        {"event_type": "session.started", "ts": "2026-05-17T10:00:00Z"},
-        {"event_type": "model.completed", "ts": "2026-05-17T10:00:12Z",
+        {"event_type": "session.started", "ts": _recent_iso(0)},
+        {"event_type": "model.completed", "ts": _recent_iso(12),
          "data": {"modelId": "claude-opus-4",
                   "text": "I couldn't complete that request because the API returned 403."}},
-        {"event_type": "session.ended", "ts": "2026-05-17T10:00:13Z"},
+        {"event_type": "session.ended", "ts": _recent_iso(13)},
     ]
     outcome, conf = classify_session(events, {})
     assert outcome == OUTCOME_FAILED
@@ -91,10 +91,10 @@ def test_classify_escalated_when_approval_row_exists():
     from clawmetry.outcome_classifier import classify_session, OUTCOME_ESCALATED
 
     events = [
-        {"event_type": "session.started", "ts": "2026-05-17T10:00:00Z"},
+        {"event_type": "session.started", "ts": _recent_iso(0)},
         {"event_type": "tool.result", "ts": "2026-05-17T10:00:10Z",
          "data": {"name": "bash", "status": "ok"}},
-        {"event_type": "session.ended", "ts": "2026-05-17T10:00:11Z"},
+        {"event_type": "session.ended", "ts": _recent_iso(11)},
     ]
     approvals = [{"id": "app-1", "status": "approved"}]
     outcome, conf = classify_session(events, {}, approvals=approvals)
@@ -235,14 +235,28 @@ def isolated_store(tmp_path, monkeypatch):
         pass
 
 
+def _recent_iso(offset_secs: int = 0) -> str:
+    """An ISO timestamp a few minutes old.
+
+    The seeds used to carry a hard-coded 2026-05-17, which sat inside the
+    endpoint's ``?window=30d`` when the test was written and fell out of it
+    three months later — the assertion then read ``0 == 3`` for reasons that
+    had nothing to do with outcomes. Anchoring to now keeps the window test
+    testing the window.
+    """
+    import datetime as _dt
+    t = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=600 - offset_secs)
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _seed_finished_session(store, *, sid, ok=True, with_error=False):
     """Insert a session row + a handful of events that wind to session.ended."""
     store.ingest_session({
         "agent_type": "openclaw",
         "session_id": sid,
-        "started_at": "2026-05-17T10:00:00Z",
-        "last_active_at": "2026-05-17T10:00:13Z",
-        "ended_at": "2026-05-17T10:00:13Z",
+        "started_at": _recent_iso(0),
+        "last_active_at": _recent_iso(13),
+        "ended_at": _recent_iso(13),
         "status": "completed" if ok else "errored",
         "total_tokens": 1000,
         "cost_usd": 0.02,
@@ -250,24 +264,24 @@ def _seed_finished_session(store, *, sid, ok=True, with_error=False):
     base = [
         {"id": f"{sid}-1", "agent_type": "openclaw", "node_id": "n",
          "agent_id": "main", "session_id": sid,
-         "event_type": "session.started", "ts": "2026-05-17T10:00:00Z"},
+         "event_type": "session.started", "ts": _recent_iso(0)},
         {"id": f"{sid}-2", "agent_type": "openclaw", "node_id": "n",
          "agent_id": "main", "session_id": sid,
-         "event_type": "model.completed", "ts": "2026-05-17T10:00:12Z",
+         "event_type": "model.completed", "ts": _recent_iso(12),
          "data": {"modelId": "claude-opus-4", "text": "All done."}},
     ]
     if with_error:
         base.append({
             "id": f"{sid}-err", "agent_type": "openclaw", "node_id": "n",
             "agent_id": "main", "session_id": sid,
-            "event_type": "tool.result", "ts": "2026-05-17T10:00:11Z",
+            "event_type": "tool.result", "ts": _recent_iso(11),
             "data": {"name": "bash", "error": True,
                      "error_message": "command not found"},
         })
     base.append({
         "id": f"{sid}-end", "agent_type": "openclaw", "node_id": "n",
         "agent_id": "main", "session_id": sid,
-        "event_type": "session.ended", "ts": "2026-05-17T10:00:13Z",
+        "event_type": "session.ended", "ts": _recent_iso(13),
     })
     for e in base:
         store.ingest(e)
@@ -695,3 +709,94 @@ def test_aggregate_outcomes_counts_tool_call_stuck_against_success_rate():
     assert agg["tool_call_stuck"] == 5
     # 80 / (80 + 15 + 5) = 0.80
     assert agg["success_rate"] == 0.8
+
+
+# ── the stored label decays (2026-09-05 "Still running" regression) ─────────
+#
+# The classifier being right is only half the fix. ``ongoing`` was written once
+# and then treated as final: ``reclassify_session_outcome`` fired only on a
+# ``session.ended`` event, which the family runtimes never emit, and the read
+# path re-ran the classifier only for rows where ``outcome IS NULL``. So the
+# first label a Claude Code session ever received was also its last.
+
+def test_a_decayed_ongoing_label_is_re_resolved_on_read(isolated_store):
+    """A stale ``ongoing`` must be re-run, not served."""
+    import clawmetry.local_store as ls
+    now_ms = int(time.time() * 1000)
+    assert ls._is_stale_classification(
+        {"outcome": "ongoing", "outcome_classified_at": now_ms - 9 * 3600_000})
+    assert ls._is_stale_classification(
+        {"outcome": "waiting", "outcome_classified_at": now_ms - 9 * 3600_000})
+
+
+def test_a_fresh_live_label_is_served_from_the_stamp(isolated_store):
+    """Within the TTL the stored label stands — this is the cost guard.
+
+    Without it a page of 50 live rows would re-scan 50 sessions' events on
+    every single read.
+    """
+    import clawmetry.local_store as ls
+    assert not ls._is_stale_classification(
+        {"outcome": "ongoing", "outcome_classified_at": int(time.time() * 1000)})
+
+
+def test_settled_labels_never_re_resolve(isolated_store):
+    """Only the two process-shaped labels decay.
+
+    ``success``/``failed``/``escalated`` describe a transcript and read the
+    same tomorrow; re-running them would be pure cost.
+    """
+    import clawmetry.local_store as ls
+    old = int(time.time() * 1000) - 30 * 24 * 3600_000
+    for label in ("success", "failed", "escalated"):
+        assert not ls._is_stale_classification(
+            {"outcome": label, "outcome_classified_at": old}), label
+
+
+def test_reclassify_retires_a_dead_session_that_reads_as_ongoing(
+    isolated_store, monkeypatch, tmp_path
+):
+    """End to end, on the store: the exact 9a3e3302 shape.
+
+    A two-message session, last event moments old, stamped ``ongoing`` — then
+    the process goes away. The label must move off "still running" on the next
+    read, with no new event to trigger it (there will never be one).
+    """
+    import datetime as _dt
+    # Point process_control at an empty sessions dir so absence of a per-pid
+    # record reads as LIVE_DEAD, not "cannot tell" (which is what an absent
+    # directory returns — the distinction between a container with no ~/.claude
+    # mount and a terminal that was closed).
+    sessions_dir = tmp_path / "claude_cfg" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude_cfg"))
+    _ls, store = isolated_store
+    sid = "claude_code:dead-one"
+
+    def iso(offset):
+        return (_dt.datetime.now(_dt.timezone.utc)
+                - _dt.timedelta(seconds=offset)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    store.ingest_session({
+        "agent_type": "claude_code", "session_id": sid,
+        "started_at": iso(20), "last_active_at": iso(10),
+        "status": "active", "total_tokens": 16, "cost_usd": 0.13,
+    })
+    for e in [
+        {"id": "d-1", "agent_type": "claude_code", "node_id": "n",
+         "agent_id": "main", "session_id": sid,
+         "event_type": "session.started", "ts": iso(20)},
+        {"id": "d-2", "agent_type": "claude_code", "node_id": "n",
+         "agent_id": "main", "session_id": sid,
+         "event_type": "model.completed", "ts": iso(10),
+         "data": {"text": "Ready. What would you like me to do?"}},
+    ]:
+        store.ingest(e)
+    store.flush()
+
+    # No per-pid record exists for this id, so the probe reports it dead —
+    # exactly what it reports for a closed terminal.
+    outcome, _conf = store.reclassify_session_outcome(sid,
+                                                      agent_type="claude_code")
+    assert outcome != "ongoing", (
+        "a session with no live process must not read as still running")
