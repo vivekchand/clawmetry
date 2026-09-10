@@ -176,17 +176,158 @@ def disable_cloud() -> bool:
         return False
 
 
-# ── Sign-out / uninstall trace cleanup ─────────────────────────────────────
-# The cm_ bearer is mirrored into OpenClaw's own config file
-# (~/.openclaw/openclaw.json → clawmetry.cloudToken) and the E2E workspace
-# key may be mirrored into the OS keychain. Neither lives under ~/.clawmetry,
-# so `clawmetry disconnect` / `clawmetry uninstall` / the desktop uninstaller
-# must clear them explicitly or a later install silently re-adopts the old
-# account identity (founder report 2026-08-10: a fresh desktop install landed
-# signed-in with zero login because the surviving cloudToken was the first
-# source `_read_cloud_token` checks).
+# ── The cm_ cloud bearer: where it lives ───────────────────────────────────
+# It lives in ClawMetry's OWN config, ``~/.clawmetry/config.json`` → ``api_key``
+# (the same file the sync daemon writes via ``sync.save_config``).
+#
+# It used to *also* be mirrored into OpenClaw's config file as
+# ``~/.openclaw/openclaw.json`` → ``clawmetry.cloudToken``. That mirror is
+# retired: ``clawmetry`` is not a key in OpenClaw's schema, so every write
+# left OpenClaw's own config failing validation. OpenClaw's next CLI run then
+# fires ``doctor --fix``, which restores the last-known-good config and
+# restarts the gateway — killing the user's active session and rotating the
+# gateway token out from under our WS tap. Field report 2026-09-09 (Steven M.
+# Alper): that happened at least twice on one machine, and the user's own
+# agent correctly diagnosed it as "ClawMetry should store its config in its
+# own file, not piggyback on OpenClaw's config".
+#
+# So: we never write that key again. We still READ it (an install that
+# predates this change has the token only there) and, on first read,
+# migrate it into our own config and strip it from OpenClaw's — which also
+# un-corrupts the file for anyone already affected.
+#
+# Sign-out / uninstall must still clear BOTH: the E2E workspace key may be
+# mirrored into the OS keychain, and neither the keychain entry nor the
+# legacy OpenClaw key lives under ~/.clawmetry, so `clawmetry disconnect` /
+# `clawmetry uninstall` / the desktop uninstaller clear them explicitly or a
+# later install silently re-adopts the old account identity (founder report
+# 2026-08-10: a fresh desktop install landed signed-in with zero login
+# because the surviving cloudToken was the first source `_read_cloud_token`
+# checks).
 
 OPENCLAW_CONFIG_PATH = os.path.expanduser("~/.openclaw/openclaw.json")
+
+#: ClawMetry's own config — the ONLY file we write the cm_ bearer to.
+CLAWMETRY_CONFIG_PATH = os.path.expanduser("~/.clawmetry/config.json")
+
+
+def _load_json(path: str) -> dict:
+    """Best-effort dict read. Returns {} for missing/garbage/non-dict."""
+    import json as _json
+
+    try:
+        with open(path) as f:
+            data = _json.load(f)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _atomic_write_json(path: str, data: dict) -> bool:
+    """Write ``data`` to ``path`` via a temp file + rename. Never raises."""
+    import json as _json
+
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            _json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        return False
+
+
+def write_cloud_token(token: str) -> bool:
+    """Persist the cm_ bearer to ``~/.clawmetry/config.json`` → ``api_key``.
+
+    Merges into the existing config so the daemon's ``node_id`` /
+    ``encryption_key`` survive. Returns True on success; never raises.
+
+    Deliberately does NOT touch ``~/.openclaw/openclaw.json`` — see the
+    module comment above. Writing there corrupted OpenClaw's config.
+    """
+    if not token:
+        return False
+    data = _load_json(CLAWMETRY_CONFIG_PATH)
+    if data.get("api_key") == token:
+        return True
+    data["api_key"] = token
+    return _atomic_write_json(CLAWMETRY_CONFIG_PATH, data)
+
+
+def read_cloud_token() -> str:
+    """Return the cm_ bearer, '' when this machine isn't paired.
+
+    Our own config wins. Falls back to the retired OpenClaw mirror and, when
+    it finds one there, migrates it: copies the value into our config and
+    strips the ``clawmetry`` key out of OpenClaw's file. That heals a machine
+    that was corrupted by an older ClawMetry without asking the user to do
+    anything. Best-effort — a failed migration still returns the token.
+    """
+    own = _load_json(CLAWMETRY_CONFIG_PATH).get("api_key") or ""
+    # The daemon only ever writes cm_ keys here; anything else is garbage we
+    # must not hand to the cloud as a Bearer (audit P0 #5 kept this guard).
+    if isinstance(own, str) and own.startswith("cm_"):
+        # Our config is authoritative; still clean up a stale legacy mirror
+        # so OpenClaw's config stops failing its own schema validation.
+        migrate_legacy_cloud_token()
+        return own
+    legacy = read_legacy_cloud_token()
+    if legacy:
+        migrate_legacy_cloud_token()
+    return legacy
+
+
+def read_legacy_cloud_token() -> str:
+    """Read ``~/.openclaw/openclaw.json`` → ``clawmetry.cloudToken``, '' if absent."""
+    section = _load_json(OPENCLAW_CONFIG_PATH).get("clawmetry")
+    if not isinstance(section, dict):
+        return ""
+    token = section.get("cloudToken") or ""
+    return token if isinstance(token, str) else ""
+
+
+#: Set once we have confirmed OpenClaw's config carries no ``clawmetry`` key,
+#: so the migration check stops re-reading that file on every cloud-proxy
+#: request. Only this process ever writes the key (and after this change, it
+#: never does), so a one-shot memo is safe. ``reset_legacy_migration_memo``
+#: exists for tests, which point the paths at a tmp_path per case.
+_LEGACY_MIGRATION_DONE = False
+
+
+def reset_legacy_migration_memo() -> None:
+    """Forget that the legacy-key check already ran. For tests."""
+    global _LEGACY_MIGRATION_DONE
+    _LEGACY_MIGRATION_DONE = False
+
+
+def migrate_legacy_cloud_token() -> bool:
+    """Move a legacy ``clawmetry.cloudToken`` out of OpenClaw's config.
+
+    Copies the token into ``~/.clawmetry/config.json`` when we don't already
+    have one, then deletes the whole ``clawmetry`` section from
+    ``~/.openclaw/openclaw.json``. Idempotent: a no-op (returning False) once
+    the key is gone, so calling it from a read path costs one small file read
+    — and after the first clean check, nothing at all.
+
+    Returns True only when it actually removed the key.
+    """
+    global _LEGACY_MIGRATION_DONE
+    if _LEGACY_MIGRATION_DONE:
+        return False
+    legacy = read_legacy_cloud_token()
+    if legacy and not (_load_json(CLAWMETRY_CONFIG_PATH).get("api_key") or ""):
+        # Adopt it first. If the strip below fails we must not lose the token.
+        write_cloud_token(legacy)
+    removed = clear_cloud_token()
+    if not removed:
+        # Nothing there (or the file is unwritable). Either way, stop paying
+        # for this check on every read.
+        _LEGACY_MIGRATION_DONE = True
+    return removed
 
 
 def clear_cloud_token() -> bool:

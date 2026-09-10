@@ -625,7 +625,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # A heartbeat row is a liveness ping, not a transport envelope. The daemon's
 # heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
@@ -2399,6 +2399,8 @@ def _apply_migrations(conn) -> None:
         _migrate_policy_actions_ladder(conn)
     if "session_context" in existing_tables:
         _migrate_session_context_runtime(conn)
+    if "rollup_session" in existing_tables:
+        _migrate_rollup_session_runtime(conn)
 
 
 def _migrate_session_context_runtime(conn) -> None:
@@ -2464,6 +2466,51 @@ def _migrate_session_context_runtime(conn) -> None:
           AND session_id LIKE '%:%'
           AND split_part(session_id, ':', 1) <> ''
     """)
+
+
+def _migrate_rollup_session_runtime(conn) -> None:
+    """Heal ``rollup_session.runtime`` rows that pre-date the #5743 write fix.
+
+    #5743 changed the WRITE path so a new rollup derives its runtime from the
+    session id prefix instead of ``agent_type`` (which the family ingest never
+    sets, so every paid runtime landed as ``openclaw``). It repaired nothing
+    already in the table, and the rows do not heal on their own:
+    ``_mirror_session_rollups_locked`` rewrites a row only when its session is
+    re-ingested, and ended sessions are skipped by the family high-water mark
+    by design. So a session that finished before the upgrade keeps its wrong
+    runtime forever.
+
+    Measured on a node running 0.12.849, which carries the write fix, 76
+    minutes after restart: 2279 rows, 179 correct, **2100 stale** (2070 of
+    them ended ``claude_code`` sessions that will never be re-read), and ZERO
+    rows genuinely OpenClaw. Independently reproduced on a second node: 2305
+    rows, 205 correct, 2100 stale, same per-runtime breakdown.
+
+    The consequence is not cosmetic: ``query_rollup_sessions(runtime=...)``
+    returns 92% fewer rows than it should, and ``query_usage_by_team`` joins
+    ``tm.key_value = rs.runtime``, so historical per-team spend collapses
+    under ``openclaw``.
+
+    The predicate is :data:`_NON_OPENCLAW_RUNTIME_PREFIXES`, the same list
+    :func:`_runtime_of_session_id` checks, so the migration and the write path
+    cannot drift. That list is also what makes this safe: a genuine OpenClaw
+    id carries no runtime prefix, and one that merely contains a colon can
+    never match a known runtime name.
+
+    Idempotent. The ``WHERE`` makes a second run a no-op, and a row only ever
+    moves from a wrong label to the runtime its own id already names.
+    """
+    prefixes = ", ".join("'" + p + "'" for p in _NON_OPENCLAW_RUNTIME_PREFIXES)
+    if not prefixes:
+        return
+    conn.execute(
+        f"""
+        UPDATE rollup_session
+           SET runtime = split_part(session_id, ':', 1)
+         WHERE split_part(session_id, ':', 1) IN ({prefixes})
+           AND runtime IS DISTINCT FROM split_part(session_id, ':', 1)
+        """
+    )
 
 
 def _migrate_policy_actions_ladder(conn) -> None:
