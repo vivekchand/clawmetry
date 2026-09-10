@@ -1911,7 +1911,14 @@ def session_live_state(runtime: str, session_id: str) -> Optional[str]:
     about whether the child finished.
 
     Accepts either a store id (``claude_code:<uuid>``) or a native one.
-    Never raises — a probe that throws is worse than a probe that shrugs.
+    Never raises -- a probe that throws is worse than a probe that shrugs.
+
+    The rules above are recorded, not just applied: '"Still running" is a
+    claim about a process, so ask the process' in the Runtime and Session
+    Observability blueprint carries them as contracts (idle is not busy; None
+    is not dead; a sub-agent answers None; the id prefix wins over the runtime
+    argument) plus the ADR for why an in-flight label expires after 10s
+    instead of being re-stamped on the sync cycle.
     """
     try:
         rt = (runtime or "").strip().lower()
