@@ -205,6 +205,79 @@ def test_the_discovery_has_a_reader_from_the_first_commit():
     assert "never edits" in src, "the read-only promise must be on screen"
 
 
+# ── the snapshot slice and the prompt (#4784, second half) ──────────────────
+
+
+def test_the_snapshot_slice_is_built_and_never_raises(monkeypatch):
+    import clawmetry.sync as sync
+
+    slice_ = sync._build_detected_otel_apps()
+    for key in ("apps", "suggestable", "degraded", "degradedReason",
+                "checkedPorts", "instruction", "scannedAtMs"):
+        assert key in slice_, key
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(od, "discover_otel_emitters", boom)
+    degraded = sync._build_detected_otel_apps()
+    assert degraded["apps"] == [] and degraded["suggestable"] == []
+
+
+def test_the_slice_is_in_the_encrypted_snapshot_not_the_heartbeat():
+    """An OTEL_SERVICE_NAME is the user's own name for their own service
+    ("acme-billing-prod"). It is theirs to see and not ours to hold in the
+    clear, so it rides the AES-encrypted snapshot like session content."""
+    import inspect
+    import clawmetry.sync as sync
+
+    src = inspect.getsource(sync)
+    i = src.find('"detectedOtelApps"')
+    assert i > 0, "the slice must be in the snapshot payload"
+    # The snapshot builder, not _build_heartbeat / the plaintext path.
+    window = src[max(0, i - 4000):i]
+    assert '"securityPosture"' in window, (
+        "detectedOtelApps must sit in the same encrypted snapshot dict as "
+        "securityPosture, which documents the encrypted-only rule"
+    )
+
+
+def test_the_overview_payload_carries_the_slice_too():
+    """The bug the browser caught, not the tests.
+
+    The slice was built into the cloud SNAPSHOT only, and the first-run panel
+    reads `/api/overview`. On a local dashboard the prompt therefore never
+    rendered: it would have appeared on the hosted dashboard and nowhere
+    else. Both payloads carry it now.
+    """
+    import inspect
+    import routes.overview as ov
+
+    src = inspect.getsource(ov)
+    assert '"detectedOtelApps"' in src, "the local overview must serve it"
+    assert hasattr(ov, "_detected_otel_apps_cached")
+    cached = inspect.getsource(ov._detected_otel_apps_cached)
+    assert "monotonic" in cached, (
+        "discovery costs ~86 ms; /api/overview is polled every few seconds, "
+        "so it must be memoised rather than run per request"
+    )
+
+
+def test_the_prompt_reads_suggestable_never_apps():
+    """`apps` can include a port ClawMetry itself holds (it binds 4318).
+    Telling someone to redirect their app to ClawMetry, from ClawMetry, is
+    worse than saying nothing."""
+    from pathlib import Path
+    app_js = (Path(__file__).resolve().parents[1] / "clawmetry" / "static"
+              / "js" / "app.js").read_text(encoding="utf-8")
+    i = app_js.find("detectedOtelApps")
+    assert i > 0, "the first-run panel must read the slice"
+    block = app_js[i:i + 1800]
+    assert "otel.suggestable" in block
+    assert "otel.apps" not in block, "the prompt must not render self-detections"
+    assert "never changes another application" in block, (
+        "the read-only promise belongs on screen next to the instruction")
+
+
 def test_a_pass_is_cheap_enough_for_the_snapshot_timer():
     """FLYWHEEL 1e: the daemon budget. Measured at 86 ms of CPU per pass on
     the dev machine, 0.14% of one core on a 60s timer."""
