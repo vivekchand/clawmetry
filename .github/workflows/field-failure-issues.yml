@@ -146,7 +146,10 @@ jobs:
             fi
           done
 
-      # An alarm that cannot clear is not an alarm. Until now this job only
+      # An alarm that cannot clear is not an alarm -- the rule is recorded, not
+      # just applied: "An alarm that cannot clear is not an alarm" in the Field
+      # Failure Reporting and Auto-Triage blueprint carries the three guards
+      # below as contracts. Until now this job only
       # ever opened and refreshed: a signature that stopped occurring aged out
       # of the aggregate window and left its issue open forever, with the last
       # comment still reading "Still occurring". #5739 is the example --
