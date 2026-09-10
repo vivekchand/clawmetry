@@ -13,7 +13,7 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Zie hoe je agent denkt.** Realtime observability voor **30 AI-agentruntimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 andere. Eén dashboard voor je hele agentvloot.
+**Zie hoe je agent denkt.** Realtime observability voor **31 AI-agentruntimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 27 andere. Eén dashboard voor je hele agentvloot.
 
 > 🌐 **Lees dit in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [meer →](docs/i18n/)
 
@@ -63,7 +63,7 @@ Een gebruikspercentage is alleen zo eerlijk als waar het door gedeeld wordt.
 ClawMetry bepaalt de venstergrootte per provider vanuit [een tabel die je
 kunt lezen en waar je een PR op kunt indienen](clawmetry/context_windows.py),
 met dekking voor Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen,
-Mistral, Llama en GLM. Het meet niet alle 30 runtimes met de liniaal van
+Mistral, Llama en GLM. Het meet niet alle 31 runtimes met de liniaal van
 één leverancier. Dat is belangrijk: een beurt van 300K tokens bij GPT-5,
 afgezet tegen Anthropics 200K, leest als ">100%, geblazen" terwijl het in
 werkelijkheid op 75% van GPT-5's 400K zit. Diezelfde liniaal verbergt een
@@ -84,7 +84,7 @@ betekent, zegt dat ook. [Volledige details](docs/CONTEXT_BLOWOUT.md)
 
 | Pad | Toegevoegd aan je agent | Standaard? |
 |---|---|---|
-| Session-file tailing (alle 30 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
+| Session-file tailing (alle 31 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
 | HTTP-interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** per LLM-aanroep, oftewel 0,009% van een aanroep van 5 s | uit |
 | Pre-tool hook gate (warme cache) | **+44 ms** per gepoorte tool-aanroep, boven op een interpretervloer van 36 ms | uit |
 | Enforcement proxy | **+9,7 ms** per LLM-aanroep | uit |
