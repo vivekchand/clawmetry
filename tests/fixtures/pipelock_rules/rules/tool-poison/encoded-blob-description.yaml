@@ -1,0 +1,12 @@
+  - id: tool-poison-encoded-blob-description
+    type: tool-poison
+    status: experimental
+    name: "Encoded Blob in Description"
+    description: "Detects base64-like encoded blobs in tool descriptions followed by execution instructions"
+    severity: medium
+    confidence: medium
+    tags:
+      - "owasp-llm:LLM01"
+    pattern:
+      regex: '[A-Za-z0-9+/]{40,}={0,2}.{0,60}(?:decode|execute|eval|run|follow|process)'
+      scan_field: description
