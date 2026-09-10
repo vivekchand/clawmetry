@@ -73,7 +73,7 @@ _NON_OPENCLAW_RT_SET = frozenset((
     "grok_bot",
     "lovable",
     "replit",
-
+    "muse_code",
 ))
 
 def _event_runtime(ev) -> str:
@@ -1203,6 +1203,7 @@ _RUNTIME_PREFIXES = frozenset({
     "grok_bot",
     "lovable",
     "replit",
+    "muse_code",
 })
 
 
