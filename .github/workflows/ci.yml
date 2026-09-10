@@ -162,6 +162,16 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
+      # WorkflowIntegrityGuard. Written for ADR-005 ("a CI step that cannot
+      # fail is worse than no CI step") and, until #5744, run by NO job at all
+      # -- the exact trap this repo's own convention warns about, on the guard
+      # whose whole subject is guards that do nothing. It also now rejects a
+      # `${{ }}` expansion of a workflow input inside a `run:` body, the
+      # template-injection shape #5673 fixed in auto-deploy-cloud.yml and
+      # #5744 fixed again here.
+      - name: Workflow integrity (dead steps, unreachable triggers, input injection)
+        run: python3 -m pytest tests/test_ci_workflow_invocations_are_real.py -q
+
       # Named explicitly because this repo's CI runs FILE LISTS, not
       # `pytest tests/`. /api/runtime-summary claimed to mirror the daemon's
       # runtimeSummary slice but re-implemented it as a capped raw-event scan:
