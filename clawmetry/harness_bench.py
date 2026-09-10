@@ -137,7 +137,8 @@ def _completion_mark(feats: list[dict]) -> dict[str, Any]:
     if not measurable:
         return _mark(MARK_UNSEEN, STATE_UNSUPPORTED, "quality_signals",
                      "completion signals are not measurable for this harness")
-    finished = [f for f in measurable if f["outcome"] not in ("ongoing", "")]
+    finished = [f for f in measurable
+                if f["outcome"] not in ("ongoing", "waiting", "")]
     if not finished:
         return _mark(MARK_UNSEEN, STATE_NONE_SEEN, "outcome_classifier",
                      "no finished sessions in the window yet")
@@ -223,7 +224,7 @@ def build_runtime_scope(
     m_spend = sum(f["cost_usd"] for f in measurable)
     done_n = sum(1 for f in measurable if f["done"])
     failed_spend = sum(f["cost_usd"] for f in measurable if not f["done"]
-                       and f["outcome"] not in ("ongoing", ""))
+                       and f["outcome"] not in ("ongoing", "waiting", ""))
 
     # An install whose daemon predates outcome reporting returns rows with
     # no outcome at all; that is "outcomes unavailable", not "nothing ever
@@ -458,7 +459,8 @@ def build_headtohead(
             return []
         sides = []
         for rt, fl in eligible.items():
-            finished = [f for f in fl if f["outcome"] not in ("ongoing", "")]
+            finished = [f for f in fl
+                        if f["outcome"] not in ("ongoing", "waiting", "")]
             done = sum(1 for f in finished if f["done"])
             spend = sum(f["cost_usd"] for f in fl)
             rough = sum(1 for f in fl if f["rough"])
