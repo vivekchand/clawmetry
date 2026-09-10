@@ -17,6 +17,15 @@ Same class as the malformed-YAML bug that kept ``c6-schedule-heal.yml`` from
 ever running, and it is caught the same way: by checking the thing rather than
 assuming it.
 
+The rules here are recorded, not just applied: "An action reference is pinned
+to a commit, or it does not merge" in the Release Verification and Merge Gating
+blueprint carries them as contracts -- pinned means a full 40-character SHA;
+composite actions under ``.github/actions/`` are in scope because their
+``uses:`` lines run with the CALLING job's token; and this is a gate that is
+deliberately NOT ``SecurityAuditScanner``, whose reporting-only posture is
+unchanged. It also records why the gate checks pin SHAPE offline and leaves
+target resolution opt-in.
+
 Resolving a ref needs the network, so that half is opt-in via
 ``CLAWMETRY_LIVE_CHECKS=1`` and runs in the supply-chain workflow, which already
 has a token. Local runs without the flag do the offline checks only.
