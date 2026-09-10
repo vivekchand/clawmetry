@@ -70,7 +70,7 @@ COMPARABILITY_MAX_DISTANCE = 0.5
 # derived here (ended with no finishing signal), the rest are stored labels.
 OUTCOME_KEYS = (
     "success", "failed", "cognitive_loop", "tool_call_stuck", "escalated",
-    "ongoing", "abandoned", "unknown",
+    "ongoing", "waiting", "abandoned", "unknown",
 )
 FAILURE_OUTCOMES = frozenset({"failed", "cognitive_loop", "tool_call_stuck"})
 
@@ -296,7 +296,8 @@ def cohort_stats(views: list[dict], *, signals_available: bool = False) -> dict:
     inp = sum(v["input_tokens"] for v in views if v.get("input_tokens") is not None)
     mix = Counter(v["outcome"] for v in views)
     outcome_mix = {k: int(mix.get(k, 0)) for k in OUTCOME_KEYS if mix.get(k, 0)}
-    finished = [v for v in views if v["outcome"] not in ("ongoing", "unknown")]
+    finished = [v for v in views
+                if v["outcome"] not in ("ongoing", "waiting", "unknown")]
     failures = sum(1 for v in views if v["outcome"] in FAILURE_OUTCOMES)
     done = sum(1 for v in views if v["done"])
     done_basis = "git_commit" if any(v["done_basis"] == "git_commit" for v in views) else "outcome"

@@ -24,8 +24,19 @@ Outcomes (5-way):
                     issue #1706). Fires BEFORE ``ongoing`` because a still-
                     chattering session that's not making forward progress is
                     no longer healthily ongoing.
-  ongoing         — session is still active (no terminal session.ended event
-                    AND last event is recent, default <5 min)
+  ongoing         — the agent is WORKING right now. Asserted from a live
+                    process when the caller can probe one; otherwise
+                    inferred from a recent last event (default <5 min).
+  waiting         — the process is alive but sitting at its prompt with
+                    nothing to do. Only ever asserted from a live probe:
+                    a transcript cannot tell "waiting for a person" from
+                    "the terminal was closed", and guessing produced the
+                    bug this label exists to fix (a nine-hour-dead session
+                    still reading "Still running").
+
+``ongoing`` and ``waiting`` are the only labels that decay. Both describe a
+process, not a transcript, so a caller that stores them MUST re-resolve them
+rather than treat the stamp as final — see ``TIME_DEPENDENT_OUTCOMES``.
 
 Defaults are conservative on purpose (per memory
 ``feedback_synthetic_tests_missed_real_event_shape``): when uncertain we
@@ -52,12 +63,32 @@ OUTCOME_FAILED = "failed"
 OUTCOME_ESCALATED = "escalated"
 OUTCOME_COGNITIVE_LOOP = "cognitive_loop"
 OUTCOME_ONGOING = "ongoing"
+OUTCOME_WAITING = "waiting"
 OUTCOME_TOOL_CALL_STUCK = "tool_call_stuck"
 
 VALID_OUTCOMES = frozenset({
     OUTCOME_SUCCESS, OUTCOME_FAILED, OUTCOME_ESCALATED,
     OUTCOME_TOOL_CALL_STUCK, OUTCOME_COGNITIVE_LOOP, OUTCOME_ONGOING,
+    OUTCOME_WAITING,
 })
+
+# Labels that describe a session that has not finished. Every rate that
+# divides by "sessions that ended" must exclude all of them — a session
+# sitting at its prompt is no more a success than one mid-turn.
+IN_FLIGHT_OUTCOMES = frozenset({OUTCOME_ONGOING, OUTCOME_WAITING})
+
+# Labels whose truth changes with the clock alone. Every other label is a
+# statement about a transcript that will read the same tomorrow; these two
+# are statements about a process, and go stale the moment it exits. Readers
+# use this to decide what must be re-resolved rather than trusted.
+TIME_DEPENDENT_OUTCOMES = IN_FLIGHT_OUTCOMES
+
+# Liveness verdicts accepted by ``classify_session(live=...)``. They mirror
+# ``clawmetry.process_control.LIVE_*`` without importing it: the classifier
+# stays a pure function over values its caller supplies.
+LIVE_BUSY = "busy"
+LIVE_IDLE = "idle"
+LIVE_DEAD = "dead"
 
 # How long after the last event we still call a session "ongoing".
 # 5 min matches the brain-stream / activity heuristic used elsewhere.
@@ -569,6 +600,7 @@ def classify_session(
     *,
     approvals: list[dict[str, Any]] | None = None,
     now: float | None = None,
+    live: str | None = None,
 ) -> tuple[str, float]:
     """Return ``(outcome, confidence)`` for one session.
 
@@ -581,6 +613,11 @@ def classify_session(
         row with status != "pending" means a human was looped in →
         ``escalated``.
       now: clock override for tests. Defaults to ``time.time()``.
+      live: what the caller's process probe says about this session right
+        now — ``"busy"``, ``"idle"``, ``"dead"``, or ``None`` for "this node
+        cannot tell". ``None`` and ``"dead"`` are NOT interchangeable:
+        ``None`` keeps the recent-activity heuristic, ``"dead"`` retires the
+        session and classifies the transcript on its merits.
 
     Confidence:
       * 1.0   — explicit ``status`` field on session row
@@ -590,7 +627,8 @@ def classify_session(
       * 0.8   — tool_call_stuck (invocation older than threshold, no result)
       * 0.8   — cognitive loop detected (issue #1706)
       * 0.75  — last-turn text matched a failure pattern
-      * 0.6   — ongoing (recent activity, no terminal event)
+      * 0.95  — ongoing / waiting asserted from a live process probe
+      * 0.6   — ongoing (recent activity, no terminal event, no probe)
       * 0.5   — fell through to "success" default (conservative)
     """
     if now is None:
@@ -631,7 +669,12 @@ def classify_session(
     # heartbeat-ish events but has a dead tool call is correctly flagged.
     # (#1648 — matches OpenClaw's ``blocked_tool_call`` triage class.)
     terminal = _has_terminal_event(evs) or bool(meta.get("ended_at"))
-    if not terminal:
+    # A live probe that says ``idle`` positively contradicts this branch: an
+    # agent blocked on a tool reports ``busy``/``shell``, never ``idle``. So
+    # an unanswered invocation on an idle session is a result the transcript
+    # never recorded, not a tool that hung — and calling it "Got stuck" would
+    # be the same mistake as "Still running", one label down.
+    if not terminal and live != LIVE_IDLE:
         stuck = find_stuck_tool_calls(evs, now=now)
         if stuck:
             return OUTCOME_TOOL_CALL_STUCK, 0.8
@@ -660,14 +703,38 @@ def classify_session(
     ) and _has_corroborating_stall_evidence(evs):
         return OUTCOME_COGNITIVE_LOOP, 0.8
 
-    # ── 4. Ongoing — no terminal marker AND recent activity ─────────
+    # ── 4. Ongoing / waiting — is the process actually up? ──────────
+    #
+    # Audit 2026-09-05. This branch used to ask one question — "did an event
+    # land in the last five minutes?" — and the answer was stamped once and
+    # never revisited. A session whose last line was written 39 seconds
+    # earlier was labelled ``ongoing`` and still read "Still running" nine
+    # and a half hours later, with its transcript untouched and no process
+    # left to run it. Measured on a real node the label was true for 3 of 43
+    # rows: the other 40 were finished sub-agents, dead terminals, and
+    # sessions parked at a prompt.
+    #
+    # Recent activity is not liveness. It cannot distinguish an agent mid-turn
+    # from a terminal that was closed a second after the last reply, and the
+    # runtimes that record their own pid can answer directly. So a probe, when
+    # the caller has one, decides this branch:
+    #
+    #   busy -> ongoing   the agent is generating or running a tool
+    #   idle -> waiting   the process is up, the prompt is open, nobody typed
+    #   dead -> fall through and classify the transcript on its merits
+    #   None -> no probe on this runtime; keep the recent-activity heuristic
     if not terminal:
-        age = _last_event_age_seconds(evs, now)
-        if age < ONGOING_RECENT_SECONDS:
-            return OUTCOME_ONGOING, 0.6
-        # If session row says it's running but events are stale, fall
-        # through to outcome detection rather than mislabelling as
-        # ongoing. Caller can decide whether to surface "stale" badge.
+        if live == LIVE_BUSY:
+            return OUTCOME_ONGOING, 0.95
+        if live == LIVE_IDLE:
+            return OUTCOME_WAITING, 0.95
+        if live != LIVE_DEAD:
+            age = _last_event_age_seconds(evs, now)
+            if age < ONGOING_RECENT_SECONDS:
+                return OUTCOME_ONGOING, 0.6
+        # Stale events with no probe, or a probe that says the process is
+        # gone: fall through to outcome detection rather than mislabelling
+        # the session as still in flight.
 
     # ── 5. Failed — last tool.result was an error ───────────────────
     # Scan from the tail back through up to 5 events; an error in the
@@ -706,12 +773,14 @@ def aggregate_outcomes(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "escalated":         9,
             "cognitive_loop":    0,
             "ongoing":           0,
+            "waiting":           0,
             "tool_call_stuck":   0,
             "success_rate":   0.880,   # success / (success + failed + loop + stuck)
             "needed_human_rate": 0.036,  # escalated / total
         }
 
-    ``success_rate`` deliberately excludes ``ongoing`` (still in flight) and
+    ``success_rate`` deliberately excludes ``ongoing`` and ``waiting`` (both
+    still in flight — see ``IN_FLIGHT_OUTCOMES``) and
     ``escalated`` (different category — a successful human-in-the-loop run
     isn't a failure of the agent). ``cognitive_loop`` and ``tool_call_stuck``
     ARE in the denominator because both are terminal failure modes: the agent
@@ -724,10 +793,14 @@ def aggregate_outcomes(rows: list[dict[str, Any]]) -> dict[str, Any]:
         OUTCOME_ESCALATED: 0,
         OUTCOME_COGNITIVE_LOOP: 0,
         OUTCOME_ONGOING: 0,
+        OUTCOME_WAITING: 0,
         OUTCOME_TOOL_CALL_STUCK: 0,
     }
     for r in rows or []:
         o = (r or {}).get("outcome") or OUTCOME_SUCCESS
+        # An unrecognised label lands in ``success`` (below), so every label
+        # this module can emit MUST have a bucket here — a missing one does
+        # not read as zero, it reads as a success and inflates the rate.
         if o in counts:
             counts[o] += 1
         else:
@@ -748,6 +821,7 @@ def aggregate_outcomes(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "escalated": counts[OUTCOME_ESCALATED],
         "cognitive_loop": counts[OUTCOME_COGNITIVE_LOOP],
         "ongoing": counts[OUTCOME_ONGOING],
+        "waiting": counts[OUTCOME_WAITING],
         "tool_call_stuck": counts[OUTCOME_TOOL_CALL_STUCK],
         "success_rate": round(success_rate, 4),
         "needed_human_rate": round(needed_human, 4),
