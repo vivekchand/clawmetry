@@ -98,7 +98,19 @@ jobs:
 
             pysuffix=""
             [ -n "$py" ] && pysuffix=" (py $py)"
-            TITLE="[field-failure] $cls on $os$pysuffix"
+            # The title is the DEDUPE KEY, and the aggregate groups by stage x
+            # class x OS x Python. Leaving stage out of the key collapses two
+            # different signatures onto one issue: a daemon that stopped
+            # ingesting and an install that never started would share a title,
+            # so whichever arrived second would only "refresh" the first and
+            # its lede would describe the wrong failure entirely.
+            #
+            # bootstrap_failed keeps the historical shape verbatim. Changing it
+            # would orphan every open issue, which is the one thing the title
+            # contract forbids; a new stage gets a new prefix instead.
+            stagelabel=""
+            [ "$stage" != "bootstrap_failed" ] && stagelabel="${stage%_failed}: "
+            TITLE="[field-failure] ${stagelabel}$cls on $os$pysuffix"
             printf '%s\n' "$TITLE" >> /tmp/live-titles.txt
 
             # An install that never started and a daemon that stopped working
