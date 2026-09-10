@@ -209,6 +209,17 @@ jobs:
       - name: Architecture docs name modules that exist
         run: python3 -m pytest tests/test_module_map_drift.py -q
 
+      # Every `uses:` reference -- workflows AND the composite actions under
+      # .github/actions/, whose own `uses:` lines run with the calling job's
+      # token -- must stay pinned to a full commit SHA. A tag is mutable: its
+      # owner can repoint it at code that then runs with our credentials, and
+      # several of these workflows hold `contents: write` or publish to PyPI.
+      # scripts/check_action_refs.py makes the same check, but only in
+      # supply-chain.yml; this line is what applies the ratchet to every PR.
+      # Named explicitly because this job runs FILE LISTS.
+      - name: Action references stay pinned to a commit SHA
+        run: python3 -m pytest tests/test_action_refs_pinned.py -q
+
       # Red-team corpus: every publicly disclosed agent attack we claim to
       # catch, we still catch. Named explicitly because this job runs FILE
       # LISTS -- a signature added without a line here is checked by nothing.
@@ -480,6 +491,23 @@ jobs:
       # and status reports whether data is actually moving.
       - name: The daemon lock cannot lock the daemon out
         run: python3 -m pytest tests/test_pid_lock_reclaim.py tests/test_status_daemon_truth.py tests/test_pid_liveness_windows.py -q
+
+      # The field-failure pipeline (desktop shell -> cloud sink -> deduped
+      # issue -> hourly fixer) had ONE producer, the installer, so a daemon
+      # that stopped working reported to nobody: it exits before the error
+      # handler and the auto-updater initialise, and a dead daemon sends no
+      # heartbeat, so the node just goes quiet. Pins the daemon as the second
+      # producer, and pins the privacy contract key by key.
+      - name: The daemon reports the failures that stop it working
+        run: python3 -m pytest tests/test_daemon_field_report.py -q
+
+      # The module map is generated from each module's docstring, and the
+      # generator took the first LINE, so a docstring whose opening sentence
+      # wrapped produced a row cut mid-clause. Nothing failed: the generator
+      # and its --check gate agreed with each other on a truncated string.
+      # Thirteen modules were in that state before this guard existed.
+      - name: Module map rows are whole sentences
+        run: python3 -m pytest tests/test_module_map_summaries_are_whole.py -q
 
   # ── API tests across all 3 platforms ─────────────────────────────────────────────────────────────────────────────────────────
   api-tests:
