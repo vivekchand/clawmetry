@@ -691,7 +691,7 @@ def api_entitlement_lock_reason_path_batch():
     what-if -> matrix what-if.
 
     Use case: a paywall comparison surface ("here are the 6 features +
-    30 runtimes + my channel count + my retention window, walk each one
+    31 runtimes + my channel count + my retention window, walk each one
     from OSS to Enterprise") hydrates the full matrix off ONE call
     instead of N calls to ``/lock-reason-path`` per item. Rung walk is
     item-agnostic, so all per-item paths share the same length and
