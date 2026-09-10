@@ -15169,8 +15169,20 @@ def _session_cost_intel(s) -> dict:
             "cacheRead": cr, "cacheWrite": cw, "reasoning": rt,
         }
         # Cache-hit %: share of read context served from cache (cheaper).
+        # Anthropic reports cached tokens on top of uncached input (additive
+        # denominator: in_t + cr). OpenAI includes cached tokens inside
+        # input_tokens already (inclusive denominator: in_t). Guard impossible
+        # OpenAI counters (cr > in_t) rather than emitting >100%.
         if (in_t + cr) > 0:
-            out["cacheHitPct"] = round(cr / (in_t + cr) * 100, 1)
+            try:
+                from clawmetry.providers_pricing import provider_for_model as _pfm
+                _cache_prov = _pfm(model) if model else ""
+            except Exception:
+                _cache_prov = ""
+            if _cache_prov == "openai" and in_t > 0 and cr <= in_t:
+                out["cacheHitPct"] = round(cr / in_t * 100, 1)
+            elif _cache_prov != "openai":
+                out["cacheHitPct"] = round(cr / (in_t + cr) * 100, 1)
         # Reasoning-tax $: reasoning tokens priced at the model's output rate.
         if model and rt > 0:
             try:
