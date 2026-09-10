@@ -61,7 +61,22 @@ jobs:
           }
           count=$(jq '.signatures | length' <<<"$body" 2>/dev/null || echo 0)
           echo "signatures reported: $count"
-          [ "$count" = "0" ] && exit 0
+
+          # A well-formed payload declares its own window. Without that we
+          # cannot tell "nothing is failing" from "the endpoint changed shape
+          # and jq read every field as empty", and the difference decides
+          # whether the reconcile step below closes every open issue.
+          window=$(jq -r '.window_days // empty' <<<"$body" 2>/dev/null || echo "")
+          if [ -z "$window" ]; then
+            echo "payload declares no window_days; treating as malformed, nothing filed or closed"
+            exit 0
+          fi
+
+          # The set of signatures the last $window days actually report,
+          # as issue titles. Written before any filing so the reconcile
+          # step compares against the same snapshot the filing used.
+          : > /tmp/live-titles.txt
+          printf '%s\n' "$window" > /tmp/live-window.txt
 
           # Make sure the label exists (idempotent; never fails the job).
           gh label create field-failure \
@@ -82,6 +97,7 @@ jobs:
             pysuffix=""
             [ -n "$py" ] && pysuffix=" (py $py)"
             TITLE="[field-failure] $cls on $os$pysuffix"
+            printf '%s\n' "$TITLE" >> /tmp/live-titles.txt
 
             ISSUE_BODY=$(printf '%s\n' \
               "Aggregated desktop bootstrap-failure telemetry crossed the reporting threshold for this signature." \
@@ -128,4 +144,56 @@ jobs:
                 || echo "could not create issue for $TITLE"
               echo "filed: $TITLE"
             fi
+          done
+
+      # An alarm that cannot clear is not an alarm. Until now this job only
+      # ever opened and refreshed: a signature that stopped occurring aged out
+      # of the aggregate window and left its issue open forever, with the last
+      # comment still reading "Still occurring". #5739 is the example --
+      # one install, one event, silent since, and nothing would ever have
+      # closed it.
+      #
+      # Absence here is a real signal, not missing data: the endpoint reports
+      # every signature seen in the window, so a title that is absent has had
+      # no event on any machine for the whole window.
+      - name: Close issues whose signature stopped occurring
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # The filing step exits 0 without writing this when the endpoint is
+          # unreachable or malformed. No snapshot means no evidence of absence,
+          # so close nothing -- a network blip must never sweep the tracker.
+          if [ ! -f /tmp/live-titles.txt ]; then
+            echo "no signature snapshot from this run; closing nothing"
+            exit 0
+          fi
+          sort -u /tmp/live-titles.txt > /tmp/live-sorted.txt
+          window=$(cat /tmp/live-window.txt 2>/dev/null || echo 30)
+          echo "live signatures this run: $(wc -l < /tmp/live-sorted.txt) (window ${window}d)"
+
+          gh issue list --repo "$REPO" --label field-failure --state open \
+            --limit 200 --json number,title > /tmp/open-issues.json
+
+          jq -c '.[]' /tmp/open-issues.json | while read -r row; do
+            num=$(jq -r .number <<<"$row")
+            title=$(jq -r .title <<<"$row")
+
+            if grep -qxF "$title" /tmp/live-sorted.txt; then
+              continue
+            fi
+
+            body=$(printf '%s\n' \
+              "No longer occurring: this signature reported no events on any machine in the last ${window} days, so it has aged out of the aggregate window at https://app.clawmetry.com/api/desktop/_failures. Closing." \
+              "" \
+              "That says the failure stopped, not why. A shipped fix and the last affected machine going away look identical from an aggregate, so this closure is not a claim that anything was repaired. If the signature recurs, this job files a fresh issue on its next tick.")
+
+            gh issue comment "$num" --repo "$REPO" --body "$body" \
+              || echo "could not comment on #$num"
+
+            gh issue close "$num" --repo "$REPO" --reason "not planned" \
+              || echo "could not close #$num"
+            echo "closed #$num ($title)"
           done
