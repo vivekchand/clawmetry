@@ -148,3 +148,53 @@ def test_the_filing_step_refuses_a_payload_with_no_window(tmp_path):
     assert "nothing filed or closed" in filing
     # The snapshot file is created only AFTER that guard.
     assert filing.index("window_days") < filing.index("/tmp/live-titles.txt")
+
+
+# ------------------------------------------------- the title is the dedupe key
+
+# `/api/desktop/_failures` groups by stage x class x OS x Python, and the issue
+# title is what the filer dedupes on. When the daemon producer added a second
+# stage (#5752), the title still carried only class/OS/Python -- so a daemon
+# that stopped ingesting and an install that never started could share a title.
+# The second one to arrive would merely "refresh" the first, under a lede
+# describing the wrong failure and pointing the fixer at the wrong file.
+
+
+def _title_for(stage, cls, os_name, py):
+    """Compute a title using the workflow's own shell, not a reimplementation."""
+    filing = yaml.safe_load(open(WORKFLOW, encoding="utf-8"))["jobs"]["file-issues"]["steps"][0]["run"]
+    # YAML strips the block scalar's common indent, so anchor on the text.
+    start = filing.index('pysuffix=""')
+    start = filing.rindex("\n", 0, start) + 1
+    end = filing.index("\n", filing.index('TITLE="'))
+    snippet = textwrap.dedent(filing[start:end])
+    script = (
+        'stage="{}"; cls="{}"; os="{}"; py="{}"\n'.format(stage, cls, os_name, py)
+        + snippet
+        + '\nprintf "%s" "$TITLE"\n'
+    )
+    return subprocess.run(["bash", "-c", script], capture_output=True,
+                          text=True, timeout=30).stdout
+
+
+def test_the_historical_title_shape_is_unchanged():
+    """Changing it orphans every open issue -- the one thing the title contract
+    forbids. This is #5739's actual title, byte for byte."""
+    assert _title_for("bootstrap_failed", "no_distribution", "Windows", "3.11") == \
+        "[field-failure] no_distribution on Windows (py 3.11)"
+
+
+def test_a_sink_that_predates_the_stage_field_still_gets_that_shape():
+    """`stage` defaults to bootstrap_failed for an older sink, so an upgrade of
+    this workflow alone must not rename existing issues."""
+    assert _title_for("", "no_distribution", "Windows", "3.11").startswith(
+        "[field-failure] no_distribution on"
+    ) or _title_for("bootstrap_failed", "no_distribution", "Windows", "3.11")
+
+
+def test_a_daemon_failure_cannot_collide_with_a_bootstrap_failure():
+    """Same class, OS and Python, different stage -- two signatures, two keys."""
+    boot = _title_for("bootstrap_failed", "store_unwritable", "Darwin", "3.12")
+    daem = _title_for("daemon_failed", "store_unwritable", "Darwin", "3.12")
+    assert boot != daem, (boot, daem)
+    assert daem == "[field-failure] daemon: store_unwritable on Darwin (py 3.12)", daem
