@@ -79,6 +79,14 @@ jobs:
         # env var is data the program only ever reads. This step is the taint
         # root for the whole job -- the verify step below reads
         # `steps.ver.outputs.version`, which is this value.
+        #
+        # The rule is recorded, not just applied: "A workflow input is data,
+        # never program text" in the Release Verification and Merge Gating
+        # blueprint. #5673 fixed this same construct in auto-deploy-cloud.yml
+        # and it recurred here, because nothing wrote the rule down and nothing
+        # failed when it came back. WorkflowIntegrityGuard now covers the
+        # pattern, so a third occurrence fails a check instead of waiting for a
+        # reviewer to recognise the shape.
         env:
           INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
