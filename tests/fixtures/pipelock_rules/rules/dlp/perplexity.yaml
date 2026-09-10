@@ -1,0 +1,14 @@
+  - id: dlp-perplexity-api-key
+    type: dlp
+    status: stable
+    name: "Perplexity API Key"
+    description: "Detects Perplexity AI API keys"
+    severity: critical
+    confidence: high
+    references:
+      - "https://docs.perplexity.ai/docs/admin/api-key-management"
+    tags:
+      - "provider:perplexity"
+      - "owasp-llm:LLM06"
+    pattern:
+      regex: 'pplx-[A-Za-z0-9]{16,}'

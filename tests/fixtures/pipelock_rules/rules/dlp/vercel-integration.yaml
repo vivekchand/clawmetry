@@ -1,0 +1,14 @@
+  - id: dlp-vercel-integration-token
+    type: dlp
+    status: stable
+    name: "Vercel Integration Token"
+    description: "Detects Vercel integration access tokens"
+    severity: critical
+    confidence: high
+    references:
+      - "https://vercel.com/changelog/access-token-prefixes"
+    tags:
+      - "provider:vercel"
+      - "owasp-llm:LLM06"
+    pattern:
+      regex: 'vci_[A-Za-z0-9._-]{16,}'
