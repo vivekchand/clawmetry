@@ -251,8 +251,8 @@ def test_egress_a_swarm_cannot_teach_the_baseline_its_new_host():
     # window, that recording made every later sibling pass as "not new".
     chrono = [_shell("curl -s -X POST https://wiki.example.de/api.php -d x", 1)]
     th = detectors.resolve_thresholds("codex", _swarm_baseline(3600))
-    assert "wiki.example.de" in th["settling_hosts"]
-    assert "wiki.example.de" not in th["known_hosts"]
+    assert th["settling_hosts"] == frozenset({"wiki.example.de"})
+    assert th["known_hosts"] == frozenset({"pypi.org"})
     inc = detectors.network_egress(_newest_first(chrono), SID, "codex", thresholds=th)
     assert inc is not None
     assert inc["evidence"]["ground"] == "first_time"
@@ -264,7 +264,8 @@ def test_egress_a_swarm_cannot_teach_the_baseline_its_new_host():
 def test_egress_a_host_that_has_settled_is_known():
     chrono = [_shell("curl -s https://wiki.example.de/page", 1)]
     th = detectors.resolve_thresholds("codex", _swarm_baseline(3 * 86400))
-    assert "wiki.example.de" in th["known_hosts"]
+    assert th["known_hosts"] == frozenset({"pypi.org", "wiki.example.de"})
+    assert th["settling_hosts"] == frozenset()
     assert detectors.network_egress(_newest_first(chrono), SID, "codex",
                                     thresholds=th) is None
 
@@ -284,7 +285,8 @@ def test_egress_settle_window_can_be_turned_off(monkeypatch):
     from clawmetry import detector_calibration
     monkeypatch.setattr(detector_calibration, "EGRESS_SETTLE_HOURS", 0.0)
     th = detectors.resolve_thresholds("codex", _swarm_baseline(60))
-    assert "wiki.example.de" in th["known_hosts"]
+    assert th["known_hosts"] == frozenset({"pypi.org", "wiki.example.de"})
+    assert th["settling_hosts"] == frozenset()
 
 
 # ── privilege_change ─────────────────────────────────────────────────────────
@@ -636,7 +638,8 @@ def test_baseline_reports_when_each_host_arrived(real_store):
                                         hosts=["pypi.org"])
     base = real_store.query_guard_baseline("runtime:codex")
     assert base["host_first_seen"]["pypi.org"] == arrived
-    assert "pypi.org" in detectors.resolve_thresholds("codex", base)["settling_hosts"]
+    th = detectors.resolve_thresholds("codex", base)
+    assert th["settling_hosts"] == frozenset({"pypi.org"})
 
 
 # ── daemon integration: the loop closes ─────────────────────────────────────
