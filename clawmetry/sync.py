@@ -24950,7 +24950,21 @@ def run_daemon() -> None:
                 log.warning("bootstrap capture failed: %s", _be)
 
             # ── High-priority: memory, flow metrics, subagents, recent sessions ──
-            mem = sync_memory(config, state, paths)
+            # Each of the six calls below (mem/ev/sm/crons + the snapshot)
+            # used to run bare, unlike every neighbour in this loop. A
+            # persistent exception in any ONE of them (e.g. one malformed
+            # session file parsed the same wrong way on every retry) aborted
+            # the whole cycle before it ever reached `state["last_sync"] = ...`
+            # below -- and because `state = load_state()` re-reads the same
+            # broken input at the top of the next cycle too, that one bad
+            # source stalled ingest forever while the separate heartbeat
+            # thread kept reporting the daemon as alive
+            # (field-failure #5800/#5801, daemon_ingest_stalled).
+            try:
+                mem = sync_memory(config, state, paths)
+            except Exception as _mem_e:
+                log.warning("memory sync error (non-fatal): %s", _mem_e)
+                mem = 0
             try:
                 sync_runtime_memory_files(config, state, paths)
             except Exception as _rme:
@@ -24958,7 +24972,10 @@ def run_daemon() -> None:
             snap = 0
             now_snap = time.time()
             if now_snap - last_snapshot > snapshot_interval:
-                snap = sync_system_snapshot(config, state, paths)  # subagents + flow
+                try:
+                    snap = sync_system_snapshot(config, state, paths)  # subagents + flow
+                except Exception as _snap_e:
+                    log.warning("system snapshot sync error (non-fatal): %s", _snap_e)
                 last_snapshot = now_snap
 
             # ── Gateway process metric capture (#852 follow-up) ──
@@ -24980,8 +24997,15 @@ def run_daemon() -> None:
             except Exception as _dlq_e:
                 log.debug("sync_dlq replay failed (continuing): %s", _dlq_e)
 
-            ev = sync_sessions(config, state, paths)
-            ev += sync_claude_cli_sessions(config, state, paths)
+            try:
+                ev = sync_sessions(config, state, paths)
+            except Exception as _sess_e:
+                log.warning("session sync error (non-fatal): %s", _sess_e)
+                ev = 0
+            try:
+                ev += sync_claude_cli_sessions(config, state, paths)
+            except Exception as _cli_e:
+                log.warning("claude-cli session sync error (non-fatal): %s", _cli_e)
             # NemoClaw sandbox-internal sessions (#3116) — openshell exec path.
             # No-op when openshell is absent or no sandbox has openclaw sessions.
             try:
@@ -25050,8 +25074,16 @@ def run_daemon() -> None:
                 ev += sync_channel_messages(config, state, paths)
             except Exception as _ce:
                 log.warning(f"channel sync error (non-fatal): {_ce}")
-            sm = sync_session_metadata(config, state)
-            crons = sync_crons(config, state, paths)
+            try:
+                sm = sync_session_metadata(config, state)
+            except Exception as _sm_e:
+                log.warning("session metadata sync error (non-fatal): %s", _sm_e)
+                sm = 0
+            try:
+                crons = sync_crons(config, state, paths)
+            except Exception as _crons_e:
+                log.warning("cron sync error (non-fatal): %s", _crons_e)
+                crons = 0
             # Issue #605 DuckDB follow-up: tail cron-run JSONL files into
             # DuckDB so the dashboard's per-job timeline reads from the
             # columnar store. Failure is non-fatal — the legacy JSONL-read
