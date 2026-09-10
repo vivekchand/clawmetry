@@ -1,7 +1,12 @@
 """Field-failure reports from the sync daemon (Requirement: Daemon Field-Failure Reporting, AC-FFR-005).
 
 That requirement is a child of Field Failure Reporting and Auto-Triage, whose
-pipeline this joins as its second producer. The blueprint of the same name carries the decisions behind the
+pipeline this joins as its second producer. The sink half is already live:
+clawmetry-cloud #2364 merged 2026-09-09 and `/api/desktop/_failures` returns a
+`stage` on every signature today, so this producer posts into a sink that
+already understands `daemon_failed`. That ordering is deliberate -- a sink
+accepting a stage nothing sends is harmless; a producer with no sink posts
+into a silent drop. The blueprint of the same name carries the decisions behind the
 three choices here that look arbitrary and are not: reporting from above the
 gate (ADR-001), sending inline on a path that exits (ADR-002), and deriving
 the session id rather than fixing it (ADR-003).
