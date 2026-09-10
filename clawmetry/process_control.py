@@ -305,6 +305,16 @@ def runtime_control_support(runtime: str, session_id: str = "",
                 "state": "controllable",
                 "reason": "", "platform": plat}
 
+    if rt in UNVERIFIED_RUNTIMES:
+        return {"controllable": False, "runtime": rt, "actions": [],
+                "state": "unknown",
+                "reason": ("Muse Code runs a real local process per session, "
+                           "but its protocol reports no pid and ClawMetry has "
+                           "no verified way to match a session to one — so "
+                           "these controls are not offered rather than "
+                           "offered and inert"),
+                "platform": plat}
+
     return {"controllable": False, "runtime": rt, "actions": [],
             "state": "unsupported",
             "reason": f"No signal support for {rt or 'unknown runtime'}",
@@ -386,6 +396,20 @@ SUPPORTED_RUNTIMES = frozenset(
      "qwen_code", "pi", "grok", "deepseek_harness", "kimi"}
 )
 UNSUPPORTED_RUNTIMES = frozenset({"cursor"})
+
+# Runtimes that almost certainly CAN be signalled but have no resolver yet, so
+# we do not know which pid belongs to a given session. Kept apart from
+# UNSUPPORTED_RUNTIMES because the two are different claims and the Guard tab
+# says different things: "unsupported" asserts no per-session process exists
+# here, ever, which for these would be false.
+#
+# muse_code: `muse` runs one local process tree per terminal session, so Stop
+# and Kill would work — but MSP carries no pid anywhere (session/list returns
+# sessionId, path and workspaceRoot, never a process), so a resolver has to
+# match argv+cwd like codex's, and that has not been verified against a real
+# `muse` process. Shipping the buttons on an unverified resolver is how you
+# get a Kill that silently signals nothing, or worse, the wrong tree.
+UNVERIFIED_RUNTIMES = frozenset({"muse_code"})
 
 # Runtimes whose support is decided PER SESSION, not per runtime, because the
 # runtime hosts sessions in more than one execution model. These are listed in

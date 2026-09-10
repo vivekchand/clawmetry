@@ -27,7 +27,8 @@ def test_cloud_model_reasoning_and_cache():
     )
     assert intel["tokenSplit"]["reasoning"] == 5000
     assert intel["reasoningCostUsd"] > 0  # reasoning billed at the output rate
-    assert intel["cacheHitPct"] == round(80000 / 180000 * 100, 1)
+    # OpenAI: cached tokens are already inside input_tokens → denominator is in_t
+    assert intel["cacheHitPct"] == round(80000 / 100000 * 100, 1)  # 80.0 %
 
 
 def test_local_model_reasoning_is_real_zero():
@@ -36,6 +37,33 @@ def test_local_model_reasoning_is_real_zero():
     )
     # Local model: reasoning is real $0.00 (not "unknown").
     assert intel["reasoningCostUsd"] == 0.0
+
+
+def test_openai_cache_hit_pct_inclusive_denominator():
+    # Regression: OpenAI cached tokens are already part of input_tokens.
+    # cr / in_t = 80.0 %; the old Anthropic-style cr/(in_t+cr) gave 44.4 % (wrong).
+    intel = _session_cost_intel(
+        _FakeSession(input=100_000, cache_read=80_000, model="gpt-5.4")
+    )
+    assert intel["cacheHitPct"] == 80.0
+
+
+def test_anthropic_cache_hit_pct_additive_denominator():
+    # Anthropic cached tokens are additive (NOT already in input_tokens).
+    # Denominator is in_t + cr.
+    intel = _session_cost_intel(
+        _FakeSession(input=100_000, cache_read=80_000, model="claude-opus-4-8")
+    )
+    assert intel["cacheHitPct"] == round(80_000 / 180_000 * 100, 1)  # 44.4 %
+
+
+def test_openai_impossible_cache_counter_omits_pct():
+    # cr > in_t is impossible for OpenAI (cached is a subset of input).
+    # Guard it: omit cacheHitPct rather than emit >100 %.
+    intel = _session_cost_intel(
+        _FakeSession(input=100, cache_read=200, model="gpt-5.4")
+    )
+    assert "cacheHitPct" not in intel
 
 
 def test_no_model_omits_reasoning_keeps_cache():
