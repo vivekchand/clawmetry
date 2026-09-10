@@ -22,6 +22,7 @@ import time as _time
 from typing import List, Optional, Set
 
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
+from .openclaw_reply_recovery import _reply_recovery_events  # noqa: F401
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
 
@@ -2717,6 +2718,12 @@ class OpenClawAdapter(AgentAdapter):
             _backup = _backup_outcome_events(_gw_events)
             if _backup:
                 meta.update(_backup)
+            # Reply-recovery event capture (#5620): OpenClaw 2026.9.2+ recovers
+            # active/queued/delegated replies after Gateway restarts. Scan the
+            # already-fetched events so there is no extra I/O.
+            _reply_rec = _reply_recovery_events(_gw_events)
+            if _reply_rec:
+                meta.update(_reply_rec)
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by
