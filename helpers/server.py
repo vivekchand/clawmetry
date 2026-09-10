@@ -1,4 +1,12 @@
-"""Server-startup helpers for dashboard.py."""
+"""Server-startup helpers for dashboard.py.
+
+The loopback rule this module enforces is recorded, not just applied: "The
+interactive debugger is a loopback-only capability" in the Local Observability
+Service blueprint carries the contracts (fail closed; a wildcard bind is not
+loopback; never resolve a hostname to decide it; the status line is not the
+control) and the ADR for why the call site is asserted and not only this
+helper.
+"""
 
 import ipaddress
 

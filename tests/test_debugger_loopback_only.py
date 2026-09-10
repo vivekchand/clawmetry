@@ -101,3 +101,99 @@ def test_helper_never_raises_on_hostile_input():
     """Bad input must fail closed, not crash the server on startup."""
     for junk in ["", "   ", None, "::::::", "999.999.999.999", "[", "]", "%", 12345]:
         assert dashboard._is_loopback_host(junk) is False
+
+
+# ---------------------------------------------------------------- the wiring
+
+# Everything above tests `is_loopback_host` in isolation. A correct helper that
+# nothing calls closes no vulnerability, and `_run_server` is far too
+# side-effect-heavy to invoke here (banners, listeners, a real bind), so the
+# call site is asserted structurally instead. This is what actually regresses:
+# someone restores `debug=True` while all 22 helper cases stay green.
+
+
+def _app_run_call():
+    """The `app.run(...)` call inside `_run_server`, as an AST node."""
+    import ast
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = open(os.path.join(here, "..", "dashboard.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name == "_run_server"):
+            continue
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            fn = call.func
+            if isinstance(fn, ast.Attribute) and fn.attr == "run" and \
+                    isinstance(fn.value, ast.Name) and fn.value.id == "app":
+                return call
+    raise AssertionError("no app.run(...) call found inside _run_server")
+
+
+def test_the_debugger_flag_is_not_a_hardcoded_true():
+    """The whole bug in one assertion: `debug=True` at this call site is
+    bandit B201, and it is what shipped."""
+    import ast
+
+    call = _app_run_call()
+    kw = {k.arg: k.value for k in call.keywords}
+    assert "debug" in kw, "app.run() no longer passes debug at all"
+    node = kw["debug"]
+    assert not (isinstance(node, ast.Constant) and node.value is True), (
+        "app.run(debug=True) is unconditional again: with --debug defaulting to "
+        "True, any --host that is not loopback publishes the Werkzeug "
+        "traceback page and its eval console to the network"
+    )
+
+
+def test_the_debugger_flag_comes_from_the_loopback_check():
+    """Not merely 'not True' -- it must be the value the loopback helper
+    produced. `debug=False` everywhere would pass the test above while
+    silently removing dev mode's debugger for everyone."""
+    import ast
+
+    call = _app_run_call()
+    node = {k.arg: k.value for k in call.keywords}["debug"]
+    assert isinstance(node, ast.Name), (
+        "expected app.run(debug=<name bound from the loopback check>), got "
+        f"{ast.dump(node)[:120]}"
+    )
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = open(os.path.join(here, "..", "dashboard.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    bound_from_check = False
+    for fn in ast.walk(tree):
+        if not (isinstance(fn, ast.FunctionDef) and fn.name == "_run_server"):
+            continue
+        for assign in ast.walk(fn):
+            if not isinstance(assign, ast.Assign):
+                continue
+            targets = [t.id for t in assign.targets if isinstance(t, ast.Name)]
+            if node.id not in targets:
+                continue
+            value = assign.value
+            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) \
+                    and "loopback" in value.func.id.lower():
+                bound_from_check = True
+    assert bound_from_check, (
+        f"app.run(debug={node.id}) but {node.id} is not assigned from a "
+        "loopback check inside _run_server"
+    )
+
+
+def test_the_reloader_is_never_sacrificed_for_the_debugger():
+    """Dev mode exists for auto-reload. Turning the debugger off must not take
+    the reloader with it, or the fix costs the feature it was protecting."""
+    import ast
+
+    call = _app_run_call()
+    kw = {k.arg: k.value for k in call.keywords}
+    node = kw.get("use_reloader")
+    assert node is not None, "app.run() no longer passes use_reloader"
+    assert isinstance(node, ast.Constant) and node.value is True, (
+        "use_reloader must stay unconditionally True: it is the part of dev "
+        "mode that is safe on any bind"
+    )

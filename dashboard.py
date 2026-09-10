@@ -46,7 +46,6 @@ if sys.platform == "win32":
         pass
 
 import glob
-import ipaddress
 import json
 import socket
 from collections import deque, defaultdict
