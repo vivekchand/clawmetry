@@ -13,7 +13,7 @@
 
 <a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
 
-**Veja o seu agente pensar.** Observabilidade em tempo real para **30 runtimes de agentes de IA**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex e mais 26. Um único painel para toda a sua frota de agentes.
+**Veja o seu agente pensar.** Observabilidade em tempo real para **31 runtimes de agentes de IA**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex e mais 27. Um único painel para toda a sua frota de agentes.
 
 > 🌐 **Leia isto em:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [mais →](docs/i18n/)
 
@@ -27,7 +27,7 @@ Abre em **http://localhost:8900**. Configuração zero: encontra os runtimes de 
 
 ![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## Funciona com 30 runtimes de agentes
+## Funciona com 31 runtimes de agentes
 
 **Grátis na aplicação open source:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
@@ -55,7 +55,7 @@ Duas perguntas que vale a pena responder antes de confiar em qualquer ferramenta
 
 **Como lida com o estouro da janela de contexto entre runtimes?**
 
-Uma percentagem de utilização só é tão honesta quanto o valor pelo qual é dividida. O ClawMetry dimensiona a janela por fornecedor a partir de [uma tabela que pode ler e submeter via PR](clawmetry/context_windows.py), cobrindo Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama e GLM. Não mede os 30 runtimes com a régua de um único fornecedor. Isso importa: um turno de 300K do GPT-5 avaliado com a régua de 200K da Anthropic lê-se como ">100%, estourado" quando na verdade está a 75% dos 400K do GPT-5. A mesma régua esconde um turno de 130K do DeepSeek genuinamente estourado como um confortável 65%.
+Uma percentagem de utilização só é tão honesta quanto o valor pelo qual é dividida. O ClawMetry dimensiona a janela por fornecedor a partir de [uma tabela que pode ler e submeter via PR](clawmetry/context_windows.py), cobrindo Anthropic, OpenAI, Google, xAI, DeepSeek, Kimi, Qwen, Mistral, Llama e GLM. Não mede os 31 runtimes com a régua de um único fornecedor. Isso importa: um turno de 300K do GPT-5 avaliado com a régua de 200K da Anthropic lê-se como ">100%, estourado" quando na verdade está a 75% dos 400K do GPT-5. A mesma régua esconde um turno de 130K do DeepSeek genuinamente estourado como um confortável 65%.
 
 Cada janela é enviada com a sua proveniência: `model_table`, `explicit_marker`, `observed_floor`, ou um honesto `default` quando não conhecemos o modelo. Um indicador construído sobre uma suposição nunca é apresentado com a mesma autoridade de um construído sobre uma consulta.
 
@@ -65,7 +65,7 @@ O ClawMetry só consegue ver eventos de compactação nalguns runtimes. Por isso
 
 | Percurso | Adicionado ao seu agente | Padrão? |
 |---|---|---|
-| Leitura contínua de ficheiros de sessão (todos os 30 runtimes) | **0**. Processo separado, sem código do ClawMetry no seu agente | ligado |
+| Leitura contínua de ficheiros de sessão (todos os 31 runtimes) | **0**. Processo separado, sem código do ClawMetry no seu agente | ligado |
 | Interceptor HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** por chamada LLM, ou 0,009% de uma chamada de 5s | desligado |
 | Portão de hook pré-ferramenta (cache aquecida) | **+44 ms** por chamada de ferramenta controlada, sobre um piso de 36 ms do interpretador | desligado |
 | Proxy de aplicação | **+9,7 ms** por chamada LLM | desligado |

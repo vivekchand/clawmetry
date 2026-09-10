@@ -5854,6 +5854,7 @@ var _Q_RUNTIME_NAMES = {
   kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
+  muse_code: 'Muse Code',
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -12113,6 +12114,7 @@ var _CM_RT_LABEL = {
   deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
+  muse_code: 'Muse Code',
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -29069,7 +29071,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 30 runtimes side by side. Respects the global
+// the headline demo path — the 31 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -32403,7 +32405,7 @@ async function renderFirstRunReport(overview) {
   // at: it probes local runtime paths and prescribes `clawmetry connect` /
   // `clawmetry --sample`. On a hosted node page the probe runs inside the
   // cloud container, which has no runtimes and never will, so it reported
-  // "No supported runtime was detected ... checked 30 runtimes" about the
+  // "No supported runtime was detected ... checked 31 runtimes" about the
   // server while the reader was looking at their own laptop's sessions.
   // A local-machine diagnostic has no honest answer to give here.
   if (window.CLOUD_MODE) { el.style.display = 'none'; return; }
@@ -32464,7 +32466,7 @@ async function renderFirstRunReport(overview) {
 
   // How widely we looked, and where to get the detail.
   //
-  // This used to render the expanded probe path for all 30 runtimes. Two
+  // This used to render the expanded probe path for all 31 runtimes. Two
   // problems with putting that on a screen. It carries the account name
   // (`/Users/<name>/...`) into every screenshot, screen-share and pasted
   // issue of an empty dashboard, which is the rule the detector surface
@@ -32492,6 +32494,40 @@ async function renderFirstRunReport(overview) {
      + 'Want to see what this looks like with data? Restart with '
      + '<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">clawmetry --sample</code>'
      + ' for three labelled synthetic sessions, including one that is stuck.</div>';
+
+  // #4784: something on this machine already emits OpenTelemetry and does not
+  // send it here. That is the most actionable thing we can say to someone
+  // looking at an empty dashboard, because it needs no install and no signup:
+  // one environment variable and their existing traces arrive.
+  //
+  // Reads `suggestable`, never `apps`: the latter can include a port
+  // ClawMetry itself holds (it binds 4318), and telling someone to redirect
+  // their app to ClawMetry, from ClawMetry, is worse than saying nothing.
+  try {
+    var otel = (overview && overview.detectedOtelApps) || {};
+    var sugg = otel.suggestable || [];
+    if (sugg.length) {
+      var named = sugg.filter(function (a) { return a.identified; });
+      var lead = named.length
+        ? ('<b>' + escHtml(named[0].name) + '</b>'
+           + (sugg.length > 1 ? ' and ' + (sugg.length - 1) + ' other'
+              + (sugg.length > 2 ? 's' : '') : '')
+           + ' on this machine ' + (sugg.length > 1 ? 'are' : 'is')
+           + ' already emitting OpenTelemetry, to '
+           + '<code>' + escHtml(named[0].endpoint) + '</code>.')
+        : ('Something on this machine is already emitting OpenTelemetry.');
+      h += '<div style="border-top:1px solid var(--border-secondary);margin-top:11px;'
+         + 'padding-top:11px;font-size:13.5px;color:var(--text-secondary);">'
+         + lead
+         + ' Send a copy here and it shows up in these tabs, with nothing to install:'
+         + '<pre style="margin:8px 0 0;padding:10px 12px;background:var(--bg-primary);'
+         + 'border:1px solid var(--border-secondary);border-radius:6px;overflow-x:auto;'
+         + 'font-size:12.5px;">' + escHtml(otel.instruction || '') + '</pre>'
+         + '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">'
+         + 'ClawMetry never changes another application\'s configuration.</div>'
+         + '</div>';
+    }
+  } catch (e) { /* the panel is worth more than the prompt */ }
 
   el.innerHTML = h;
   el.style.display = 'block';

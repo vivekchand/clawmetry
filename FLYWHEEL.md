@@ -26,8 +26,8 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 > - **Before adding any poller/fetch, ask:** does this need to run on *every* tab? every *N* seconds? can it reuse an existing fetch or the snapshot?
 > - **Measure before shipping:** open the Network panel / Resource Timing and confirm no endpoint is fetched N× per cycle and no background poller fires off its own screen. "It works" is not enough — "it works without a request storm" is the bar.
 
-> ## Multi-runtime: ClawMetry observes 30 agent runtimes, not just OpenClaw (non-negotiable)
-> **ClawMetry is runtime-neutral. It observes 30 AI agent runtimes, not OpenClaw alone.**
+> ## Multi-runtime: ClawMetry observes 31 agent runtimes, not just OpenClaw (non-negotiable)
+> **ClawMetry is runtime-neutral. It observes 31 AI agent runtimes, not OpenClaw alone.**
 > **[`SUPPORTED_RUNTIMES.txt`](./SUPPORTED_RUNTIMES.txt) is the one list — do not type a second one.**
 > It is generated from `FREE_RUNTIMES | PAID_RUNTIMES` in `clawmetry/entitlements.py` and carries every
 > runtime's id, display label, free/paid tier and clawmetry.com path, plus the derived count and the
@@ -47,7 +47,7 @@ The north star: **don't stop at "code compiles." Stop at "verified working in pr
 > clawmetry-pro's FLYWHEEL said 22, clawmetry-landing's said 21 and clawmetry-cloud's said 14 — four
 > hand-maintained lists, four different numbers, none of them visible to the others' CI.
 > - **User-facing copy and UI must never imply OpenClaw-only.** Framing like "designed for OpenClaw agents", "your OpenClaw machine", "No OpenClaw detected", or "Looking for OpenClaw activity" is a bug. Use runtime-neutral language ("your AI agent", "the machine your agent runs on") or name the runtimes ("OpenClaw, NVIDIA NemoClaw + 10 more runtimes", matching the homepage install card). Naming runtimes is public; pricing and tier internals stay private.
-> - **Verify across all 30 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
+> - **Verify across all 31 runtimes, end to end.** Never ship a change verified only on OpenClaw. Use a `/workflow` to fan out a per-runtime E2E check: one agent per runtime that installs or configures it, runs a real turn, and asserts it lands correctly (in Brain by agent_type, in the right tab, with cost and tokens). "Works on OpenClaw" is not "works".
 > Burned 2026-06-01: the docs FAQ said "ClawMetry is designed for OpenClaw agents" and the cloud empty-states plus the radar assumed OpenClaw-only. Many surfaces still need this sweep; when you touch a screen, fix its runtime framing.
 
 ---
