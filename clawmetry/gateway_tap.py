@@ -118,6 +118,101 @@ _BACKOFF_MAX_SEC = 60.0
 _ENABLE_ENV = "CLAWMETRY_ENABLE_WS_TAP"
 
 
+# Gateway `connect` rejections that mean "your credentials are wrong", as
+# opposed to "the gateway is busy/unhealthy". The whole point of the list is
+# to decide whether re-reading the token off disk could possibly help;
+# anything unrecognised is a transient failure, retried with what we hold.
+#
+# Captured off the wire from a live OpenClaw gateway (2026-09-10) rather than
+# guessed, because the top-level `code` is USELESS here — a bad token comes
+# back as the generic `INVALID_REQUEST`, and the machine-readable answer is
+# one level down in `error.details`:
+#
+#   bad token → {"code": "INVALID_REQUEST",
+#                "message": "unauthorized: gateway token mismatch (...)",
+#                "details": {"code": "AUTH_TOKEN_MISMATCH",
+#                            "authReason": "token_mismatch",
+#                            "recommendedNextStep": "update_auth_credentials"}}
+#   no token  → {"code": "NOT_PAIRED", "message": "device identity required",
+#                "details": {"code": "DEVICE_IDENTITY_REQUIRED"}}
+#
+# So we flatten code + message + details before matching. Matching the prose
+# alone would work today and break the first time upstream rewords or
+# localises that sentence.
+_AUTH_REJECT_MARKERS = (
+    # details.code / details.authReason — the durable, machine-readable form.
+    "auth_token_mismatch",
+    "token_mismatch",
+    "device_identity_required",
+    "not_paired",
+    "update_auth_credentials",
+    # message prose — older builds and other gateway implementations.
+    "token mismatch",
+    "unauthorized",
+    "unauthenticated",
+    "invalid_token",
+    "invalid token",
+    "bad token",
+    "auth_failed",
+    "auth failed",
+    "authentication",
+    "forbidden",
+)
+
+
+class GatewayAuthError(RuntimeError):
+    """The gateway rejected our `connect` because the token is wrong.
+
+    Distinguished from a generic disconnect so ``_run`` can (a) re-read the
+    token from disk before the next attempt and (b) stop repeating the same
+    WARNING once a minute forever — field report 2026-09-09: a user whose
+    gateway had restarted saw `token_mismatch` logged every 60s
+    indefinitely, because the tap cached the token it read at daemon start
+    and never looked at the config file again.
+    """
+
+
+def _is_auth_rejection(error: dict | None) -> bool:
+    """True when a rejected `connect` blames our credentials.
+
+    Takes the WHOLE ``error`` object because the answer is spread across it:
+    a live OpenClaw puts the generic ``INVALID_REQUEST`` in ``code`` and the
+    real reason in ``details.code`` / ``details.authReason``. We flatten the
+    lot and match case-insensitively, so a build that moves the marker
+    between those fields still classifies correctly.
+    """
+    if not isinstance(error, dict):
+        return False
+    try:
+        blob = json.dumps(error, default=str).lower()
+    except Exception:  # noqa: BLE001 — an unserialisable error is still text
+        blob = str(error).lower()
+    return any(marker in blob for marker in _AUTH_REJECT_MARKERS)
+
+
+def _auth_next_step(error: dict | None) -> str:
+    """The gateway's own remediation hint, '' when it offers none.
+
+    A live gateway sends ``details.recommendedNextStep`` (e.g.
+    ``update_auth_credentials``). Quoting it beats inventing our own advice.
+    """
+    if not isinstance(error, dict):
+        return ""
+    details = error.get("details")
+    if not isinstance(details, dict):
+        return ""
+    step = details.get("recommendedNextStep") or details.get("authReason") or ""
+    return str(step) if step else ""
+
+
+def _gateway_config_hint() -> str:
+    """The config path a user should look at, for log messages only."""
+    oc_dir = os.environ.get(
+        "CLAWMETRY_OPENCLAW_DIR", os.path.expanduser("~/.openclaw")
+    )
+    return os.path.join(oc_dir, "openclaw.json")
+
+
 # ── Frame normalization ─────────────────────────────────────────────────
 
 # A normalized turn we project from any provider's WS frame. Mirrors the
@@ -345,6 +440,14 @@ class GatewayTap:
         self.frames_seen = 0
         self.rows_written = 0
         self.last_error: str | None = None
+        # Credential self-heal bookkeeping. ``auth_failures`` counts
+        # consecutive `connect` rejections that looked like bad credentials;
+        # it resets on any successful connect or whenever the token on disk
+        # changes. ``token_reloads`` is how many times we picked up a rotated
+        # token — surfaced so a health check can say "we recovered" instead
+        # of the user having to reinstall.
+        self.auth_failures = 0
+        self.token_reloads = 0
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
@@ -374,6 +477,39 @@ class GatewayTap:
                 # Clean disconnect: reset backoff so the next reconnect
                 # is immediate (gateway restart, network blip).
                 backoff = _BACKOFF_INITIAL_SEC
+            except GatewayAuthError as e:
+                self.last_error = repr(e)
+                self.auth_failures += 1
+                # A rotated gateway token is the common cause (OpenClaw
+                # restarts the gateway and mints a new one; `openclaw doctor
+                # --fix` does the same). Re-read the config NOW rather than
+                # waiting out the backoff, and if it really did change,
+                # retry immediately instead of sleeping up to a minute.
+                if self._refresh_credentials():
+                    backoff = _BACKOFF_INITIAL_SEC
+                    continue
+                # Same token, same rejection. Say so once, loudly and
+                # actionably, then go quiet — repeating this every 60s for
+                # the life of the daemon is what the field report was about.
+                if self.auth_failures == 1:
+                    log.warning(
+                        "gateway WS tap: the gateway rejected our token (%s). "
+                        "Re-read %s and will keep watching it for a new "
+                        "token — no reinstall needed. Live channel messages "
+                        "are paused until the tokens match. Further identical "
+                        "rejections are logged at DEBUG.",
+                        e, _gateway_config_hint(),
+                    )
+                else:
+                    log.debug(
+                        "gateway WS tap: token still rejected (attempt %d): %s",
+                        self.auth_failures, e,
+                    )
+                if self._on_disconnect:
+                    try:
+                        self._on_disconnect(e)
+                    except Exception:
+                        pass
             except Exception as e:  # noqa: BLE001 — log and retry
                 self.last_error = repr(e)
                 log.warning(
@@ -389,6 +525,42 @@ class GatewayTap:
             self._stop.wait(timeout=backoff)
             backoff = min(_BACKOFF_MAX_SEC, backoff * 2.0)
 
+    # ── credentials ────────────────────────────────────────────────────
+
+    def _refresh_credentials(self) -> bool:
+        """Re-read the gateway URL + token from env/config.
+
+        Returns True when either actually changed, meaning the next connect
+        attempt is worth making immediately. The tap used to cache whatever
+        it read at daemon start, so a gateway restart that rotated the token
+        left it retrying the dead credential forever.
+
+        Never raises and never clears a token we hold: a missing/unreadable
+        config (mid-write by OpenClaw, or `doctor --fix` swapping the file)
+        must not downgrade a working tap to anonymous.
+        """
+        try:
+            url, token = _detect_gateway_endpoint()
+        except Exception as e:  # noqa: BLE001 — config read is best-effort
+            log.debug("gateway WS tap: credential refresh failed: %s", e)
+            return False
+        changed = False
+        if token and token != self.token:
+            self.token = token
+            self.token_reloads += 1
+            self.auth_failures = 0
+            changed = True
+            log.info(
+                "gateway WS tap: picked up a rotated gateway token from %s "
+                "— reconnecting",
+                _gateway_config_hint(),
+            )
+        if url and url != self.url:
+            self.url = url
+            changed = True
+            log.info("gateway WS tap: gateway endpoint moved to %s", url)
+        return changed
+
     def _run_once(self) -> None:
         try:
             import websocket  # type: ignore
@@ -402,6 +574,14 @@ class GatewayTap:
             # runtime, this is essentially a one-shot warning.
             self._stop.wait(timeout=300)
             return
+
+        # Re-read the token/port before every attempt. This is one small
+        # JSON read at most once per backoff window (<=1/min), and it is the
+        # difference between "the gateway restarted and we recovered" and
+        # "the user reinstalls ClawMetry". Cheap enough to do unconditionally
+        # so a rotation is picked up even after a *clean* disconnect, which
+        # never raises GatewayAuthError.
+        self._refresh_credentials()
 
         ws_url = (
             self.url.replace("http://", "ws://").replace("https://", "wss://")
@@ -460,10 +640,16 @@ class GatewayTap:
             r = json.loads(ws.recv())
             if r.get("type") == "res" and r.get("id") == cid:
                 if not r.get("ok"):
-                    raise RuntimeError(
-                        f"gateway connect rejected: "
-                        f"{r.get('error', {}).get('message', 'unknown')}"
-                    )
+                    err = r.get("error") or {}
+                    message = str(err.get("message") or "").strip()
+                    code = str(err.get("code") or "").strip()
+                    detail = f"gateway connect rejected: {message or code or 'unknown'}"
+                    if _is_auth_rejection(err):
+                        step = _auth_next_step(err)
+                        if step:
+                            detail = f"{detail} [gateway suggests: {step}]"
+                        raise GatewayAuthError(detail)
+                    raise RuntimeError(detail)
                 granted = (
                     r.get("payload", {}).get("auth", {}).get("scopes") or []
                 )
@@ -516,6 +702,7 @@ class GatewayTap:
                 log.debug("gateway WS tap: %s subscribe error: %s", method, e)
 
         self.connected = True
+        self.auth_failures = 0
         if sub_ok:
             log.info(
                 "gateway WS tap connected — capturing live channel events"
