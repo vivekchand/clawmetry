@@ -38,7 +38,7 @@ from clawmetry import mcp_install as mi  # noqa: E402
 from clawmetry import mcp_server as ms  # noqa: E402
 
 
-# ── fixtures ───────────────────────────────────────────────────────────────
+# ── fixtures ─────────────────────────────────────────────────────
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
@@ -199,7 +199,7 @@ def test_signal_rates_says_not_available_when_daemon_lacks_method(monkeypatch):
     assert out["error"] == "signals not available on this daemon version"
 
 
-# ── 2. write path through the store ───────────────────────────────────────
+# ── 2. write path through the store ───────────────────────────────────────────
 
 def test_ingest_applies_redaction_and_cap(store):
     secret = "sk-ant-abcdefghijklmnopqrstuvwxyz0123456789"
@@ -283,7 +283,7 @@ def test_session_inferred_from_env_then_cwd(store, monkeypatch, tmp_path):
     assert out["session_source"] == "working directory"
 
 
-# ── 3. corroboration ──────────────────────────────────────────────────────
+# ── 3. corroboration ───────────────────────────────────────────────────
 
 def _inc(sid="claude_code:abc", first=1000.0, last=1100.0, sig="daemon_detect_stuck_loop"):
     return {"session_id": sid, "signature": sig, "first_seen": first, "last_seen": last}
@@ -361,7 +361,7 @@ def test_permission_denial_corroborates(store, monkeypatch):
     assert row["corroborated"] is True and row["corroboration_ref"] == "denial:ap-1"
 
 
-# ── 4. honesty ────────────────────────────────────────────────────────────
+# ── 4. honesty ──────────────────────────────────────────────────────────
 
 def test_honesty_withheld_below_minimum_with_reason():
     incs = [_inc(sid=f"claude_code:s{i}", first=100 * i, last=100 * i + 10) for i in range(3)]
@@ -398,7 +398,7 @@ def test_store_honesty_uses_min_incidents_env(store, monkeypatch):
     assert rows[0]["runtime"] == "claude_code"
 
 
-# ── 5. installer, per verified runtime format ─────────────────────────────
+# ── 5. installer, per verified runtime format ─────────────────────────────────
 
 def _seed(home, runtime):
     """Pre-existing config with a FOREIGN server entry, in that runtime's format."""
@@ -414,6 +414,9 @@ def _seed(home, runtime):
         json.dump({"$schema": "https://opencode.ai/config.json",
                    "mcp": {"github": {"type": "local", "command": ["npx", "gh-mcp"],
                                        "enabled": True}}}, open(path, "w"))
+    elif fmt == "json_muse":
+        json.dump({"other": True, "mcp_servers": {"github": {"command": "npx", "args": ["gh"]}}},
+                  open(path, "w"))
     else:
         json.dump({"other": True, "mcpServers": {"github": {"command": "npx", "args": ["gh"]}}},
                   open(path, "w"))
@@ -426,8 +429,15 @@ def _foreign_present(runtime, path):
     if fmt == "toml_mcp_servers":
         return "[mcp_servers.github]" in text and 'model = "o3"' in text
     data = json.loads(text)
-    key = "mcp" if fmt == "json_opencode" else "mcpServers"
-    return "github" in data.get(key, {}) and (fmt == "json_opencode" or data.get("other") is True)
+    if fmt == "json_opencode":
+        key = "mcp"
+    elif fmt == "json_muse":
+        key = "mcp_servers"
+    else:
+        key = "mcpServers"
+    if fmt in ("json_opencode", "json_muse"):
+        return "github" in data.get(key, {})
+    return "github" in data.get(key, {}) and data.get("other") is True
 
 
 def _ours_present(runtime, path):
@@ -440,6 +450,11 @@ def _ours_present(runtime, path):
         e = data["mcp"].get("clawmetry")
         return bool(e) and e["type"] == "local" and e["command"] == ["/opt/clawmetry/bin/clawmetry", "mcp"] \
             and e["enabled"] is True
+    if fmt == "json_muse":
+        e = data.get("mcp_servers", {}).get("clawmetry")
+        if not e:
+            return False
+        return e["command"] == "/opt/clawmetry/bin/clawmetry" and e["args"] == ["mcp"]
     e = data["mcpServers"].get("clawmetry")
     if not e:
         return False
@@ -488,10 +503,16 @@ def test_hand_written_entry_is_never_deleted(home, runtime):
             fh.write('\n[mcp_servers.clawmetry]\ncommand = "clawmetry"\nargs = ["mcp"]\n')
     else:
         data = json.load(open(path))
-        key = "mcp" if fmt == "json_opencode" else "mcpServers"
-        data[key]["clawmetry"] = ({"type": "local", "command": ["clawmetry", "mcp"]}
-                                  if fmt == "json_opencode"
-                                  else {"command": "clawmetry", "args": ["mcp"]})
+        if fmt == "json_opencode":
+            key = "mcp"
+            entry = {"type": "local", "command": ["clawmetry", "mcp"]}
+        elif fmt == "json_muse":
+            key = "mcp_servers"
+            entry = {"command": "clawmetry", "args": ["mcp"]}
+        else:
+            key = "mcpServers"
+            entry = {"command": "clawmetry", "args": ["mcp"]}
+        data[key]["clawmetry"] = entry
         json.dump(data, open(path, "w"))
     before = open(path).read()
     assert inst.status(runtime)["status"] == mi.ALREADY_PRESENT

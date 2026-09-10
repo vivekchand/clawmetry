@@ -91,6 +91,10 @@ EXEMPT: list[tuple[str, str, str]] = [
     ("clawmetry/sync.py", "10 runtimes", "rollup sizing estimate, not the catalogue"),
     ("docs/WHAT_USERS_WANT.md", "18 runtimes total", "dated research note"),
     ("clawmetry/runtime_memory.py", "other 17 runtimes", "historic bug narrative, means all-but-one"),
+    ("clawmetry/entitlements.py", '"& 26 more" next to "30 runtimes"',
+     "historic bug narrative: what the README ACTUALLY said before the "
+     "marquee existed. Rewriting the 30 makes the sentence describe a state "
+     "that never happened, which is worse than a stale number"),
     (".github/workflows/sync-github-about.yml", "26 AI agent runtimes",
      "quotes the stale blurb that workflow exists to prevent"),
 ]

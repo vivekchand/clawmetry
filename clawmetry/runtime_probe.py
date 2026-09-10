@@ -198,6 +198,22 @@ RUNTIME_PROBES: tuple = (
     # files rather than the directory: the dir alone is created by a first
     # launch that never recorded a session, and ~/.config is shared with
     # every other tool, so a bare-dir probe is the weakest possible evidence.
+    # Muse Code keeps two directories apart and it is easy to probe the wrong
+    # one (we did). Verified against muse 1.0.3 on macOS:
+    #   ~/.local/share/muse  ($XDG_DATA_HOME/muse) -- the real home:
+    #                        session-index.db + sessions/YYYY/MM/DD/<uuid>/
+    #   ~/.config/muse       -- settings.json and auth.json only
+    # macOS follows XDG here, NOT ~/Library/Application Support. The session
+    # index comes first because it is the only one of these that proves Muse
+    # actually RAN: ~/.config/muse is created on first launch even when that
+    # launch fails for want of credentials, so the bare directory proves
+    # nothing and is deliberately not listed.
+    RuntimeProbe("muse_code", "Muse Code",
+                 ("~/.local/share/muse/session-index.db",
+                  "~/.local/share/muse/sessions",
+                  "~/.config/muse/settings.json",
+                  "~/.config/muse/auth.json"),
+                 env="CLAWMETRY_MUSE_HOME"),
     RuntimeProbe("openworker", "OpenWorker",
                  ("~/.config/coworker/coworker.db",
                   "~/.config/coworker/conversations",
