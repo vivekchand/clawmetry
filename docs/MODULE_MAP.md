@@ -110,6 +110,7 @@ Helpers extracted out of `dashboard.py`. Route modules still reach the ones that
 | `helpers/logs.py` | medium |  |  | Filesystem helpers for OpenClaw log discovery + tail + grep. |
 | `helpers/openapi.py` | medium | `bp_openapi` | `/api/docs`, `/openapi.json` | auto-generate an OpenAPI 3.1 spec from Flask routes. |
 | `helpers/pricing.py` | small |  |  | Pure helpers for mapping model names to providers. |
+| `helpers/server.py` | small |  |  | Server-startup helpers for dashboard.py. |
 | `helpers/streams.py` | small |  |  | Bounded SSE client accounting. |
 | `helpers/system.py` | medium |  |  | Portable system uptime helpers. |
 
@@ -196,6 +197,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/numbat_ingest.py` | medium | map Perplexity numbat NDJSON records into ClawMetry rows. |
 | `clawmetry/onboarding_state.py` | small | the ONE writer for the first-run gate's |
 | `clawmetry/org_key.py` | small | The organisation key: one secret, shared by the people in one organisation. |
+| `clawmetry/otel_discovery.py` | medium | Find applications on this machine that already emit OpenTelemetry (#4784). |
 | `clawmetry/otel_exporter.py` | medium | Outbound OTLP trace exporter for ClawMetry. |
 | `clawmetry/otel_profiles.py` | small | OTel runtime profiles — the seam between the generic OTLP receiver and |
 | `clawmetry/otel_push.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
@@ -266,6 +268,7 @@ The runtime adapters that ship in open source. The paid ones live in `clawmetry-
 | `clawmetry/adapters/goose.py` | medium | GooseAdapter — read Goose (Block / block/goose) sessions from its SQLite store. |
 | `clawmetry/adapters/nemo.py` | large | NeMoAdapter — push-mode telemetry exporter for NVIDIA's NeMo Agent Toolkit. |
 | `clawmetry/adapters/openclaw.py` | large | This adapter does NOT re-implement OpenClaw session parsing. It delegates |
+| `clawmetry/adapters/openclaw_share.py` | medium | OpenClaw public-share state (issue #5746). |
 | `clawmetry/adapters/phase.py` | medium | The session phase model: one state machine, every runtime. |
 | `clawmetry/adapters/registry.py` | small | Process-wide adapter registry. |
 

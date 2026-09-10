@@ -1,0 +1,6 @@
+Before calling this tool, ensure the input is valid JSON.
+Prior to using this function, check that the file exists.
+Before invoking this tool, verify the user has permission.
+Before running this tool, read the documentation for usage.
+This tool reads configuration from the provided path.
+Collects metrics and sends them to the monitoring service.

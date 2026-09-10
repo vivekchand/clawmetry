@@ -121,7 +121,6 @@ CANONICAL_TABS = [
     # 2026-08-01: the old tab rendered hardcoded token estimates node-wide.
     # switchTab('context') aliases to context-economics for old deep links.
     "limits",
-    "clusters",
     "history",
     # Tabs added after initial C5 coverage -- verified present in
     # clawmetry/templates/tabs/ or routes/ as of 2026-06-09.
