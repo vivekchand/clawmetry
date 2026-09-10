@@ -172,6 +172,14 @@ jobs:
       - name: Workflow integrity (dead steps, unreachable triggers, input injection)
         run: python3 -m pytest tests/test_ci_workflow_invocations_are_real.py -q
 
+      # #5739: the field-failure filer could open and refresh an issue but
+      # never close one, so a signature that stopped occurring left its issue
+      # open forever under a "Still occurring" comment. Runs the reconcile
+      # step's real shell against a fake gh -- including the case where the
+      # endpoint is unreachable, which must close nothing.
+      - name: Field-failure issues close when the signature stops
+        run: python3 -m pytest tests/test_field_failure_autoclose.py -q
+
       # Named explicitly because this repo's CI runs FILE LISTS, not
       # `pytest tests/`. /api/runtime-summary claimed to mirror the daemon's
       # runtimeSummary slice but re-implemented it as a capped raw-event scan:
@@ -395,6 +403,9 @@ jobs:
       # here because this job runs FILE LISTS.
       - name: Hosted Security tab shows only what it can fill
         run: python3 -m pytest tests/test_security_tab_cloud_honesty.py -q
+
+      - name: Werkzeug debugger only on loopback bind
+        run: python3 -m pytest tests/test_debugger_loopback_only.py -q
 
       # The Overview "Active Tasks" panel told four lies on one screen under
       # ?runtime=codex: a hardcoded personal-project pill said OpenClaw, no

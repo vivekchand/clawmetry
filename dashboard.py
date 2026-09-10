@@ -99,6 +99,7 @@ from helpers.streams import (  # noqa: F401 — re-export for routes/
     _release_stream_slot,
 )
 from helpers.hardware import _detect_host_hardware  # noqa: F401 — re-export for routes/
+from helpers.server import is_loopback_host as _is_loopback_host
 from helpers.gateway import (  # noqa: F401 — re-export for routes/
     _gw_invoke,
     _gw_invoke_docker,
@@ -13539,9 +13540,36 @@ def _run_server(args):
         pass  # stdout may be closed/redirected on Windows
 
     if args.debug:
-        # Dev mode -- use Flask's reloader
+        # Dev mode -- use Flask's reloader.
+        #
+        # The Werkzeug debugger is only safe behind a loopback bind. With
+        # debug=True, any unhandled exception serves the interactive traceback
+        # page -- source, local variables, and a (PIN-gated) eval console -- to
+        # whoever reached the port. `--debug` is the DEFAULT here, so the user
+        # who adds `--host 0.0.0.0` for LAN access (which the banner above
+        # advertises) would otherwise publish all of that to the network
+        # without ever asking for it.
+        #
+        # Keep the reloader either way -- that is the part dev mode is for --
+        # and drop only the debugger when the bind is not loopback.
+        debugger_ok = _is_loopback_host(args.host)
+        if not debugger_ok:
+            try:
+                print(
+                    f"  Note: debugger off -- {args.host} is not loopback. "
+                    "Auto-reload stays on."
+                )
+                print()
+            except (ValueError, OSError):
+                # stdout may be closed/redirected on Windows, same as the
+                # banner above. Never let a status line stop the server.
+                pass
         app.run(
-            host=args.host, port=args.port, debug=True, use_reloader=True, threaded=True
+            host=args.host,
+            port=args.port,
+            debug=debugger_ok,
+            use_reloader=True,
+            threaded=True,
         )
     else:
         # Prod mode -- use Waitress (no WSGI warning, multi-threaded)
