@@ -32495,6 +32495,40 @@ async function renderFirstRunReport(overview) {
      + '<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">clawmetry --sample</code>'
      + ' for three labelled synthetic sessions, including one that is stuck.</div>';
 
+  // #4784: something on this machine already emits OpenTelemetry and does not
+  // send it here. That is the most actionable thing we can say to someone
+  // looking at an empty dashboard, because it needs no install and no signup:
+  // one environment variable and their existing traces arrive.
+  //
+  // Reads `suggestable`, never `apps`: the latter can include a port
+  // ClawMetry itself holds (it binds 4318), and telling someone to redirect
+  // their app to ClawMetry, from ClawMetry, is worse than saying nothing.
+  try {
+    var otel = (overview && overview.detectedOtelApps) || {};
+    var sugg = otel.suggestable || [];
+    if (sugg.length) {
+      var named = sugg.filter(function (a) { return a.identified; });
+      var lead = named.length
+        ? ('<b>' + escHtml(named[0].name) + '</b>'
+           + (sugg.length > 1 ? ' and ' + (sugg.length - 1) + ' other'
+              + (sugg.length > 2 ? 's' : '') : '')
+           + ' on this machine ' + (sugg.length > 1 ? 'are' : 'is')
+           + ' already emitting OpenTelemetry, to '
+           + '<code>' + escHtml(named[0].endpoint) + '</code>.')
+        : ('Something on this machine is already emitting OpenTelemetry.');
+      h += '<div style="border-top:1px solid var(--border-secondary);margin-top:11px;'
+         + 'padding-top:11px;font-size:13.5px;color:var(--text-secondary);">'
+         + lead
+         + ' Send a copy here and it shows up in these tabs, with nothing to install:'
+         + '<pre style="margin:8px 0 0;padding:10px 12px;background:var(--bg-primary);'
+         + 'border:1px solid var(--border-secondary);border-radius:6px;overflow-x:auto;'
+         + 'font-size:12.5px;">' + escHtml(otel.instruction || '') + '</pre>'
+         + '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">'
+         + 'ClawMetry never changes another application\'s configuration.</div>'
+         + '</div>';
+    }
+  } catch (e) { /* the panel is worth more than the prompt */ }
+
   el.innerHTML = h;
   el.style.display = 'block';
 }

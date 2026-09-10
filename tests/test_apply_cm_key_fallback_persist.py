@@ -15,10 +15,17 @@ subprocess) the subprocess exited non-zero. The old shell:
 
 The fix: even when the subprocess fails, persist the key at the same
 location ``dashboard._write_cloud_token`` uses
-(``~/.openclaw/openclaw.json → clawmetry.cloudToken``). That path is
-what ``dashboard._read_cloud_token`` / ``_cloud_connected`` / the
-cloud-cta status route inspect — so the dashboard flips to "connected"
-and the onboarding gate stops re-prompting.
+(``~/.clawmetry/config.json → api_key``). That path is what
+``dashboard._read_cloud_token`` / ``_cloud_connected`` / the cloud-cta
+status route inspect — so the dashboard flips to "connected" and the
+onboarding gate stops re-prompting.
+
+That used to be ``~/.openclaw/openclaw.json → clawmetry.cloudToken``.
+Writing there is now itself a bug (field report 2026-09-09): ``clawmetry``
+is not a key in OpenClaw's schema, so the write made OpenClaw's own config
+fail validation and its next CLI run fired ``doctor --fix``, restoring the
+last-known-good config and restarting the gateway mid-session. The tests
+below therefore also assert the *negative*: OpenClaw's file is not touched.
 """
 
 from __future__ import annotations
@@ -44,15 +51,16 @@ def fake_home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _openclaw_token(fake_home: Path) -> str:
-    p = fake_home / ".openclaw" / "openclaw.json"
+def _persisted_key(fake_home: Path) -> str:
+    """The cm_ bearer as the dashboard would read it back."""
+    p = fake_home / ".clawmetry" / "config.json"
     if not p.exists():
         return ""
     try:
         data = json.loads(p.read_text())
     except (ValueError, OSError):
         return ""
-    return ((data.get("clawmetry") or {}).get("cloudToken") or "")
+    return data.get("api_key") or ""
 
 
 # ---------------------------------------------------------------------------
@@ -60,79 +68,80 @@ def _openclaw_token(fake_home: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_fallback_writes_token_to_openclaw_sidecar(fake_home):
+def test_fallback_writes_token_to_clawmetry_config(fake_home):
     ok = desk_onb._fallback_persist_cm_key("cm_abc123")
     assert ok is True
-    assert _openclaw_token(fake_home) == "cm_abc123"
+    assert _persisted_key(fake_home) == "cm_abc123"
 
 
 def test_fallback_rejects_non_cm_key(fake_home):
     assert desk_onb._fallback_persist_cm_key("") is False
     assert desk_onb._fallback_persist_cm_key("not-a-cm-key") is False
     # And no file is written when the key is rejected.
-    assert not (fake_home / ".openclaw" / "openclaw.json").exists()
+    assert not (fake_home / ".clawmetry" / "config.json").exists()
 
 
-def test_fallback_preserves_existing_openclaw_json(fake_home):
-    """We must not clobber the user's OpenClaw config — only touch the
-    ``clawmetry.cloudToken`` sub-key. This mirrors how
-    ``dashboard._write_cloud_token`` handles the same file."""
+def test_fallback_never_touches_openclaws_config(fake_home):
+    """The bug this half of the change fixes: the fallback must leave
+    ``~/.openclaw/openclaw.json`` byte-identical. A ``clawmetry`` key in
+    there makes OpenClaw's own config fail validation, and the next
+    ``openclaw`` run repairs it by restoring the last-known-good config
+    and restarting the gateway — killing the user's live session."""
     oc = fake_home / ".openclaw" / "openclaw.json"
     oc.parent.mkdir(parents=True, exist_ok=True)
-    oc.write_text(json.dumps({
+    original = json.dumps({
         "tools": {"exec": {"host": "gateway"}},
         "meta": {"lastTouchedVersion": "2026.7.1"},
-    }))
+    }, indent=2)
+    oc.write_text(original)
 
     desk_onb._fallback_persist_cm_key("cm_xyz789")
 
-    data = json.loads(oc.read_text())
-    assert data["clawmetry"]["cloudToken"] == "cm_xyz789"
-    assert data["tools"]["exec"]["host"] == "gateway", (
-        "fallback must be a merge, not a replace — losing the OpenClaw "
-        "tools/meta config would break OpenClaw itself."
+    assert oc.read_text() == original, (
+        "openclaw.json belongs to OpenClaw — we do not write to it at all."
     )
-    assert data["meta"]["lastTouchedVersion"] == "2026.7.1"
+    assert _persisted_key(fake_home) == "cm_xyz789"
 
 
-def test_fallback_merges_with_existing_clawmetry_block(fake_home):
-    oc = fake_home / ".openclaw" / "openclaw.json"
-    oc.parent.mkdir(parents=True, exist_ok=True)
-    oc.write_text(json.dumps({
-        "clawmetry": {"gatewayToken": "gw_existing"},
+def test_fallback_preserves_the_daemons_other_config_keys(fake_home):
+    """``node_id`` / ``encryption_key`` share this file. A bare replace
+    would lose the node identity and make every snapshot already pushed
+    under the old encryption key undecryptable."""
+    cfg = fake_home / ".clawmetry" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(json.dumps({
+        "node_id": "node-42",
+        "encryption_key": "deadbeef",
     }))
 
     desk_onb._fallback_persist_cm_key("cm_new_key")
 
-    data = json.loads(oc.read_text())
-    assert data["clawmetry"]["cloudToken"] == "cm_new_key"
-    assert data["clawmetry"]["gatewayToken"] == "gw_existing", (
-        "Existing sibling keys under clawmetry must survive — a bare "
-        "assignment would wipe gatewayToken and break gateway auth."
-    )
+    data = json.loads(cfg.read_text())
+    assert data["api_key"] == "cm_new_key"
+    assert data["node_id"] == "node-42"
+    assert data["encryption_key"] == "deadbeef"
 
 
-def test_fallback_handles_corrupt_openclaw_json(fake_home):
-    """A malformed openclaw.json shouldn't take down the fallback path
+def test_fallback_handles_corrupt_config_json(fake_home):
+    """A malformed config.json shouldn't take down the fallback path
     — we're on a failing branch already, we cannot compound the failure.
     Rewrite it clean so the token lands."""
-    oc = fake_home / ".openclaw" / "openclaw.json"
-    oc.parent.mkdir(parents=True, exist_ok=True)
-    oc.write_text("{not valid json")
+    cfg = fake_home / ".clawmetry" / "config.json"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text("{not valid json")
 
     ok = desk_onb._fallback_persist_cm_key("cm_recover")
 
     assert ok is True
-    data = json.loads(oc.read_text())
-    assert data["clawmetry"]["cloudToken"] == "cm_recover"
+    assert json.loads(cfg.read_text())["api_key"] == "cm_recover"
 
 
 def test_fallback_never_raises_on_oserror(fake_home, monkeypatch):
     """Home path unwriteable? Return False, don't raise. The onboarding
     stamp path will still get the recovery message from apply_cm_key."""
-    # Make ~/.openclaw exist as a FILE where the fallback expects a dir.
-    # openclaw.json.parent.mkdir(parents=True, exist_ok=True) then fails.
-    (fake_home / ".openclaw").write_text("blocking")
+    # Make ~/.clawmetry exist as a FILE where the fallback expects a dir.
+    # config.json.parent.mkdir(parents=True, exist_ok=True) then fails.
+    (fake_home / ".clawmetry").write_text("blocking")
 
     # Must not raise.
     ok = desk_onb._fallback_persist_cm_key("cm_noraise")
@@ -189,7 +198,7 @@ def test_apply_cm_key_subprocess_failure_persists_key(fake_home, tmp_path, monke
 
     assert ok is False
     assert "launchctl" in msg
-    assert _openclaw_token(fake_home) == "cm_realkey", (
+    assert _persisted_key(fake_home) == "cm_realkey", (
         "Subprocess failed but the key is real (OTP minted it moments "
         "ago). Without this write the dashboard's onboarding gate "
         "re-prompts on every relaunch (founder report 2026-08-12)."
@@ -209,7 +218,7 @@ def test_apply_cm_key_timeout_persists_key(fake_home, tmp_path, monkeypatch):
 
     assert ok is False
     assert "timed out" in msg
-    assert _openclaw_token(fake_home) == "cm_timeout"
+    assert _persisted_key(fake_home) == "cm_timeout"
 
 
 def test_apply_cm_key_generic_exception_persists_key(fake_home, tmp_path, monkeypatch):
@@ -225,7 +234,7 @@ def test_apply_cm_key_generic_exception_persists_key(fake_home, tmp_path, monkey
 
     assert ok is False
     assert "sign-in error" in msg
-    assert _openclaw_token(fake_home) == "cm_exc"
+    assert _persisted_key(fake_home) == "cm_exc"
 
 
 def test_apply_cm_key_missing_venv_persists_key(fake_home, tmp_path):
@@ -236,7 +245,7 @@ def test_apply_cm_key_missing_venv_persists_key(fake_home, tmp_path):
     )
     assert ok is False
     assert "venv is not ready" in msg
-    assert _openclaw_token(fake_home) == "cm_earlybail"
+    assert _persisted_key(fake_home) == "cm_earlybail"
 
 
 def test_apply_cm_key_selfhost_failure_also_persists(fake_home, tmp_path, monkeypatch):
@@ -253,7 +262,7 @@ def test_apply_cm_key_selfhost_failure_also_persists(fake_home, tmp_path, monkey
     ok, msg = desk_onb.apply_cm_key(venv_bin, "cm_selfhost", mode="selfhost")
 
     assert ok is False
-    assert _openclaw_token(fake_home) == "cm_selfhost"
+    assert _persisted_key(fake_home) == "cm_selfhost"
 
 
 # ─── Trial mint on the fallback path (founder ask 2026-08-13) ────────────
@@ -329,7 +338,7 @@ def test_fallback_trial_mint_never_raises_on_network_error(fake_home, monkeypatc
     ok = desk_onb._fallback_persist_cm_key("cm_offline_test")
 
     assert ok is True, "network failure must not undo the pairing"
-    assert _openclaw_token(fake_home) == "cm_offline_test"
+    assert _persisted_key(fake_home) == "cm_offline_test"
 
 
 def test_fallback_trial_mint_swallows_activate_errors(fake_home, monkeypatch):

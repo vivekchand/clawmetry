@@ -12206,35 +12206,25 @@ def _get_uptime_str(pid):
 def _read_cloud_token():
     """Resolve the cloud bearer the dashboard uses for /api/cloud-proxy/*.
 
-    Two sources of truth (audit P0 #5, clawmetry-cloud#779):
-
-      1. ``~/.openclaw/openclaw.json`` → ``clawmetry.cloudToken`` (legacy
-         OpenClaw sidecar path; written by ``clawmetry connect``).
-      2. ``~/.clawmetry/config.json`` → ``api_key`` (the daemon's own
-         config, written by ``python -m clawmetry.sync`` once the node is
-         paired). Validated by the ``cm_`` prefix.
-
-    Without (2) the dashboard would 401 the entire Alerts UI even on
-    machines where the daemon is fully cloud-paired but never had the
-    OpenClaw sidecar config written.
+    Delegates to ``clawmetry.config.read_cloud_token``, which reads
+    ``~/.clawmetry/config.json`` → ``api_key`` (the daemon's own config,
+    written by ``clawmetry connect`` / ``python -m clawmetry.sync``) and
+    falls back to the retired ``~/.openclaw/openclaw.json`` →
+    ``clawmetry.cloudToken`` mirror, migrating it out of OpenClaw's config
+    on the way. Returns None (not '') when unpaired — callers test truthiness
+    but a couple pass the result straight into a header dict, and None is the
+    long-standing contract here.
     """
-    # Source 1 — OpenClaw sidecar (existing path, kept first so an explicit
-    # `clawmetry connect` write wins over the daemon-side copy).
-    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
     try:
-        with open(cfg_path) as f:
-            data = json.load(f)
-        tok = (data.get("clawmetry", {}) or {}).get("cloudToken", "")
-        if tok:
-            return tok
+        from clawmetry.config import read_cloud_token as _read
+        return _read() or None
     except Exception:
         pass
-    # Source 2 — daemon's own config (audit P0 #5 fallback).
-    daemon_cfg = os.path.expanduser("~/.clawmetry/config.json")
+    # Last-ditch inline read: config.py import failing should not take the
+    # Alerts UI down on a machine that IS paired.
     try:
-        with open(daemon_cfg) as f:
-            data = json.load(f)
-        tok = data.get("api_key", "")
+        with open(os.path.expanduser("~/.clawmetry/config.json")) as f:
+            tok = json.load(f).get("api_key", "")
         if isinstance(tok, str) and tok.startswith("cm_"):
             return tok
     except Exception:
@@ -12243,18 +12233,18 @@ def _read_cloud_token():
 
 
 def _write_cloud_token(token):
-    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
-    try:
-        with open(cfg_path) as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
-    if "clawmetry" not in data:
-        data["clawmetry"] = {}
-    data["clawmetry"]["cloudToken"] = token
-    os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-    with open(cfg_path, "w") as f:
-        json.dump(data, f, indent=2)
+    """Persist the cm_ bearer to ClawMetry's own config.
+
+    This used to write ``clawmetry.cloudToken`` into
+    ``~/.openclaw/openclaw.json``. It no longer touches that file at all:
+    ``clawmetry`` is not a key in OpenClaw's schema, so the write left
+    OpenClaw's config failing validation, and OpenClaw's next CLI run fired
+    ``doctor --fix`` — restoring the last-known-good config, restarting the
+    gateway and killing the user's live session. See the comment block in
+    ``clawmetry/config.py``.
+    """
+    from clawmetry.config import write_cloud_token as _write
+    _write(token)
 
 
 # In-memory account-email cache for /api/cloud-cta/status. `fail_at` throttles
