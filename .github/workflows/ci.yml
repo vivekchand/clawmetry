@@ -209,6 +209,15 @@ jobs:
       - name: Architecture docs name modules that exist
         run: python3 -m pytest tests/test_module_map_drift.py -q
 
+      # docs/INGEST.md is GENERATED from clawmetry/ingest_contract.py, the same
+      # way MODULE_MAP.md is generated from the tree. A generated doc with no
+      # drift check is a hand-maintained doc that nobody knows is stale, which
+      # is the failure #5568 fixed for the architecture docs. Named explicitly
+      # because this job runs FILE LISTS: without this line the guard runs in
+      # no job at all and the doc rots silently.
+      - name: The ingest doc matches the ingest contract
+        run: python3 -m pytest tests/test_ingest_doc_drift.py -q
+
       # Every `uses:` reference -- workflows AND the composite actions under
       # .github/actions/, whose own `uses:` lines run with the calling job's
       # token -- must stay pinned to a full commit SHA. A tag is mutable: its
@@ -633,6 +642,7 @@ jobs:
             tests/test_moat_event_shape_manifest_guard.py \
             tests/test_moat_regression_1129.py \
             tests/test_e2e_real_openclaw_pipeline.py \
+            tests/test_onboarding_ingest_status.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
             tests/test_query_events_keys_first.py \
             tests/test_cost_scan_slim_events.py \

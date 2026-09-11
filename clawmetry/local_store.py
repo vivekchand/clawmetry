@@ -12282,6 +12282,98 @@ class LocalStore(TrailStoreMixin):
         except (TypeError, ValueError, IndexError):
             return 0
 
+    def query_ingest_status(self, *, recent_window_secs: int = 86400) -> dict:
+        """Aggregate ingest-status for GET /api/onboarding/ingest-status.
+
+        Polled every 2 s by the onboarding strip, so the two SQL passes are
+        deliberately light: one aggregate over the whole events table (total
+        count, 24-hour bucket, first/last timestamps) and one GROUP BY
+        agent_type for the per-source breakdown. No full scan of ``data``
+        blobs; zone maps on ``created_at`` keep both passes fast on large
+        stores.
+
+        The ``kind`` field in each source row is derived from
+        ``entitlements.ALL_RUNTIMES``: runtimes ClawMetry ships adapters for
+        ingest via filesystem; anything else arrived over OTLP or the HTTP
+        ingest API.
+
+        Never raises — returns a disconnected stub on any error so the strip
+        degrades silently instead of breaking the onboarding overlay.
+        """
+        import time as _time
+        try:
+            cutoff_ms = int((_time.time() - recent_window_secs) * 1000)
+            agg_rows = self._fetch(
+                """
+                SELECT
+                    COUNT(*)                                         AS events_total,
+                    SUM(CASE WHEN created_at > ? THEN 1 ELSE 0 END) AS events_recent,
+                    MIN(created_at) / 1000.0                         AS first_event_at,
+                    MAX(created_at) / 1000.0                         AS last_event_at
+                FROM events
+                WHERE agent_type != 'daemon'
+                """,
+                [cutoff_ms],
+            )
+            # `_fetch` returns positional TUPLES, not mappings. Reading these
+            # as dicts raised AttributeError on every call, the blanket
+            # `except` below swallowed it, and the endpoint reported
+            # "not connected" for every user regardless of how much data the
+            # store held -- the precise failure it exists to prevent, inverted.
+            agg = tuple(agg_rows[0]) if agg_rows else ()
+            total = int(agg[0] or 0) if len(agg) > 0 else 0
+            recent = int(agg[1] or 0) if len(agg) > 1 else 0
+            first_at = agg[2] if len(agg) > 2 else None
+            last_at = agg[3] if len(agg) > 3 else None
+
+            src_rows = self._fetch(
+                """
+                SELECT
+                    agent_type               AS runtime,
+                    COUNT(*)                 AS events,
+                    MAX(created_at) / 1000.0 AS last_at
+                FROM events
+                WHERE agent_type != 'daemon'
+                GROUP BY agent_type
+                ORDER BY events DESC
+                LIMIT 50
+                """,
+                [],
+            )
+
+            try:
+                from clawmetry.entitlements import ALL_RUNTIMES as _all_rt
+            except Exception:
+                _all_rt = frozenset()
+
+            sources = []
+            for r in (src_rows or []):
+                row = tuple(r)
+                runtime = row[0] if len(row) > 0 else ""
+                sources.append({
+                    "kind": "filesystem" if runtime in _all_rt else "otlp",
+                    "runtime": runtime or "",
+                    "events": int((row[1] if len(row) > 1 else 0) or 0),
+                    "last_at": row[2] if len(row) > 2 else None,
+                })
+            return {
+                "connected": total > 0,
+                "events_total": total,
+                "events_recent": recent,
+                "first_event_at": first_at,
+                "last_event_at": last_at,
+                "sources": sources,
+            }
+        except Exception:
+            return {
+                "connected": False,
+                "events_total": 0,
+                "events_recent": 0,
+                "first_event_at": None,
+                "last_event_at": None,
+                "sources": [],
+            }
+
     def query_events_by_ingest(
         self,
         *,
