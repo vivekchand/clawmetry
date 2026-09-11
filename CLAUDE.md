@@ -264,6 +264,7 @@ CLAWMETRY_GUARD_POLICIES=1             # Evaluate Guard policies at all (0 = ski
 CLAWMETRY_POLICY_ENFORCE=0             # Let a policy actually signal a process. Default 0 = dry run; this one env var disables every policy on the node
 CLAWMETRY_GUARD_CRITICAL_USD=...       # Spend-at-risk above which a warning becomes critical
 CLAWMETRY_NOPROG_TOOLS__<RUNTIME>=40   # Per-runtime threshold override (highest layer in resolve_thresholds)
+CLAWMETRY_EGRESS_SETTLE_HOURS=24       # A learned host counts as known only after this long in the cohort's memory, so a swarm cannot vouch for its own destination (0 = off)
 CLAWMETRY_ENFORCE=1                    # Turn entitlement enforcement on (default: GRACE, everything allowed)
 
 # Resource budget (FLYWHEEL.md 1e: the daemon must stay near-invisible)
