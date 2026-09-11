@@ -12315,11 +12315,16 @@ class LocalStore(TrailStoreMixin):
                 """,
                 [cutoff_ms],
             )
-            agg = agg_rows[0] if agg_rows else {}
-            total = int(agg.get("events_total") or 0)
-            recent = int(agg.get("events_recent") or 0)
-            first_at = agg.get("first_event_at")
-            last_at = agg.get("last_event_at")
+            # `_fetch` returns positional TUPLES, not mappings. Reading these
+            # as dicts raised AttributeError on every call, the blanket
+            # `except` below swallowed it, and the endpoint reported
+            # "not connected" for every user regardless of how much data the
+            # store held -- the precise failure it exists to prevent, inverted.
+            agg = tuple(agg_rows[0]) if agg_rows else ()
+            total = int(agg[0] or 0) if len(agg) > 0 else 0
+            recent = int(agg[1] or 0) if len(agg) > 1 else 0
+            first_at = agg[2] if len(agg) > 2 else None
+            last_at = agg[3] if len(agg) > 3 else None
 
             src_rows = self._fetch(
                 """
@@ -12333,6 +12338,7 @@ class LocalStore(TrailStoreMixin):
                 ORDER BY events DESC
                 LIMIT 50
                 """,
+                [],
             )
 
             try:
@@ -12340,15 +12346,16 @@ class LocalStore(TrailStoreMixin):
             except Exception:
                 _all_rt = frozenset()
 
-            sources = [
-                {
-                    "kind": "filesystem" if r.get("runtime") in _all_rt else "otlp",
-                    "runtime": r.get("runtime", ""),
-                    "events": int(r.get("events") or 0),
-                    "last_at": r.get("last_at"),
-                }
-                for r in (src_rows or [])
-            ]
+            sources = []
+            for r in (src_rows or []):
+                row = tuple(r)
+                runtime = row[0] if len(row) > 0 else ""
+                sources.append({
+                    "kind": "filesystem" if runtime in _all_rt else "otlp",
+                    "runtime": runtime or "",
+                    "events": int((row[1] if len(row) > 1 else 0) or 0),
+                    "last_at": row[2] if len(row) > 2 else None,
+                })
             return {
                 "connected": total > 0,
                 "events_total": total,
