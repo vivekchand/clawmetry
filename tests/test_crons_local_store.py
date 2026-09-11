@@ -37,6 +37,15 @@ def _build_app(tmp_path, monkeypatch, *, enable_fast_path: bool):
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "5")
+    # CLAWMETRY_ROLE=dashboard makes get_store() hand back a _ProxyStore
+    # (clawmetry/local_store.py's non-writer-process branch) instead of
+    # opening this test's own tmp DuckDB file directly. cli.py's main()
+    # sets this via a bare os.environ[...] = ... (clawmetry/cli.py ~9138)
+    # that outlives any one test, so a suite-order neighbour that calls
+    # cli.main() (e.g. test_cli_unattended_update.py) leaks it into every
+    # test that runs after — this fixture must not depend on running
+    # before that neighbour in the file list.
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
     if enable_fast_path:
         monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
     else:
