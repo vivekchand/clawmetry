@@ -886,6 +886,14 @@ jobs:
           CI: "true"
         run: python3 -m pytest tests/test_question_set_relay.py -q
 
+      # A hook-parked request is stamped ...Z (UTC); _seconds_since must not
+      # read it as local wall-clock (2026-09-11: a 4-minute-old question
+      # showed "waiting 2h 2m" on a CEST machine).
+      - name: Approval waiting time honours UTC
+        env:
+          CI: "true"
+        run: python3 -m pytest tests/test_seconds_since_utc.py -q
+
       # Mutation testing: does the suite actually catch bugs, or has it been
       # weakened into a tautology? Line coverage cannot tell the difference.
       # The score ratchets -- it may rise freely, and a drop fails the build.
