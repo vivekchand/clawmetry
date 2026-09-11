@@ -1,5 +1,15 @@
 ## Unreleased
 
+### Fixed: Harness Engineering stamped Codex, OpenClaw and five more runtimes "Can't see" (2026-09-11)
+- **Why:** the bench ranks a runtime only on sessions the quality grader could measure. On a live node Codex showed 16 sessions and 0 measurable, so it sat below the line as "completion not verifiable from what this harness records" while Claude Code ranked normally.
+- **Codex:** it records tool-call `arguments` as a JSON string. The grader read only dict inputs, dropped every one, and so had no signal it could apply. Measured on 25 real Codex sessions: 0 measurable before, 19 after. The other 6 have under 8 events and no tool results and correctly stay out.
+- **hermes, kimi, devin, picoclaw, openworker:** these write the OpenAI nested shape, `{"type": "function", "function": {"name", "arguments"}}`. The grader read only the top level, so it lost even the tool name. Live hermes: 0 of 5 measurable before, 2 after.
+- **OpenClaw:** only the family ingest path wrote `metadata.quality`. OpenClaw sessions arrive through `_local_ingest_sessions_batch` and were never graded, so the bench could never rank OpenClaw. They are now graded at ingest from their stored events, with the grade carried forward while a session is unchanged, because the metadata upsert replaces the whole blob.
+- **Already-seen sessions are re-graded:** grading runs only at ingest, so the family ingest salt moves to `/ctx1/q2` and every family session is re-read once.
+- **Why CI missed it:** the runtime conformance test counted only dict arguments, so it never asserted that Codex inputs survived. It now counts JSON-string and nested arguments, and `test_quality_signals_contract.py` plus `test_quality_runtime_conformance.py` now run in CI. They were not listed in any workflow before.
+- **Pairs with:** clawmetry-pro 0.7.25, where Codex tool results carry `isError` from Codex's own `exit_code` or "Script failed" line, which turns on the tool-failure signals for Codex too.
+- **Carries:** PR #5869.
+
 ### Added: Queue Lanes, so background runs have somewhere to be seen (2026-09-11)
 - **Why:** OpenClaw records every background run in one ledger, where the `runtime` column IS the queue lane: `cron`, `subagent`, `cli`. ClawMetry has mirrored that ledger into DuckDB and served it at `/api/run-ledger` since #2100, but PR #5668 removed the unreachable "Sub-Agents and Queue Lanes" tab and took the endpoint's only consumer with it. Measured on `main` before this change: zero references to `run-ledger` across `static/js/app.js` and every shipped tab template. The store query, the endpoint, the snapshot slice and their tests shipped in every wheel with nobody able to see any of it.
 - **The cost of that:** a lane can fail wholesale in silence. On the node this was built against, 104 of 106 cron runs had failed over days with `heartbeat skipped: no-route`, and no screen in the product said so.
