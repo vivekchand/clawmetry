@@ -204,6 +204,15 @@ jobs:
       - name: E2E nightly workflow gateway-token wiring
         run: python3 -m pytest tests/test_e2e_nightly_workflow.py -q
 
+      # The quarantine pipeline parses JUnit XML out of a workflow artifact it
+      # downloads, and ElementTree expands internally-declared entities -- so a
+      # document could expand far beyond what it cost to send. scripts/
+      # auto_quarantine.py now refuses a DTD outright; these cases pin that.
+      # Named here because this job runs FILE LISTS, not `pytest tests/`: this
+      # file existed with 29 passing cases and ran in no job at all.
+      - name: Quarantine pipeline JUnit parsing
+        run: python3 -m pytest tests/test_auto_quarantine.py -q
+
       - name: Published provider pricing and cache accounting
         run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
 
@@ -235,6 +244,15 @@ jobs:
       # this makes it a check. Text-parses the tuples, so no daemon deps.
       - name: A chat channel appears in all four lists
         run: python3 -m pytest tests/test_channel_four_lists.py -q
+
+      # FLYWHEEL 1f3 bans em-dashes and double-dashes in user-facing copy and
+      # names CHANGELOG release entries explicitly. Nothing checked, so nine
+      # entries shipped with them and 151 more sat in older ones; a Drift Bot
+      # run noticed one by chance days later. FLYWHEEL even prescribes this
+      # grep. A verbatim user quote is exempt (blockquote line): editing what
+      # somebody said to satisfy a style rule is worse than the violation.
+      - name: No em-dashes or double-dashes in the CHANGELOG
+        run: python3 -m pytest tests/test_changelog_no_em_dashes.py -q
 
       # Every `uses:` reference -- workflows AND the composite actions under
       # .github/actions/, whose own `uses:` lines run with the calling job's
@@ -761,6 +779,8 @@ jobs:
             tests/test_detectors_behavioural.py \
             tests/test_detectors_ngram.py \
             tests/test_detectors_secret_value_corpus.py \
+            tests/test_detectors_swarm_gaps.py \
+            tests/test_detectors_coordinated_action.py \
             tests/test_guard_escalation_ladder.py \
             tests/test_guard_policies_api_ladder.py \
             tests/test_guard_policy_enforcement.py \
