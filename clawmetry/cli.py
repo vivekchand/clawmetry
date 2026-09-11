@@ -4982,7 +4982,7 @@ def _cmd_key(args) -> None:
 
         if as_json:
             print(_json.dumps({"action": "create", "ok": True,
-                               "key": plaintext,  # lgtm[py/clear-text-logging-sensitive-data]
+                               "key": plaintext,  # codeql[py/clear-text-logging-sensitive-data]
                                "record": {k: v for k, v in record.items()
                                           if k != "hash"}}, indent=2))
             return
@@ -4990,7 +4990,7 @@ def _cmd_key(args) -> None:
         print("Key created. It is shown once and is not stored anywhere in")
         print("readable form, so copy it now.")
         print("")
-        print(f"    {plaintext}")  # lgtm[py/clear-text-logging-sensitive-data]
+        print(f"    {plaintext}")  # codeql[py/clear-text-logging-sensitive-data]
         print("")
         print(f"Name:    {record['name']}  (id {record['id']})")
         print(f"Reads:   {', '.join(record['scopes'])}")
