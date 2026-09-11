@@ -161,6 +161,12 @@ _RM_RECURSIVE_FORCE = _rx(
 # and it runs on every exec classification, which the Brain feed performs
 # thousands of times per page-load. An `rm` invocation longer than these
 # bounds is not something this rule can usefully judge anyway.
+# Was compiled INLINE inside _classify_exec, so it was rebuilt on every exec
+# classification -- thousands per Brain page-load -- and `\w*r\w*` let the
+# engine backtrack between the two runs (CodeQL py/polynomial-redos). Hoisted
+# and bounded.
+_RM_DASH_R = _rx(r"\brm\s{1,8}-\w{0,8}r\w{0,8}\s")
+
 _RM_ROOT_TARGET = _rx(
     r"\brm\s{1,8}[^|;&]{0,256}\s{1,8}(?:--?\w{1,32}\s{1,8}){0,8}"
     r"(?:/|/\*|~|~/|\$home\b|\$\{home\}|"
@@ -227,7 +233,11 @@ _CMD_RULES: list[tuple["re.Pattern[str]", str, str]] = [
     (_rx(r"\b(?:env|printenv|set)\b\s*(?:$|[|;&])[^|;&]*"
          r"\b(?:curl|wget|nc)\b"), "high",
      "dumps environment variables toward the network"),
-    (_rx(r"\b\w*(?:api[_-]?key|secret|token|passwd|password|credential)\w*\s*="),
+    # Bounded: `\w*` on BOTH sides of the alternation lets the engine
+    # backtrack between them (CodeQL py/polynomial-redos). An identifier
+    # longer than these bounds is not one this rule can usefully judge.
+    (_rx(r"\b\w{0,32}(?:api[_-]?key|secret|token|passwd|password|credential)"
+         r"\w{0,32}\s{0,8}="),
      "high", "references secret-looking values"),
     (_rx(r"\breg\s+add\s+hklm\b"), "high",
      "writes to the Windows machine registry"),
@@ -403,7 +413,7 @@ def _classify_exec(cmd: str, hits: list[tuple[str, str]]) -> None:
     # depends on its value, and lowercasing a path can change it.
     _classify_git_exec_config(cmd, hits)
     # rm -rf aimed at root or home escalates to critical.
-    if _RM_RECURSIVE_FORCE.search(low) or _rx(r"\brm\s+-\w*r\w*\s").search(low):
+    if _RM_RECURSIVE_FORCE.search(low) or _RM_DASH_R.search(low):
         if _RM_ROOT_TARGET.search(low):
             hits.append(("critical",
                          "recursive delete targets the filesystem root or home"))
