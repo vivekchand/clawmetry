@@ -1,22 +1,27 @@
-"""Regression for field-failures #5800 / #5801 (``daemon_ingest_stalled`` on
-Darwin py3.14 and Linux py3.12).
+"""Regression for field-failures #5800 / #5801 / #5829-#5834
+(``daemon_ingest_stalled`` on Darwin py3.14, Linux py3.12, and, after the
+first fix (#5802) missed one more call, again on Darwin py3.10/3.11/3.12/3.14
+and Linux py3.10/3.12).
 
 ``run_daemon``'s steady-state ``while True:`` cycle wraps almost every ingest
 call in its own ``try/except`` so one bad data source cannot take down the
 rest -- see the many "non-fatal" log lines throughout the loop in
-``clawmetry/sync.py``. Six calls (memory, the two session syncs, the
-subagent/flow snapshot, session metadata, crons) were the exception: they ran
-bare. A persistent exception in any one of them -- e.g. one session file that
-parses the same wrong way on every retry -- aborted the WHOLE cycle before it
-ever reached ``state["last_sync"] = ...``, and because ``state = load_state()``
-re-reads the same broken input at the top of the next cycle too, that single
-bad source froze ``last_sync`` forever. The daemon process stays up and the
-separate lock-heartbeat thread (``_start_lock_heartbeat`` /
-``_report_if_ingest_stalled``) keeps touching its heartbeat file the whole
-time, so nothing looks dead -- until ``field_report.last_sync_age_secs()``
-crosses ``CLAWMETRY_STALLED_INGEST_SECS`` (1h) and the daemon reports itself
-as ``daemon_ingest_stalled``, which is exactly the two field failures this
-pins.
+``clawmetry/sync.py``. Seven calls (memory, the two session syncs, the
+subagent/flow snapshot, session metadata, crons, and log-line sync) were the
+exception: they ran bare. A persistent exception in any one of them -- e.g.
+one session file that parses the same wrong way on every retry -- aborted the
+WHOLE cycle before it ever reached ``state["last_sync"] = ...``, and because
+``state = load_state()`` re-reads the same broken input at the top of the
+next cycle too, that single bad source froze ``last_sync`` forever. The
+daemon process stays up and the separate lock-heartbeat thread
+(``_start_lock_heartbeat`` / ``_report_if_ingest_stalled``) keeps touching
+its heartbeat file the whole time, so nothing looks dead -- until
+``field_report.last_sync_age_secs()`` crosses ``CLAWMETRY_STALLED_INGEST_SECS``
+(1h) and the daemon reports itself as ``daemon_ingest_stalled``. #5802 fixed
+the first six calls; ``sync_logs`` kept running bare a few lines further down
+the same loop (it is gated behind its own throttle interval, so it was easy
+to miss in the earlier sweep), and the field failure recurred on six more
+OS/Python combinations the very next day.
 
 This test parses ``clawmetry/sync.py`` with ``ast`` rather than importing it,
 so it needs no daemon dependencies (DuckDB, cryptography, ...) and runs in the
@@ -31,7 +36,7 @@ SYNC_PATH = os.path.join(
     os.path.dirname(__file__), "..", "clawmetry", "sync.py"
 )
 
-# The six calls that used to run outside any try/except in the steady-state
+# The calls that used to run outside any try/except in the steady-state
 # loop. A persistent exception in any one of them must not stop the others,
 # and must not stop `state["last_sync"]` from advancing.
 TARGET_CALLS = frozenset({
@@ -41,6 +46,7 @@ TARGET_CALLS = frozenset({
     "sync_system_snapshot",
     "sync_session_metadata",
     "sync_crons",
+    "sync_logs",
 })
 
 

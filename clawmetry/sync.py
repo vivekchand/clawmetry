@@ -25152,7 +25152,11 @@ def run_daemon() -> None:
             lg = 0
             now_log = time.time()
             if now_log - last_log_sync > log_sync_interval:
-                lg = sync_logs(config, state, paths)
+                try:
+                    lg = sync_logs(config, state, paths)
+                except Exception as _lg_e:
+                    log.warning("log sync error (non-fatal): %s", _lg_e)
+                    lg = 0
                 last_log_sync = now_log
             try:
                 sync_voice_log_events(config, state, paths)
