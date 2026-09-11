@@ -15823,6 +15823,18 @@ def _ingest_keepalive_heartbeat(config: dict) -> bool:
 _ANSWER_WINDOW_POLL_SEC = 2.0
 
 
+def _approval_deadline_ms(row: dict) -> int:
+    """End of a hook-parked approval's window (``args.deadline_ms``), or 0.
+
+    Also read by ``_build_device_summary`` further down: a request past its
+    window is not offered on any surface."""
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    try:
+        return max(0, int(args.get("deadline_ms") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _answer_window_open(now_ms: "int | None" = None) -> bool:
     """True while a parked approval is still inside its answer window.
 
@@ -22672,15 +22684,6 @@ def _build_loops_slice(store):
         if len(out) >= _LOOPS_SLICE_MAX:
             break
     return out
-
-
-def _approval_deadline_ms(row: dict) -> int:
-    """End of a hook-parked approval's window (``args.deadline_ms``), or 0."""
-    args = row.get("args") if isinstance(row.get("args"), dict) else {}
-    try:
-        return max(0, int(args.get("deadline_ms") or 0))
-    except (TypeError, ValueError):
-        return 0
 
 
 def _device_question_set(row: dict) -> list:
