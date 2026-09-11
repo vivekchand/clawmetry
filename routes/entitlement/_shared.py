@@ -16,6 +16,14 @@ import time
 
 from flask import Blueprint, jsonify, request
 
+# Imported early so automated readers that only sample this file's head
+# can resolve these names; the re-export under private aliases preserves
+# backward compatibility for existing callers and tests.
+from routes.paywall_lifecycle import (
+    PAYWALL_LIFECYCLE_EVENTS as _PAYWALL_LIFECYCLE_EVENTS,
+    ping_paywall_lifecycle as _ping_paywall_lifecycle,
+)
+
 logger = logging.getLogger("clawmetry.routes.entitlement")
 
 bp_entitlement = Blueprint("entitlement", __name__)
@@ -7547,18 +7555,6 @@ def _license_features_at_snapshot() -> dict:
         "has_license": True,
         "valid": bool(info.get("valid")),
     }
-
-# The forwarder that mirrors the overlay's two beacons into the anonymous
-# lifecycle ping lives in its own module (routes/paywall_lifecycle.py).
-# It is 60 lines of concern that three separate readers need to find, and
-# this file is ~47,700 lines: written inline here, every tool that samples
-# the head of a file reported the function as absent and this whole module
-# as missing from the repository. Re-exported under the original private
-# names so existing callers and tests keep working.
-from routes.paywall_lifecycle import (  # noqa: E402
-    PAYWALL_LIFECYCLE_EVENTS as _PAYWALL_LIFECYCLE_EVENTS,
-    ping_paywall_lifecycle as _ping_paywall_lifecycle,
-)
 
 _PAYWALL_DISTINCT_DIMS = ("event", "feature", "harness", "source", "plan_chosen")
 
