@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: the release pipeline published nothing at all (2026-09-11)
+- **Why:** `release-on-merge.yml` runs `npm ci` in `frontend/`, and it had been failing `ERESOLVE` since #5376 took `vite` to `^8.2.2` while `@vitejs/plugin-react` stayed at `^4.7.0`, which peers only up to `^7`. The two were separate dependabot PRs, so nothing evaluated them together.
+- **The failure mode is the dangerous one:** `npm ci` in `frontend/` runs *only* on the release path, so every ordinary PR stayed green while a `[RELEASE]` merge produced no PyPI upload. The Fish Audio release below merged cleanly and shipped nothing — caught only because the published version was checked rather than the merge being taken as success.
+- **What:** `@vitejs/plugin-react` → `^6.1.0`, which peers `vite: ^8.0.0` (its other three peers are optional). `package-lock.json` is regenerated in the same commit: `npm ci` requires both files to agree, so bumping `package.json` alone — which is all dependabot #5257 proposed — swaps one `npm ci` failure for another.
+- **Verified by running the release step's own commands:** `npm ci` exit 1 → exit 0 (86 packages), and `npm run build` emits the bundle. Carries #5824.
+
 ### Added: Fish Audio voice/telephony is the 24th chat channel (2026-09-11)
 - **Why:** people delegate to agents through chat, so a channel ClawMetry cannot see is a conversation that does not exist in the product — the shape of the original report, *"I message Diya on Telegram and ClawMetry shows nothing"* (#5045).
 - **What:** `fish-audio` joins the channel catalogue, its transcripts ingest from `~/.openclaw/fish-audio/*.jsonl`, live events arrive over the gateway tap as `fishaudio`, and `/api/channel/*` serves the tab. The channel count is derived, not typed, so every surface quoting it moved to 24 together.
