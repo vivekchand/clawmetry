@@ -14480,6 +14480,8 @@ async function loadCrons() {
     renderCrons();
     // Load cron health summary panel
     loadCronHealth();
+    // Load the OpenClaw queue-lane rollup (issue #5721)
+    loadQueueLanes();
     // Load multi-node cron status from fleet nodes
     loadCronsMultiNode();
     // Load cron health monitor (GH #302)
@@ -14504,6 +14506,117 @@ async function loadCrons() {
             + '</div>';
     if (listEl) listEl.innerHTML = msg;
     console.warn('loadCrons failed', e);
+  }
+}
+
+// ---------------------------------------------------------------- Queue Lanes
+// OpenClaw records every background run in one ledger, and `runtime` IS the
+// queue lane: `cron`, `subagent`, `cli`. `sync.py::sync_run_ledger` mirrors
+// that ledger into DuckDB and `/api/run-ledger` has served the rollup since
+// #2100, but PR #5668 cut the only tab that read it, so both the endpoint and
+// the snapshot slice shipped in every wheel with zero UI consumers (#5721).
+//
+// This is that rollup, in Crons rather than in a tab of its own: `cron` is one
+// of the three lanes, Crons is already in the nav, and a rollup is a panel's
+// worth of content.
+//
+// Cloud reads the `runLedger` snapshot slice, not the endpoint. On the hosted
+// server `/api/run-ledger` is an oss-passthrough that finds no local DuckDB
+// and honestly returns empty lists, so fetching it there would paint a
+// false-empty panel over a node that has runs.
+var _QUEUE_LANE_LABELS = { cron: 'Cron', subagent: 'Sub-agents', cli: 'CLI' };
+
+function _queueLaneBadge(color, text) {
+  return '<span style="font-size:11px;background:' + color + '22;color:' + color
+       + ';border-radius:6px;padding:2px 8px;white-space:nowrap;">' + escHtml(text) + '</span>';
+}
+
+// Split out from loadQueueLanes so the empty state and the rollup can both be
+// exercised without a store or a network round trip.
+function renderQueueLanes(lanes) {
+  lanes = Array.isArray(lanes) ? lanes : [];
+  var html = '<div class="card" style="padding:14px;">';
+  html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">';
+  html += '<span style="font-size:13px;font-weight:700;color:var(--text-primary);">&#x1F6E4;&#xFE0F; Queue Lanes</span>';
+  html += '<span style="font-size:11px;color:var(--text-muted);">OpenClaw background runs by lane: cron jobs, sub-agents, CLI turns</span>';
+  html += '</div>';
+
+  if (!lanes.length) {
+    // Name why it is empty. An endless "Loading..." over an empty ledger is
+    // what got the old Queue Lanes tab hidden in 44acaa72f, and what put six
+    // dead panels on the cloud Security tab.
+    html += '<div style="font-size:12px;color:var(--text-muted);line-height:1.7;">'
+         +  'No background runs recorded on this node, and this is the finished '
+         +  'state, not a spinner. ClawMetry mirrors OpenClaw\'s run ledger '
+         +  '(<code>state/openclaw.sqlite</code> on OpenClaw 2026.6.5 and newer, '
+         +  '<code>tasks/runs.sqlite</code> on 2026.5.x). An empty rollup means '
+         +  'either an OpenClaw older than those, or a node that has not run a '
+         +  'cron job, sub-agent or background CLI task yet.'
+         +  '</div>';
+    return html + '</div>';
+  }
+
+  html += '<div style="display:grid;gap:6px;">';
+  lanes.forEach(function(l) {
+    l = l || {};
+    var total   = Number(l.total || 0);
+    var ok      = Number(l.succeeded || 0);
+    var failed  = Number(l.failed || 0);
+    var running = Number(l.running || 0);
+    var queued  = Number(l.queued || 0);
+    var name    = _QUEUE_LANE_LABELS[l.lane] || String(l.lane || 'unknown');
+
+    html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);flex-wrap:wrap;">';
+    html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);min-width:92px;">' + escHtml(name) + '</span>';
+    if (running) html += _queueLaneBadge('#3b82f6', running + ' running');
+    if (queued)  html += _queueLaneBadge('#f59e0b', queued + ' queued');
+    if (ok)      html += _queueLaneBadge('#22c55e', ok + ' succeeded');
+    if (failed)  html += _queueLaneBadge('#ef4444', failed + ' failed');
+    html += '<span style="font-size:11px;color:var(--text-muted);margin-left:auto;white-space:nowrap;">'
+         +  total + ' total'
+         +  (l.last_event_at ? ' &middot; last ' + escHtml(timeAgo(Number(l.last_event_at))) : '')
+         +  '</span>';
+    html += '</div>';
+
+    // A lane that mostly fails is the whole reason to look at this panel. On
+    // the node this was built against, 104 of 106 cron runs had failed with
+    // "heartbeat skipped: no-route" and no surface said so.
+    if (total >= 5 && failed * 2 >= total) {
+      html += '<div style="font-size:11px;color:#ef4444;padding:0 10px 2px;">'
+           +  failed + ' of ' + total + ' runs in this lane failed.'
+           +  '</div>';
+    }
+  });
+  html += '</div>';
+  return html + '</div>';
+}
+
+async function loadQueueLanes() {
+  var panel = document.getElementById('cron-queue-lanes');
+  if (!panel) return;
+  try {
+    var lanes = null;
+    if (window.CLOUD_MODE && typeof window.__cmSnap === 'function') {
+      var sp = await window.__cmSnap();
+      lanes = sp && sp.runLedger && sp.runLedger.lanes;
+    } else {
+      // limit=1 because this panel reads `lanes` only; the rollup is computed
+      // store-side and does not need the `runs` array.
+      var data = await (typeof fetchJsonWithTimeout === 'function'
+        ? fetchJsonWithTimeout('/api/run-ledger?limit=1', 8000)
+        : fetch('/api/run-ledger?limit=1').then(function(r) { return r.json(); }));
+      lanes = data && data.lanes;
+    }
+    panel.innerHTML = renderQueueLanes(lanes);
+  } catch (e) {
+    // Say it failed. Do not fall through to the empty state, which claims
+    // there are no runs.
+    panel.innerHTML = '<div class="card" style="padding:14px;font-size:13px;color:var(--text-error);">'
+      + 'Failed to load queue lanes: ' + escHtml(String((e && e.message) || e))
+      + ' <button onclick="loadQueueLanes()" style="margin-left:8px;background:transparent;'
+      + 'border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;'
+      + 'padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
+    console.warn('loadQueueLanes failed', e);
   }
 }
 
