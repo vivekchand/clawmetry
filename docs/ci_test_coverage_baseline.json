@@ -1,0 +1,13 @@
+{
+  "_comment": [
+    "Ratchet baseline for scripts/check_ci_test_coverage.py.",
+    "'unlisted_max' is the maximum number of tests/test_*.py files",
+    "that may be absent from all .github/workflows/*.yml files.",
+    "CI fails when the unlisted count GROWS above this number.",
+    "Ratchet down by running --update-baseline after wiring new tests in.",
+    "Related: issue #5813"
+  ],
+  "total": 1138,
+  "listed": 206,
+  "unlisted_max": 932
+}
