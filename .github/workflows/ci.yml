@@ -817,6 +817,7 @@ jobs:
             tests/test_detectors_swarm_gaps.py \
             tests/test_detectors_coordinated_action.py \
             tests/test_guard_escalation_ladder.py \
+            tests/test_principal_scope_ladder.py \
             tests/test_guard_policies_api_ladder.py \
             tests/test_guard_policy_enforcement.py \
             tests/test_waste_flags_free_default.py \
