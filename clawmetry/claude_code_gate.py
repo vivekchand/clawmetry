@@ -385,7 +385,12 @@ def _launcher_prefix() -> str:
     else:
         import shlex as _shlex
         quoted = _shlex.quote(launcher)
-    return quoted if script else f"{quoted} -m clawmetry"
+    if script:
+        return quoted
+    # No console script: fall back to -m, isolated so the agent's working
+    # directory cannot shadow the package (see module_launch_flags).
+    flags = hook_ownership.module_launch_flags()
+    return f"{quoted} {flags} -m clawmetry" if flags else f"{quoted} -m clawmetry"
 
 
 def _hook_command(base: str) -> str:
