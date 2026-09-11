@@ -58,6 +58,13 @@ SECTIONS: list[tuple[str, str, str]] = [
         "New endpoints go here, never in `dashboard.py`.",
     ),
     (
+        "routes/entitlement",
+        "Entitlement route package (`routes/entitlement/`)",
+        "The entitlement API surface, split from a single 47k-line file into "
+        "a package: a shared helpers module holds the blueprint and helpers; "
+        "eight endpoint files hold the 434 route handlers.",
+    ),
+    (
         "helpers",
         "Shared helpers (`helpers/`)",
         "Helpers extracted out of `dashboard.py`. Route modules still reach "
