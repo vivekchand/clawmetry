@@ -46,6 +46,14 @@ def _build_app(tmp_path, monkeypatch, *, enable_fast_path: bool):
     # test that runs after — this fixture must not depend on running
     # before that neighbour in the file list.
     monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
+    # CLAWMETRY_SAMPLE=1 makes get_store() ignore CLAWMETRY_LOCAL_STORE_PATH
+    # entirely and redirect to ~/.clawmetry/sample/sample.duckdb instead
+    # (clawmetry/local_store.py's sample-mode branch). sample_data.py's
+    # enable_sample_mode() sets it via a bare os.environ[...] = ... with no
+    # matching cleanup, so test_sample_data.py::test_enable_sample_mode_*
+    # leaks it into every test that runs after it in the same suite-order
+    # position — same class of leak as CLAWMETRY_ROLE above.
+    monkeypatch.delenv("CLAWMETRY_SAMPLE", raising=False)
     if enable_fast_path:
         monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
     else:
