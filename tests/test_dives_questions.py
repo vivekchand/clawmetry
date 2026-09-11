@@ -30,10 +30,10 @@ if "flask" not in sys.modules:
     sys.modules["flask"].jsonify = MagicMock()
     sys.modules["flask"].request = MagicMock()
 
-from routes.dives import SUGGESTED_QUESTIONS  # noqa: E402
+from routes.dives import DIVES_GALLERY_QUESTIONS as SUGGESTED_QUESTIONS  # noqa: E402
 
 _KNOWN_CHART_TYPES = frozenset({"bar", "line", "doughnut", "pie", "scatter", "bubble", "radar"})
-_KNOWN_CATEGORIES = frozenset({"cost", "activity", "sessions", "crons", "system", "memory", "channels"})
+_KNOWN_CATEGORIES = frozenset({"cost", "activity", "sessions", "crons", "system", "memory"})
 
 # One-way ratchet — update intentionally when adding or removing entries.
 _EXPECTED_COUNT = 15

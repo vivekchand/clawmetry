@@ -350,11 +350,14 @@ def api_dives_list():
 
 # ── Suggested-questions gallery (DIVES-5) ─────────────────────────────────────
 
-#: Curated starter questions for the Dives UI.  Each entry has ``question``
-#: (display text), ``chart_type`` (Chart.js type) and ``category`` (for
-#: UI grouping).  The test suite pins the count — update ``_EXPECTED_COUNT``
-#: in ``tests/test_dives_questions.py`` whenever you add or remove entries.
-SUGGESTED_QUESTIONS: tuple[dict, ...] = (
+#: Curated starter questions for the Dives UI gallery.  Each entry has
+#: ``question`` (display text), ``chart_type`` (Chart.js type) and
+#: ``category`` (for UI grouping).  Distinct from
+#: ``clawmetry.dives_prompt.SUGGESTED_QUESTIONS``, which carries pre-validated
+#: SQL answer objects for the LLM prompt builder.  The test suite pins the
+#: count — update ``_EXPECTED_COUNT`` in ``tests/test_dives_questions.py``
+#: whenever you add or remove entries.
+DIVES_GALLERY_QUESTIONS: tuple[dict, ...] = (
     # ── Cost & spend ──────────────────────────────────────────────────────────
     {"question": "Show total cost per agent runtime over the last 7 days",
      "chart_type": "bar", "category": "cost"},
@@ -397,7 +400,7 @@ SUGGESTED_QUESTIONS: tuple[dict, ...] = (
 @bp_dives.route("/api/dives/questions")
 def api_dives_questions():
     """GET → {questions: [{question, chart_type, category}, ...]}"""
-    return jsonify({"questions": [dict(q) for q in SUGGESTED_QUESTIONS]})
+    return jsonify({"questions": [dict(q) for q in DIVES_GALLERY_QUESTIONS]})
 
 
 @bp_dives.route("/api/dives/<slug>")
