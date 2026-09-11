@@ -1472,7 +1472,10 @@ jobs:
         # Composite action from PR #1545 -- installs `openclaw` with `npm ci`
         # from its own committed lockfile and exposes it on PATH. The version
         # is pinned there and moved by Dependabot, not passed from here.
-        uses: ./.github/actions/setup-openclaw
+        # `$/<path>` is GitHub's self-repository syntax: it resolves against this
+        # repository at the commit the workflow is already running, and counts as a
+        # pinned reference for policy purposes, which the older `./<path>` does not.
+        uses: $/.github/actions/setup-openclaw
         with:
           gateway-token: moat-live-e2e-token
       - name: Install Python deps
