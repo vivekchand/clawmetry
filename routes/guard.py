@@ -355,7 +355,7 @@ def _live_only_rows(store_rows: list) -> list:
 _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 
 
-# The two kinds ``clawmetry.repo_scan`` emits. Imported from where they are
+# The kinds ``clawmetry.repo_scan`` emits. Imported from where they are
 # declared so this route cannot drift from the daemon; the literal fallback
 # exists because the Guard tab must render on a cloud instance where the
 # scanner module may be absent, and a missing import must not blank the tab.
@@ -385,6 +385,15 @@ def _incident_rank(inc) -> tuple:
     except (TypeError, ValueError):
         count = 0
     return (spend, sev, count)
+
+
+def _share_verdict(meta):
+    """``True``/``False`` when the daemon recorded a public-share verdict for
+    this session, ``None`` when it never got one. See
+    :mod:`clawmetry.adapters.openclaw_share` (#5746)."""
+    from clawmetry.adapters.openclaw_share import share_extra
+
+    return share_extra(meta).get("isShared")
 
 
 @bp_guard.route("/api/guard/sessions")
@@ -515,6 +524,13 @@ def api_guard_sessions():
             "total_tokens": int(s.get("total_tokens") or 0),
             "message_count": int(s.get("message_count") or 0),
             "cwd": cwd,
+            # #5746 — is this session's transcript published to a public,
+            # link-accessible view? ``None`` means the daemon has no verdict
+            # (never probed, or no gateway to probe), and the tab must render
+            # that as unknown rather than as "private": claiming a session is
+            # not shared when we never asked is the failure mode this signal
+            # exists to prevent.
+            "public_share": _share_verdict(meta),
             "incident": incident_by_session.get(sid),
             # What is in the folder this agent was pointed at, when anything is.
             # Separate from ``incident`` on purpose: it is not ranked against

@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-230 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+237 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -34,11 +34,11 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/attention.py` | medium | `bp_attention` | `/api/attention`, `/api/hooks` | "which of my agents needs me right now". |
 | `routes/audit.py` | small | `bp_audit` | `/api/audit-log` | Enterprise audit-log query endpoint. |
 | `routes/autonomy.py` | medium | `bp_autonomy` | `/api/autonomy` | Autonomy Score endpoint. |
-| `routes/bench.py` | medium | `bp_bench` | `/api/bench` | Harness Engineering tab endpoints (Blueprint: Harness Benchmarks & |
+| `routes/bench.py` | medium | `bp_bench` | `/api/bench` | Harness Engineering tab endpoints (Blueprint: Harness Benchmarks & Comparison; REQ-HB-001..007). |
 | `routes/bootstrap.py` | small | `bp_bootstrap` | `/api/bootstrap` | "First Contact" bootstrap artifact endpoints. |
 | `routes/brain.py` | large | `bp_brain` | `/api/brain`, `/api/brain-history`, `/api/brain-stream`, `/api/llm-call-timeline` | Brain event feed endpoints. |
 | `routes/channels.py` | large | `bp_channels` | `/api/channel`, `/api/channel-delivery-health`, `/api/channels` | Per-channel adapter endpoints. |
-| `routes/cohort.py` | medium | `bp_cohort` | `/api/cohort-compare`, `/api/sessions` | Cohort compare and similar runs (WO-60; requirement "Cohort compare and |
+| `routes/cohort.py` | medium | `bp_cohort` | `/api/cohort-compare`, `/api/sessions` | Cohort compare and similar runs (WO-60; requirement "Cohort compare and similar runs", REQ-COH-001..004). |
 | `routes/compliance.py` | small | `bp_compliance` | `/api/compliance` | OSS stub after the impl lives in clawmetry-pro. |
 | `routes/components.py` | large | `bp_components` | `/api/component` | Per-panel component detail endpoints. |
 | `routes/context_economics.py` | small | `bp_context_economics` | `/api/context-coverage`, `/api/context-economics` | context-window economics (PRD P1-2). |
@@ -87,7 +87,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/signals.py` | medium | `bp_signals` | `/api/briefs`, `/api/signals` | Behaviour Signals read API (WO-58). |
 | `routes/skills.py` | medium | `bp_skills` | `/api/skills` | Skills fidelity telemetry endpoints (GH #687). |
 | `routes/sla.py` | small | `bp_sla` | `/api/sla` | SLA policy CRUD + compliance-status endpoints. |
-| `routes/spend_flow.py` | small | `bp_spend_flow` | `/api/spend-flow` | node-wide AI spend flow (the "where does the |
+| `routes/spend_flow.py` | small | `bp_spend_flow` | `/api/spend-flow` | node-wide AI spend flow (the "where does the money go" Sankey). |
 | `routes/tool_catalog.py` | medium | `bp_tool_catalog` | `/api/mcp-servers`, `/api/tool-catalog` | interactive tool catalog + provenance (PRD P1-3). |
 | `routes/tracing.py` | large | `bp_tracing` | `/api/trace`, `/api/traces` | Phoenix/Arize-style tracing endpoints. |
 | `routes/trail.py` | small | `bp_trail` | `/api/trail` | decision-trail coverage, declared per runtime. |
@@ -108,6 +108,7 @@ Helpers extracted out of `dashboard.py`. Route modules still reach the ones that
 | `helpers/logs.py` | medium |  |  | Filesystem helpers for OpenClaw log discovery + tail + grep. |
 | `helpers/openapi.py` | medium | `bp_openapi` | `/api/docs`, `/openapi.json` | auto-generate an OpenAPI 3.1 spec from Flask routes. |
 | `helpers/pricing.py` | small |  |  | Pure helpers for mapping model names to providers. |
+| `helpers/server.py` | small |  |  | Server-startup helpers for dashboard.py. |
 | `helpers/streams.py` | small |  |  | Bounded SSE client accounting. |
 | `helpers/system.py` | medium |  |  | Portable system uptime helpers. |
 
@@ -134,19 +135,19 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/cohort_compare.py` | medium | Cohort compare and similar runs: pure math, no I/O (WO-60). |
 | `clawmetry/cohort_queries.py` | medium | Store reads behind cohort compare and similar runs (WO-60). |
 | `clawmetry/config.py` | medium | ClawMetry configuration dataclass. |
-| `clawmetry/connector_health.py` | small | Connector liveness — turn the daemon's ``connector.health`` signal |
+| `clawmetry/connector_health.py` | small | Connector liveness — turn the daemon's ``connector.health`` signal stream into a per-channel ok/degraded/down verdict. |
 | `clawmetry/context_coverage.py` | small | Which context-blowout signals we can actually see, per runtime. |
 | `clawmetry/context_windows.py` | medium | Context-window sizing across every runtime ClawMetry ingests. |
 | `clawmetry/cost_windows.py` | small | One definition of "today", "this week" and "this month" for every cost surface. |
 | `clawmetry/cursor_connector.py` | medium | Opt-in pull of Cursor cloud-agent usage, with the operator's own key. |
-| `clawmetry/daemon_registration.py` | medium | one place that knows how to make the |
+| `clawmetry/daemon_registration.py` | medium | one place that knows how to make the sync daemon survive a reboot/logoff/crash, on every OS. |
 | `clawmetry/deepeval_bridge.py` | medium | optional DeepEval metric engine (local-first). |
 | `clawmetry/delegated_usage.py` | medium | Usage for work a runtime handed to another vendor's agent. |
 | `clawmetry/detector_behaviour.py` | medium | Is this agent doing something it does not normally do? |
 | `clawmetry/detector_calibration.py` | medium | How a detector decides what "too many" means, for THIS runtime and THIS team. |
 | `clawmetry/detector_money.py` | small | What a finding costs, and therefore what to look at first. |
 | `clawmetry/detector_surface.py` | medium | What a tool call actually touched, and what a finding may repeat back. |
-| `clawmetry/detectors.py` | large | research-backed, judge-free, CPU-cheap trajectory |
+| `clawmetry/detectors.py` | large | research-backed, judge-free, CPU-cheap trajectory anomaly detectors over a session's recent event sequence (issue #2999). |
 | `clawmetry/deterministic_evaluators.py` | medium | cheap, code-based checks on sessions. |
 | `clawmetry/distinfo_cleanup.py` | small | prune stale dist-info left by partial upgrades. |
 | `clawmetry/dives_prompt.py` | medium | prompt template + schema descriptor for Dives. |
@@ -163,8 +164,9 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/event_shape.py` | small | ONE normalizer for every stored event shape. |
 | `clawmetry/event_shape_classify.py` | medium | Event-shape classifier implementation (private to :mod:`clawmetry.event_shape`). |
 | `clawmetry/extensions.py` | medium | ClawMetry extension/plugin system. |
+| `clawmetry/field_report.py` | medium | Field-failure reports from the sync daemon (Requirement: Daemon Field-Failure Reporting, AC-FFR-005). |
 | `clawmetry/flow_trace.py` | medium | Flow trace assembly for the Harness Engineering tab (REQ-HB-006). |
-| `clawmetry/gateway_protocol.py` | small | the single source of the OpenClaw gateway |
+| `clawmetry/gateway_protocol.py` | small | the single source of the OpenClaw gateway WebSocket protocol range every connect frame must advertise. |
 | `clawmetry/gateway_tap.py` | medium | live OpenClaw gateway WebSocket subscriber. |
 | `clawmetry/git_outcomes.py` | medium | Read a repository and say whether the agent's work shipped (REQ-OBS-CEA-022). |
 | `clawmetry/guard_actuator.py` | medium | Guard actuator — the ONE path from a decision to a process. |
@@ -177,23 +179,24 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/ingest_contract.py` | small | the declared ingest/1 contract registry. |
 | `clawmetry/insights.py` | medium | Weekly Insights Digest — LLM-over-DuckDB summary of the last 7 days. |
 | `clawmetry/installs.py` | medium | Install census — find every clawmetry copy on this machine and flag stale ones. |
-| `clawmetry/instrument.py` | medium | ``clawmetry instrument <runtime>`` — switch a runtime's own OpenTelemetry |
+| `clawmetry/instrument.py` | medium | ``clawmetry instrument <runtime>`` — switch a runtime's own OpenTelemetry exporter on and point it at the local ClawMetry receiver (WO-57). |
 | `clawmetry/interceptor.py` | medium | Zero-config HTTP interceptor for LLM API cost tracking. |
 | `clawmetry/latency_tracker.py` | small | Per-endpoint p50/p95 handler-latency tracker (in-memory rolling window). |
 | `clawmetry/license.py` | huge | self-hosted Pro/Enterprise license client. |
 | `clawmetry/lifecycle_coverage.py` | medium | Which lifecycle facts each runtime can put on a session's trail. |
 | `clawmetry/local_server.py` | medium | HTTP query server hosted INSIDE the sync daemon process. |
 | `clawmetry/local_store.py` | huge | Local DuckDB event store — Phase 1 of the local-first refactor (#964). |
-| `clawmetry/mcp_install.py` | medium | Register the ClawMetry MCP server with each runtime's MCP configuration |
+| `clawmetry/mcp_install.py` | medium | Register the ClawMetry MCP server with each runtime's MCP configuration (WO-59, REQ-SELF-001). |
 | `clawmetry/mcp_server.py` | medium | ClawMetry MCP server — exposes local telemetry as MCP tools (stdio transport). |
 | `clawmetry/narrator.py` | small | LLM-narrated alert enrichment (issue #1412, Feature C). |
 | `clawmetry/net.py` | medium | clawmetry.net — outbound TLS + proxy bootstrap for enterprise networks. |
 | `clawmetry/nonsecret_hash.py` | small | MD5/SHA-1 digests that are *not* being used as a security primitive. |
 | `clawmetry/numbat_ingest.py` | medium | map Perplexity numbat NDJSON records into ClawMetry rows. |
-| `clawmetry/onboarding_state.py` | small | the ONE writer for the first-run gate's |
+| `clawmetry/onboarding_state.py` | small | the ONE writer for the first-run gate's choice file, ``~/.clawmetry/onboarding.json``. |
 | `clawmetry/org_key.py` | small | The organisation key: one secret, shared by the people in one organisation. |
+| `clawmetry/otel_discovery.py` | medium | Find applications on this machine that already emit OpenTelemetry (#4784). |
 | `clawmetry/otel_exporter.py` | medium | Outbound OTLP trace exporter for ClawMetry. |
-| `clawmetry/otel_profiles.py` | small | OTel runtime profiles — the seam between the generic OTLP receiver and |
+| `clawmetry/otel_profiles.py` | small | OTel runtime profiles — the seam between the generic OTLP receiver and runtime-specific knowledge (WO-57). |
 | `clawmetry/otel_push.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
 | `clawmetry/otlp_json.py` | medium | stdlib OTLP/JSON decoder (issue #4781). |
 | `clawmetry/outcome_classifier.py` | large | Auto-label every session with an outcome. |
@@ -218,16 +221,17 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/risk.py` | medium | Hallucination Risk Indicator (issue #567). |
 | `clawmetry/runtime_gates.py` | medium | Pre-tool gates for Cursor and GitHub Copilot CLI — "block before it runs". |
 | `clawmetry/runtime_memory.py` | large | Per-runtime Memory & Skills file browser. |
-| `clawmetry/runtime_probe.py` | medium | zero-dependency presence probes for every |
-| `clawmetry/runtime_records.py` | medium | What each runtime actually records — so a surface can say "not recorded" |
+| `clawmetry/runtime_probe.py` | medium | zero-dependency presence probes for every supported agent runtime (#3917, founder request 2026-07-22). |
+| `clawmetry/runtime_records.py` | medium | What each runtime actually records — so a surface can say "not recorded" instead of rendering a zero. |
+| `clawmetry/sample_data.py` | medium | Synthetic sample sessions, so a fresh install is never an empty product. |
 | `clawmetry/secure.py` | medium | clawmetry secure — one-command numbat (Perplexity agent-EDR) setup. |
 | `clawmetry/security_posture.py` | large | Runtime-aware security posture registry. |
-| `clawmetry/self_diagnostics.py` | medium | Agent self-diagnostics: reports an agent files about its own trouble, and |
+| `clawmetry/self_diagnostics.py` | medium | Agent self-diagnostics: reports an agent files about its own trouble, and the independent check on whether the tool stream agrees (WO-59, REQ-SELF). |
 | `clawmetry/selfhosted.py` | small | clawmetry.selfhosted — ClawMetry Enterprise single-tenant server mode. |
 | `clawmetry/session_context.py` | medium | Inputs & context: what the agent was actually given, per session. |
 | `clawmetry/session_titles.py` | medium | ChatGPT-style session titles from the first real user prompt. |
 | `clawmetry/siem.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
-| `clawmetry/signal_shifts.py` | medium | Signal shifts (WO-62): notice when a behaviour-signal rate moves, explain |
+| `clawmetry/signal_shifts.py` | medium | Signal shifts (WO-62): notice when a behaviour-signal rate moves, explain what moved it, and open an issue the operator can resolve or ignore. |
 | `clawmetry/span_reconstruct.py` | medium | Runtime-agnostic span reconstruction for family runtimes (Agent Graph WS-A). |
 | `clawmetry/spend_flow.py` | medium | node-wide AI spend flow (pure math). |
 | `clawmetry/sync.py` | huge | Cloud sync daemon for clawmetry connect. |
@@ -259,7 +263,10 @@ The runtime adapters that ship in open source. The paid ones live in `clawmetry-
 | `clawmetry/adapters/cost.py` | small | Shared cost-derivation helper for the bundled runtime adapters. |
 | `clawmetry/adapters/goose.py` | medium | GooseAdapter — read Goose (Block / block/goose) sessions from its SQLite store. |
 | `clawmetry/adapters/nemo.py` | large | NeMoAdapter — push-mode telemetry exporter for NVIDIA's NeMo Agent Toolkit. |
-| `clawmetry/adapters/openclaw.py` | large | This adapter does NOT re-implement OpenClaw session parsing. It delegates |
+| `clawmetry/adapters/openclaw.py` | large | This adapter does NOT re-implement OpenClaw session parsing. |
+| `clawmetry/adapters/openclaw_reply_recovery.py` | small | Reply-recovery event scanner for the OpenClaw adapter. |
+| `clawmetry/adapters/openclaw_share.py` | medium | OpenClaw public-share state (issue #5746). |
+| `clawmetry/adapters/openclaw_update_pipeline.py` | small | Update-pipeline state scanner for the OpenClaw adapter. |
 | `clawmetry/adapters/phase.py` | medium | The session phase model: one state machine, every runtime. |
 | `clawmetry/adapters/registry.py` | small | Process-wide adapter registry. |
 

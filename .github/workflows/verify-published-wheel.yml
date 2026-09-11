@@ -1,0 +1,115 @@
+# Verify a PUBLISHED release on all three platforms.
+name: Verify published wheel
+
+# WHY THIS EXISTS, given ci.yml already has a "pip install" matrix:
+# that job runs `pip install flask .` -- it installs the branch SOURCE. It
+# proves the code in a PR is installable. It cannot say anything about the
+# artifact a user actually receives from PyPI, and every install claim in the
+# README and on the landing page is about that artifact.
+#
+# This workflow installs `clawmetry==<version>` FROM PyPI in a clean venv, from
+# a neutral working directory, and exercises the six things a first-time user
+# does: install, check the version, start it, look at a machine with no agent
+# data, run with the network blocked, uninstall.
+#
+# Manual by design (`workflow_dispatch`), because it is a release gate rather
+# than a per-commit check: pin one version, run it, record the result.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published version to verify (blank = latest on PyPI)'
+        required: false
+        type: string
+  # Self-test: a change to the verifier or this workflow runs it on all three
+  # platforms against the latest published release. Path-scoped, so it does not
+  # add a cross-platform job to every unrelated PR -- but a broken verifier can
+  # never be merged on the strength of one developer's macOS run.
+  pull_request:
+    paths:
+      - scripts/verify_published_wheel.py
+      - .github/workflows/verify-published-wheel.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-wheel-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11"]
+        include:
+          # setup.py advertises python_requires=">=3.8" and the macOS desktop
+          # bundle ships a 3.9 venv, so the console script has to work there.
+          # A PEP 604 annotation at module scope has killed every subcommand on
+          # 3.9 before while 3.11 stayed green.
+          - os: ubuntu-latest
+            python-version: "3.9"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # The script creates its own venv in a temp dir and runs the dashboard
+      # from a neutral cwd. It must NOT be run with the checkout as the working
+      # directory of the child process -- dashboard.py here would shadow the
+      # installed wheel and the run would verify the wrong program. The script
+      # enforces that itself; this step only invokes it.
+      # Blank input (or a PR self-test) verifies whatever is currently latest
+      # on PyPI, so the workflow always has something real to check.
+      - name: Resolve version
+        id: ver
+        shell: python
+        # The dispatch input is bound here rather than expanded inside the
+        # script. A `${{ }}` expansion is pasted into the program text before
+        # the interpreter runs, so the value becomes part of the program; an
+        # env var is data the program only ever reads. This step is the taint
+        # root for the whole job -- the verify step below reads
+        # `steps.ver.outputs.version`, which is this value.
+        #
+        # The rule is recorded, not just applied: "A workflow input is data,
+        # never program text" in the Release Verification and Merge Gating
+        # blueprint. #5673 fixed this same construct in auto-deploy-cloud.yml
+        # and it recurred here, because nothing wrote the rule down and nothing
+        # failed when it came back. WorkflowIntegrityGuard now covers the
+        # pattern, so a third occurrence fails a check instead of waiting for a
+        # reviewer to recognise the shape.
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          import json, os, re, urllib.request
+          want = os.environ.get("INPUT_VERSION", "").strip()
+          if not want:
+              with urllib.request.urlopen(
+                      "https://pypi.org/pypi/clawmetry/json", timeout=30) as r:
+                  want = json.load(r)["info"]["version"]
+          # Belt to the env-binding's braces: what goes into GITHUB_OUTPUT is a
+          # bare version and nothing else, so a later step cannot inherit a
+          # newline (which would forge a second output) or shell metacharacters.
+          if not re.fullmatch(r"[0-9A-Za-z.+!-]{1,64}", want):
+              raise SystemExit(f"not a version string, refusing to continue: {want!r}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"version={want}\n")
+          print(f"verifying clawmetry=={want}")
+
+      # `shell: bash` is explicit because this runs on the Windows leg too,
+      # where the default shell is pwsh and `$VERSION` would silently read as
+      # an unset PowerShell variable rather than the environment variable.
+      - name: Verify the published wheel
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: python scripts/verify_published_wheel.py --version "$VERSION"

@@ -67,10 +67,10 @@ which is why every existing policy keeps behaving identically.
 All thresholds are AND-ed. An unset threshold (0) never blocks a match, so a
 policy with everything zeroed fires on the first matching incident.
 
-**Workspace findings must be named.** ``repo_scan`` emits two kinds
-(``repo_config_exec``, ``agent_config_tamper``) that describe the FOLDER an
-agent was pointed at, not the agent's behaviour, and both are ``critical`` by
-construction. An empty ``trigger_kind`` therefore does NOT match them: a
+**Workspace findings must be named.** ``repo_scan`` emits kinds
+(``repo_config_exec``, ``agent_config_tamper``, ``package_manifest_exec``)
+that describe the FOLDER an agent was pointed at, not the agent's behaviour,
+and any of them can be ``critical`` by construction. An empty ``trigger_kind`` therefore does NOT match them: a
 standing "pause anything critical" rule, written about runaway agents, would
 otherwise start pausing sessions because of a property of a checkout, with no
 way to write "except that". A policy that wants to act on a poisoned repo says

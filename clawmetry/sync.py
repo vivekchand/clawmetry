@@ -50,47 +50,395 @@ def _pid_file() -> Path:
     return Path(os.path.expanduser("~/.clawmetry/sync.pid"))
 
 
-def _acquire_pid_lock() -> bool:
-    """Atomically claim the PID file. Return False if another instance is
-    already running. Uses ``O_CREAT|O_EXCL`` to win the create race when
-    two daemons start simultaneously — the previous ``exists()`` then
-    ``write_text()`` pattern had a TOCTOU window where both processes
-    could pass the check and both write their PIDs.
+# The lock records WHO holds it, not just a number. A bare pid is not an
+# identity: the OS recycles pids, so a daemon that dies without running its
+# atexit hook (SIGKILL, panic, power loss) leaves a file naming a number that
+# some unrelated process will eventually be handed. ``is_alive()`` then says
+# "yes" forever and every respawn exits — the daemon is locked out of its own
+# lock with no way back except a human deleting the file.
+#
+# Burned 2026-09-08 on a Pro node: sync stopped at 19:32 and never resumed.
+# launchd (KeepAlive, ThrottleInterval 30) respawned it ~1,400 times overnight,
+# each one printing "Another instance is already running. Exiting.", while
+# ``clawmetry status`` still showed a green daemon and a 12-hour-old "Last sync".
+#
+# So: identity is ``(pid, start-time-token)``, verified through the same
+# ``process_control.verify_pid`` pid-reuse guard the Guard actuators use before
+# they signal anything. A holder we cannot positively identify as our own
+# daemon is a stale lock, and stale locks are reclaimed.
+_LOCK_OWNER = "clawmetry-sync"
 
-    Identified by @dumko2001 in #512.
+# How long a holder may go without ticking its heartbeat before the next
+# respawn treats it as wedged and takes the lock. Generous by default: a
+# healthy daemon ticks every 30s, so 15 min is 30 missed ticks.
+_LOCK_STALE_SECS_DEFAULT = 900.0
+
+
+def _lock_heartbeat_file() -> Path:
+    return Path(os.path.expanduser("~/.clawmetry/sync.heartbeat"))
+
+
+def _lock_identity_file() -> Path:
+    """Who the lock holder is, alongside the pid file rather than inside it.
+
+    ``sync.pid`` stays a bare integer because several things already read it
+    that way (``daemon_registration._is_sync_running``, the dashboard's
+    background spawn, ``install.sh``'s sandbox teardown). Putting the identity
+    record in a sidecar buys pid-reuse detection without breaking any of them;
+    a missing or mismatched sidecar simply falls back to the command-line check.
+    """
+    return Path(os.path.expanduser("~/.clawmetry/sync.lock.json"))
+
+
+def _lock_stale_secs() -> float:
+    try:
+        v = float(os.environ.get("CLAWMETRY_LOCK_STALE_SECS", "") or 0)
+        return v if v > 0 else _LOCK_STALE_SECS_DEFAULT
+    except (TypeError, ValueError):
+        return _LOCK_STALE_SECS_DEFAULT
+
+
+def _proc_start_token_safe(pid: int):
+    """The process's start-time token, or None when it cannot be read.
+
+    Thin wrapper so this module never hard-depends on process_control's
+    private helper and tests have one seam to reach for.
+    """
+    try:
+        from clawmetry.process_control import _proc_start_token
+        return _proc_start_token(int(pid))
+    except Exception:  # noqa: BLE001 - dead pid / perm / unsupported platform
+        return None
+
+
+def touch_lock_heartbeat() -> None:
+    """Prove this process is still scheduling threads.
+
+    Written by the daemon's watchdog on a fixed tick, independent of how long
+    an ingest cycle takes, so a legitimately slow backfill is never mistaken
+    for a wedge. Only a process whose interpreter has stopped running (frozen,
+    SIGSTOPped, deadlocked) lets this file go stale.
+    """
+    try:
+        hb = _lock_heartbeat_file()
+        hb.parent.mkdir(parents=True, exist_ok=True)
+        hb.write_text(str(int(time.time())))
+    except Exception as e:  # noqa: BLE001 - never take the daemon down for this
+        log.debug("lock heartbeat not written: %s", e)
+
+
+def _write_lock_identity() -> None:
+    """Record who took the lock, so the next start can tell a live daemon from
+    a recycled pid. Best-effort: without it the lock still works, it just falls
+    back to identifying the holder by its command line."""
+    try:
+        f = _lock_identity_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({
+            "pid": os.getpid(),
+            "start": _proc_start_token_safe(os.getpid()),
+            "owner": _LOCK_OWNER,
+            "since": int(time.time()),
+        }))
+    except Exception as e:  # noqa: BLE001
+        log.debug("lock identity not written: %s", e)
+
+
+def _read_lock_record(pid_path: Path):
+    """Parse the lock. Returns ``{"pid": int, "start": str|None}`` or None.
+
+    The pid comes from ``sync.pid`` (a bare int, or a JSON object should a
+    future release write one). The start-time token comes from the sidecar,
+    and only when it names the same pid: a sidecar left behind by an earlier
+    holder must not be used to identify the current one.
+    """
+    try:
+        raw = pid_path.read_text().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    pid = None
+    if raw.startswith("{"):
+        try:
+            pid = int(json.loads(raw).get("pid"))
+        except (ValueError, TypeError):
+            return None
+    else:
+        try:
+            pid = int(raw)
+        except ValueError:
+            return None
+    start = None
+    try:
+        ident = json.loads(_lock_identity_file().read_text())
+        if int(ident.get("pid")) == pid:
+            start = ident.get("start") or None
+    except (OSError, ValueError, TypeError):
+        pass
+    return {"pid": pid, "start": start}
+
+
+def _holder_cmdline_verdict(pid: int) -> str:
+    """Identify a lock holder by its command line: ``"ours"``, ``"foreign"`` or
+    ``"unknown"``.
+
+    The fallback for a legacy bare-int lock file, which carries no start token.
+    ``"unknown"`` is a real answer and must stay distinct from ``"foreign"``:
+    ``_proc_cmdline`` reads nothing on a Windows host without psutil, and
+    treating "I could not look" as "not ours" there would let an upgrade
+    reclaim a lock a perfectly healthy daemon still holds.
+    """
+    try:
+        from clawmetry.process_control import _proc_cmdline
+        blob = " ".join(_proc_cmdline(int(pid))).lower()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    if not blob:
+        return "unknown"
+    if "clawmetry" in blob and ("sync" in blob or "daemon" in blob):
+        return "ours"
+    return "foreign"
+
+
+def _started_after_the_lock(pid: int, pid_path: Path) -> bool:
+    """True when ``pid`` began AFTER the lock file was written.
+
+    A process that did not exist when the lock was taken cannot be the process
+    that took it, so this is proof of pid reuse that needs no command line and
+    no recorded token: it is the only identity check available on a Windows
+    host without psutil, where ``_proc_cmdline`` reads nothing.
+
+    Conservative in both directions. Returns False whenever either timestamp is
+    unavailable, and allows a few seconds of slack because the daemon starts
+    fractionally before it writes its lock.
+    """
+    try:
+        from clawmetry.process_control import _proc_start_epoch
+
+        started = _proc_start_epoch(int(pid))
+        if started is None:
+            return False
+        return started > pid_path.stat().st_mtime + 5.0
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def _lock_holder_verdict(rec, pid_path: Path = None) -> tuple:
+    """Decide what the current lock holder is. Returns ``(verdict, why)`` where
+    verdict is ``"held"`` (a live daemon owns it), ``"stale"`` (reclaim it) or
+    ``"wedged"`` (ours, but frozen: stop it, then reclaim)."""
+    if not rec:
+        return "stale", "unreadable_lock_file"
+    pid = rec.get("pid")
+    if not pid or pid <= 0:
+        return "stale", "no_pid_in_lock_file"
+    if int(pid) == os.getpid():
+        # A caller that pre-wrote our own pid must not lock us out of our own
+        # lock (the #5740 spawn race). Ours by definition.
+        return "stale", "lock_names_this_process"
+
+    from clawmetry.process_control import is_alive as _pid_alive
+
+    if not _pid_alive(int(pid)):
+        return "stale", "pid_not_alive"
+
+    recorded_start = rec.get("start")
+    if recorded_start:
+        from clawmetry.process_control import verify_pid as _verify_pid
+
+        ok, why = _verify_pid(int(pid), recorded_start)
+        if not ok:
+            # Alive, but not the process that took the lock: recycled number.
+            return "stale", f"pid_recycled({why})"
+    elif pid_path is not None and _started_after_the_lock(int(pid), pid_path):
+        # It cannot have written a file that predates it.
+        return "stale", "pid_recycled(started_after_lock)"
+    elif _holder_cmdline_verdict(int(pid)) == "foreign":
+        # Legacy bare-int file and the live holder is somebody else entirely.
+        return "stale", "pid_recycled(cmdline_mismatch)"
+
+    # It is genuinely our daemon. Is it still running, or frozen? Only a
+    # heartbeat that EXISTS and has gone stale condemns it: a daemon from
+    # before this change never writes one, and absence must not shoot a
+    # healthy process during an upgrade.
+    try:
+        hb = _lock_heartbeat_file()
+        if hb.exists():
+            age = time.time() - hb.stat().st_mtime
+            if age > _lock_stale_secs():
+                return "wedged", f"no_heartbeat_for_{int(age)}s"
+    except OSError:
+        pass
+    return "held", "daemon_running"
+
+
+def _process_is_gone(pid: int) -> bool:
+    """True when ``pid`` can no longer run code.
+
+    ``is_alive`` is deliberately a "can I address this pid" probe, and on POSIX
+    the signal-0 probe behind it succeeds for a ZOMBIE: a process that has
+    exited but whose parent has not reaped it. For "did my signal actually
+    work?" a zombie counts as gone.
+    """
+    from clawmetry.process_control import is_alive as _pid_alive
+
+    if not _pid_alive(int(pid)):
+        return True
+    try:  # reap it if it happens to be our own child
+        os.waitpid(int(pid), os.WNOHANG)
+    except (ChildProcessError, OSError, AttributeError):
+        pass
+    if not _pid_alive(int(pid)):
+        return True
+    try:
+        import psutil  # type: ignore
+
+        return psutil.Process(int(pid)).status() == psutil.STATUS_ZOMBIE
+    except ImportError:
+        pass
+    except Exception:  # noqa: BLE001 - no such process / access
+        return True
+    if os.name == "nt":
+        return False
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "state=", "-p", str(int(pid))],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return out.startswith("Z") or not out
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _stop_wedged_holder(pid: int) -> bool:
+    """Stop a frozen holder so its lock can be reclaimed. TERM, then KILL."""
+    try:
+        import signal as _signal
+
+        if os.name == "nt":
+            from clawmetry.process_control import _win_terminate
+            _win_terminate(int(pid))
+        else:
+            os.kill(int(pid), _signal.SIGTERM)
+        for _ in range(50):
+            if _process_is_gone(pid):
+                return True
+            time.sleep(0.1)
+        if os.name != "nt":
+            os.kill(int(pid), _signal.SIGKILL)
+            for _ in range(20):
+                if _process_is_gone(pid):
+                    return True
+                time.sleep(0.1)
+        return _process_is_gone(pid)
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not stop wedged daemon pid %s: %s", pid, e)
+        return False
+
+
+def _acquire_pid_lock() -> bool:
+    """Atomically claim the PID file. Return False only when a *live, verified*
+    sync daemon already holds it.
+
+    Uses ``O_CREAT|O_EXCL`` to win the create race when two daemons start
+    simultaneously — the previous ``exists()`` then ``write_text()`` pattern had
+    a TOCTOU window where both processes could pass the check and both write
+    their PIDs. Identified by @dumko2001 in #512.
+
+    A holder that is not alive, not us, or not identifiable as our daemon is a
+    stale lock and gets reclaimed. See the note above ``_LOCK_OWNER``.
     """
     pid_path = _pid_file()
     pid_path.parent.mkdir(parents=True, exist_ok=True)
-    pid_str = str(os.getpid()).encode()
-    while True:
+    payload = str(os.getpid()).encode()
+    # Bounded: each pass either returns or removes one stale file, so a
+    # pathological loop (another process recreating it) gives up rather than
+    # spinning forever.
+    for _ in range(8):
         try:
             fd = os.open(str(pid_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
-                os.write(fd, pid_str)
+                os.write(fd, payload)
             finally:
                 os.close(fd)
+            _write_lock_identity()
+            touch_lock_heartbeat()
             return True
         except FileExistsError:
-            try:
-                existing_pid = int(pid_path.read_text().strip())
-            except (ValueError, OSError):
-                try:
-                    pid_path.unlink()
-                except OSError:
-                    return False
-                continue
-            # os.kill(pid, 0) is not a liveness probe on Windows (never
-            # raises for dead pids -> a stale lock file would block the
-            # daemon from ever starting again). is_alive() is portable.
-            from clawmetry.process_control import is_alive as _pid_alive
-
-            if _pid_alive(existing_pid):
+            rec = _read_lock_record(pid_path)
+            verdict, why = _lock_holder_verdict(rec, pid_path)
+            if verdict == "held":
                 return False
+            if verdict == "wedged":
+                held_pid = (rec or {}).get("pid")
+                log.warning(
+                    "sync.pid held by a wedged daemon (pid=%s, %s) — stopping it "
+                    "and taking over", held_pid, why
+                )
+                if not _stop_wedged_holder(int(held_pid)):
+                    return False
+            else:
+                log.warning(
+                    "reclaiming stale sync.pid (pid=%s, %s)",
+                    (rec or {}).get("pid"), why
+                )
             try:
                 pid_path.unlink()
-            except OSError:
+            except FileNotFoundError:
                 pass
-                continue
+            except OSError as e:
+                log.warning("could not remove stale sync.pid: %s", e)
+                return False
+        except OSError as e:
+            log.warning("could not claim sync.pid: %s", e)
+            return False
+    return False
+
+
+# A sync cycle is about a minute. An hour without one completing is not a slow
+# machine, it is a daemon that is alive and not working: the failure mode that
+# has no supervisor at all, because the process is up and every liveness probe
+# in the stack says so.
+_STALLED_INGEST_SECS = float(os.environ.get("CLAWMETRY_STALLED_INGEST_SECS", "") or 3600)
+
+
+def _report_if_ingest_stalled() -> None:
+    """detectors.py ships ``no_progress`` to tell a customer their agent has
+    stopped getting anywhere. This is the same question asked about ourselves,
+    from the watchdog thread, which keeps running when the ingest loop does
+    not. Throttled to one report per six hours by the field-report stamp.
+    """
+    try:
+        from clawmetry import field_report as _fr
+
+        age = _fr.last_sync_age_secs()
+        if age is not None and age > _STALLED_INGEST_SECS:
+            _fr.report_daemon_failure("daemon_ingest_stalled",
+                                      version=_get_version())
+    except Exception as e:  # noqa: BLE001 - the watchdog must never die
+        log.debug("stall check skipped: %s", e)
+
+
+def _start_lock_heartbeat(interval_secs: float = 30.0) -> threading.Thread:
+    """Tick the lock heartbeat on a fixed cadence for as long as this process
+    can run Python.
+
+    Deliberately independent of the ingest cycle: a backfill that takes ten
+    minutes is healthy and must keep its lock, so the heartbeat measures
+    "interpreter still scheduling", not "cycle completed". A stalled *cycle*
+    is a different failure and is surfaced by ``clawmetry status``, which
+    reports the age of the last completed sync rather than killing anything.
+    """
+    def _beat() -> None:
+        while True:
+            touch_lock_heartbeat()
+            _report_if_ingest_stalled()
+            time.sleep(interval_secs)
+
+    th = threading.Thread(target=_beat, daemon=True, name="lock-heartbeat")
+    th.start()
+    return th
 
 
 def _release_pid_lock() -> None:
@@ -98,6 +446,14 @@ def _release_pid_lock() -> None:
         _pid_file().unlink(missing_ok=True)
     except Exception:
         pass
+    # Leave no misleading artefacts behind a clean exit: an orphaned heartbeat
+    # could only ever make a later holder look wedged, and an orphaned identity
+    # record only ever describes a process that is gone.
+    for _f in (_lock_heartbeat_file, _lock_identity_file):
+        try:
+            _f().unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 # ── Graceful shutdown — drain ring buffer on SIGTERM/SIGINT/atexit (#1593) ──
@@ -772,6 +1128,36 @@ def split_session_title(title: str, enc_key: str | None, fallback: str) -> tuple
         return fallback, encrypt_payload({"display_name": title}, enc_key)
     except Exception:
         return fallback, None
+
+
+def seal_meeting_transcript(row: dict, enc_key: str | None) -> str | None:
+    """Encrypted companion blob for an OpenClaw meeting transcript (#5747).
+
+    Same rule as :func:`split_session_title` and :func:`seal_session_intent`,
+    and it matters more here than anywhere else in the product: a meeting
+    transcript is human speech, and some of the speakers never installed
+    ClawMetry and cannot consent to it leaving their colleague's laptop. So
+    the words ride ONLY this node-key-encrypted field. The cleartext row that
+    accompanies it carries counts, timings and identifiers, which answer "is
+    capture working" without carrying what anyone said.
+
+    A node with no encryption key sends NOTHING, rather than falling back to
+    plaintext. Never raises: a failure here must drop the content, never the
+    surrounding sync pass.
+    """
+    if not enc_key or not isinstance(row, dict):
+        return None
+    payload = {
+        k: row.get(k)
+        for k in ("title", "summary_markdown", "transcript_text", "selector")
+        if row.get(k)
+    }
+    if not payload:
+        return None
+    try:
+        return encrypt_payload(payload, enc_key)
+    except Exception:
+        return None
 
 
 def seal_session_intent(intent: str, enc_key: str | None) -> str | None:
@@ -4539,6 +4925,35 @@ def _session_agent_type(row: dict, session_id: str) -> str:
     return "openclaw"
 
 
+def _annotate_public_share(rows: list) -> None:
+    """Stamp ``shared`` / ``share_created_at`` onto OpenClaw session rows.
+
+    Probes the gateway once per session key (see
+    :mod:`clawmetry.adapters.openclaw_share` for why a list call cannot
+    answer this, and why the share token is never carried). Rows the probe
+    could not answer for are left untouched, so "unknown" stays distinct
+    from "not shared" all the way to Guard.
+
+    Off with ``CLAWMETRY_OPENCLAW_SHARE=0``. Never raises.
+    """
+    if os.environ.get("CLAWMETRY_OPENCLAW_SHARE", "1").strip() == "0":
+        return
+    if not rows:
+        return
+    keys = [r.get("session_key") for r in rows if r.get("session_key")]
+    if not keys:
+        return
+    from clawmetry.adapters.openclaw_share import fetch_share_state
+
+    state = fetch_share_state(keys)
+    if not state:
+        return
+    for r in rows:
+        fields = state.get(r.get("session_key") or "")
+        if fields:
+            r.update(fields)
+
+
 def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
     """Mirror a batch of session rows (the same dicts we push to /ingest/sessions)
     into the local DuckDB ``sessions`` table. Batched: ONE
@@ -4566,9 +4981,20 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
         meta_extras = {
             k: v for k, v in s.items()
             if k in ("channel", "chat_type", "subject", "recent_model",
-                     "session_key", "end_reason", "runtime", "thinking_level")
+                     "session_key", "end_reason", "runtime", "thinking_level",
+                     # #5746 public-share verdict. ``shared`` is a bool, so
+                     # the ``and v`` filter below would drop a stored False —
+                     # which is a real answer ("we asked; it is not
+                     # published"), not a missing one. Handled explicitly
+                     # after this comprehension.
+                     "share_created_at")
             and v
         }
+        # ``shared`` carries meaning when False, so it bypasses the
+        # truthiness filter above. Absent stays absent: a session the daemon
+        # could not probe must not be recorded as "not shared" (#5746).
+        if isinstance(s.get("shared"), bool):
+            meta_extras["shared"] = s["shared"]
         session_rows.append({
             "agent_type": _session_agent_type(s, sid),
             "session_id": sid,
@@ -7560,6 +7986,7 @@ _LITE_RT_LABELS = {
     "openworker": "OpenWorker",
     "lovable": "Lovable",
     "replit": "Replit Agent",
+    "muse_code": "Muse Code",
 
 }
 
@@ -12659,6 +13086,166 @@ def _openclaw_task_ledger_paths() -> list[Path]:
     ]
 
 
+def sync_meeting_transcripts(config: dict, state: dict, paths: dict) -> int:
+    """Mirror OpenClaw's meeting transcripts into DuckDB ``meeting_transcripts``.
+
+    OpenClaw 2026.9.3 ships a meeting library: capture a call, and the harness
+    writes ``meeting_transcript_sessions`` / ``_utterances`` / ``_summaries``
+    into the SAME ``~/.openclaw/state/openclaw.sqlite`` this module already
+    reads for the run ledger, so this needs no new path discovery and no new
+    permission. Schema read from the shipped harness and from a live store,
+    not from the changelog (#5747).
+
+    Content handling is the whole point of the design. ``transcript_text`` and
+    ``summary_markdown`` are human speech, including speakers who never
+    installed ClawMetry, so they are stored LOCALLY and reach the hosted
+    service only through :func:`seal_meeting_transcript`. Nothing here puts
+    them in a plaintext row.
+
+    Idempotent + incremental on an ``updated_at_ms`` watermark: a meeting
+    still being captured is re-read as its utterance count grows and the row
+    is overwritten, never duplicated.
+
+    Degrades silently: no DB, no meeting tables (a pre-2026.9.3 harness), a
+    locked file or a malformed row each return 0 rather than raising.
+    """
+    try:
+        from clawmetry import local_store as _ls
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_meeting_transcripts: local_store unavailable: %s", e)
+        return 0
+
+    srcs = [p for p in _openclaw_task_ledger_paths() if p.exists()]
+    if not srcs:
+        return 0
+
+    node_id = config.get("node_id", "") if isinstance(config, dict) else ""
+    marks = state.setdefault("meeting_transcript_watermarks", {})
+
+    try:
+        store = _ls.get_store()
+    except Exception as e:  # noqa: BLE001
+        log.debug("sync_meeting_transcripts: get_store failed: %s", e)
+        return 0
+
+    n = 0
+    for src in srcs:
+        key = str(src)
+        watermark = int(marks.get(key, 0) or 0)
+        try:
+            rows, new_watermark = _read_meeting_transcripts(src, watermark)
+        except Exception as e:  # noqa: BLE001
+            log.debug("sync_meeting_transcripts: read failed for %s (%s)", src, e)
+            continue
+        for r in rows:
+            try:
+                store.ingest_meeting_transcript(r, node_id=node_id)
+                n += 1
+            except Exception as e:  # noqa: BLE001
+                log.debug("sync_meeting_transcripts: bad row skipped: %s", e)
+        if new_watermark > watermark:
+            marks[key] = new_watermark
+    return n
+
+
+def _read_meeting_transcripts(src, watermark: int) -> tuple:
+    """Read meeting sessions past ``watermark``, joining their utterances and
+    summary. Returns ``(rows, new_watermark)``.
+
+    Read-only URI open so we never contend with OpenClaw's own writer, and a
+    missing ``meeting_transcript_sessions`` table (any harness before
+    2026.9.3) is a skip rather than an error.
+    """
+    import sqlite3
+
+    out: list = []
+    new_watermark = watermark
+    conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=2.0)
+    try:
+        conn.row_factory = sqlite3.Row
+        has = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='meeting_transcript_sessions'").fetchone()
+        if not has:
+            return [], watermark
+        sessions = conn.execute(
+            "SELECT session_id, started_at, stopped_at, selector, provider_id, "
+            "       title, updated_at_ms "
+            "FROM meeting_transcript_sessions "
+            "WHERE COALESCE(updated_at_ms, 0) >= ? "
+            "ORDER BY COALESCE(updated_at_ms, 0) ASC LIMIT 500",
+            [watermark],
+        ).fetchall()
+        for srow in sessions:
+            sid = srow["session_id"]
+            if not sid:
+                continue
+            ums = int(srow["updated_at_ms"] or 0)
+            new_watermark = max(new_watermark, ums)
+            speakers, lines, count = set(), [], 0
+            try:
+                for u in conn.execute(
+                    "SELECT speaker_label, speaker_id, text, final "
+                    "FROM meeting_transcript_utterances WHERE session_id = ? "
+                    "ORDER BY sequence ASC LIMIT 20000", [sid],
+                ):
+                    count += 1
+                    who = (u["speaker_label"] or u["speaker_id"] or "").strip()
+                    if who:
+                        speakers.add(who)
+                    txt = (u["text"] or "").strip()
+                    if txt:
+                        lines.append(f"{who}: {txt}" if who else txt)
+            except sqlite3.Error:
+                pass
+            markdown = None
+            try:
+                srow2 = conn.execute(
+                    "SELECT markdown, utterance_count FROM "
+                    "meeting_transcript_summaries WHERE session_id = ? LIMIT 1",
+                    [sid],
+                ).fetchone()
+                if srow2:
+                    markdown = srow2["markdown"]
+                    count = count or int(srow2["utterance_count"] or 0)
+            except sqlite3.Error:
+                pass
+            out.append({
+                "session_id": sid,
+                "title": srow["title"],
+                "provider_id": srow["provider_id"],
+                "selector": srow["selector"],
+                "started_at": srow["started_at"],
+                "stopped_at": srow["stopped_at"],
+                "utterance_count": count,
+                "speaker_count": len(speakers),
+                "duration_ms": _meeting_duration_ms(srow["started_at"],
+                                                    srow["stopped_at"]),
+                "summary_markdown": markdown,
+                "transcript_text": "\n".join(lines) or None,
+                "updated_at_ms": ums,
+            })
+    finally:
+        conn.close()
+    return out, new_watermark
+
+
+def _meeting_duration_ms(started, stopped) -> int:
+    """Milliseconds between two harness timestamps, 0 when either is missing
+    or unparseable. Never raises."""
+    if not started or not stopped:
+        return 0
+    try:
+        from datetime import datetime as _dt
+
+        def _p(v):
+            return _dt.fromisoformat(str(v).replace("Z", "+00:00"))
+
+        return max(0, int((_p(stopped) - _p(started)).total_seconds() * 1000))
+    except Exception:
+        return 0
+
+
 def sync_run_ledger(config: dict, state: dict, paths: dict) -> int:
     """Mirror OpenClaw's background-run ledger (``tasks/runs.sqlite``) into
     the local DuckDB ``run_ledger`` table.
@@ -13320,6 +13907,16 @@ def sync_session_metadata(config: dict, state: dict = None) -> int:
                 for s in rows:
                     if not s.get("model"):
                         s["model"] = fallback
+            # #5746 — public-share verdict, before the rows are written
+            # anywhere. Daemon-side on purpose: it is one gateway RPC per
+            # session (``publicShare`` is stripped from every session-list
+            # projection upstream), which belongs on the sync cycle and not
+            # in a request handler. Cloud containers have no gateway, so
+            # this is also the only place the signal can be captured at all.
+            try:
+                _annotate_public_share(rows)
+            except Exception as _e:
+                log.debug("openclaw share probe skipped: %s", _e)
             # Local-first: write through to ~/.clawmetry/events.duckdb FIRST.
             # Best-effort — never blocks cloud sync on a local-store failure.
             try:
@@ -14125,6 +14722,12 @@ _FAMILY_ADAPTER_SPECS = (
     # worker, not a coding CLI: its sessions are SaaS-connector work as
     # often as file edits.
     ("clawmetry_pro.adapters.openworker", "OpenWorkerAdapter"),
+    # Muse Code (developer.meta.com/ai/products/muse-code) -- Meta's terminal
+    # coding agent. The only runtime here read over a PROTOCOL rather than off
+    # disk: its transcript format is unpublished, but `muse serve` speaks the
+    # Muse Session Protocol and session/list + session/read are documented
+    # read-only surfaces that hand back the log path too.
+    ("clawmetry_pro.adapters.muse_code", "MuseCodeAdapter"),
     # Lovable (lovable.dev) -- cloud app builder with NO local process or
     # store; the adapter reads local git clones of its GitHub-synced repos
     # (one bot commit per accepted agent edit). Observe-only, no cost.
@@ -14591,8 +15194,20 @@ def _session_cost_intel(s) -> dict:
             "cacheRead": cr, "cacheWrite": cw, "reasoning": rt,
         }
         # Cache-hit %: share of read context served from cache (cheaper).
+        # Anthropic reports cached tokens on top of uncached input (additive
+        # denominator: in_t + cr). OpenAI includes cached tokens inside
+        # input_tokens already (inclusive denominator: in_t). Guard impossible
+        # OpenAI counters (cr > in_t) rather than emitting >100%.
         if (in_t + cr) > 0:
-            out["cacheHitPct"] = round(cr / (in_t + cr) * 100, 1)
+            try:
+                from clawmetry.providers_pricing import provider_for_model as _pfm
+                _cache_prov = _pfm(model) if model else ""
+            except Exception:
+                _cache_prov = ""
+            if _cache_prov == "openai" and in_t > 0 and cr <= in_t:
+                out["cacheHitPct"] = round(cr / in_t * 100, 1)
+            elif _cache_prov != "openai":
+                out["cacheHitPct"] = round(cr / (in_t + cr) * 100, 1)
         # Reasoning-tax $: reasoning tokens priced at the model's output rate.
         if model and rt > 0:
             try:
@@ -20546,11 +21161,14 @@ def _session_row_cwd(session: dict) -> str:
 # repos re-reads nothing until one of those files changes.
 _REPO_SCAN_ON = "CLAWMETRY_REPO_SCAN"        # "0" disables the workspace scan
 _REPO_SCAN_CACHE_MAX = int(os.environ.get("CLAWMETRY_REPO_SCAN_CACHE_MAX", "500"))
-#: Files a scan actually reads. The stamp is built from these and nothing else,
-#: so an unrelated write inside the repo does not invalidate the cache.
+#: Fallback for a repo_scan too old to declare ``SCANNED_FILES``. The live list
+#: is DERIVED from the scanner (see ``_repo_scan_stamp``): a hand-kept copy here
+#: is how package.json ended up scanned but not stamped, which left a checkout
+#: poisoned after first sight invisible forever.
 _REPO_SCAN_STAMP_FILES = (
     os.path.join(".git", "config"),
     os.path.join(".vscode", "tasks.json"),
+    "package.json",
 )
 
 
@@ -20565,9 +21183,11 @@ def _repo_scan_stamp(workspace: str) -> tuple:
     try:
         from clawmetry import repo_scan as _rs
         hook_files = tuple(getattr(_rs, "_AGENT_HOOK_FILES", ()) or ())
+        scanned = tuple(getattr(_rs, "SCANNED_FILES", ()) or ())
     except Exception:  # noqa: BLE001
         hook_files = ()
-    names = list(_REPO_SCAN_STAMP_FILES)
+        scanned = ()
+    names = list(scanned or _REPO_SCAN_STAMP_FILES)
     for entry in hook_files:
         # _AGENT_HOOK_FILES entries are relative paths, or (path, ...) tuples.
         rel = entry[0] if isinstance(entry, (tuple, list)) and entry else entry
@@ -21987,6 +22607,37 @@ def _build_bench_slice(store, *, days: int = 30) -> dict:
     return out
 
 
+def _build_detected_otel_apps() -> dict:
+    """The ``detectedOtelApps`` snapshot slice (#4784).
+
+    Runs on the daemon's snapshot timer, never per request, and costs about
+    86 ms of CPU (0.14% of one core at a 60 second cadence). Never raises: a
+    suggestion that can break the snapshot carrying it is worse than no
+    suggestion, so a failure degrades to an empty slice.
+
+    ``suggestable`` is the list a prompt renders. It excludes any port
+    ClawMetry may itself hold, so the dashboard never tells someone to
+    redirect their app to ClawMetry from ClawMetry.
+    """
+    try:
+        from clawmetry import otel_discovery as _od
+        r = _od.discover_otel_emitters()
+        return {
+            "apps": r.get("apps") or [],
+            "suggestable": r.get("suggestable") or [],
+            "degraded": bool(r.get("degraded")),
+            "degradedReason": r.get("degraded_reason"),
+            "checkedPorts": r.get("checked_ports") or [],
+            "instruction": _od.redirect_instruction(),
+            "scannedAtMs": r.get("scanned_at_ms"),
+        }
+    except Exception as e:  # noqa: BLE001
+        log.debug("detectedOtelApps slice failed: %s", e)
+        return {"apps": [], "suggestable": [], "degraded": False,
+                "degradedReason": None, "checkedPorts": [],
+                "instruction": "", "scannedAtMs": 0}
+
+
 def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     """Push system info + subagent data as encrypted snapshot.
 
@@ -22892,6 +23543,13 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "diagnostics": _build_diagnostics(paths.get("workspace")),
         "modelAttribution": _build_model_attribution(),
         "runtimeSummary": _runtime_summary,
+        # Applications on this machine that already emit OpenTelemetry but do
+        # not send it here (#4784). Rides the ENCRYPTED snapshot, never the
+        # plaintext heartbeat: an OTEL_SERVICE_NAME is the user's own name for
+        # their own service ("acme-billing-prod"), which is theirs to see and
+        # not ours to hold in the clear. A node with no key uploads nothing at
+        # all, by the same no-key rule the rest of this payload obeys.
+        "detectedOtelApps": _build_detected_otel_apps(),
         # What each runtime actually records (clawmetry/runtime_records.py).
         # Rides the snapshot so the HOSTED dashboard can tell "this runtime
         # was idle" apart from "this runtime keeps no cost record" — without
@@ -23497,6 +24155,26 @@ def run_daemon() -> None:
         print(
             "[clawmetry-sync] Another instance is already running. Exiting.", flush=True
         )
+        # ADR-001 of the Daemon Field-Failure Reporting blueprint: a failure
+        # report must not depend on machinery downstream of the failure.
+        # Refusing the lock is USUALLY correct and frequent: a double start, or
+        # someone running `python -m clawmetry.sync` beside the service. What
+        # is not normal is refusing it while nothing is ingesting, which is the
+        # 2026-09-08 field failure: a supervisor restarting into this branch
+        # every 30 seconds for twelve hours with no data moving and, because
+        # this path exits before the error handler and the auto-updater
+        # initialise, no trace of it anywhere but a local log file.
+        try:
+            from clawmetry import field_report as _fr
+
+            age = _fr.last_sync_age_secs()
+            if age is not None and age > _STALLED_INGEST_SECS:
+                # Inline, not a background thread: the process exits on the
+                # next line and the interpreter would take the thread with it.
+                _fr.report_daemon_failure("daemon_lock_refused",
+                                          version=_get_version(), blocking=True)
+        except Exception as _fr_e:  # noqa: BLE001 - never delay a failing start
+            log.debug("field report skipped: %s", _fr_e)
         sys.exit(0)
     import atexit
 
@@ -23509,6 +24187,7 @@ def run_daemon() -> None:
     # racing supervisor restart sees the lock held until the flush is
     # done, instead of starting a second daemon mid-drain.
     _install_shutdown_handlers()
+    _start_lock_heartbeat()
 
     # Open-core plugin discovery. dashboard.py runs this at import time so the
     # dashboard process picks up entry-point plugins (clawmetry-pro adapters,
@@ -23802,6 +24481,15 @@ def run_daemon() -> None:
             log.info(f"  Run ledger: {rl} rows ingested")
     except Exception as e:
         log.warning(f"  Run-ledger ingest error: {e}")
+    # OpenClaw 2026.9.3 meeting library (state/openclaw.sqlite) → DuckDB
+    # meeting_transcripts (#5747). Speech stays local; it reaches the hosted
+    # service only through seal_meeting_transcript.
+    try:
+        mt = sync_meeting_transcripts(config, state, paths)
+        if mt:
+            log.info(f"  Meeting transcripts: {mt} rows ingested")
+    except Exception as e:
+        log.warning(f"  Meeting-transcript ingest error: {e}")
     # Sub-agent + flow registries (state/openclaw.sqlite) → subagents rows
     # with prompt/reply/status/parent (orchestration capture, OpenClaw leg).
     try:
@@ -24261,7 +24949,21 @@ def run_daemon() -> None:
                 log.warning("bootstrap capture failed: %s", _be)
 
             # ── High-priority: memory, flow metrics, subagents, recent sessions ──
-            mem = sync_memory(config, state, paths)
+            # Each of the six calls below (mem/ev/sm/crons + the snapshot)
+            # used to run bare, unlike every neighbour in this loop. A
+            # persistent exception in any ONE of them (e.g. one malformed
+            # session file parsed the same wrong way on every retry) aborted
+            # the whole cycle before it ever reached `state["last_sync"] = ...`
+            # below -- and because `state = load_state()` re-reads the same
+            # broken input at the top of the next cycle too, that one bad
+            # source stalled ingest forever while the separate heartbeat
+            # thread kept reporting the daemon as alive
+            # (field-failure #5800/#5801, daemon_ingest_stalled).
+            try:
+                mem = sync_memory(config, state, paths)
+            except Exception as _mem_e:
+                log.warning("memory sync error (non-fatal): %s", _mem_e)
+                mem = 0
             try:
                 sync_runtime_memory_files(config, state, paths)
             except Exception as _rme:
@@ -24269,7 +24971,10 @@ def run_daemon() -> None:
             snap = 0
             now_snap = time.time()
             if now_snap - last_snapshot > snapshot_interval:
-                snap = sync_system_snapshot(config, state, paths)  # subagents + flow
+                try:
+                    snap = sync_system_snapshot(config, state, paths)  # subagents + flow
+                except Exception as _snap_e:
+                    log.warning("system snapshot sync error (non-fatal): %s", _snap_e)
                 last_snapshot = now_snap
 
             # ── Gateway process metric capture (#852 follow-up) ──
@@ -24291,8 +24996,15 @@ def run_daemon() -> None:
             except Exception as _dlq_e:
                 log.debug("sync_dlq replay failed (continuing): %s", _dlq_e)
 
-            ev = sync_sessions(config, state, paths)
-            ev += sync_claude_cli_sessions(config, state, paths)
+            try:
+                ev = sync_sessions(config, state, paths)
+            except Exception as _sess_e:
+                log.warning("session sync error (non-fatal): %s", _sess_e)
+                ev = 0
+            try:
+                ev += sync_claude_cli_sessions(config, state, paths)
+            except Exception as _cli_e:
+                log.warning("claude-cli session sync error (non-fatal): %s", _cli_e)
             # NemoClaw sandbox-internal sessions (#3116) — openshell exec path.
             # No-op when openshell is absent or no sandbox has openclaw sessions.
             try:
@@ -24361,8 +25073,16 @@ def run_daemon() -> None:
                 ev += sync_channel_messages(config, state, paths)
             except Exception as _ce:
                 log.warning(f"channel sync error (non-fatal): {_ce}")
-            sm = sync_session_metadata(config, state)
-            crons = sync_crons(config, state, paths)
+            try:
+                sm = sync_session_metadata(config, state)
+            except Exception as _sm_e:
+                log.warning("session metadata sync error (non-fatal): %s", _sm_e)
+                sm = 0
+            try:
+                crons = sync_crons(config, state, paths)
+            except Exception as _crons_e:
+                log.warning("cron sync error (non-fatal): %s", _crons_e)
+                crons = 0
             # Issue #605 DuckDB follow-up: tail cron-run JSONL files into
             # DuckDB so the dashboard's per-job timeline reads from the
             # columnar store. Failure is non-fatal — the legacy JSONL-read
@@ -24378,6 +25098,11 @@ def run_daemon() -> None:
                 sync_openclaw_subagent_runs(config, state, paths)
             except Exception as _e_rl:
                 log.debug("sync_run_ledger error (non-fatal): %s", _e_rl)
+            # Meeting library → meeting_transcripts (#5747).
+            try:
+                sync_meeting_transcripts(config, state, paths)
+            except Exception as _e_mt:
+                log.debug("sync_meeting_transcripts error (non-fatal): %s", _e_mt)
             # Issue #3696 — OpenClaw backup/snapshot lifecycle observability.
             try:
                 sync_backups(config, state, paths)

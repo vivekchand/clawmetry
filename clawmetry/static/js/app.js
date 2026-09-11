@@ -1,4 +1,96 @@
 // ─────────────────────────────────────────────────────────────────────────
+// "Can't reach the collector" — the banner that stops an empty tab lying.
+//
+// Issue #5534: when a read through the daemon query proxy times out, the
+// handler gets ``None`` and the tab renders EMPTY — "no sessions have a
+// transcript yet" under a header counting 61 of them, ``0 models`` over a
+// store holding thousands. A spinner says wait and an error says something
+// is wrong, but an empty state is a positive claim about the user's own
+// work. When the truth is "I could not read it", that claim is false and is
+// indistinguishable from data loss to the person reading it.
+//
+// The server now says so: any ``/api/*`` response from a request whose store
+// read was unreachable carries ``X-CM-Store-Available: false`` (and, on JSON
+// objects, ``store_available: false``). Reading the HEADER is deliberate —
+// inspecting bodies would mean cloning and re-parsing every API response,
+// including the multi-MB event scans, which is exactly the request-cost
+// regression FLYWHEEL forbids. One header read, no body touched.
+//
+// Self-healing: the next healthy ``/api/*`` response clears it, so a
+// transient contended read shows the banner for one poll and then goes away
+// on its own.
+// ─────────────────────────────────────────────────────────────────────────
+(function initStoreReachabilityBanner() {
+  if (window._cmStoreBannerInstalled) return;
+  window._cmStoreBannerInstalled = true;
+  window._cmStoreUnreachable = false;
+
+  function _banner() { return document.getElementById('store-unreachable-banner'); }
+
+  function _paint() {
+    var el = _banner();
+    if (!el) return;
+    el.style.display = window._cmStoreUnreachable ? 'flex' : 'none';
+  }
+
+  window.cmStoreUnreachable = function () { return !!window._cmStoreUnreachable; };
+
+  // The sentence a tab shows INSTEAD of its empty state. Never "you have no
+  // data" when we could not look.
+  window.cmStoreUnreachableHtml = function (extraStyle) {
+    var msg = (typeof t === 'function')
+      ? t('common.store_unreachable_panel', null,
+           "Can't reach the collector on this machine, so this list can't be read right now. Nothing has been lost \u2014 it reappears as soon as the connection is back.")
+      : "Can't reach the collector on this machine, so this list can't be read right now. Nothing has been lost \u2014 it reappears as soon as the connection is back.";
+    var esc = (typeof escHtml === 'function') ? escHtml : function (x) { return String(x); };
+    return '<div style="padding:16px;color:#fbbf24;' + (extraStyle || '') + '">' + esc(msg)
+      + ' <button type="button" onclick="cmRetryStoreRead()" style="background:transparent;color:#fbbf24;border:1px solid #fbbf24;border-radius:6px;padding:2px 10px;font-size:12px;cursor:pointer;margin-left:6px;">'
+      + esc((typeof t === 'function') ? t('common.retry', null, 'Retry') : 'Retry') + '</button></div>';
+  };
+
+  // The retry affordance. Re-runs the tab the user is actually looking at
+  // when the dashboard exposes a reloader for it; a full reload otherwise.
+  window.cmRetryStoreRead = function () {
+    window._cmStoreUnreachable = false;
+    _paint();
+    try {
+      if (typeof window.reloadActiveTab === 'function') { window.reloadActiveTab(); return; }
+    } catch (e) {}
+    try { location.reload(); } catch (e) {}
+  };
+
+  function _note(unreachable) {
+    if (window._cmStoreUnreachable === unreachable) return;
+    window._cmStoreUnreachable = unreachable;
+    _paint();
+  }
+
+  var _origFetch = (typeof window.fetch === 'function') ? window.fetch.bind(window) : null;
+  if (!_origFetch) return;
+  window.fetch = function (input, init) {
+    return _origFetch(input, init).then(function (res) {
+      try {
+        var url = '';
+        if (typeof input === 'string') url = input;
+        else if (input && input.url) url = input.url;
+        if (res && res.headers && /(^|\/)(api|v1)\//.test(url)) {
+          var flag = res.headers.get('X-CM-Store-Available');
+          if (flag === 'false') _note(true);
+          else if (res.ok) _note(false);
+        }
+      } catch (e) {}
+      return res;
+    });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _paint);
+  } else {
+    _paint();
+  }
+})();
+
+// ─────────────────────────────────────────────────────────────────────────
 // Trial-end hard-block overlay.
 //
 // Fires when ``/api/trial/status`` returns ``hard_blocked: true`` (the daemon
@@ -2115,7 +2207,6 @@ function switchTab(name) {
     if (typeof loadTrailTab === 'function') loadTrailTab();
   }
   if (name === 'version-impact') loadVersionImpact();
-  if (name === 'clusters') loadClusters();
   if (name === 'flow') initFlow();
   if (name === 'tracing') loadTracing();
   if (name === 'turn-anatomy') loadTurnAnatomy();
@@ -2561,7 +2652,8 @@ async function loadOutcomeTile() {
     parts.push(pct + '% success');
     if (d.escalated > 0) parts.push(d.escalated + ' needed human');
     if (d.failed > 0) parts.push(d.failed + ' failed');
-    if (d.ongoing > 0) parts.push(d.ongoing + ' running');
+    if (d.ongoing > 0) parts.push(d.ongoing + ' working');
+    if (d.waiting > 0) parts.push(d.waiting + ' gone quiet');
     summaryEl.innerHTML = parts.map(function(p, i){
       // First chip = primary, success% gets the colored chip.
       var color = '';
@@ -3887,7 +3979,8 @@ function _cmOutcomeChip(outcome) {
   var map = {
     success:         { label: 'Succeeded',  color: 'var(--ok, #22c55e)' },
     escalated:       { label: 'Escalated',  color: 'var(--warn, #eab308)' },
-    ongoing:         { label: 'Ongoing',    color: 'var(--text-muted)' },
+    ongoing:         { label: 'Working',    color: '#3b82f6' },
+    waiting:         { label: 'Gone quiet',     color: '#8b5cf6' },
     failed:          { label: 'Failed',     color: 'var(--err, #ef4444)' },
     tool_call_stuck: { label: 'Tool stuck', color: 'var(--err, #ef4444)' },
     cognitive_loop:  { label: 'Stuck in a loop', color: 'var(--err, #ef4444)' },
@@ -4809,6 +4902,7 @@ async function loadAll() {
     window._cmOverview = overview;
     try { renderOauthBanner(overview); } catch(e) {}
     try { _renderOverviewHero(); } catch(e) {}
+    try { renderFirstRunReport(overview); } catch(e) {}
 
     // Start only critical secondary panels immediately. Expensive/non-critical
     // cards are staggered below so the initial widget load does not stampede
@@ -5762,6 +5856,7 @@ var _Q_RUNTIME_NAMES = {
   kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
+  muse_code: 'Muse Code',
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -10188,6 +10283,15 @@ async function loadBrainPage(silent) {
       _renderBrainHistoryCap(false);
       return;
     }
+    // #5534: an unreadable store answers with the same {events: []} a quiet
+    // machine does. Say which one this is rather than draw an empty stream
+    // over a store full of activity.
+    if (data && data.store_available === false) {
+      var _bhUnEl = document.getElementById('brain-stream');
+      if (_bhUnEl) _bhUnEl.innerHTML = cmStoreUnreachableHtml('margin:12px;');
+      _renderBrainHistoryCap(false);
+      return;
+    }
     var events = (data.events || []).slice().sort(function(a,b){
       var ta = a.time ? new Date(a.time).getTime() : 0;
       var tb = b.time ? new Date(b.time).getTime() : 0;
@@ -10463,7 +10567,8 @@ var LOOP_KIND_LABEL = {
   // Not the agent's behaviour: what was in the folder it was pointed at.
   // Mirrors clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'This folder is set up to run a program',
-  agent_config_tamper: 'An agent hook config in this folder was changed'
+  agent_config_tamper: 'An agent hook config in this folder was changed',
+  package_manifest_exec: 'Installing this folder\'s dependencies runs its own code'
 };
 
 // What ignoring this is estimated to cost. Blank when we do not know, because
@@ -12011,6 +12116,7 @@ var _CM_RT_LABEL = {
   deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
+  muse_code: 'Muse Code',
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -12161,7 +12267,7 @@ var _CM_RT_NODEWIDE = {
   // what pushed a redundant per-tab runtime picker into the page.
   crons: 1, security: 1, selfevolve: 1,
   policy: 1, nemoclaw: 1, notifications: 1,
-  clusters: 1, actions: 1,
+  actions: 1,
   // logs + version-impact are NOT node-wide: logs stream a specific runtime's
   // log source (LOGS capability), version-impact correlates OpenClaw releases.
   // Both are capability-gated below instead of carrying a false scope note.
@@ -18241,7 +18347,7 @@ async function loadUsage() {
     } else {
       otelExtra.style.display = 'none';
     }
-    renderPluginPieChart(byPlugin.plugins || []);
+    renderPluginPieChart(byPlugin.plugins || [], byPlugin.store_available === false);
     // Load session cost breakdown
     fetch('/api/sessions/cost-breakdown').then(r => r.json()).then(function(cbd) {
       window._sessionCostData = cbd.top10 || [];
@@ -18972,7 +19078,7 @@ function renderSessionCostChart() {
   }
 }
 
-function renderPluginPieChart(rows) {
+function renderPluginPieChart(rows, storeUnreachable) {
   var canvas = document.getElementById('usage-plugin-pie');
   var legend = document.getElementById('usage-plugin-legend');
   if (!canvas || !legend) return;
@@ -18981,7 +19087,11 @@ function renderPluginPieChart(rows) {
   if (!data.length) {
     var ctxEmpty = canvas.getContext('2d');
     ctxEmpty.clearRect(0, 0, canvas.width, canvas.height);
-    legend.innerHTML = '<div style="color:var(--text-muted);">' + t("app.no_plugin_tool_call_attribution_detected_yet", null, "No plugin tool-call attribution detected yet.") + '</div>';
+    // #5534: "no attribution detected yet" is a finding. An unreachable
+    // store produced no finding at all.
+    legend.innerHTML = storeUnreachable
+      ? cmStoreUnreachableHtml('padding:0;')
+      : '<div style="color:var(--text-muted);">' + t("app.no_plugin_tool_call_attribution_detected_yet", null, "No plugin tool-call attribution detected yet.") + '</div>';
     return;
   }
 
@@ -19111,6 +19221,21 @@ async function loadModelAttribution() {
     var _maRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
     var _maQ = (_maRt && _maRt !== 'all') ? ('?runtime=' + encodeURIComponent(_maRt)) : '';
     var data = await fetch('/api/model-attribution' + _maQ).then(function(r) { return r.json(); });
+    // #5534: a store we could not read answers with the same {models: []} an
+    // idle machine does. Rendering "0 models / 0 turns / --" over a store
+    // holding thousands of turns is a wrong answer dressed as a fact, so say
+    // which of the two this is and change no number.
+    if (data && data.store_available === false) {
+      ['model-primary', 'model-primary-pct', 'model-count', 'model-total-turns',
+       'model-fallback-rate', 'model-fallback-detail'].forEach(function(id) {
+        document.querySelectorAll('#' + id).forEach(function(el) { el.textContent = '\u2014'; });
+      });
+      var _maChart = document.getElementById('model-mix-chart');
+      if (_maChart) _maChart.innerHTML = cmStoreUnreachableHtml();
+      var _maTbl = document.getElementById('model-sessions-table');
+      if (_maTbl) _maTbl.innerHTML = '';
+      return;
+    }
     var models = data.models || [];
     var switches = data.switches || [];
     var totalTurns = data.total_turns || 0;
@@ -19560,7 +19685,11 @@ async function loadTranscripts() {
     if (plumbCountEl) plumbCountEl.textContent = plumbingTotal > 0 ? (window._transcriptShowPlumbing ? '(' + plumbingTotal + ' shown)' : '(' + plumbingTotal + ' hidden)') : '';
     var plumbBtn = document.getElementById('transcript-plumbing-btn');
     if (plumbBtn) plumbBtn.style.display = plumbingTotal > 0 ? '' : 'none';
-    var emptyMsg = _txWinEmpty
+    var emptyMsg = (data && data.store_available === false)
+      // #5534: the store could not be read, so "no transcripts" would be a
+      // claim about the user's sessions we have no standing to make.
+      ? cmStoreUnreachableHtml()
+      : _txWinEmpty
       ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this window. Try a wider window — or note that only recently synced sessions are listed here.') + '</div>'
       : _rtNoTx
       ? _cmRuntimeEmptyMsg(_rtFilter)
@@ -22768,56 +22897,6 @@ async function loadVersionImpact() {
   }
 }
 
-// ── Session Clusters Panel ─────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════════════════════
-// ─────────────────────────────────────────────────────────────────────────────
-async function loadClusters() {
-  var el = document.getElementById('clusters-content');
-  if (!el) return;
-  el.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.analyzing_session_patterns", null, "Analyzing session patterns...") + '</div>';
-  try {
-    var data = await fetch('/api/sessions/clusters').then(r => r.json());
-    if (!data.clusters || data.clusters.length === 0) {
-      el.innerHTML = '<div class="card" style="padding:20px;text-align:center;"><div style="font-size:13px;color:var(--text-muted);">' + t("app.no_sessions_found_to_cluster", null, "No sessions found to cluster.") + '</div></div>';
-      return;
-    }
-    var clusterColors = {'browsing-heavy':'#60a5fa','code-heavy':'#34d399','messaging':'#f472b6','doc-analysis':'#a78bfa','mixed-research':'#fbbf24','cron-light':'#94a3b8','expensive-outlier':'#ef4444','general':'#6b7280'};
-    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-bottom:16px;">';
-    data.clusters.forEach(function(cl) {
-      var color = clusterColors[cl.label] || '#6b7280';
-      var errorPct = (cl.error_rate * 100).toFixed(0);
-      html += '<div class="card" style="padding:16px;border-top:3px solid ' + color + ';">';
-      html += '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">';
-      html += '<div><div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + escHtml(cl.label) + '</div>';
-      html += '<div style="font-size:12px;color:var(--text-muted);">' + cl.session_count + ' session' + (cl.session_count !== 1 ? 's' : '') + '</div></div>';
-      html += '<div style="background:' + color + '22;color:' + color + ';padding:4px 8px;border-radius:12px;font-size:11px;font-weight:600;">' + cl.session_count + '</div>';
-      html += '</div>';
-      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">';
-      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Avg cost:</span> <span style="font-weight:600;color:var(--text-primary);">$' + cl.avg_cost.toFixed(4) + '</span></div>';
-      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Avg tokens:</span> <span style="font-weight:600;color:var(--text-primary);">' + (cl.avg_tokens / 1000).toFixed(1) + 'K</span></div>';
-      html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Error rate:</span> <span style="font-weight:600;">' + errorPct + '%</span></div>';
-      if (cl.rep_session) {
-        html += '<div style="font-size:12px;"><span style="color:var(--text-muted);">Top session:</span> <span style="font-family:monospace;color:var(--text-accent);" title="' + escHtml(cl.rep_session.id) + '">' + escHtml(cl.rep_session.id.substring(0,8)) + '</span></div>';
-      }
-      html += '</div>';
-      if (cl.rep_session && cl.rep_session.tools && cl.rep_session.tools.length > 0) {
-        html += '<div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">';
-        cl.rep_session.tools.slice(0,5).forEach(function(t) {
-          html += '<span style="background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:4px;font-size:10px;padding:2px 6px;color:var(--text-muted);">' + escHtml(t) + '</span>';
-        });
-        html += '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div>';
-    var total = data.clusters.reduce(function(s, c) { return s + c.session_count; }, 0);
-    html += '<div class="card" style="padding:12px 16px;font-size:12px;color:var(--text-muted);">Total: <strong style="color:var(--text-primary);">' + total + ' sessions</strong> across <strong style="color:var(--text-primary);">' + data.clusters.length + ' clusters</strong></div>';
-    el.innerHTML = html;
-  } catch(e) {
-    el.innerHTML = '<div style="padding:16px;color:var(--text-error);">' + t("app.failed_to_load_clusters", null, "Failed to load clusters") + '</div>';
-  }
-}
-
 var _overviewRefreshRunning = false;
 function startOverviewRefresh() {
   // Don't fire loadAll() immediately -- bootDashboard already called it
@@ -25087,6 +25166,11 @@ async function loadOverviewTasks() {
     // than claiming the machine is idle — other runtimes may be flat out.
     var _rtName = (_atRt === 'all') ? '' : _cmRuntimeLabel(_atRt);
     function _emptyState() {
+      // #5534: "The AI is idle." is a claim about the user's agents. When the
+      // store could not be read we have no standing to make it — an
+      // unreachable collector answers with the same empty list an idle
+      // machine does.
+      if (data && data.store_available === false) return cmStoreUnreachableHtml('text-align:center;padding:40px 20px;');
       var head = _rtName ? ('No active tasks for ' + escHtml(_rtName)) : 'No active tasks';
       var sub  = _hiddenOther > 0
         ? (_hiddenOther + ' task' + (_hiddenOther === 1 ? '' : 's') + ' on other runtimes — switch runtime to see them.')
@@ -28989,7 +29073,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 30 runtimes side by side. Respects the global
+// the headline demo path — the 31 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -30793,12 +30877,14 @@ var GUARD_KIND_LABEL = {
   // policy form makes you name them rather than folding them into "any
   // signal". Keys mirror clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'Repo config runs a program',
-  agent_config_tamper: 'Agent hook config changed'
+  agent_config_tamper: 'Agent hook config changed',
+  package_manifest_exec: 'Installing deps runs its code'
 };
 
 // The workspace half of GUARD_KIND_LABEL, so a renderer can tell the two
 // questions apart without hard-coding kind strings a second time.
-var GUARD_WORKSPACE_KINDS = ['repo_config_exec', 'agent_config_tamper'];
+var GUARD_WORKSPACE_KINDS = ['repo_config_exec', 'agent_config_tamper',
+                             'package_manifest_exec'];
 
 // The policy form's condition list, built from GUARD_KIND_LABEL rather than
 // re-typed. A hand-kept second copy is how a new kind ends up renderable but
@@ -31101,6 +31187,14 @@ function loadGuardSessions() {
         statusCell += ' <span class="pill ' + guardSeverityClass(ws.severity) + '" title="' +
           guardEsc(ws.detail || '') + '">' +
           guardEsc(GUARD_KIND_LABEL[ws.kind] || ws.kind) + '</span>';
+      }
+      // #5746 — this session's transcript is published to a read-only public
+      // link that anyone holding it can open, and which keeps receiving new
+      // conversation text. Strictly `=== true`: `null` means the daemon never
+      // got a verdict (no gateway to ask), and drawing anything for that would
+      // turn "we do not know" into a claim.
+      if (s.public_share === true) {
+        statusCell += ' <span class="pill pill-warn" title="This session is published to a read-only public link. Anyone with the link can read its conversation text, including messages sent from now on. Revoke it from the OpenClaw session menu.">Public link</span>';
       }
       // Listed from the live process probe, so it can be stopped now, but the
       // sync daemon has not read its transcript yet. Say that rather than let
@@ -32255,4 +32349,188 @@ function signalsDeleteBrief(id) {
     fetch('/api/briefs/' + encodeURIComponent(id), { method: 'DELETE' })
       .then(function (r) { return r.json().then(function (j) { j._status = r.status; return j; }); }),
     _sigT('signals.brief_delete_err', null, 'Could not delete the brief.'));
+}
+
+// ── First-run report (#5716) ────────────────────────────────────────────────
+// A dashboard with nothing on it reads as a broken install. When there is
+// genuinely nothing to show, say where we looked, what would change the
+// answer, and offer the sample: rather than rendering an empty shell.
+//
+// Deliberately conservative about WHEN it appears: only with zero sessions
+// AND zero events. A user whose agents are simply idle today has data, and
+// telling them "nothing detected" would be wrong.
+//
+// Two ways that conservatism was not conservative enough (#5766):
+//
+//   1. A MISSING key was read as zero. `/api/overview` does not have one
+//      canonical session-count field: OSS serves `sessions` + `sessionCount`,
+//      while the cloud node page builds the payload client-side out of the
+//      encrypted snapshot and ships `sessionCount` ONLY: no `sessions`, no
+//      events keys at all. So the probe fell off the end of its key list,
+//      returned 0, and declared a machine with 1,281 synced sessions empty,
+//      directly under a header reading "Claude Code · 1281 sessions".
+//      Absence of a count is "unknown", never "zero": with no count field
+//      present at all we say nothing rather than accuse the install.
+//   2. `sessionsToday` is legitimately 0 on a busy machine that has not run
+//      anything since midnight, so the answer is the MAX over the keys the
+//      payload actually carries, not the first one found.
+var _FRR_SESSION_KEYS = ['sessions', 'sessionCount', 'session_count',
+                         'total_sessions', 'sessionsToday'];
+var _FRR_EVENT_KEYS = ['events', 'event_count', 'total_events'];
+
+// Highest count across the keys the payload actually carries, or null when it
+// carries none of them (unknown, not empty).
+function _frrCount(overview, keys) {
+  var best = null;
+  for (var i = 0; i < keys.length; i++) {
+    var v = overview && overview[keys[i]];
+    var n = null;
+    if (typeof v === 'number' && isFinite(v)) n = v;
+    else if (Array.isArray(v)) n = v.length;
+    if (n !== null && (best === null || n > best)) best = n;
+  }
+  return best;
+}
+
+// Only a payload that positively reports zero earns the panel.
+function _frrLooksEmpty(overview) {
+  var sessions = _frrCount(overview, _FRR_SESSION_KEYS);
+  var events = _frrCount(overview, _FRR_EVENT_KEYS);
+  if (sessions === null && events === null) return false;
+  return (sessions || 0) <= 0 && (events || 0) <= 0;
+}
+
+async function renderFirstRunReport(overview) {
+  var el = document.getElementById('first-run-report');
+  if (!el) return;
+  // Every sentence in this panel is about the machine the reader is sitting
+  // at: it probes local runtime paths and prescribes `clawmetry connect` /
+  // `clawmetry --sample`. On a hosted node page the probe runs inside the
+  // cloud container, which has no runtimes and never will, so it reported
+  // "No supported runtime was detected ... checked 31 runtimes" about the
+  // server while the reader was looking at their own laptop's sessions.
+  // A local-machine diagnostic has no honest answer to give here.
+  if (window.CLOUD_MODE) { el.style.display = 'none'; return; }
+  if (!_frrLooksEmpty(overview)) { el.style.display = 'none'; return; }
+
+  var d = null;
+  try {
+    d = await fetch('/api/entitlement/runtime-detection', { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); });
+  } catch (e) { d = null; }
+  var probes = (d && d.probes) || [];
+  var found = probes.filter(function (p) { return p.found; });
+
+  var h = '<div style="display:flex;align-items:center;gap:9px;margin-bottom:10px;">'
+        + '<span style="font-size:17px;" aria-hidden="true">&#128269;</span>'
+        + '<b style="font-size:15px;color:var(--text-primary);">No agent sessions on this machine yet</b></div>';
+
+  // Nothing is ingesting -> nothing will EVER appear, and no amount of
+  // agent activity changes that. Saying "run some work through the agent"
+  // here would send the user to do something that cannot help (#5740).
+  var noIngest = d && d.ingest_running === false;
+
+  if (noIngest) {
+    h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
+       + (found.length
+          ? 'ClawMetry detected <b>' + found.map(function (p) { return escHtml(p.label || p.id); }).join(', ')
+            + '</b> on this machine, but '
+          : 'No sessions are being read, because ')
+       + '<b>nothing is reading ' + (found.length === 1 ? 'it' : 'them')
+       + ' into the local store yet.</b> '
+       + 'The dashboard displays what the sync daemon collects, and the daemon '
+       + 'is not running on this machine. Start it and this page fills in:</p>'
+       + '<pre style="margin:0 0 12px;padding:10px 12px;background:var(--bg-primary);'
+       + 'border:1px solid var(--border-secondary);border-radius:6px;overflow-x:auto;'
+       + 'font-size:12.5px;">clawmetry connect   <span style="color:var(--text-muted);">'
+       + '# or: python3 -m clawmetry.sync</span></pre>';
+  } else if (found.length) {
+    // Runtimes are here and ingest is running; their session stores are empty
+    // or not yet read. Say that, rather than implying nothing is installed.
+    var names = found.map(function (p) { return escHtml(p.label || p.id); }).join(', ');
+    h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
+       + 'ClawMetry detected <b>' + names + '</b> on this machine, but has not read any '
+       + 'sessions from ' + (found.length === 1 ? 'it' : 'them') + ' yet. Run some work '
+       + 'through the agent and this fills in within a minute.</p>';
+    var locked = found.filter(function (p) { return !p.allowed; });
+    if (locked.length && d && !d.pending) {
+      h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
+         + escHtml(locked.map(function (p) { return p.label || p.id; }).join(', '))
+         + ' need the ' + escHtml((d && d.actionable_tier_label) || 'Starter')
+         + ' plan\u2019s adapters before their sessions can be read.</p>';
+    }
+  } else if (!noIngest) {
+    h += '<p style="margin:0 0 10px;font-size:13.5px;color:var(--text-secondary);">'
+       + 'No supported runtime was detected. That is a real answer, not an error. '
+       + 'If you think it looked in the wrong place, the command below prints '
+       + 'every location it checked.</p>';
+  }
+
+  // How widely we looked, and where to get the detail.
+  //
+  // This used to render the expanded probe path for all 31 runtimes. Two
+  // problems with putting that on a screen. It carries the account name
+  // (`/Users/<name>/...`) into every screenshot, screen-share and pasted
+  // issue of an empty dashboard, which is the rule the detector surface
+  // already holds itself to (AC-OBS-RSO-030.7: no report carries a full
+  // filesystem path). And a complete, copy-pasteable map of where we look
+  // for every supported runtime is a different artefact from the same table
+  // sitting in a source file: it ships with every install and lands in every
+  // screenshot of a fresh machine.
+  //
+  // So the panel says HOW MANY runtimes were checked, which is what makes
+  // "nothing detected" trustworthy, and points at `clawmetry diagnose` for
+  // the list. That is a local command whose output a person runs and chooses
+  // to share.
+  if (probes.length) {
+    h += '<p style="margin:0 0 12px;font-size:12.5px;color:var(--text-muted);">'
+       + 'ClawMetry checked <b>' + probes.length + ' runtimes</b> in their default locations. '
+       + 'To see exactly where it looked, run '
+       + '<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">clawmetry diagnose</code>.'
+       + '<br>On macOS, reading some of them needs Full Disk Access for your terminal. '
+       + 'A runtime storing its sessions somewhere else can be pointed at ClawMetry '
+       + 'with the environment variables in docs/compatibility.md.</p>';
+  }
+
+  h += '<div style="border-top:1px solid var(--border-secondary);padding-top:11px;font-size:13.5px;color:var(--text-secondary);">'
+     + 'Want to see what this looks like with data? Restart with '
+     + '<code style="background:var(--bg-primary);padding:2px 6px;border-radius:4px;">clawmetry --sample</code>'
+     + ' for three labelled synthetic sessions, including one that is stuck.</div>';
+
+  // #4784: something on this machine already emits OpenTelemetry and does not
+  // send it here. That is the most actionable thing we can say to someone
+  // looking at an empty dashboard, because it needs no install and no signup:
+  // one environment variable and their existing traces arrive.
+  //
+  // Reads `suggestable`, never `apps`: the latter can include a port
+  // ClawMetry itself holds (it binds 4318), and telling someone to redirect
+  // their app to ClawMetry, from ClawMetry, is worse than saying nothing.
+  try {
+    var otel = (overview && overview.detectedOtelApps) || {};
+    var sugg = otel.suggestable || [];
+    if (sugg.length) {
+      var named = sugg.filter(function (a) { return a.identified; });
+      var lead = named.length
+        ? ('<b>' + escHtml(named[0].name) + '</b>'
+           + (sugg.length > 1 ? ' and ' + (sugg.length - 1) + ' other'
+              + (sugg.length > 2 ? 's' : '') : '')
+           + ' on this machine ' + (sugg.length > 1 ? 'are' : 'is')
+           + ' already emitting OpenTelemetry, to '
+           + '<code>' + escHtml(named[0].endpoint) + '</code>.')
+        : ('Something on this machine is already emitting OpenTelemetry.');
+      h += '<div style="border-top:1px solid var(--border-secondary);margin-top:11px;'
+         + 'padding-top:11px;font-size:13.5px;color:var(--text-secondary);">'
+         + lead
+         + ' Send a copy here and it shows up in these tabs, with nothing to install:'
+         + '<pre style="margin:8px 0 0;padding:10px 12px;background:var(--bg-primary);'
+         + 'border:1px solid var(--border-secondary);border-radius:6px;overflow-x:auto;'
+         + 'font-size:12.5px;">' + escHtml(otel.instruction || '') + '</pre>'
+         + '<div style="margin-top:6px;font-size:12px;color:var(--text-muted);">'
+         + 'ClawMetry never changes another application\'s configuration.</div>'
+         + '</div>';
+    }
+  } catch (e) { /* the panel is worth more than the prompt */ }
+
+  el.innerHTML = h;
+  el.style.display = 'block';
 }

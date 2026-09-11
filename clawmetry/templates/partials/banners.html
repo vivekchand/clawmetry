@@ -1,3 +1,14 @@
+{% if sample_mode %}
+<!-- Sample-data banner. Deliberately NOT dismissable and NOT JS-driven: every
+     number on screen in this mode is synthetic, so the label must be present
+     in the first painted frame and must stay there. -->
+<div id="cm-sample-banner" role="status" style="display:flex; align-items:center; gap:10px; padding:9px 16px; background:#3b2f0b; border-bottom:2px solid #eab308; color:#fde68a; font-size:13px; font-weight:600;">
+  <span style="font-size:15px;" aria-hidden="true">&#9888;</span>
+  <span style="flex:1;">{{ sample_banner }}</span>
+  <code style="background:rgba(0,0,0,0.28); padding:2px 7px; border-radius:4px; font-size:12px; font-weight:500;">clawmetry</code>
+</div>
+{% endif %}
+
 <!-- Agent Builder cross-sell pill (dismissable, centered). ONE announcement
      pill at a time: this replaced the desk-device pill, it does not stack. -->
 <div id="cm-device-pill" style="display:none; justify-content:center; align-items:center; padding:8px 16px; background:#0b0d12; border-bottom:1px solid rgba(124,140,255,0.18);">
@@ -91,6 +102,35 @@ function dismissDevicePill(){ try{ localStorage.setItem('cm_ab_pill_dismissed','
 </div>
 
 <!-- Auto-Pause Banner -->
+<!-- Store-unreachable banner (#5534). Shown when a read in this dashboard
+     could not reach the collector that holds your data. Without it the tabs
+     render "no sessions" / "0 models" over a full store, which reads as data
+     loss. -->
+<div id="store-unreachable-banner" style="
+  display:none;
+  padding:10px 16px;
+  background:#78350f;
+  border-bottom:2px solid #f59e0b;
+  color:#fde68a;
+  font-size:13px;
+  font-weight:600;
+  align-items:center;
+  gap:10px;
+  ">
+  <span style="font-size:16px;">⚠</span>
+  <span id="store-unreachable-banner-msg" style="flex:1;" data-i18n="banners.store_unreachable">Can’t reach the collector on this machine, so some screens may look emptier than they are. Nothing has been lost — retrying.</span>
+  <button type="button" onclick="cmRetryStoreRead()" style="
+    background:#b45309;
+    color:#fff;
+    border:none;
+    border-radius:6px;
+    padding:4px 12px;
+    font-size:12px;
+    cursor:pointer;
+    font-weight:600;
+    " data-i18n="common.retry">Retry</button>
+</div>
+
 <div id="paused-banner" style="
   display:none;
   padding:10px 16px;

@@ -1,7 +1,6 @@
 {
   "_comment": "Known top-level names defined more than once, per file. Python keeps the LAST definition silently, so every caller of the first changes behaviour without a diff anyone reads. tests/test_no_shadowed_module_functions.py asserts a file's count never RISES, which lets the existing debt shrink without blocking work on it. A file absent from this map must have zero. Lowering a number here is the only way to record progress; raising one is a deliberate act somebody has to justify in review.",
   "baseline": {
-    "dashboard.py": 59,
     "routes/entitlement.py": 1
   }
 }

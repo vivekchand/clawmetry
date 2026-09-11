@@ -59,6 +59,13 @@ _TOML_END = "# clawmetry-mcp:end"
 #   json_mcpservers  {"mcpServers": {name: {command, args[, type]}}}
 #   json_opencode    {"mcp": {name: {"type": "local", "command": [..], "enabled": true}}}
 #   toml_mcp_servers [mcp_servers.name] command = ".." args = [".."]
+#   json_muse        {"mcp_servers": {name: {transport, command, args}}}
+#
+# ``seed``: keys a CREATED file must carry to be valid for that runtime. Only
+# applied when we are writing the file from nothing — never merged into a file
+# the user already has. Muse Code needs this: its settings file must contain
+# ``"schema_version": 1`` or the app fails at startup, so writing a bare
+# {"mcp_servers": ...} would leave the user unable to launch Muse at all.
 #
 # ``verified``: how the format was checked. Recorded here on purpose so a
 # future reader can re-check the same source when a vendor moves things.
@@ -103,6 +110,18 @@ SUPPORTED: Dict[str, Dict[str, Any]] = {
         "entry_type": "local",
         "guidance_file": "AGENTS.md",
         "verified": "opencode.ai/docs/mcp-servers + /docs/config (mcp: {type: local, command: [..]})",
+    },
+    "muse_code": {
+        "label": "Muse Code",
+        "path": "~/.config/muse/settings.json",
+        "format": "json_muse",
+        "entry_type": "",
+        "guidance_file": "AGENTS.md",
+        "seed": {"schema_version": 1},
+        "verified": "dev.meta.ai/docs/muse-code/extending (mcp_servers block in the "
+                    "settings file; each server needs a transport of stdio or "
+                    "streamable_http) + /configuration (settings file lives at "
+                    "~/.config/muse/settings.json and must carry schema_version)",
     },
     "windsurf": {
         "label": "Windsurf",
@@ -235,6 +254,10 @@ def _write_json_file(path: str, data: dict) -> None:
 def _json_entry(spec: dict, command: str, args: List[str]) -> dict:
     if spec["format"] == "json_opencode":
         return {"type": "local", "command": [command] + list(args), "enabled": True}
+    if spec["format"] == "json_muse":
+        # Muse names the stdio/http choice `transport`, not `type`, and treats
+        # a missing one as invalid rather than defaulting it.
+        return {"transport": "stdio", "command": command, "args": list(args)}
     entry: Dict[str, Any] = {}
     if spec.get("entry_type"):
         entry["type"] = spec["entry_type"]
@@ -244,7 +267,11 @@ def _json_entry(spec: dict, command: str, args: List[str]) -> dict:
 
 
 def _json_container_key(spec: dict) -> str:
-    return "mcp" if spec["format"] == "json_opencode" else "mcpServers"
+    if spec["format"] == "json_opencode":
+        return "mcp"
+    if spec["format"] == "json_muse":
+        return "mcp_servers"
+    return "mcpServers"
 
 
 # ── TOML (Codex) ─────────────────────────────────────────────────────────────
@@ -392,6 +419,10 @@ class Installer:
                 data, problem = _read_json_file(path)
                 if data is None:
                     return dict(base, status=UNKNOWN_FORMAT, detail=problem)
+                if not data and spec.get("seed"):
+                    # Creating the file from nothing: without this the runtime
+                    # rejects its own config on next launch.
+                    data.update(spec["seed"])
                 key = _json_container_key(spec)
                 container = data.get(key)
                 if container is None:
@@ -441,6 +472,9 @@ class Installer:
                 data, problem = _read_json_file(path)
                 if data is None:
                     return dict(base, status=UNKNOWN_FORMAT, detail=problem)
+                # No `seed` here on purpose: uninstall removes, it never
+                # creates. Seeding an absent file would leave a config behind
+                # for a runtime the user just detached from.
                 key = _json_container_key(spec)
                 container = data.get(key)
                 if isinstance(container, dict) and _entry_is_ours(container.get(SERVER_NAME)):

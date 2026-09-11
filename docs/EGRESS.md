@@ -34,7 +34,7 @@ python3 -m pytest tests/test_egress_suppression.py tests/test_e2e_invariants.py
 |---|---|---|
 | **Self-hosted** (`SELF_HOSTED=true`) | No | No |
 | **Air-gapped** (`CLAWMETRY_OFFLINE=1`) | No | No |
-| **Local only** (no `clawmetry connect`) | One install ping; nothing else | PyPI version check |
+| **Local only** (no `clawmetry connect`) | One install ping, plus a field-failure report if the daemon stops working | PyPI version check |
 | **Managed cloud** (`clawmetry connect`) | Yes: sealed content plus plaintext metadata (table below) | PyPI version check |
 
 No ClawMetry deployment loads a CDN, font, analytics script, error tracker or
@@ -199,6 +199,7 @@ Codex sessions on the machine.
 | `GET /api/cloud/account`, `GET /api/cloud/claim-status` | once per daemon start; every 5 s only while on a placeholder account | key in a header, node_id | none |
 | `POST /auth` | only during `clawmetry connect` | api_key, hostname, machine_id (hash of hardware id) | none |
 | `POST /api/install` | once per install, first run | random install id, version, OS, Python version, detected agent name, CI flag | none |
+| `POST /api/desktop/open` (stage `daemon_failed`) | at most once per failure class per 6 h, and only when the daemon cannot do its job | random install id, failure class from a closed enum (`daemon_lock_refused`, `daemon_ingest_stalled`), clawmetry version, OS, OS version, arch, Python major.minor, and a session id derived as `<class>-<UTC date>` | none |
 | `POST /api/admin/anon-event` | first dashboard load that fails auth | event name, version, browser family | none |
 | `POST /ingest/trial-warning` | at most once a day on a trial | days_left, plan | none |
 | `POST /api/license/ping` | self-hosted, **off unless** `CLAWMETRY_LICENSE_PING=1` | version, license subject, tier, timestamp | none |

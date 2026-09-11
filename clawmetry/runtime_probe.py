@@ -37,6 +37,24 @@ except Exception:  # pragma: no cover - defensive; keep onboarding alive
     FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
 
 
+def _tilde(path: str) -> str:
+    """``/Users/ada/.codex`` -> ``~/.codex``. Never widens a path.
+
+    Every rendered path ends up somewhere it was not written for: a
+    screenshot, a screen-share, a support ticket, a pasted issue. An absolute
+    path carries the account name and buys nothing, because ``~/.codex`` is
+    exactly as checkable. This is the rule the detector surface already holds
+    itself to (AC-OBS-RSO-030.7: no report carries a full filesystem path).
+    """
+    try:
+        home = os.path.expanduser("~")
+        if home and home != os.sep and path.startswith(home):
+            return "~" + path[len(home):]
+    except Exception:
+        pass
+    return path
+
+
 @dataclass
 class RuntimeProbe:
     """One supported runtime: id, human label, and where its data lives."""
@@ -45,6 +63,30 @@ class RuntimeProbe:
     label: str
     paths: tuple  # candidate globs, relative to ~ unless absolute / env-based
     env: str = ""  # optional env var naming the data dir (adapter-honoured)
+
+    def checked_paths(self) -> list:
+        """The locations :meth:`found` actually looks at, expanded.
+
+        An empty state that says "nothing detected" without saying WHERE it
+        looked is indistinguishable from a broken install, and the user has no
+        way to tell us we searched the wrong place. A candidate whose
+        environment variable is unset stays literal (``$GOOSE_PATH_ROOT/...``)
+        rather than being silently dropped: "we looked here and that variable
+        is not set" is the honest answer.
+        """
+        out = []
+        try:
+            if self.env:
+                root = os.environ.get(self.env)
+                out.append(
+                    _tilde(os.path.expanduser(root)) if root
+                    else f"${self.env} (unset)"
+                )
+            for p in self.paths:
+                out.append(_tilde(os.path.expanduser(os.path.expandvars(p))))
+        except Exception:
+            return out
+        return out
 
     def found(self) -> bool:
         """True when any candidate location exists. Never raises."""
@@ -156,6 +198,22 @@ RUNTIME_PROBES: tuple = (
     # files rather than the directory: the dir alone is created by a first
     # launch that never recorded a session, and ~/.config is shared with
     # every other tool, so a bare-dir probe is the weakest possible evidence.
+    # Muse Code keeps two directories apart and it is easy to probe the wrong
+    # one (we did). Verified against muse 1.0.3 on macOS:
+    #   ~/.local/share/muse  ($XDG_DATA_HOME/muse) -- the real home:
+    #                        session-index.db + sessions/YYYY/MM/DD/<uuid>/
+    #   ~/.config/muse       -- settings.json and auth.json only
+    # macOS follows XDG here, NOT ~/Library/Application Support. The session
+    # index comes first because it is the only one of these that proves Muse
+    # actually RAN: ~/.config/muse is created on first launch even when that
+    # launch fails for want of credentials, so the bare directory proves
+    # nothing and is deliberately not listed.
+    RuntimeProbe("muse_code", "Muse Code",
+                 ("~/.local/share/muse/session-index.db",
+                  "~/.local/share/muse/sessions",
+                  "~/.config/muse/settings.json",
+                  "~/.config/muse/auth.json"),
+                 env="CLAWMETRY_MUSE_HOME"),
     RuntimeProbe("openworker", "OpenWorker",
                  ("~/.config/coworker/coworker.db",
                   "~/.config/coworker/conversations",
@@ -216,7 +274,9 @@ RUNTIME_PROBES: tuple = (
 def probe_runtimes() -> list:
     """Presence-probe every supported runtime.
 
-    Returns ``[{id, label, free, found}]`` in catalogue order. Never raises.
+    Returns ``[{id, label, free, found, paths, env}]`` in catalogue order.
+    ``paths`` is what was actually checked, so a caller can show the user
+    where we looked instead of only that we found nothing. Never raises.
     """
     out = []
     for probe in RUNTIME_PROBES:
@@ -224,12 +284,18 @@ def probe_runtimes() -> list:
             hit = probe.found()
         except Exception:
             hit = False
+        try:
+            checked = probe.checked_paths()
+        except Exception:
+            checked = []
         out.append(
             {
                 "id": probe.id,
                 "label": probe.label,
                 "free": probe.id in FREE_RUNTIMES,
                 "found": hit,
+                "paths": checked,
+                "env": probe.env or "",
             }
         )
     return out

@@ -19,6 +19,7 @@ incident can say whether the threshold it crossed was measured or shipped.
 from __future__ import annotations
 
 import os
+import time
 from typing import Optional
 
 
@@ -75,6 +76,12 @@ WRITE_TOOL_SUBSTRINGS = tuple(
 BLAST_RADIUS_FILES = int(os.environ.get("CLAWMETRY_BLAST_FILES", "25"))
 # network_egress: distinct external hosts in one window that counts as fan-out.
 EGRESS_HOST_FANOUT = int(os.environ.get("CLAWMETRY_EGRESS_HOSTS", "8"))
+# network_egress: how long a host must have been in a cohort's memory before
+# it counts as KNOWN. Hosts are learned from every session in the cohort, so
+# without this the first session of a swarm to reach a host taught every
+# sibling that the host was normal, and the siblings went silent (DseWiki,
+# 2026: hundreds of agents posting to one wiki). 0 disables the window.
+EGRESS_SETTLE_HOURS = float(os.environ.get("CLAWMETRY_EGRESS_SETTLE_HOURS", "24"))
 
 # Silent-failure detectors (rate limited / blocked on a human / crashed).
 # How many rate-limit style refusals (429 / overloaded / quota) in the window
@@ -145,6 +152,8 @@ RUNTIME_PROFILES: dict = {
     # exclusively through them looks like it made no progress at all. It also
     # drives a shell (``run_shell``), which the shell-mutation rule covers.
     "openworker": {"write_tools": ("replace_in_file", "apply_unified_diff")},
+    # Muse Code's edit tools, as named in the toolCall items MSP serves.
+    "muse_code": {"write_tools": ("edit_file", "write_file", "apply_patch")},
     # Replit Agent writes through ``write``/``edit`` (both match the module
     # defaults) and shells through ``bash`` (covered by the shell-mutation
     # rule) — vocabulary verified against real in-workspace journals (pro
@@ -306,8 +315,33 @@ def resolve_thresholds(runtime: Optional[str] = None,
     th["no_progress_enabled"] = no_progress_enabled
     th["sources"] = sources
     th["baseline"] = learned
-    th["known_hosts"] = frozenset(
-        str(h).lower() for h in (baseline or {}).get("hosts") or ()
-        if isinstance(h, str) and h.strip()
-    )
+    th["known_hosts"], th["settling_hosts"] = _split_hosts(baseline)
+    th["egress_settle_hours"] = EGRESS_SETTLE_HOURS
     return th
+
+
+def _split_hosts(baseline: Optional[dict], now: Optional[float] = None) -> tuple:
+    """``(known, settling)`` host sets from a cohort baseline.
+
+    A host is KNOWN once it has been in the cohort's memory for
+    ``EGRESS_SETTLE_HOURS``; before that it is SETTLING and still new to
+    ``network_egress``. A baseline without arrival times (a store that
+    predates them) treats every host as known, which is the old behaviour.
+    """
+    base = baseline if isinstance(baseline, dict) else {}
+    hosts = {str(h).lower() for h in base.get("hosts") or ()
+             if isinstance(h, str) and h.strip()}
+    first_seen = base.get("host_first_seen")
+    if not isinstance(first_seen, dict) or EGRESS_SETTLE_HOURS <= 0:
+        return frozenset(hosts), frozenset()
+    arrived = {str(k).lower(): v for k, v in first_seen.items() if isinstance(k, str)}
+    cutoff_ms = ((time.time() if now is None else now)
+                 - EGRESS_SETTLE_HOURS * 3600) * 1000
+    settling = set()
+    for h in hosts:
+        try:
+            if float(arrived[h]) > cutoff_ms:
+                settling.add(h)
+        except (KeyError, TypeError, ValueError):
+            continue  # no arrival time for this host: known, as before
+    return frozenset(hosts - settling), frozenset(settling)
