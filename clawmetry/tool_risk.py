@@ -265,11 +265,93 @@ _DESTRUCTIVE_HTTP = ("delete",)
 _WRITE_HTTP = ("post", "put", "patch")
 
 
+# ── git config that executes a program (clawmetry-pro#244) ─────────────────
+#
+# `repo_scan` already knows which git config keys run a program -- that list is
+# the whole basis of `repo_config_exec`. Passing the same key on the command
+# line is the same arbitrary code execution, and scored `medium` here purely
+# because nothing connected the two modules. `medium` is rank 1, so a policy
+# with `min_risk: high` held none of these. Mirror of the Google ADK CI/CD
+# finding (Pillar Security, fixed Jul 2026): a command filter that trusted
+# `git` was reached through `core.hooksPath`.
+# The value alternation captures a QUOTED run whole. An unquoted-only pattern
+# stops at the first `;`, so `core.pager="less; curl evil"` captured just
+# `less` and read as a recognised tool -- the payload hid behind the
+# metacharacter the known-good check exists to catch.
+_GIT_CONFIG_INLINE = _rx(
+    r"(?:^|\s)-c\s*([A-Za-z0-9._*-]+)="
+    r"(\"[^\"]*\"|'[^']*'|[^\s;|&]*)")
+_GIT_CONFIG_ENV_OPT = _rx(
+    r"(?:^|\s)--config-env[=\s]([A-Za-z0-9._*-]+)=")
+# Environment forms of the same keys, set inline on the command.
+_GIT_EXEC_ENVVARS = _rx(
+    r"\b(GIT_SSH_COMMAND|GIT_EXTERNAL_DIFF|GIT_EDITOR|GIT_PAGER|GIT_ASKPASS"
+    r"|GIT_SEQUENCE_EDITOR)=")
+# Not an exec KEY: it names no program. It enables the ext:: transport so the
+# program comes from the URL argument, which is why repo_scan's key list does
+# not (and should not) contain it.
+_GIT_EXT_TRANSPORT = _rx(r"\bprotocol\.ext\.allow\s*=")
+
+
+def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
+    """Flag `git -c <key>=<value>` where the key makes git run a program.
+
+    Uses ``repo_scan.git_config_executes`` rather than a second copy of the
+    key list, so the scanner and the classifier cannot drift. Reasons name the
+    key: an operator working the Approvals queue can tell this from a build
+    command, which "shell command with side effects unknown" did not allow.
+    """
+    if "git" not in cmd.lower():
+        return
+    try:
+        from clawmetry.repo_scan import (git_config_executes,
+                                         git_config_value_known_good)
+    except Exception:
+        return
+    seen: set = set()
+    for key, value in _GIT_CONFIG_INLINE.findall(cmd):
+        k = key.lower()
+        # Shell quoting is the caller's, not git's: `alias.x='!payload'` must
+        # be read as `!payload` or the value-dependent alias rule never fires.
+        val = value.strip().strip("\"'")
+        if k in seen:
+            continue
+        if not git_config_executes(k, val):
+            continue
+        seen.add(k)
+        if git_config_value_known_good(val):
+            # Recognition, not suppression: `core.pager=less` executes by
+            # definition and is ordinary. Say what it is and leave the level
+            # to the other rules rather than promoting a common command.
+            hits.append(("medium",
+                         f"sets git {key} to a recognised tool ({val.split()[0]})"))
+            continue
+        hits.append(("high", f"sets git {key}, which git executes"))
+    # --config-env names an ENV VAR holding the value, so the value is not
+    # visible here; the predicate is called with an empty value, which matches
+    # literal exec keys and deliberately does not fire on value-dependent ones.
+    for key in _GIT_CONFIG_ENV_OPT.findall(cmd):
+        k = key.lower()
+        if k not in seen and git_config_executes(k):
+            seen.add(k)
+            hits.append(("high",
+                         f"sets git {key} from the environment, which git executes"))
+    for name in _GIT_EXEC_ENVVARS.findall(cmd):
+        hits.append(("high", f"sets {name}, which git executes"))
+    if _GIT_EXT_TRANSPORT.search(cmd):
+        hits.append(("high",
+                     "enables the git ext:: transport, which runs a program "
+                     "named in the remote URL"))
+
+
 def _classify_exec(cmd: str, hits: list[tuple[str, str]]) -> None:
     low = cmd.lower()
     for rx_, level, reason in _CMD_RULES:
         if rx_.search(low):
             hits.append((level, reason))
+    # Read from the ORIGINAL command, not `low`: an alias's executability
+    # depends on its value, and lowercasing a path can change it.
+    _classify_git_exec_config(cmd, hits)
     # rm -rf aimed at root or home escalates to critical.
     if _RM_RECURSIVE_FORCE.search(low) or _rx(r"\brm\s+-\w*r\w*\s").search(low):
         if _RM_ROOT_TARGET.search(low):

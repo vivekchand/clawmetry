@@ -784,6 +784,7 @@ jobs:
             tests/test_openclaw_detection_real.py \
             tests/test_repo_scan_daemon_wiring.py \
             tests/test_guard_workspace_kinds.py \
+            tests/test_tool_risk.py \
             tests/test_no_shadowed_module_functions.py \
             tests/test_hooks_claude_code.py \
             tests/test_hook_ownership_quoted_launcher.py \

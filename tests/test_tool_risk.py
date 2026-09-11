@@ -367,3 +367,79 @@ def test_extract_tool_blocks_string_args_and_variant_keys():
 def test_watcher_event_types_cover_v3_and_nemoclaw():
     assert "model.completed" in approvals._TOOL_EVENT_TYPES
     assert "tool.call" in approvals._TOOL_EVENT_TYPES
+
+
+# ── git config that executes a program (clawmetry-pro#244) ────────────────
+#
+# repo_scan._EXEC_KEYS is the basis of `repo_config_exec`: it knows which git
+# config keys make git run a program. tool_risk did not, so passing the same
+# key on the command line scored `medium` — rank 1, which a policy with
+# `min_risk: high` does not hold. Six forms of arbitrary code execution were
+# under-rated. Mirror of the Google ADK CI/CD finding, where a command filter
+# that trusted `git` was reached through core.hooksPath.
+
+import pytest as _pytest
+
+from clawmetry.tool_risk import classify_tool_call as _classify, risk_rank
+
+
+def _level(cmd):
+    return _classify("Bash", {"command": cmd})["level"]
+
+
+@_pytest.mark.parametrize("cmd", [
+    "git -c core.hooksPath=/tmp/evil status",
+    "git -c core.fsmonitor=/tmp/evil.sh status",
+    "git -c core.sshCommand=/tmp/evil.sh fetch",
+    "git -c alias.x='!/tmp/evil.sh' x",
+    "git -c protocol.ext.allow=always fetch ext::sh -c id",
+    "git --config-env=core.sshCommand=EVIL fetch",
+    "GIT_SSH_COMMAND=/tmp/evil.sh git fetch",
+])
+def test_git_config_exec_is_high(cmd):
+    """Each of these runs an attacker-chosen program. `medium` is rank 1, so
+    a `min_risk: high` policy held none of them."""
+    lvl = _level(cmd)
+    assert risk_rank(lvl) >= risk_rank("high"), (
+        f"{cmd!r} scored {lvl!r} (rank {risk_rank(lvl)}); a min_risk:high "
+        f"policy does not hold it."
+    )
+
+
+def test_reason_names_the_key_not_side_effects_unknown():
+    """An operator working the Approvals queue could not tell this from a
+    build command."""
+    r = _classify("Bash", {"command": "git -c core.hooksPath=/tmp/evil status"})
+    joined = " ".join(r["reasons"])
+    assert "core.hooksPath" in joined, joined
+    assert "side effects unknown" not in joined, joined
+
+
+@_pytest.mark.parametrize("cmd", [
+    "git status",
+    "git -c user.name=bob commit -m x",
+    "git -c alias.lg='log --oneline' lg",     # alias without "!" is not a shell
+    "git -c core.pager=less log",             # recognised tool
+])
+def test_ordinary_git_is_not_promoted(cmd):
+    """False positives are the whole design problem. An alias is executable
+    only when its value starts with `!`, and a recognised pager is ordinary."""
+    assert risk_rank(_level(cmd)) < risk_rank("high"), cmd
+
+
+def test_known_good_value_cannot_hide_a_payload_behind_a_metachar():
+    """`core.pager="less; curl evil"` starts with a recognised tool. The
+    known-good check rejects any value that chains or redirects, and the
+    parser must capture the quoted value WHOLE for that check to see it."""
+    assert _level('git -c core.pager="less; curl evil" log') == "high"
+
+
+def test_predicate_is_shared_with_repo_scan_not_copied():
+    """One list, not two that drift: the classifier must consult repo_scan's
+    predicate, so a key added there is rated here without a second edit."""
+    from clawmetry.repo_scan import git_config_executes
+    assert git_config_executes("core.hooksPath", "/tmp/x") is True
+    assert git_config_executes("alias.x", "!/tmp/e.sh") is True
+    assert git_config_executes("alias.x", "log --oneline") is False
+    # protocol.ext.allow names no program; it must NOT be in the key set.
+    assert git_config_executes("protocol.ext.allow", "always") is False

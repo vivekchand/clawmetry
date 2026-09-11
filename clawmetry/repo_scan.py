@@ -289,6 +289,42 @@ def _parse_git_config(text: str) -> list:
     return out
 
 
+def git_config_value_known_good(value: str) -> bool:
+    """Is this config VALUE a recognised, ordinary tool rather than a payload?
+
+    Shared with :mod:`clawmetry.tool_risk` for the same reason as
+    :func:`git_config_executes`: ``core.pager=less`` executes by definition and
+    is an entirely ordinary thing to type, so a classifier that promotes it on
+    the key alone reports noise on a common command. A value that chains,
+    substitutes or redirects is never known-good whatever it starts with.
+    """
+    return _is_known_good(str(value or ""))
+
+
+def git_config_executes(full_key: str, value: str = "") -> bool:
+    """Does setting this git config key to this value make git run a program?
+
+    The single source of truth for "this git config executes", shared with
+    :mod:`clawmetry.tool_risk` so the on-disk scanner and the tool-stream
+    classifier cannot disagree about the same fact. It is a PREDICATE, not a
+    name set, because executability is partly value-dependent: ``alias.x`` is
+    a shell command only when its value starts with ``!``, and a name-only
+    export would either miss that or promote every benign alias.
+
+    ``value`` defaults to empty for callers that can see the key but not the
+    value (``git --config-env=k=ENVVAR`` names an environment variable, not
+    the program). That is deliberately conservative: literal exec keys still
+    match, and the value-dependent ones do not fire on an unknown value.
+
+    NOTE: this does NOT cover ``protocol.ext.allow``. That key names no
+    program — it enables the ``ext::`` transport so the command comes from the
+    URL argument instead. Callers that see a command line must handle it
+    separately; treating it as an exec key here would be wrong.
+    """
+    return _key_is_executable(str(full_key or "").strip().lower(),
+                              str(value or ""))
+
+
 def _key_is_executable(full_key: str, value: str) -> bool:
     if full_key in _EXEC_KEYS:
         return True
