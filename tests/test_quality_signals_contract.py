@@ -125,6 +125,29 @@ def test_dialect_every_family_runtime_parses(runtime):
     assert evs[0].tool_name == "Bash", f"{runtime} tool call not parsed"
 
 
+def test_dialect_codex_json_string_arguments_are_parsed():
+    """Codex writes ``arguments`` as a JSON STRING. Reading only dicts dropped
+    every input, left no gradeable signal, and stamped Codex "Can't see" on the
+    Harness Engineering bench (2026-09-11)."""
+    row = {
+        "event_type": "tool_call", "ts": 1000,
+        "data": {"role": "assistant", "content": "", "_runtime": "codex",
+                 "tool_name": "exec",
+                 "tool_calls": [{"id": "c", "name": "exec",
+                                 "arguments": '{"cmd": "ls", "tool": "exec_command"}'}]},
+    }
+    evs = normalize_events([row])
+    assert evs[0].tool_name == "exec"
+    assert evs[0].tool_input == {"cmd": "ls", "tool": "exec_command"}
+    assert probe_capabilities(evs, runtime="codex").supports("tool_thrash")
+
+
+def test_dialect_non_json_string_arguments_degrade_to_empty():
+    row = {"event_type": "tool_call", "ts": 1000,
+           "data": {"tool_calls": [{"name": "exec", "arguments": "{not json"}]}}
+    assert normalize_events([row])[0].tool_input == {}
+
+
 def test_error_flag_absent_is_not_success():
     """A runtime that reports nothing about a result must read as UNKNOWN.
 

@@ -132,9 +132,19 @@ def _raw_tool_input_hint(rows) -> bool:
         if not isinstance(blob, dict):
             continue
         for tc in (blob.get("tool_calls") or []):
-            if isinstance(tc, dict) and isinstance(
-                    tc.get("input") or tc.get("arguments"), dict):
-                if tc.get("input") or tc.get("arguments"):
+            if not isinstance(tc, dict):
+                continue
+            for k in ("input", "arguments"):
+                v = tc.get(k)
+                # Codex records ``arguments`` as a JSON string. Counting only
+                # dicts made this hint blind to it, so the codex fixture never
+                # asserted inputs and the dropped-input bug shipped.
+                if isinstance(v, str):
+                    try:
+                        v = json.loads(v)
+                    except Exception:
+                        continue
+                if isinstance(v, dict) and v:
                     return True
         if isinstance(blob.get("input"), dict) and blob.get("name"):
             return True

@@ -14961,11 +14961,16 @@ def _family_ingest_rev() -> str:
     without a bump the "What the agent was given" panel stays empty for every
     session that had already been seen. Bump the salt when the OSS extraction
     changes without a pro release.
+
+    ``/q2`` (2026-09-11): quality grading started reading JSON-string tool
+    ``arguments`` (Codex). ``metadata.quality`` is graded only at ingest, so
+    without the bump every already-seen Codex session stays "not measurable"
+    and the Harness Engineering bench keeps stamping Codex "Can't see".
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2"
     except Exception:
         return ""
 
