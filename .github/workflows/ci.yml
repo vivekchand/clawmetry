@@ -204,6 +204,15 @@ jobs:
       - name: E2E nightly workflow gateway-token wiring
         run: python3 -m pytest tests/test_e2e_nightly_workflow.py -q
 
+      # The quarantine pipeline parses JUnit XML out of a workflow artifact it
+      # downloads, and ElementTree expands internally-declared entities -- so a
+      # document could expand far beyond what it cost to send. scripts/
+      # auto_quarantine.py now refuses a DTD outright; these cases pin that.
+      # Named here because this job runs FILE LISTS, not `pytest tests/`: this
+      # file existed with 29 passing cases and ran in no job at all.
+      - name: Quarantine pipeline JUnit parsing
+        run: python3 -m pytest tests/test_auto_quarantine.py -q
+
       - name: Published provider pricing and cache accounting
         run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
 
