@@ -218,8 +218,13 @@ def run_case(case: dict) -> dict:
 
 
 def _fingerprint(case: dict) -> str:
+    # usedforsecurity=False: this is a dedupe key, not a security control. See
+    # the matching note in scripts/harness/audit.py — the digest only has to be
+    # stable so a daily run recognises a gap it already filed. Clears bandit
+    # B324 (CWE-327); SHA-1 is kept rather than widened to SHA-256 because
+    # changing the digest would re-file every gap already on file exactly once.
     key = f"{case.get('id', '')}:{case.get('surface', '')}".lower()
-    return "sgap-" + hashlib.sha1(key.encode()).hexdigest()[:10]
+    return "sgap-" + hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:10]
 
 
 def _existing_fingerprints() -> set:
