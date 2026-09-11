@@ -21492,7 +21492,8 @@ def _record_guard_observation(store, sid: str, runtime: str, agent_id: str,
         store.record_guard_observation(
             sid, cohort, runtime=runtime, agent_id=agent_id,
             tool_calls=profile["tool_calls"], write_files=profile["write_files"],
-            wrote=profile["wrote"], hosts=profile["hosts"])
+            wrote=profile["wrote"], hosts=profile["hosts"],
+            write_hosts=profile.get("write_hosts") or [])
         if runtime_cohort and runtime_cohort != cohort:
             # A composite key: one session contributes a row to each cohort,
             # and the PK is the session id, so the second row needs its own.
@@ -21500,7 +21501,8 @@ def _record_guard_observation(store, sid: str, runtime: str, agent_id: str,
                 f"{runtime_cohort}|{sid}", runtime_cohort, runtime=runtime,
                 agent_id=agent_id, tool_calls=profile["tool_calls"],
                 write_files=profile["write_files"], wrote=profile["wrote"],
-                hosts=profile["hosts"])
+                hosts=profile["hosts"],
+                write_hosts=profile.get("write_hosts") or [])
     except Exception as e:  # noqa: BLE001
         log.debug("guard: baseline observation failed for %s: %s", sid, e)
 
@@ -21920,6 +21922,9 @@ def _emit_detector_incidents(store, state: dict) -> int:
     bad_sessions: set = set()
     emitted = 0
     all_incidents: list = []
+    # Each session's write actions, for the fleet pass after the loop
+    # (clawmetry/detector_swarm.py). Collected here so the steps are parsed once.
+    fleet_fps: dict = {}
     for s in candidates:
         sid = s.get("session_id") or ""
         try:
@@ -21947,6 +21952,13 @@ def _emit_detector_incidents(store, state: dict) -> int:
         _record_guard_observation(
             store, sid, runtime or "", facts.get("agent_id") or "",
             _det.session_profile(steps, thresholds.get("write_tools")))
+        try:
+            from clawmetry import detector_swarm as _swarm
+            _fps = _swarm.write_fingerprints(steps)
+            if _fps:
+                fleet_fps[sid] = _fps
+        except Exception as _fe:  # noqa: BLE001
+            log.debug("detectors: fingerprinting skipped for %s: %s", sid, _fe)
 
         try:
             incidents = _det.run_all(events, sid, runtime, facts=facts,
@@ -22097,6 +22109,14 @@ def _emit_detector_incidents(store, state: dict) -> int:
             memo.pop(k, None)
     except Exception:
         pass
+    # The fleet question: are sessions that should be independent acting in
+    # step? One pass per tick over every session's write actions, after the
+    # per-session pass, so its incidents reach the same policy pass below.
+    try:
+        all_incidents.extend(_emit_fleet_incidents(store, state, fleet_fps, now))
+    except Exception as e:  # noqa: BLE001
+        log.warning("detectors: fleet pass failed: %s", e)
+
     # Guard policies: turn this tick's incidents into at most one enforcement
     # decision per session. Isolated from the emit path above — a policy
     # failure must never stop telemetry ingest.
@@ -22107,6 +22127,96 @@ def _emit_detector_incidents(store, state: dict) -> int:
         log.warning("guard: policy pass failed: %s", e)
 
     return emitted
+
+
+def _emit_fleet_incidents(store, state: dict, fleet_fps: dict, now: float) -> list:
+    """Run ``coordinated_action`` over this tick's write actions.
+
+    One human message per fingerprint, however many sessions share it: forty
+    pages about one swarm get muted, one page with a count gets read. Each
+    participating session still gets its own ``loop_signals`` row, so the
+    Guard tab shows the finding on every row it concerns and a policy that
+    names ``coordinated_action`` can act per session.
+
+    Returns the per-session copies for the policy pass. Never raises.
+    """
+    if not fleet_fps:
+        return []
+    try:
+        from clawmetry import detector_swarm as _swarm
+        keys = sorted({_swarm.fingerprint_key(fp)
+                       for fps in fleet_fps.values() for fp in fps})
+        hist = store.query_action_fingerprints(keys=keys) or {}
+        parents = store.query_subagent_parents(session_ids=sorted(fleet_fps)) or {}
+    except Exception as e:  # noqa: BLE001
+        log.debug("detectors: fleet pass inputs unavailable: %s", e)
+        return []
+
+    incidents = _swarm.coordinated_action(
+        fleet_fps, parents=parents, history=hist.get("first_seen") or {},
+        history_since_ms=hist.get("since"), now=now)
+
+    # Remember what was seen, AFTER judging it, so this tick's burst is judged
+    # against the memory from before it.
+    try:
+        seen: dict = {}
+        for sid, fps in fleet_fps.items():
+            for fp in fps:
+                seen.setdefault(_swarm.fingerprint_key(fp), [tuple(fp), set()])[1].add(sid)
+        store.record_action_fingerprints(fingerprints=[
+            (k, fp[0], fp[1], fp[2], len(sids)) for k, (fp, sids) in sorted(seen.items())])
+    except Exception as e:  # noqa: BLE001
+        log.debug("detectors: fingerprint memory write failed: %s", e)
+
+    memo = state.setdefault("detector_emit_memo", {})
+    if not isinstance(memo, dict):
+        memo = {}
+        state["detector_emit_memo"] = memo
+    reemit = max(30, STUCK_MIN_SECONDS // 2)
+    out: list = []
+    for inc in incidents:
+        base = {k: v for k, v in inc.items() if k != "participants"}
+        key = str((inc.get("evidence") or {}).get("fingerprint_key") or "")
+        delivered_via: list = []
+        try:
+            from clawmetry import incident_alerts as _ia
+            res = _ia.deliver_incident(
+                store, dict(base, session_id="fleet:" + key[:100]), source="fleet_detector")
+            delivered_via = list(res.get("delivered_via") or [])
+        except Exception as e:  # noqa: BLE001
+            log.debug("detectors: fleet alert delivery skipped: %s", e)
+        for sid in list(inc.get("participants") or [])[:200]:
+            per = dict(base, session_id=sid,
+                       runtime=_detector_runtime(sid, "") or "unknown")
+            out.append(per)
+            memo_key = f"{sid}::coordinated_action"
+            last = memo.get(memo_key)
+            if isinstance(last, (int, float)) and (now - last) < reemit:
+                continue
+            try:
+                store.ingest_loop_signal(
+                    session_id=sid,
+                    signature="daemon_detect_coordinated_action",
+                    repeat_count=_DETECT_SEVERITY_COUNT.get("warning", 5),
+                    severity="warning",
+                    agent_type=str(per["runtime"]),
+                    details={
+                        "source": "daemon_fleet_detector",
+                        "kind": "coordinated_action",
+                        "message": per.get("title"),
+                        "detail": per.get("detail"),
+                        "evidence": per.get("evidence"),
+                        "first_bad_step": None,
+                        "spend_at_risk_usd": None,
+                        "spend_basis": "unknown",
+                        "delivered_via": delivered_via,
+                    },
+                )
+                memo[memo_key] = now
+                log.info("detectors: %s", per.get("title"))
+            except Exception as e:  # noqa: BLE001
+                log.warning("detectors: fleet loop_signal failed for %s: %s", sid, e)
+    return out
 
 
 # ── Per-session loops slice (Command River Phase-2) ─────────────────────────

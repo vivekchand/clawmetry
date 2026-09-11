@@ -10565,6 +10565,9 @@ var LOOP_KIND_LABEL = {
   rate_limited: 'Being rate limited by its provider',
   blocked_on_user: 'Waiting for you to answer',
   crashed: 'Crashed and restarted',
+  // Fleet-wide: several unrelated agents doing the same unusual thing.
+  // Mirrors clawmetry/detector_swarm.py FLEET_KINDS.
+  coordinated_action: 'Acting in step with unrelated agents',
   // Not the agent's behaviour: what was in the folder it was pointed at.
   // Mirrors clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'This folder is set up to run a program',
@@ -30873,6 +30876,9 @@ var GUARD_KIND_LABEL = {
   rate_limited: 'Rate limited by the provider',
   blocked_on_user: 'Waiting on you',
   crashed: 'Crashed and restarted',
+  // Fleet: several unrelated agents doing the same unusual thing. Keys
+  // mirror clawmetry/detector_swarm.py FLEET_KINDS.
+  coordinated_action: 'Coordinated with unrelated agents',
   // Workspace: what is in the folder this agent was pointed at. Not a
   // behaviour, which is why these two sort on their own axis and why the
   // policy form makes you name them rather than folding them into "any
