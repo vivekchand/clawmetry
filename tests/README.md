@@ -20,7 +20,7 @@ As of 2026-05-17, GitHub Actions workflows can install OpenClaw
 in one step via the composite action in `.github/actions/setup-openclaw`:
 
 ```yaml
-- uses: ./.github/actions/setup-openclaw
+- uses: $/.github/actions/setup-openclaw
   with:
     gateway-token: ci-token   # exported as OPENCLAW_GATEWAY_TOKEN
 ```
@@ -58,6 +58,6 @@ real agent on the runner. That is the root cause of the recurring
 the dashboard short-circuits to anon mode and never reaches the authed
 screens. Workflows that want the authed surfaces should now:
 
-1. `uses: ./.github/actions/setup-openclaw`
+1. `uses: $/.github/actions/setup-openclaw`
 2. Read `OPENCLAW_GATEWAY_TOKEN` from the env when starting the
    ClawMetry dashboard process.

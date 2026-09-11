@@ -1,15 +1,20 @@
 """routes/scheduler.py — OpenClaw run-ledger + queue-lane endpoints.
 
-OpenClaw 2026.5.x records every background run — sub-agents
+OpenClaw records every background run — sub-agents
 (``runtime='subagent'``), cron jobs (``runtime='cron'``) and inline
-CLI/agent turns (``runtime='cli'``) — in a unified SQLite ledger at
-``~/.openclaw/tasks/runs.sqlite``. The sync daemon mirrors it into the
-DuckDB ``run_ledger`` table (``clawmetry/sync.py:sync_run_ledger``).
+CLI/agent turns (``runtime='cli'``) — in one SQLite ledger. **The file
+moved**: 2026.6.5+/2026.7.x keep ``task_runs`` in the unified
+``~/.openclaw/state/openclaw.sqlite``, while 2026.5.x wrote a standalone
+``~/.openclaw/tasks/runs.sqlite``. ``sync._openclaw_task_ledger_paths()``
+is the authority and ingests from every candidate that exists; do not
+hardcode either path here. The daemon mirrors the rows into the DuckDB
+``run_ledger`` table (``clawmetry/sync.py:sync_run_ledger``).
 
 This module exposes that ledger so three observability surfaces share
 one source of truth:
 
-  GET /api/run-ledger          — lanes rollup + recent runs (Scheduler tab)
+  GET /api/run-ledger          — lanes rollup + recent runs (Crons tab
+                                 Queue Lanes panel, #5721)
   GET /api/run-ledger/tree     — sub-agent fan-out tree (parent -> children)
 
 ``runtime`` IS the OpenClaw queue lane, so the lanes rollup is the live
@@ -56,8 +61,10 @@ def api_run_ledger():
 
     Query params: ``runtime`` (lane filter), ``status``, ``limit`` (<=1000).
     Returns ``{lanes, runs, _source}``. Never 500s — an empty ledger (fresh
-    sync, OpenClaw < 2026.5, or daemon mid-restart) returns empty lists so
-    the tab renders an honest "no background runs yet" state.
+    sync, an OpenClaw predating the ledger, or a daemon mid-restart) returns
+    empty lists, and the Queue Lanes panel in Crons renders an honest
+    "no background runs on this node" state naming those causes rather than
+    a spinner.
     """
     try:
         limit = max(1, min(1000, int(request.args.get("limit", 200))))
