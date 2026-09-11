@@ -294,7 +294,7 @@ jobs:
         run: |
           python3 -c "
           import glob, re, sys
-          pat = re.compile(r'sys\.(stdout|stderr)\s*=\s*io\.TextIOWrapper\(', re.S)
+          pat = re.compile(r'sys\\.(stdout|stderr)\\s*=\\s*io\\.TextIOWrapper\\(', re.S)
           bad = []
           for f in (
               ['dashboard.py']
@@ -501,6 +501,16 @@ jobs:
       - name: The daemon reports the failures that stop it working
         run: python3 -m pytest tests/test_daemon_field_report.py -q
 
+      # Field failures #5800/#5801 (daemon_ingest_stalled on Darwin py3.14 and
+      # Linux py3.12): six ingest calls in the steady-state sync cycle ran
+      # bare, unlike every neighbouring call in that loop. A persistent
+      # exception in any one of them aborted the whole cycle before it ever
+      # reached `state["last_sync"] = ...`, and since the next cycle reloads
+      # the same on-disk state, one bad source froze last_sync forever while
+      # the separate heartbeat thread kept reporting the daemon as alive.
+      - name: The sync cycle isolates every ingest call
+        run: python3 -m pytest tests/test_sync_cycle_fault_isolation.py -q
+
       # The module map is generated from each module's docstring, and the
       # generator took the first LINE, so a docstring whose opening sentence
       # wrapped produced a row cut mid-clause. Nothing failed: the generator
@@ -588,7 +598,7 @@ jobs:
         # Quarantined tests still run daily in quarantine-sweep.yml.
         run: python3 -m pytest tests/test_api.py -v --tb=short -m 'not quarantine'
 
-  # ── MOAT verifier (hermetic, hard-fail) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  # ── MOAT verifier (hermetic, hard-fail) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
   # is caught BEFORE merge." These files exercise the
   # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
@@ -648,6 +658,8 @@ jobs:
             tests/test_session_context_route.py \
             tests/test_tracing_reasoning_spans.py \
             tests/test_obs_gap_openclaw_response_steered_5578.py \
+            tests/test_obs_gap_openclaw_reply_recovery_5620.py \
+            tests/test_obs_gap_openclaw_update_pipeline_5749.py \
             tests/test_trail_coverage_route.py \
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
@@ -812,7 +824,7 @@ jobs:
             tests/test_license_scalar_accessors.py \
             -q
 
-  # ── Compression / cache-safety eval (Tier-1, deterministic) ──────────────────────────────
+  # ── Compression / cache-safety eval (Tier-1, deterministic) ───────────────────────────────
   # Issue #2844 (epic #2837): port Headroom's eval rigor so we can claim
   # "compression-safe" with proof. This Tier-1 gate is pure-Python and spends
   # ZERO API budget — it proves CCR payload compression is byte-for-byte
@@ -838,7 +850,7 @@ jobs:
       - name: Run compression/cache-safety eval suite
         run: python3 -m pytest tests/test_compression_safety_eval.py -q
 
-  # ── Red-team corpus (disclosed attacks we claim to catch) ────────────────────
+  # ── Red-team corpus (disclosed attacks we claim to catch) ─────────────────────────────
   # scripts/redteam/corpus/*.json holds one entry per publicly disclosed agent
   # attack, each naming the detector that must fire and at what severity. The
   # day GitSpawn stops being detected this job goes red, instead of a customer
@@ -884,7 +896,7 @@ jobs:
             *) echo "::error::Red-team audit exited $code (unexpected)"; exit 1 ;;
           esac
 
-  # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────
+  # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────────────────
   # The ONLY job that installs opentelemetry-proto. Without it every OTLP
   # protobuf test in this repo is importorskip'd, so the receiver an
   # enterprise points 500 machines at had zero CI coverage — the failure mode
@@ -939,7 +951,7 @@ jobs:
           # dashboard over HTTP (BASE_URL), which this job does not boot. It
           # runs in the api-tests job, which does.
 
-  # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ──────────────────────────────
+  # ── MOAT keystone (DuckDB-first invariant, 13-endpoint bar) ────────────────────────────────────
   # Implements `docs/MOAT_BAR.md` Section 5 acceptance criterion #1:
   # `keystone_e2e.py --no-drive` exits 0 on every PR. The keystone is the
   # canonical 13-endpoint verifier (PR #1672) that asserts every
@@ -1137,7 +1149,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ── pip install smoke test across platforms ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  # ── pip install smoke test across platforms ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   pip-install:
     name: pip install (${{ matrix.os }}, py${{ matrix.python-version }})
     needs: lint
@@ -1276,7 +1288,7 @@ jobs:
           fi
           echo "✅ /static/js/app.js served from installed wheel"
 
-  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ──────────────────────────────
+  # ── Eval suite gate (Phase 2 evals, refs #1619 / PR #1626) ────────────────────────────────
   # Runs ClawMetry's own golden suite (tests/data/golden_ci.yaml) through
   # the `clawmetry eval` CLI on every PR. Catches regressions in:
   #   * eval_suite_runner.py YAML parsing / runner loop
@@ -1367,7 +1379,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  # ── Live OpenClaw E2E ────────────────────────────────────────────────────────────────────────────────────────────────────────
+  # ── Live OpenClaw E2E ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   # Closes #1544. Boots a real openclaw gateway, sends a real message
   # through `openclaw agent --local`, drives the daemon's
   # sync_sessions_recent over the on-disk JSONL, and asserts every
