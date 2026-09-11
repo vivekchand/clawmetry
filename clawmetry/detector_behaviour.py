@@ -18,10 +18,10 @@ from __future__ import annotations
 import re
 from typing import Iterable, Optional
 
-from clawmetry.detector_surface import (
-    _IPV4_RE, _SEGMENT_SPLIT_RE, SECRET_VALUE_OWNERS, _cmd_sketch,
-    _is_inspect_only, _redact_path, _segment_write_hosts, host_owned_by,
+from clawmetry.detector_payload import (
+    _SEGMENT_SPLIT_RE, SECRET_VALUE_OWNERS, _segment_write_hosts, host_owned_by,
 )
+from clawmetry.detector_surface import _IPV4_RE, _cmd_sketch, _is_inspect_only, _redact_path
 
 
 def _core():

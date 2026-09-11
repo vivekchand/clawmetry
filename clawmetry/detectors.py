@@ -76,9 +76,13 @@ from clawmetry.detector_calibration import (  # noqa: F401
     resolve_thresholds,
 )
 from clawmetry.detector_surface import (  # noqa: F401
-    _MUTATING_CMD_RE, _REDIRECT_WRITE_RE, _action_surface, _args_text,
-    _cmd_sketch, _hosts_from_text, _is_inspect_only, _redact_path,
-    _secret_value_categories, _strip_heredocs, _write_hosts,
+    _MUTATING_CMD_RE, _REDIRECT_WRITE_RE, _action_surface, _cmd_sketch,
+    _hosts_from_text, _is_inspect_only, _redact_path, _strip_heredocs,
+)
+# What a call SENT (direction) and CARRIED (credential values); stamped on each
+# step below as ``write_hosts`` and ``secret_values``.
+from clawmetry.detector_payload import (  # noqa: F401
+    _args_text, _secret_value_categories, _write_hosts,
 )
 from clawmetry.detector_money import (  # noqa: F401
     CRITICAL_SPEND_USD, _SEVERITY_RANK, _severity_promote, annotate_spend,
@@ -184,6 +188,14 @@ _FAILURE_TEXT_MARKERS = (
 #    "is_error": bool,      # tool_result only
 #    "result_text": str,    # tool_result only (lower-cased, truncated)
 #    "has_text": bool,      # text turn carrying a real reply (progress marker)
+#    # tool_call only, from detector_surface._action_surface:
+#    "paths": tuple, "cmd": str, "hosts": tuple,
+#    # tool_call only, from detector_payload._write_hosts: hosts the call SENT
+#    # data to (also merged into "hosts", so an upload is always egress):
+#    "write_hosts": tuple,
+#    # tool_call AND tool_result, from detector_payload._secret_value_categories:
+#    # categories of token-shaped values in the arguments or output, never values:
+#    "secret_values": tuple,
 #   }
 
 _TOPLEVEL_TOOL_CALL_TYPES = frozenset(
@@ -518,10 +530,12 @@ def session_profile(steps: list, write_tools=None) -> dict:
     """Summarize one session for the cohort baseline it feeds.
 
     Takes already-normalized steps (the daemon has them; re-parsing 200 events
-    to count them would double the tick cost for nothing) and returns the four
-    numbers ``record_guard_observation`` stores: how many tool calls, how many
-    distinct files mutated, whether it wrote at all, and which external hosts
-    it reached.
+    to count them would double the tick cost for nothing) and returns what
+    ``record_guard_observation`` stores: how many tool calls, how many
+    distinct files mutated, whether it wrote at all, which external hosts it
+    reached (``hosts``), and which of those it SENT data to (``write_hosts``,
+    from each step's ``write_hosts``), which is how the cohort learns which
+    hosts it only ever reads from.
 
     This is the loop that closes gap 03: today's sessions decide what counts as
     unusual tomorrow. Never raises — an empty profile just means this session
