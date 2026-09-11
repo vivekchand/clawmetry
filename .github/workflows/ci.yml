@@ -538,6 +538,15 @@ jobs:
       - name: Anomaly baselines reach the card
         run: python3 -m pytest tests/test_anomaly_baselines_reach_the_card.py -q
 
+      # /api/run-ledger and its snapshot slice shipped in every wheel with zero
+      # UI consumers after PR #5668 cut the only tab that read them (#5721).
+      # The rollup now lives in Crons as the Queue Lanes panel; these pin that
+      # the panel is actually reached, that cloud reads the snapshot slice
+      # rather than the hosted endpoint's honest-but-empty fallback, and that
+      # the empty state names why it is empty instead of spinning forever.
+      - name: Queue Lanes panel is reachable
+        run: python3 -m pytest tests/test_queue_lanes_panel_is_reachable.py -q
+
       # A Pro node stopped syncing for 12 hours (2026-09-08) because sync.pid
       # named a pid the OS had recycled onto an unrelated process: every
       # launchd respawn read "alive" and exited, and `clawmetry status` still
@@ -806,6 +815,7 @@ jobs:
             tests/test_e2e_invariants.py \
             tests/test_e2e_telegram_brain_ingest.py \
             tests/test_rollup_session_runtime_attribution.py \
+            tests/test_crons_local_store.py \
             -q
 
   # ── Entitlement API test suite (~2700+ hermetic tests) ─────────────────────────────────────────────
