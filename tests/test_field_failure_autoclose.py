@@ -198,3 +198,44 @@ def test_a_daemon_failure_cannot_collide_with_a_bootstrap_failure():
     daem = _title_for("daemon_failed", "store_unwritable", "Darwin", "3.12")
     assert boot != daem, (boot, daem)
     assert daem == "[field-failure] daemon: store_unwritable on Darwin (py 3.12)", daem
+
+
+# ------------------------------------------- a closed signature is not re-filed
+
+# A signature stays in the 30-day aggregate long after its fix ships, so an
+# issue closed on the strength of a fix is still being reported. Dedupe searches
+# OPEN issues only, so the next tick found nothing and filed a duplicate:
+# #5829-#5834 were closed at 07:49 and re-filed as #5853-#5858 within hours,
+# putting a second copy of a signature in front of whoever had just triaged it.
+
+
+def _filing_script():
+    doc = yaml.safe_load(open(WORKFLOW, encoding="utf-8"))
+    return doc["jobs"]["file-issues"]["steps"][0]["run"]
+
+
+def test_the_filer_looks_for_a_recently_closed_issue_before_creating_one():
+    src = _filing_script()
+    assert "state:closed" in src, (
+        "the filer never looks for a closed issue with this title, so a "
+        "signature closed while still in the aggregate window is re-filed"
+    )
+    # The closed lookup must happen BEFORE the create.
+    assert src.index("state:closed") < src.index("gh issue create")
+
+
+def test_the_closed_lookup_is_bounded_by_the_aggregate_window():
+    """Older than the window and a recurrence really is news, so it should get a
+    fresh issue. Without a bound, a signature could never be filed again."""
+    src = _filing_script()
+    assert "86400" in src and "window" in src
+    assert "continue" in src, "nothing skips the create path"
+
+
+def test_the_note_does_not_claim_the_fix_failed():
+    """A report inside the window proves nothing about the fix: the signature
+    cannot have aged out yet. Saying otherwise would send someone to re-debug a
+    bug that is already fixed."""
+    src = _filing_script()
+    assert "not evidence the fix failed" in src
+    assert "Reopen only if" in src

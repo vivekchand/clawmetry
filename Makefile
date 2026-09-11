@@ -1,4 +1,4 @@
-.PHONY: test test-api test-e2e test-e2e-duckdb test-fast test-hooks test-workflow test-moat test-moat-real test-compat moat-check moat-check-drive dev lint lint-daemon-allowlist
+.PHONY: test test-api test-e2e test-e2e-duckdb test-fast test-hooks test-workflow test-moat test-moat-real test-compat moat-check moat-check-drive dev lint lint-daemon-allowlist lint-ci-test-coverage ci-test-coverage-report ci-test-coverage-baseline
 
 dev:
 	OPENCLAW_GATEWAY_TOKEN=dev-token python3 dashboard.py --port 8900
@@ -102,7 +102,7 @@ moat-check:
 moat-check-drive:
 	@python3 scripts/accuracy_harness/keystone_e2e.py
 
-lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count lint-ac-coverage lint-module-map
+lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count lint-ac-coverage lint-module-map lint-ci-test-coverage
 
 # Issue #1267: every `local_store_via_daemon("X")` / `_ls_call("X")` call
 # in routes/ must reference a method that's in the daemon's allowlist
@@ -141,15 +141,30 @@ lint-runtime-count:
 lint-module-map:
 	@python3 scripts/gen_module_map.py --check
 
+# CI test-file coverage ratchet (issue #5813). 82% of test files were in no
+# CI job. This guard stops the hole from growing: new tests must be wired
+# into a workflow in the same PR. Ratchet down by running:
+#   python3 scripts/check_ci_test_coverage.py --update-baseline
+lint-ci-test-coverage:
+	@python3 scripts/check_ci_test_coverage.py --check
+
+ci-test-coverage-report:
+	@python3 scripts/check_ci_test_coverage.py --report
+
+ci-test-coverage-baseline:
+	@python3 scripts/check_ci_test_coverage.py --update-baseline
+
+
 lint-py:
 	python3 -c "import ast; ast.parse(open('dashboard.py').read()); print('Python syntax OK')"
 	ruff check dashboard.py clawmetry/
 
-# v0.12.165 shipped clawmetry/static/js/app.js with a missing `}` (PR #753).
-# Browsers threw "Unexpected end of input" on first parse, killing every
-# function in the bundle and stranding the dashboard on its boot overlay.
-# `node --check` is the cheapest possible gate — runs in <100ms per file
-# and would have failed the offending PR locally and in CI.
+# v0.12.165 shipped clawmetry/static/js/app.js with a missing `}`
+# (PR #753). Browsers threw "Unexpected end of input" on first parse,
+# killing every function in the bundle and stranding the dashboard on
+# its boot overlay. `node --check` is the cheapest possible gate —
+# runs in <100ms per file and would have failed the offending PR
+# locally and in CI.
 lint-js:
 	@if command -v node >/dev/null 2>&1; then \
 	    for f in clawmetry/static/js/*.js; do \
@@ -160,4 +175,4 @@ lint-js:
 	    echo "WARN: node not installed — skipping JS syntax check (CI installs node automatically)"; \
 	fi
 
-.PHONY: lint lint-py lint-js lint-daemon-allowlist lint-ac-coverage ac-report ac-baseline
+.PHONY: lint lint-py lint-js lint-daemon-allowlist lint-ac-coverage ac-report ac-baseline lint-ci-test-coverage ci-test-coverage-report ci-test-coverage-baseline
