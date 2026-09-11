@@ -99,6 +99,7 @@ from helpers.streams import (  # noqa: F401 — re-export for routes/
     _release_stream_slot,
 )
 from helpers.hardware import _detect_host_hardware  # noqa: F401 — re-export for routes/
+from helpers.server import is_loopback_host as _is_loopback_host
 from helpers.gateway import (  # noqa: F401 — re-export for routes/
     _gw_invoke,
     _gw_invoke_docker,
@@ -447,52 +448,6 @@ _fleet_db_lock = threading.Lock()
 
 
 # ── Budget & Alert Database ────────────────────────────────────────────
-
-
-def _default_alerts_webhook_config():
-    # NOTE: dashboard.py defines this trio (default/load/save) TWICE; the
-    # LATER definitions (~line 9600) win at import time and carry the full
-    # schema (pagerduty/opsgenie/telegram/min_severity). This early copy is
-    # shadowed dead code kept in sync so nobody "fixes" the wrong one again.
-    return {
-        "webhook_url": "",
-        "slack_webhook_url": "",
-        "discord_webhook_url": "",
-        "telegram_bot_token": "",
-        "telegram_chat_id": "",
-        "cost_spike_alerts": True,
-        "agent_error_rate_alerts": True,
-        "security_posture_changes": True,
-    }
-
-
-def _load_alerts_webhook_config():
-    cfg = _default_alerts_webhook_config()
-    try:
-        if os.path.exists(_ALERTS_CONFIG_FILE):
-            with open(_ALERTS_CONFIG_FILE, "r") as f:
-                data = json.load(f)
-            if isinstance(data, dict):
-                for k in cfg:
-                    if k in data:
-                        cfg[k] = data[k]
-    except Exception:
-        pass
-    return cfg
-
-
-def _save_alerts_webhook_config(updates):
-    cfg = _load_alerts_webhook_config()
-    for k in cfg:
-        if k in updates:
-            cfg[k] = updates[k]
-    try:
-        os.makedirs(os.path.dirname(_ALERTS_CONFIG_FILE), exist_ok=True)
-        with open(_ALERTS_CONFIG_FILE, "w") as f:
-            json.dump(cfg, f, indent=2)
-    except Exception:
-        pass
-    return cfg
 
 
 # ── DuckDB cost fallback (issue #1404) ────────────────────────────────
@@ -1295,84 +1250,6 @@ def _resume_gateway():
     _budget_paused_reason = ""
 
 
-def _fire_alert(rule_id, alert_type, message, channels=None):
-    """Fire an alert with cooldown check."""
-    global _budget_alert_cooldowns
-    now = time.time()
-
-    # Check cooldown (default 30 min for budget alerts)
-    cooldown_sec = 1800
-    last_fired = _budget_alert_cooldowns.get(rule_id, 0)
-    if now - last_fired < cooldown_sec:
-        return
-
-    _budget_alert_cooldowns[rule_id] = now
-
-    # Save to alert history
-    if channels is None:
-        channels = ["banner"]
-    try:
-        with _fleet_db_lock:
-            db = _fleet_db()
-            for ch in channels:
-                db.execute(
-                    "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (rule_id, alert_type, message, ch, now),
-                )
-            db.commit()
-            db.close()
-    except Exception as e:
-        print(f"Warning: Failed to save alert history: {e}")
-
-    # Send to channels
-    for ch in channels:
-        if ch == "telegram":
-            _send_telegram_alert(message)
-        elif ch == "webhook":
-            pass  # webhook sending handled by custom alert rules
-
-
-def _send_telegram_alert(message):
-    """Send alert via direct Telegram API (preferred) or gateway fallback."""
-    # Try direct Telegram API first (using budget config)
-    try:
-        cfg = _get_budget_config()
-        token = str(cfg.get("telegram_bot_token", "")).strip()
-        chat_id = str(cfg.get("telegram_chat_id", "")).strip()
-        if token and chat_id:
-            import urllib.request
-
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload = json.dumps(
-                {
-                    "chat_id": chat_id,
-                    "text": f"[ClawMetry Alert] {message}",
-                    "parse_mode": "Markdown",
-                }
-            ).encode()
-            req = urllib.request.Request(
-                url,
-                data=payload,
-                headers={"Content-Type": "application/json"},
-            )
-            urllib.request.urlopen(req, timeout=10)
-            return
-    except Exception as e:
-        print(f"Warning: Direct Telegram alert failed: {e}")
-    # Fallback: send through gateway
-    try:
-        _gw_invoke(
-            "message",
-            {
-                "action": "send",
-                "message": f"[ClawMetry Alert] {message}",
-            },
-        )
-    except Exception:
-        pass
-
-
 def _url_safe_for_external_request(url):
     """Return (ok, reason) for an outbound webhook URL.
 
@@ -1408,46 +1285,6 @@ def _url_safe_for_external_request(url):
                 or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
             return False, f"blocked internal address {ip}"
     return True, ""
-
-
-def _send_webhook_alert(url, alert_data, payload_type="generic"):
-    """Send alert to a webhook URL (generic JSON, Slack, or Discord)."""
-    try:
-        import urllib.request as _ur
-
-        # SSRF guard: never POST a user-configured webhook at an internal target.
-        _ok, _reason = _url_safe_for_external_request(url)
-        if not _ok:
-            try:
-                app.logger.warning("webhook alert blocked (%s): %s", _reason, url)
-            except Exception:
-                pass
-            return
-
-        if payload_type == "discord":
-            content = (
-                alert_data.get("message")
-                or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
-            )
-            body = {"content": content}
-        elif payload_type == "slack":
-            text = (
-                alert_data.get("message")
-                or f"[{alert_data.get('type', 'alert')}] cost=${alert_data.get('cost_usd', 0)} threshold=${alert_data.get('threshold', 0)}"
-            )
-            body = {"text": text}
-        else:
-            body = alert_data
-        payload = json.dumps(body).encode()
-        req = _ur.Request(
-            url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        _ur.urlopen(req, timeout=10)
-    except Exception:
-        pass
 
 
 _velocity_cache = {"ts": 0, "result": None, "mtimes": {}}
@@ -1606,592 +1443,7 @@ def _compute_velocity_status():
     }
 
 
-def _budget_monitor_loop():
-    """Background thread: check for anomalies, agent-down, and custom alert rules."""
-    global _budget_alert_cooldowns, _security_posture_hash
-    while True:
-        time.sleep(60)
-        try:
-            now = time.time()
-
-            # Agent-down check
-            if (
-                _otel_last_received > 0
-                and (now - _otel_last_received) > _AGENT_DOWN_SECONDS
-            ):
-                _fire_alert(
-                    rule_id="agent_down",
-                    alert_type="agent_down",
-                    message=f"Agent appears down: no OTLP data for {int((now - _otel_last_received) / 60)} minutes",
-                    channels=["banner", "telegram"],
-                )
-
-            # Anomaly check: today's cost > 2x 7-day average
-            status = _get_budget_status()
-            daily_spent = status["daily_spent"]
-            if daily_spent > 0:
-                week_avg = (
-                    status["weekly_spent"] / 7 if status["weekly_spent"] > 0 else 0
-                )
-                if week_avg > 0 and daily_spent > week_avg * 2:
-                    ratio = daily_spent / week_avg
-                    _fire_alert(
-                        rule_id="anomaly_daily",
-                        alert_type="anomaly",
-                        message=f"Spending anomaly: today ${daily_spent:.2f} is {ratio:.1f}x the 7-day average (${week_avg:.2f}/day)",
-                        channels=["banner", "telegram"],
-                    )
-                    _dispatch_configured_webhooks(
-                        "cost_spike",
-                        {
-                            "type": "cost_spike",
-                            "agent": "main",
-                            "cost_usd": round(daily_spent, 4),
-                            "threshold": round(week_avg * 2, 4),
-                            "timestamp": now,
-                            "message": f"Cost spike detected: {ratio:.1f}x daily average",
-                        },
-                    )
-
-            # Token velocity alert (GH#313): detect runaway agent loops
-            try:
-                vel = _compute_velocity_status()
-                if vel["active"]:
-                    reasons_str = "; ".join(vel["reasons"])
-                    sid_hint = (
-                        f" (session: {vel['triggeringSession'][:12]}...)"
-                        if vel.get("triggeringSession")
-                        else ""
-                    )
-                    msg = f"\u26a1 Runaway loop detected{sid_hint}: {reasons_str}"
-                    _fire_alert(
-                        rule_id="token_velocity",
-                        alert_type="token_velocity",
-                        message=msg,
-                        channels=["banner", "telegram"],
-                    )
-            except Exception as _vel_err:
-                print(f"Warning: velocity check failed: {_vel_err}")
-
-            # Agent error-rate check from webhook channel metrics (last 60 minutes)
-            window_start = now - 3600
-            total_wh = 0
-            error_wh = 0
-            with _metrics_lock:
-                for e in metrics_store.get("webhooks", []):
-                    ts = e.get("timestamp", 0)
-                    if ts < window_start:
-                        continue
-                    total_wh += 1
-                    et = str(e.get("type", "")).lower()
-                    if et.endswith(".error") or "error" in et:
-                        error_wh += 1
-            if total_wh >= 10:
-                error_rate = (error_wh / total_wh) * 100.0
-                if error_rate >= 20.0:
-                    rule_id = "agent_error_rate_high"
-                    last_fired = _budget_alert_cooldowns.get(rule_id, 0)
-                    if now - last_fired >= 1800:
-                        _budget_alert_cooldowns[rule_id] = now
-                        msg = f"Agent error rate high: {error_rate:.1f}% ({error_wh}/{total_wh}) in the last hour"
-                        _fire_alert(
-                            rule_id=rule_id,
-                            alert_type="agent_error_rate",
-                            message=msg,
-                            channels=["banner", "telegram"],
-                        )
-                        _dispatch_configured_webhooks(
-                            "agent_error_rate",
-                            {
-                                "type": "agent_error_rate",
-                                "agent": "main",
-                                "cost_usd": round(status.get("daily_spent", 0), 4),
-                                "threshold": 20.0,
-                                "timestamp": now,
-                                "message": msg,
-                            },
-                        )
-
-            # Security posture change check
-            posture = _detect_security_metadata() or {}
-            posture_hash = json.dumps(posture, sort_keys=True)
-            if not _security_posture_hash:
-                _security_posture_hash = posture_hash
-            elif posture_hash != _security_posture_hash:
-                _security_posture_hash = posture_hash
-                msg = "Security posture changed (sandbox/auth/network settings updated)"
-                _fire_alert(
-                    rule_id="security_posture_change",
-                    alert_type="security",
-                    message=msg,
-                    channels=["banner", "telegram"],
-                )
-                _dispatch_configured_webhooks(
-                    "security_posture_change",
-                    {
-                        "type": "security_posture_change",
-                        "agent": "main",
-                        "cost_usd": round(status.get("daily_spent", 0), 4),
-                        "threshold": 0,
-                        "timestamp": now,
-                        "message": msg,
-                    },
-                )
-
-            # Custom alert rules
-            rules = _get_alert_rules()
-            for rule in rules:
-                if not rule.get("enabled"):
-                    continue
-                rule_id = rule["id"]
-                rtype = rule["type"]
-                threshold = rule["threshold"]
-                channels = json.loads(rule.get("channels", '["banner"]'))
-                cooldown = rule.get("cooldown_min", 30) * 60
-                # Per-runtime scope: 'all' (node-wide) or one runtime id.
-                # Scoped rules read per-runtime slices from DuckDB via the
-                # daemon proxy; node-wide rules keep the legacy aggregates.
-                rt_scope = str(rule.get("runtime") or "all").lower()
-
-                last_fired = _budget_alert_cooldowns.get(rule_id, 0)
-                if now - last_fired < cooldown:
-                    continue
-
-                fired = False
-                msg = ""
-
-                if rtype == "threshold":
-                    _spent = status["daily_spent"]
-                    if rt_scope != "all":
-                        _spent = _runtime_daily_spend(rt_scope)
-                    if _spent is not None and _spent >= threshold:
-                        _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
-                        msg = f"Daily spending{_scope_lbl} ${_spent:.2f} exceeded threshold ${threshold:.2f}"
-                        fired = True
-                elif rtype == "spike":
-                    # Spike: cost in last hour > threshold x average hourly rate
-                    hour_ago = now - 3600
-                    hour_cost = 0
-                    with _metrics_lock:
-                        for e in metrics_store["cost"]:
-                            if e.get("timestamp", 0) >= hour_ago:
-                                hour_cost += e.get("usd", 0)
-                    avg_hourly = status["daily_spent"] / max(
-                        1,
-                        (
-                            now
-                            - datetime.now()
-                            .replace(hour=0, minute=0, second=0, microsecond=0)
-                            .timestamp()
-                        )
-                        / 3600,
-                    )
-                    if avg_hourly > 0 and hour_cost > avg_hourly * threshold:
-                        msg = f"Spending spike: ${hour_cost:.2f} in last hour ({(hour_cost / avg_hourly):.1f}x average)"
-                        fired = True
-                elif rtype == "token_spike":
-                    if rt_scope != "all":
-                        _tpm = _runtime_tokens_per_min(rt_scope)
-                        if _tpm is not None and _tpm >= threshold:
-                            msg = (
-                                f"Token spike [{rt_scope}]: {int(_tpm):,} tokens/min "
-                                f"(threshold: {int(threshold):,}/min)"
-                            )
-                            fired = True
-                    else:
-                        try:
-                            vel = _compute_velocity_status()
-                        except Exception:
-                            vel = None
-                        if vel:
-                            tokens_per_min = vel.get("tokensIn2Min", 0) / 2.0
-                            if tokens_per_min >= threshold:
-                                sid = vel.get("triggeringSession") or ""
-                                sid_hint = f" (session: {sid[:12]}...)" if sid else ""
-                                msg = (
-                                    f"Token spike: {int(tokens_per_min):,} tokens/min "
-                                    f"(threshold: {int(threshold):,}/min){sid_hint}"
-                                )
-                                fired = True
-                elif rtype == "agent_down":
-                    # "Agent offline > N min" (UI alert_type ``node_offline``).
-                    # Founder 2026-08-15: this rtype has been accepted by the
-                    # POST validator since the self-hosted bridge landed but
-                    # never had a branch here, so every rule created from the
-                    # tab's "Agent offline" row was a silent no-op.
-                    #
-                    # Signal is the most recent REAL agent event in DuckDB —
-                    # not OTLP (the hardcoded ``agent_down`` monitor above
-                    # keys off ``_otel_last_received``, which stays 0 on the
-                    # many installs without ``[otel]``, so it never fires
-                    # there either). ``exclude_daemon`` keeps ClawMetry's own
-                    # diagnostics from masking a dead agent as "alive".
-                    try:
-                        from datetime import datetime as _dt2, timezone as _tz2
-                        from routes.local_query import local_store_via_daemon
-                        _rows = local_store_via_daemon(
-                            "query_events", limit=1, exclude_daemon=True,
-                            **({"runtime": rt_scope} if rt_scope != "all" else {}),
-                        ) or []
-                        _last_iso = (_rows[0].get("ts") or "") if _rows else ""
-                        if _last_iso:
-                            _last = _dt2.fromisoformat(
-                                str(_last_iso).replace("Z", "+00:00")
-                            )
-                            if _last.tzinfo is None:
-                                _last = _last.replace(tzinfo=_tz2.utc)
-                            _idle_min = (
-                                _dt2.now(_tz2.utc) - _last
-                            ).total_seconds() / 60.0
-                            if _idle_min >= threshold:
-                                _scope_lbl = (
-                                    "" if rt_scope == "all" else f" [{rt_scope}]"
-                                )
-                                msg = (
-                                    f"Agent offline{_scope_lbl}: no activity for "
-                                    f"{int(_idle_min)} min "
-                                    f"(threshold: {int(threshold)} min)"
-                                )
-                                fired = True
-                    except Exception:
-                        pass
-                elif rtype == "session_cost":
-                    # "Session cost > $N" (UI alert_type ``session_cost``).
-                    # Previously mapped onto ``threshold``, which evaluates
-                    # DAILY spend — so a $5 per-session rule actually fired on
-                    # the whole day's total. This checks the costliest single
-                    # session in the last 24h, which is what the row promises.
-                    #
-                    # Cost is API-equivalent (token split x API rates), never
-                    # the user's invoice — say so, per the cost-copy honesty
-                    # pass (a Max-plan subscriber pays $0 incremental).
-                    try:
-                        from datetime import datetime as _dt3, timedelta as _td3, timezone as _tz3
-                        from routes.local_query import local_store_via_daemon
-                        _since = (_dt3.now(_tz3.utc) - _td3(hours=24)).strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        )
-                        _sessions = local_store_via_daemon(
-                            "query_sessions", since=_since, limit=500,
-                        ) or []
-                        _worst = None
-                        for _s in _sessions:
-                            _sid = _s.get("session_id") or ""
-                            if rt_scope != "all" and _session_runtime_of(_sid) != rt_scope:
-                                continue
-                            try:
-                                _c = float(_s.get("cost_usd") or 0)
-                            except (TypeError, ValueError):
-                                continue
-                            if _c >= threshold and (_worst is None or _c > _worst[1]):
-                                _worst = (_sid, _c)
-                        if _worst:
-                            _scope_lbl = "" if rt_scope == "all" else f" [{rt_scope}]"
-                            msg = (
-                                f"Session cost{_scope_lbl}: session "
-                                f"{_worst[0][:12]} reached ${_worst[1]:.2f} "
-                                f"(threshold: ${threshold:.2f}) - API-equivalent, "
-                                f"not a billed amount"
-                            )
-                            fired = True
-                    except Exception:
-                        pass
-                elif rtype == "unproductive_burn":
-                    # Issue #1707 — forward-progress signal. Fires when any
-                    # session burns >= ``threshold`` tokens per state delta
-                    # over the last 10 min window (genuine spinning, not just
-                    # busy productive burn). Pro rule.
-                    try:
-                        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-                        from routes.local_query import local_store_via_daemon
-                        since_iso = (_dt.now(_tz.utc) - _td(minutes=10)).strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        )
-                        rows = local_store_via_daemon(
-                            "query_forward_progress", since=since_iso,
-                        ) or []
-                        worst = None
-                        for r in rows:
-                            try:
-                                if rt_scope != "all" and _session_runtime_of(
-                                        r.get("session_id") or "") != rt_scope:
-                                    continue
-                                if float(r.get("ratio") or 0) >= float(threshold):
-                                    if worst is None or r["ratio"] > worst["ratio"]:
-                                        worst = r
-                            except (TypeError, ValueError):
-                                continue
-                        if worst:
-                            sid = (worst.get("session_id") or "")[:12]
-                            msg = (
-                                f"Unproductive burn: session {sid} burned "
-                                f"{int(worst['tokens']):,} tokens with "
-                                f"{int(worst['state_deltas'])} state deltas "
-                                f"(ratio: {int(worst['ratio']):,} tok/delta, "
-                                f"threshold: {int(threshold):,})"
-                            )
-                            fired = True
-                    except Exception:
-                        pass
-
-                if fired:
-                    _budget_alert_cooldowns[rule_id] = now
-                    try:
-                        with _fleet_db_lock:
-                            db = _fleet_db()
-                            # Belt-and-suspenders cross-evaluator dedup.
-                            # The sync daemon's _evaluate_alerts_local
-                            # writes to this SAME alert_history table but
-                            # holds a separate per-process cooldown memo,
-                            # so before this check the same rule_id could
-                            # land twice within a second (live repro
-                            # 2026-07-15: ids 3,4 rule 2f270a9c, both
-                            # channel=banner). Skip the INSERT when a fire
-                            # of the same rule_id already lives inside the
-                            # rule's own cooldown window; cooldown=0
-                            # disables the check so explicit no-cooldown
-                            # rules still fire every tick.
-                            skip_insert = False
-                            try:
-                                cd_int = int(cooldown or 0)
-                            except (TypeError, ValueError):
-                                cd_int = 0
-                            if cd_int > 0:
-                                cutoff = now - cd_int
-                                existing = db.execute(
-                                    "SELECT 1 FROM alert_history "
-                                    "WHERE rule_id = ? AND fired_at > ? "
-                                    "LIMIT 1",
-                                    (rule_id, cutoff),
-                                ).fetchone()
-                                skip_insert = existing is not None
-                            if not skip_insert:
-                                for ch in channels:
-                                    db.execute(
-                                        "INSERT INTO alert_history (rule_id, type, message, channel, fired_at) "
-                                        "VALUES (?, ?, ?, ?, ?)",
-                                        (rule_id, rtype, msg, ch, now),
-                                    )
-                                db.commit()
-                            db.close()
-                    except Exception:
-                        pass
-                    for ch in channels:
-                        if ch == "telegram":
-                            _send_telegram_alert(msg)
-                        elif ch == "webhook":
-                            webhook_url = rule.get("webhook_url", "")
-                            if webhook_url:
-                                _send_webhook_alert(
-                                    webhook_url,
-                                    {"type": rtype, "message": msg, "timestamp": now},
-                                )
-
-        except Exception as e:
-            print(f"Warning: Budget monitor error: {e}")
-
-
 # ── OTLP Protobuf Helpers ──────────────────────────────────────────────
-
-
-def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
-    """DEAD COPY — shadowed. dashboard.py defines this twice and the SECOND
-    definition (search for "Claude Code native metrics (WO-57)") is the one
-    that runs. Edit that one."""
-    req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
-
-    for resource_metrics in req.resource_metrics:
-        resource_attrs = {}
-        if resource_metrics.resource:
-            for attr in resource_metrics.resource.attributes:
-                resource_attrs[attr.key] = _otel_attr_value(attr.value)
-
-        for scope_metrics in resource_metrics.scope_metrics:
-            for metric in scope_metrics.metrics:
-                name = metric.name
-                ts = time.time()
-
-                if name == "openclaw.tokens":
-                    for dp in _get_data_points(metric):
-                        attrs = _get_dp_attrs(dp)
-                        _add_metric(
-                            "tokens",
-                            {
-                                "timestamp": ts,
-                                "input": attrs.get("input_tokens", 0),
-                                "output": attrs.get("output_tokens", 0),
-                                "total": _get_dp_value(dp),
-                                "model": attrs.get(
-                                    "model", resource_attrs.get("model", "")
-                                ),
-                                "channel": attrs.get(
-                                    "channel", resource_attrs.get("channel", "")
-                                ),
-                                "provider": attrs.get(
-                                    "provider", resource_attrs.get("provider", "")
-                                ),
-                            },
-                        )
-                elif name == "openclaw.cost.usd":
-                    for dp in _get_data_points(metric):
-                        attrs = _get_dp_attrs(dp)
-                        _add_metric(
-                            "cost",
-                            {
-                                "timestamp": ts,
-                                "usd": _get_dp_value(dp),
-                                "model": attrs.get(
-                                    "model", resource_attrs.get("model", "")
-                                ),
-                                "channel": attrs.get(
-                                    "channel", resource_attrs.get("channel", "")
-                                ),
-                                "provider": attrs.get(
-                                    "provider", resource_attrs.get("provider", "")
-                                ),
-                            },
-                        )
-                elif name == "openclaw.run.duration_ms":
-                    for dp in _get_data_points(metric):
-                        attrs = _get_dp_attrs(dp)
-                        _add_metric(
-                            "runs",
-                            {
-                                "timestamp": ts,
-                                "duration_ms": _get_dp_value(dp),
-                                "model": attrs.get(
-                                    "model", resource_attrs.get("model", "")
-                                ),
-                                "channel": attrs.get(
-                                    "channel", resource_attrs.get("channel", "")
-                                ),
-                            },
-                        )
-                elif name == "openclaw.context.tokens":
-                    for dp in _get_data_points(metric):
-                        attrs = _get_dp_attrs(dp)
-                        _add_metric(
-                            "tokens",
-                            {
-                                "timestamp": ts,
-                                "input": _get_dp_value(dp),
-                                "output": 0,
-                                "total": _get_dp_value(dp),
-                                "model": attrs.get(
-                                    "model", resource_attrs.get("model", "")
-                                ),
-                                "channel": attrs.get(
-                                    "channel", resource_attrs.get("channel", "")
-                                ),
-                                "provider": attrs.get(
-                                    "provider", resource_attrs.get("provider", "")
-                                ),
-                            },
-                        )
-                elif name in (
-                    "openclaw.message.processed",
-                    "openclaw.message.queued",
-                    "openclaw.message.duration_ms",
-                ):
-                    for dp in _get_data_points(metric):
-                        attrs = _get_dp_attrs(dp)
-                        outcome = (
-                            "processed"
-                            if "processed" in name
-                            else ("queued" if "queued" in name else "duration")
-                        )
-                        _add_metric(
-                            "messages",
-                            {
-                                "timestamp": ts,
-                                "channel": attrs.get(
-                                    "channel", resource_attrs.get("channel", "")
-                                ),
-                                "outcome": outcome,
-                                "duration_ms": _get_dp_value(dp)
-                                if "duration" in name
-                                else 0,
-                            },
-                        )
-                elif name in (
-                    "openclaw.webhook.received",
-                    "openclaw.webhook.error",
-                    "openclaw.webhook.duration_ms",
-                ):
-                    for dp in _get_data_points(metric):
-                        attrs = _get_dp_attrs(dp)
-                        wtype = (
-                            "received"
-                            if "received" in name
-                            else ("error" if "error" in name else "duration")
-                        )
-                        _add_metric(
-                            "webhooks",
-                            {
-                                "timestamp": ts,
-                                "channel": attrs.get(
-                                    "channel", resource_attrs.get("channel", "")
-                                ),
-                                "type": wtype,
-                            },
-                        )
-                # OTel GenAI metric semconv (OpenLLMetry / OTel SDK auto-instrument
-                # emit these instead of the openclaw.* names). gen_ai.client.
-                # token.usage is a histogram/sum keyed by gen_ai.token.type
-                # (input|output); gen_ai.client.operation.duration is the
-                # request latency. Map them onto the same tiles as the
-                # openclaw.* path so a "bring your own agent" install lights the
-                # token / runs tiles. Unknown metrics stay silently dropped.
-                elif name == "gen_ai.client.token.usage":
-                    for dp in _get_data_points(metric):
-                        attrs = _get_dp_attrs(dp)
-                        ttype = str(attrs.get("gen_ai.token.type", "")).lower()
-                        try:
-                            val = int(_get_dp_value(dp))
-                        except (TypeError, ValueError):
-                            continue
-                        model = attrs.get("gen_ai.request.model") or attrs.get(
-                            "model", resource_attrs.get("model", "")
-                        )
-                        provider = attrs.get("gen_ai.system") or attrs.get(
-                            "gen_ai.provider.name"
-                        ) or attrs.get("provider", resource_attrs.get("provider", ""))
-                        _add_metric(
-                            "tokens",
-                            {
-                                "timestamp": ts,
-                                "input": val if ttype == "input" else 0,
-                                "output": val if ttype == "output" else 0,
-                                "total": val,
-                                "model": model,
-                                "channel": attrs.get(
-                                    "channel", resource_attrs.get("channel", "")
-                                ),
-                                "provider": provider,
-                            },
-                        )
-                elif name == "gen_ai.client.operation.duration":
-                    for dp in _get_data_points(metric):
-                        attrs = _get_dp_attrs(dp)
-                        try:
-                            # semconv unit is seconds; the runs tile stores ms.
-                            dur_ms = float(_get_dp_value(dp)) * 1000.0
-                        except (TypeError, ValueError):
-                            continue
-                        model = attrs.get("gen_ai.request.model") or attrs.get(
-                            "model", resource_attrs.get("model", "")
-                        )
-                        _add_metric(
-                            "runs",
-                            {
-                                "timestamp": ts,
-                                "duration_ms": dur_ms,
-                                "model": model,
-                                "channel": attrs.get(
-                                    "channel", resource_attrs.get("channel", "")
-                                ),
-                            },
-                        )
 
 
 _OTEL_SPAN_KIND_NAMES = {
@@ -2208,856 +1460,6 @@ _OTEL_STATUS_CODE_NAMES = {
     1: "OK",
     2: "ERROR",
 }
-
-
-def _otel_to_row(span, resource_attrs):
-    """DEAD COPY — shadowed by the second definition below; edit that one.
-
-    Translate one OTel proto Span (plus its resource attributes) to the
-    dict shape :func:`clawmetry.local_store.LocalStore.ingest_span` expects.
-
-    Issue #1007 / epic #1006. Maps common OTel attribute conventions onto
-    typed columns so the dashboard's usage / trace-tree views don't have
-    to JSON-extract on every read:
-
-      * ``gen_ai.request.model`` / ``llm.model`` / ``model`` → ``model``
-      * ``gen_ai.usage.input_tokens`` / ``llm.usage.prompt_tokens`` →
-        ``tokens_input``
-      * ``gen_ai.usage.output_tokens`` / ``llm.usage.completion_tokens`` →
-        ``tokens_output``
-      * ``gen_ai.usage.total_tokens`` → ``token_count``
-      * ``gen_ai.usage.cost_usd`` / ``llm.usage.cost`` → ``cost_usd``; when the
-        exporter ships no cost (the OTel GenAI norm — cost is not a standard
-        span attribute, so MLflow's OpenClaw plugin et al. emit token-only
-        spans), it is derived from tokens × model pricing, cache-aware, with
-        the provider resolved from ``gen_ai.provider.name`` / ``gen_ai.system``
-        or inferred from the model — same as the #2049 event path.
-      * ``gen_ai.tool.name`` / ``tool.name`` / ``code.function`` → ``tool_name``
-      * ``gen_ai.conversation.id`` / ``session.id`` / ``openclaw.session_id`` →
-        ``session_id``
-      * ``gen_ai.agent.id`` / ``agent.id`` / ``openclaw.agent_id`` (also from
-        resource) → ``agent_id``
-      * ``agent.type`` (also from resource) → ``agent_type``
-      * ``gen_ai.input.messages`` / ``gen_ai.output.messages`` (current semconv)
-        and the legacy ``gen_ai.prompt`` / ``gen_ai.completion`` → ``input`` /
-        ``output``
-      * Resource ``service.name`` → ``service_name``
-
-    Targets the OpenTelemetry GenAI semantic conventions (v1.37) so spans from
-    any conforming emitter — including MLflow's ``@mlflow/mlflow-openclaw``
-    tracer — light up ClawMetry's trace tree and cost views without a bespoke
-    per-SDK translator.
-
-    Everything not projected lands in the ``attributes`` JSON blob so the
-    span-detail panel can render any custom attributes the SDK exporter
-    set (e.g. ``gen_ai.operation.name``, ``gen_ai.agent.name``). Span events /
-    links are passed through as JSON arrays.
-    """
-    attrs = {}
-    for attr in span.attributes:
-        attrs[attr.key] = _otel_attr_value(attr.value)
-
-    # deployment.environment is a RESOURCE attribute (deployment.environment
-    # .name since semconv 1.27; the bare key before that), so it used to be
-    # dropped with the rest of the resource. Keep it on the span's attribute
-    # blob so a dev/tst/prod fleet (AgentCore's normal shape) stays separable
-    # after ingest; the session materializer lifts it onto session metadata.
-    if "deployment.environment" not in attrs:
-        for _env_key in ("deployment.environment.name", "deployment.environment"):
-            _env_val = attrs.get(_env_key) or resource_attrs.get(_env_key)
-            if _env_val not in (None, ""):
-                attrs["deployment.environment"] = str(_env_val)
-                break
-
-    # Time columns. OTel proto carries unix-nano; we store unix-seconds in
-    # ``start_ts`` / ``end_ts`` (DOUBLE) so chart libs can format them
-    # without converting twice.
-    start_ts = (span.start_time_unix_nano or 0) / 1e9
-    end_ts = (span.end_time_unix_nano or 0) / 1e9 or start_ts
-    duration_ns = max(0, (span.end_time_unix_nano or 0) - (span.start_time_unix_nano or 0))
-    duration_ms = duration_ns / 1_000_000.0
-
-    # Status + kind.
-    kind_id = getattr(span, "kind", 0) or 0
-    kind_name = _OTEL_SPAN_KIND_NAMES.get(kind_id, str(kind_id))
-    status_code_id = 0
-    status_message = ""
-    if span.HasField("status"):
-        status_code_id = span.status.code
-        status_message = span.status.message or ""
-    status_code_name = _OTEL_STATUS_CODE_NAMES.get(status_code_id, str(status_code_id))
-
-    # Attribute → typed-column projection. ``attrs`` first (per-span) so it
-    # wins over ``resource_attrs`` (resource-level fallback) — same
-    # precedence the OTel spec uses.
-    def _pick(*keys):
-        for k in keys:
-            v = attrs.get(k)
-            if v not in (None, ""):
-                return v
-            v = resource_attrs.get(k)
-            if v not in (None, ""):
-                return v
-        return None
-
-    def _pick_int(*keys):
-        v = _pick(*keys)
-        if v is None:
-            return None
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            return None
-
-    def _pick_float(*keys):
-        v = _pick(*keys)
-        if v is None:
-            return None
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
-
-    model = _pick("gen_ai.request.model", "gen_ai.response.model", "llm.model", "model")
-    tokens_input = _pick_int("gen_ai.usage.input_tokens", "llm.usage.prompt_tokens", "input_tokens")
-    tokens_output = _pick_int("gen_ai.usage.output_tokens", "llm.usage.completion_tokens", "output_tokens")
-    token_count = _pick_int("gen_ai.usage.total_tokens", "llm.usage.total_tokens", "total_tokens")
-    if token_count is None and (tokens_input or tokens_output):
-        token_count = (tokens_input or 0) + (tokens_output or 0)
-    # Prompt-cache tokens (OTel GenAI semconv + Anthropic convention). Not
-    # stored as typed columns — they ride the attributes blob — but read here
-    # so the derived cost below is cache-aware (matches the #2049 event path).
-    cache_read = _pick_int("gen_ai.usage.cache_read.input_tokens",
-                           "gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens") or 0
-    cache_write = _pick_int("gen_ai.usage.cache_creation.input_tokens",
-                            "gen_ai.usage.cache_creation_input_tokens",
-                            "cache_creation_input_tokens") or 0
-    # Provider: OTel GenAI semconv renamed gen_ai.system -> gen_ai.provider.name.
-    provider = _pick("gen_ai.provider.name", "gen_ai.system", "llm.provider", "provider") or ""
-    cost_usd = _pick_float("gen_ai.usage.cost_usd", "llm.usage.cost", "cost_usd")
-    # Cost is NOT an OTel-standard span attribute, so GenAI emitters (MLflow's
-    # OpenClaw plugin, raw OpenAI/Anthropic auto-trace, …) ship token-only spans
-    # that would read as $0 in our usage/cost views. Derive it the same way the
-    # event ingest does (#2049): tokens x model pricing, cache-aware, provider
-    # resolved from the model when the span omits it. Only fill when the exporter
-    # supplied no cost at all, so an explicit cost (even 0 for a local model) wins.
-    if cost_usd is None and model and (tokens_input or tokens_output or cache_read or cache_write):
-        try:
-            from clawmetry.providers_pricing import estimate_event_cost_usd
-            derived = estimate_event_cost_usd(
-                model,
-                input_tokens=tokens_input or 0,
-                output_tokens=tokens_output or 0,
-                cache_read_tokens=cache_read,
-                cache_write_tokens=cache_write,
-                provider=provider,
-            )
-            if derived:
-                cost_usd = derived
-        except Exception:
-            pass
-    # tool.name: OTel GenAI semconv uses gen_ai.tool.name on execute_tool spans.
-    tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function")
-    # session/conversation: semconv uses gen_ai.conversation.id.
-    session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
-    agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
-    service_name = resource_attrs.get("service.name") or attrs.get("service.name")
-    # Runtime identity. An explicit agent.type wins (OpenClaw / clawmetry-pro
-    # adapters set it); otherwise derive it from the OTLP resource service.name
-    # so OpenLLMetry-instrumented foreign apps appear as their OWN agent_type
-    # ("my-langchain-app" -> "my_langchain_app") instead of mis-bucketing under
-    # "openclaw". Absent service.name -> "custom". OpenClaw/clawmetry-known
-    # service names stay "openclaw" so existing OpenClaw OTLP flows are intact.
-    agent_type = _pick("agent.type", "openclaw.agent_type", "agent_type")
-    if not agent_type:
-        derived = _otlp_service_name_to_agent_type(service_name)
-        agent_type = derived or "openclaw"
-    node_id = _pick("node.id", "openclaw.node_id", "host.name")
-
-    # Span events: array of {time_unix_nano, name, attributes}.
-    events = []
-    for ev in span.events:
-        ev_attrs = {}
-        for a in ev.attributes:
-            ev_attrs[a.key] = _otel_attr_value(a.value)
-        events.append({
-            "time_unix_nano": ev.time_unix_nano,
-            "name": ev.name,
-            "attributes": ev_attrs,
-        })
-
-    # Span links: array of {trace_id, span_id, attributes}.
-    links = []
-    for ln in span.links:
-        ln_attrs = {}
-        for a in ln.attributes:
-            ln_attrs[a.key] = _otel_attr_value(a.value)
-        links.append({
-            "trace_id": _hex(ln.trace_id),
-            "span_id": _hex(ln.span_id),
-            "attributes": ln_attrs,
-        })
-
-    # input / output messages. The current semconv ships a single
-    # ``gen_ai.input.messages`` / ``gen_ai.output.messages`` value, but
-    # OpenLLMetry / traceloop-sdk emit INDEXED attributes instead:
-    #   gen_ai.prompt.0.role, gen_ai.prompt.0.content, gen_ai.prompt.1.role, ...
-    #   gen_ai.completion.0.role, gen_ai.completion.0.content, plus tool-call
-    #   variants (gen_ai.completion.0.tool_calls.0.name / .arguments).
-    # When the flat keys are absent we assemble an ordered messages list from
-    # the indexed attrs so the same downstream column gets a structured value
-    # (JSON-serialized by _to_blob, the same shape the flat path stores).
-    _MSG_CAP = 200_000  # defensive total-size cap (matches the brain-blob house style)
-
-    def _assemble_indexed(prefix):
-        """Collect gen_ai.<prefix>.<i>.<field> into an ordered [{role, content,
-        ...}] list. Returns None when no indexed attrs exist (caller falls back
-        to the flat keys). Bounded by _MSG_CAP total chars so a pathological
-        span can't blow the row up."""
-        by_index = {}
-        plen = len(prefix) + 1  # "gen_ai.prompt."
-        for k, v in attrs.items():
-            if not k.startswith(prefix + "."):
-                continue
-            rest = k[plen:]
-            dot = rest.find(".")
-            if dot <= 0:
-                continue
-            idx_str, field = rest[:dot], rest[dot + 1:]
-            try:
-                idx = int(idx_str)
-            except ValueError:
-                continue
-            by_index.setdefault(idx, {})[field] = v
-        if not by_index:
-            return None
-        out_msgs = []
-        total = 0
-        for idx in sorted(by_index.keys()):
-            fields = by_index[idx]
-            msg = {}
-            role = fields.get("role")
-            if role is not None:
-                msg["role"] = role
-            content = fields.get("content")
-            if content is not None:
-                msg["content"] = content
-            # Tool-call variants (gen_ai.completion.0.tool_calls.0.name etc.)
-            # and any other indexed sub-fields ride along verbatim so nothing
-            # is silently dropped.
-            for fk, fv in fields.items():
-                if fk in ("role", "content"):
-                    continue
-                msg[fk] = fv
-            if not msg:
-                continue
-            out_msgs.append(msg)
-            try:
-                total += len(str(content or "")) + len(str(role or ""))
-            except Exception:
-                pass
-            if total >= _MSG_CAP:
-                break
-        return out_msgs or None
-
-    input_val = (attrs.get("gen_ai.input.messages") or attrs.get("gen_ai.prompt")
-                 or attrs.get("llm.prompts") or attrs.get("input"))
-    if input_val is None:
-        input_val = _assemble_indexed("gen_ai.prompt")
-    output_val = (attrs.get("gen_ai.output.messages") or attrs.get("gen_ai.completion")
-                  or attrs.get("llm.completions") or attrs.get("output"))
-    if output_val is None:
-        output_val = _assemble_indexed("gen_ai.completion")
-
-    return {
-        "span_id": _hex(span.span_id),
-        "trace_id": _hex(span.trace_id),
-        "parent_span_id": _hex(span.parent_span_id) or None,
-        "agent_type": agent_type,
-        "agent_id": agent_id,
-        "node_id": node_id,
-        "session_id": session_id,
-        "service_name": service_name,
-        "name": span.name,
-        "kind": kind_name,
-        "status_code": status_code_name,
-        "status_message": status_message,
-        "status": status_code_name,
-        "start_ts": start_ts,
-        "end_ts": end_ts,
-        "duration_ms": duration_ms,
-        "duration_ns": duration_ns,
-        "model": model,
-        "tool_name": tool_name,
-        "cost_usd": cost_usd,
-        "token_count": token_count,
-        "tokens_input": tokens_input,
-        "tokens_output": tokens_output,
-        "input": input_val,
-        "output": output_val,
-        "attributes": attrs,
-        "events": events,
-        "links": links,
-    }
-
-
-def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
-    """DEAD COPY — shadowed by the second definition below; edit that one.
-
-    Decode OTLP traces protobuf and extract relevant span data.
-
-    Two-path design (issue #1007): we still feed the in-memory metrics
-    cache (the live dashboard's hot path — sub-second tiles for tokens /
-    runs / messages) AND persist every span to DuckDB via
-    ``local_store.put_span`` so the trace tree / span detail views can
-    query historical traces. The DuckDB write is best-effort wrapped in
-    try/except — a write failure must NOT break the metrics cache path.
-    """
-    req = _otlp_request(pb_data, "traces", content_encoding, content_type)
-
-    # session_id -> deployment.environment (or None) for every non-OpenClaw
-    # span in this batch. Feeds ONE materialize_otlp_sessions call at the end
-    # so span-only apps (AgentCore, OpenLLMetry) get a sessions row (WO-55).
-    _otlp_sessions_seen = {}
-
-    # Resolve the local store lazily so unit tests that monkeypatch the
-    # singleton in advance (or run without DuckDB) don't pay the import
-    # cost upfront.
-    _store = None
-    try:
-        from clawmetry import local_store as _ls
-        _store = _ls.get_store()
-    except Exception:
-        _store = None
-
-    for resource_spans in req.resource_spans:
-        resource_attrs = {}
-        if resource_spans.resource:
-            for attr in resource_spans.resource.attributes:
-                resource_attrs[attr.key] = _otel_attr_value(attr.value)
-
-        for scope_spans in resource_spans.scope_spans:
-            for span in scope_spans.spans:
-                attrs = {}
-                for attr in span.attributes:
-                    attrs[attr.key] = _otel_attr_value(attr.value)
-
-                ts = time.time()
-                duration_ns = span.end_time_unix_nano - span.start_time_unix_nano
-                duration_ms = duration_ns / 1_000_000
-
-                span_name = span.name.lower()
-                # Count a "run" for OpenClaw-shaped span names AND for GenAI LLM
-                # spans: OpenLLMetry / traceloop-sdk name them ``openai.chat`` /
-                # ``anthropic.chat`` / ``<vendor>.completion`` and tag the
-                # operation on ``gen_ai.operation.name`` (chat / text_completion
-                # / generate_content). Without this a "bring your own agent"
-                # install records spans but the live Runs tile stays at zero.
-                _genai_op = (attrs.get("gen_ai.operation.name") or "").lower()
-                _is_genai_run = (
-                    _genai_op in ("chat", "text_completion", "generate_content")
-                    or span_name.endswith(".chat")
-                    or span_name.endswith(".completion")
-                    or span_name in ("openai.chat", "anthropic.chat")
-                )
-                if "run" in span_name or "completion" in span_name or _is_genai_run:
-                    _add_metric(
-                        "runs",
-                        {
-                            "timestamp": ts,
-                            "duration_ms": duration_ms,
-                            "model": attrs.get(
-                                "model", resource_attrs.get("model", "")
-                            ),
-                            "channel": attrs.get(
-                                "channel", resource_attrs.get("channel", "")
-                            ),
-                        },
-                    )
-                elif "message" in span_name:
-                    _add_metric(
-                        "messages",
-                        {
-                            "timestamp": ts,
-                            "channel": attrs.get(
-                                "channel", resource_attrs.get("channel", "")
-                            ),
-                            "outcome": "processed",
-                            "duration_ms": duration_ms,
-                        },
-                    )
-
-                # Generic cost/token mapping from span ATTRIBUTES. Codex (and
-                # OTel-instrumented agents) emit cost/token telemetry on spans
-                # like ``codex.api_request`` — without this they persist to the
-                # spans table but never light the cost/usage tiles. OpenClaw cost
-                # arrives via the /v1/metrics path (openclaw.cost.usd), not span
-                # attrs, so this doesn't double-count. Same shape as /v1/logs
-                # (#2591).
-                _sc = (attrs.get("cost_usd") or attrs.get("cost.usd")
-                       or attrs.get("cost") or attrs.get("gen_ai.usage.cost_usd"))
-                if _sc is not None:
-                    try:
-                        _add_metric("cost", {
-                            "timestamp": ts, "usd": float(_sc),
-                            "model": attrs.get("model", resource_attrs.get("model", "")),
-                            "channel": attrs.get("channel", resource_attrs.get("channel", "")),
-                            "provider": attrs.get("provider", resource_attrs.get("provider", "")),
-                        })
-                    except (TypeError, ValueError):
-                        pass
-                _si = (attrs.get("gen_ai.usage.input_tokens")
-                       or attrs.get("input_tokens") or attrs.get("tokens.input")
-                       or attrs.get("prompt_tokens"))
-                _so = (attrs.get("gen_ai.usage.output_tokens")
-                       or attrs.get("output_tokens") or attrs.get("tokens.output")
-                       or attrs.get("completion_tokens"))
-                if _si is not None or _so is not None:
-                    try:
-                        _i, _o = int(_si or 0), int(_so or 0)
-                        _add_metric("tokens", {
-                            "timestamp": ts, "input": _i, "output": _o, "total": _i + _o,
-                            "model": attrs.get("model", resource_attrs.get("model", "")),
-                            "channel": attrs.get("channel", resource_attrs.get("channel", "")),
-                            "provider": attrs.get("provider", resource_attrs.get("provider", "")),
-                        })
-                    except (TypeError, ValueError):
-                        pass
-
-                # DuckDB write-through. Failures here are logged but do not
-                # break the metrics cache path above (which is what the
-                # live tiles read from). Idempotent on span_id — OTLP
-                # retries land as INSERT OR REPLACE without duping.
-                if _store is not None:
-                    try:
-                        # Keyword arg is REQUIRED: in the dashboard process
-                        # get_store() returns a _ProxyStore that forwards to the
-                        # daemon writer, and the proxy only forwards **kwargs
-                        # (positional args are dropped). With a positional span
-                        # the write silently no-ops and OTLP spans never persist
-                        # whenever the daemon owns the writer lock (i.e. every
-                        # real install). put_span is allowlisted in
-                        # routes/local_query._DAEMON_METHODS so the daemon
-                        # executes the real write.
-                        _row = _otel_to_row(span, resource_attrs)
-                        _store.put_span(span=_row)
-                        # Track for session materialization (WO-55). OpenClaw
-                        # sessions come from transcripts; only foreign apps
-                        # need a span-derived sessions row.
-                        _sid = _row.get("session_id")
-                        if _sid and (_row.get("agent_type") or "") != "openclaw":
-                            _env = (_row.get("attributes") or {}).get(
-                                "deployment.environment")
-                            if _env or str(_sid) not in _otlp_sessions_seen:
-                                _otlp_sessions_seen[str(_sid)] = _env
-                    except Exception as e:
-                        try:
-                            import logging as _lg
-                            _lg.getLogger("clawmetry.dashboard").warning(
-                                "local_store.put_span failed: %s", e
-                            )
-                        except Exception:
-                            pass
-
-    # One materialization call per export batch (not per span — get_store()
-    # here can be an HTTP proxy to the daemon; FLYWHEEL 1e). Recomputes the
-    # touched sessions from their spans and upserts sessions rows so the
-    # Sessions tab and runtime switcher show a span-only OTLP app (WO-55).
-    if _store is not None and _otlp_sessions_seen:
-        try:
-            _store.materialize_otlp_sessions(
-                session_ids=sorted(_otlp_sessions_seen),
-                environments={k: v for k, v in _otlp_sessions_seen.items() if v},
-            )
-        except Exception as e:
-            try:
-                import logging as _lg
-                _lg.getLogger("clawmetry.dashboard").warning(
-                    "materialize_otlp_sessions failed: %s", e
-                )
-            except Exception:
-                pass
-
-
-def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
-    """DEAD COPY — shadowed. dashboard.py defines this twice and the SECOND
-    definition wins (search for "Daemon-free OTLP intake"). Edits here change
-    nothing at runtime; make them in the live copy.
-
-    Decode OTLP logs protobuf and ingest agent EVENT records (#2596).
-
-    Claude Code (and other runtimes) export their per-turn event stream as OTel
-    *logs* — ``event_name`` like ``claude_code.api_request`` / ``tool_decision``
-    with cost/token/model attributes — not just metrics/traces, so an OTel-
-    configured install gives signal we previously dropped. We map any log record
-    carrying cost or token attributes into the same metrics cache categories as
-    /v1/metrics (cost / tokens / runs), so the cost + usage tiles light up.
-    Best-effort: a bad record never breaks the batch.
-    """
-    req = _otlp_request(pb_data, "logs", content_encoding, content_type)
-
-    def _f(attrs, *keys):
-        for k in keys:
-            if k in attrs and attrs[k] not in (None, ""):
-                return attrs[k]
-        return None
-
-    for resource_logs in req.resource_logs:
-        resource_attrs = {}
-        if resource_logs.resource:
-            for attr in resource_logs.resource.attributes:
-                resource_attrs[attr.key] = _otel_attr_value(attr.value)
-
-        for scope_logs in resource_logs.scope_logs:
-            for rec in scope_logs.log_records:
-                attrs = {}
-                for attr in rec.attributes:
-                    attrs[attr.key] = _otel_attr_value(attr.value)
-                ts = time.time()
-                model = _f(attrs, "model") or resource_attrs.get("model", "")
-                channel = _f(attrs, "channel") or resource_attrs.get("channel", "")
-                provider = _f(attrs, "provider") or resource_attrs.get("provider", "")
-
-                cost = _f(attrs, "cost_usd", "cost.usd", "cost")
-                if cost is not None:
-                    try:
-                        _add_metric("cost", {
-                            "timestamp": ts, "usd": float(cost),
-                            "model": model, "channel": channel, "provider": provider,
-                        })
-                    except (TypeError, ValueError):
-                        pass
-
-                itok = _f(attrs, "input_tokens", "tokens.input", "prompt_tokens")
-                otok = _f(attrs, "output_tokens", "tokens.output", "completion_tokens")
-                if itok is not None or otok is not None:
-                    try:
-                        i, o = int(itok or 0), int(otok or 0)
-                        _add_metric("tokens", {
-                            "timestamp": ts, "input": i, "output": o, "total": i + o,
-                            "model": model, "channel": channel, "provider": provider,
-                        })
-                    except (TypeError, ValueError):
-                        pass
-
-                dur = _f(attrs, "duration_ms", "duration.ms")
-                ev = (getattr(rec, "event_name", "") or "").lower()
-                if dur is not None and any(k in ev for k in ("request", "run", "completion")):
-                    try:
-                        _add_metric("runs", {
-                            "timestamp": ts, "duration_ms": float(dur),
-                            "model": model, "channel": channel,
-                        })
-                    except (TypeError, ValueError):
-                        pass
-
-
-def _get_otel_usage_data():
-    """Aggregate OTLP metrics into usage data for the Usage tab."""
-    today = datetime.now()
-    today_start = today.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    week_start = (
-        (today - timedelta(days=today.weekday()))
-        .replace(hour=0, minute=0, second=0, microsecond=0)
-        .timestamp()
-    )
-    month_start = today.replace(
-        day=1, hour=0, minute=0, second=0, microsecond=0
-    ).timestamp()
-
-    daily_tokens = {}
-    daily_cost = {}
-    model_usage = {}
-
-    with _metrics_lock:
-        for entry in metrics_store["tokens"]:
-            ts = entry.get("timestamp", 0)
-            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-            total = entry.get("total", 0)
-            daily_tokens[day] = daily_tokens.get(day, 0) + total
-            model = entry.get("model", "unknown") or "unknown"
-            model_usage[model] = model_usage.get(model, 0) + total
-
-        for entry in metrics_store["cost"]:
-            ts = entry.get("timestamp", 0)
-            day = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-            daily_cost[day] = daily_cost.get(day, 0) + entry.get("usd", 0)
-
-    days = []
-    for i in range(13, -1, -1):
-        d = today - timedelta(days=i)
-        ds = d.strftime("%Y-%m-%d")
-        days.append(
-            {
-                "date": ds,
-                "tokens": daily_tokens.get(ds, 0),
-                "cost": daily_cost.get(ds, 0),
-            }
-        )
-
-    today_str = today.strftime("%Y-%m-%d")
-    today_tok = daily_tokens.get(today_str, 0)
-    week_tok = sum(v for k, v in daily_tokens.items() if _safe_date_ts(k) >= week_start)
-    month_tok = sum(
-        v for k, v in daily_tokens.items() if _safe_date_ts(k) >= month_start
-    )
-    today_cost_val = daily_cost.get(today_str, 0)
-    week_cost_val = sum(
-        v for k, v in daily_cost.items() if _safe_date_ts(k) >= week_start
-    )
-    month_cost_val = sum(
-        v for k, v in daily_cost.items() if _safe_date_ts(k) >= month_start
-    )
-
-    run_durations = []
-    with _metrics_lock:
-        for entry in metrics_store["runs"]:
-            run_durations.append(entry.get("duration_ms", 0))
-    avg_run_ms = sum(run_durations) / len(run_durations) if run_durations else 0
-
-    msg_count = len(metrics_store["messages"])
-
-    # Enhanced cost tracking for OTLP data
-    trend_data = _analyze_usage_trends(daily_tokens)
-    model_billing, billing_summary = _build_model_billing(model_usage)
-    warnings = _generate_cost_warnings(
-        today_cost_val,
-        week_cost_val,
-        month_cost_val,
-        trend_data,
-        month_tok,
-        billing_summary,
-    )
-
-    return {
-        "source": "otlp",
-        "days": days,
-        "today": today_tok,
-        "week": week_tok,
-        "month": month_tok,
-        "todayCost": round(today_cost_val, 4),
-        "weekCost": round(week_cost_val, 4),
-        "monthCost": round(month_cost_val, 4),
-        "avgRunMs": round(avg_run_ms, 1),
-        "messageCount": msg_count,
-        "modelBreakdown": [
-            {"model": k, "tokens": v}
-            for k, v in sorted(model_usage.items(), key=lambda x: -x[1])
-        ],
-        "modelBilling": model_billing,
-        "billingSummary": billing_summary,
-        "trend": trend_data,
-        "warnings": warnings,
-    }
-
-
-def _auto_detect_data_dir():
-    """Auto-detect OpenClaw data directory, including Docker volume mounts."""
-    # Standard locations
-    candidates = [
-        os.path.expanduser("~/.openclaw"),
-        os.path.expanduser("~/.clawdbot"),
-    ]
-    # Docker volume mounts (Hostinger pattern: /docker/*/data/.openclaw)
-    try:
-        import glob as _glob
-
-        for pattern in [
-            "/docker/*/data/.openclaw",
-            "/docker/*/.openclaw",
-            "/var/lib/docker/volumes/*/_data/.openclaw",
-        ]:
-            candidates.extend(_glob.glob(pattern))
-    except Exception:
-        pass
-    # Check Docker inspect for mount points
-    try:
-        import subprocess as _sp
-
-        container_ids = (
-            _sp.check_output(
-                ["docker", "ps", "-q", "--filter", "ancestor=*openclaw*"],
-                timeout=3,
-                stderr=_sp.DEVNULL,
-            )
-            .decode()
-            .strip()
-            .split()
-        )
-        if not container_ids:
-            # Try all containers
-            container_ids = (
-                _sp.check_output(["docker", "ps", "-q"], timeout=3, stderr=_sp.DEVNULL)
-                .decode()
-                .strip()
-                .split()
-            )
-        for cid in container_ids[:3]:
-            try:
-                mounts = (
-                    _sp.check_output(
-                        [
-                            "docker",
-                            "inspect",
-                            cid,
-                            "--format",
-                            "{{range .Mounts}}{{.Source}}:{{.Destination}} {{end}}",
-                        ],
-                        timeout=3,
-                        stderr=_sp.DEVNULL,
-                    )
-                    .decode()
-                    .strip()
-                    .split()
-                )
-                for mount in mounts:
-                    parts = mount.split(":")
-                    if len(parts) >= 1:
-                        src = parts[0]
-                        oc_path = os.path.join(src, ".openclaw")
-                        if os.path.isdir(oc_path) and oc_path not in candidates:
-                            candidates.insert(0, oc_path)
-                        # Also check if the mount itself is the .openclaw dir
-                        if src.endswith(".openclaw") and os.path.isdir(src):
-                            candidates.insert(0, src)
-            except Exception:
-                pass
-    except Exception:
-        pass
-    for c in candidates:
-        if (
-            c
-            and os.path.isdir(c)
-            and (
-                os.path.isdir(os.path.join(c, "agents"))
-                or os.path.isdir(os.path.join(c, "workspace"))
-                or os.path.exists(os.path.join(c, "cron", "jobs.json"))
-            )
-        ):
-            return c
-    return None
-
-
-def detect_config(args=None):
-    """Auto-detect OpenClaw/Moltbot paths, with CLI and env overrides."""
-    global WORKSPACE, MEMORY_DIR, LOG_DIR, SESSIONS_DIR, USER_NAME
-
-    # 0a. --openclaw-dir: set OpenClaw config directory (Issue #322 - Docker config bleed)
-    if args and getattr(args, "openclaw_dir", None):
-        os.environ["CLAWMETRY_OPENCLAW_DIR"] = os.path.expanduser(args.openclaw_dir)
-
-    # 0. --data-dir: set defaults from OpenClaw data directory (e.g. /path/.openclaw)
-    data_dir = None
-    if args and getattr(args, "data_dir", None):
-        data_dir = os.path.expanduser(args.data_dir)
-    elif os.environ.get("OPENCLAW_DATA_DIR"):
-        data_dir = os.path.expanduser(os.environ["OPENCLAW_DATA_DIR"])
-    else:
-        # Auto-detect: check common locations including Docker volumes
-        data_dir = _auto_detect_data_dir()
-
-    if data_dir and os.path.isdir(data_dir):
-        # Auto-set workspace, sessions, crons from data dir
-        ws = os.path.join(data_dir, "workspace")
-        if os.path.isdir(ws) and not (args and args.workspace):
-            if not args:
-                import argparse
-
-                args = argparse.Namespace()
-            args.workspace = ws
-        sess = os.path.join(data_dir, "agents", "main", "sessions")
-        if os.path.isdir(sess) and not (args and getattr(args, "sessions_dir", None)):
-            args.sessions_dir = sess
-
-    # 1. Workspace - where agent files live (SOUL.md, MEMORY.md, memory/, etc.)
-    if args and args.workspace:
-        WORKSPACE = os.path.expanduser(args.workspace)
-    elif os.environ.get("OPENCLAW_HOME"):
-        WORKSPACE = os.path.expanduser(os.environ["OPENCLAW_HOME"])
-    elif os.environ.get("OPENCLAW_WORKSPACE"):
-        WORKSPACE = os.path.expanduser(os.environ["OPENCLAW_WORKSPACE"])
-    else:
-        # Auto-detect: check common locations
-        candidates = [
-            _detect_workspace_from_config(),
-            os.path.expanduser("~/.openclaw/workspace"),
-            os.path.expanduser("~/.clawdbot/workspace"),
-            os.path.expanduser("~/clawd"),
-            os.path.expanduser("~/openclaw"),
-            os.getcwd(),
-        ]
-        for c in candidates:
-            if (
-                c
-                and os.path.isdir(c)
-                and (
-                    os.path.exists(os.path.join(c, "SOUL.md"))
-                    or os.path.exists(os.path.join(c, "AGENTS.md"))
-                    or os.path.exists(os.path.join(c, "MEMORY.md"))
-                    or os.path.isdir(os.path.join(c, "memory"))
-                )
-            ):
-                WORKSPACE = c
-                break
-        if not WORKSPACE:
-            # "/" is not a workspace. launchd starts agents with cwd="/", so
-            # this last-resort guess silently poisoned every workspace-relative
-            # state path (see _fleet_db_path) on an auto-started install.
-            _cwd = os.getcwd()
-            WORKSPACE = _cwd if _cwd not in ("/", "") else os.path.expanduser("~")
-
-    MEMORY_DIR = os.path.join(WORKSPACE, "memory")
-
-    # 2. Log directory
-    if args and args.log_dir:
-        LOG_DIR = os.path.expanduser(args.log_dir)
-    elif os.environ.get("OPENCLAW_LOG_DIR"):
-        LOG_DIR = os.path.expanduser(os.environ["OPENCLAW_LOG_DIR"])
-    else:
-        candidates = _get_log_dirs() + [os.path.expanduser("~/.clawdbot/logs")]
-        LOG_DIR = next((d for d in candidates if os.path.isdir(d)), _get_log_dirs()[0])
-
-    # 3. Sessions directory (transcript .jsonl files)
-    if args and getattr(args, "sessions_dir", None):
-        SESSIONS_DIR = os.path.expanduser(args.sessions_dir)
-    elif os.environ.get("OPENCLAW_SESSIONS_DIR"):
-        SESSIONS_DIR = os.path.expanduser(os.environ["OPENCLAW_SESSIONS_DIR"])
-    else:
-        candidates = [
-            os.path.expanduser("~/.openclaw/agents/main/sessions"),
-            os.path.expanduser("~/.clawdbot/agents/main/sessions"),
-            os.path.join(WORKSPACE, "sessions") if WORKSPACE else None,
-            os.path.expanduser("~/.openclaw/sessions"),
-            os.path.expanduser("~/.clawdbot/sessions"),
-        ]
-        # Also scan agents dirs
-        for agents_base in [
-            os.path.expanduser("~/.openclaw/agents"),
-            os.path.expanduser("~/.clawdbot/agents"),
-        ]:
-            if os.path.isdir(agents_base):
-                for agent in os.listdir(agents_base):
-                    p = os.path.join(agents_base, agent, "sessions")
-                    if p not in candidates:
-                        candidates.append(p)
-        SESSIONS_DIR = next(
-            (d for d in candidates if d and os.path.isdir(d)),
-            candidates[0] if candidates else None,
-        )
-
-    # 4. User name (shown in Flow visualization)
-    if args and args.name:
-        USER_NAME = args.name
-    elif os.environ.get("OPENCLAW_USER"):
-        USER_NAME = os.environ["OPENCLAW_USER"]
-    else:
-        USER_NAME = "You"
-
-    # Phase 3: initialize DataProvider with detected paths
-    try:
-        _init_data_provider()
-    except Exception:
-        pass
 
 
 # Cache for _sync_scope_runtimes(). The sync banner polls, and adapter
@@ -3174,183 +1576,6 @@ def _sync_scope_refresh():
         _SYNC_SCOPE_CACHE["runtimes"] = rows
         _SYNC_SCOPE_CACHE["running"] = False
     return rows
-
-
-def _detect_gateway_port():
-    """Detect the OpenClaw gateway port from config files or environment."""
-    # Check environment variable first
-    env_port = os.environ.get("OPENCLAW_GATEWAY_PORT", "").strip()
-    if env_port:
-        try:
-            return int(env_port)
-        except ValueError:
-            pass
-    # Try reading from gateway config
-    # Try JSON configs first (openclaw.json / moltbot.json / clawdbot.json)
-    _oc_dir = _get_openclaw_dir()
-    json_paths = [
-        os.path.join(_oc_dir, "openclaw.json"),
-        os.path.join(_oc_dir, "moltbot.json"),
-        os.path.join(_oc_dir, "clawdbot.json"),
-        os.path.expanduser("~/.clawdbot/clawdbot.json"),
-    ]
-    for jp in json_paths:
-        try:
-            import json as _json
-
-            with open(jp) as f:
-                cfg = _json.load(f)
-            gw = cfg.get("gateway", {})
-            if isinstance(gw, dict) and "port" in gw:
-                return int(gw["port"])
-        except (FileNotFoundError, ValueError, KeyError, TypeError):
-            pass
-    # Try YAML configs
-    yaml_paths = [
-        os.path.expanduser("~/.openclaw/gateway.yaml"),
-        os.path.expanduser("~/.openclaw/gateway.yml"),
-        os.path.expanduser("~/.clawdbot/gateway.yaml"),
-        os.path.expanduser("~/.clawdbot/gateway.yml"),
-    ]
-    for cp in yaml_paths:
-        try:
-            with open(cp) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("port:"):
-                        port_val = line.split(":", 1)[1].strip()
-                        return int(port_val)
-        except (FileNotFoundError, ValueError, IndexError):
-            pass
-    return 18789  # Default OpenClaw gateway port
-
-
-def _detect_gateway_token():
-    """Detect the OpenClaw gateway auth token from env, config files, or running process."""
-    # 1. Environment variable (most reliable - matches running gateway)
-    env_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "").strip()
-    if env_token:
-        return env_token
-    # 2. Try reading from running gateway process env (Linux only)
-    try:
-        import subprocess as _sp
-
-        result = _sp.run(
-            ["pgrep", "-f", "openclaw-gateway"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-        for pid in result.stdout.strip().split("\n"):
-            pid = pid.strip()
-            if pid:
-                try:
-                    with open(f"/proc/{pid}/environ", "r") as f:
-                        env_data = f.read()
-                    for entry in env_data.split("\0"):
-                        if entry.startswith("OPENCLAW_GATEWAY_TOKEN="):
-                            return entry.split("=", 1)[1]
-                except (PermissionError, FileNotFoundError):
-                    pass
-    except Exception:
-        pass
-    # 3. Config files
-    _oc_dir = _get_openclaw_dir()
-    json_paths = [
-        os.path.join(_oc_dir, "openclaw.json"),
-        os.path.join(_oc_dir, "moltbot.json"),
-        os.path.join(_oc_dir, "clawdbot.json"),
-        os.path.expanduser("~/.clawdbot/clawdbot.json"),
-    ]
-    for jp in json_paths:
-        try:
-            import json as _json
-
-            with open(jp) as f:
-                cfg = _json.load(f)
-            # Primary path on current OpenClaw: cfg["gateway"]["auth"]["token"].
-            # Some installs / older schemas store the token at top-level
-            # cfg["auth"]["token"] (issue #1127). Try the nested gateway
-            # path first, then the top-level auth path so we cover both
-            # without breaking the common case.
-            gw = cfg.get("gateway", {})
-            if isinstance(gw, dict):
-                gw_auth = gw.get("auth", {})
-                if isinstance(gw_auth, dict) and gw_auth.get("token"):
-                    return gw_auth["token"]
-            top_auth = cfg.get("auth", {})
-            if isinstance(top_auth, dict) and top_auth.get("token"):
-                return top_auth["token"]
-        except (FileNotFoundError, ValueError, KeyError, TypeError):
-            pass
-    return None
-
-
-def _detect_disk_mounts():
-    """Detect mounted filesystems to monitor (root + any large data drives)."""
-    mounts = ["/"]
-    try:
-        with open("/proc/mounts") as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) >= 2:
-                    mount_point = parts[1]
-                    fs_type = parts[2] if len(parts) > 2 else ""
-                    # Include additional data mounts (skip virtual/special filesystems)
-                    if (
-                        mount_point.startswith("/mnt/")
-                        or mount_point.startswith("/data")
-                    ) and fs_type not in (
-                        "tmpfs",
-                        "devtmpfs",
-                        "proc",
-                        "sysfs",
-                        "cgroup",
-                        "cgroup2",
-                    ):
-                        mounts.append(mount_point)
-    except (IOError, OSError):
-        pass
-    return mounts
-
-
-def get_public_ip():
-    """Get the machine's public IP address (useful for cloud/VPS users).
-
-    Shadowed by the second definition further down this file, which is the one
-    that actually runs. Gated identically so the dead copy cannot reintroduce
-    an ungated third-party call if the definitions are ever reordered.
-    """
-    if _egress_suppressed():
-        return None
-    try:
-        import urllib.request
-
-        return (
-            urllib.request.urlopen("https://api.ipify.org", timeout=2)
-            .read()
-            .decode()
-            .strip()
-        )
-    except Exception:
-        return None
-
-
-def get_local_ip():
-    """Get the machine's LAN IP address."""
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(0.2)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except (socket.error, OSError):
-        # Network unavailable or socket error - common in offline/restricted environments
-        return "127.0.0.1"
-    except Exception as e:
-        print(f"[warn]  Warning: Unexpected error getting local IP: {e}")
-        return "127.0.0.1"
 
 
 # ── HTML Template ───────────────────────────────────────────────────────
@@ -8825,7 +7050,6 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/version-impact.html' %}
 
 <!-- SESSION CLUSTERS -->
-{% include 'tabs/clusters.html' %}
 
 <!-- HISTORY -->
 
@@ -10216,187 +8440,6 @@ _usage_cache = {"data": None, "ts": 0}
 _USAGE_CACHE_TTL = 60  # seconds
 _sessions_cache = {"data": None, "ts": 0}
 _SESSIONS_CACHE_TTL = 10  # seconds
-
-
-def _compute_transcript_analytics():
-    """Parse transcript files once for usage, anomalies, cron attribution, and plugin breakdown."""
-    now = time.time()
-    if (
-        _transcript_analytics_cache["data"] is not None
-        and (now - _transcript_analytics_cache["ts"]) < _TRANSCRIPT_ANALYTICS_TTL
-    ):
-        return _transcript_analytics_cache["data"]
-
-    sessions_dir = _get_sessions_dir()
-    summaries = []
-    plugin_stats = defaultdict(lambda: {"tokens": 0.0, "cost": 0.0, "calls": 0})
-    daily_tokens = {}
-    daily_cost = {}
-    daily_input_tokens = {}
-    daily_output_tokens = {}
-    daily_cache_read_tokens = {}
-    daily_cache_write_tokens = {}
-    model_usage = {}
-
-    if os.path.isdir(sessions_dir):
-        for fname in os.listdir(sessions_dir):
-            # Accept both live `.jsonl` and archived `.jsonl.reset.<ts>` files.
-            if not (fname.endswith(".jsonl") or ".jsonl.reset." in fname):
-                continue
-            # Runtime trajectory/checkpoint files duplicate session content and
-            # can dwarf real transcripts (hundreds of MB). They make usage
-            # widgets crawl on first load, so keep analytics on canonical
-            # session/reset transcripts only.
-            if ".trajectory." in fname or ".checkpoint." in fname or ".deleted." in fname:
-                continue
-            sid = fname.split(".jsonl", 1)[0]
-            fpath = os.path.join(sessions_dir, fname)
-            fallback_dt = datetime.fromtimestamp(os.path.getmtime(fpath))
-
-            s_tokens = 0
-            s_cost = 0.0
-            s_model = "unknown"
-            s_start = None
-            s_end = None
-            search_parts = []
-            explicit_cron_refs = set()
-
-            try:
-                with open(fpath, "r") as f:
-                    for line in f:
-                        try:
-                            obj = json.loads(line.strip())
-                        except Exception:
-                            continue
-
-                        ts = _parse_event_timestamp(
-                            obj.get("timestamp")
-                            or obj.get("time")
-                            or obj.get("created_at"),
-                            fallback_dt,
-                        )
-                        if ts:
-                            if s_start is None or ts < s_start:
-                                s_start = ts
-                            if s_end is None or ts > s_end:
-                                s_end = ts
-
-                        # Collect cron hints from metadata and known custom session-info events
-                        _collect_cron_refs(obj, explicit_cron_refs)
-                        if obj.get("customType") == "openclaw.session-info":
-                            search_parts.append(
-                                json.dumps(obj.get("data", {}), default=str).lower()
-                            )
-
-                        message = (
-                            obj.get("message", {})
-                            if isinstance(obj.get("message"), dict)
-                            else {}
-                        )
-                        model = message.get("model") or obj.get("model")
-                        if model:
-                            s_model = model
-
-                        usage_metrics = _extract_usage_metrics(obj)
-                        tokens = usage_metrics["tokens"]
-                        cost = usage_metrics["cost"]
-                        input_tokens = usage_metrics.get("input_tokens", 0)
-                        output_tokens = usage_metrics.get("output_tokens", 0)
-                        cache_read_tokens = usage_metrics.get("cache_read_tokens", 0)
-                        cache_write_tokens = usage_metrics.get("cache_write_tokens", 0)
-
-                        if tokens > 0:
-                            s_tokens += tokens
-                            if cost > 0:
-                                s_cost += cost
-
-                            # Bucket to this event's actual date, not the
-                            # session start date. Fixes the bug where a
-                            # long-running session's entire token total
-                            # piled onto the day the session started.
-                            _ev_date = (ts or fallback_dt).strftime("%Y-%m-%d")
-                            daily_tokens[_ev_date] = daily_tokens.get(_ev_date, 0) + tokens
-                            daily_cost[_ev_date] = daily_cost.get(_ev_date, 0.0) + cost
-                            daily_input_tokens[_ev_date] = daily_input_tokens.get(_ev_date, 0) + input_tokens
-                            daily_output_tokens[_ev_date] = daily_output_tokens.get(_ev_date, 0) + output_tokens
-                            daily_cache_read_tokens[_ev_date] = daily_cache_read_tokens.get(_ev_date, 0) + cache_read_tokens
-                            daily_cache_write_tokens[_ev_date] = daily_cache_write_tokens.get(_ev_date, 0) + cache_write_tokens
-
-                            plugins = _extract_tool_plugins(obj)
-                            if plugins:
-                                share_tokens = float(tokens) / float(len(plugins))
-                                share_cost = (
-                                    float(cost) / float(len(plugins))
-                                    if cost > 0
-                                    else 0.0
-                                )
-                                for p in plugins:
-                                    plugin_stats[p]["tokens"] += share_tokens
-                                    plugin_stats[p]["cost"] += share_cost
-                                    plugin_stats[p]["calls"] += 1
-
-                        # Textual hints for cron matching
-                        if isinstance(message.get("content"), list):
-                            for part in message.get("content", []):
-                                if isinstance(part, dict):
-                                    txt = part.get("text")
-                                    if isinstance(txt, str) and txt:
-                                        search_parts.append(txt.lower())
-                        if obj.get("type") == "custom":
-                            try:
-                                search_parts.append(
-                                    json.dumps(obj, default=str).lower()
-                                )
-                            except Exception:
-                                pass
-
-                if s_start is None:
-                    s_start = fallback_dt
-                if s_end is None:
-                    s_end = fallback_dt
-
-                # daily_tokens/daily_cost are now populated per-event above
-                # (bucketed by each event's timestamp, not the session start).
-                # Only model_usage still aggregates per-session.
-                model_usage[s_model] = model_usage.get(s_model, 0) + s_tokens
-
-                search_text = " ".join(search_parts)
-                if len(search_text) > 12000:
-                    search_text = search_text[:12000]
-
-                summaries.append(
-                    {
-                        "session_id": sid,
-                        "tokens": s_tokens,
-                        "cost_usd": s_cost,
-                        "model": s_model,
-                        "start_ts": s_start.timestamp() if s_start else 0,
-                        "end_ts": s_end.timestamp() if s_end else 0,
-                        "day": s_start.strftime("%Y-%m-%d") if s_start else fallback_dt.strftime("%Y-%m-%d"),
-                        "search_text": search_text,
-                        "explicit_cron_refs": explicit_cron_refs,
-                        "is_cron_candidate": ("cron" in search_text)
-                        or bool(explicit_cron_refs),
-                    }
-                )
-            except Exception:
-                continue
-
-    summaries.sort(key=lambda s: s.get("start_ts", 0))
-    result = {
-        "sessions": summaries,
-        "plugin_stats": plugin_stats,
-        "daily_tokens": daily_tokens,
-        "daily_cost": daily_cost,
-        "daily_input_tokens": daily_input_tokens,
-        "daily_output_tokens": daily_output_tokens,
-        "daily_cache_read_tokens": daily_cache_read_tokens,
-        "daily_cache_write_tokens": daily_cache_write_tokens,
-        "model_usage": model_usage,
-    }
-    _transcript_analytics_cache["data"] = result
-    _transcript_analytics_cache["ts"] = now
-    return result
 
 
 _transcript_analytics_cache = {"data": None, "ts": 0}
@@ -13950,7 +11993,7 @@ ARCHITECTURE_OVERVIEW = """\
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
   │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
-  │  Any of 30 runtimes │              │  ClawMetry          │              │  Your browser       │
+  │  Any of 31 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
   │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
   │  Nothing changes.   │              │  Serves dashboard.  │              │                     │
@@ -14164,35 +12207,25 @@ def _get_uptime_str(pid):
 def _read_cloud_token():
     """Resolve the cloud bearer the dashboard uses for /api/cloud-proxy/*.
 
-    Two sources of truth (audit P0 #5, clawmetry-cloud#779):
-
-      1. ``~/.openclaw/openclaw.json`` → ``clawmetry.cloudToken`` (legacy
-         OpenClaw sidecar path; written by ``clawmetry connect``).
-      2. ``~/.clawmetry/config.json`` → ``api_key`` (the daemon's own
-         config, written by ``python -m clawmetry.sync`` once the node is
-         paired). Validated by the ``cm_`` prefix.
-
-    Without (2) the dashboard would 401 the entire Alerts UI even on
-    machines where the daemon is fully cloud-paired but never had the
-    OpenClaw sidecar config written.
+    Delegates to ``clawmetry.config.read_cloud_token``, which reads
+    ``~/.clawmetry/config.json`` → ``api_key`` (the daemon's own config,
+    written by ``clawmetry connect`` / ``python -m clawmetry.sync``) and
+    falls back to the retired ``~/.openclaw/openclaw.json`` →
+    ``clawmetry.cloudToken`` mirror, migrating it out of OpenClaw's config
+    on the way. Returns None (not '') when unpaired — callers test truthiness
+    but a couple pass the result straight into a header dict, and None is the
+    long-standing contract here.
     """
-    # Source 1 — OpenClaw sidecar (existing path, kept first so an explicit
-    # `clawmetry connect` write wins over the daemon-side copy).
-    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
     try:
-        with open(cfg_path) as f:
-            data = json.load(f)
-        tok = (data.get("clawmetry", {}) or {}).get("cloudToken", "")
-        if tok:
-            return tok
+        from clawmetry.config import read_cloud_token as _read
+        return _read() or None
     except Exception:
         pass
-    # Source 2 — daemon's own config (audit P0 #5 fallback).
-    daemon_cfg = os.path.expanduser("~/.clawmetry/config.json")
+    # Last-ditch inline read: config.py import failing should not take the
+    # Alerts UI down on a machine that IS paired.
     try:
-        with open(daemon_cfg) as f:
-            data = json.load(f)
-        tok = data.get("api_key", "")
+        with open(os.path.expanduser("~/.clawmetry/config.json")) as f:
+            tok = json.load(f).get("api_key", "")
         if isinstance(tok, str) and tok.startswith("cm_"):
             return tok
     except Exception:
@@ -14201,18 +12234,18 @@ def _read_cloud_token():
 
 
 def _write_cloud_token(token):
-    cfg_path = os.path.expanduser("~/.openclaw/openclaw.json")
-    try:
-        with open(cfg_path) as f:
-            data = json.load(f)
-    except Exception:
-        data = {}
-    if "clawmetry" not in data:
-        data["clawmetry"] = {}
-    data["clawmetry"]["cloudToken"] = token
-    os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-    with open(cfg_path, "w") as f:
-        json.dump(data, f, indent=2)
+    """Persist the cm_ bearer to ClawMetry's own config.
+
+    This used to write ``clawmetry.cloudToken`` into
+    ``~/.openclaw/openclaw.json``. It no longer touches that file at all:
+    ``clawmetry`` is not a key in OpenClaw's schema, so the write left
+    OpenClaw's config failing validation, and OpenClaw's next CLI run fired
+    ``doctor --fix`` — restoring the last-known-good config, restarting the
+    gateway and killing the user's live session. See the comment block in
+    ``clawmetry/config.py``.
+    """
+    from clawmetry.config import write_cloud_token as _write
+    _write(token)
 
 
 # In-memory account-email cache for /api/cloud-cta/status. `fail_at` throttles
@@ -14997,16 +13030,45 @@ def _start_daemon_background():
         )
     else:
         spawn_kwargs["start_new_session"] = True
+    # Output goes to ~/.clawmetry/sync.log, not devnull. cmd_connect's own
+    # failure path already tells the user to `cat ~/.clawmetry/sync.log` -- a
+    # file nothing ever wrote -- so a daemon that died on startup did so
+    # invisibly (#5740).
+    cm_dir = _pl.Path.home() / ".clawmetry"
+    cm_dir.mkdir(parents=True, exist_ok=True)
+    log_path = cm_dir / "sync.log"
+    try:
+        log_fh = open(log_path, "a", buffering=1)
+    except OSError:
+        log_fh = open(os.devnull, "w")
     proc = subprocess.Popen(
         [sys.executable, "-m", "clawmetry.sync"],
-        stdout=open(os.devnull, "w"),
-        stderr=open(os.devnull, "w"),
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
         **spawn_kwargs,
     )
-    pid_file = _pl.Path.home() / ".clawmetry" / "sync.pid"
-    pid_file.parent.mkdir(parents=True, exist_ok=True)
-    pid_file.write_text(str(proc.pid))
-    print(f"  Sync daemon started (background, PID {proc.pid})")
+    # Deliberately NOT writing sync.pid here. That file is the daemon's
+    # singleton lock and the daemon authors it itself, together with the
+    # identity record `_lock_holder_verdict` checks. A pid file written by
+    # this process carries no such record, so the daemon has to treat its own
+    # lock as stale and reclaim it before it can start -- work that only
+    # exists because we wrote the file.
+    print_pid = proc.pid
+    try:
+        rc = proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        rc = None
+    if rc is None:
+        print(f"  Sync daemon started (background, PID {print_pid})")
+        return
+    tail = ""
+    try:
+        lines = log_path.read_text(errors="replace").strip().splitlines()
+        tail = lines[-1][:160] if lines else ""
+    except Exception:
+        pass
+    print(f"  Sync daemon exited immediately (exit {rc}); see {log_path}"
+          + (f"\n    {tail}" if tail else ""))
 
 
 def _is_sync_running():
@@ -15457,9 +13519,36 @@ def _run_server(args):
         pass  # stdout may be closed/redirected on Windows
 
     if args.debug:
-        # Dev mode -- use Flask's reloader
+        # Dev mode -- use Flask's reloader.
+        #
+        # The Werkzeug debugger is only safe behind a loopback bind. With
+        # debug=True, any unhandled exception serves the interactive traceback
+        # page -- source, local variables, and a (PIN-gated) eval console -- to
+        # whoever reached the port. `--debug` is the DEFAULT here, so the user
+        # who adds `--host 0.0.0.0` for LAN access (which the banner above
+        # advertises) would otherwise publish all of that to the network
+        # without ever asking for it.
+        #
+        # Keep the reloader either way -- that is the part dev mode is for --
+        # and drop only the debugger when the bind is not loopback.
+        debugger_ok = _is_loopback_host(args.host)
+        if not debugger_ok:
+            try:
+                print(
+                    f"  Note: debugger off -- {args.host} is not loopback. "
+                    "Auto-reload stays on."
+                )
+                print()
+            except (ValueError, OSError):
+                # stdout may be closed/redirected on Windows, same as the
+                # banner above. Never let a status line stop the server.
+                pass
         app.run(
-            host=args.host, port=args.port, debug=True, use_reloader=True, threaded=True
+            host=args.host,
+            port=args.port,
+            debug=debugger_ok,
+            use_reloader=True,
+            threaded=True,
         )
     else:
         # Prod mode -- use Waitress (no WSGI warning, multi-threaded)
@@ -15505,6 +13594,58 @@ def _init_data_provider():
         )
     except Exception:
         return None
+
+
+
+def _ensure_ingest_running() -> None:
+    """Start the sync daemon on a plain `clawmetry` boot when nothing is
+    ingesting for THIS home (#5740).
+
+    `pip install clawmetry && clawmetry` is the command in the README, on the
+    homepage and in every install doc, and it starts only the dashboard.
+    Ingest is the daemon's job, and every other `_start_daemon_background()`
+    call site sits in the cloud-connect flow -- so a user who followed the
+    documented quickstart got a dashboard that told them it had detected their
+    runtime and then showed zero sessions, with no error to search for.
+    Reproduced on the published wheel and on main with a real Goose store:
+    the probe found Goose, /api/overview reported 0 sessions, and one manual
+    `python -m clawmetry.sync` turned it into 4.
+
+    Deliberately HOME-scoped. The obvious check, `_is_sync_running()`, shells
+    out to `pgrep -f "clawmetry.*sync"`, which matches a daemon belonging to
+    ANOTHER home serving a DIFFERENT store -- on a developer machine that is
+    the normal case, and it would make this skip exactly where it is needed.
+    `local_store._daemon_registered()` reads a file scoped to this home.
+
+    Never raises, never blocks the boot, and `CLAWMETRY_AUTO_INGEST=0` turns
+    it off entirely.
+    """
+    if str(os.environ.get("CLAWMETRY_AUTO_INGEST", "1")).strip().lower() in (
+        "0", "false", "no", "off",
+    ):
+        return
+    # Sample mode serves a synthetic store; ingesting real sessions into it
+    # would defeat the isolation the sample depends on.
+    try:
+        from clawmetry import sample_data as _sample_data
+        if _sample_data.is_sample_mode():
+            return
+    except Exception:
+        pass
+    try:
+        from clawmetry import local_store as _ls
+        if _ls._daemon_registered():
+            return  # something already owns this home's store
+    except Exception:
+        return  # cannot tell -> do nothing rather than risk a second writer
+    try:
+        _start_daemon_background()
+    except Exception as exc:
+        # A failure here must never stop the dashboard serving -- but it must
+        # not be silent either, or we are back to an empty screen with no
+        # explanation.
+        print(f"  Could not start the sync daemon ({exc}). The dashboard will "
+              f"show no sessions until one runs: python3 -m clawmetry.sync")
 
 
 def main():
@@ -15675,6 +13816,9 @@ def main():
             print()
         except (ValueError, OSError):
             pass
+        # The dashboard renders what the daemon collects; without one, a
+        # machine full of agent sessions renders empty (#5740).
+        _ensure_ingest_running()
         _run_server(args)
 
 

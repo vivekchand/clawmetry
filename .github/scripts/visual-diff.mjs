@@ -55,7 +55,7 @@ const AUTH_TOKEN = process.env.CLAWMETRY_VISUAL_DIFF_TOKEN || "";
 // switchTab() name here, in CANONICAL_TABS, and in PR_SCREENSHOT_TABS.
 // `overview` is the implicit default -- listed first for a `root` baseline.
 const DEFAULT_TABS =
-  "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,limits,clusters,history,channels,harness,inventory,nemoclaw,guard,signals,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents,evals,bench,trail";
+  "overview,flow,brain,usage,crons,memory,security,subagents,transcripts,logs,skills,models,approvals,alerts,notifications,limits,history,channels,harness,inventory,nemoclaw,guard,signals,policy,selfevolve,swimlane,tool-catalog,tracing,turn-anatomy,version-impact,context-economics,agents,evals,bench,trail";
 const TABS = (process.env.PR_SCREENSHOT_TABS || DEFAULT_TABS)
   .split(",")
   .map((p) => p.trim())
@@ -91,8 +91,8 @@ async function reachable(url) {
  *
  * This is called before the screenshot loop to provide an early diagnostic
  * message. A failure no longer aborts the run -- we continue screenshotting
- * so the PR comment always has images (showing the overlay) rather than
- * "no screenshots". The error is collected into
+ * so the PR comment always has diagnostic images (showing the overlay) rather
+ * than "no screenshots". The error is collected into
  * preflightFailed[] and merged into authGaps at the end so the workflow
  * still exits 3 to signal the auth problem.
  */
@@ -126,7 +126,9 @@ async function shoot(browser, baseUrl, view, tab, file) {
       : undefined,
   });
   const page = await ctx.newPage();
-  // Kill animations + caret blink for stable pixel comparisons.
+  // Kill CSS animations + caret blink for stable pixel comparisons.
+  // JS-driven rAF loops and SVG SMIL animations are frozen later, after
+  // the page has fully rendered, immediately before page.screenshot().
   await page.addInitScript(() => {
     const css =
       "*,*::before,*::after{animation-duration:0s !important;animation-delay:0s !important;transition-duration:0s !important;transition-delay:0s !important;caret-color:transparent !important;}";
@@ -270,6 +272,36 @@ async function shoot(browser, baseUrl, view, tab, file) {
       window.scrollTo(0, 0);
       await new Promise((r) => setTimeout(r, 200));
     });
+
+    // Freeze JS-driven and SVG SMIL animations immediately before capture.
+    // The addInitScript CSS (animation-duration:0s) stops CSS animations;
+    // this catches everything else:
+    //   - requestAnimationFrame loops (canvas dash-phase, counter tickers)
+    //   - SVG SMIL <animate> elements (stroke-dashoffset, dasharray)
+    // Without this, the flow tab's dashed-edge animation changes phase
+    // between BASE and HEAD captures and flags every pixel on every animated
+    // path as changed -- a 100% diff on a frame a human reviewer cannot
+    // distinguish. Issue #5737: this caused 54/72 views to be flagged on
+    // PRs that changed nothing visible, training reviewers to ignore the bot.
+    // Content is fully rendered by the scroll loop above; only phase-jitter
+    // is eliminated here.
+    //
+    // Known limitation: animation loops that capture the original
+    // requestAnimationFrame reference before this override and drive phase
+    // via performance.now() are not fully stopped. Freezing performance.now()
+    // requires page.clock.install() which also stops all timers and breaks
+    // the overlay-wait and scroll-loop setTimeout calls. Remaining phase-jitter
+    // tabs (desktop flow, brain, usage, subagents, nemoclaw, selfevolve,
+    // version-impact, agents) are tracked in issue #5737 for a future fix.
+    await page.evaluate(() => {
+      window.requestAnimationFrame = () => 0;
+      window.webkitRequestAnimationFrame = () => 0;
+      document.querySelectorAll("svg").forEach((s) => {
+        try { s.pauseAnimations(); } catch (_) {}
+      });
+    });
+    // 50ms drain: lets any in-flight rAF callback complete before shutter.
+    await page.waitForTimeout(50);
 
     await page.screenshot({ path: file, fullPage: true });
   } catch (err) {

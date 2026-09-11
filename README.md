@@ -8,9 +8,12 @@
 [![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
 [![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
-<a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
+**An agent can make a hundred tool calls without making progress.** ClawMetry
+reads the session files your coding agents already write, and puts the timeline,
+the tool calls and whatever token and cost data the runtime exposes into one
+view — so you can tell a long run that is working from one that is stuck.
 
-**See your agent think.** Real-time observability for **30 AI agent runtimes**: [OpenClaw](https://github.com/openclaw/openclaw), [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), Claude Code, OpenAI Codex & 26 more. One dashboard for your whole agent fleet.
+Works with **31 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 27 more. One dashboard for your whole agent fleet. ([the full list](SUPPORTED_RUNTIMES.txt), generated from the catalogue.)
 
 > 🌐 **Read this in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [more →](docs/i18n/)
 
@@ -25,11 +28,27 @@ you already have, reads them read-only, and changes nothing about how they run.
 
 ![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
-## Works with 30 agent runtimes
+## Before you install
+
+| | |
+|---|---|
+| **What it does** | Reads the session files and logs your agents already write. No SDK, no code change, no instrumentation in your app. |
+| **What you see** | Session timeline, tool-by-tool replay, token and cost breakdown, and trajectory signals (looping, repeated failures) — per runtime. |
+| **What's free** | `pip install clawmetry` reads **OpenClaw, NVIDIA NemoClaw and Goose** with no account, no key and no network call. The other 27 — Claude Code, Codex, Cursor and the rest — are read by the closed-source `clawmetry-pro` companion, which arrives with the 7-day trial or a plan — see [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) for the exact split. |
+| **How to start** | `pip install clawmetry && clawmetry`, then open localhost:8900. No agents on this machine yet? `clawmetry --sample` opens on three labelled synthetic sessions. |
+| **What leaves your machine** | No session data, unless you run `clawmetry connect`. Two things do run by default, both opt-out and neither carrying session content: an anonymous install ping and a PyPI version check. Every destination is inventoried in [docs/EGRESS.md](docs/EGRESS.md), rebuilt from a wire capture rather than from reading comments. |
+
+Two limits worth knowing before you judge the output: runtimes expose very
+different data (some publish no cost at all — [the matrix](docs/compatibility.md)
+says which, per runtime), and observing an action is not the same as being able
+to block it ([which controls are real, per runtime](docs/APPROVALS.md)).
+
+
+## Works with 31 agent runtimes
 
 **Free in the open source app:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-**On a paid plan:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**On a paid plan:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 Every runtime gets the same dashboard. Run several at once and the header
 switcher re-scopes every tab to one of them.
@@ -58,7 +77,7 @@ Two questions worth answering before you trust any agent-comparison tool.
 A utilization percentage is only as honest as what it divides by. ClawMetry
 sizes the window per provider from [a table you can read and
 PR](clawmetry/context_windows.py), covering Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama and GLM. It does not measure all 30
+DeepSeek, Kimi, Qwen, Mistral, Llama and GLM. It does not measure all 31
 runtimes with one vendor's ruler. That matters: a 300K GPT-5 turn scored
 against Anthropic's 200K reads ">100%, blown" when it is really at 75% of
 GPT-5's 400K. The same ruler hides a genuinely overflowed 130K DeepSeek turn
@@ -78,7 +97,7 @@ ClawMetry can only see compaction events on some runtimes. So
 
 | Path | Added to your agent | Default? |
 |---|---|---|
-| Session-file tailing (all 30 runtimes) | **0**. Separate process, no ClawMetry code in your agent | on |
+| Session-file tailing (all 31 runtimes) | **0**. Separate process, no ClawMetry code in your agent | on |
 | HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** per LLM call, or 0.009% of a 5s call | off |
 | Pre-tool hook gate (warm cache) | **+44 ms** per gated tool call, over a 36 ms interpreter floor | off |
 | Enforcement proxy | **+9.7 ms** per LLM call | off |
@@ -262,6 +281,11 @@ for an approve or a deny.
 ![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
 More, per runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
+
+## Recognition
+
+<a href="https://www.producthunt.com/products/clawmetry?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-clawmetry-for-openclaw" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1081207&theme=light&period=daily&t=1771491508782" alt="ClawMetry - #5 Product of the Day on Product Hunt" width="250" height="54" /></a>
+
 
 ## Star History
 

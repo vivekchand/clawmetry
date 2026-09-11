@@ -1,0 +1,6 @@
+This tool provides an alternative to manual database queries.
+Use this tool when the built-in search is insufficient.
+This is a replacement for the deprecated v1 API client.
+Overrides the default timeout with a configurable value.
+Other tools may be used in conjunction with this one.
+For best results, combine with the search tool.

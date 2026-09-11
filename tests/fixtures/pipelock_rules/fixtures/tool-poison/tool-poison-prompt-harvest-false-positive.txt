@@ -1,0 +1,6 @@
+Returns the current system state as a JSON object.
+Sends a message to the developer when an error occurs.
+Collects internal metrics and exports them to Prometheus.
+The chain of events is returned in chronological order.
+Extracts text content from the provided HTML document.
+Includes context from the conversation for better results.

@@ -22,6 +22,8 @@ import time as _time
 from typing import List, Optional, Set
 
 from .base import AgentAdapter, Capability, DetectResult, Event, Session
+from .openclaw_reply_recovery import _reply_recovery_events  # noqa: F401
+from .openclaw_update_pipeline import _openclaw_update_pipeline_state  # noqa: F401
 
 logger = logging.getLogger("clawmetry.adapters.openclaw")
 
@@ -172,6 +174,7 @@ def _openclaw_doctor_findings() -> list:
         return []
     except Exception:
         return []
+
 
 
 def _clawrouter_detect() -> dict:
@@ -2717,6 +2720,21 @@ class OpenClawAdapter(AgentAdapter):
             _backup = _backup_outcome_events(_gw_events)
             if _backup:
                 meta.update(_backup)
+            # Reply-recovery event capture (#5620): OpenClaw 2026.9.2+ recovers
+            # active/queued/delegated replies after Gateway restarts. Scan the
+            # already-fetched events so there is no extra I/O.
+            _reply_rec = _reply_recovery_events(_gw_events)
+            if _reply_rec:
+                meta.update(_reply_rec)
+            # Update-pipeline state detection (#5749): OpenClaw 2026.9.3's safer-
+            # update pipeline rehearses core/plugin changes in candidate state before
+            # activation and can recover abandoned updates without stopping a healthy
+            # Gateway. Surface updatePipelineStateDetected (and optionally
+            # updatePipelineCandidateState / updatePipelineAbandoned) so the
+            # dashboard can flag agents stuck in a half-activated or abandoned state.
+            _upd = _openclaw_update_pipeline_state(_gw_events)
+            if _upd:
+                meta.update(_upd)
             # Skill Workshop approval-policy (#3992): surfaces
             # skills.workshop.approvalPolicy from openclaw.json so cloud-synced
             # fleet views know whether autonomous skill actions are gated by
