@@ -168,11 +168,49 @@ def _classname_to_file_and_class(classname: str) -> tuple[str, str | None]:
     return file_path, class_name
 
 
+def _reject_doctype(xml_bytes: bytes) -> None:
+    """Raise ET.ParseError if the document declares a DTD.
+
+    ElementTree does not resolve *external* entities, but it does expand
+    internal ones, so a document that declares its own entities can expand to
+    orders of magnitude more than it costs to send -- the "billion laughs"
+    shape. This parses artifacts downloaded over the network, so the cheap
+    fix is to refuse the only construct that makes expansion possible.
+
+    A DTD may appear only in the prolog, before the root element, so walk the
+    prolog past whitespace, processing instructions and comments and stop at
+    the first thing that is none of those. JUnit XML has no DTD; a document
+    with one is not something this script needs to read.
+    """
+    i = 0
+    if xml_bytes[:3] == b"\xef\xbb\xbf":  # UTF-8 BOM
+        i = 3
+    n = len(xml_bytes)
+    while i < n:
+        while i < n and xml_bytes[i : i + 1].isspace():
+            i += 1
+        if xml_bytes.startswith(b"<?", i):  # <?xml ... ?> and other PIs
+            end = xml_bytes.find(b"?>", i)
+            if end == -1:
+                return  # malformed prolog; let the real parser report it
+            i = end + 2
+        elif xml_bytes.startswith(b"<!--", i):
+            end = xml_bytes.find(b"-->", i)
+            if end == -1:
+                return
+            i = end + 3
+        elif xml_bytes.startswith(b"<!DOCTYPE", i):
+            raise ET.ParseError("refusing a JUnit XML document that declares a DTD")
+        else:
+            return  # root element (or junk the real parser will reject)
+
+
 def _parse_junit_xml(xml_bytes: bytes) -> set[str]:
     """Return pytest node IDs of all FAILED/ERRORED test cases in a JUnit XML blob."""
     failed: set[str] = set()
     try:
-        root = ET.fromstring(xml_bytes)  # noqa: S314
+        _reject_doctype(xml_bytes)
+        root = ET.fromstring(xml_bytes)  # noqa: S314 -- DTD refused above
     except ET.ParseError as exc:
         print(f"  WARN: could not parse JUnit XML: {exc}", file=sys.stderr)
         return failed
