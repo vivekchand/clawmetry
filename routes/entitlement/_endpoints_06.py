@@ -1001,7 +1001,7 @@ def api_entitlement_next_tier_channel_spec_at_batch():
     ``/channel-spec-at-batch`` pairs with ``/channel-spec-at``: scalar
     what-if -> batch what-if.
 
-    Use case: a pricing-comparison "here are the 23 chat channels I
+    Use case: a pricing-comparison "here are the 24 chat channels I
     care about -- what do they look like at my next rung?" surface
     hydrates every channel off ONE call instead of N calls to
     ``/next-tier-channel-spec-at``.
