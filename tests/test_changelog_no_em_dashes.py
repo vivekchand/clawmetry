@@ -15,14 +15,21 @@ banners, modal text), but those live in other repos or other formats; a guard
 that tried to cover everything here would either be vacuous or fire on code.
 One file, checked properly, beats a broad check nobody trusts.
 
-TWO EXCEPTIONS, both about not making the document lie:
+NO EXEMPTIONS, including for quotations. An earlier version of this guard
+skipped blockquote lines, on the reasoning that editing a user's words to
+satisfy a style rule is worse than the violation. That framed a false binary
+and put the guard at odds with the rule it enforces: FLYWHEEL bans these
+characters in user-facing copy and carves out nothing for quotations, and a
+published CHANGELOG entry is user-facing whoever wrote the sentence.
 
-  * a **verbatim quote** from a user keeps whatever punctuation they used.
-    Editing someone's words to satisfy a style rule is worse than the
-    violation, so a line inside a blockquote is skipped;
-  * describing a glyph is fine as long as the glyph is described rather than
-    printed. "renders a dash placeholder" is true and clean; embedding the
-    character to be accurate is a false choice.
+Standard editorial practice settles it. Punctuation inside a quote may be
+adjusted as long as the reader can see it was, so the one entry that relied on
+the exemption now reads "(punctuation normalised; wording verbatim)" and not a
+word of what the founder said has changed.
+
+The same reasoning covers describing a glyph: name it rather than print it.
+"renders a dash placeholder" is true and clean; embedding the character in
+order to be accurate is the same false binary.
 """
 from __future__ import annotations
 
@@ -36,16 +43,10 @@ EM_DASH = "—"
 #: `--` as prose, not `--flag`, `a--b`, or an HTML comment.
 _DOUBLE_DASH = re.compile(r"(?<![-\w])--(?![-\w>])")
 
-#: Lines quoting a person verbatim keep their own punctuation.
-_QUOTE = re.compile(r"^\s*>")
-
-
 def _offending_lines():
     out = []
     with open(CHANGELOG, encoding="utf-8") as fh:
         for n, line in enumerate(fh, 1):
-            if _QUOTE.match(line):
-                continue
             if EM_DASH in line or _DOUBLE_DASH.search(line):
                 out.append((n, line.rstrip()))
     return out
@@ -67,8 +68,9 @@ def test_no_em_dash_or_double_dash_in_the_changelog():
             "FLYWHEEL.md 1f3 bans in user-facing copy:\n%s%s\n\n"
             "Use a comma, parenthetical, colon, or full stop. To describe the "
             "character itself, name it (\"a dash placeholder\") rather than "
-            "printing it. A verbatim quote from a user is exempt: put it in a "
-            "blockquote line." % (len(bad), shown, more)
+            "printing it. Quoting someone is not an exemption: adjust the "
+            "punctuation and say so, as in \"(punctuation normalised; wording "
+            "verbatim)\"." % (len(bad), shown, more)
         )
 
 
@@ -86,8 +88,12 @@ def test_a_command_line_flag_is_not_a_double_dash_violation():
     assert not _DOUBLE_DASH.search("pass --update-baseline to ratchet down")
 
 
-def test_a_verbatim_quote_is_exempt():
-    """A user's own words are not ours to restyle."""
+def test_a_blockquote_is_not_an_exemption():
+    """The rule carves out nothing for quotations, so neither does this.
+
+    An earlier version skipped blockquote lines and so disagreed with Drift Bot
+    about the same file, which is worse than either answer alone.
+    """
     import tempfile
 
     global CHANGELOG
@@ -95,10 +101,10 @@ def test_a_verbatim_quote_is_exempt():
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
                                          encoding="utf-8") as fh:
-            fh.write("> how is a task started on August 20th active tasks -- "
-                     "bunch of shitty non functional things\n")
+            fh.write("> a quoted line with a double dash -- right here\n")
             fh.write("- A clean line with no banned punctuation.\n")
             CHANGELOG = fh.name
-        assert _offending_lines() == []
+        bad = _offending_lines()
+        assert [n for n, _ in bad] == [1], bad
     finally:
         CHANGELOG = original
