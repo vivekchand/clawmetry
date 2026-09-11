@@ -777,6 +777,7 @@ jobs:
             tests/test_signals_ui_contract.py \
             tests/test_signal_shifts.py \
             tests/test_briefs.py \
+            tests/test_dives_questions.py \
             tests/test_guard_control_capability.py \
             tests/test_guard_control_route.py \
             tests/test_guard_control_transparency.py \

@@ -285,8 +285,9 @@ def test_endpoint_days_until_expiry_invalid_file(app):
 def test_endpoint_days_until_expiry_never_5xxs(app, monkeypatch):
     """Even if the license module blows up mid-request, the endpoint must
     still return HTTP 200 with the OSS-free shape."""
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_license_expiry_snapshot",
@@ -399,8 +400,9 @@ def test_endpoint_expiring_within_threshold_zero_matches_day_of(app):
 
 
 def test_endpoint_expiring_within_never_5xxs(app, monkeypatch):
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_license_expiry_snapshot",

@@ -865,8 +865,9 @@ def test_endpoint_never_4xx_on_axis_side_inputs(client, url):
 def test_endpoint_never_5xx_on_body_builder_blowup(monkeypatch, client):
     """A body-builder blowup collapses to the fallback envelope with
     stable 21-key shape."""
-    import routes.entitlement as re_mod
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as re_mod
     def _boom(*a, **kw):
         raise RuntimeError("body builder blowup")
 
