@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections import deque
 from urllib.parse import urlparse
@@ -79,6 +80,16 @@ _RATE_WINDOW_SEC = 60.0
 #: Flask stashes the resolved key record here so ``_add_cors`` can echo
 #: the right origin after the view has run.
 _G_KEY = "_cm_api_key_record"
+
+# Regex that matches only what normalise_origins() ever stores: scheme://host[:port].
+# Used as a CodeQL-recognised sanitizer before setting Access-Control-Allow-Origin
+# (CWE-113): even though canonical_allowed_origin() returns a stored value rather
+# than the caller-supplied origin string, an explicit structural check here
+# makes the invariant machine-verifiable.
+_ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9._-]+(:\d{1,5})?$")
+
+# Same pattern for the Host header in llms.txt: RFC 3986 host + optional port.
+_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+(:\d{1,5})?$")
 
 
 def _rate_limited(key_id: str) -> bool:
@@ -190,6 +201,12 @@ def _add_cors(response):
         canonical = apikeys.any_canonical_allowed_origin(origin)
     if not canonical:
         return response
+    # Gate on the regex so CodeQL's taint-flow analysis sees an explicit
+    # structural check before the stored value enters the response header
+    # (CWE-113 sanitizer; the check is also a defence-in-depth assertion
+    # that the stored origin was normalised correctly on write).
+    if not _ORIGIN_RE.fullmatch(canonical):
+        return response
     response.headers["Access-Control-Allow-Origin"] = canonical
     response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
@@ -260,9 +277,14 @@ def _llms_txt(record: dict) -> str:
     """
     granted = sorted(apikeys.granted_shapes(record))
     # Reconstruct from parsed components so a crafted Host header cannot
-    # inject newlines or other content into the response body.
+    # inject newlines or other content into the response body. The extra
+    # structural check on netloc (RFC 3986 host + port chars only) gives
+    # CodeQL a machine-verifiable sanitizer for the taint from request.host_url.
     _p = urlparse(request.host_url)
-    host = f"{_p.scheme}://{_p.netloc}".rstrip("/")
+    if _p.scheme in ("http", "https") and _HOST_RE.fullmatch(_p.netloc or ""):
+        host = f"{_p.scheme}://{_p.netloc}"
+    else:
+        host = "http://127.0.0.1:8900"
     lines = [
         "# ClawMetry query API (%s)" % CONTRACT_VERSION,
         "",
