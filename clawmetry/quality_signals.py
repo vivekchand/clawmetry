@@ -238,6 +238,13 @@ def _tool_calls_of(data: dict[str, Any]) -> list[tuple[str, dict]]:
     if isinstance(tcs, list):
         for tc in tcs:
             if isinstance(tc, dict):
+                # OpenAI chat-completions nests the call one level down:
+                # {"type": "function", "function": {"name", "arguments"}}.
+                # hermes / kimi / devin / picoclaw / openworker write it that
+                # way; reading only the top level lost even the tool NAME.
+                fn = tc.get("function")
+                if not tc.get("name") and isinstance(fn, dict):
+                    tc = fn
                 name = str(tc.get("name") or "").strip()
                 out.append((name, _input_of(tc)))
     if out:

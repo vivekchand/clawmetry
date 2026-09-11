@@ -134,6 +134,8 @@ def _raw_tool_input_hint(rows) -> bool:
         for tc in (blob.get("tool_calls") or []):
             if not isinstance(tc, dict):
                 continue
+            if isinstance(tc.get("function"), dict):
+                tc = tc["function"]  # OpenAI nested {"function": {...}}
             for k in ("input", "arguments"):
                 v = tc.get(k)
                 # Codex records ``arguments`` as a JSON string. Counting only

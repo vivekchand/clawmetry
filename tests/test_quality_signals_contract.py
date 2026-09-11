@@ -142,6 +142,22 @@ def test_dialect_codex_json_string_arguments_are_parsed():
     assert probe_capabilities(evs, runtime="codex").supports("tool_thrash")
 
 
+def test_dialect_openai_nested_function_tool_call_is_parsed():
+    """hermes / kimi / devin / picoclaw / openworker nest the call under
+    ``function``. The name lived there too, so these runtimes had no tool
+    calls at all as far as grading could tell."""
+    row = {
+        "event_type": "tool_call", "ts": 1000,
+        "data": {"role": "assistant", "content": "", "_runtime": "hermes",
+                 "tool_calls": [{"id": "c", "type": "function",
+                                 "function": {"name": "read_file",
+                                              "arguments": '{"path": "/a.py"}'}}]},
+    }
+    e = normalize_events([row])[0]
+    assert e.tool_name == "read_file"
+    assert e.file_path == "/a.py"
+
+
 def test_dialect_non_json_string_arguments_degrade_to_empty():
     row = {"event_type": "tool_call", "ts": 1000,
            "data": {"tool_calls": [{"name": "exec", "arguments": "{not json"}]}}
