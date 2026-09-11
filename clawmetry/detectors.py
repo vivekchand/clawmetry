@@ -846,6 +846,22 @@ _BLOCKED_TOOL_NAMES = frozenset({
     "askuserquestion", "ask_user_question", "ask_user", "request_permission",
     "elicit", "elicitation",
 })
+# The runtime's own words for "a pre-tool hook crashed, so this call never
+# ran". Claude Code: ``PreToolUse:<Tool> hook error: [<command>]: <stderr>``;
+# Cursor and Copilot name their blocking events. Only an ERROR counts: a hook
+# that deliberately denies a call (a policy a person set) is a decision, not a
+# stuck agent.
+_HOOK_EVENT_NAMES = ("pretooluse", "beforeshellexecution", "beforemcpexecution",
+                     "beforereadfile")
+# Present in every command line ClawMetry's gates install (console script or
+# ``python -m clawmetry``), so a failing hook naming it is our own gate.
+_OWN_GATE_MARKER = "clawmetry hook "
+
+
+def _is_hook_error(text: str) -> bool:
+    """True when a lower-cased tool result says a pre-tool hook errored."""
+    t = text or ""
+    return "hook error" in t and any(n in t for n in _HOOK_EVENT_NAMES)
 _RESTART_TYPES = frozenset({"session.started", "session.restarted",
                             "session.reset"})
 
@@ -1034,6 +1050,62 @@ def blocked_on_user(events: Iterable[dict], session_id: str,
                  "observed": "pending rows in the approvals table for this session"},
                 None,
             )
+
+        # Hook path: the runtime refused the agent's tool calls before they
+        # ran because a pre-tool hook ERRORED, and nothing has succeeded
+        # since. The agent cannot do anything until a person fixes the hook,
+        # and it usually stops and says so in a terminal nobody is watching.
+        # When the failing hook is ClawMetry's own gate, every call is being
+        # blocked by our bug, so it is critical.
+        rejections, own_gate, hook_idx = 0, False, None
+        for i, ev in enumerate(_chronological(events)):
+            et = str(ev.get("event_type") or "").strip().lower()
+            data = _coerce_dict(ev.get("data"))
+            role = _event_role(data)
+            if et in _USER_TYPES or role == "user":
+                rejections, own_gate, hook_idx = 0, False, None  # a human is here
+                continue
+            if et != "tool_result" and role != "tool":
+                continue
+            text = _result_text(data)
+            if _is_hook_error(text):
+                rejections += 1
+                own_gate = own_gate or _OWN_GATE_MARKER in text
+                if hook_idx is None:
+                    hook_idx = i
+            else:
+                rejections, own_gate, hook_idx = 0, False, None  # it recovered
+        if rejections and (rejections >= 2 or idle >= wait_need):
+            evidence = {
+                "pending_approvals": 0, "idle_seconds": int(idle),
+                "hook_errors": rejections, "own_gate": own_gate,
+                "threshold": wait_need,
+                "threshold_source": th["sources"].get("blocked_wait_sec", "static"),
+                "observed": "tool results rejected because a pre-tool hook "
+                            "errored, with nothing succeeding after them",
+                "asked_via": "hook",
+            }
+            if own_gate:
+                return _incident(
+                    "blocked_on_user", session_id, runtime, "critical",
+                    f"ClawMetry's own gate is blocking {rt_label}",
+                    f"Every tool call this agent tries is rejected before it "
+                    f"runs because ClawMetry's pre-tool hook is erroring "
+                    f"({rejections} so far). The agent cannot do anything "
+                    f"until that is fixed. A hook that runs python -m clawmetry "
+                    f"picks up an older clawmetry checkout if one sits in the "
+                    f"agent's working directory. Removing the ClawMetry entry "
+                    f"from the runtime's PreToolUse hook settings unblocks the "
+                    f"agent now.",
+                    evidence, hook_idx)
+            return _incident(
+                "blocked_on_user", session_id, runtime, "warning",
+                f"{rt_label} is blocked by a failing hook",
+                f"{rejections} tool call(s) were rejected because a pre-tool "
+                f"hook errored, and nothing has succeeded since. The agent "
+                f"cannot continue until the hook is fixed or removed from the "
+                f"runtime's hook settings.",
+                evidence, hook_idx)
 
         # Runtime event path: find the last question / permission request and
         # make sure nothing from the user followed it.

@@ -58,6 +58,98 @@ FREE_CHANNELS = frozenset({"banner", "telegram"})
 #: Channels that need the ``alert_webhooks`` entitlement.
 GATED_CHANNELS = frozenset({"slack", "discord", "webhook"})
 
+#: Urgent incidents also go out on channels nobody has to set up: a desktop
+#: notification on this machine and, on a node connected to ClawMetry cloud, a
+#: cloud notice that always emails the account owner and reaches every channel
+#: they enabled (PagerDuty included). An agent that is blocked and tells nobody
+#: is the failure these exist for: the banner only helps if the dashboard is
+#: open, and Telegram only if someone configured a bot.
+URGENT_KINDS = frozenset({"blocked_on_user"})
+_CLOUD_NOTIFY_PATH = "/api/cloud/incidents/notify"
+
+
+def is_urgent(kind: str, severity: str) -> bool:
+    """Critical anything, or an agent that cannot continue without a person."""
+    return severity == "critical" or kind in URGENT_KINDS
+
+
+def send_desktop(title: str, message: str) -> bool:
+    """A native notification on this machine, no configuration: ``osascript``
+    on macOS, ``notify-send`` on Linux. The text travels as argv, never inside
+    the AppleScript source, so an incident title cannot inject script. Off
+    with ``CLAWMETRY_DESKTOP_ALERTS=0``. Never raises."""
+    if os.environ.get("CLAWMETRY_DESKTOP_ALERTS", "1").strip() == "0":
+        return False
+    try:
+        import shutil
+        import subprocess
+        t = str(title or "ClawMetry")[:120]
+        m = str(message or "")[:400]
+        if sys.platform == "darwin" and shutil.which("osascript"):
+            argv = ["osascript",
+                    "-e", "on run argv",
+                    "-e", "display notification (item 2 of argv) with title "
+                          "(item 1 of argv) sound name \"Basso\"",
+                    "-e", "end run", t, m]
+        elif sys.platform.startswith("linux") and shutil.which("notify-send"):
+            argv = ["notify-send", "--urgency=critical", "--app-name=ClawMetry", t, m]
+        else:
+            return False
+        return subprocess.run(argv, timeout=5, capture_output=True).returncode == 0
+    except Exception as e:  # noqa: BLE001
+        log.debug("desktop notification failed: %s", e)
+        return False
+
+
+def send_cloud(incident: dict, message: str) -> bool:
+    """Hand an urgent incident to ClawMetry cloud, which emails the account
+    owner every time (no channel setup needed) and fans out to every channel
+    they enabled. Only on nodes connected with a ``cm_`` key; honours
+    local-only mode and ``CLAWMETRY_CLOUD_INCIDENT_ALERTS=0``. One attempt
+    with a short timeout, because this runs inside the detector pass.
+    Never raises."""
+    if os.environ.get("CLAWMETRY_CLOUD_INCIDENT_ALERTS", "1").strip() == "0":
+        return False
+    try:
+        from clawmetry.config import is_cloud_disabled
+        if is_cloud_disabled():
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from clawmetry import sync as _sync
+        cfg = _sync.load_config()
+        base = str(_sync.INGEST_URL or "").rstrip("/")
+    except Exception:  # noqa: BLE001
+        return False
+    api_key = str(cfg.get("api_key") or "").strip()
+    node_id = str(cfg.get("node_id") or "").strip()
+    if not api_key.startswith("cm_") or not node_id or not base:
+        return False
+    sid = str(incident.get("session_id") or "")
+    kind = str(incident.get("kind") or "")
+    payload = {
+        "node_id": node_id, "session_id": sid, "kind": kind,
+        "severity": str(incident.get("severity") or "warning"),
+        "title": str(incident.get("title") or "")[:200],
+        "message": str(message or "")[:1500],
+        "runtime": str(incident.get("runtime") or ""),
+        "event_id": f"{sid}:{kind}",
+    }
+    try:
+        req = urllib.request.Request(
+            base + _CLOUD_NOTIFY_PATH, data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {api_key}",
+                     "X-Node-Id": node_id, "User-Agent": "clawmetry"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT) as resp:
+            body = json.loads(resp.read() or b"{}")
+        return bool(isinstance(body, dict) and body.get("ok"))
+    except Exception as e:  # noqa: BLE001
+        log.warning("cloud incident notice failed: %s", e)
+        return False
+
 _ALERTS_CONFIG_FILE = os.path.expanduser("~/.openclaw/clawmetry-alerts.json")
 _BUILTIN_PREFS_FILE = os.path.expanduser("~/.clawmetry/builtin_monitors.json")
 _HTTP_TIMEOUT = 10
@@ -461,6 +553,13 @@ def deliver_incident(store: Any, incident: dict, *,
             }
             if send_webhook(payload):
                 via.append("webhook")
+        # Urgent: also the channels nobody has to configure.
+        if is_urgent(kind, sev):
+            head = str(incident.get("title") or "Your agent needs attention")
+            if send_desktop(f"ClawMetry: {head}", message):
+                via.append("desktop")
+            if send_cloud(incident, message):
+                via.append("cloud")
 
         if not via:
             out["reason"] = "no channel accepted the alert (banner write failed)"
