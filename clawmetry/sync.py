@@ -22800,7 +22800,7 @@ def _build_bench_slice(store, *, days: int = 30) -> dict:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
         "%Y-%m-%dT%H:%M:%S")
     # Per-runtime cap: a single cost-ordered cap let claude_code fill all
-    # 1500 rows and 10 of 12 runtimes vanished from the bench (2026-09-11).
+    # 1500 rows and every quieter runtime vanished from the bench (2026-09-11).
     rows = store.query_quality_sessions(
         since=since, limit=6000, per_runtime_limit=1500) or []
     grouped: dict = {}
