@@ -567,8 +567,9 @@ def test_endpoint_grace_reports_grace_true_and_enforced_false(client, ent):
 def test_endpoint_never_5xx_on_scalar_blowup(monkeypatch, client):
     """If the scalar blows up, the endpoint falls back to the empty-path
     envelope (never 5xxs)."""
-    import routes.entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     def _boom(*a, **kw):
         raise RuntimeError("simulated")
 
@@ -585,8 +586,9 @@ def test_endpoint_never_5xx_on_scalar_blowup(monkeypatch, client):
 
 
 def test_endpoint_fallback_envelope_shape(client, monkeypatch):
-    import routes.entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     def _boom(*a, **kw):
         raise RuntimeError("simulated")
 

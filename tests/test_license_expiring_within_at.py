@@ -467,8 +467,9 @@ def test_endpoint_expiring_within_at_never_5xxs(app, monkeypatch):
     """Even if the shared snapshot blows up mid-request, the endpoint
     must still return HTTP 200 with the OSS-free shape (snapshot
     fallback kicks in; requested_epoch / threshold_days still echoed)."""
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_license_expires_snapshot",

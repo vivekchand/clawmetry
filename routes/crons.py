@@ -183,7 +183,6 @@ def _row_to_cron_job(row):
         "schedule": schedule or {},
         "enabled": bool(row.get("enabled", True)),
         "createdAtMs": int(extras.get("createdAtMs") or 0),
-        "model": row.get("model") or "",
         "state": {
             "lastRunAtMs": _parse_iso_to_ms(row.get("last_run_at")),
             "lastStatus": row.get("last_status") or "pending",
@@ -191,6 +190,8 @@ def _row_to_cron_job(row):
             **state_extras,
         },
     }
+    if row.get("model"):
+        job["model"] = row.get("model")
     # Carry through any extra top-level fields (prompt, channel, ...)
     for k, v in extras.items():
         if k not in {"createdAtMs", "schedule", "lastDurationMs",
@@ -280,6 +281,42 @@ def _try_local_store_cron_runs(job_id):
     return runs[:50]
 
 
+# Issue #5866: a cron job's own state blob (``consecutiveFailures``,
+# ``lastStatus``) is only as good as OpenClaw's bookkeeping for it, and a
+# job that fires and *skips* every time (no-route, precondition unmet, ...)
+# never gets a failure recorded there at all — ``runs7d`` stays null and the
+# job grades "ok" on no evidence. ``run_ledger`` (synced from OpenClaw's own
+# ``task_runs`` table) is the ground truth for what actually happened, and
+# the Queue Lanes panel already reads it — so cross-check against it here
+# too rather than trusting the job's self-report alone.
+_RUN_LEDGER_FAILURE_STATUSES = {"failed", "error", "timeout"}
+
+
+def _cron_run_ledger_stats(ledger_runs):
+    """Reduce a job's ``run_ledger`` rows (newest first) to the fields the
+    health summary needs: the most recent status, how many of the most
+    recent runs failed in a row, and whether ANY runs are on record at all.
+
+    Returns ``None`` when ``ledger_runs`` is empty (nothing to cross-check
+    against — the job's own state is the only signal we have)."""
+    if not ledger_runs:
+        return None
+    consecutive_failures = 0
+    for run in ledger_runs:
+        status = (run.get("status") or "").strip().lower()
+        if status in _RUN_LEDGER_FAILURE_STATUSES:
+            consecutive_failures += 1
+        else:
+            break
+    last = ledger_runs[0]
+    return {
+        "lastStatus": (last.get("status") or "").strip().lower(),
+        "lastError": last.get("error") or "",
+        "consecutiveFailures": consecutive_failures,
+        "runCount": len(ledger_runs),
+    }
+
+
 def _try_local_store_cron_health_summary():
     """Return ``/api/cron/health-summary`` payload from the local DuckDB.
 
@@ -289,6 +326,10 @@ def _try_local_store_cron_health_summary():
     blob if the writer included it) — when absent we report no anomalies
     but every other field stays meaningful.
 
+    Cross-checks each job's health against ``run_ledger`` (issue #5866):
+    OpenClaw's own run history for that job, which sees an outcome (e.g. a
+    skipped run) the job's own state blob may never record.
+
     Returns ``None`` on empty/missing store.
     """
     # Issue #1256: route through _ls_call (see _try_local_store_crons).
@@ -297,6 +338,12 @@ def _try_local_store_cron_health_summary():
         return None
     if not rows:
         return None
+
+    ledger_by_source = defaultdict(list)
+    for run in (_ls_call("query_run_ledger", runtime="cron", limit=2000) or []):
+        sid = run.get("source_id")
+        if sid:
+            ledger_by_source[sid].append(run)
 
     now_ms = int(datetime.now().timestamp() * 1000)
     summary = []
@@ -318,6 +365,17 @@ def _try_local_store_cron_health_summary():
         consecutive_failures = state.get("consecutiveFailures") or 0
         last_error = state.get("lastError", "") or ""
         next_run_ms = state.get("nextRunAtMs") or 0
+
+        # Issue #5866: cross-check against run_ledger. A job's own state can
+        # under-report failures (or never record them at all — a run that
+        # fires and skips leaves consecutiveFailures at 0 forever), so a
+        # ledger that has MORE consecutive failures than the state blob wins.
+        ledger_stats = _cron_run_ledger_stats(ledger_by_source.get(job_id))
+        if ledger_stats and ledger_stats["consecutiveFailures"] > consecutive_failures:
+            consecutive_failures = ledger_stats["consecutiveFailures"]
+            last_status = ledger_stats["lastStatus"] or last_status
+            if not last_error:
+                last_error = ledger_stats["lastError"]
 
         is_silent = False
         expected_interval_ms = None
