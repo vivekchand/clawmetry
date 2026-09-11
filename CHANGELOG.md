@@ -13,6 +13,7 @@
 - **Also fixed, from the Hugging Face intrusion timeline:** `credential_access` missed `env` used as a statement (`id; env; cat …`, the intrusion's first command) because the environment-dump pattern required a pipe or end of line after it, and it had no category for a pod's mounted service-account token. Both now match; the token is a strong category, so a read followed by egress is `critical`. `env FOO=1 prog` still does not match.
 - **Not in scope:** correlating one new host across many sessions into a single incident (cross-session correlation) is separate work. During the settle window a swarm raises one `first_time` per session, deduplicated per session by the existing alert path.
 - **Verified:** new cases in `tests/test_detectors_behavioural.py` (swarm, settled host, legacy baseline, window disabled, store round-trip keeps the first arrival time, the two credential patterns and their look-alikes).
+- **Carries:** #5810.
 
 ### Added: the gateway's own failures reach the dashboard (2026-09-10)
 - **Why:** a whole class of failure never appears in a session transcript, because it happens *to* the harness rather than inside a conversation. The gateway boots degraded, the kernel kills the local model server, a backup archive is rejected as corrupt, replies are recovered after a restart — each explains an otherwise-silent outage that a reader looking at sessions cannot see at all.
