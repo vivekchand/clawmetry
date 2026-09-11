@@ -290,9 +290,7 @@ _WRITE_HTTP = ("post", "put", "patch")
 # (or whatever prompted it) chose. CodeQL py/polynomial-redos flagged the
 # unbounded first cut. A git config key is short and a value longer than the
 # cap is not something we can usefully rate anyway.
-_GIT_CONFIG_INLINE = _rx(
-    r"(?:^|\s)-c[ \t]{0,4}([A-Za-z0-9._*-]{1,64})="
-    r"(\"[^\"]{0,512}\"|'[^']{0,512}'|[^\s;|&]{0,512})")
+_GIT_CONFIG_INLINE = _rx(r"(?:^|\s)-c[ \t]{0,4}([A-Za-z0-9._*-]{1,64})=")
 _GIT_CONFIG_ENV_OPT = _rx(
     r"(?:^|\s)--config-env[=\s]([A-Za-z0-9._*-]{1,64})=")
 # Environment forms of the same keys, set inline on the command.
@@ -303,6 +301,31 @@ _GIT_EXEC_ENVVARS = _rx(
 # program comes from the URL argument, which is why repo_scan's key list does
 # not (and should not) contain it.
 _GIT_EXT_TRANSPORT = _rx(r"\bprotocol\.ext\.allow\s*=")
+
+
+def _scan_config_value(cmd: str, start: int, limit: int = 512) -> str:
+    """The value after ``-c key=``, read by one left-to-right scan.
+
+    Honours a single level of shell quoting and stops at the first unquoted
+    whitespace or command separator. Linear and allocation-bounded by
+    construction: no regex, so no backtracking to be polynomial about.
+    """
+    out: list = []
+    quote = ""
+    for ch in cmd[start:start + limit]:
+        if quote:
+            if ch == quote:
+                quote = ""
+            else:
+                out.append(ch)
+            continue
+        if ch in "\"'":
+            quote = ch
+            continue
+        if ch.isspace() or ch in ";|&":
+            break
+        out.append(ch)
+    return "".join(out)
 
 
 def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
@@ -322,11 +345,17 @@ def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
     except Exception:
         return
     seen: set = set()
-    for key, value in _GIT_CONFIG_INLINE.findall(cmd):
+    for m in _GIT_CONFIG_INLINE.finditer(cmd):
+        key = m.group(1)
         k = key.lower()
-        # Shell quoting is the caller's, not git's: `alias.x='!payload'` must
-        # be read as `!payload` or the value-dependent alias rule never fires.
-        val = value.strip().strip("\"'")
+        # The VALUE is scanned, never matched. A regex alternation over
+        # quoted-or-unquoted is ambiguous -- the unquoted branch also matches a
+        # quote -- which is a polynomial backtrack on a hot path
+        # (CodeQL py/polynomial-redos). A single left-to-right scan cannot
+        # backtrack at all. Shell quoting is the caller's, not git's:
+        # `alias.x='!payload'` must read as `!payload` or the value-dependent
+        # alias rule never fires.
+        val = _scan_config_value(cmd, m.end())
         if k in seen:
             continue
         if not git_config_executes(k, val):
