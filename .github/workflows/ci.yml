@@ -920,6 +920,7 @@ jobs:
           python3 -m pytest \
             tests/test_entitlement*.py \
             tests/test_entitlements*.py \
+            tests/test_entitlement_has_capacity_batch.py \
             tests/test_required_tier_canonical.py \
             tests/test_tier_catalog.py \
             tests/test_tier_cli.py \

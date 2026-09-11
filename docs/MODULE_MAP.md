@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-247 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+248 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -110,6 +110,7 @@ The entitlement API surface, split from a single 47k-line file into a package: a
 | `routes/entitlement/_endpoints_06.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_feature_catalog_at_path_batch .. |
 | `routes/entitlement/_endpoints_07.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_lock_reason_at_path .. |
 | `routes/entitlement/_endpoints_08.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_min_tier_for_features_batch .. |
+| `routes/entitlement/_endpoints_09.py` | medium |  | `/api/entitlement` | endpoint handlers api_entitlement_has_capacity_batch, api_entitlement_has_capacity_batch_at. |
 | `routes/entitlement/_shared.py` | huge | `bp_entitlement` |  | imports, constants, the blueprint and every non-handler helper the endpoint modules call. |
 
 ## Shared helpers (`helpers/`)
