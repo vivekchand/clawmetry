@@ -1799,10 +1799,31 @@ _DDL = [
         hits        BIGINT DEFAULT 1,
         first_seen  BIGINT NOT NULL,
         last_seen   BIGINT NOT NULL,
+        -- Direction. How often the cohort SENT data here, when it first did,
+        -- and when we started recording direction for this host at all (see
+        -- detector_calibration._read_only_hosts for why that clock exists).
+        writes           BIGINT DEFAULT 0,
+        write_first_seen BIGINT,
+        dir_since        BIGINT,
         PRIMARY KEY (cohort, host)
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_guard_hosts_cohort ON guard_egress_hosts(cohort, last_seen)",
+    # Write actions this node has seen, fleet-wide: ``PUT host/a/b``. What
+    # makes coordinated_action able to say "none of them has done this
+    # before" (clawmetry/detector_swarm.py). first_seen never moves, so an
+    # action a swarm keeps repeating still has to finish settling.
+    """
+    CREATE TABLE IF NOT EXISTS guard_action_fingerprints (
+        fingerprint VARCHAR PRIMARY KEY,
+        verb        VARCHAR,
+        host        VARCHAR,
+        path_prefix VARCHAR,
+        sessions    BIGINT DEFAULT 0,
+        first_seen  BIGINT NOT NULL,
+        last_seen   BIGINT NOT NULL
+    )
+    """,
     # ── Session phase (one state machine, every runtime) ──────────────────
     # Its own table, not columns on ``sessions``: the phase is observed on a
     # different cadence than the session row, three work orders are adding
@@ -2337,6 +2358,12 @@ _MIGRATIONS_V2 = [
     ("events",   "is_error",      "BOOLEAN"),
     ("sessions", "intent",        "VARCHAR"),
     ("sessions", "intent_source", "VARCHAR"),
+    # Egress direction per cohort host. NULL dir_since on existing rows is
+    # what keeps an upgrade from calling every known host "read-only": the
+    # direction watch starts on the first observation after the upgrade.
+    ("guard_egress_hosts", "writes",           "BIGINT DEFAULT 0"),
+    ("guard_egress_hosts", "write_first_seen", "BIGINT"),
+    ("guard_egress_hosts", "dir_since",        "BIGINT"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -7621,7 +7648,8 @@ class LocalStore(TrailStoreMixin):
                                  runtime: str = "", agent_id: str = "",
                                  tool_calls: int = 0, write_files: int = 0,
                                  wrote: bool = False,
-                                 hosts: Any = None) -> None:
+                                 hosts: Any = None,
+                                 write_hosts: Any = None) -> None:
         """Record what ONE session looked like, for the cohort it belongs to.
 
         Upsert on ``session_id`` because the daemon re-reads an active session
@@ -7664,18 +7692,34 @@ class LocalStore(TrailStoreMixin):
                         updated_at  = excluded.updated_at
                 """, [sid, coh, str(runtime or "")[:64], str(agent_id or "")[:64],
                       tc, wf, bool(wrote), now_ms])
-                for host in list(hosts or [])[:64]:
-                    h = str(host or "").strip().lower()[:253]
+                written = {str(w or "").strip().lower()[:253]
+                           for w in list(write_hosts or [])[:64]}
+                every = [str(x or "").strip().lower()[:253]
+                         for x in list(hosts or [])[:64]] + sorted(written)
+                for h in list(dict.fromkeys(every))[:64]:
                     if not h:
                         continue
+                    w = h in written
+                    # first_seen, write_first_seen and dir_since never move
+                    # once set: a host must be able to finish settling while
+                    # a swarm keeps using it.
                     self._conn.execute("""
                         INSERT INTO guard_egress_hosts (
-                            cohort, host, hits, first_seen, last_seen
-                        ) VALUES (?, ?, 1, ?, ?)
+                            cohort, host, hits, first_seen, last_seen,
+                            writes, write_first_seen, dir_since
+                        ) VALUES (?, ?, 1, ?, ?, ?, ?, ?)
                         ON CONFLICT (cohort, host) DO UPDATE SET
                             hits      = guard_egress_hosts.hits + 1,
-                            last_seen = excluded.last_seen
-                    """, [coh, h, now_ms, now_ms])
+                            last_seen = excluded.last_seen,
+                            writes    = COALESCE(guard_egress_hosts.writes, 0)
+                                        + excluded.writes,
+                            write_first_seen = COALESCE(
+                                guard_egress_hosts.write_first_seen,
+                                excluded.write_first_seen),
+                            dir_since = COALESCE(guard_egress_hosts.dir_since,
+                                                 excluded.dir_since)
+                    """, [coh, h, now_ms, now_ms, 1 if w else 0,
+                          now_ms if w else None, now_ms])
         except Exception:
             return
 
@@ -7735,11 +7779,22 @@ class LocalStore(TrailStoreMixin):
             "window_days": window_days,
         }
         try:
-            hosts = self._conn.execute("""
-                SELECT host, first_seen FROM guard_egress_hosts
-                WHERE cohort = ? AND last_seen >= ?
-                ORDER BY hits DESC LIMIT ?
-            """, [coh, cutoff, max(1, min(int(max_hosts or 500), 5000))]).fetchall()
+            lim = max(1, min(int(max_hosts or 500), 5000))
+            try:
+                hosts = self._conn.execute("""
+                    SELECT host, first_seen, write_first_seen, dir_since
+                    FROM guard_egress_hosts
+                    WHERE cohort = ? AND last_seen >= ?
+                    ORDER BY hits DESC LIMIT ?
+                """, [coh, cutoff, lim]).fetchall()
+            except Exception:
+                # A store whose direction migration failed still answers the
+                # host question; it just cannot say which hosts are read-only.
+                hosts = [tuple(r) + (None, None) for r in self._conn.execute("""
+                    SELECT host, first_seen FROM guard_egress_hosts
+                    WHERE cohort = ? AND last_seen >= ?
+                    ORDER BY hits DESC LIMIT ?
+                """, [coh, cutoff, lim]).fetchall()]
             out["hosts"] = [r[0] for r in hosts if r and r[0]]
             # When each host ENTERED the cohort's memory. network_egress only
             # treats a host as known once it has been there a while; without
@@ -7747,9 +7802,17 @@ class LocalStore(TrailStoreMixin):
             # sibling that the host is normal.
             out["host_first_seen"] = {
                 r[0]: int(r[1]) for r in hosts if r and r[0] and r[1] is not None}
+            # Direction: when the cohort first WROTE to each host, and since
+            # when we have been watching direction at all.
+            out["host_write_first_seen"] = {
+                r[0]: int(r[2]) for r in hosts if r and r[0] and r[2] is not None}
+            out["host_dir_since"] = {
+                r[0]: int(r[3]) for r in hosts if r and r[0] and r[3] is not None}
         except Exception:
             out["hosts"] = []
             out["host_first_seen"] = {}
+            out["host_write_first_seen"] = {}
+            out["host_dir_since"] = {}
         return out
 
     def prune_guard_baseline(self, days: int = 180) -> int:
@@ -7774,9 +7837,106 @@ class LocalStore(TrailStoreMixin):
                     "DELETE FROM guard_session_stats WHERE updated_at < ?", [cutoff])
                 self._conn.execute(
                     "DELETE FROM guard_egress_hosts WHERE last_seen < ?", [cutoff])
+                self._conn.execute(
+                    "DELETE FROM guard_action_fingerprints WHERE last_seen < ?", [cutoff])
         except Exception:
             return 0
         return removed
+
+    def record_action_fingerprints(self, fingerprints: Any = None) -> None:
+        """Remember the write actions seen this tick, fleet-wide.
+
+        ``fingerprints`` is a list of ``(key, verb, host, path_prefix,
+        sessions)``. ``first_seen`` never moves once set, so an action a swarm
+        keeps repeating still has to finish settling before it counts as
+        normal. Never raises.
+        """
+        now_ms = int(time.time() * 1000)
+        try:
+            with self._write_lock:
+                for item in list(fingerprints or [])[:500]:
+                    try:
+                        key, verb, host, prefix, n = item
+                    except (TypeError, ValueError):
+                        continue
+                    if not key:
+                        continue
+                    self._conn.execute("""
+                        INSERT INTO guard_action_fingerprints (
+                            fingerprint, verb, host, path_prefix, sessions,
+                            first_seen, last_seen
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (fingerprint) DO UPDATE SET
+                            last_seen = excluded.last_seen,
+                            sessions  = GREATEST(guard_action_fingerprints.sessions,
+                                                 excluded.sessions)
+                    """, [str(key)[:300], str(verb or "")[:16], str(host or "")[:253],
+                          str(prefix or "")[:120], max(0, int(n or 0)), now_ms, now_ms])
+        except Exception:
+            return
+
+    def query_action_fingerprints(self, keys: Any = None) -> dict:
+        """``{"first_seen": {key: ms}, "since": ms | None}``.
+
+        ``since`` is the oldest ``first_seen`` in the table: how long this node
+        has been remembering write actions at all. ``coordinated_action`` stays
+        silent until that memory is a full settle window old, because on day
+        one every action is "new". Never raises.
+        """
+        out: dict = {"first_seen": {}, "since": None}
+        try:
+            row = self._conn.execute(
+                "SELECT MIN(first_seen) FROM guard_action_fingerprints").fetchone()
+            out["since"] = int(row[0]) if row and row[0] is not None else None
+            ks = [str(k)[:300] for k in list(keys or [])[:500] if k]
+            if ks:
+                marks = ",".join("?" for _ in ks)
+                rows = self._conn.execute(
+                    f"SELECT fingerprint, first_seen FROM guard_action_fingerprints "
+                    f"WHERE fingerprint IN ({marks})", ks).fetchall()
+                out["first_seen"] = {r[0]: int(r[1]) for r in rows if r and r[0]}
+        except Exception:
+            return {"first_seen": {}, "since": None}
+        return out
+
+    def query_subagent_parents(self, session_ids: Any = None) -> dict:
+        """``{child_id: parent_id}`` for these sessions and their ancestors.
+
+        Walks ``subagents.parent_session_id`` upward a level per query, bounded
+        in depth and width, so ``coordinated_action`` can count an orchestrator
+        and its subagents as one family. Ids are looked up both as given and
+        without a ``<runtime>:`` prefix, since the two tables may differ.
+        Never raises.
+        """
+        out: dict = {}
+        frontier: set = set()
+        for sid in list(session_ids or [])[:500]:
+            s = str(sid or "")
+            if not s:
+                continue
+            frontier.add(s)
+            head, sep, tail = s.partition(":")
+            if sep and tail:
+                frontier.add(tail)
+        try:
+            for _ in range(25):
+                if not frontier:
+                    break
+                ids = list(frontier)[:1000]
+                marks = ",".join("?" for _ in ids)
+                rows = self._fetch(
+                    f"SELECT subagent_id, parent_session_id FROM subagents "
+                    f"WHERE subagent_id IN ({marks}) AND parent_session_id IS NOT NULL "
+                    f"AND parent_session_id <> ''", ids)
+                nxt: set = set()
+                for child, parent in rows:
+                    if child and parent and child not in out:
+                        out[str(child)] = str(parent)
+                        nxt.add(str(parent))
+                frontier = nxt - set(out)
+        except Exception:
+            return out
+        return out
     # ── Session phase (see clawmetry/adapters/phase.py) ──────────────────
 
     def record_session_phase(self, session_id: str, phase: Any = None,

@@ -148,6 +148,41 @@ jobs:
               --search "\"$TITLE\" in:title state:open" \
               --json number,updatedAt --jq '.[0]' || echo "")
 
+            # A signature stays in the 30-day aggregate long after its fix
+            # ships, so an issue closed on the strength of a fix is STILL being
+            # reported. Dedupe searches open issues only, so the next tick found
+            # nothing, filed a fresh issue, and produced a second copy of a
+            # signature somebody had just triaged: #5829-#5834 were closed at
+            # 07:49 and re-filed as #5853-#5858 within hours.
+            #
+            # Before filing, look for a RECENTLY CLOSED issue with this title.
+            # Finding one means "already triaged, still ageing out", so comment
+            # there instead of opening a duplicate. Older closures still get a
+            # new issue: a signature returning after the window really is news.
+            if [ -z "$EXISTING" ] || [ "$EXISTING" = "null" ]; then
+              CLOSED=$(gh issue list --repo "$REPO" \
+                --search "\"$TITLE\" in:title state:closed" \
+                --json number,closedAt --jq '.[0]' || echo "")
+              if [ -n "$CLOSED" ] && [ "$CLOSED" != "null" ]; then
+                cnum=$(jq -r .number <<<"$CLOSED")
+                cat=$(jq -r .closedAt <<<"$CLOSED")
+                cage=$(( $(date -u +%s) - $(date -u -d "$cat" +%s 2>/dev/null || echo 0) ))
+                # One aggregate window. Inside it the signature cannot yet have
+                # stopped, so a report proves nothing about whether the fix worked.
+                if [ "$cage" -lt "$(( ${window:-30} * 86400 ))" ]; then
+                  if [ "$cage" -gt 86400 ]; then
+                    gh issue comment "$cnum" --repo "$REPO" --body \
+                      "Still in the aggregate: $installs distinct install(s), $events event(s) in the last ${window} days (last seen $last, latest shell ${ver:-unknown}). This issue is closed and the signature has not aged out yet, so this is not evidence the fix failed. Reopen only if it is still reported after $(date -u -d "$cat +${window} days" +%Y-%m-%d 2>/dev/null || echo 'the window closes')." \
+                      || echo "could not comment on #$cnum"
+                    echo "noted on recently-closed #$cnum ($TITLE)"
+                  else
+                    echo "skip: recently closed #$cnum, noted less than a day ago ($TITLE)"
+                  fi
+                  continue
+                fi
+              fi
+            fi
+
             if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
               num=$(jq -r .number <<<"$EXISTING")
               updated=$(jq -r .updatedAt <<<"$EXISTING")
