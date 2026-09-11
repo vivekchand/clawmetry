@@ -453,7 +453,7 @@ ClawMetry is open-core. `clawmetry/entitlements.py` is the single source of
 truth for what an install may do, and for the runtime and channel catalogues
 that every count in this repo is derived from. `clawmetry/license.py` verifies
 self-hosted license keys offline with Ed25519, using the `cryptography`
-dependency rather than a new one. `routes/entitlement.py` exposes the resolved
+dependency rather than a new one. `routes/entitlement/` (a package: init re-exports flat namespace, shared helpers module, eight endpoint files with 434 handlers) exposes the resolved
 entitlement at `/api/entitlement*`.
 
 The resolver runs in **GRACE** mode until the announced enforce date: every

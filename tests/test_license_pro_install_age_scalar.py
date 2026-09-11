@@ -300,8 +300,9 @@ def test_endpoint_pro_installed_at_corrupt_marker(env):
 def test_endpoint_pro_installed_at_never_5xxs(env, monkeypatch):
     """Even if the shared snapshot blows up mid-request, the endpoint
     must still return HTTP 200 with the no-marker shape."""
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_pro_install_snapshot",
@@ -377,8 +378,9 @@ def test_endpoint_pro_install_age_days_missing_installed_at(env):
 
 
 def test_endpoint_pro_install_age_days_never_5xxs(env, monkeypatch):
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_pro_install_snapshot",
