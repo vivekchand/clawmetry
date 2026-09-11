@@ -316,8 +316,48 @@ def resolve_thresholds(runtime: Optional[str] = None,
     th["sources"] = sources
     th["baseline"] = learned
     th["known_hosts"], th["settling_hosts"] = _split_hosts(baseline)
+    th["read_only_hosts"] = _read_only_hosts(baseline, th["known_hosts"])
     th["egress_settle_hours"] = EGRESS_SETTLE_HOURS
     return th
+
+
+def _read_only_hosts(baseline: Optional[dict], known, now: Optional[float] = None) -> frozenset:
+    """Known hosts this cohort has only ever READ from, watched long enough to say so.
+
+    Two clocks, both ``EGRESS_SETTLE_HOURS`` long:
+
+    * ``host_dir_since`` — when the store started recording the DIRECTION of
+      calls to this host. A store that predates direction tracking has none,
+      and a freshly upgraded one has only just started, so "no writes seen"
+      means nothing until the watch has run a full window. Without this every
+      host would look read-only on the first tick after an upgrade.
+    * ``host_write_first_seen`` — when the cohort first wrote to it. A first
+      write inside the window does not count, for the same reason a new host
+      does not: the first session of a swarm to write somewhere must not
+      vouch for the rest.
+    """
+    base = baseline if isinstance(baseline, dict) else {}
+    since = base.get("host_dir_since")
+    if not isinstance(since, dict) or not known:
+        return frozenset()
+    writes = base.get("host_write_first_seen")
+    writes = writes if isinstance(writes, dict) else {}
+    window_ms = max(0.0, EGRESS_SETTLE_HOURS) * 3600 * 1000
+    cutoff_ms = (time.time() if now is None else now) * 1000 - window_ms
+    out = set()
+    for h in known:
+        try:
+            if float(since[h]) > cutoff_ms:
+                continue          # not watched for a full window yet
+        except (KeyError, TypeError, ValueError):
+            continue
+        first_write = writes.get(h)
+        try:
+            if first_write is None or float(first_write) > cutoff_ms:
+                out.add(h)
+        except (TypeError, ValueError):
+            continue
+    return frozenset(out)
 
 
 def _split_hosts(baseline: Optional[dict], now: Optional[float] = None) -> tuple:
