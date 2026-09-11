@@ -41,6 +41,30 @@ def _patch(monkeypatch, handler):
 
 
 class TestApiBench:
+    def test_sessions_are_capped_per_runtime_not_overall(self, client, monkeypatch):
+        """One global cost-ordered cap let the loudest runtime take every row;
+        on a live node 10 of 12 runtimes never reached the bench."""
+        seen = []
+
+        def fake(method, **kw):
+            if method == "query_quality_sessions":
+                seen.append(kw)
+                return [_session("pi", i=0)]
+            return [] if "rollup" in method else {}
+        _patch(monkeypatch, fake)
+        client.get("/api/bench")
+        assert seen[0].get("per_runtime_limit"), seen
+
+    def test_daemon_without_per_runtime_limit_falls_back(self, client, monkeypatch):
+        def fake(method, **kw):
+            if method == "query_quality_sessions":
+                return None if "per_runtime_limit" in kw else [_session("pi", i=0)]
+            return [] if "rollup" in method else {}
+        _patch(monkeypatch, fake)
+        data = client.get("/api/bench").get_json()
+        assert data["store_available"] is True
+        assert "pi" in data["byRuntime"]
+
     def test_store_unreachable_is_reported_not_blank(self, client, monkeypatch):
         _patch(monkeypatch, lambda method, **kw: None)
         data = client.get("/api/bench").get_json()

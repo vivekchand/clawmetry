@@ -5042,8 +5042,52 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
             "cwd":        _session_cwd(s),
             "git_branch": _session_git_branch(s),
         })
+    for row in session_rows:
+        q = _openclaw_session_quality(store, row)
+        if q is not None:
+            row["metadata"] = dict(row["metadata"] or {}, quality=q)
     if session_rows:
         store.ingest_sessions_batch(session_rows)
+
+
+# sid -> (last_active_at it was graded at, stored quality block). The metadata
+# upsert replaces the whole blob, so a row re-sent without its grade would ERASE
+# the stored one; the cache lets an unchanged session carry its grade forward
+# without re-reading its events every cycle.
+_OPENCLAW_QUALITY_CACHE: dict = {}
+_OPENCLAW_QUALITY_CACHE_MAX = 5000
+
+
+def _openclaw_session_quality(store, row: dict):
+    """Quality verdicts for one OpenClaw session row, for ``metadata.quality``.
+
+    Family runtimes are graded at ingest (``_session_quality`` in
+    ``sync_family_runtimes``); OpenClaw sessions never were, so every OpenClaw
+    session had no grade and the Harness Engineering bench stamped OpenClaw
+    "Can't see" (2026-09-11). The cycle ingests events before session
+    metadata, so the session's events are already in the store here. A
+    session still being written is re-graded on its next change. Never
+    raises; None means "leave metadata as is".
+    """
+    sid = row.get("session_id") or ""
+    if not sid or ":" in sid:
+        return None  # runtime-prefixed ids belong to the family path
+    stamp = str(row.get("last_active_at") or "")
+    hit = _OPENCLAW_QUALITY_CACHE.get(sid)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    try:
+        events = store.query_events(session_id=sid, limit=4000) or []
+        q = _session_quality_from_rows(
+            events, runtime="openclaw", session_id=sid,
+            thresholds=_quality_thresholds_for("openclaw", store))
+    except Exception:
+        log.debug("openclaw quality assessment failed (%s)", sid, exc_info=True)
+        return hit[1] if hit else None
+    if len(_OPENCLAW_QUALITY_CACHE) >= _OPENCLAW_QUALITY_CACHE_MAX:
+        _OPENCLAW_QUALITY_CACHE.clear()
+    _OPENCLAW_QUALITY_CACHE[sid] = (stamp, q)
+    return q
 
 
 def _local_ingest_memory_files(all_files: list, changed_paths: list) -> None:
@@ -14961,11 +15005,16 @@ def _family_ingest_rev() -> str:
     without a bump the "What the agent was given" panel stays empty for every
     session that had already been seen. Bump the salt when the OSS extraction
     changes without a pro release.
+
+    ``/q2`` (2026-09-11): quality grading started reading JSON-string tool
+    ``arguments`` (Codex). ``metadata.quality`` is graded only at ingest, so
+    without the bump every already-seen Codex session stays "not measurable"
+    and the Harness Engineering bench keeps stamping Codex "Can't see".
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2"
     except Exception:
         return ""
 
@@ -15372,8 +15421,15 @@ def _session_quality(events, *, runtime: str, session_id: str,
     rebuild exists to remove. Exhibit lists are already capped inside
     ``Verdict.as_dict`` so the metadata blob stays small.
     """
+    return _session_quality_from_rows(
+        _adapter_events_to_rows(events, runtime), runtime=runtime,
+        session_id=session_id, thresholds=thresholds)
+
+
+def _session_quality_from_rows(rows, *, runtime: str, session_id: str,
+                               thresholds: dict) -> dict:
+    """``_session_quality`` for rows already in DuckDB event shape (OpenClaw)."""
     from clawmetry.quality_signals import assess_session
-    rows = _adapter_events_to_rows(events, runtime)
     a = assess_session(rows, runtime=runtime, session_id=session_id,
                        thresholds=thresholds)
     d = a.as_dict()
@@ -22743,7 +22799,10 @@ def _build_bench_slice(store, *, days: int = 30) -> dict:
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
         "%Y-%m-%dT%H:%M:%S")
-    rows = store.query_quality_sessions(since=since, limit=1500) or []
+    # Per-runtime cap: a single cost-ordered cap let claude_code fill all
+    # 1500 rows and every quieter runtime vanished from the bench (2026-09-11).
+    rows = store.query_quality_sessions(
+        since=since, limit=6000, per_runtime_limit=1500) or []
     grouped: dict = {}
     for r in rows:
         if isinstance(r, dict):

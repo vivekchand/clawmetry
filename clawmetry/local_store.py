@@ -5560,8 +5560,14 @@ class LocalStore(TrailStoreMixin):
         since: str | None = None,
         until: str | None = None,
         limit: int = 400,
+        per_runtime_limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Session rows for the Quality tab, scoped by REAL runtime.
+
+        ``per_runtime_limit`` caps rows per session-id-prefix runtime BEFORE
+        the overall ``limit``. Cross-runtime callers (the Harness Engineering
+        bench) need it: under one cost-ordered cap the loudest runtime took
+        every row and quieter runtimes vanished (2026-09-11: 10 of 12).
 
         Deliberately NOT ``query_outcomes``. That method filters on
         ``sessions.agent_type``, which is a legacy column hardcoded to
@@ -5594,15 +5600,26 @@ class LocalStore(TrailStoreMixin):
             clauses.append(_rt_clause)
             params.extend(_rt_params)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        qualify = ""
+        if per_runtime_limit:
+            qualify = """
+            QUALIFY row_number() OVER (
+                PARTITION BY CASE WHEN strpos(session_id, ':') > 0
+                                  THEN split_part(session_id, ':', 1)
+                                  ELSE 'openclaw' END
+                ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST) <= ?"""
         sql = f"""
             SELECT session_id, title, started_at, last_active_at, ended_at,
                    status, cost_usd, total_tokens, message_count, metadata,
                    outcome, outcome_confidence, cwd, git_branch
             FROM sessions
             {where}
+            {qualify}
             ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST
             LIMIT ?
         """
+        if per_runtime_limit:
+            params.append(int(per_runtime_limit))
         params.append(int(limit))
         cols = ["session_id", "title", "started_at", "last_active_at",
                 "ended_at", "status", "cost_usd", "total_tokens",
