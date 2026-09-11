@@ -42,7 +42,7 @@ All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, l
 | `routes/health.py` | `bp_health` — system-health, reliability, diagnostics, rate-limits, sandbox-status, health-stream (SSE) |
 | `routes/overview.py` | `bp_overview` — main dashboard endpoint, channels list, timeline, cloud-CTA OTP |
 | `routes/brain.py` | `bp_brain` — `/api/brain-history` + `/api/brain-stream` (SSE) |
-| `routes/channels.py` | `bp_channels` — 23 chat-channel adapters (Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat, …) |
+| `routes/channels.py` | `bp_channels` — 24 chat-channel adapters (Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat, …) |
 | `routes/components.py` | `bp_components` — Flow-panel detail endpoints (tool / runtime / machine / gateway / brain) |
 | `routes/local_query.py` | `bp_local_query` — `/api/local/*` DuckDB read API + the daemon-proxy `_dispatch` (shape→store bridge shared by HTTP and the cloud relay) |
 | `routes/guard.py` | `bp_guard` — live session control (Pause/Stop/Kill), Guard policy CRUD, policy decision log, learned baselines. Sessions ranked by **spend at risk**, not severity |
@@ -261,6 +261,8 @@ CLAWMETRY_SIGNALS=1                    # Behaviour Signals tick on/off; CLAWMETR
 # Guard / enforcement. Every one of these defaults to the safe side.
 CLAWMETRY_DETECTORS=1                  # Trajectory + behavioural detectors on/off
 CLAWMETRY_GUARD_POLICIES=1             # Evaluate Guard policies at all (0 = skip the pass entirely)
+CLAWMETRY_DESKTOP_ALERTS=1             # Urgent incidents (critical, or an agent blocked on you) pop a desktop notification (0 = off)
+CLAWMETRY_CLOUD_INCIDENT_ALERTS=1      # Connected nodes hand urgent incidents to cloud, which always emails the account owner (0 = off)
 CLAWMETRY_POLICY_ENFORCE=0             # Let a policy actually signal a process. Default 0 = dry run; this one env var disables every policy on the node
 CLAWMETRY_GUARD_CRITICAL_USD=...       # Spend-at-risk above which a warning becomes critical
 CLAWMETRY_NOPROG_TOOLS__<RUNTIME>=40   # Per-runtime threshold override (highest layer in resolve_thresholds)
