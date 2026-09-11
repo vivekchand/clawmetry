@@ -547,6 +547,15 @@ jobs:
       - name: Queue Lanes panel is reachable
         run: python3 -m pytest tests/test_queue_lanes_panel_is_reachable.py -q
 
+      # tests/e2e/pseudolocale.mjs shipped for months as a script that could
+      # not fail: it ran in no workflow, and its only exit-1 path was
+      # `STRICT && fail > 0`, so a dashboard where nothing was localised
+      # printed "Locale machinery verified" and exited 0. These pin the
+      # separation that makes it gateable (machinery always fatal, residual
+      # strings a soft backlog) and pin that it stays wired to a workflow.
+      - name: Pseudolocale gate can go red
+        run: python3 -m pytest tests/test_pseudolocale_gate_can_fail.py -q
+
       # A Pro node stopped syncing for 12 hours (2026-09-08) because sync.pid
       # named a pid the OS had recycled onto an unrelated process: every
       # launchd respawn read "alive" and exited, and `clawmetry status` still
