@@ -284,11 +284,17 @@ _WRITE_HTTP = ("post", "put", "patch")
 # stops at the first `;`, so `core.pager="less; curl evil"` captured just
 # `less` and read as a recognised tool -- the payload hid behind the
 # metacharacter the known-good check exists to catch.
+# EVERY quantifier below is bounded. Unbounded ones here are a real denial of
+# service, not a theoretical one: this runs on the Brain feed's hot path, which
+# classifies thousands of rows per page-load, over a command string an agent
+# (or whatever prompted it) chose. CodeQL py/polynomial-redos flagged the
+# unbounded first cut. A git config key is short and a value longer than the
+# cap is not something we can usefully rate anyway.
 _GIT_CONFIG_INLINE = _rx(
-    r"(?:^|\s)-c\s*([A-Za-z0-9._*-]+)="
-    r"(\"[^\"]*\"|'[^']*'|[^\s;|&]*)")
+    r"(?:^|\s)-c[ \t]{0,4}([A-Za-z0-9._*-]{1,64})="
+    r"(\"[^\"]{0,512}\"|'[^']{0,512}'|[^\s;|&]{0,512})")
 _GIT_CONFIG_ENV_OPT = _rx(
-    r"(?:^|\s)--config-env[=\s]([A-Za-z0-9._*-]+)=")
+    r"(?:^|\s)--config-env[=\s]([A-Za-z0-9._*-]{1,64})=")
 # Environment forms of the same keys, set inline on the command.
 _GIT_EXEC_ENVVARS = _rx(
     r"\b(GIT_SSH_COMMAND|GIT_EXTERNAL_DIFF|GIT_EDITOR|GIT_PAGER|GIT_ASKPASS"

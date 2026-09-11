@@ -443,3 +443,28 @@ def test_predicate_is_shared_with_repo_scan_not_copied():
     assert git_config_executes("alias.x", "log --oneline") is False
     # protocol.ext.allow names no program; it must NOT be in the key set.
     assert git_config_executes("protocol.ext.allow", "always") is False
+
+
+def test_git_config_regexes_are_bounded_against_redos():
+    """Every quantifier in the git-config patterns is bounded.
+
+    CodeQL py/polynomial-redos flagged the first cut. This is not theoretical:
+    classify_tool_call runs on the Brain feed's hot path over a command string
+    an agent chose, so a quadratic match is a denial of service on a page-load.
+    """
+    import time
+    # Pathological shapes for an unbounded `-c\s*([\w.]+)=` / value pattern.
+    for payload in (
+        "git -c " + " " * 40000 + "a=b",
+        "git -c " + "a" * 40000 + "=b",
+        "git -c core.pager=" + "x" * 40000,
+        "git -c core.pager=\"" + "x" * 40000,
+        "git --config-env=" + "a" * 40000 + "=B",
+    ):
+        t0 = time.monotonic()
+        _classify("Bash", {"command": payload})
+        elapsed = time.monotonic() - t0
+        assert elapsed < 1.0, (
+            f"classify took {elapsed:.2f}s on a {len(payload)}-char command; "
+            f"a quantifier is unbounded again"
+        )
