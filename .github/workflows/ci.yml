@@ -729,6 +729,7 @@ jobs:
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
             tests/test_openclaw_quality_at_ingest.py \
+            tests/test_quality_sessions_per_runtime_limit.py \
             tests/test_quality_signals_contract.py \
             tests/test_quality_runtime_conformance.py \
             tests/test_cohort_compare.py \
