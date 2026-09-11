@@ -224,14 +224,85 @@ def test_a_healthy_daemon_reports_nothing(home, monkeypatch, sent):
     assert sent == []
 
 
+def _watch(sync, monkeypatch, *, mono_now, since=None, last_sync="seen"):
+    """Drive the watchdog's own bookkeeping directly.
+
+    `_STALL_WATCH` records which `last_sync` value is current and the
+    `time.monotonic()` reading when it first became current. `since=None`
+    means "the watchdog has only just started looking".
+    """
+    monkeypatch.setattr(sync.time, "monotonic", lambda: mono_now)
+    sync._STALL_WATCH["last_sync"] = last_sync
+    sync._STALL_WATCH["since_mono"] = since
+
+
 def test_a_wedged_daemon_reports_itself(home, monkeypatch, sent):
-    """AC-FFR-005.2. The process is up, the watchdog thread is scheduling, and no cycle has
-    completed in an hour. Every liveness probe in the stack says fine."""
+    """AC-FFR-005.2. The process is up, the watchdog thread is scheduling, and
+    no cycle has completed in an hour -- on BOTH clocks. Every liveness probe
+    in the stack says fine."""
+    import clawmetry.sync as sync
+
+    f = _state(home, monkeypatch, "2026-09-08T19:32:21+00:00")
+    raw = "2026-09-08T19:32:21+00:00"
+    # The watchdog has been watching this same stamp for two hours of running
+    # time, so the machine was awake for it.
+    _watch(sync, monkeypatch, mono_now=7200.0, since=0.0, last_sync=raw)
+    sync._report_if_ingest_stalled()
+    assert [p["failure_class"] for p in sent] == ["daemon_ingest_stalled"]
+
+
+def test_a_laptop_that_slept_is_not_called_broken(home, monkeypatch, sent):
+    """The false positive this guard exists for.
+
+    `last_sync` is a WALL-CLOCK stamp, so a machine suspended overnight wakes
+    with an age of hours while the daemon is healthy and its next cycle
+    completes seconds later. `time.monotonic()` does not advance across
+    suspend, so a small monotonic age proves the gap was sleep.
+
+    Reporting here marks every sleeping laptop as broken, and an alarm that
+    fires on healthy nodes is one people learn to ignore.
+    """
+    import clawmetry.sync as sync
+
+    raw = "2026-09-08T19:32:21+00:00"
+    _state(home, monkeypatch, raw)
+    # Wall age: days. Monotonic age: 40 seconds -- we just woke up.
+    _watch(sync, monkeypatch, mono_now=40.0, since=0.0, last_sync=raw)
+    sync._report_if_ingest_stalled()
+    assert sent == [], sent
+
+
+def test_a_daemon_that_just_started_is_not_called_broken(home, monkeypatch, sent):
+    """The same false positive by a different route, and the likelier one.
+
+    Every node auto-updates from PyPI, so every daemon restarts when a release
+    ships. A machine that was powered off overnight starts its daemon with a
+    `last_sync` from yesterday: wall age hours, nothing wrong. The watchdog has
+    no observation history yet, which is "no idea" -- and no idea is never
+    reported as broken.
+    """
+    import clawmetry.sync as sync
+
+    raw = "2026-09-08T19:32:21+00:00"
+    _state(home, monkeypatch, raw)
+    _watch(sync, monkeypatch, mono_now=5.0, since=None, last_sync=None)
+    sync._report_if_ingest_stalled()
+    assert sent == [], sent
+
+
+def test_a_completed_cycle_restarts_the_clock(home, monkeypatch, sent):
+    """A new `last_sync` value means ingest is working again, so the monotonic
+    window restarts -- otherwise one old stall would keep reporting forever."""
     import clawmetry.sync as sync
 
     _state(home, monkeypatch, "2026-09-08T19:32:21+00:00")
+    # The watchdog was watching a DIFFERENT (older) stamp for hours.
+    _watch(sync, monkeypatch, mono_now=9000.0, since=0.0, last_sync="an-older-stamp")
     sync._report_if_ingest_stalled()
-    assert [p["failure_class"] for p in sent] == ["daemon_ingest_stalled"]
+    assert sent == [], sent
+    # ...and it has now latched onto the current stamp, starting a fresh window.
+    assert sync._STALL_WATCH["last_sync"] == "2026-09-08T19:32:21+00:00"
+    assert sync._STALL_WATCH["since_mono"] == 9000.0
 
 
 def test_the_stall_check_never_raises(monkeypatch):
