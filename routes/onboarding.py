@@ -639,6 +639,59 @@ def _signout_restart_daemon() -> None:
         _run()
 
 
+@bp_onboarding.route("/api/onboarding/ingest-status", methods=["GET"])
+def api_onboarding_ingest_status():
+    """Return aggregate ingest-status for the onboarding data-arrival strip.
+
+    Polled every 2 s by the frontend; must respond in << 50 ms even on a
+    store with 100k+ events. Reads through the daemon proxy so the dashboard
+    process never opens the writer-locked DuckDB directly — on cloud the
+    daemon pushes the snapshot, so reading raw files from this handler would
+    return empty results.
+
+    Shape::
+
+        {
+          "connected": true,
+          "events_total": 4127,
+          "events_recent": 22,           // last 24 h
+          "first_event_at": 1757300000.0,
+          "last_event_at":  1757300412.0,
+          "sources": [
+            {"kind": "filesystem", "runtime": "claude_code",
+             "events": 4100, "last_at": 1757300412.0},
+            {"kind": "otlp", "runtime": "my_langchain_app",
+             "events": 27,   "last_at": 1757300390.0}
+          ]
+        }
+
+    ``connected`` is true when at least one event exists. ``kind`` is
+    ``"filesystem"`` for runtimes ClawMetry ships a native adapter for and
+    ``"otlp"`` for bring-your-own apps that push via OTLP or the HTTP ingest
+    API. The response is always HTTP 200 — the strip degrades gracefully on
+    any store error rather than breaking the onboarding overlay.
+    """
+    try:
+        from routes.local_query import local_store_via_daemon
+        result = local_store_via_daemon("query_ingest_status", recent_window_secs=86400)
+        if result is None:
+            from clawmetry import local_store as _ls
+            result = _ls.get_store(read_only=True).query_ingest_status()
+    except Exception:
+        result = None
+
+    if not isinstance(result, dict):
+        result = {
+            "connected": False,
+            "events_total": 0,
+            "events_recent": 0,
+            "first_event_at": None,
+            "last_event_at": None,
+            "sources": [],
+        }
+    return jsonify(result)
+
+
 @bp_onboarding.route("/api/account/signout", methods=["POST"])
 def api_account_signout():
     """Forget the ClawMetry account this machine is signed in with.
