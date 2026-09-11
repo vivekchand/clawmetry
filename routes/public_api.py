@@ -179,16 +179,18 @@ def _add_cors(response):
         return response
     record = getattr(g, _G_KEY, None)
     if record is not None:
-        allowed = apikeys.origin_allowed(record, origin)
+        # Use the stored canonical form, not the caller-supplied string, so
+        # the response header is never built from raw request data (CWE-113).
+        canonical = apikeys.canonical_allowed_origin(record, origin)
     else:
         # Preflight, or a request that failed auth. A preflight carries
         # no Authorization header, so the only question we can answer is
         # whether the user has authorised this origin for any live key.
         # The real request is still checked against its own key.
-        allowed = apikeys.any_key_allows_origin(origin)
-    if not allowed:
+        canonical = apikeys.any_canonical_allowed_origin(origin)
+    if not canonical:
         return response
-    response.headers["Access-Control-Allow-Origin"] = origin
+    response.headers["Access-Control-Allow-Origin"] = canonical
     response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = (
