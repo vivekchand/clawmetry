@@ -8,6 +8,7 @@
 - **Storage:** `guard_action_fingerprints` (verb, host, two masked path segments, session count, first and last seen; no command text or query strings), pruned with the Guard baseline.
 - **Verified:** `tests/test_detectors_coordinated_action.py` (26 tests, including a parent cycle, a settled action, no-memory silence, and a daemon pass that pages once and marks every participant); worst case on 400 real sessions with no history and memory forced old: 0 findings even at a threshold of 2.
 - **Not claimed:** correlation of reads, or across machines. No enforcement by default.
+- **Carries:** #5846.
 
 ### Added: Guard sees write direction, credential values and remote privilege (2026-09-11)
 - **Why:** the Hugging Face swarm scorecard (clawmetry.com/blog/could-clawmetry-have-caught-the-hugging-face-swarm) found five things a single swarm member already showed that the behavioural detectors could not see: WebDAV `MKCOL`/`PUT` to an Artifactory host every session was allowed to reach (row 2), an upload to huggingface.co (row 10), Hugging Face write tokens read from output and posted to a board (row 9), admin minted through a token endpoint (row 3), and cluster-admin (row 12). `network_egress` keyed on host only, so a read and a write looked identical; `credential_access` matched secret locations only (0 of 45 values in the vendored corpus); `privilege_change` knew the local OS only.
@@ -17,6 +18,7 @@
 - **Remote privilege:** role bindings, `system:admin`/`masters` impersonation, AWS IAM key and policy grants, GCP and Azure role grants, privileged or host-root-mounted containers, and writing calls to Artifactory token and plugin and Jenkins script-console endpoints. All critical; reading or listing the same resources stays quiet.
 - **Verified:** `tests/test_detectors_swarm_gaps.py` (62 tests); the pipelock corpus value lane moved from 0/45 to 45/45 with 0 near-miss over-fires (`VALUE_LANE_BASELINE` updated deliberately); 0 findings from any new lane across 400 real sessions (13,434 steps) on a development machine.
 - **Not claimed:** writes or credentials a program handles internally. These read tool arguments and tool output, and every finding says so.
+- **Carries:** #5845.
 
 ### Fixed: the stall detector called every sleeping laptop broken (2026-09-11)
 - **Why:** the daemon stall reporter shipped in 0.12.855 immediately produced 8 distinct installs and 9 events in under a day, across Darwin and Linux and five Python versions — against the one bootstrap signature that has 1 install in 30 days. Six issues were auto-filed overnight (#5829–#5834). The volume was the tell: the reports were not trustworthy.
