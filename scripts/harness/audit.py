@@ -278,8 +278,15 @@ def _extract_json_array(text: str) -> list:
 
 
 def _fingerprint(runtime: str, gap: dict) -> str:
+    # usedforsecurity=False: this is a dedupe key, not a security control. The
+    # digest only has to be stable so a daily run recognises a gap it already
+    # filed — nothing authenticates or authorises on it, and an attacker who
+    # could forge one would gain the ability to suppress their own issue.
+    # Declaring the intent is also what clears bandit B324 (CWE-327); SHA-1 is
+    # kept rather than widened to SHA-256 because changing the digest would
+    # re-file every gap already on file exactly once.
     key = f"{runtime}:{gap.get('title', '')}:{gap.get('where', '')}".lower()
-    return "hgap-" + hashlib.sha1(key.encode()).hexdigest()[:10]
+    return "hgap-" + hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:10]
 
 
 def _existing_fingerprints():
