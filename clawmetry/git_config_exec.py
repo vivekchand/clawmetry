@@ -64,7 +64,10 @@ _KNOWN_GOOD_PREFIXES = (
 
 #: A value that chains, substitutes or redirects is never known-good, whatever
 #: it starts with -- ``git-lfs clean -- %f; curl attacker`` starts with git-lfs.
-_SHELL_METACHARS = re.compile(r"[;&|`$><\n]|\$\(|\|\|")
+#: Covers: sequence (;, &&, ||, &), pipe (|), substitution ($, `), redirect
+#: (>, <), comment injection (#), history expansion (!), subshell/brace grouping
+#: ( ) { }, and CR (\r) which some shells treat as a command separator.
+_SHELL_METACHARS = re.compile(r"[;&|`$><\n\r!#(){}]")
 
 
 def executes(full_key: str, value: str = "") -> bool:
