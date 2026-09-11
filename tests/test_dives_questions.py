@@ -30,9 +30,10 @@ if "flask" not in sys.modules:
     sys.modules["flask"].jsonify = MagicMock()
     sys.modules["flask"].request = MagicMock()
 
+from clawmetry.dives_prompt import SUPPORTED_CHART_TYPES  # noqa: E402
 from routes.dives import DIVES_GALLERY_QUESTIONS as SUGGESTED_QUESTIONS  # noqa: E402
 
-_KNOWN_CHART_TYPES = frozenset({"bar", "line", "pie", "table", "number"})
+_KNOWN_CHART_TYPES = frozenset(SUPPORTED_CHART_TYPES)
 _KNOWN_CATEGORIES = frozenset({"cost", "activity", "sessions", "crons", "system", "memory"})
 
 # One-way ratchet — update intentionally when adding or removing entries.
