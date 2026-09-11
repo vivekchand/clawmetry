@@ -270,6 +270,47 @@
 
   // ── Renderers ─────────────────────────────────────────────────────────────
 
+  // AgentOps scorecard rule types (clawmetry/alert_evaluator.py AGENTOPS_RULES:
+  // latency SLOs and rates you can alert on). `metric` / `sample` are the
+  // /api/agentops/scorecard keys the editor reads to show what the number is
+  // right now, so a threshold is set against reality rather than a guess.
+  const _agoPct = v => (v * 100).toFixed(1) + '%';
+  const AGENTOPS_RULE_UI = {
+    latency_p95_above: { icon: '🐢', verb: 'p95 session duration exceeds', unit: 'min', placeholder: 30,
+      name: 'Slow sessions', metric: 'session_duration_p95_sec', sample: 'timed_sessions',
+      noun: 'finished sessions', window: 60, fmt: v => (v / 60).toFixed(1) + ' min',
+      hint: 'The slowest 5% of recently finished sessions took longer than your limit, start to finish.' },
+    tool_latency_p95_above: { icon: '⏳', verb: 'p95 tool latency exceeds', unit: 's', placeholder: 30,
+      name: 'Slow tools', metric: 'tool_latency_p95_ms', sample: 'timed_tool_calls',
+      noun: 'timed tool calls', window: 60, fmt: v => (v / 1000).toFixed(1) + ' s', tool: true,
+      hint: 'The slowest 5% of recent tool calls took longer than your limit, for every tool or just one.' },
+    escalation_rate_above: { icon: '🙋', verb: 'Needed-a-human rate exceeds', unit: '%', placeholder: 10,
+      name: 'Escalations', metric: 'escalation_rate', sample: 'classified_total',
+      noun: 'finished sessions', window: 60, fmt: _agoPct,
+      hint: 'Too many recent sessions ended by handing the work back to a person.' },
+    guardrail_violation_rate_above: { icon: '🚧', verb: 'Guardrail violation rate exceeds', unit: '%', placeholder: 5,
+      name: 'Guardrail violations', metric: 'guardrail_violation_rate', sample: 'guardrail_sessions',
+      noun: 'active sessions', window: 60, fmt: _agoPct,
+      hint: 'Too many active sessions tripped a Guard policy, had an approval denied, or hit a blocking guardrail.' },
+    handoff_failure_rate_above: { icon: '🤝', verb: 'Handoff failure rate exceeds', unit: '%', placeholder: 10,
+      name: 'Handoff failures', metric: 'handoff_failure_rate', sample: 'handoffs_finished',
+      noun: 'finished handoffs', window: 60, fmt: _agoPct,
+      hint: 'Too many tasks handed to a sub-agent came back failed.' },
+    review_accuracy_below: { icon: '🔍', verb: 'Reviewer-marked accuracy drops below', unit: '%', placeholder: 90,
+      name: 'Review accuracy', metric: 'review_accuracy', sample: 'reviews',
+      noun: 'reviews', window: 10080, fmt: _agoPct,
+      hint: 'Of the sessions people reviewed, too few were marked correct.' },
+    ground_truth_accuracy_below: { icon: '🎯', verb: 'Accuracy against your records drops below', unit: '%', placeholder: 90,
+      name: 'Real-outcome accuracy', metric: 'ground_truth_accuracy', sample: 'ground_truth_judged',
+      noun: 'reported outcomes', window: 10080, fmt: _agoPct,
+      hint: 'Of the outcomes your own system reported back, too few were correct.' },
+    first_pass_rate_below: { icon: '✅', verb: 'First-pass rate drops below', unit: '%', placeholder: 80,
+      name: 'First-pass rate', metric: 'first_pass_rate', sample: 'first_pass_known',
+      noun: 'reported outcomes', window: 10080, fmt: _agoPct,
+      hint: 'Too few results were accepted the first time, by your own records.' },
+  };
+  const _agoMap = f => Object.fromEntries(Object.entries(AGENTOPS_RULE_UI).map(([k, v]) => [k, f(v)]));
+
   const RULE_TYPE_LABELS = {
     daily_spend:      { icon: '💰', verb: 'Daily spend exceeds' },
     session_cost:     { icon: '🧵', verb: 'Session cost exceeds' },
@@ -282,6 +323,7 @@
     eval_score_below:     { icon: '⭐', verb: 'Quality score drops below' },
     outcome_failure_rate: { icon: '🚦', verb: 'Failure rate exceeds' },
     signal_rate_above:    { icon: '💬', verb: 'Behaviour signal rate exceeds' },
+    ..._agoMap(v => ({ icon: v.icon, verb: v.verb })),
   };
 
   // On/off slider that matches the Approvals protection-rule toggle. Clicking
@@ -468,6 +510,7 @@
     eval_score_below:     'Average quality score (judged 0-5) of recent sessions dropped below your threshold.',
     outcome_failure_rate: 'Too many recent sessions ended badly (failed or got stuck) as a share of finished sessions.',
     signal_rate_above:    'A behaviour signal (frustration, praise, refusals, work handed back, giving up, retries) crossed your rate over the window, with enough turns to mean it.',
+    ..._agoMap(v => v.hint),
   };
   // Hide alerts older than this from the history view. Stops the list from
   // accumulating forever; the user only cares about recent activity.
@@ -975,6 +1018,7 @@
       eval_score_below:     { unit: '/ 5',  placeholder: 3,  label: 'Average quality score drops below', name: 'Quality drop' },
       outcome_failure_rate: { unit: '%',    placeholder: 20, label: 'Session failure rate exceeds', name: 'Failure rate' },
       signal_rate_above:    { unit: '% of turns', placeholder: 10, label: 'Signal rate exceeds', name: 'Frustration rate' },
+      ..._agoMap(v => ({ unit: v.unit, placeholder: v.placeholder, label: v.verb, name: v.name })),
     };
     const p = presets[t] || { unit: '', placeholder: 0, label: 'Threshold', name: 'Custom alert' };
     const val = r.threshold_value ?? p.placeholder;
@@ -1002,8 +1046,69 @@
         <label>Applies to</label>
         <select id="alerts-rule-scope">${scopeOpts}</select>
       </div>
-    ` + (t === 'signal_rate_above' ? signalRuleRows(r) : '');
+    ` + (t === 'signal_rate_above' ? signalRuleRows(r) : '')
+      + (AGENTOPS_RULE_UI[t] ? agentopsRuleRows(r, t) : '');
+    if (AGENTOPS_RULE_UI[t]) {
+      const scopeEl = document.getElementById('alerts-rule-scope');
+      if (scopeEl) scopeEl.addEventListener('change', window.alertsAgentopsNow);
+      window.alertsAgentopsNow();
+    }
   }
+
+  // AgentOps rules name a window, a minimum sample and (tool latency only)
+  // one tool, and show the figure as it stands now. Kept off the other
+  // types' forms so nothing else grows a field it does not read.
+  function agentopsRuleRows(r, t) {
+    const ui = AGENTOPS_RULE_UI[t];
+    const win = Number(r.window_minutes) || ui.window;
+    const minS = Number(r.min_sessions) || '';
+    return `
+      <div class="alerts-form-row">
+        <label>Over the last</label>
+        <input type="number" id="alerts-rule-window" value="${win}" min="1" step="1" style="width:120px;" onchange="alertsAgentopsNow()" />
+        <span class="alerts-form-unit">minutes</span>
+      </div>
+      <div class="alerts-form-row">
+        <label>Only when at least</label>
+        <input type="number" id="alerts-rule-minsample" value="${minS}" min="1" step="1" placeholder="default" style="width:120px;" />
+        <span class="alerts-form-unit">${escape(ui.noun)}</span>
+      </div>` + (ui.tool ? `
+      <div class="alerts-form-row">
+        <label>Only for tool</label>
+        <input type="text" id="alerts-rule-tool" value="${escape(r.tool_name || '')}" placeholder="every tool" style="width:180px;" onchange="alertsAgentopsNow()" />
+      </div>` : '') + `
+      <div class="alerts-form-row"><span class="alerts-form-unit" id="alerts-rule-now" aria-live="polite"></span></div>`;
+  }
+
+  // "Right now: 4.2 min over 37 finished sessions." One fetch per editor
+  // open / window change, never polled. A store the page cannot read (the
+  // hosted dashboard, a stopped daemon) leaves the line empty rather than
+  // claiming a zero.
+  window.alertsAgentopsNow = function () {
+    const ui = AGENTOPS_RULE_UI[alertsState.editorType];
+    const el = document.getElementById('alerts-rule-now');
+    if (!ui || !el) return;
+    const scope = (document.getElementById('alerts-rule-scope') || {}).value || 'all';
+    const win = Math.max(1, Math.round(Number((document.getElementById('alerts-rule-window') || {}).value) || ui.window));
+    const tool = ui.tool ? String((document.getElementById('alerts-rule-tool') || {}).value || '').trim() : '';
+    fetch('/api/agentops/scorecard?window=' + win + '&runtime=' + encodeURIComponent(scope))
+      .then(r => (r.ok ? r.json() : null))
+      .then(j => {
+        if (!j || !j.store_available) { el.textContent = ''; return; }
+        const m = j.metrics || {};
+        let v = m[ui.metric];
+        let n = Number(m[ui.sample]) || 0;
+        if (tool) {
+          const row = (m.tool_latency_by_tool || []).find(x => x.name === tool);
+          v = row ? row.p95_ms : null;
+          n = row ? Number(row.timed_calls) || 0 : 0;
+        }
+        el.textContent = (v == null || !n)
+          ? 'Nothing measured in this window yet, so this rule would stay quiet.'
+          : 'Right now: ' + ui.fmt(Number(v)) + ' over ' + n + ' ' + ui.noun + '.';
+      })
+      .catch(() => { el.textContent = ''; });
+  };
 
   // Behaviour-signal rules name the preset signal they watch plus the window
   // and the minimum sample. Kept off the other types' forms so nothing else
@@ -1102,6 +1207,14 @@
       const minEl = document.getElementById('alerts-rule-minturns');
       if (winEl && Number(winEl.value) > 0) body.window_minutes = Math.round(Number(winEl.value));
       if (minEl && Number(minEl.value) > 0) body.min_turns = Math.round(Number(minEl.value));
+    }
+    if (AGENTOPS_RULE_UI[alertsState.editorType]) {
+      const winEl = document.getElementById('alerts-rule-window');
+      const minEl = document.getElementById('alerts-rule-minsample');
+      const toolEl = document.getElementById('alerts-rule-tool');
+      if (winEl && Number(winEl.value) > 0) body.window_minutes = Math.round(Number(winEl.value));
+      if (minEl && Number(minEl.value) > 0) body.min_sessions = Math.round(Number(minEl.value));
+      if (toolEl && toolEl.value.trim()) body.tool_name = toolEl.value.trim();
     }
 
     // An example row has no server-side rule — saving it is a create, not an
