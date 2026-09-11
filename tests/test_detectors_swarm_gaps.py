@@ -105,7 +105,9 @@ def test_http_tool_method_argument_counts_as_a_write():
 
 def test_an_upload_with_no_url_is_still_egress():
     step = detectors.normalize_events([_shell("twine upload dist/*")])[0]
-    assert "upload.pypi.org" in step["hosts"]
+    # Exact equality, not ``"<domain>" in``: CodeQL reads the latter as an
+    # incomplete URL check even in a test.
+    assert step["hosts"] == ("upload.pypi.org",)
 
 
 # ── write_to_read_only_host (rows 2, 10) ─────────────────────────────────────
@@ -351,7 +353,7 @@ def test_baseline_records_direction_and_never_moves_its_clocks(real_store):
     base = real_store.query_guard_baseline("runtime:codex")
     assert base["host_write_first_seen"]["artifactory.internal"] == first_write
     # A write-only host (no URL in the command) still enters the host set.
-    assert "upload.pypi.org" in base["hosts"]
+    assert set(base["hosts"]) == {"pypi.org", "artifactory.internal", "upload.pypi.org"}
 
 
 def test_an_old_store_gains_the_direction_columns_empty(tmp_path):
