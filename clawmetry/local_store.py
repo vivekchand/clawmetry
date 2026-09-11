@@ -9070,6 +9070,58 @@ class LocalStore(TrailStoreMixin):
                   str(approval_id)])
         return 1
 
+    def expire_stale_approvals(self, grace_seconds: int = 120) -> int:
+        """Retire pending approvals whose waiter is gone.
+
+        A hook-parked approval records its window's end in
+        ``args.deadline_ms``, and the hook that parked it writes the timeout
+        itself when the window ends. If that hook dies first (its receiver
+        restarted, Claude Code cancelled it), nothing ever closes the row:
+        the runtime has already fallen back to its own prompt, yet every
+        surface keeps offering buttons that can no longer reach it. Burned
+        2026-09-11: a question sat on the cloud strip for 2h38m.
+
+        Flips rows more than ``grace_seconds`` past their deadline to
+        ``expired`` (a question hook reads that as "ask the terminal", never
+        as a refusal). Rows without a deadline are left alone. Returns rows
+        expired. Never raises into the daemon loop.
+        """
+        if self._read_only:
+            return 0
+        from datetime import datetime, timezone
+        cutoff_ms = int((time.time() - max(30, int(grace_seconds))) * 1000)
+        expired = 0
+        try:
+            with self._write_lock:
+                rows = self._conn.execute(
+                    "SELECT id, args FROM approvals WHERE status = 'pending'"
+                ).fetchall()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                for approval_id, raw in rows:
+                    try:
+                        text = (raw.decode("utf-8")
+                                if isinstance(raw, (bytes, bytearray)) else raw)
+                        args = json.loads(text) if text else {}
+                        deadline_ms = int((args or {}).get("deadline_ms") or 0)
+                    except Exception:
+                        continue
+                    if not deadline_ms or deadline_ms >= cutoff_ms:
+                        continue
+                    self._conn.execute("""
+                        UPDATE approvals
+                        SET status = 'expired', decision = 'expired',
+                            decision_reason = ?, resolver = 'sweep',
+                            resolved_at = ?
+                        WHERE id = ? AND status = 'pending'
+                    """, ["nothing was waiting on this request any more; "
+                          "the agent had already moved on", now_iso,
+                          str(approval_id)])
+                    expired += 1
+        except Exception:
+            log.debug("local store: expire_stale_approvals failed",
+                      exc_info=True)
+        return expired
+
     # ── review_queue helpers (issue #1615) ────────────────────────────────
     def ingest_review_sample(self, sample: dict[str, Any]) -> int:
         """Insert one sampled session into the review queue.
