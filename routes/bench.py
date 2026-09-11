@@ -61,8 +61,17 @@ def _iso_cutoff(days: int) -> str:
 def _sessions_by_runtime(days: int):
     """All quality-session rows in the window, grouped by runtime.
     Returns (grouped_or_None, store_available)."""
+    # Capped PER RUNTIME, not overall: one global cost-ordered cap let the
+    # loudest runtime take every row, so on a live node most runtimes never
+    # reached the bench at all (2026-09-11).
     rows = _ls_call("query_quality_sessions", since=_iso_cutoff(days),
-                    limit=_SESSION_LIMIT)
+                    limit=_SESSION_LIMIT * 4,
+                    per_runtime_limit=_SESSION_LIMIT)
+    if rows is None:
+        # A daemon older than per_runtime_limit rejects the kwarg; fall back
+        # rather than report the store unavailable.
+        rows = _ls_call("query_quality_sessions", since=_iso_cutoff(days),
+                        limit=_SESSION_LIMIT)
     if rows is None:
         return None, False
     grouped: dict[str, list[dict]] = {}

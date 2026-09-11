@@ -5042,8 +5042,52 @@ def _local_ingest_sessions_batch(rows: list, node_id: str) -> None:
             "cwd":        _session_cwd(s),
             "git_branch": _session_git_branch(s),
         })
+    for row in session_rows:
+        q = _openclaw_session_quality(store, row)
+        if q is not None:
+            row["metadata"] = dict(row["metadata"] or {}, quality=q)
     if session_rows:
         store.ingest_sessions_batch(session_rows)
+
+
+# sid -> (last_active_at it was graded at, stored quality block). The metadata
+# upsert replaces the whole blob, so a row re-sent without its grade would ERASE
+# the stored one; the cache lets an unchanged session carry its grade forward
+# without re-reading its events every cycle.
+_OPENCLAW_QUALITY_CACHE: dict = {}
+_OPENCLAW_QUALITY_CACHE_MAX = 5000
+
+
+def _openclaw_session_quality(store, row: dict):
+    """Quality verdicts for one OpenClaw session row, for ``metadata.quality``.
+
+    Family runtimes are graded at ingest (``_session_quality`` in
+    ``sync_family_runtimes``); OpenClaw sessions never were, so every OpenClaw
+    session had no grade and the Harness Engineering bench stamped OpenClaw
+    "Can't see" (2026-09-11). The cycle ingests events before session
+    metadata, so the session's events are already in the store here. A
+    session still being written is re-graded on its next change. Never
+    raises; None means "leave metadata as is".
+    """
+    sid = row.get("session_id") or ""
+    if not sid or ":" in sid:
+        return None  # runtime-prefixed ids belong to the family path
+    stamp = str(row.get("last_active_at") or "")
+    hit = _OPENCLAW_QUALITY_CACHE.get(sid)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    try:
+        events = store.query_events(session_id=sid, limit=4000) or []
+        q = _session_quality_from_rows(
+            events, runtime="openclaw", session_id=sid,
+            thresholds=_quality_thresholds_for("openclaw", store))
+    except Exception:
+        log.debug("openclaw quality assessment failed (%s)", sid, exc_info=True)
+        return hit[1] if hit else None
+    if len(_OPENCLAW_QUALITY_CACHE) >= _OPENCLAW_QUALITY_CACHE_MAX:
+        _OPENCLAW_QUALITY_CACHE.clear()
+    _OPENCLAW_QUALITY_CACHE[sid] = (stamp, q)
+    return q
 
 
 def _local_ingest_memory_files(all_files: list, changed_paths: list) -> None:
@@ -12415,6 +12459,83 @@ def _apply_pending_write(qtype: str, q: dict, owner_hash: str | None = None) -> 
     raise ValueError(f"unhandled write type: {qtype}")
 
 
+def _apply_answer_decision(q: dict, approval_id: str, resolver: str,
+                           reason) -> None:
+    """``decision='answer'``: the person answered a question the agent asked
+    (Claude Code AskUserQuestion) from the cloud strip, not from the local
+    Approvals tab.
+
+    The pick arrives as ``sealed_answers``: the browser encrypts
+    ``{"answers": {...}}`` with this node's E2E key (the key the question
+    arrived under), so the cloud relays it without reading it. It is then
+    validated against the question set the hook stored, exactly like a local
+    answer (``question_sets.apply_answer_decision``), and the waiting hook
+    resumes the session with it.
+
+    Anything wrong (no key, a seal from another key, a label that is not one
+    of the options, the row already decided or expired) leaves the row as it
+    is: the hook hands the question to the terminal at its deadline. Never a
+    fabricated answer, never raises."""
+    sealed = q.get("sealed_answers")
+    if not isinstance(sealed, str) or not sealed.strip():
+        log.warning("approval_decision %s: answer carries no sealed_answers",
+                    approval_id)
+        return
+    try:
+        key = str(load_config().get("encryption_key") or "")
+        opened = decrypt_payload(sealed.strip(), key) if key else None
+    except Exception as e:
+        log.warning("approval_decision %s: sealed answer unreadable (%s)",
+                    approval_id, type(e).__name__)
+        return
+    answers = opened.get("answers") if isinstance(opened, dict) else None
+    if not isinstance(answers, dict) or not answers:
+        log.warning("approval_decision %s: sealed answer has no answers",
+                    approval_id)
+        return
+    try:
+        from clawmetry import local_store
+        from clawmetry import question_sets as qsets
+        store = local_store.get_store()
+        row = next((r for r in (store.query_approvals(status="pending",
+                                                      limit=500) or [])
+                    if isinstance(r, dict) and r.get("id") == approval_id),
+                   None)
+    except Exception as e:
+        log.warning("approval_decision %s: local_store unavailable: %s",
+                    approval_id, e)
+        return
+    if row is None:
+        log.debug("[approval] %s relayed answer: no pending row (already "
+                  "decided, expired, or another node)", approval_id)
+        return
+
+    def _write(method: str, **kwargs) -> bool:
+        try:
+            getattr(store, method)(**kwargs)
+            return True
+        except Exception as we:
+            log.warning("approval_decision %s: %s failed: %s",
+                        approval_id, method, we)
+            return False
+
+    ok, msg, _code = qsets.apply_answer_decision(
+        approval_id, row, answers, resolver=resolver, reason=reason,
+        write=_write)
+    if not ok:
+        log.warning("[approval] %s relayed answer rejected: %s",
+                    approval_id, msg)
+        return
+    log.info("[approval] %s answered via %s", approval_id, resolver)
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event("approval.decision", actor=resolver,
+                           target=approval_id, result="answered",
+                           source="cloud-relay")
+    except Exception:
+        pass
+
+
 def _apply_approval_decision(q: dict) -> None:
     """Flip an approvals row in local DuckDB based on a cloud-relayed
     decision. Used by `_dispatch_pending_queries`.
@@ -12432,6 +12553,9 @@ def _apply_approval_decision(q: dict) -> None:
         return
     resolver = (q.get("resolver") or "cloud-relay").strip()
     reason = q.get("reason")
+    if decision == "answer":
+        _apply_answer_decision(q, approval_id, resolver, reason)
+        return
     try:
         from clawmetry import local_store
         store = local_store.get_store()
@@ -14961,11 +15085,16 @@ def _family_ingest_rev() -> str:
     without a bump the "What the agent was given" panel stays empty for every
     session that had already been seen. Bump the salt when the OSS extraction
     changes without a pro release.
+
+    ``/q2`` (2026-09-11): quality grading started reading JSON-string tool
+    ``arguments`` (Codex). ``metadata.quality`` is graded only at ingest, so
+    without the bump every already-seen Codex session stays "not measurable"
+    and the Harness Engineering bench keeps stamping Codex "Can't see".
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2"
     except Exception:
         return ""
 
@@ -15372,8 +15501,15 @@ def _session_quality(events, *, runtime: str, session_id: str,
     rebuild exists to remove. Exhibit lists are already capped inside
     ``Verdict.as_dict`` so the metadata blob stays small.
     """
+    return _session_quality_from_rows(
+        _adapter_events_to_rows(events, runtime), runtime=runtime,
+        session_id=session_id, thresholds=thresholds)
+
+
+def _session_quality_from_rows(rows, *, runtime: str, session_id: str,
+                               thresholds: dict) -> dict:
+    """``_session_quality`` for rows already in DuckDB event shape (OpenClaw)."""
     from clawmetry.quality_signals import assess_session
-    rows = _adapter_events_to_rows(events, runtime)
     a = assess_session(rows, runtime=runtime, session_id=session_id,
                        thresholds=thresholds)
     d = a.as_dict()
@@ -20050,19 +20186,29 @@ def _build_cron_jobs(paths):
 
 
 def _seconds_since(ts) -> int:
-    """Seconds elapsed since an ISO-ish timestamp string (the store writes naive
-    local wall-clock), clamped to >= 0; returns 0 on any parse failure. Used so
-    the device's approval ``waiting_seconds`` is a real value, not always 0."""
+    """Seconds elapsed since an ISO-ish timestamp string, clamped to >= 0;
+    returns 0 on any parse failure. Used so the device's approval
+    ``waiting_seconds`` is a real value, not always 0.
+
+    A naive string is local wall-clock (most store rows); a ``Z`` or
+    ``+HH:MM`` suffix is honoured. Burned 2026-09-11: hook-parked approvals
+    are stamped ``...Z`` (UTC) and the ``Z`` was stripped, so on a CEST
+    machine every question read "waiting 2h 2m" the moment it was asked."""
     if not ts:
         return 0
     try:
-        from datetime import datetime
-        s = str(ts).strip().replace("Z", "")
+        from datetime import datetime, timezone
+        s = str(ts).strip()
+        utc = s.endswith("Z")
+        if utc:
+            s = s[:-1] + "+00:00"
         try:
             dt = datetime.fromisoformat(s)
         except ValueError:
             dt = datetime.fromisoformat(s.split(".")[0].split("+")[0])
-        ref = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+            if utc:
+                dt = dt.replace(tzinfo=timezone.utc)
+        ref = datetime.now(timezone.utc) if dt.tzinfo else datetime.now()
         return max(0, int((ref - dt).total_seconds()))
     except Exception:
         return 0
@@ -20822,6 +20968,15 @@ def _refresh_attention_cache(store) -> int:
         store.expire_stale_hook_attention(ATTENTION_HOOK_MAX_AGE_SECONDS)
     except Exception as _pe:  # noqa: BLE001
         log.debug("attention-detect: persist failed (continuing): %s", _pe)
+    # Same safety valve for the approvals queue: a hook that died before its
+    # window ended leaves a row every surface would keep offering buttons on.
+    try:
+        n_expired = store.expire_stale_approvals()
+        if n_expired:
+            log.info("[approval] expired %d request(s) nothing was waiting on",
+                     n_expired)
+    except Exception as _ae:  # noqa: BLE001
+        log.debug("approval sweep failed (continuing): %s", _ae)
     return len(items)
 
 
@@ -22438,6 +22593,43 @@ def _build_loops_slice(store):
     return out
 
 
+def _approval_deadline_ms(row: dict) -> int:
+    """End of a hook-parked approval's window (``args.deadline_ms``), or 0."""
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    try:
+        return max(0, int(args.get("deadline_ms") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _device_question_set(row: dict) -> list:
+    """The approval's question set (``args._cm_questions``, stored by the
+    hook receiver from Claude Code's AskUserQuestion), trimmed for the
+    snapshot: what a surface needs to render the options and nothing else.
+    Empty when the approval is an ordinary yes/no request."""
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    out = []
+    for q in (args.get("_cm_questions") or [])[:4]:
+        if not isinstance(q, dict) or not q.get("question"):
+            continue
+        options = [
+            {"label": str(o.get("label"))[:120],
+             "description": str(o.get("description") or "")[:240]}
+            for o in (q.get("options") or [])[:4]
+            if isinstance(o, dict) and o.get("label")
+        ]
+        if not options:
+            continue
+        out.append({
+            "question": str(q.get("question"))[:400],
+            "header": str(q.get("header") or "")[:40],
+            "multiSelect": bool(q.get("multiSelect")),
+            "allow_free_text": bool(q.get("allow_free_text")),
+            "options": options,
+        })
+    return out
+
+
 def _build_device_summary(spending, daily_usage, efficiency=None):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
@@ -22572,8 +22764,16 @@ def _build_device_summary(spending, daily_usage, efficiency=None):
         pass
     try:
         from clawmetry import waste_flags as _wf
+        now_ms = int(time.time() * 1000)
+        # Only requests something is still waiting on. A hook-parked row
+        # carries its window's end in args.deadline_ms; once that has passed
+        # the runtime has already fallen back to its own terminal prompt, so
+        # Approve/Deny (or an answer) could no longer reach it. Burned
+        # 2026-09-11: a question sat on the cloud strip for 2h38m after the
+        # gate hook lost its receiver and the terminal had taken over.
         ap = [r for r in (store.query_approvals(status="pending", limit=200) or [])
-              if isinstance(r, dict)]
+              if isinstance(r, dict)
+              and not (0 < _approval_deadline_ms(r) <= now_ms)]
         if ap:
             oldest = min(ap, key=lambda r: (r.get("created_at") or ""))
             sid = oldest.get("requestor_session_id") or ""
@@ -22586,6 +22786,17 @@ def _build_device_summary(spending, daily_usage, efficiency=None):
                 # field and got 0 every time because we never sent it (#contract).
                 "waiting_seconds": _seconds_since(oldest.get("created_at")),
             }
+            deadline_ms = _approval_deadline_ms(oldest)
+            if deadline_ms:
+                summary["approval"]["deadline_ms"] = deadline_ms
+            questions = _device_question_set(oldest)
+            if questions:
+                # The runtime asked a question (Claude Code AskUserQuestion),
+                # not for permission: surfaces render its options, and the
+                # pick comes back as an `answer` decision. Rides the E2E
+                # snapshot, so the cloud never reads the question.
+                summary["approval"]["kind"] = "question_set"
+                summary["approval"]["questions"] = questions
     except Exception:
         pass
     # Surface a "something is stuck" alert from the daemon's loop-detection
@@ -22743,7 +22954,10 @@ def _build_bench_slice(store, *, days: int = 30) -> dict:
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
         "%Y-%m-%dT%H:%M:%S")
-    rows = store.query_quality_sessions(since=since, limit=1500) or []
+    # Per-runtime cap: a single cost-ordered cap let claude_code fill all
+    # 1500 rows and every quieter runtime vanished from the bench (2026-09-11).
+    rows = store.query_quality_sessions(
+        since=since, limit=6000, per_runtime_limit=1500) or []
     grouped: dict = {}
     for r in rows:
         if isinstance(r, dict):
