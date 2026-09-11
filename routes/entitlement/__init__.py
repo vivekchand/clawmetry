@@ -7,7 +7,7 @@ Key symbols: bp_entitlement, _ping_paywall_lifecycle,
 _PAYWALL_LIFECYCLE_EVENTS, _MINIMAL_OSS_FREE_SNAPSHOT.
 
 See _shared.py for the blueprint, constants, and all 150 non-handler helpers;
-_endpoints_01 through _endpoints_08 for the 434 route handlers in their
+_endpoints_01 through _endpoints_09 for the 436 route handlers in their
 original order.  dashboard.py does from routes.entitlement import bp_entitlement
 and every entitlement test that patches a helper targets routes.entitlement._shared.
 """
@@ -182,5 +182,6 @@ from ._endpoints_05 import *  # noqa: F401,F403
 from ._endpoints_06 import *  # noqa: F401,F403
 from ._endpoints_07 import *  # noqa: F401,F403
 from ._endpoints_08 import *  # noqa: F401,F403
+from ._endpoints_09 import *  # noqa: F401,F403
 
 __all__ = ["bp_entitlement"]
