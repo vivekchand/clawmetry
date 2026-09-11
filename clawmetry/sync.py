@@ -402,6 +402,11 @@ def _acquire_pid_lock() -> bool:
 # in the stack says so.
 _STALLED_INGEST_SECS = float(os.environ.get("CLAWMETRY_STALLED_INGEST_SECS", "") or 3600)
 
+# What the watchdog last saw, as (last_sync value, time.monotonic() when we
+# first saw that value). The pair is what lets the check tell a suspended
+# machine from a wedged ingest loop; see _report_if_ingest_stalled.
+_STALL_WATCH = {"last_sync": None, "since_mono": None}
+
 
 def _report_if_ingest_stalled() -> None:
     """detectors.py ships ``no_progress`` to tell a customer their agent has
@@ -413,9 +418,34 @@ def _report_if_ingest_stalled() -> None:
         from clawmetry import field_report as _fr
 
         age = _fr.last_sync_age_secs()
-        if age is not None and age > _STALLED_INGEST_SECS:
-            _fr.report_daemon_failure("daemon_ingest_stalled",
-                                      version=_get_version())
+
+        # Track how long THIS value of last_sync has been the current one, on a
+        # clock that does not advance while the machine is suspended.
+        raw = _fr.last_sync_raw()
+        now_mono = time.monotonic()
+        if raw != _STALL_WATCH["last_sync"]:
+            _STALL_WATCH["last_sync"] = raw
+            _STALL_WATCH["since_mono"] = now_mono
+
+        if age is None or age <= _STALLED_INGEST_SECS:
+            return
+
+        # The wall clock says it has been a long time, which on its own does not
+        # mean ingest stalled. `last_sync` is a wall-clock stamp, so a laptop
+        # suspended overnight wakes with an age of hours while the daemon is
+        # healthy and its next cycle completes seconds later. Reporting that
+        # marks every sleeping machine as broken, and an alarm that fires on
+        # healthy nodes is one people learn to ignore.
+        #
+        # time.monotonic() does not advance across suspend on Darwin or Linux,
+        # so "how long have we been watching this same last_sync while actually
+        # running" is the honest measure. Both clocks must agree.
+        since = _STALL_WATCH["since_mono"]
+        if since is None or (now_mono - since) <= _STALLED_INGEST_SECS:
+            return
+
+        _fr.report_daemon_failure("daemon_ingest_stalled",
+                                  version=_get_version())
     except Exception as e:  # noqa: BLE001 - the watchdog must never die
         log.debug("stall check skipped: %s", e)
 
@@ -6473,9 +6503,12 @@ def sync_openclaw_claude_sessions_via_index(
 #
 # Miss the gateway list and live messages never arrive while history works.
 # Miss the catalogue and the channel is invisible even with rows in the store.
-# The disk name and the wire name may legitimately differ (``fish-audio`` on
-# disk, ``fishaudio`` on the wire), so neither list may be derived from the
-# other by string munging.
+#
+# Every name is currently byte-identical across all four lists -- none even
+# contains a hyphen. They are still four separate edits: nothing derives one
+# list from another, and nothing enforces that they agree beyond
+# tests/test_channel_four_lists.py, which compares on a normalised form so a
+# future adapter that does need different spellings does not silently pass.
 #
 # Recorded as "A chat channel is four lists, and a channel in three of them is
 # broken" in the Runtime and Session Observability blueprint, with an ADR for
@@ -25149,7 +25182,11 @@ def run_daemon() -> None:
             lg = 0
             now_log = time.time()
             if now_log - last_log_sync > log_sync_interval:
-                lg = sync_logs(config, state, paths)
+                try:
+                    lg = sync_logs(config, state, paths)
+                except Exception as _lg_e:
+                    log.warning("log sync error (non-fatal): %s", _lg_e)
+                    lg = 0
                 last_log_sync = now_log
             try:
                 sync_voice_log_events(config, state, paths)
