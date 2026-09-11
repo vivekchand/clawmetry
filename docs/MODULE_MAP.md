@@ -176,7 +176,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/hooks.py` | medium | Hook lifecycle manager — install manifest and atomic install/uninstall API. |
 | `clawmetry/hooks_claude_code.py` | large | Claude Code hooks → ClawMetry: pre-execution approval gate + phone pushes. |
 | `clawmetry/incident_alerts.py` | medium | deliver a detector incident to a human. |
-| `clawmetry/ingest_contract.py` | small | the declared ingest/1 contract registry. |
+| `clawmetry/ingest_contract.py` | medium | the declared ingest/1 contract registry. |
 | `clawmetry/insights.py` | medium | Weekly Insights Digest — LLM-over-DuckDB summary of the last 7 days. |
 | `clawmetry/installs.py` | medium | Install census — find every clawmetry copy on this machine and flag stale ones. |
 | `clawmetry/instrument.py` | medium | ``clawmetry instrument <runtime>`` — switch a runtime's own OpenTelemetry exporter on and point it at the local ClawMetry receiver (WO-57). |
