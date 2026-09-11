@@ -28,9 +28,42 @@ write.**
 from __future__ import annotations
 
 import os
+import sys
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple
 
 _QUOTE_CHARS = ("'", '"')
+
+
+def _installed_in_user_site() -> bool:
+    """True when the running clawmetry package lives in the user site."""
+    try:
+        import site
+        import clawmetry
+        usp = os.path.abspath(site.getusersitepackages())
+        return os.path.abspath(clawmetry.__file__).startswith(usp + os.sep)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def module_launch_flags(version_info=None, user_site_install=None) -> str:
+    """Interpreter flags for a ``python -m clawmetry`` hook command that keep
+    the agent's working directory off ``sys.path``.
+
+    The runtimes start hooks in the AGENT'S working directory, and ``-m`` puts
+    that directory first on ``sys.path``. A project holding a ``clawmetry/``
+    folder (any checkout of this repo) then shadows the installed package, its
+    CLI rejects the ``hook`` subcommand, and argparse exits 2, which Claude
+    Code reads as "block this tool call". A gate that promises to fail open
+    blocked every call instead (2026-09-11, about six hours, nobody told).
+    ``-P`` (Python 3.11+) drops only that entry. Older interpreters get ``-I``,
+    unless the package is a user-site install, which ``-I`` would also hide.
+    """
+    vi = tuple((version_info or sys.version_info)[:2])
+    if vi >= (3, 11):
+        return "-P"
+    if user_site_install is None:
+        user_site_install = _installed_in_user_site()
+    return "" if user_site_install else "-I"
 
 
 def normalize_command(cmd: str) -> str:
