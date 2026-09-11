@@ -366,14 +366,14 @@ DIVES_GALLERY_QUESTIONS: tuple[dict, ...] = (
     {"question": "Which sessions cost the most? Show the top 10 by total cost.",
      "chart_type": "bar", "category": "cost"},
     {"question": "What fraction of my total spend goes to each LLM model?",
-     "chart_type": "doughnut", "category": "cost"},
+     "chart_type": "pie", "category": "cost"},
     # ── Usage & activity ──────────────────────────────────────────────────────
     {"question": "How many sessions have I started per day this month?",
      "chart_type": "line", "category": "activity"},
     {"question": "Show me total token consumption per agent runtime",
      "chart_type": "bar", "category": "activity"},
     {"question": "What are the most common event types across all agents?",
-     "chart_type": "doughnut", "category": "activity"},
+     "chart_type": "pie", "category": "activity"},
     {"question": "How many events were recorded per hour today?",
      "chart_type": "bar", "category": "activity"},
     # ── Sessions ──────────────────────────────────────────────────────────────
@@ -383,7 +383,7 @@ DIVES_GALLERY_QUESTIONS: tuple[dict, ...] = (
      "chart_type": "bar", "category": "sessions"},
     # ── Crons & ops ───────────────────────────────────────────────────────────
     {"question": "How many cron jobs are registered per agent runtime?",
-     "chart_type": "doughnut", "category": "crons"},
+     "chart_type": "pie", "category": "crons"},
     {"question": "Show daily cron run counts over the last 14 days",
      "chart_type": "line", "category": "crons"},
     # ── System health ─────────────────────────────────────────────────────────
