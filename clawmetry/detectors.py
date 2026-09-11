@@ -76,8 +76,9 @@ from clawmetry.detector_calibration import (  # noqa: F401
     resolve_thresholds,
 )
 from clawmetry.detector_surface import (  # noqa: F401
-    _MUTATING_CMD_RE, _REDIRECT_WRITE_RE, _action_surface, _cmd_sketch,
-    _hosts_from_text, _is_inspect_only, _redact_path, _strip_heredocs,
+    _MUTATING_CMD_RE, _REDIRECT_WRITE_RE, _action_surface, _args_text,
+    _cmd_sketch, _hosts_from_text, _is_inspect_only, _redact_path,
+    _secret_value_categories, _strip_heredocs, _write_hosts,
 )
 from clawmetry.detector_money import (  # noqa: F401
     CRITICAL_SPEND_USD, _SEVERITY_RANK, _severity_promote, annotate_spend,
@@ -429,7 +430,10 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
             steps.append({"i": i, "kind": "tool_result",
                           "tool": str(tool or ""), "args_hash": "",
                           "is_error": is_err, "result_text": txt,
-                          "has_text": False})
+                          "has_text": False,
+                          # Categories of token-shaped values the output
+                          # carried. Never the values themselves.
+                          "secret_values": _secret_value_categories(txt)})
             continue
 
         # Tool CALLS (top-level or hosted inside an assistant/model envelope).
@@ -438,6 +442,11 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
             for c in calls:
                 tool = str(c.get("tool") or "")
                 paths, cmd, hosts = _action_surface(tool, c.get("args"))
+                # An upload is egress even when the command names no URL
+                # (``twine upload``), so its destination joins ``hosts``.
+                write_hosts = _write_hosts(tool, c.get("args"), cmd)
+                if write_hosts:
+                    hosts = tuple(dict.fromkeys(tuple(hosts) + write_hosts))
                 steps.append({
                     "i": i, "kind": "tool_call",
                     "tool": tool,
@@ -445,6 +454,8 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
                     "is_error": False, "result_text": "", "has_text": False,
                     # What the call touched; the behavioural detectors read these.
                     "paths": paths, "cmd": cmd, "hosts": hosts,
+                    "write_hosts": write_hosts,
+                    "secret_values": _secret_value_categories(_args_text(c.get("args"))),
                 })
             continue
 
@@ -516,16 +527,21 @@ def session_profile(steps: list, write_tools=None) -> dict:
     unusual tomorrow. Never raises — an empty profile just means this session
     teaches the baseline nothing.
     """
-    out = {"tool_calls": 0, "write_files": 0, "wrote": False, "hosts": []}
+    out = {"tool_calls": 0, "write_files": 0, "wrote": False, "hosts": [],
+           "write_hosts": []}
     try:
         files = set()
         hosts = set()
+        write_hosts = set()
         calls = 0
         for st in steps or []:
             if not isinstance(st, dict):
                 continue
             for h in st.get("hosts") or ():
                 hosts.add(h)
+            for h in st.get("write_hosts") or ():
+                write_hosts.add(h)
+            out["write_hosts"] = sorted(write_hosts)[:64]
             if st.get("kind") != "tool_call" or not st.get("tool"):
                 continue
             calls += 1

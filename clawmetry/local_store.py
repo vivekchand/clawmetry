@@ -1799,6 +1799,12 @@ _DDL = [
         hits        BIGINT DEFAULT 1,
         first_seen  BIGINT NOT NULL,
         last_seen   BIGINT NOT NULL,
+        -- Direction. How often the cohort SENT data here, when it first did,
+        -- and when we started recording direction for this host at all (see
+        -- detector_calibration._read_only_hosts for why that clock exists).
+        writes           BIGINT DEFAULT 0,
+        write_first_seen BIGINT,
+        dir_since        BIGINT,
         PRIMARY KEY (cohort, host)
     )
     """,
@@ -2337,6 +2343,12 @@ _MIGRATIONS_V2 = [
     ("events",   "is_error",      "BOOLEAN"),
     ("sessions", "intent",        "VARCHAR"),
     ("sessions", "intent_source", "VARCHAR"),
+    # Egress direction per cohort host. NULL dir_since on existing rows is
+    # what keeps an upgrade from calling every known host "read-only": the
+    # direction watch starts on the first observation after the upgrade.
+    ("guard_egress_hosts", "writes",           "BIGINT DEFAULT 0"),
+    ("guard_egress_hosts", "write_first_seen", "BIGINT"),
+    ("guard_egress_hosts", "dir_since",        "BIGINT"),
 ]
 
 # ── Integrity / hash-chain (Issue #2200) ────────────────────────────────────
@@ -7621,7 +7633,8 @@ class LocalStore(TrailStoreMixin):
                                  runtime: str = "", agent_id: str = "",
                                  tool_calls: int = 0, write_files: int = 0,
                                  wrote: bool = False,
-                                 hosts: Any = None) -> None:
+                                 hosts: Any = None,
+                                 write_hosts: Any = None) -> None:
         """Record what ONE session looked like, for the cohort it belongs to.
 
         Upsert on ``session_id`` because the daemon re-reads an active session
@@ -7664,18 +7677,34 @@ class LocalStore(TrailStoreMixin):
                         updated_at  = excluded.updated_at
                 """, [sid, coh, str(runtime or "")[:64], str(agent_id or "")[:64],
                       tc, wf, bool(wrote), now_ms])
-                for host in list(hosts or [])[:64]:
-                    h = str(host or "").strip().lower()[:253]
+                written = {str(w or "").strip().lower()[:253]
+                           for w in list(write_hosts or [])[:64]}
+                every = [str(x or "").strip().lower()[:253]
+                         for x in list(hosts or [])[:64]] + sorted(written)
+                for h in list(dict.fromkeys(every))[:64]:
                     if not h:
                         continue
+                    w = h in written
+                    # first_seen, write_first_seen and dir_since never move
+                    # once set: a host must be able to finish settling while
+                    # a swarm keeps using it.
                     self._conn.execute("""
                         INSERT INTO guard_egress_hosts (
-                            cohort, host, hits, first_seen, last_seen
-                        ) VALUES (?, ?, 1, ?, ?)
+                            cohort, host, hits, first_seen, last_seen,
+                            writes, write_first_seen, dir_since
+                        ) VALUES (?, ?, 1, ?, ?, ?, ?, ?)
                         ON CONFLICT (cohort, host) DO UPDATE SET
                             hits      = guard_egress_hosts.hits + 1,
-                            last_seen = excluded.last_seen
-                    """, [coh, h, now_ms, now_ms])
+                            last_seen = excluded.last_seen,
+                            writes    = COALESCE(guard_egress_hosts.writes, 0)
+                                        + excluded.writes,
+                            write_first_seen = COALESCE(
+                                guard_egress_hosts.write_first_seen,
+                                excluded.write_first_seen),
+                            dir_since = COALESCE(guard_egress_hosts.dir_since,
+                                                 excluded.dir_since)
+                    """, [coh, h, now_ms, now_ms, 1 if w else 0,
+                          now_ms if w else None, now_ms])
         except Exception:
             return
 
@@ -7735,11 +7764,22 @@ class LocalStore(TrailStoreMixin):
             "window_days": window_days,
         }
         try:
-            hosts = self._conn.execute("""
-                SELECT host, first_seen FROM guard_egress_hosts
-                WHERE cohort = ? AND last_seen >= ?
-                ORDER BY hits DESC LIMIT ?
-            """, [coh, cutoff, max(1, min(int(max_hosts or 500), 5000))]).fetchall()
+            lim = max(1, min(int(max_hosts or 500), 5000))
+            try:
+                hosts = self._conn.execute("""
+                    SELECT host, first_seen, write_first_seen, dir_since
+                    FROM guard_egress_hosts
+                    WHERE cohort = ? AND last_seen >= ?
+                    ORDER BY hits DESC LIMIT ?
+                """, [coh, cutoff, lim]).fetchall()
+            except Exception:
+                # A store whose direction migration failed still answers the
+                # host question; it just cannot say which hosts are read-only.
+                hosts = [tuple(r) + (None, None) for r in self._conn.execute("""
+                    SELECT host, first_seen FROM guard_egress_hosts
+                    WHERE cohort = ? AND last_seen >= ?
+                    ORDER BY hits DESC LIMIT ?
+                """, [coh, cutoff, lim]).fetchall()]
             out["hosts"] = [r[0] for r in hosts if r and r[0]]
             # When each host ENTERED the cohort's memory. network_egress only
             # treats a host as known once it has been there a while; without
@@ -7747,9 +7787,17 @@ class LocalStore(TrailStoreMixin):
             # sibling that the host is normal.
             out["host_first_seen"] = {
                 r[0]: int(r[1]) for r in hosts if r and r[0] and r[1] is not None}
+            # Direction: when the cohort first WROTE to each host, and since
+            # when we have been watching direction at all.
+            out["host_write_first_seen"] = {
+                r[0]: int(r[2]) for r in hosts if r and r[0] and r[2] is not None}
+            out["host_dir_since"] = {
+                r[0]: int(r[3]) for r in hosts if r and r[0] and r[3] is not None}
         except Exception:
             out["hosts"] = []
             out["host_first_seen"] = {}
+            out["host_write_first_seen"] = {}
+            out["host_dir_since"] = {}
         return out
 
     def prune_guard_baseline(self, days: int = 180) -> int:

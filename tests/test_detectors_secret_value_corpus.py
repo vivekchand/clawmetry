@@ -20,12 +20,12 @@ mostly *values*:
                   for and it works; the tests here keep it working.
 
   VALUE lane    — a secret literal riding inside a command
-                  (``curl -H "Authorization: Bearer ops_…"``). The detector
-                  reads ``paths`` and ``cmd`` off the action surface and matches
-                  them against location patterns, so a token pasted into an
-                  argument is invisible to it. That is a missing capability, not
-                  a broken detector, and ``VALUE_LANE_BASELINE`` pins it so it
-                  cannot be closed or widened without someone recording a number.
+                  (``curl -H "Authorization: Bearer ops_…"``). This used to be
+                  invisible: the detector matched only location patterns. The
+                  value lane now scans call arguments and tool output for token
+                  shapes (these rules among them, ported with a left boundary),
+                  and ``VALUE_LANE_BASELINE`` pins the measured coverage so it
+                  cannot move without someone recording a number.
 """
 from __future__ import annotations
 
@@ -49,10 +49,12 @@ SID = "claude_code:corpus"
 # 9 true positives instead of 9 — a silent fail-open, so it is pinned below.
 RULE_FLAGS = re.IGNORECASE
 
-# How many VALUE-lane fixture lines `credential_access` flags today. Zero: it
-# matches secret locations, never secret values. Raise this when value-level
-# DLP lands — the assertion is here so that lands as a measured number.
-VALUE_LANE_BASELINE = 0
+# How many VALUE-lane fixture lines `credential_access` flags. It was 0 of 45
+# while the detector matched only secret LOCATIONS. The value lane
+# (detector_surface._SECRET_VALUE_PATTERNS, which ports these rules with a left
+# boundary) took it to 45 of 45 with the near-miss half still at 0. A change
+# in either direction must be recorded here deliberately.
+VALUE_LANE_BASELINE = 45
 
 
 # ── vendored corpus loading ──────────────────────────────────────────────────
@@ -230,11 +232,10 @@ def test_value_lane_never_over_fires():
 def test_value_lane_coverage_matches_the_recorded_baseline():
     """Real secrets pasted into a command, then sent to an external host.
 
-    Today this is ``0`` of ~45: the detector matches secret *locations* off the
-    action surface and never inspects a value, so a live token in an argument
-    passes silently. That is a capability we do not have rather than a bug, and
-    it is asserted rather than skipped so the number cannot change unnoticed —
-    raise VALUE_LANE_BASELINE when value-level DLP lands.
+    This was ``0`` of ~45 while the detector matched secret *locations* only.
+    The value lane scans call arguments and tool output for token shapes and
+    now flags every line; it is asserted rather than skipped so the number
+    cannot change unnoticed in either direction.
     """
     fired, total = _value_lane_hits("true")
     assert total >= 40, f"true-positive corpus shrank to {total} lines"

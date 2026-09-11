@@ -18,7 +18,10 @@ from __future__ import annotations
 import re
 from typing import Iterable, Optional
 
-from clawmetry.detector_surface import _IPV4_RE, _cmd_sketch, _is_inspect_only, _redact_path
+from clawmetry.detector_surface import (
+    _IPV4_RE, _SEGMENT_SPLIT_RE, SECRET_VALUE_OWNERS, _cmd_sketch,
+    _is_inspect_only, _redact_path, _segment_write_hosts, host_owned_by,
+)
 
 
 def _core():
@@ -212,6 +215,88 @@ _CREDENTIAL_STRONG = frozenset({
 })
 
 
+def _a(noun: str) -> str:
+    return ("an " if noun[:1].lower() in "aeiou" else "a ") + noun
+
+
+def _secret_value_lane(steps) -> Optional[dict]:
+    """The VALUE half of ``credential_access``: token-shaped strings in a
+    call's arguments or in a tool's output (see
+    ``detector_surface._SECRET_VALUE_PATTERNS``). ``None`` when there are none.
+
+    * critical: a token rode in a call to a host that does not own it (a
+      Hugging Face token posted to an Artifactory board), or a token that
+      first appeared in tool OUTPUT was later sent anywhere.
+    * warning: the agent handled a token in its own arguments.
+    * info: a token only appeared in output. Observation, not accusation.
+    """
+    in_output: dict = {}
+    held: dict = {}
+    sent_to: dict = {}
+    reused: set = set()
+    first_idx = None
+    for pos, st in enumerate(steps):
+        vals = st.get("secret_values") or ()
+        if not vals:
+            continue
+        if first_idx is None:
+            first_idx = st.get("i")
+        kind = st.get("kind")
+        if kind == "tool_result":
+            for c in vals:
+                in_output.setdefault(c, pos)
+            continue
+        if kind != "tool_call":
+            continue
+        call_hosts = st.get("hosts") or ()
+        for c in vals:
+            held[c] = held.get(c, 0) + 1
+            owners = SECRET_VALUE_OWNERS.get(c)
+            if owners is not None:
+                for h in call_hosts:
+                    if not host_owned_by(h, owners) and h not in sent_to.get(c, ()):
+                        sent_to.setdefault(c, []).append(h)
+            if call_hosts and c in in_output and in_output[c] < pos:
+                reused.add(c)
+    if not in_output and not held:
+        return None
+
+    if sent_to:
+        c = sorted(sent_to)[0]
+        h = sent_to[c][0]
+        sev, title = "critical", f"sent {_a(c)} to {h}"
+        detail = (f"{_a(c).capitalize()} rode in a call that reached {h}, which "
+                  f"is not a host that token belongs to. Tokens go to the "
+                  f"service that issued them; one sent elsewhere is the shape "
+                  f"of a leak. Only the kind of token is recorded. ")
+    elif reused:
+        c = sorted(reused)[0]
+        sev, title = "critical", f"found {_a(c)} in tool output, then used it"
+        detail = (f"{_a(c).capitalize()} first appeared in a tool's output and "
+                  f"later rode in a call that reached the network. An agent "
+                  f"picking up a credential it was not handed, and using it, is "
+                  f"worth a look before it continues. ")
+    elif held:
+        c = sorted(held)[0]
+        sev, title = "warning", f"handled {_a(c)} in its commands"
+        detail = (f"{_a(c).capitalize()} appeared in the agent's tool "
+                  f"arguments. Only the kind of token is recorded, never the "
+                  f"value. ")
+    else:
+        c = sorted(in_output)[0]
+        sev, title = "info", f"{_a(c)} appeared in tool output"
+        detail = (f"{_a(c).capitalize()} appeared in a tool's output. Nothing "
+                  f"used it in this window; surfaced so it is not invisible. ")
+    return {
+        "severity": sev, "title": title, "detail": detail,
+        "first_idx": first_idx,
+        "categories": sorted(set(in_output) | set(held)),
+        "in_output": sorted(in_output),
+        "sent_to_hosts": sorted({h for hs in sent_to.values() for h in hs}),
+        "reused": sorted(reused),
+    }
+
+
 def credential_access(events: Iterable[dict], session_id: str,
                       runtime: Optional[str] = None, *,
                       thresholds: Optional[dict] = None,
@@ -248,12 +333,13 @@ def credential_access(events: Iterable[dict], session_id: str,
                     if first_idx is None:
                         first_idx = st.get("i")
                         first_pos = pos
-        if not categories:
+        values = _secret_value_lane(steps)
+        if not categories and not values:
             return None
 
         # Egress AFTER the first credential touch, in the same window.
         egress_after = []
-        for st in steps[(first_pos or 0) + 1:]:
+        for st in steps[(first_pos or 0) + 1:] if categories else ():
             for h in st.get("hosts") or ():
                 egress_after.append(h)
         egress_after = sorted(set(egress_after))
@@ -266,9 +352,28 @@ def credential_access(events: Iterable[dict], session_id: str,
             "accesses": sum(categories.values()),
             "egress_after": egress_after[:5],
             "observed": "tool_arguments",
-            # No paths, no commands. The category IS the finding.
-            "redacted": "paths and commands are deliberately not recorded",
+            # No paths, no commands, no values. The category IS the finding.
+            "redacted": "paths, commands and secret values are deliberately not recorded",
         }
+        if values:
+            evidence.update({
+                "value_categories": values["categories"],
+                "values_in_output": values["in_output"],
+                "values_sent_to": values["sent_to_hosts"][:5],
+                "values_reused": values["reused"],
+            })
+            if values["in_output"]:
+                evidence["observed"] = "tool_arguments_and_results"
+            # A token leaving for a host that does not own it outranks any
+            # location finding; with no location finding, the value lane is
+            # the whole story at whatever severity it earned.
+            if values["severity"] == "critical" or not categories:
+                return _core()._incident(
+                    "credential_access", session_id, runtime, values["severity"],
+                    f"{runtime}: {values['title']}",
+                    values["detail"] + _core()._stop_hint(), evidence,
+                    values["first_idx"])
+
         # Rank a named secret above a generic environment dump in the headline.
         head = (strong or labels)[0]
         more = f" and {len(labels) - 1} more" if len(labels) > 1 else ""
@@ -333,7 +438,9 @@ def network_egress(events: Iterable[dict], session_id: str,
     try:
         runtime, th, steps = _core()._prepare(events, steps, thresholds, runtime, session_id)
         known = th.get("known_hosts") or frozenset()
+        read_only = th.get("read_only_hosts") or frozenset()
         hosts: dict = {}
+        written: dict = {}
         first_idx = None
         for st in steps:
             for h in st.get("hosts") or ():
@@ -341,17 +448,24 @@ def network_egress(events: Iterable[dict], session_id: str,
                     hosts[h] = st.get("i")
                     if first_idx is None:
                         first_idx = st.get("i")
+            for h in st.get("write_hosts") or ():
+                written.setdefault(h, st.get("i"))
         if not hosts:
             return None
 
         distinct = sorted(hosts)
         new_hosts = [h for h in distinct if h not in known] if known else []
+        # Sent data to a host the cohort has only ever READ from: the package
+        # mirror used as a message board (Hugging Face swarm, July 2026).
+        ro_writes = [h for h in sorted(written) if h in read_only]
         raw_ips = [h for h in distinct if _IPV4_RE.match(h)]
         fanout_limit = int(th["egress_hosts"])
         fanout = len(distinct) >= fanout_limit
 
         if new_hosts:
             ground, sev = "first_time", "warning"
+        elif ro_writes:
+            ground, sev = "write_to_read_only_host", "warning"
         elif fanout:
             ground, sev = "fanout", "warning"
         elif raw_ips:
@@ -374,24 +488,41 @@ def network_egress(events: Iterable[dict], session_id: str,
             "raw_addresses": raw_ips[:4],
             "known_host_count": len(known),
             "threshold": fanout_limit,
+            # Direction: hosts this window SENT data to, and which of those
+            # the cohort has only ever read from.
+            "write_hosts": sorted(written)[:8],
+            "read_only_writes": ro_writes[:8],
             "observed": "tool_arguments",
         }
+        settle_h = th.get("egress_settle_hours") or 0
+        window = f"{settle_h:g}h"
         if ground == "first_time":
             shown = ", ".join(new_hosts[:3])
-            settle_h = th.get("egress_settle_hours") or 0
-            window = f"{settle_h:g}h"
             detail = (f"This agent has not reached {shown} in the {len(known)} "
                       f"host(s) its cohort has used for longer than {window}. ")
             if settling_new:
                 detail += (f"{len(settling_new)} of them were first reached by "
                            f"other sessions in this cohort within the last "
                            f"{window}, so they are not counted as normal yet. ")
+            verb = ("first write to" if any(h in written for h in new_hosts[:3])
+                    else "first contact with")
             return _core()._incident(
                 "network_egress", session_id, runtime, sev,
-                f"{runtime}: first contact with {shown}"
+                f"{runtime}: {verb} {shown}"
                 + (f" +{len(new_hosts) - 3} more" if len(new_hosts) > 3 else ""),
                 detail + _core()._stop_hint(),
                 evidence, hosts.get(new_hosts[0]))
+        if ground == "write_to_read_only_host":
+            shown = ", ".join(ro_writes[:3])
+            return _core()._incident(
+                "network_egress", session_id, runtime, sev,
+                f"{runtime}: sent data to {shown}, a host its cohort only reads from",
+                f"The agent wrote to {shown} (an upload, a PUT or POST, a "
+                f"publish). Sessions in its cohort have only ever read from "
+                f"there, watched for at least {window}. A package mirror or "
+                f"shared cache is where agents get things; an agent putting "
+                f"things there is the unusual direction. " + _core()._stop_hint(),
+                evidence, written.get(ro_writes[0]))
         if ground == "fanout":
             return _core()._incident(
                 "network_egress", session_id, runtime, sev,
@@ -432,7 +563,34 @@ _PRIVILEGE_PATTERNS = (
     ("installed a launch/system service",
      re.compile(r"\blaunchctl\s+(?:load|bootstrap)|\bsystemctl\s+(?:enable|start)|"
                 r"\bcrontab\s+-", re.I), False),
+    # Remote tier: privilege on SOMEONE ELSE'S system. A role binding or an
+    # access key outlives the session exactly as a setuid bit does, so these
+    # are critical too. The Hugging Face swarm reached cluster-admin this way
+    # (scorecard rows 3 and 12) while the local tier saw nothing.
+    ("granted a Kubernetes role binding",
+     re.compile(r"\bkubectl\b[^;&|\n]*\bcreate\s+(?:cluster)?rolebinding\b", re.I), True),
+    ("acted as a Kubernetes cluster admin",
+     re.compile(r"\bkubectl\b[^;&|\n]*--as(?:-group)?[=\s]['\"]?system:(?:admin|masters)\b",
+                re.I), True),
+    ("created cloud credentials or attached an IAM policy",
+     re.compile(r"\baws\s+iam\s+(?:create-access-key|create-login-profile|"
+                r"attach-(?:user|role|group)-policy|put-(?:user|role|group)-policy|"
+                r"update-assume-role-policy|add-user-to-group)\b", re.I), True),
+    ("granted a cloud IAM role",
+     re.compile(r"\bgcloud\b[^;&|\n]*\badd-iam-policy-binding\b|"
+                r"\baz\s+role\s+assignment\s+create\b", re.I), True),
+    ("ran a privileged container",
+     re.compile(r"\b(?:docker|podman)\s+run\b[^;&|\n]*(?:--privileged\b|"
+                r"(?:-v|--volume)[=\s]['\"]?/:/|--pid[=\s]host\b)", re.I), True),
 )
+# Admin endpoints that turn an HTTP request into standing privilege or code
+# execution on the server: Artifactory token minting and plugin execution,
+# Jenkins' script console. Only a WRITING request counts: fetching the page is
+# looking, POSTing a script is running it.
+_ADMIN_API_RE = re.compile(
+    r"://[^\s'\"]+/(?:api/security/token|api/plugins/(?:execute|reload)|"
+    r"scriptText|scriptExecution|script)(?=[\s'\"?/#]|$)", re.I)
+_ADMIN_API_LABEL = "called a remote admin API"
 
 
 def privilege_change(events: Iterable[dict], session_id: str,
@@ -468,6 +626,13 @@ def privilege_change(events: Iterable[dict], session_id: str,
                     if first_idx is None:
                         first_idx = st.get("i")
                         sketch = _cmd_sketch(cmd)
+            if any(_ADMIN_API_RE.search(seg) and _segment_write_hosts(seg)
+                   for seg in _SEGMENT_SPLIT_RE.split(cmd)[:40]):
+                found[_ADMIN_API_LABEL] = found.get(_ADMIN_API_LABEL, 0) + 1
+                critical.append(_ADMIN_API_LABEL)
+                if first_idx is None:
+                    first_idx = st.get("i")
+                    sketch = _cmd_sketch(cmd)
         if not found:
             return None
 
