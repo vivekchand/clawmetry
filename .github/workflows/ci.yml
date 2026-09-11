@@ -556,6 +556,13 @@ jobs:
       - name: Pseudolocale gate can go red
         run: python3 -m pytest tests/test_pseudolocale_gate_can_fail.py -q
 
+      # provenance.js exists because "a zero and a hole are identical once
+      # they are formatted". The Cost tiles route through it; the cost
+      # optimizer modal did not, and printed $0.000 on a hosted node whose
+      # own snapshot carried spending.today = 272.36 (cloud #2322).
+      - name: Cost optimizer tells a hole from a zero
+        run: python3 -m pytest tests/test_cost_optimizer_zero_is_not_unknown.py -q
+
       # A Pro node stopped syncing for 12 hours (2026-09-08) because sync.pid
       # named a pid the OS had recycled onto an unrelated process: every
       # launchd respawn read "alive" and exited, and `clawmetry status` still
@@ -878,6 +885,14 @@ jobs:
         env:
           CI: "true"
         run: python3 -m pytest tests/test_question_set_relay.py -q
+
+      # A hook-parked request is stamped ...Z (UTC); _seconds_since must not
+      # read it as local wall-clock (2026-09-11: a 4-minute-old question
+      # showed "waiting 2h 2m" on a CEST machine).
+      - name: Approval waiting time honours UTC
+        env:
+          CI: "true"
+        run: python3 -m pytest tests/test_seconds_since_utc.py -q
 
       # Mutation testing: does the suite actually catch bugs, or has it been
       # weakened into a tautology? Line coverage cannot tell the difference.
