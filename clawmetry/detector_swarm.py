@@ -36,7 +36,7 @@ import time
 from typing import Optional
 
 from clawmetry.detector_calibration import EGRESS_SETTLE_HOURS
-from clawmetry.detector_surface import _SEGMENT_SPLIT_RE, _program, _segment_write_hosts
+from clawmetry.detector_payload import _SEGMENT_SPLIT_RE, _program, _segment_write_hosts
 
 #: The incident kinds only a fleet-wide pass can produce. Re-exported through
 #: ``detectors.ALL_INCIDENT_KINDS`` so every renderer and policy form knows them.

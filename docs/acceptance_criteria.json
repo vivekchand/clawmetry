@@ -859,6 +859,54 @@
       "text": "A failure to produce titles shall degrade to no titles, and shall never prevent the rest of the snapshot from being produced."
     },
     {
+      "id": "AC-OBS-RSO-035.1",
+      "doc": "Coordinated action: unrelated sessions acting in step",
+      "doc_id": "ad8d99c6-bdee-4913-b4c2-3b351e95330b",
+      "text": "The system shall describe each observed write as an action made of its method or transfer type, its destination, and the first two segments of its path, with any path segment containing a digit masked, so that per-agent directory names collapse into the shared location they sit under."
+    },
+    {
+      "id": "AC-OBS-RSO-035.2",
+      "doc": "Coordinated action: unrelated sessions acting in step",
+      "doc_id": "ad8d99c6-bdee-4913-b4c2-3b351e95330b",
+      "text": "When sessions from at least a configured number of unrelated families (default five) perform the same action that the node has no settled history of, the system shall raise one finding for that action, naming the action and how many families took it."
+    },
+    {
+      "id": "AC-OBS-RSO-035.3",
+      "doc": "Coordinated action: unrelated sessions acting in step",
+      "doc_id": "ad8d99c6-bdee-4913-b4c2-3b351e95330b",
+      "text": "Sessions linked by a parent/child (orchestrator/subagent) relationship, including through several levels or a cycle, shall count as one family."
+    },
+    {
+      "id": "AC-OBS-RSO-035.4",
+      "doc": "Coordinated action: unrelated sessions acting in step",
+      "doc_id": "ad8d99c6-bdee-4913-b4c2-3b351e95330b",
+      "text": "An action counts as normal only after it has been in the node's memory for the settle window; an action first seen inside the window stays unusual, so the first member of a swarm cannot vouch for the rest."
+    },
+    {
+      "id": "AC-OBS-RSO-035.5",
+      "doc": "Coordinated action: unrelated sessions acting in step",
+      "doc_id": "ad8d99c6-bdee-4913-b4c2-3b351e95330b",
+      "text": "A node that has not been recording actions for a full settle window shall raise no such finding."
+    },
+    {
+      "id": "AC-OBS-RSO-035.6",
+      "doc": "Coordinated action: unrelated sessions acting in step",
+      "doc_id": "ad8d99c6-bdee-4913-b4c2-3b351e95330b",
+      "text": "Each finding shall reach a person as one message, however many sessions share it, and shall appear on each participating session in the Guard tab without being re-recorded on every tick."
+    },
+    {
+      "id": "AC-OBS-RSO-035.7",
+      "doc": "Coordinated action: unrelated sessions acting in step",
+      "doc_id": "ad8d99c6-bdee-4913-b4c2-3b351e95330b",
+      "text": "A policy that does not name this kind shall not act on it, so a catch-all rule written about single agents cannot pause every participant at once."
+    },
+    {
+      "id": "AC-OBS-RSO-035.8",
+      "doc": "Coordinated action: unrelated sessions acting in step",
+      "doc_id": "ad8d99c6-bdee-4913-b4c2-3b351e95330b",
+      "text": "The finding shall state that it is derived from tool arguments."
+    },
+    {
       "id": "AC-RSO-CWD-001.1",
       "doc": "Runtime and Session Observability",
       "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",

@@ -5,6 +5,25 @@ https://clawmetry.com/blog/could-clawmetry-have-caught-the-hugging-face-swarm:
 ~1,200 agents used one Artifactory path as a message board, and 90% pivoted
 to the same target within an hour. Every per-session detector saw, at most,
 one agent doing something slightly odd. This file pins the fleet question.
+
+Acceptance criteria proven here (REQ-OBS-RSO-035):
+
+    AC-OBS-RSO-035.1  test_per_agent_paths_share_one_fingerprint, test_fingerprint_shape
+    AC-OBS-RSO-035.2  test_unrelated_sessions_writing_one_unseen_prefix_fire_once,
+                      test_below_the_threshold_is_quiet
+    AC-OBS-RSO-035.3  test_an_orchestrator_and_its_subagents_count_once,
+                      test_subagents_of_different_orchestrators_are_unrelated,
+                      test_a_parent_cycle_cannot_hang_the_walk,
+                      test_subagent_parents_walk_to_the_root
+    AC-OBS-RSO-035.4  test_an_action_the_node_has_long_known_is_normal,
+                      test_an_action_first_seen_minutes_ago_is_still_unusual,
+                      test_fingerprint_memory_round_trip
+    AC-OBS-RSO-035.5  test_a_node_without_a_full_window_of_memory_says_nothing
+    AC-OBS-RSO-035.6  test_fleet_pass_pages_once_and_marks_every_participant,
+                      test_fleet_pass_does_not_re_mark_a_session_every_tick
+    AC-OBS-RSO-035.7  test_a_catch_all_policy_does_not_act_on_the_swarm,
+                      test_a_policy_that_names_coordinated_action_matches
+    AC-OBS-RSO-035.8  test_unrelated_sessions_writing_one_unseen_prefix_fire_once
 """
 from __future__ import annotations
 
