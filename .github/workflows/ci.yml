@@ -857,6 +857,15 @@ jobs:
           CI: "true"
         run: python3 -m pytest tests/test_store_invariants.py -q
 
+      # An agent's question (Claude Code AskUserQuestion) reaches the snapshot
+      # with its options, a sealed answer from the cloud strip lands on the
+      # stored request, and a request nothing is waiting on is retired rather
+      # than offered forever (2026-09-11: one sat on the strip for 2h38m).
+      - name: Question-set approvals relay
+        env:
+          CI: "true"
+        run: python3 -m pytest tests/test_question_set_relay.py -q
+
       # Mutation testing: does the suite actually catch bugs, or has it been
       # weakened into a tautology? Line coverage cannot tell the difference.
       # The score ratchets -- it may rise freely, and a drop fails the build.
