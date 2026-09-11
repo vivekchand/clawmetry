@@ -8867,9 +8867,6 @@ DASHBOARD_HTML = r"""
 <!-- UPGRADE IMPACT -->
 {% include 'tabs/version-impact.html' %}
 
-<!-- SESSION CLUSTERS -->
-{% include 'tabs/clusters.html' %}
-
 <!-- HISTORY -->
 
 <!-- Rate limits panel removed -- see sidebar comment above. -->
