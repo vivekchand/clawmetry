@@ -15090,11 +15090,17 @@ def _family_ingest_rev() -> str:
     ``arguments`` (Codex). ``metadata.quality`` is graded only at ingest, so
     without the bump every already-seen Codex session stays "not measurable"
     and the Harness Engineering bench keeps stamping Codex "Can't see".
+
+    ``/t1`` (2026-09-11): titles skip harness-injected context
+    (``clawmetry/injected_context.py``). Stored titles are written only at
+    ingest, so without the bump every idle Codex session keeps its
+    "# AGENTS.md instructions for …" title, locally and in the sealed cloud
+    ``title_blob``.
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1/q2"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t1"
     except Exception:
         return ""
 
@@ -16060,6 +16066,12 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # list-block content, and caches per session so an already-titled
                 # session never re-reads the transcript head. Never raises.
                 _ftitle = (s.display_name or s.title or "").strip()
+                # An adapter's own title can be injected context: Codex
+                # titled every session "# AGENTS.md instructions for …"
+                # (founder report 2026-09-11). Keep only the human part.
+                if _ftitle and not _session_titles.looks_like_session_id(
+                        _ftitle, s.id):
+                    _ftitle = _session_titles.derive_title_from_texts([_ftitle])
                 if not _ftitle or _session_titles.looks_like_session_id(_ftitle, s.id):
                     _ftitle = _session_titles.title_for_family_session(
                         runtime, s.id, _events
@@ -17307,31 +17319,21 @@ def _derive_transcript_title(msgs):
     """
     if not isinstance(msgs, (list, tuple)):
         return ""
+    from clawmetry.injected_context import human_prompt
     for m in msgs:
         if not isinstance(m, dict):
             continue
         if m.get("role") != "user":
             continue
-        c = m.get("content")
-        text = ""
-        if isinstance(c, str):
-            text = c
-        elif isinstance(c, list):
-            for block in c:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    t = block.get("text")
-                    if isinstance(t, str) and t.strip():
-                        text = t
-                        break
-                elif isinstance(block, str) and block.strip():
-                    text = block
-                    break
+        # Only what the person typed: Codex's "# AGENTS.md instructions"
+        # turn, Cursor's <user_query> wrapper and friends are harness
+        # context (founder report 2026-09-11).
+        text = human_prompt(m.get("content"))
         if not text:
             # Some adapters write the prompt under a sibling key.
             for fld in ("text", "prompt", "finalPromptText"):
-                v = m.get(fld)
-                if isinstance(v, str) and v.strip():
-                    text = v
+                text = human_prompt(m.get(fld))
+                if text:
                     break
         text = " ".join((text or "").split())  # collapse all whitespace runs
         if not text:
@@ -17380,12 +17382,16 @@ def _render_transcript_page(page: dict, args: dict) -> dict:
 def _first_user_prompt_index(msgs):
     """Index of the opening user prompt in a transcript message list, or
     ``None``. Mirrors what the replay's turn grouping treats as a turn anchor:
-    ``role == "user"``, not a tool chip, non-empty text content."""
+    ``role == "user"``, not a tool chip, and text the person typed: a bare
+    ``[Image: source: …]`` placeholder row used to win here, so the cap kept
+    it and dropped the real opening prompt (and with it the title) on every
+    session over the cap."""
+    from clawmetry.injected_context import human_prompt
     for i, m in enumerate(msgs):
         if not isinstance(m, dict) or m.get("role") != "user" or m.get("tool"):
             continue
         c = m.get("content")
-        if isinstance(c, str) and c.strip():
+        if isinstance(c, str) and human_prompt(c):
             return i
     return None
 
