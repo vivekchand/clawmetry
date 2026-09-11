@@ -128,6 +128,17 @@ def _stamp_reported(failure_class: str) -> None:
         log.debug("field report: stamp not written: %s", e)
 
 
+def last_sync_raw():
+    """The raw ``last_sync`` value, or None. Used to tell "the same cycle stamp
+    is still current" from "a new cycle completed", without re-parsing dates."""
+    try:
+        from clawmetry.sync import STATE_FILE
+
+        return json.loads(STATE_FILE.read_text()).get("last_sync")
+    except Exception:  # noqa: BLE001 - missing, unreadable, unparseable
+        return None
+
+
 def last_sync_age_secs():
     """Seconds since the daemon last COMPLETED a sync cycle, or None.
 
