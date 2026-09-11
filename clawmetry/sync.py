@@ -25367,7 +25367,19 @@ def run_daemon() -> None:
                     "pre-checkpoint local-store flush failed (continuing): %s",
                     _flush_e,
                 )
-            save_state(state)
+            # field-failure daemon_ingest_stalled (#5853-#5858): unlike every
+            # other call in this loop, this one used to run bare. A
+            # persistent write failure (disk full, a transient permission
+            # error, …) propagated straight to the outer "Sync cycle error"
+            # handler below, skipping the heartbeat/alerts/detector passes
+            # still to come AND leaving the fresh last_sync unwritten on
+            # disk -- which is exactly what field_report.last_sync_age_secs()
+            # reads. Same class of bug as #5800-#5834, one more call the
+            # earlier sweeps missed.
+            try:
+                save_state(state)
+            except Exception as _ss_e:
+                log.warning("save_state failed (continuing): %s", _ss_e)
             if ev or lg or mem or crons or sm or snap or cron_runs or tg or oc_cc:
                 try:
                     from clawmetry.config import cloud_egress_enabled as _cee

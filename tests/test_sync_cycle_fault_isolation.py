@@ -1,7 +1,7 @@
-"""Regression for field-failures #5800 / #5801 / #5829-#5834
-(``daemon_ingest_stalled`` on Darwin py3.14, Linux py3.12, and, after the
-first fix (#5802) missed one more call, again on Darwin py3.10/3.11/3.12/3.14
-and Linux py3.10/3.12).
+"""Regression for field-failures #5800 / #5801 / #5829-#5834 / #5853-#5858
+(``daemon_ingest_stalled`` on Darwin py3.14, Linux py3.12, and, after each
+earlier fix missed one more call, again on Darwin py3.10/3.11/3.12/3.14 and
+Linux py3.10/3.12 -- twice).
 
 ``run_daemon``'s steady-state ``while True:`` cycle wraps almost every ingest
 call in its own ``try/except`` so one bad data source cannot take down the
@@ -21,7 +21,12 @@ its heartbeat file the whole time, so nothing looks dead -- until
 the first six calls; ``sync_logs`` kept running bare a few lines further down
 the same loop (it is gated behind its own throttle interval, so it was easy
 to miss in the earlier sweep), and the field failure recurred on six more
-OS/Python combinations the very next day.
+OS/Python combinations the very next day. A third sweep found ``save_state``
+itself -- the call that actually persists ``last_sync`` to disk -- still bare
+a few lines further down: even after ``state["last_sync"]`` was updated in
+memory, a persistent write failure there (disk full, a transient permission
+error) never reached disk, and skipped the heartbeat/alerts/detector passes
+for that cycle too.
 
 This test parses ``clawmetry/sync.py`` with ``ast`` rather than importing it,
 so it needs no daemon dependencies (DuckDB, cryptography, ...) and runs in the
@@ -47,6 +52,7 @@ TARGET_CALLS = frozenset({
     "sync_session_metadata",
     "sync_crons",
     "sync_logs",
+    "save_state",
 })
 
 

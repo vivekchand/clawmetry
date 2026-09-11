@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: `save_state` could stall the sync daemon's `last_sync` forever (2026-09-11)
+- **Why:** field failures #5853-#5858 reported `daemon_ingest_stalled` across six more OS/Python combinations, the third occurrence of this class after #5800/#5801 and #5829-#5834.
+- **The bug:** `run_daemon()`'s steady-state loop wraps almost every ingest call in its own `try/except` so one bad source cannot take the whole cycle down, but `save_state(state)` (the call that actually persists `last_sync` to `~/.clawmetry/state.json`, which `field_report.last_sync_age_secs()` reads) still ran bare. A persistent write failure there propagated to the loop's outer "Sync cycle error" handler, skipping the heartbeat/alerts/detector passes for that cycle and leaving `last_sync` on disk frozen even though `state["last_sync"]` had already advanced in memory.
+- **What:** wrapped `save_state(state)` in its own `try/except`, matching every neighbouring call in the loop.
+- **Verified:** `tests/test_sync_cycle_fault_isolation.py` (AST-based guard) now checks `save_state` too; proven red against the pre-fix code, green after.
+- **Carries:** #5853-#5858.
+
 ### Added: Guard notices unrelated agents acting in step, `coordinated_action` (2026-09-11)
 - **Why:** rows 5 and 11 of the Hugging Face swarm scorecard: about 1,200 agents used one shared Artifactory path as a message board, then 90% converged on one target within an hour. Every ClawMetry detector read one session, so each agent looked at most slightly odd and the population was invisible. The follow-up post (clawmetry.com/blog/observe-the-swarm-not-the-session) committed to asking the fleet question instead: are sessions that should be independent behaving as if they are coordinated?
 - **What:** `clawmetry/detector_swarm.py` turns every write call into a fingerprint (verb, host, first two path segments, digit segments masked, so per-agent directories collapse into the shared board), and groups sessions into families through the subagent table, so an orchestrator and its subagents count once. One finding per fingerprint when at least 5 unrelated families (`CLAWMETRY_COORD_MIN_SESSIONS`) share an action the node has no settled memory of.
