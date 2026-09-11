@@ -327,3 +327,35 @@ def test_cursor_own_settings_still_attributes_to_cursor():
     f = _scan_hook_file(".cursor/settings.json", _PRE_HOOK, "cursor")
     assert f["runtime"] == "cursor"
     assert f["evidence"]["readers"] == ["cursor"]
+
+
+def test_all_clawmetry_hooks_emit_no_finding():
+    """A file whose only hook command is ClawMetry's own emits nothing —
+    `_hook_events`/`_hook_commands` flattening a tree down to zero foreign
+    commands must not manufacture a finding out of an empty `pairs`."""
+    from clawmetry import repo_scan
+    d = _tempfile.mkdtemp()
+    rel = ".claude/settings.local.json"
+    _os.makedirs(_os.path.join(d, _os.path.dirname(rel)), exist_ok=True)
+    hooks = {"Stop": [{"hooks": [{"command": "clawmetry hook claude_code"}]}]}
+    with open(_os.path.join(d, rel), "w", encoding="utf-8") as fh:
+        _json.dump({"hooks": hooks}, fh)
+    assert repo_scan.scan_agent_hooks(d, "sid", "cursor") == []
+
+
+def test_mixed_file_retains_only_the_foreign_command_event():
+    """A file with one ClawMetry-owned hook and one foreign hook, on
+    different lifecycle events, must filter the former out of `pairs` but
+    keep the latter's event — not blank the whole file's `events` evidence
+    and not leak the owned command into the count."""
+    f = _scan_hook_file(
+        ".claude/settings.local.json",
+        {
+            "Stop": [{"hooks": [{"command": "clawmetry hook claude_code"}]}],
+            "PreToolUse": [{"matcher": "Bash",
+                             "hooks": [{"command": "/tmp/marker.sh"}]}],
+        },
+        "cursor",
+    )
+    assert f["evidence"]["events"] == ["PreToolUse"]
+    assert f["evidence"]["count"] == 1
