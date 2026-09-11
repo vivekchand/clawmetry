@@ -348,44 +348,6 @@ def api_dives_list():
     return jsonify({"dives": _list_dives()})
 
 
-@bp_dives.route("/api/dives/<slug>")
-def api_dives_get(slug: str):
-    """GET → dive record + re-run rows against live data."""
-    record = _read_dive(slug)
-    if record is None:
-        return jsonify({"error": "Not found."}), 404
-
-    sql = record.get("sql", "")
-    rows: list[dict] = []
-    run_error: str | None = None
-    if sql:
-        try:
-            store = _get_store()
-            rows, run_error = _execute(sql, store)
-        except Exception as e:
-            run_error = str(e)[:200]
-
-    body = dict(record)
-    body["rows"] = rows
-    if run_error:
-        body["run_error"] = run_error
-    return jsonify(body)
-
-
-@bp_dives.route("/api/dives/<slug>", methods=["DELETE"])
-def api_dives_delete(slug: str):
-    """DELETE → {deleted: slug}"""
-    safe = _safe_slug(slug)
-    path = os.path.join(_dives_dir(), safe + ".json")
-    if not os.path.isfile(path):
-        return jsonify({"error": "Not found."}), 404
-    try:
-        os.remove(path)
-    except OSError as e:
-        return jsonify({"error": f"Delete failed: {e}"}), 500
-    return jsonify({"deleted": safe})
-
-
 # ── Suggested-questions gallery (DIVES-5) ─────────────────────────────────────
 
 #: Curated starter questions for the Dives UI.  Each entry has ``question``
@@ -436,3 +398,41 @@ SUGGESTED_QUESTIONS: tuple[dict, ...] = (
 def api_dives_questions():
     """GET → {questions: [{question, chart_type, category}, ...]}"""
     return jsonify({"questions": [dict(q) for q in SUGGESTED_QUESTIONS]})
+
+
+@bp_dives.route("/api/dives/<slug>")
+def api_dives_get(slug: str):
+    """GET → dive record + re-run rows against live data."""
+    record = _read_dive(slug)
+    if record is None:
+        return jsonify({"error": "Not found."}), 404
+
+    sql = record.get("sql", "")
+    rows: list[dict] = []
+    run_error: str | None = None
+    if sql:
+        try:
+            store = _get_store()
+            rows, run_error = _execute(sql, store)
+        except Exception as e:
+            run_error = str(e)[:200]
+
+    body = dict(record)
+    body["rows"] = rows
+    if run_error:
+        body["run_error"] = run_error
+    return jsonify(body)
+
+
+@bp_dives.route("/api/dives/<slug>", methods=["DELETE"])
+def api_dives_delete(slug: str):
+    """DELETE → {deleted: slug}"""
+    safe = _safe_slug(slug)
+    path = os.path.join(_dives_dir(), safe + ".json")
+    if not os.path.isfile(path):
+        return jsonify({"error": "Not found."}), 404
+    try:
+        os.remove(path)
+    except OSError as e:
+        return jsonify({"error": f"Delete failed: {e}"}), 500
+    return jsonify({"deleted": safe})
