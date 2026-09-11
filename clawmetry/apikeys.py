@@ -471,6 +471,23 @@ def origin_allowed(record: dict, origin: str) -> bool:
     return o in [str(x).lower() for x in (record.get("origins") or [])]
 
 
+def canonical_allowed_origin(record: dict, origin: str) -> "str | None":
+    """Return the stored canonical form of *origin* if this key allows it.
+
+    Returns ``None`` when the origin is not on the key's allowlist.
+    Using the stored value (not the caller-supplied string) in the
+    ``Access-Control-Allow-Origin`` response header prevents a
+    user-input → response-header taint chain (CWE-113).
+    """
+    if not origin:
+        return None
+    o = origin.strip().rstrip("/").lower()
+    for stored in (record.get("origins") or []):
+        if str(stored).lower() == o:
+            return str(stored)
+    return None
+
+
 def any_key_allows_origin(origin: str) -> bool:
     """True when ANY live key names ``origin``.
 
@@ -489,6 +506,26 @@ def any_key_allows_origin(origin: str) -> bool:
         if o in [str(x).lower() for x in (rec.get("origins") or [])]:
             return True
     return False
+
+
+def any_canonical_allowed_origin(origin: str) -> "str | None":
+    """Return the stored canonical form of *origin* from any live key that allows it.
+
+    Returns ``None`` when no live key names the origin.
+    Uses the stored value (not the caller-supplied string) so the
+    ``Access-Control-Allow-Origin`` response header is not built from
+    raw request data (CWE-113).
+    """
+    if not origin:
+        return None
+    o = origin.strip().rstrip("/").lower()
+    for rec in _read_store()["keys"]:
+        if rec.get("revoked_at"):
+            continue
+        for stored in (rec.get("origins") or []):
+            if str(stored).lower() == o:
+                return str(stored)
+    return None
 
 
 def granted_shapes(record: dict) -> set:
