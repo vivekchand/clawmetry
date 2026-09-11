@@ -547,6 +547,22 @@ jobs:
       - name: Queue Lanes panel is reachable
         run: python3 -m pytest tests/test_queue_lanes_panel_is_reachable.py -q
 
+      # tests/e2e/pseudolocale.mjs shipped for months as a script that could
+      # not fail: it ran in no workflow, and its only exit-1 path was
+      # `STRICT && fail > 0`, so a dashboard where nothing was localised
+      # printed "Locale machinery verified" and exited 0. These pin the
+      # separation that makes it gateable (machinery always fatal, residual
+      # strings a soft backlog) and pin that it stays wired to a workflow.
+      - name: Pseudolocale gate can go red
+        run: python3 -m pytest tests/test_pseudolocale_gate_can_fail.py -q
+
+      # provenance.js exists because "a zero and a hole are identical once
+      # they are formatted". The Cost tiles route through it; the cost
+      # optimizer modal did not, and printed $0.000 on a hosted node whose
+      # own snapshot carried spending.today = 272.36 (cloud #2322).
+      - name: Cost optimizer tells a hole from a zero
+        run: python3 -m pytest tests/test_cost_optimizer_zero_is_not_unknown.py -q
+
       # A Pro node stopped syncing for 12 hours (2026-09-08) because sync.pid
       # named a pid the OS had recycled onto an unrelated process: every
       # launchd respawn read "alive" and exited, and `clawmetry status` still
@@ -728,6 +744,10 @@ jobs:
             tests/test_trail_coverage_route.py \
             tests/test_harness_bench.py \
             tests/test_bench_route.py \
+            tests/test_openclaw_quality_at_ingest.py \
+            tests/test_quality_sessions_per_runtime_limit.py \
+            tests/test_quality_signals_contract.py \
+            tests/test_quality_runtime_conformance.py \
             tests/test_cohort_compare.py \
             tests/test_outcome_classifier.py \
             tests/test_session_live_state.py \
@@ -856,6 +876,23 @@ jobs:
         env:
           CI: "true"
         run: python3 -m pytest tests/test_store_invariants.py -q
+
+      # An agent's question (Claude Code AskUserQuestion) reaches the snapshot
+      # with its options, a sealed answer from the cloud strip lands on the
+      # stored request, and a request nothing is waiting on is retired rather
+      # than offered forever (2026-09-11: one sat on the strip for 2h38m).
+      - name: Question-set approvals relay
+        env:
+          CI: "true"
+        run: python3 -m pytest tests/test_question_set_relay.py -q
+
+      # A hook-parked request is stamped ...Z (UTC); _seconds_since must not
+      # read it as local wall-clock (2026-09-11: a 4-minute-old question
+      # showed "waiting 2h 2m" on a CEST machine).
+      - name: Approval waiting time honours UTC
+        env:
+          CI: "true"
+        run: python3 -m pytest tests/test_seconds_since_utc.py -q
 
       # Mutation testing: does the suite actually catch bugs, or has it been
       # weakened into a tautology? Line coverage cannot tell the difference.

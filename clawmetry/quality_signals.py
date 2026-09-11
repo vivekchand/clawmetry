@@ -192,6 +192,28 @@ def _text_of(data: dict[str, Any]) -> str:
     return ""
 
 
+def _input_of(tc: dict[str, Any]) -> dict:
+    """A tool call's argument object, from ``input`` or ``arguments``.
+
+    Codex (and the OpenAI function-calling shape generally) records
+    ``arguments`` as a JSON-encoded STRING, not an object. Reading only dicts
+    dropped every Codex input, so thrash detection was unsupported, no signal
+    applied, and every Codex session was "not measurable" -- the Harness
+    Engineering bench stamped the whole runtime "Can't see" (2026-09-11).
+    """
+    for k in ("input", "arguments"):
+        v = tc.get(k)
+        if isinstance(v, str) and v.lstrip().startswith("{"):
+            try:
+                import json
+                v = json.loads(v)
+            except Exception:
+                continue
+        if isinstance(v, dict) and v:
+            return v
+    return {}
+
+
 def _tool_calls_of(data: dict[str, Any]) -> list[tuple[str, dict]]:
     """[(tool_name, input), ...] across BOTH dialects.
 
@@ -216,21 +238,22 @@ def _tool_calls_of(data: dict[str, Any]) -> list[tuple[str, dict]]:
     if isinstance(tcs, list):
         for tc in tcs:
             if isinstance(tc, dict):
+                # OpenAI chat-completions nests the call one level down:
+                # {"type": "function", "function": {"name", "arguments"}}.
+                # hermes / kimi / devin / picoclaw / openworker write it that
+                # way; reading only the top level lost even the tool NAME.
+                fn = tc.get("function")
+                if not tc.get("name") and isinstance(fn, dict):
+                    tc = fn
                 name = str(tc.get("name") or "").strip()
-                ipt = tc.get("input")
-                if not isinstance(ipt, dict):
-                    ipt = tc.get("arguments")
-                out.append((name, ipt if isinstance(ipt, dict) else {}))
+                out.append((name, _input_of(tc)))
     if out:
         return out
 
     # OpenClaw v3 flat: {"name": "read_file", "input": {...}}
     name = data.get("name")
     if isinstance(name, str) and name:
-        ipt = data.get("input")
-        if not isinstance(ipt, dict):
-            ipt = data.get("arguments")
-        return [(name.strip(), ipt if isinstance(ipt, dict) else {})]
+        return [(name.strip(), _input_of(data))]
 
     # family scalar fallback
     tn = data.get("tool_name")

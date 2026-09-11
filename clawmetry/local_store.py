@@ -5560,8 +5560,14 @@ class LocalStore(TrailStoreMixin):
         since: str | None = None,
         until: str | None = None,
         limit: int = 400,
+        per_runtime_limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Session rows for the Quality tab, scoped by REAL runtime.
+
+        ``per_runtime_limit`` caps rows per session-id-prefix runtime BEFORE
+        the overall ``limit``. Cross-runtime callers (the Harness Engineering
+        bench) need it: under one cost-ordered cap the loudest runtime took
+        every row and quieter runtimes vanished (2026-09-11: 10 of 12).
 
         Deliberately NOT ``query_outcomes``. That method filters on
         ``sessions.agent_type``, which is a legacy column hardcoded to
@@ -5594,15 +5600,26 @@ class LocalStore(TrailStoreMixin):
             clauses.append(_rt_clause)
             params.extend(_rt_params)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        qualify = ""
+        if per_runtime_limit:
+            qualify = """
+            QUALIFY row_number() OVER (
+                PARTITION BY CASE WHEN strpos(session_id, ':') > 0
+                                  THEN split_part(session_id, ':', 1)
+                                  ELSE 'openclaw' END
+                ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST) <= ?"""
         sql = f"""
             SELECT session_id, title, started_at, last_active_at, ended_at,
                    status, cost_usd, total_tokens, message_count, metadata,
                    outcome, outcome_confidence, cwd, git_branch
             FROM sessions
             {where}
+            {qualify}
             ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST
             LIMIT ?
         """
+        if per_runtime_limit:
+            params.append(int(per_runtime_limit))
         params.append(int(limit))
         cols = ["session_id", "title", "started_at", "last_active_at",
                 "ended_at", "status", "cost_usd", "total_tokens",
@@ -9052,6 +9069,58 @@ class LocalStore(TrailStoreMixin):
             """, [new_status, decision, reason, resolver, resolved_at,
                   str(approval_id)])
         return 1
+
+    def expire_stale_approvals(self, grace_seconds: int = 120) -> int:
+        """Retire pending approvals whose waiter is gone.
+
+        A hook-parked approval records its window's end in
+        ``args.deadline_ms``, and the hook that parked it writes the timeout
+        itself when the window ends. If that hook dies first (its receiver
+        restarted, Claude Code cancelled it), nothing ever closes the row:
+        the runtime has already fallen back to its own prompt, yet every
+        surface keeps offering buttons that can no longer reach it. Burned
+        2026-09-11: a question sat on the cloud strip for 2h38m.
+
+        Flips rows more than ``grace_seconds`` past their deadline to
+        ``expired`` (a question hook reads that as "ask the terminal", never
+        as a refusal). Rows without a deadline are left alone. Returns rows
+        expired. Never raises into the daemon loop.
+        """
+        if self._read_only:
+            return 0
+        from datetime import datetime, timezone
+        cutoff_ms = int((time.time() - max(30, int(grace_seconds))) * 1000)
+        expired = 0
+        try:
+            with self._write_lock:
+                rows = self._conn.execute(
+                    "SELECT id, args FROM approvals WHERE status = 'pending'"
+                ).fetchall()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                for approval_id, raw in rows:
+                    try:
+                        text = (raw.decode("utf-8")
+                                if isinstance(raw, (bytes, bytearray)) else raw)
+                        args = json.loads(text) if text else {}
+                        deadline_ms = int((args or {}).get("deadline_ms") or 0)
+                    except Exception:
+                        continue
+                    if not deadline_ms or deadline_ms >= cutoff_ms:
+                        continue
+                    self._conn.execute("""
+                        UPDATE approvals
+                        SET status = 'expired', decision = 'expired',
+                            decision_reason = ?, resolver = 'sweep',
+                            resolved_at = ?
+                        WHERE id = ? AND status = 'pending'
+                    """, ["nothing was waiting on this request any more; "
+                          "the agent had already moved on", now_iso,
+                          str(approval_id)])
+                    expired += 1
+        except Exception:
+            log.debug("local store: expire_stale_approvals failed",
+                      exc_info=True)
+        return expired
 
     # ── review_queue helpers (issue #1615) ────────────────────────────────
     def ingest_review_sample(self, sample: dict[str, Any]) -> int:
