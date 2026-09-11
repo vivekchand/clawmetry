@@ -21,6 +21,16 @@ Usage
     python3 scripts/check_ci_test_coverage.py --update-baseline   # tighten ratchet
 
 Related: issue #5813 -- "82% of the test suite runs in no CI job"
+
+Recorded as "A test named in no workflow runs in no job" in the Release
+Verification and Merge Gating blueprint, which carries the contracts (the
+count may never grow; tightening is explicit via --update-baseline) and the
+ADR for why this records the debt and fails only on GROWTH rather than
+demanding a 933-file cleanup before anything else can merge.
+
+One limit worth knowing: this checks that a file is NAMED in a workflow, not
+that the job can run it. A test wired into a job without its dependencies
+collects nothing and pytest exits 5 -- listed, and still never executed.
 """
 
 import argparse

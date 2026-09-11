@@ -5,9 +5,9 @@
     "that may be absent from all .github/workflows/*.yml files.",
     "CI fails when the unlisted count GROWS above this number.",
     "Ratchet down by running --update-baseline after wiring new tests in.",
-    "Related: issue #5813 -- 82% of the test suite ran in no CI job"
+    "Related: issue #5813"
   ],
-  "total": 1136,
-  "listed": 203,
-  "unlisted_max": 933
+  "total": 1138,
+  "listed": 206,
+  "unlisted_max": 932
 }
