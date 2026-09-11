@@ -79,6 +79,11 @@ from clawmetry.detector_surface import (  # noqa: F401
     _MUTATING_CMD_RE, _REDIRECT_WRITE_RE, _action_surface, _cmd_sketch,
     _hosts_from_text, _is_inspect_only, _redact_path, _strip_heredocs,
 )
+# What a call SENT (direction) and CARRIED (credential values); stamped on each
+# step below as ``write_hosts`` and ``secret_values``.
+from clawmetry.detector_payload import (  # noqa: F401
+    _args_text, _secret_value_categories, _write_hosts,
+)
 from clawmetry.detector_money import (  # noqa: F401
     CRITICAL_SPEND_USD, _SEVERITY_RANK, _severity_promote, annotate_spend,
     incident_rank, sort_incidents,
@@ -120,10 +125,14 @@ DETECTOR_KINDS = (
     "crashed",
 )
 
-#: Every incident kind the product can render or match, detector or workspace.
-#: Surfaces that render an incident (Guard tab labels, the policy form) and
-#: anything that validates a kind read THIS, never one of the halves.
-ALL_INCIDENT_KINDS = DETECTOR_KINDS + WORKSPACE_KINDS
+# Kinds only the fleet-wide pass can produce (``detector_swarm``): no single
+# session's tool stream shows them, so they are not in ``DETECTOR_KINDS``.
+from clawmetry.detector_swarm import FLEET_KINDS  # noqa: E402,F401
+
+#: Every incident kind the product can render or match: detector, workspace or
+#: fleet. Surfaces that render an incident (Guard tab labels, the policy form)
+#: and anything that validates a kind read THIS, never one of the parts.
+ALL_INCIDENT_KINDS = DETECTOR_KINDS + WORKSPACE_KINDS + FLEET_KINDS
 
 
 # ── Tunable thresholds (env-overridable) ─────────────────────────────────────
@@ -183,6 +192,14 @@ _FAILURE_TEXT_MARKERS = (
 #    "is_error": bool,      # tool_result only
 #    "result_text": str,    # tool_result only (lower-cased, truncated)
 #    "has_text": bool,      # text turn carrying a real reply (progress marker)
+#    # tool_call only, from detector_surface._action_surface:
+#    "paths": tuple, "cmd": str, "hosts": tuple,
+#    # tool_call only, from detector_payload._write_hosts: hosts the call SENT
+#    # data to (also merged into "hosts", so an upload is always egress):
+#    "write_hosts": tuple,
+#    # tool_call AND tool_result, from detector_payload._secret_value_categories:
+#    # categories of token-shaped values in the arguments or output, never values:
+#    "secret_values": tuple,
 #   }
 
 _TOPLEVEL_TOOL_CALL_TYPES = frozenset(
@@ -429,7 +446,10 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
             steps.append({"i": i, "kind": "tool_result",
                           "tool": str(tool or ""), "args_hash": "",
                           "is_error": is_err, "result_text": txt,
-                          "has_text": False})
+                          "has_text": False,
+                          # Categories of token-shaped values the output
+                          # carried. Never the values themselves.
+                          "secret_values": _secret_value_categories(txt)})
             continue
 
         # Tool CALLS (top-level or hosted inside an assistant/model envelope).
@@ -438,6 +458,11 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
             for c in calls:
                 tool = str(c.get("tool") or "")
                 paths, cmd, hosts = _action_surface(tool, c.get("args"))
+                # An upload is egress even when the command names no URL
+                # (``twine upload``), so its destination joins ``hosts``.
+                write_hosts = _write_hosts(tool, c.get("args"), cmd)
+                if write_hosts:
+                    hosts = tuple(dict.fromkeys(tuple(hosts) + write_hosts))
                 steps.append({
                     "i": i, "kind": "tool_call",
                     "tool": tool,
@@ -445,6 +470,8 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
                     "is_error": False, "result_text": "", "has_text": False,
                     # What the call touched; the behavioural detectors read these.
                     "paths": paths, "cmd": cmd, "hosts": hosts,
+                    "write_hosts": write_hosts,
+                    "secret_values": _secret_value_categories(_args_text(c.get("args"))),
                 })
             continue
 
@@ -507,25 +534,32 @@ def session_profile(steps: list, write_tools=None) -> dict:
     """Summarize one session for the cohort baseline it feeds.
 
     Takes already-normalized steps (the daemon has them; re-parsing 200 events
-    to count them would double the tick cost for nothing) and returns the four
-    numbers ``record_guard_observation`` stores: how many tool calls, how many
-    distinct files mutated, whether it wrote at all, and which external hosts
-    it reached.
+    to count them would double the tick cost for nothing) and returns what
+    ``record_guard_observation`` stores: how many tool calls, how many
+    distinct files mutated, whether it wrote at all, which external hosts it
+    reached (``hosts``), and which of those it SENT data to (``write_hosts``,
+    from each step's ``write_hosts``), which is how the cohort learns which
+    hosts it only ever reads from.
 
     This is the loop that closes gap 03: today's sessions decide what counts as
     unusual tomorrow. Never raises — an empty profile just means this session
     teaches the baseline nothing.
     """
-    out = {"tool_calls": 0, "write_files": 0, "wrote": False, "hosts": []}
+    out = {"tool_calls": 0, "write_files": 0, "wrote": False, "hosts": [],
+           "write_hosts": []}
     try:
         files = set()
         hosts = set()
+        write_hosts = set()
         calls = 0
         for st in steps or []:
             if not isinstance(st, dict):
                 continue
             for h in st.get("hosts") or ():
                 hosts.add(h)
+            for h in st.get("write_hosts") or ():
+                write_hosts.add(h)
+            out["write_hosts"] = sorted(write_hosts)[:64]
             if st.get("kind") != "tool_call" or not st.get("tool"):
                 continue
             calls += 1

@@ -1113,6 +1113,9 @@ _DAEMON_METHODS = frozenset({
     # (memory: feedback_cli_methods_need_daemon_allowlist).
     "record_guard_observation",
     "query_guard_baseline",
+    "record_action_fingerprints",
+    "query_action_fingerprints",
+    "query_subagent_parents",
     "prune_guard_baseline",
     # Session phase (clawmetry/adapters/phase.py). The daemon stamps a
     # transition on every ingest pass and the dashboard reads it back to say
