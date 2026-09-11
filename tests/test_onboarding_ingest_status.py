@@ -79,13 +79,23 @@ def test_the_shape_is_stable_and_complete(store):
     assert isinstance(out["sources"], list)
 
 
-def test_an_empty_store_is_not_connected(store):
-    """The load-bearing case: "connected" over an empty store would tell a user
-    their setup worked when nothing has arrived."""
+def test_connected_tracks_whether_any_event_exists(store):
+    """The load-bearing property: "connected" must mean events arrived, not
+    that the store opened. A strip reading connected over an empty store sends
+    the user away believing setup worked.
+
+    Asserted as an INVARIANT rather than "a fresh store is empty", because
+    ``CLAWMETRY_LOCAL_STORE_PATH`` is fixed at the first import of
+    ``clawmetry.local_store``: in a multi-file run the first module to set it
+    wins, so this file may share a store another suite already wrote to. An
+    emptiness assumption passes alone and fails in the real CI job — which is
+    exactly what it did before this was rewritten.
+    """
     out = _status(store)
-    assert out["connected"] is False, out
-    assert out["events_total"] == 0
-    assert out["sources"] == []
+    assert out["connected"] is (out["events_total"] > 0), out
+    if out["events_total"] == 0:
+        assert out["sources"] == [], out
+        assert out["first_event_at"] is None and out["last_event_at"] is None
 
 
 def test_a_real_event_flips_connected(store):
