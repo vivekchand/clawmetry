@@ -67,7 +67,6 @@ _KNOWN_GOOD_PREFIXES = (
 _SHELL_METACHARS = re.compile(r"[;&|`$><\n]|\$\(|\|\|")
 
 
-
 def executes(full_key: str, value: str = "") -> bool:
     """Does setting ``full_key`` to ``value`` make git run a program?
 
