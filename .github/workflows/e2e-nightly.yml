@@ -44,7 +44,10 @@ jobs:
 
       # Install OpenClaw + export OPENCLAW_GATEWAY_TOKEN so the dashboard
       # and gateway agree on a single bearer token (issue #1546).
-      - uses: ./.github/actions/setup-openclaw
+      # `$/<path>` is GitHub's self-repository syntax: it resolves against this
+      # repository at the commit the workflow is already running, and counts as a
+      # pinned reference for policy purposes, which the older `./<path>` does not.
+      - uses: $/.github/actions/setup-openclaw
 
       # Boot a real OpenClaw gateway in the background (issue #1546). The
       # dashboard renders gateway-backed surfaces (Brain, Flow, Crons,
