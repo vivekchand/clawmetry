@@ -32,7 +32,7 @@ if "flask" not in sys.modules:
 
 from routes.dives import DIVES_GALLERY_QUESTIONS as SUGGESTED_QUESTIONS  # noqa: E402
 
-_KNOWN_CHART_TYPES = frozenset({"bar", "line", "pie", "scatter", "bubble", "radar"})
+_KNOWN_CHART_TYPES = frozenset({"bar", "line", "pie", "table", "number"})
 _KNOWN_CATEGORIES = frozenset({"cost", "activity", "sessions", "crons", "system", "memory"})
 
 # One-way ratchet — update intentionally when adding or removing entries.
