@@ -1,21 +1,41 @@
 #!/usr/bin/env node
 /**
  * Pseudolocale (en-XA) gate: verifies locale machinery is live and
- * surfaces un-extracted UI strings per tab. Runs as a soft gate by
- * default (exit 0 with a per-tab report). Set STRICT=1 to make it
- * a hard exit-1 gate — activate once the i18n-residual.tsv backlog
- * reaches zero.
+ * surfaces un-extracted UI strings per tab.
+ *
+ * TWO DIFFERENT THINGS, TWO DIFFERENT SEVERITIES. Conflating them is
+ * what kept this script out of CI (#2258):
+ *
+ *   1. MACHINERY  — is the pseudolocale actually applied, does the
+ *      switcher list en-XA, does the locale survive a tab switch.
+ *      These are invariants, not a backlog. They ALWAYS exit 1.
+ *   2. RESIDUAL   — how many un-extracted English strings are left on
+ *      each tab. This IS a backlog being worked down, so it is soft by
+ *      default. STRICT=1 demands zero; MAX_RESIDUAL=<n> is the ratchet
+ *      in between, failing only when the backlog GROWS.
+ *
+ * Until 2026-09-11 a single STRICT flag governed both, so the only
+ * exit-1 path was `STRICT && fail > 0`. Without STRICT the script
+ * printed "Locale machinery verified" and exited 0 even when the
+ * machinery check had just failed, which made it useless as a gate:
+ * wiring it into CI would have added a job that could not go red.
  *
  * Requires a running ClawMetry OSS dashboard at CLAWMETRY_URL
- * (default http://localhost:8900). Skips cleanly if unreachable.
+ * (default http://localhost:8900). Unreachable means SKIP when run by
+ * hand, but REQUIRE_DASHBOARD=1 turns that into a failure so a CI job
+ * cannot pass by never testing anything.
  *
  * Run:
  *   node tests/e2e/pseudolocale.mjs
- *   HEADLESS=0   node tests/e2e/pseudolocale.mjs   # show browser
- *   STRICT=1     node tests/e2e/pseudolocale.mjs   # fail on any un-extracted string
+ *   HEADLESS=0          node tests/e2e/pseudolocale.mjs  # show browser
+ *   STRICT=1            node tests/e2e/pseudolocale.mjs  # demand zero residual
+ *   MAX_RESIDUAL=40     node tests/e2e/pseudolocale.mjs  # ratchet
+ *   REQUIRE_DASHBOARD=1 node tests/e2e/pseudolocale.mjs  # no silent skip
  *   CLAWMETRY_URL=http://localhost:9000 node tests/e2e/pseudolocale.mjs
  *
- * Exits 0 unless STRICT=1 and un-extracted strings are detected.
+ * Exits 1 when a machinery check fails, when the dashboard is required
+ * and absent, when STRICT=1 and any string is un-extracted, or when
+ * MAX_RESIDUAL is set and the residual count exceeds it.
  */
 import { chromium } from 'playwright';
 
@@ -23,6 +43,14 @@ const BASE_URL = process.env.CLAWMETRY_URL || 'http://localhost:8900';
 const HEADLESS  = process.env.HEADLESS !== '0';
 const STRICT    = process.env.STRICT === '1';
 const PAUSE_MS  = HEADLESS ? 1200 : 2500;
+// A CI job that quietly passes when the dashboard never booted is worse
+// than no job at all: it reports a verdict it did not reach.
+const REQUIRE_DASHBOARD = process.env.REQUIRE_DASHBOARD === '1';
+// Ratchet. Unset means "report only"; a number fails when the residual
+// backlog grows past it, without demanding the zero that STRICT does.
+const MAX_RESIDUAL = process.env.MAX_RESIDUAL === undefined
+  ? null
+  : Number.parseInt(process.env.MAX_RESIDUAL, 10);
 
 // High-coverage tabs to walk. Add more as the catalog converges.
 const TABS = [
@@ -103,15 +131,35 @@ async function main() {
   console.log(`[pseudolocale] tabs   : ${TABS.join(', ')}\n`);
 
   // Probe the dashboard before launching Playwright.
+  //
+  // Retried, and not on a 4s single shot. `/api/overview` fans out over the
+  // whole store, and measured on a node with real history the first call took
+  // 4.18s against exactly that timeout while the next two took 1.3s. A gate
+  // that reports "dashboard not reachable" because one cold call was 180ms
+  // late is a flaky gate, and a flaky gate gets ignored rather than fixed.
+  const PROBE_ATTEMPTS = 5;
+  const PROBE_TIMEOUT_MS = 15000;
   let reachable = false;
-  try {
-    const r = await fetch(`${BASE_URL}/api/overview`, {
-      signal: AbortSignal.timeout(4000),
-    });
-    reachable = r.status < 500;
-  } catch {}
+  for (let attempt = 1; attempt <= PROBE_ATTEMPTS && !reachable; attempt++) {
+    try {
+      const r = await fetch(`${BASE_URL}/api/overview`, {
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      reachable = r.status < 500;
+    } catch {}
+    if (!reachable && attempt < PROBE_ATTEMPTS) {
+      console.log(`[pseudolocale] probe ${attempt}/${PROBE_ATTEMPTS} failed, retrying`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
 
   if (!reachable) {
+    if (REQUIRE_DASHBOARD) {
+      console.error(`[pseudolocale] FAIL: dashboard required but not reachable at ${BASE_URL}.`);
+      console.error('  REQUIRE_DASHBOARD=1 is set, so this is a failure rather than a skip:');
+      console.error('  a gate that passes without testing anything is not a gate.');
+      process.exit(1);
+    }
     console.log(`[pseudolocale] SKIP: dashboard not reachable at ${BASE_URL}.`);
     console.log('  Start it with:  clawmetry  (or: python3 dashboard.py --port 8900)');
     process.exit(0);
@@ -180,15 +228,14 @@ async function main() {
     tabReport[tabName] = leaking;
 
     if (leaking.length === 0) {
-      check(`${tabName}: no un-extracted strings`, true);
+      console.log(`  ✓ ${tabName}: no un-extracted strings`);
     } else {
       const preview = leaking.slice(0, 8).join(', ');
       const msg = `${leaking.length} un-extracted word(s): ${preview}${leaking.length > 8 ? ', …' : ''}`;
-      if (STRICT) {
-        check(`${tabName}: no un-extracted strings`, false, msg);
-      } else {
-        console.log(`  ⚠ ${tabName}: ${msg}`);
-      }
+      // Residual strings are counted, never fed to check(): check() is
+      // machinery only, and mixing them is what made a dead switcher
+      // indistinguishable from an unfinished backlog.
+      console.log(`  ⚠ ${tabName}: ${msg}`);
     }
   }
 
@@ -212,15 +259,33 @@ async function main() {
   console.log(`  ${pass} passed, ${fail} failed`);
   console.log(`  ${totalLeaking} un-extracted string(s) across ${leakyTabs.length} tab(s)`);
 
-  if (!STRICT && totalLeaking > 0) {
-    console.log('  (soft-gate mode — re-run with STRICT=1 to enforce zero un-extracted strings)');
-  }
-  if (STRICT && fail > 0) {
-    console.log('\nFailures:');
+  // Machinery first, and unconditionally. A broken locale switcher is not
+  // a backlog item, and saying "verified" over one is how this script
+  // managed to report success on a dashboard where nothing was localised.
+  if (fail > 0) {
+    console.log('\nMachinery failures:');
     failures.forEach(f => console.log(`  • ${f}`));
+    console.log('\n  ❌ Locale machinery is broken. This is not the residual backlog.');
     process.exit(1);
   }
+
   console.log('  ✅ Locale machinery verified');
+
+  if (STRICT && totalLeaking > 0) {
+    console.log(`\n  ❌ STRICT=1 and ${totalLeaking} un-extracted string(s) remain.`);
+    process.exit(1);
+  }
+  if (MAX_RESIDUAL !== null && Number.isFinite(MAX_RESIDUAL) && totalLeaking > MAX_RESIDUAL) {
+    console.log(`\n  ❌ residual backlog grew: ${totalLeaking} un-extracted string(s), ` +
+                `ratchet allows ${MAX_RESIDUAL}.`);
+    console.log('  Extract the new strings, or raise MAX_RESIDUAL deliberately and say why.');
+    process.exit(1);
+  }
+  if (totalLeaking > 0) {
+    console.log(`  (${totalLeaking} un-extracted string(s) within budget` +
+                `${MAX_RESIDUAL !== null ? ` of ${MAX_RESIDUAL}` : ''}; ` +
+                'STRICT=1 demands zero)');
+  }
 }
 
 main().catch(err => {
