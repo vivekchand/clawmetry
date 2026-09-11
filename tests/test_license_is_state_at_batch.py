@@ -587,8 +587,9 @@ def test_endpoint_is_state_at_batch_never_5xxs(app, monkeypatch):
     """Even if the shared snapshot blows up mid-request, the endpoint
     still returns HTTP 200 with the OSS-free snapshot fallback + honest
     per-row derivation."""
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_license_state_at_snapshot",

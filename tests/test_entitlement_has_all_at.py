@@ -648,7 +648,7 @@ def test_endpoint_never_5xx_on_body_blowup(monkeypatch, client):
     def _boom(*a, **kw):
         raise RuntimeError("blowup in body builder")
 
-    monkeypatch.setattr("routes.entitlement._has_all_at_body", _boom)
+    monkeypatch.setattr("routes.entitlement._shared._has_all_at_body", _boom)
     resp = client.get(
         "/api/entitlement/has-all-at?tier=cloud_pro&features=fleet&channels=5"
     )
