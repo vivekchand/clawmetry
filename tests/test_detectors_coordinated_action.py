@@ -95,6 +95,8 @@ def test_unrelated_sessions_writing_one_unseen_prefix_fire_once():
     assert inc["evidence"]["first_seen_by_node"] is None
     assert len(inc["participants"]) == 6
     assert inc["evidence"]["observed"] == "tool_arguments"
+    # AC-OBS-RSO-035.8: the words a person reads say where this came from.
+    assert "tool arguments" in inc["detail"]
 
 
 def test_below_the_threshold_is_quiet():

@@ -215,8 +215,10 @@ def coordinated_action(fingerprints_by_session: dict, *,
                            + history_line
                            + "Independent agents converging on one shared "
                              "destination is how a shared cache becomes a "
-                             "message board. You can Stop or Pause these agents "
-                             "from the ClawMetry dashboard or device."),
+                             "message board. This is read from the agents' tool "
+                             "arguments, not observed on the network. You can "
+                             "Stop or Pause these agents from the ClawMetry "
+                             "dashboard or device."),
                 "evidence": {
                     "fingerprint": {"verb": verb, "host": host, "path_prefix": prefix},
                     "fingerprint_key": key,
