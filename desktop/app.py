@@ -831,47 +831,52 @@ def _known_good_python() -> Optional[str]:
     """The pinned python.org interpreter, if it is on disk and passes the
     usual probe.
 
-    Checks the exact per-user path `_winget_install_python` writes first.
-    If that is absent or fails the probe, also asks the py launcher for the
-    specific minor (``py -3.12``) — unlike bare ``py`` (which resolves to
-    the NEWEST installed interpreter, the one whose wheels are missing), the
-    version flag resolves only to Python 3.12 regardless of what else is
-    installed, covering system-wide installs that winget did not make."""
+    Checks the exact per-user path ``_winget_install_python`` writes first,
+    then the Windows Registry (HKCU before HKLM) where the python.org
+    installer records the installation directory for every minor version it
+    manages.  Both paths are exact filesystem paths — no py launcher, no
+    re-probing."""
     if platform.system() != "Windows":
         return None
-    exe = (Path(os.environ.get("LOCALAPPDATA", ""))
-           / "Programs" / "Python" / KNOWN_GOOD_PYTHON_DIRNAME / "python.exe")
-    if exe.exists():
+    candidates = []
+    # Primary: the per-user path _winget_install_python writes.
+    per_user = (Path(os.environ.get("LOCALAPPDATA", ""))
+                / "Programs" / "Python" / KNOWN_GOOD_PYTHON_DIRNAME
+                / "python.exe")
+    if per_user.exists():
+        candidates.append(str(per_user))
+    # Secondary: the registered install path.  The python.org installer
+    # writes SOFTWARE\Python\PythonCore\<minor>\InstallPath in HKCU
+    # (per-user install) and HKLM (system-wide install).  Reading the
+    # registry directly gives the exact path without involving the py
+    # launcher or any re-probing.  winreg is stdlib on Windows; the
+    # ImportError branch handles non-Windows test runners.
+    try:
+        import winreg  # type: ignore[import]
+        reg_subkey = (rf"SOFTWARE\Python\PythonCore"
+                      rf"\{KNOWN_GOOD_PYTHON_MINOR}\InstallPath")
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(hive, reg_subkey) as k:
+                    install_dir, _ = winreg.QueryValueEx(k, "")
+                    exe = Path(install_dir) / "python.exe"
+                    path = str(exe)
+                    if path not in candidates and exe.exists():
+                        candidates.append(path)
+            except OSError:
+                pass
+    except ImportError:
+        pass
+    for candidate in candidates:
         try:
             r = subprocess.run(
-                [str(exe), "-c", _PYTHON_PROBE],
+                [candidate, "-c", _PYTHON_PROBE],
                 capture_output=True, text=True, timeout=20,
                 env=_child_env(), stdin=subprocess.DEVNULL,
                 **_win_subprocess_kwargs(),
             )
             if r.returncode == 0:
-                return str(exe)
-        except Exception:
-            pass
-    # Fallback: the py launcher with an explicit minor finds Python 3.12
-    # wherever it lives (system-wide, another user path, etc.) when the
-    # per-user LOCALAPPDATA path above was absent or failed the probe.
-    # Bare 'py' is NOT used: it resolves to the newest interpreter (the
-    # one whose wheels are missing).
-    py_launcher = shutil.which("py")
-    if py_launcher:
-        try:
-            r = subprocess.run(
-                [py_launcher, f"-{KNOWN_GOOD_PYTHON_MINOR}", "-c",
-                 "import sys, venv, ensurepip; print(sys.executable)"],
-                capture_output=True, text=True, timeout=20,
-                env=_child_env(), stdin=subprocess.DEVNULL,
-                **_win_subprocess_kwargs(),
-            )
-            if r.returncode == 0:
-                path = r.stdout.strip()
-                if path and Path(path).exists():
-                    return path
+                return candidate
         except Exception:
             pass
     return None
