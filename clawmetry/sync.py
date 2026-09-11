@@ -21492,7 +21492,8 @@ def _record_guard_observation(store, sid: str, runtime: str, agent_id: str,
         store.record_guard_observation(
             sid, cohort, runtime=runtime, agent_id=agent_id,
             tool_calls=profile["tool_calls"], write_files=profile["write_files"],
-            wrote=profile["wrote"], hosts=profile["hosts"])
+            wrote=profile["wrote"], hosts=profile["hosts"],
+            write_hosts=profile.get("write_hosts") or [])
         if runtime_cohort and runtime_cohort != cohort:
             # A composite key: one session contributes a row to each cohort,
             # and the PK is the session id, so the second row needs its own.
@@ -21500,7 +21501,8 @@ def _record_guard_observation(store, sid: str, runtime: str, agent_id: str,
                 f"{runtime_cohort}|{sid}", runtime_cohort, runtime=runtime,
                 agent_id=agent_id, tool_calls=profile["tool_calls"],
                 write_files=profile["write_files"], wrote=profile["wrote"],
-                hosts=profile["hosts"])
+                hosts=profile["hosts"],
+                write_hosts=profile.get("write_hosts") or [])
     except Exception as e:  # noqa: BLE001
         log.debug("guard: baseline observation failed for %s: %s", sid, e)
 
