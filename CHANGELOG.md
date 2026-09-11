@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: the cloud strip said "waiting 2h 2m" for a question asked minutes ago (2026-09-11)
+- **Why:** `sync._seconds_since` stripped the `Z` from a timestamp and compared it against local wall-clock. Hook-parked approvals are stamped in UTC, so on a CEST machine `deviceSummary.approval.waiting_seconds` was two hours too long from the moment a question was asked, and each new question looked like the old one coming back.
+- **What:** a `Z` or `+HH:MM` suffix is honoured (including the py3.9 fallback parser); naive strings stay local wall-clock, which is what most store rows carry.
+- **Verified:** `tests/test_seconds_since_utc.py` (8 tests, TZ pinned to Europe/Amsterdam; 2 fail on the old code), run in CI next to the question-set relay step. Paired with clawmetry-cloud #2409, which stops the strip re-popping hidden or timed-out cards.
+- **Carries:** #5879.
+
 ### Fixed: a decision made on a cloud surface now reaches the agent in time (2026-09-11)
 - **Why:** the question-set work shipped and was tested live. The cloud strip rendered Claude Code's question with its real options, the click reached cloud in 10 ms with 22 s left on the window - and the agent never got the answer. The relay queue is drained ONLY by a daemon heartbeat, and the main loop heartbeats at the END of a cycle: that node's heartbeats were 20:45:35 then 20:47:05, a 90-second gap spent syncing 7,388 events. The answer landed 5 s after the 20:47:00 deadline, the question had already fallen back to the terminal, and the person's answer reached nobody. `_ingest_keepalive_heartbeat` is 20 s-throttled and only fires inside heavy per-item loops; the 2 s "approvals watcher" scans tool calls, it does not heartbeat. On a busy node, answering from a dashboard was a lottery - for Approve/Deny just as much as for a question.
 - **What:** `_answer_window_open()` asks whether any pending approval is still inside its window (`args.deadline_ms`, stamped by the gate-hook receiver); `_start_answer_window_heartbeat()` runs a daemon thread beside the approvals watcher that heartbeats every 2 s while that is true, so a relayed decision reaches the waiting hook in seconds rather than whenever the node next finishes a cycle.
