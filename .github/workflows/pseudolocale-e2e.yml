@@ -1,0 +1,104 @@
+name: Pseudolocale E2E
+
+# Wires tests/e2e/pseudolocale.mjs into CI. Closes the "not wired into CI"
+# item on issue #2258, where `git grep -rn pseudolocale .github/` returned
+# nothing: the script existed, was runnable by hand, and gated nothing.
+#
+# Wiring it required fixing it first. The script conflated two different
+# things under one STRICT flag:
+#
+#   MACHINERY  is the pseudolocale applied at all, does the switcher list
+#              en-XA, does the locale survive a tab switch. Invariants.
+#   RESIDUAL   how many un-extracted English strings remain per tab. A
+#              backlog being worked down.
+#
+# The only exit-1 path was `STRICT && fail > 0`, so without STRICT a dead
+# locale switcher printed "Locale machinery verified" and exited 0.
+# Measured against a server that answers every probe and localises nothing:
+#
+#   pre-fix    0 passed, 4 failed ... "Locale machinery verified"   exit 0
+#   post-fix   machinery failures listed, "not the residual backlog" exit 1
+#
+# So machinery now always hard-fails and this job can actually go red.
+#
+# REQUIRE_DASHBOARD=1 is the other half. The script skips cleanly when the
+# dashboard is unreachable, which is right by hand and wrong in CI: a job
+# that passes because nothing booted reports a verdict it never reached.
+#
+# MAX_RESIDUAL is deliberately NOT set. The residual count is a function of
+# the data on the node, not of the code: two consecutive runs against the
+# same dashboard measured 5778 then 6302, because the tabs render live
+# session content. Pinning a number here would buy a flaky gate and teach
+# people to ignore it. The residual report is printed for humans; the
+# machinery is what gates. A ratchet becomes meaningful once this runs
+# against a fixed fixture, and the env var is there for that day.
+
+on:
+  pull_request:
+    paths:
+      - "clawmetry/static/js/i18n.js"
+      - "clawmetry/static/locales/**"
+      - "clawmetry/templates/**"
+      - "tests/e2e/pseudolocale.mjs"
+      - "tests/e2e/package.json"
+      - ".github/workflows/pseudolocale-e2e.yml"
+
+concurrency:
+  group: pseudo-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pseudolocale-e2e:
+    name: Pseudolocale machinery is live (en-XA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Same rationale as zero-click-auth-e2e.yml: the trial hard block is
+    # default-ON in code, and this job tests the unrelated locale surface,
+    # so opt out to get a dashboard shell without a license.
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      - name: Install dashboard runtime deps
+        run: pip install flask waitress cryptography requests duckdb
+
+      - name: Install Playwright + Chromium
+        working-directory: tests/e2e
+        run: |
+          # `npm ci`, not `npm install`: installs exactly what the committed
+          # package-lock.json resolves to, so CI cannot silently drift onto a
+          # newer transitive dependency than the one that was reviewed.
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Start dashboard
+        run: |
+          python3 dashboard.py --port 8900 > /tmp/pseudo-dashboard.log 2>&1 &
+          echo "started"
+
+      - name: Run pseudolocale E2E
+        working-directory: tests/e2e
+        env:
+          CLAWMETRY_URL: http://localhost:8900
+          # No silent pass if the dashboard above never came up.
+          REQUIRE_DASHBOARD: '1'
+        run: npm run test:pseudolocale
+
+      - name: Dashboard log on failure
+        if: failure()
+        run: tail -100 /tmp/pseudo-dashboard.log || true

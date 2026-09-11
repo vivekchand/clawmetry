@@ -583,8 +583,9 @@ def test_endpoint_invalid_signature(app):
 def test_endpoint_never_5xxs(app, monkeypatch):
     """Even if the shared snapshot blows up mid-request, the endpoint
     must still return HTTP 200 with the OSS-free shape."""
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_license_expires_snapshot",
@@ -735,7 +736,9 @@ def test_endpoint_batch_bad_tokens_collapse_to_false(app):
 def test_endpoint_batch_never_5xxs(app, monkeypatch):
     """Snapshot blowup + underlying batch blowup -> HTTP 200 with the
     OSS-free branch shape and an empty ``rows`` list rather than a 5xx."""
-    from routes import entitlement as _routes
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     import clawmetry.license as _lic
 
     monkeypatch.setattr(
