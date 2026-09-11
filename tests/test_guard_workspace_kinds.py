@@ -258,3 +258,104 @@ def test_it_counts_as_flagged(rows):
 def test_the_row_cwd_comes_from_the_column(rows):
     by_id = {r["session_id"]: r for r in rows["sessions"]}
     assert by_id["cursor:poisoned"]["cwd"] == "/w/poisoned"
+
+
+# ── hook-file attribution (CVE-2026-48124) ────────────────────────────────
+#
+# `_AGENT_HOOK_FILES` mapped each hook file to exactly ONE runtime. Cursor
+# Desktop reads `.claude/settings.local.json` and executes hooks registered
+# there without consent (GHSA-pc9j-3qc2-95wv, patched in Cursor 3.0.0), so a
+# Cursor-only machine was told a `critical` finding concerned Claude Code —
+# a runtime it does not run, which is a reasonable ground to dismiss it.
+#
+# The copy also asserted the lifecycle: "on every matching tool call". The
+# CVE's vector is a `Stop` hook, which fires once at end of turn.
+
+import json as _json
+import os as _os
+import tempfile as _tempfile
+
+
+def _scan_hook_file(rel, hooks, runtime):
+    from clawmetry import repo_scan
+    d = _tempfile.mkdtemp()
+    _os.makedirs(_os.path.join(d, _os.path.dirname(rel)), exist_ok=True)
+    with open(_os.path.join(d, rel), "w", encoding="utf-8") as fh:
+        _json.dump({"hooks": hooks}, fh)
+    out = repo_scan.scan_agent_hooks(d, "sid", runtime)
+    assert out, f"{rel}: no finding emitted"
+    return out[0]
+
+
+_STOP_HOOK = {"Stop": [{"hooks": [{"command": "/tmp/marker.sh"}]}]}
+_PRE_HOOK = {"PreToolUse": [{"matcher": "Bash",
+                             "hooks": [{"command": "/tmp/marker.sh"}]}]}
+
+
+def test_claude_hook_file_on_a_cursor_session_names_cursor():
+    """#237 acceptance: a `.claude/settings.local.json` hook on a Cursor
+    machine must produce a finding that names Cursor."""
+    f = _scan_hook_file(".claude/settings.local.json", _STOP_HOOK, "cursor")
+    assert f["runtime"] == "cursor", (
+        f"named {f['runtime']!r}; an operator running only Cursor reads a "
+        f"claude_code attribution as not-applicable and dismisses a critical."
+    )
+    assert "claude_code session" not in f["detail"]
+
+
+def test_finding_names_the_hook_event_not_a_guessed_lifecycle():
+    """A Stop hook fires at end of turn, not per tool call."""
+    f = _scan_hook_file(".claude/settings.local.json", _STOP_HOOK, "cursor")
+    assert "`Stop`" in f["detail"], f["detail"][:200]
+    assert "every matching tool call" not in f["detail"], (
+        "the lifecycle is asserted rather than read from the file"
+    )
+    pre = _scan_hook_file(".claude/settings.local.json", _PRE_HOOK, "cursor")
+    assert "`PreToolUse`" in pre["detail"], pre["detail"][:200]
+
+
+def test_unrelated_runtime_gets_every_reader_named():
+    """When the session's runtime does not execute the file, name all the
+    runtimes that do rather than picking one."""
+    f = _scan_hook_file(".claude/settings.local.json", _STOP_HOOK, "codex")
+    assert "Claude Code and Cursor" in f["detail"], f["detail"][:220]
+    assert set(f["evidence"]["readers"]) == {"claude_code", "cursor"}
+
+
+def test_cursor_own_settings_still_attributes_to_cursor():
+    """No regression: `.cursor/settings.json` has a single reader."""
+    f = _scan_hook_file(".cursor/settings.json", _PRE_HOOK, "cursor")
+    assert f["runtime"] == "cursor"
+    assert f["evidence"]["readers"] == ["cursor"]
+
+
+def test_all_clawmetry_hooks_emit_no_finding():
+    """A file whose only hook command is ClawMetry's own emits nothing —
+    `_hook_events`/`_hook_commands` flattening a tree down to zero foreign
+    commands must not manufacture a finding out of an empty `pairs`."""
+    from clawmetry import repo_scan
+    d = _tempfile.mkdtemp()
+    rel = ".claude/settings.local.json"
+    _os.makedirs(_os.path.join(d, _os.path.dirname(rel)), exist_ok=True)
+    hooks = {"Stop": [{"hooks": [{"command": "clawmetry hook claude_code"}]}]}
+    with open(_os.path.join(d, rel), "w", encoding="utf-8") as fh:
+        _json.dump({"hooks": hooks}, fh)
+    assert repo_scan.scan_agent_hooks(d, "sid", "cursor") == []
+
+
+def test_mixed_file_retains_only_the_foreign_command_event():
+    """A file with one ClawMetry-owned hook and one foreign hook, on
+    different lifecycle events, must filter the former out of `pairs` but
+    keep the latter's event — not blank the whole file's `events` evidence
+    and not leak the owned command into the count."""
+    f = _scan_hook_file(
+        ".claude/settings.local.json",
+        {
+            "Stop": [{"hooks": [{"command": "clawmetry hook claude_code"}]}],
+            "PreToolUse": [{"matcher": "Bash",
+                             "hooks": [{"command": "/tmp/marker.sh"}]}],
+        },
+        "cursor",
+    )
+    assert f["evidence"]["events"] == ["PreToolUse"]
+    assert f["evidence"]["count"] == 1
