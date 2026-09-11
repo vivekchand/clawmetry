@@ -85,7 +85,10 @@ jobs:
       # a running gateway -- it compares the token directly against env.
       - name: Setup OpenClaw
         continue-on-error: true
-        uses: ./.github/actions/setup-openclaw
+        # `$/<path>` is GitHub's self-repository syntax: it resolves against this
+        # repository at the commit the workflow is already running, and counts as a
+        # pinned reference for policy purposes, which the older `./<path>` does not.
+        uses: $/.github/actions/setup-openclaw
         with:
           gateway-token: ci-golden-token
 
