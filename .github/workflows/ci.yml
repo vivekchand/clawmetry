@@ -218,16 +218,6 @@ jobs:
       - name: The ingest doc matches the ingest contract
         run: python3 -m pytest tests/test_ingest_doc_drift.py -q
 
-      # GET /api/onboarding/ingest-status shipped with no test and was broken
-      # in two ways at once (#5680): _fetch returns TUPLES and takes
-      # (sql, params), while the method read rows as dicts and called it with
-      # one argument. A blanket `except Exception` turned both into the
-      # "disconnected" stub, so the endpoint told EVERY user nothing had
-      # arrived, whatever the store held. Named here because this job runs
-      # FILE LISTS: unlisted, the regression guard runs in no job at all.
-      - name: Onboarding ingest-status reports the events the store holds
-        run: python3 -m pytest tests/test_onboarding_ingest_status.py -q
-
       # Every `uses:` reference -- workflows AND the composite actions under
       # .github/actions/, whose own `uses:` lines run with the calling job's
       # token -- must stay pinned to a full commit SHA. A tag is mutable: its
@@ -662,6 +652,7 @@ jobs:
             tests/test_moat_event_shape_manifest_guard.py \
             tests/test_moat_regression_1129.py \
             tests/test_e2e_real_openclaw_pipeline.py \
+            tests/test_onboarding_ingest_status.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
             tests/test_query_events_keys_first.py \
             tests/test_cost_scan_slim_events.py \
