@@ -20186,19 +20186,29 @@ def _build_cron_jobs(paths):
 
 
 def _seconds_since(ts) -> int:
-    """Seconds elapsed since an ISO-ish timestamp string (the store writes naive
-    local wall-clock), clamped to >= 0; returns 0 on any parse failure. Used so
-    the device's approval ``waiting_seconds`` is a real value, not always 0."""
+    """Seconds elapsed since an ISO-ish timestamp string, clamped to >= 0;
+    returns 0 on any parse failure. Used so the device's approval
+    ``waiting_seconds`` is a real value, not always 0.
+
+    A naive string is local wall-clock (most store rows); a ``Z`` or
+    ``+HH:MM`` suffix is honoured. Burned 2026-09-11: hook-parked approvals
+    are stamped ``...Z`` (UTC) and the ``Z`` was stripped, so on a CEST
+    machine every question read "waiting 2h 2m" the moment it was asked."""
     if not ts:
         return 0
     try:
-        from datetime import datetime
-        s = str(ts).strip().replace("Z", "")
+        from datetime import datetime, timezone
+        s = str(ts).strip()
+        utc = s.endswith("Z")
+        if utc:
+            s = s[:-1] + "+00:00"
         try:
             dt = datetime.fromisoformat(s)
         except ValueError:
             dt = datetime.fromisoformat(s.split(".")[0].split("+")[0])
-        ref = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+            if utc:
+                dt = dt.replace(tzinfo=timezone.utc)
+        ref = datetime.now(timezone.utc) if dt.tzinfo else datetime.now()
         return max(0, int((ref - dt).total_seconds()))
     except Exception:
         return 0
