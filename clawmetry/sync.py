@@ -6459,10 +6459,27 @@ def sync_openclaw_claude_sessions_via_index(
 # ``channel_messages`` (so per-provider routes in ``routes/channels.py`` see
 # it). No JSONL re-read at request time.
 #
-# The directory layout below is the canonical list maintained alongside the
-# 21 adapter routes in ``routes/channels.py``. If a new adapter ships, add its
-# directory name to ``_CHANNEL_DIRS`` and the daemon will pick it up on the
-# next cycle — no further wiring required.
+# The directory layout below is the canonical list of FILESYSTEM directory
+# names, maintained alongside the adapter routes in ``routes/channels.py``.
+#
+# Adding a directory here is NOT sufficient to ship a channel. A channel is
+# four independent lists, and one in three of them is broken in a way that
+# looks like a different bug each time:
+#
+#   ``sync._CHANNEL_DIRS``            (here)  historical transcripts ingest
+#   ``gateway_tap.CHANNEL_NAMES``             live events arrive
+#   ``entitlements.ALL_CHANNELS`` + LABELS    the UI/entitlement can see it
+#   ``routes/channels.py``                    the endpoint exists
+#
+# Miss the gateway list and live messages never arrive while history works.
+# Miss the catalogue and the channel is invisible even with rows in the store.
+# The disk name and the wire name may legitimately differ (``fish-audio`` on
+# disk, ``fishaudio`` on the wire), so neither list may be derived from the
+# other by string munging.
+#
+# Recorded as "A chat channel is four lists, and a channel in three of them is
+# broken" in the Runtime and Session Observability blueprint, with an ADR for
+# why these stay four explicit lists rather than one registry.
 _CHANNEL_DIRS: tuple[str, ...] = (
     "telegram",
     "signal",
@@ -6487,6 +6504,7 @@ _CHANNEL_DIRS: tuple[str, ...] = (
     "nextcloudtalk",
     "clickclack",
     "buzz",
+    "fishaudio",
 )
 
 # Filenames inside ``~/.openclaw/<channel>/`` that are NOT conversation
