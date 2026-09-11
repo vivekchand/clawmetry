@@ -7736,13 +7736,20 @@ class LocalStore(TrailStoreMixin):
         }
         try:
             hosts = self._conn.execute("""
-                SELECT host FROM guard_egress_hosts
+                SELECT host, first_seen FROM guard_egress_hosts
                 WHERE cohort = ? AND last_seen >= ?
                 ORDER BY hits DESC LIMIT ?
             """, [coh, cutoff, max(1, min(int(max_hosts or 500), 5000))]).fetchall()
             out["hosts"] = [r[0] for r in hosts if r and r[0]]
+            # When each host ENTERED the cohort's memory. network_egress only
+            # treats a host as known once it has been there a while; without
+            # this, the first session of a swarm to reach a host teaches every
+            # sibling that the host is normal.
+            out["host_first_seen"] = {
+                r[0]: int(r[1]) for r in hosts if r and r[0] and r[1] is not None}
         except Exception:
             out["hosts"] = []
+            out["host_first_seen"] = {}
         return out
 
     def prune_guard_baseline(self, days: int = 180) -> int:

@@ -185,11 +185,18 @@ _CREDENTIAL_PATTERNS = (
     ("keychain / secret store", re.compile(r"\bsecurity\s+find-(?:generic|internet)-password|"
                                            r"\bkeyring\b|\bvault\s+(?:read|kv)\b|"
                                            r"\bkubectl\s+get\s+secret", re.I)),
-    # Deliberately narrow: a bare ``env``/``printenv`` as its own command.
+    # Deliberately narrow: a bare ``env``/``printenv`` as its own statement.
     # ``os.environ`` inside a script is source code, and matching it made every
-    # Python heredoc look like a secret dump on real sessions.
-    ("environment dump", re.compile(r"(?:^|[;&|]\s*)(?:env|printenv)\s*(?:\||$)", re.I)),
+    # Python heredoc look like a secret dump on real sessions. The statement
+    # may end at a pipe, ``;``, ``&&`` or end of line: ``id; env; cat ...`` was
+    # the first command of the July 2026 Hugging Face intrusion and used to
+    # slip through. ``env FOO=1 prog`` (running a program) still does not match.
+    ("environment dump", re.compile(r"(?:^|[;&|]\s*)(?:env|printenv)\s*(?:[;&|]|$)", re.I)),
     ("cloud metadata endpoint", re.compile(r"169\.254\.169\.254|metadata\.google\.internal", re.I)),
+    # A pod's mounted identity: whoever holds it acts as the workload.
+    ("service account token", re.compile(
+        r"/run/secrets/(?:kubernetes\.io|eks\.amazonaws\.com)/serviceaccount|"
+        r"/var/run/secrets/tokens/", re.I)),
 )
 # ``.env.example`` / ``id_rsa.pub`` are templates and public halves, not secrets.
 _CREDENTIAL_BENIGN = re.compile(r"\.env\.(?:example|sample|template)|\.pub\b|"
@@ -201,7 +208,7 @@ _CREDENTIAL_BENIGN = re.compile(r"\.env\.(?:example|sample|template)|\.pub\b|"
 _CREDENTIAL_STRONG = frozenset({
     "ssh private key", "cloud credentials", "environment file",
     "private certificate", "stored token file", "keychain / secret store",
-    "cloud metadata endpoint",
+    "cloud metadata endpoint", "service account token",
 })
 
 
@@ -352,11 +359,18 @@ def network_egress(events: Iterable[dict], session_id: str,
         else:
             return None
 
+        # Hosts other sessions in the cohort reached only recently. They are in
+        # the cohort's memory but not yet counted as normal (see
+        # detector_calibration.EGRESS_SETTLE_HOURS), so a swarm cannot vouch
+        # for its own destination.
+        settling = th.get("settling_hosts") or frozenset()
+        settling_new = [h for h in new_hosts if h in settling]
         evidence = {
             "ground": ground,
             "distinct_hosts": len(distinct),
             "hosts": distinct[:8],
             "new_hosts": new_hosts[:8],
+            "settling_hosts": settling_new[:8],
             "raw_addresses": raw_ips[:4],
             "known_host_count": len(known),
             "threshold": fanout_limit,
@@ -364,12 +378,19 @@ def network_egress(events: Iterable[dict], session_id: str,
         }
         if ground == "first_time":
             shown = ", ".join(new_hosts[:3])
+            settle_h = th.get("egress_settle_hours") or 0
+            window = f"{settle_h:g}h"
+            detail = (f"This agent has not reached {shown} in the {len(known)} "
+                      f"host(s) its cohort has used for longer than {window}. ")
+            if settling_new:
+                detail += (f"{len(settling_new)} of them were first reached by "
+                           f"other sessions in this cohort within the last "
+                           f"{window}, so they are not counted as normal yet. ")
             return _core()._incident(
                 "network_egress", session_id, runtime, sev,
                 f"{runtime}: first contact with {shown}"
                 + (f" +{len(new_hosts) - 3} more" if len(new_hosts) > 3 else ""),
-                f"This agent has not reached {shown} in the "
-                f"{len(known)} host(s) seen from it before now. " + _core()._stop_hint(),
+                detail + _core()._stop_hint(),
                 evidence, hosts.get(new_hosts[0]))
         if ground == "fanout":
             return _core()._incident(
