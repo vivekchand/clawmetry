@@ -87,7 +87,13 @@ def _hook_command(runtime_slug: str, base: str) -> str:
         quoted = _sp.list2cmdline([launcher])
     else:
         quoted = shlex.quote(launcher)
-    suffix = "" if _console_script() else " -m clawmetry"
+    if _console_script():
+        suffix = ""
+    else:
+        # Isolated -m so the agent's working directory cannot shadow the
+        # package (see hook_ownership.module_launch_flags).
+        flags = hook_ownership.module_launch_flags()
+        suffix = f" {flags} -m clawmetry" if flags else " -m clawmetry"
     return f"{quoted}{suffix} hook {runtime_slug} --base {base}"
 
 
