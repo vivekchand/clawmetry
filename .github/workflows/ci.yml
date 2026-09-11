@@ -652,6 +652,7 @@ jobs:
             tests/test_moat_event_shape_manifest_guard.py \
             tests/test_moat_regression_1129.py \
             tests/test_e2e_real_openclaw_pipeline.py \
+            tests/test_onboarding_ingest_status.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
             tests/test_query_events_keys_first.py \
             tests/test_cost_scan_slim_events.py \
