@@ -73,8 +73,9 @@ Spans and log records are mapped by `dashboard.py::_otel_to_row`. Every attribut
 | `gen_ai.agent.id` | `agent.id`, `openclaw.agent_id`, `agent_id` | Agent identifier. |
 | `gen_ai.input.messages` | `gen_ai.prompt` | Input message list (current GenAI semconv). |
 | `gen_ai.output.messages` | `gen_ai.completion` | Output message list (current GenAI semconv). |
+| `gen_ai.operation.name` | — | Operation kind (``chat``, ``text_completion``, ``generate_content``). Read to decide whether a span counts as a run: OpenLLMetry and traceloop-sdk name LLM spans ``<vendor>.chat`` / ``<vendor>.completion`` and tag the operation here, so without it a bring-your-own-agent install records spans while the live Runs tile stays at zero. |
 
-Attributes that appear in GenAI semconv but are **not yet consumed**: `gen_ai.operation.name`, `gen_ai.agent.name`.
+Attributes that appear in GenAI semconv but are **not yet consumed**: `gen_ai.agent.name`.
 
 ## Run / event ingest API
 

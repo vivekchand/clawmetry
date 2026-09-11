@@ -148,11 +148,27 @@ GEN_AI_ATTRS_READ: dict[str, tuple[str, list[str]]] = {
         "Output message list (current GenAI semconv).",
         ["gen_ai.completion"],
     ),
+    "gen_ai.operation.name": (
+        "Operation kind (``chat``, ``text_completion``, ``generate_content``). "
+        "Read to decide whether a span counts as a run: OpenLLMetry and "
+        "traceloop-sdk name LLM spans ``<vendor>.chat`` / ``<vendor>.completion`` "
+        "and tag the operation here, so without it a bring-your-own-agent "
+        "install records spans while the live Runs tile stays at zero.",
+        [],
+    ),
 }
 
 # Attributes that appear in GenAI semconv but are NOT yet consumed.
+#
+# This list is published in docs/INGEST.md, so a name here is a promise to the
+# reader that sending it changes nothing. ``gen_ai.operation.name`` was listed
+# and was in fact read by ``dashboard.py::_process_otlp_traces`` to classify a
+# span as a run -- caught by this module's own drift check (#5682). Verify
+# against the code before adding a name, not against intent.
+#
+# ``gen_ai.agent.name`` is genuinely unread on the ingest path: ClawMetry's own
+# exporter WRITES it (``clawmetry/otel_exporter.py``), and nothing reads it back.
 GEN_AI_ATTRS_NOT_READ: list[str] = [
-    "gen_ai.operation.name",
     "gen_ai.agent.name",
 ]
 
