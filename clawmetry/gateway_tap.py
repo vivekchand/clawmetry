@@ -86,8 +86,11 @@ log = logging.getLogger("clawmetry-sync")  # share the daemon logger sink
 #
 # Gateway tap identifiers are compound words without hyphens (matching
 # the convention used throughout this file). ``_CHANNEL_DIRS`` in
-# sync.py is the authoritative source of filesystem directory names and
-# may differ (e.g. ``fish-audio`` on disk vs ``fishaudio`` here).
+# sync.py is the authoritative source of filesystem directory names. The
+# two lists are maintained separately and MAY diverge in spelling, but as of
+# 0.12.861 every name is byte-identical in both -- the ``fish-audio`` vs
+# ``fishaudio`` example this comment used to give was hypothetical and never
+# matched the shipped lists, which is worse than no example.
 CHANNEL_NAMES: tuple[str, ...] = (
     "telegram",
     "signal",

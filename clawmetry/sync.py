@@ -6473,9 +6473,12 @@ def sync_openclaw_claude_sessions_via_index(
 #
 # Miss the gateway list and live messages never arrive while history works.
 # Miss the catalogue and the channel is invisible even with rows in the store.
-# The disk name and the wire name may legitimately differ (``fish-audio`` on
-# disk, ``fishaudio`` on the wire), so neither list may be derived from the
-# other by string munging.
+#
+# Every name is currently byte-identical across all four lists -- none even
+# contains a hyphen. They are still four separate edits: nothing derives one
+# list from another, and nothing enforces that they agree beyond
+# tests/test_channel_four_lists.py, which compares on a normalised form so a
+# future adapter that does need different spellings does not silently pass.
 #
 # Recorded as "A chat channel is four lists, and a channel in three of them is
 # broken" in the Runtime and Session Observability blueprint, with an ADR for
