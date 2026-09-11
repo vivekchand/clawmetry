@@ -61,12 +61,12 @@ the rule, for three reasons worth recording:
 `nemo_governance` (policy enforcement layered on top of any runtime) is a
 separate **free feature**, not a runtime — see the feature list below.
 
-**Chat-channel adapters** (all 23 are free; `entitlements.ALL_CHANNELS`):
+**Chat-channel adapters** (all 24 are free; `entitlements.ALL_CHANNELS`):
 
 Telegram, Signal, WhatsApp, Discord, Slack, IRC, iMessage, WebChat,
 Google Chat, Microsoft Teams, BlueBubbles, Matrix, Mattermost, LINE,
 Nostr, Twitch, Feishu, Zalo, Tlon, Synology Chat, Nextcloud Talk,
-ClickClack, Buzz.
+ClickClack, Buzz, Fish Audio.
 
 There is **no paid-channel tier** — every adapter unlocks on every plan.
 What tiers govern is how many channels can be *active concurrently*
