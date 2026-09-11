@@ -429,11 +429,19 @@ def scan_autorun_tasks(workspace: str, session_id: str = "",
 
 # Agent hook configs, relative to the workspace. Each is a file an agent reads
 # at session start and will happily execute commands from.
+# A hook file maps to the set of runtimes that EXECUTE it, not to one owner.
+# Cursor Desktop reads `.claude/settings.local.json` and runs hooks registered
+# there without asking (CVE-2026-48124 / GHSA-pc9j-3qc2-95wv, patched in Cursor
+# 3.0.0; Pillar Security, "The Week of Sandbox Escapes" day 6). Naming a single
+# runtime told an operator on a Cursor-only machine that a critical finding
+# concerned Claude Code, which is a reasonable ground to dismiss it.
 _AGENT_HOOK_FILES = (
-    (".claude/settings.json", "claude_code"),
-    (".claude/settings.local.json", "claude_code"),
-    (".cursor/settings.json", "cursor"),
+    (".claude/settings.json", ("claude_code", "cursor")),
+    (".claude/settings.local.json", ("claude_code", "cursor")),
+    (".cursor/settings.json", ("cursor",)),
 )
+#: Display names for the sentence that lists a file's readers.
+_RUNTIME_LABELS = {"claude_code": "Claude Code", "cursor": "Cursor"}
 # ClawMetry installs its own PreToolUse hook, so a scan has to tell our entry
 # from somebody else's. Ownership is decided on the command's ARGV SHAPE — the
 # launcher is argv[0] and `hook` is its subcommand — never on a substring of the
@@ -459,6 +467,33 @@ def _is_clawmetry_hook(command: str) -> bool:
     return False
 
 
+def _hook_events(hooks) -> list:
+    """``[(event, command), ...]`` for a settings ``hooks`` mapping.
+
+    ``_hook_commands`` flattens the tree and loses which lifecycle event a
+    command is registered on, so every finding asserted "on every matching
+    tool call". That is true of ``PreToolUse`` and false of ``Stop``, which
+    fires once at end of turn and is the vector CVE-2026-48124 used. Where the
+    event is knowable, say it instead of asserting a lifecycle.
+
+    Anything not shaped as ``{event: [...]}`` yields an empty event name, so a
+    malformed or unfamiliar file degrades to "unknown event" rather than to a
+    confident wrong one.
+    """
+    pairs: list = []
+    if isinstance(hooks, dict):
+        for event, val in hooks.items():
+            if event == "command" and isinstance(val, str):
+                pairs.append(("", val))
+                continue
+            for cmd in _hook_commands(val):
+                pairs.append((str(event), cmd))
+    else:
+        for cmd in _hook_commands(hooks):
+            pairs.append(("", cmd))
+    return pairs
+
+
 def _hook_commands(node) -> list:
     """Walk a settings tree and collect every `command` string under `hooks`."""
     found: list = []
@@ -478,7 +513,7 @@ def scan_agent_hooks(workspace: str, session_id: str = "",
                      runtime: str = "unknown") -> list:
     """Flag hook commands in agent config that ClawMetry did not install."""
     out = []
-    for rel, rt in _AGENT_HOOK_FILES:
+    for rel, readers in _AGENT_HOOK_FILES:
         path = os.path.join(workspace, rel)
         if not os.path.isfile(path):
             continue
@@ -490,9 +525,33 @@ def scan_agent_hooks(workspace: str, session_id: str = "",
         hooks = data.get("hooks")
         if not hooks:
             continue
-        foreign = [c for c in _hook_commands(hooks) if not _is_clawmetry_hook(c)]
-        if not foreign:
+        pairs = [(ev, c) for ev, c in _hook_events(hooks)
+                 if not _is_clawmetry_hook(c)]
+        if not pairs:
             continue
+        foreign = [c for _ev, c in pairs]
+        # Which runtime to name. The scan already knows the session's own
+        # runtime, so when that runtime is one of this file's readers we can
+        # say "your <runtime> session" truthfully and for free — no probe.
+        # Otherwise we name every runtime that executes the file rather than
+        # picking one, because picking one is how a Cursor-only machine was
+        # told a critical finding was about Claude Code.
+        rt = runtime if runtime in readers else (readers[0] if readers else "unknown")
+        scoped = runtime in readers
+        _names = [_RUNTIME_LABELS.get(r, r) for r in readers]
+        reader_phrase = (
+            _names[0] if len(_names) == 1
+            else " and ".join((", ".join(_names[:-1]), _names[-1]))
+        )
+        # Name the lifecycle when every foreign command shares one; never
+        # assert "every matching tool call" for a Stop hook.
+        _events = sorted({ev for ev, _c in pairs if ev})
+        if len(_events) == 1:
+            when = f"on the `{_events[0]}` event"
+        elif _events:
+            when = "on " + ", ".join(f"`{e}`" for e in _events)
+        else:
+            when = "on an event this file does not name"
         # A committed settings.json is normally the project author's own
         # tooling; settings.local.json is gitignored by convention, which is
         # exactly why a worm writes there — nothing shows up in `git status`.
@@ -502,9 +561,12 @@ def scan_agent_hooks(workspace: str, session_id: str = "",
         out.append(_finding(
             "agent_config_tamper", "critical" if local else "warning",
             f"{rel} installs {len(foreign)} hook command(s) that run with your session",
-            f"`{rel}` registers hook commands that run inside your {rt} session, "
-            "on every matching tool call, with your credentials in the "
-            "environment. "
+            (f"`{rel}` registers hook commands that run inside your {rt} "
+             f"session, {when}, with your credentials in the environment. "
+             if scoped else
+             f"`{rel}` registers hook commands that run {when}, with your "
+             f"credentials in the environment. This file is read and executed "
+             f"by {reader_phrase}. ")
             + ("This file is gitignored by convention, so an entry here does "
                "not show up in `git status` — the surface the CHAINDROP worm "
                "used to persist across 400+ npm packages. If you did not add "
@@ -516,7 +578,8 @@ def scan_agent_hooks(workspace: str, session_id: str = "",
             + "ClawMetry will not remove another tool's hooks for you.",
             {"file": rel, "commands": [_sketch(c) for c in foreign[:5]],
              "count": len(foreign), "gitignored_by_convention": local,
-             "observed": "agent_config"},
+             "observed": "agent_config", "readers": list(readers),
+             "events": _events},
             session_id, rt))
     return out
 

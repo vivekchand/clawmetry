@@ -23,6 +23,12 @@ import requests
 # store and rendered in the Alerts tab. The per-process ownership check in
 # ``local_server.discovery_serves_this_db`` stops the proxy hop; this default
 # stops the direct-open leak for every test that forgot to isolate itself.
+# Urgent incidents also notify through a desktop pop-up and ClawMetry cloud
+# (incident_alerts.send_desktop / send_cloud). A unit test must never do
+# either on a developer's machine; the tests for those senders opt back in.
+os.environ.setdefault("CLAWMETRY_DESKTOP_ALERTS", "0")
+os.environ.setdefault("CLAWMETRY_CLOUD_INCIDENT_ALERTS", "0")
+
 _CONFTEST_SET_STORE_PATH = "CLAWMETRY_LOCAL_STORE_PATH" not in os.environ
 if _CONFTEST_SET_STORE_PATH:
     import tempfile as _tempfile

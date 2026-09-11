@@ -882,7 +882,12 @@ def test_hook_command_quotes_interpreter_with_spaces(rt_gates, monkeypatch):
     cmd = rg._hook_command("copilot", "http://127.0.0.1:8900")
     parts = shlex.split(cmd)
     assert parts[0] == spacey
-    assert parts[1:4] == ["-m", "clawmetry", "hook"]
+    # The -m fallback carries an isolation flag (-P / -I) so the agent's
+    # working directory cannot shadow the package; see
+    # hook_ownership.module_launch_flags.
+    flags = rg.hook_ownership.module_launch_flags()
+    want = ([flags] if flags else []) + ["-m", "clawmetry", "hook"]
+    assert parts[1:1 + len(want)] == want
 
 
 @pytest.mark.parametrize("payload", [
