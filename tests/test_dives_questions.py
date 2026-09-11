@@ -1,4 +1,4 @@
-"""Tests for DIVES-5: suggested-questions gallery (routes.dives.SUGGESTED_QUESTIONS).
+"""Tests for DIVES-5: suggested-questions gallery (routes.dives.DIVES_GALLERY_QUESTIONS).
 
 Regression guards:
 - Fixed schema per entry (question, chart_type, category).
