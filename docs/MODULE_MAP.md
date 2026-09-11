@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-235 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+236 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -265,6 +265,7 @@ The runtime adapters that ship in open source. The paid ones live in `clawmetry-
 | `clawmetry/adapters/openclaw.py` | large | This adapter does NOT re-implement OpenClaw session parsing. |
 | `clawmetry/adapters/openclaw_reply_recovery.py` | small | Reply-recovery event scanner for the OpenClaw adapter. |
 | `clawmetry/adapters/openclaw_share.py` | medium | OpenClaw public-share state (issue #5746). |
+| `clawmetry/adapters/openclaw_update_pipeline.py` | small | Update-pipeline state scanner for the OpenClaw adapter. |
 | `clawmetry/adapters/phase.py` | medium | The session phase model: one state machine, every runtime. |
 | `clawmetry/adapters/registry.py` | small | Process-wide adapter registry. |
 
