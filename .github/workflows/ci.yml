@@ -771,6 +771,7 @@ jobs:
             tests/test_detectors_ngram.py \
             tests/test_detectors_secret_value_corpus.py \
             tests/test_detectors_swarm_gaps.py \
+            tests/test_detectors_coordinated_action.py \
             tests/test_guard_escalation_ladder.py \
             tests/test_guard_policies_api_ladder.py \
             tests/test_guard_policy_enforcement.py \

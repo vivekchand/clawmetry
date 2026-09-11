@@ -148,6 +148,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/detector_money.py` | small | What a finding costs, and therefore what to look at first. |
 | `clawmetry/detector_payload.py` | medium | What a tool call SENT, and what it CARRIED. |
 | `clawmetry/detector_surface.py` | medium | What a tool call actually touched, and what a finding may repeat back. |
+| `clawmetry/detector_swarm.py` | medium | Are sessions that should be independent behaving as if they're coordinated? |
 | `clawmetry/detectors.py` | large | research-backed, judge-free, CPU-cheap trajectory anomaly detectors over a session's recent event sequence (issue #2999). |
 | `clawmetry/deterministic_evaluators.py` | medium | cheap, code-based checks on sessions. |
 | `clawmetry/distinfo_cleanup.py` | small | prune stale dist-info left by partial upgrades. |
