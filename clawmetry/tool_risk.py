@@ -154,9 +154,17 @@ def _rx(p: str) -> "re.Pattern[str]":
 # targeting root, home, or a bare glob of either.
 _RM_RECURSIVE_FORCE = _rx(
     r"\brm\s+(?=[^|;&]*\s-\w*r)(?=[^|;&]*\s-\w*f)")
+# Quantifiers are bounded because `[^|;&]*` and the `\s+` that follows it both
+# match a space, so the engine backtracks between them: CodeQL py/polynomial-
+# redos, "slow on strings with many repetitions of ' '". This regex predates
+# the git-config work but is the one the alerts on this file actually blame,
+# and it runs on every exec classification, which the Brain feed performs
+# thousands of times per page-load. An `rm` invocation longer than these
+# bounds is not something this rule can usefully judge anyway.
 _RM_ROOT_TARGET = _rx(
-    r"\brm\s+[^|;&]*\s+(?:--?\w+\s+)*(?:/|/\*|~|~/|\$home\b|\$\{home\}|"
-    r"%userprofile%|c:\\\\?\s*$|c:\\\\?\*)\s*(?:$|[|;&])")
+    r"\brm\s{1,8}[^|;&]{0,256}\s{1,8}(?:--?\w{1,32}\s{1,8}){0,8}"
+    r"(?:/|/\*|~|~/|\$home\b|\$\{home\}|"
+    r"%userprofile%|c:\\\\?\s*$|c:\\\\?\*)\s{0,8}(?:$|[|;&])")
 
 _CMD_RULES: list[tuple["re.Pattern[str]", str, str]] = [
     # ── critical: irreversible machine or data destruction ──
