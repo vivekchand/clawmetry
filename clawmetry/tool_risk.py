@@ -22,10 +22,16 @@ Design rules (non-negotiable):
   * **Worst signal wins.** Every matching rule contributes a reason; the
     final level is the maximum. Reasons are plain copy (no em-dashes, no
     jargon) because they surface verbatim in approval prompts.
-  * **This module imports nothing from the rest of clawmetry.** It is the
-    leaf that ``approvals.py`` (and routes) import, so the canonical tool
-    map lives HERE now and ``approvals`` re-exports it (single source of
-    truth, no drift between watcher / replay / hook gate).
+  * **This module imports nothing from the rest of clawmetry except
+    ``git_config_exec``**, a constant module whose only import is ``re``.
+    It is the leaf that ``approvals.py`` (and routes) import, so the
+    canonical tool map lives HERE now and ``approvals`` re-exports it
+    (single source of truth, no drift between watcher / replay / hook gate).
+    The one exception exists because ``repo_scan`` and this module must
+    answer the same question -- does this git config execute a program? --
+    and a copy in each is a copy that drifts (clawmetry-pro#244). It is a
+    constant table, not a scanner: no I/O, no cycle, negligible import cost
+    on a path that classifies thousands of rows per page-load.
 
 Public API:
   classify_tool_call(tool_name, args) -> {level, rank, category, reasons}
@@ -304,8 +310,9 @@ def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
     if "git" not in cmd.lower():
         return
     try:
-        from clawmetry.repo_scan import (git_config_executes,
-                                         git_config_value_known_good)
+        from clawmetry.git_config_exec import executes as git_config_executes
+        from clawmetry.git_config_exec import (
+            value_known_good as git_config_value_known_good)
     except Exception:
         return
     seen: set = set()

@@ -38,6 +38,8 @@ import os
 import re
 from typing import Optional
 
+from clawmetry import git_config_exec as _gce
+
 #: Every file a scan READS, relative to the workspace. Declared here so the
 #: daemon's cache stamp cannot miss one: the stamp is what decides whether a
 #: repo is re-scanned, so a file the scanner reads but the stamp ignores means
@@ -70,40 +72,16 @@ WORKSPACE_KINDS = (
 
 # Git config keys whose VALUE is a program git will execute. Section+key, lowered.
 # Sourced from git-config(1); the wildcard forms cover per-name subsections.
-_EXEC_KEYS = (
-    "core.fsmonitor",
-    "core.hookspath",
-    "core.sshcommand",
-    "core.editor",
-    "core.pager",
-    "core.askpass",
-    "sequence.editor",
-    "credential.helper",
-    "uploadpack.packobjectshook",
-    "diff.external",
-    "gpg.program",
-    "init.templatedir",
-)
-_EXEC_KEY_PATTERNS = (
-    re.compile(r"^filter\..+\.(clean|smudge|process)$"),
-    re.compile(r"^diff\..+\.(command|textconv)$"),
-    re.compile(r"^merge\..+\.driver$"),
-    re.compile(r"^alias\..+$"),          # only flagged when the value starts "!"
-)
+_EXEC_KEYS = _gce._EXEC_KEYS
+_EXEC_KEY_PATTERNS = _gce._EXEC_KEY_PATTERNS
 
 # Commands that legitimately appear in these keys in ordinary repositories.
 # Matched against the value's leading tokens, so `git-lfs clean -- %f` is
 # recognised while `git-lfs clean; curl evil` is not.
-_KNOWN_GOOD_PREFIXES = (
-    ("git-lfs", "clean"), ("git-lfs", "smudge"), ("git-lfs", "filter-process"),
-    ("git", "lfs"),
-    ("cat",), ("true",), ("false",),
-    ("rustfmt",), ("gofmt",), ("black",), ("prettier",),
-    ("less",), ("more",), ("delta",), ("diff-so-fancy",),
-)
+_KNOWN_GOOD_PREFIXES = _gce._KNOWN_GOOD_PREFIXES
 # A value that chains, substitutes or redirects is never "known good", whatever
 # it starts with — `git-lfs clean -- %f; curl attacker` starts with git-lfs.
-_SHELL_METACHARS = re.compile(r"[;&|`$><\n]|\$\(|\|\|")
+_SHELL_METACHARS = _gce._SHELL_METACHARS
 
 _TASKS_AUTORUN = re.compile(r'"runOn"\s*:\s*"folderOpen"', re.I)
 
@@ -121,16 +99,7 @@ def _sketch(value: str, limit: int = 80) -> str:
 
 
 def _is_known_good(value: str) -> bool:
-    if _SHELL_METACHARS.search(value or ""):
-        return False
-    tokens = str(value).split()
-    if not tokens:
-        return True
-    lowered = [t.lower() for t in tokens]
-    for prefix in _KNOWN_GOOD_PREFIXES:
-        if lowered[:len(prefix)] == list(prefix):
-            return True
-    return False
+    return _gce.value_known_good(value)
 
 
 # Hook managers that legitimately point core.hooksPath at the working tree.
@@ -326,15 +295,7 @@ def git_config_executes(full_key: str, value: str = "") -> bool:
 
 
 def _key_is_executable(full_key: str, value: str) -> bool:
-    if full_key in _EXEC_KEYS:
-        return True
-    for rx in _EXEC_KEY_PATTERNS:
-        if rx.match(full_key):
-            # A git alias is only a shell command when it starts with "!".
-            if full_key.startswith("alias."):
-                return value.strip().startswith("!")
-            return True
-    return False
+    return _gce.executes(full_key, value)
 
 
 def _finding(kind: str, severity: str, title: str, detail: str,
