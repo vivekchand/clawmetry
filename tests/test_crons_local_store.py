@@ -508,6 +508,108 @@ def test_health_summary_model_field_surfaced(fast_path_app):
     )
 
 
+# ── run_ledger cross-check (issue #5866) ────────────────────────────────────
+
+
+def _seed_run_ledger_cron_runs(store, job_id, statuses):
+    """Insert ``run_ledger`` rows for ``job_id``, newest last in ``statuses``.
+
+    Mirrors what ``sync_run_ledger`` mirrors from OpenClaw's own
+    ``task_runs`` table: ``runtime='cron'``, ``source_id=job_id``."""
+    import time
+    base_ms = int(time.time() * 1000) - len(statuses) * 60000
+    for i, status in enumerate(statuses):
+        ts = base_ms + i * 60000
+        store.ingest_run_ledger_row({
+            "task_id": f"run-{job_id}-{i}",
+            "runtime": "cron",
+            "source_id": job_id,
+            "status": status,
+            "created_at": ts,
+            "last_event_at": ts,
+            "error": "heartbeat skipped: no-route" if status == "failed" else None,
+        })
+
+
+def test_health_summary_catches_failures_the_state_blob_missed(fast_path_app):
+    """Issue #5866: a cron job whose own state blob has NO run history
+    (``consecutiveFailures`` stuck at 0, as OpenClaw leaves it for a job
+    that fires and skips every time) must still grade ``error`` once
+    ``run_ledger`` shows its recent runs failing — not ``ok`` on no
+    evidence."""
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    app, ls, _cr = fast_path_app
+    now = datetime.now(timezone.utc)
+    recent_iso = (now - timedelta(seconds=30)).isoformat()
+    next_iso = (now + timedelta(minutes=5)).isoformat()
+
+    ls.get_store().ingest_cron({
+        "cron_id": "heartbeat-main",
+        "name": "heartbeat-main",
+        "schedule": '{"kind":"every","everyMs":3600000}',
+        "enabled": True,
+        "last_run_at": recent_iso,
+        "last_status": "pending",
+        "next_run_at": next_iso,
+        "createdAtMs": int(time.time() * 1000) - 86400000,
+        # No consecutiveFailures/lastError in the state blob at all — this
+        # is the "runs7d: null" case from the issue: OpenClaw's own
+        # bookkeeping never saw a failure because the run "skipped"
+        # rather than erroring.
+    })
+    # 5 consecutive failed runs on record in the ledger.
+    _seed_run_ledger_cron_runs(
+        ls.get_store(), "heartbeat-main",
+        ["succeeded", "succeeded", "failed", "failed", "failed"],
+    )
+
+    body = app.test_client().get("/api/cron/health-summary").get_json()
+    assert body.get("_source") == "local_store"
+    jobs = {j["id"]: j for j in body["jobs"]}
+    job = jobs["heartbeat-main"]
+
+    assert job["consecutiveFailures"] == 3, job
+    assert job["health"] == "error", job
+    assert job["lastStatus"] == "failed", job
+    assert job["lastError"], job
+    assert body["totals"]["error"] >= 1
+    assert body["hasErrors"] is True
+
+
+def test_health_summary_ledger_does_not_override_a_worse_state_count(fast_path_app):
+    """When the state blob already reports MORE consecutive failures than
+    the (possibly truncated) ledger slice, keep the state's count rather
+    than silently improving a job's grade."""
+    import time
+    from datetime import datetime, timezone, timedelta
+
+    app, ls, _cr = fast_path_app
+    now = datetime.now(timezone.utc)
+    recent_iso = (now - timedelta(seconds=30)).isoformat()
+    next_iso = (now + timedelta(minutes=5)).isoformat()
+
+    ls.get_store().ingest_cron({
+        "cron_id": "flaky-job",
+        "name": "Flaky Job",
+        "schedule": '{"kind":"every","everyMs":3600000}',
+        "enabled": True,
+        "last_run_at": recent_iso,
+        "last_status": "error",
+        "next_run_at": next_iso,
+        "createdAtMs": int(time.time() * 1000) - 86400000,
+        "consecutiveFailures": 9,
+        "lastError": "boom",
+    })
+    _seed_run_ledger_cron_runs(ls.get_store(), "flaky-job", ["failed"])
+
+    body = app.test_client().get("/api/cron/health-summary").get_json()
+    job = {j["id"]: j for j in body["jobs"]}["flaky-job"]
+    assert job["consecutiveFailures"] == 9, job
+    assert job["health"] == "error", job
+
+
 def test_health_summary_cron_without_model_gets_empty_string(fast_path_app):
     """Crons without a model field must surface 'model': '' in health-summary
     (not a missing key) so the JS layer can use a uniform `job.model || ''`
