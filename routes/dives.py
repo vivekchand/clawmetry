@@ -384,3 +384,55 @@ def api_dives_delete(slug: str):
     except OSError as e:
         return jsonify({"error": f"Delete failed: {e}"}), 500
     return jsonify({"deleted": safe})
+
+
+# ── Suggested-questions gallery (DIVES-5) ─────────────────────────────────────
+
+#: Curated starter questions for the Dives UI.  Each entry has ``question``
+#: (display text), ``chart_type`` (Chart.js type) and ``category`` (for
+#: UI grouping).  The test suite pins the count — update ``_EXPECTED_COUNT``
+#: in ``tests/test_dives_questions.py`` whenever you add or remove entries.
+SUGGESTED_QUESTIONS: tuple[dict, ...] = (
+    # ── Cost & spend ──────────────────────────────────────────────────────────
+    {"question": "Show total cost per agent runtime over the last 7 days",
+     "chart_type": "bar", "category": "cost"},
+    {"question": "What is my total LLM spend per day for the past 30 days?",
+     "chart_type": "line", "category": "cost"},
+    {"question": "Which sessions cost the most? Show the top 10 by total cost.",
+     "chart_type": "bar", "category": "cost"},
+    {"question": "What fraction of my total spend goes to each LLM model?",
+     "chart_type": "doughnut", "category": "cost"},
+    # ── Usage & activity ──────────────────────────────────────────────────────
+    {"question": "How many sessions have I started per day this month?",
+     "chart_type": "line", "category": "activity"},
+    {"question": "Show me total token consumption per agent runtime",
+     "chart_type": "bar", "category": "activity"},
+    {"question": "What are the most common event types across all agents?",
+     "chart_type": "doughnut", "category": "activity"},
+    {"question": "How many events were recorded per hour today?",
+     "chart_type": "bar", "category": "activity"},
+    # ── Sessions ──────────────────────────────────────────────────────────────
+    {"question": "Show average message count per session, grouped by agent runtime",
+     "chart_type": "bar", "category": "sessions"},
+    {"question": "How many sub-agents were spawned per session this week?",
+     "chart_type": "bar", "category": "sessions"},
+    # ── Crons & ops ───────────────────────────────────────────────────────────
+    {"question": "How many cron jobs are registered per agent runtime?",
+     "chart_type": "doughnut", "category": "crons"},
+    {"question": "Show daily cron run counts over the last 14 days",
+     "chart_type": "line", "category": "crons"},
+    # ── System health ─────────────────────────────────────────────────────────
+    {"question": "Plot memory usage percentage over the last 24 hours",
+     "chart_type": "line", "category": "system"},
+    {"question": "Show CPU usage trend from system snapshots this week",
+     "chart_type": "line", "category": "system"},
+    # ── Memory & context ──────────────────────────────────────────────────────
+    {"question": "How many memory blobs are stored per agent runtime?",
+     "chart_type": "bar", "category": "memory"},
+)
+
+
+@bp_dives.route("/api/dives/questions")
+def api_dives_questions():
+    """GET → {questions: [{question, chart_type, category}, ...]}"""
+    return jsonify({"questions": [dict(q) for q in SUGGESTED_QUESTIONS]})
