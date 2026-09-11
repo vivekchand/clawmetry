@@ -399,6 +399,39 @@ def evaluate(
 # ── Rule normalisation ────────────────────────────────────────────────────────
 
 
+# Type-specific fields a rule may carry. A cloud-authored rule reaches the
+# daemon as the cloud's stored body (sync.py ``alert_rule_upsert``), and the
+# cloud stores only its named columns plus a free-form ``config`` object, so
+# these fields arrive nested under ``config``, not at the top level where the
+# evaluators read them. Without lifting them, a hosted-dashboard rule silently
+# ran on defaults: a signal rule lost its signal, a latency rule its window.
+CONFIG_FIELDS = ("signal", "window_minutes", "window_sec", "min_turns",
+                 "min_sessions", "tool_name", "kinds")
+
+
+def flatten_condition(cond: dict[str, Any]) -> dict[str, Any]:
+    """Lift :data:`CONFIG_FIELDS` out of a nested ``config`` object into the
+    condition. A top-level value always wins; nothing else in ``config`` is
+    touched. Returns a new dict (or ``cond`` itself when there is nothing to
+    lift)."""
+    cfg = cond.get("config")
+    if isinstance(cfg, str):
+        import json as _json
+        try:
+            cfg = _json.loads(cfg)
+        except Exception:
+            cfg = None
+    if not isinstance(cfg, dict):
+        return cond
+    lifted = {k: cfg[k] for k in CONFIG_FIELDS
+              if cfg.get(k) is not None and cond.get(k) is None}
+    if not lifted:
+        return cond
+    out = dict(cond)
+    out.update(lifted)
+    return out
+
+
 def _normalise_rule(raw_rule: dict[str, Any]) -> dict[str, Any] | None:
     """Project a raw DuckDB ``alert_rules`` row into the evaluator's expected
     shape. Reads ``condition_json`` (the cloud rule body) and surfaces the
@@ -419,6 +452,7 @@ def _normalise_rule(raw_rule: dict[str, Any]) -> dict[str, Any] | None:
             return None
     if not isinstance(cond, dict):
         return None
+    cond = flatten_condition(cond)
 
     rule_type = cond.get("type")
     if not rule_type:

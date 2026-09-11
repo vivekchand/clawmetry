@@ -153,6 +153,43 @@ def test_runtime_scoped_rule_asks_for_its_runtime():
     assert seen == ["codex"]
 
 
+def test_cloud_authored_rule_fields_are_read_from_config():
+    """The hosted dashboard stores only named columns plus ``config``, and the
+    daemon evaluates that stored body. Fields left in ``config`` used to be
+    ignored: a hosted rule silently ran on defaults."""
+    q = {"tool_latency_p95_ms": 100.0, "timed_tool_calls": 500,
+         "tool_latency_by_tool": [{"name": "Bash", "p95_ms": 60000.0, "timed_calls": 3}]}
+    cloud = _rule("r", alert_type="tool_latency_p95_above", threshold_value=10,
+                  config={"tool_name": "Bash", "min_sessions": 3})
+    hit = ae.evaluate([cloud], [], {}, quality=q)
+    assert hit and hit[0]["metadata"]["tool_name"] == "Bash"
+    assert hit[0]["metadata"]["min_sample"] == 3
+
+    windows = []
+    r7 = _rule("w", alert_type="latency_p95_above", threshold_value=1,
+               config=json.dumps({"window_minutes": 15}))
+    ae.evaluate([r7], [], {}, quality_for=lambda w, rt: windows.append(w) or {})
+    assert windows == [15]
+    # A top-level value wins over config.
+    assert ae.flatten_condition({"window_minutes": 5, "config": {"window_minutes": 9}}
+                                )["window_minutes"] == 5
+
+
+def test_daemon_window_sizing_reads_config():
+    from clawmetry import sync
+    rules = [{"condition_json": {"alert_type": "review_accuracy_below",
+                                 "config": {"window_minutes": 20160}}}]
+    assert sync._alerts_quality_window_minutes(rules) == 20160
+
+
+def test_editor_sends_type_fields_inside_config():
+    js = _read("clawmetry/static/js/alerts.js")
+    save = js.split("window.alertsSaveRule = async function", 1)[1].split("\n  };", 1)[0]
+    assert "body.config = Object.assign" in save
+    for k in ("signal", "window_minutes", "min_sessions", "tool_name"):
+        assert f"'{k}'" in save, k
+
+
 # ── Figures on a real store ────────────────────────────────────────────────
 
 

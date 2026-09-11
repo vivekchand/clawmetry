@@ -27162,6 +27162,8 @@ def _alerts_quality_window_minutes(rules: list) -> int:
                 cond = _json.loads(cond)
             if not isinstance(cond, dict):
                 continue
+            # A cloud-authored rule carries its window inside ``config``.
+            cond = alert_evaluator.flatten_condition(cond)
             rtype = cond.get("type") or cond.get("alert_type")
             if rtype not in quality_types:
                 continue
@@ -27232,6 +27234,8 @@ def _alerts_signal_windows(rules: list, store) -> tuple:
                 cond = json.loads(cond)
             if not isinstance(cond, dict):
                 continue
+            # A cloud-authored rule carries signal / window inside ``config``.
+            cond = alert_evaluator.flatten_condition(cond)
             rtype = cond.get("type") or cond.get("alert_type")
             if rtype not in sig_types:
                 continue

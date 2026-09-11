@@ -1216,6 +1216,19 @@
       if (minEl && Number(minEl.value) > 0) body.min_sessions = Math.round(Number(minEl.value));
       if (toolEl && toolEl.value.trim()) body.tool_name = toolEl.value.trim();
     }
+    // The hosted dashboard stores only its named columns plus `config`, and
+    // the daemon evaluates that stored body, so type-specific fields must ride
+    // in `config` too or they are dropped on the way (alert_evaluator lifts
+    // them back out). The self-hosted endpoint reads the top-level copies.
+    const cfg = {};
+    ['signal', 'window_minutes', 'min_turns', 'min_sessions', 'tool_name'].forEach(k => {
+      if (body[k] !== undefined) cfg[k] = body[k];
+    });
+    if (Object.keys(cfg).length) {
+      const prev = (alertsState.editorRule && typeof alertsState.editorRule.config === 'object'
+        && alertsState.editorRule.config) || {};
+      body.config = Object.assign({}, prev, cfg);
+    }
 
     // An example row has no server-side rule — saving it is a create, not an
     // update (PUT /api/alerts/rules/example_cost would 404).
