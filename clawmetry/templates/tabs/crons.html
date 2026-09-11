@@ -18,6 +18,11 @@
     </label>
   </div>
   <div id="cron-health-panel" style="margin-bottom:12px;"></div>
+  <!-- Queue Lanes rollup (issue #5721) — rendered by loadQueueLanes() in app.js.
+       No data-i18n keys here on purpose: the strings are built in JS, like the
+       Cron Health Monitor above, so this panel does not need a new key in all
+       35 locale catalogs to ship. -->
+  <div id="cron-queue-lanes" style="margin-bottom:12px;"></div>
   <div id="crons-multi-node" style="display:none;margin-bottom:12px;"></div>
   <div class="cron-view-tabs" role="tablist">
     <button class="cron-view-tab active" data-view="active" onclick="setCronView('active')"><span data-i18n="crons.view_active">Active</span> <span class="cron-view-count" id="crons-count-active"></span></button>

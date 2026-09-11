@@ -481,7 +481,7 @@ def test_has_features_endpoint_never_5xx(monkeypatch, client):
     def _boom(*a, **kw):
         raise RuntimeError("blowup in body builder")
 
-    monkeypatch.setattr("routes.entitlement._has_bundle_body", _boom)
+    monkeypatch.setattr("routes.entitlement._shared._has_bundle_body", _boom)
     resp = client.get("/api/entitlement/has-features?features=fleet,sso")
     assert resp.status_code == 200
     body = resp.get_json()
@@ -496,7 +496,7 @@ def test_has_runtimes_endpoint_never_5xx(monkeypatch, client):
     def _boom(*a, **kw):
         raise RuntimeError("blowup in body builder")
 
-    monkeypatch.setattr("routes.entitlement._has_bundle_body", _boom)
+    monkeypatch.setattr("routes.entitlement._shared._has_bundle_body", _boom)
     resp = client.get(
         "/api/entitlement/has-runtimes?runtimes=claude_code,codex"
     )

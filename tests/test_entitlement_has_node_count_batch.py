@@ -422,8 +422,9 @@ def test_endpoint_never_5xx_on_scalar_blowup(monkeypatch, client):
 
 
 def test_endpoint_never_5xx_on_row_shape_blowup(monkeypatch, client):
-    import routes.entitlement as ent_route
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as ent_route
     def _boom(*a, **kw):
         raise RuntimeError("row shape blew up")
 
