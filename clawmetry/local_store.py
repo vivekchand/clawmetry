@@ -1809,6 +1809,21 @@ _DDL = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_guard_hosts_cohort ON guard_egress_hosts(cohort, last_seen)",
+    # Write actions this node has seen, fleet-wide: ``PUT host/a/b``. What
+    # makes coordinated_action able to say "none of them has done this
+    # before" (clawmetry/detector_swarm.py). first_seen never moves, so an
+    # action a swarm keeps repeating still has to finish settling.
+    """
+    CREATE TABLE IF NOT EXISTS guard_action_fingerprints (
+        fingerprint VARCHAR PRIMARY KEY,
+        verb        VARCHAR,
+        host        VARCHAR,
+        path_prefix VARCHAR,
+        sessions    BIGINT DEFAULT 0,
+        first_seen  BIGINT NOT NULL,
+        last_seen   BIGINT NOT NULL
+    )
+    """,
     # ── Session phase (one state machine, every runtime) ──────────────────
     # Its own table, not columns on ``sessions``: the phase is observed on a
     # different cadence than the session row, three work orders are adding
@@ -7822,9 +7837,106 @@ class LocalStore(TrailStoreMixin):
                     "DELETE FROM guard_session_stats WHERE updated_at < ?", [cutoff])
                 self._conn.execute(
                     "DELETE FROM guard_egress_hosts WHERE last_seen < ?", [cutoff])
+                self._conn.execute(
+                    "DELETE FROM guard_action_fingerprints WHERE last_seen < ?", [cutoff])
         except Exception:
             return 0
         return removed
+
+    def record_action_fingerprints(self, fingerprints: Any = None) -> None:
+        """Remember the write actions seen this tick, fleet-wide.
+
+        ``fingerprints`` is a list of ``(key, verb, host, path_prefix,
+        sessions)``. ``first_seen`` never moves once set, so an action a swarm
+        keeps repeating still has to finish settling before it counts as
+        normal. Never raises.
+        """
+        now_ms = int(time.time() * 1000)
+        try:
+            with self._write_lock:
+                for item in list(fingerprints or [])[:500]:
+                    try:
+                        key, verb, host, prefix, n = item
+                    except (TypeError, ValueError):
+                        continue
+                    if not key:
+                        continue
+                    self._conn.execute("""
+                        INSERT INTO guard_action_fingerprints (
+                            fingerprint, verb, host, path_prefix, sessions,
+                            first_seen, last_seen
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (fingerprint) DO UPDATE SET
+                            last_seen = excluded.last_seen,
+                            sessions  = GREATEST(guard_action_fingerprints.sessions,
+                                                 excluded.sessions)
+                    """, [str(key)[:300], str(verb or "")[:16], str(host or "")[:253],
+                          str(prefix or "")[:120], max(0, int(n or 0)), now_ms, now_ms])
+        except Exception:
+            return
+
+    def query_action_fingerprints(self, keys: Any = None) -> dict:
+        """``{"first_seen": {key: ms}, "since": ms | None}``.
+
+        ``since`` is the oldest ``first_seen`` in the table: how long this node
+        has been remembering write actions at all. ``coordinated_action`` stays
+        silent until that memory is a full settle window old, because on day
+        one every action is "new". Never raises.
+        """
+        out: dict = {"first_seen": {}, "since": None}
+        try:
+            row = self._conn.execute(
+                "SELECT MIN(first_seen) FROM guard_action_fingerprints").fetchone()
+            out["since"] = int(row[0]) if row and row[0] is not None else None
+            ks = [str(k)[:300] for k in list(keys or [])[:500] if k]
+            if ks:
+                marks = ",".join("?" for _ in ks)
+                rows = self._conn.execute(
+                    f"SELECT fingerprint, first_seen FROM guard_action_fingerprints "
+                    f"WHERE fingerprint IN ({marks})", ks).fetchall()
+                out["first_seen"] = {r[0]: int(r[1]) for r in rows if r and r[0]}
+        except Exception:
+            return {"first_seen": {}, "since": None}
+        return out
+
+    def query_subagent_parents(self, session_ids: Any = None) -> dict:
+        """``{child_id: parent_id}`` for these sessions and their ancestors.
+
+        Walks ``subagents.parent_session_id`` upward a level per query, bounded
+        in depth and width, so ``coordinated_action`` can count an orchestrator
+        and its subagents as one family. Ids are looked up both as given and
+        without a ``<runtime>:`` prefix, since the two tables may differ.
+        Never raises.
+        """
+        out: dict = {}
+        frontier: set = set()
+        for sid in list(session_ids or [])[:500]:
+            s = str(sid or "")
+            if not s:
+                continue
+            frontier.add(s)
+            head, sep, tail = s.partition(":")
+            if sep and tail:
+                frontier.add(tail)
+        try:
+            for _ in range(25):
+                if not frontier:
+                    break
+                ids = list(frontier)[:1000]
+                marks = ",".join("?" for _ in ids)
+                rows = self._fetch(
+                    f"SELECT subagent_id, parent_session_id FROM subagents "
+                    f"WHERE subagent_id IN ({marks}) AND parent_session_id IS NOT NULL "
+                    f"AND parent_session_id <> ''", ids)
+                nxt: set = set()
+                for child, parent in rows:
+                    if child and parent and child not in out:
+                        out[str(child)] = str(parent)
+                        nxt.add(str(parent))
+                frontier = nxt - set(out)
+        except Exception:
+            return out
+        return out
     # ── Session phase (see clawmetry/adapters/phase.py) ──────────────────
 
     def record_session_phase(self, session_id: str, phase: Any = None,

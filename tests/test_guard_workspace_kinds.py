@@ -60,8 +60,11 @@ def _js_map(name: str) -> dict:
 # ── one list ───────────────────────────────────────────────────────────────
 def test_the_union_is_the_two_halves():
     assert _det.WORKSPACE_KINDS == _rs.WORKSPACE_KINDS
-    assert _det.ALL_INCIDENT_KINDS == _det.DETECTOR_KINDS + _det.WORKSPACE_KINDS
+    assert _det.ALL_INCIDENT_KINDS == (
+        _det.DETECTOR_KINDS + _det.WORKSPACE_KINDS + _det.FLEET_KINDS)
     assert set(_det.DETECTOR_KINDS).isdisjoint(_det.WORKSPACE_KINDS)
+    assert set(_det.DETECTOR_KINDS).isdisjoint(_det.FLEET_KINDS)
+    assert set(_det.WORKSPACE_KINDS).isdisjoint(_det.FLEET_KINDS)
 
 
 def test_repo_scan_emits_only_declared_kinds(tmp_path):

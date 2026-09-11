@@ -116,6 +116,13 @@ try:  # pragma: no cover - trivial fallback
     from clawmetry.repo_scan import WORKSPACE_KINDS
 except Exception:  # noqa: BLE001
     WORKSPACE_KINDS = ("repo_config_exec", "agent_config_tamper")
+# Fleet-wide findings (clawmetry/detector_swarm.py) must also be named: one
+# coordinated_action lands on every participating session, so a catch-all rule
+# written about single agents would act on dozens of sessions at once.
+try:  # pragma: no cover - trivial fallback
+    from clawmetry.detector_swarm import FLEET_KINDS
+except Exception:  # noqa: BLE001
+    FLEET_KINDS = ("coordinated_action",)
 
 # Action ladder, weakest first. Order IS the escalation order and the
 # strongest-wins comparison; do not reorder without updating the UI copy.
@@ -306,10 +313,12 @@ def _match(policy: Dict[str, Any], incident: Dict[str, Any],
     if want_kind:
         if want_kind != kind:
             return None
-    elif kind in WORKSPACE_KINDS:
+    elif kind in WORKSPACE_KINDS or kind in FLEET_KINDS:
         # "any signal" means any signal about the AGENT. A workspace finding is
         # a property of the folder and is always critical, so folding it into
-        # the catch-all would silently repurpose every existing rule.
+        # the catch-all would silently repurpose every existing rule. A fleet
+        # finding lands on every participating session at once, so a rule
+        # written about one agent must not fan out across the swarm unasked.
         return None
 
     if not _scope_matches(policy.get("scope_runtime"), incident.get("runtime")):

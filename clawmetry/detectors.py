@@ -125,10 +125,14 @@ DETECTOR_KINDS = (
     "crashed",
 )
 
-#: Every incident kind the product can render or match, detector or workspace.
-#: Surfaces that render an incident (Guard tab labels, the policy form) and
-#: anything that validates a kind read THIS, never one of the halves.
-ALL_INCIDENT_KINDS = DETECTOR_KINDS + WORKSPACE_KINDS
+# Kinds only the fleet-wide pass can produce (``detector_swarm``): no single
+# session's tool stream shows them, so they are not in ``DETECTOR_KINDS``.
+from clawmetry.detector_swarm import FLEET_KINDS  # noqa: E402,F401
+
+#: Every incident kind the product can render or match: detector, workspace or
+#: fleet. Surfaces that render an incident (Guard tab labels, the policy form)
+#: and anything that validates a kind read THIS, never one of the parts.
+ALL_INCIDENT_KINDS = DETECTOR_KINDS + WORKSPACE_KINDS + FLEET_KINDS
 
 
 # ── Tunable thresholds (env-overridable) ─────────────────────────────────────
