@@ -137,6 +137,14 @@ jobs:
       - name: Acceptance criteria are traceable to tests
         run: python3 scripts/check_ac_coverage.py --check
 
+      # CI test-file coverage ratchet (issue #5813). Every tests/test_*.py
+      # file must be named in at least one workflow file or it silently never
+      # runs. The ratchet allows the current 933-file hole to exist while
+      # blocking any growth: new test files must be wired into a workflow
+      # job in the same PR.
+      - name: CI test-file coverage ratchet (no new unlisted tests)
+        run: python3 scripts/check_ci_test_coverage.py --check
+
       # ---- Verification architecture (L0/L1/L4) -------------------------
       # These run in the lint job because they are fast, need no services, and
       # "Syntax & Lint" is now aggregated by the merge gate (scripts/e2e_gate.py),
@@ -217,6 +225,16 @@ jobs:
       # no job at all and the doc rots silently.
       - name: The ingest doc matches the ingest contract
         run: python3 -m pytest tests/test_ingest_doc_drift.py -q
+
+      # A chat channel is FOUR independent lists (_CHANNEL_DIRS,
+      # gateway_tap.CHANNEL_NAMES, entitlements.ALL_CHANNELS, routes/channels).
+      # Each omission is silent and looks like a different bug: miss the
+      # gateway list and live messages never arrive while history ingests
+      # fine, which reads as an ingest fault rather than a missing
+      # subscription. The blueprint's ADR recorded this as caught by review;
+      # this makes it a check. Text-parses the tuples, so no daemon deps.
+      - name: A chat channel appears in all four lists
+        run: python3 -m pytest tests/test_channel_four_lists.py -q
 
       # Every `uses:` reference -- workflows AND the composite actions under
       # .github/actions/, whose own `uses:` lines run with the calling job's
@@ -381,7 +399,7 @@ jobs:
         run: python3 -m pytest tests/test_trail_tab_template.py tests/test_trail_context_panel.py tests/test_beginner_nav_phase_a.py tests/test_transcript_layout_grid.py -q
 
       # Memory & Skills catalog + its sync path. Both files existed and were
-      # green locally while running in NO job — and the catalog is exactly
+      # green locally while running in NO job -- and the catalog is exactly
       # where a wrong root means a runtime's Memory tab is empty for every
       # user (2026-09-06: Codex, whose memory is only per-repo AGENTS.md,
       # synced nothing because the daemon's launchd workspace is "/").
@@ -389,7 +407,7 @@ jobs:
         run: python3 -m pytest tests/test_runtime_memory_catalog.py -q
 
       # The desktop shell's first pip install must self-heal (broken-venv
-      # rebuild, cold-cache retry, actionable failure hints) — the
+      # rebuild, cold-cache retry, actionable failure hints) -- the
       # 2026-08-29 Windows "PyPI install failed" brick. Runs here because
       # this job is a plain pytest environment; the other desktop tests
       # predate CI wiring and still run nowhere (same file-list trap as
@@ -455,7 +473,7 @@ jobs:
 
       # A [RELEASE] merge must pin the cloud to the version it just published.
       # auto-deploy-cloud.yml's push trigger fires BEFORE the upload, reads
-      # PyPI's still-previous "latest", pins that, and nothing re-triggers it —
+      # PyPI's still-previous "latest", pins that, and nothing re-triggers it --
       # so the release goes to PyPI and never deploys, silently, with every
       # other artifact reporting success (measured on 0.12.829, 2026-09-08).
       # test_release_canary_reachable.py is named here too: it guards the same
@@ -472,13 +490,13 @@ jobs:
 
       # Home must not fetch data it renders into a hidden element. The
       # "Worker Bees" mini-widget fetched /api/subagents on every Home render
-      # and wrote into three ids inside overview.html's display:none block —
+      # and wrote into three ids inside overview.html's display:none block --
       # one wasted round trip per load, invisible in exactly the way that keeps
       # such a fetch alive. FLYWHEEL: performance is a feature AND a cost.
       - name: Home makes no invisible fetch
         run: python3 -m pytest tests/test_overview_no_invisible_fetch.py -q
 
-      # EVERY tab the wheel ships must be reachable by SOMEONE — a nav entry or
+      # EVERY tab the wheel ships must be reachable by SOMEONE -- a nav entry or
       # a switchTab() call in any bundle under static/js. Two were not.
       # Sub-Agents & Queue Lanes: a template, three loaders, an agent stop
       # control and a 5s poller, zero callers in OSS or cloud. Session
@@ -546,7 +564,7 @@ jobs:
     # Trial-end hard block is default-ON in code (clawmetry/trial_enforcement.py).
     # CI has no license file, so every non-allowlisted request would 402 and the
     # dashboard readiness probe would time out. These jobs test unrelated
-    # feature APIs (channels/health/sessions/…) — dedicated hard-block coverage
+    # feature APIs (channels/health/sessions/...) -- dedicated hard-block coverage
     # lives in tests/test_trial_hard_block.py. Opt out at the job level so both
     # the pre-pytest server boot AND the pytest conftest spawn see it.
     env:
@@ -620,10 +638,10 @@ jobs:
   # ── MOAT verifier (hermetic, hard-fail) ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   # Issue #1491 / PRD #1133 invariant #3: "A regression in either direction
   # is caught BEFORE merge." These files exercise the
-  # OpenClaw → DuckDB → API surface contract end-to-end, plus the lint
+  # OpenClaw -> DuckDB -> API surface contract end-to-end, plus the lint
   # guards that pin the chokepoint patterns (no-direct-get_store,
   # v3-shape silent-zero refs #1582). No live server, no gateway, no
-  # network — drives sync/local_store helpers + Flask test client.
+  # network -- drives sync/local_store helpers + Flask test client.
   # Runtime ~10s locally, ~15-20s on CI. HARD-FAIL: no continue-on-error.
   moat-tests:
     name: MOAT Verifier (72 tests)
@@ -737,6 +755,7 @@ jobs:
             tests/test_process_control.py \
             tests/test_process_control_windows.py \
             tests/test_detector_incident_delivery.py \
+            tests/test_blocked_agent_always_notifies.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
             tests/test_detectors.py \
             tests/test_detectors_behavioural.py \
@@ -842,7 +861,7 @@ jobs:
   # ── Compression / cache-safety eval (Tier-1, deterministic) ───────────────────────────────
   # Issue #2844 (epic #2837): port Headroom's eval rigor so we can claim
   # "compression-safe" with proof. This Tier-1 gate is pure-Python and spends
-  # ZERO API budget — it proves CCR payload compression is byte-for-byte
+  # ZERO API budget -- it proves CCR payload compression is byte-for-byte
   # lossless (needle-retention / UUID-retrieval / anomaly-preservation) and
   # that the cache-risk + compression-potential metrics persist only aggregates,
   # never the raw secrets they scan. Higher LLM-judge tiers (Tier-2/3) are
@@ -914,7 +933,7 @@ jobs:
   # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────────────────
   # The ONLY job that installs opentelemetry-proto. Without it every OTLP
   # protobuf test in this repo is importorskip'd, so the receiver an
-  # enterprise points 500 machines at had zero CI coverage — the failure mode
+  # enterprise points 500 machines at had zero CI coverage -- the failure mode
   # is a green board over an untested path, not a red one. Two tests in
   # test_spans_otlp_edge_cases.py had in fact been failing the whole time and
   # nobody could see it, because the file skipped itself.
@@ -944,7 +963,7 @@ jobs:
           python3 -c "
           import dashboard
           assert dashboard._HAS_OTEL_PROTO, (
-              'otel extra did not import — the suite below would silently skip')
+              'otel extra did not import -- the suite below would silently skip')
           print('OTLP protobuf decoder present')
           "
       - name: Run the OTLP receiver suite
@@ -962,7 +981,7 @@ jobs:
             tests/test_spans_otlp_edge_cases.py \
             tests/test_otlp_session_materialization.py \
             -q
-          # NOT listed: tests/test_e2e_otlp_ingest.py — it drives a LIVE
+          # NOT listed: tests/test_e2e_otlp_ingest.py -- it drives a LIVE
           # dashboard over HTTP (BASE_URL), which this job does not boot. It
           # runs in the api-tests job, which does.
 
@@ -1066,13 +1085,13 @@ jobs:
           echo "── local_server.log tail ──"
           tail -200 /tmp/local_server.log || true
 
-  # ── E2E Playwright tests — critical subset (hard-gate, blocks merge) ────
+  # ── E2E Playwright tests -- critical subset (hard-gate, blocks merge) ────
   # Per issue #1528: the prior `e2e-tests` job carried `continue-on-error: true`
   # which silently masked Playwright regressions. We split the suite into:
-  #   1. `e2e-critical` (this job) — TestTabsLoad: page-load + tab-nav smoke
+  #   1. `e2e-critical` (this job) -- TestTabsLoad: page-load + tab-nav smoke
   #      tests that have been stable. Hard-fails on regression.
   #      TestAllTabsPostAuth: C5 auth-overlay gate (issue #1646, #2146).
-  #   2. `e2e-nightly`  (.github/workflows/e2e-nightly.yml) — the broader
+  #   2. `e2e-nightly`  (.github/workflows/e2e-nightly.yml) -- the broader
   #      TestFlowDiagram suite, which depends on SVG rendering of live data
   #      and is still flaky. Runs on schedule, not per-PR.
   # If you add a new e2e test, default it to nightly until it has a clean
@@ -1082,7 +1101,7 @@ jobs:
     needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 12
-    # Trial-end hard block is default-ON in code — see api-tests job.
+    # Trial-end hard block is default-ON in code -- see api-tests job.
     env:
       CLAWMETRY_HARD_BLOCK: '0'
 
@@ -1228,7 +1247,7 @@ jobs:
   # ── Wheel-install verification: routes/, helpers/, static/, templates/ ────
   # This catches packaging regressions that source-checkout tests miss.
   # If static/js/app.js doesn't ship in the wheel, the dashboard's frontend
-  # 404s for everyone who `pip install clawmetry` — which is how cloud
+  # 404s for everyone who `pip install clawmetry` -- which is how cloud
   # consumes the package too. This job proves the wheel contains what it
   # needs to run end-to-end, in a fresh venv isolated from the source tree.
   wheel-install:
@@ -1298,7 +1317,7 @@ jobs:
           done
           STATUS=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:8955/static/js/app.js)
           if [ "$STATUS" != "200" ]; then
-            echo "❌ /static/js/app.js returned HTTP $STATUS — wheel is broken"
+            echo "❌ /static/js/app.js returned HTTP $STATUS -- wheel is broken"
             exit 1
           fi
           echo "✅ /static/js/app.js served from installed wheel"
@@ -1310,9 +1329,9 @@ jobs:
   #   * eval_runner.py judge plumbing (rubric, _call_judge, parse_score)
   #   * cli.py `eval` subcommand wiring (flags, exit codes, error msgs)
   #
-  # The "agent" in CI is the canned tests/eval_ci_mock_agent.py — no
+  # The "agent" in CI is the canned tests/eval_ci_mock_agent.py -- no
   # external LLM call from the agent side, only the judge (Haiku) hits
-  # the network. Cost ceiling: 4 tests × 1 judge call ≈ $0.005 per PR.
+  # the network. Cost ceiling: 4 tests x 1 judge call ~$0.005 per PR.
   #
   # Graceful-skip: when CI_ANTHROPIC_API_KEY is not set (e.g. forks,
   # community PRs) the job emits an explicit "SKIPPED" warning and exits
@@ -1322,7 +1341,7 @@ jobs:
   #
   # To disable the gate temporarily (e.g. during a known-broken judge
   # provider outage), set the repo variable `CLAWMETRY_EVALS_GATE` to
-  # "off" — the job short-circuits with a SKIPPED warning. Re-enable by
+  # "off" -- the job short-circuits with a SKIPPED warning. Re-enable by
   # unsetting the variable or setting it to anything other than "off".
   eval-suite:
     name: Eval Suite Gate (Phase 2 evals)
@@ -1345,7 +1364,7 @@ jobs:
         id: gate
         run: |
           if [ "${{ vars.CLAWMETRY_EVALS_GATE }}" = "off" ]; then
-            echo "::warning::eval gate SKIPPED — CLAWMETRY_EVALS_GATE repo var set to 'off'"
+            echo "::warning::eval gate SKIPPED -- CLAWMETRY_EVALS_GATE repo var set to 'off'"
             echo "skip=1" >> "$GITHUB_OUTPUT"
           else
             echo "skip=0" >> "$GITHUB_OUTPUT"
@@ -1357,7 +1376,7 @@ jobs:
           CI_ANTHROPIC_API_KEY: ${{ secrets.CI_ANTHROPIC_API_KEY }}
         run: |
           if [ -z "$CI_ANTHROPIC_API_KEY" ]; then
-            echo "::warning::eval gate SKIPPED — needs CI_ANTHROPIC_API_KEY repo secret. Set one at Settings → Secrets → Actions to enable the PR quality gate."
+            echo "::warning::eval gate SKIPPED -- needs CI_ANTHROPIC_API_KEY repo secret. Set one at Settings -> Secrets -> Actions to enable the PR quality gate."
             echo "skip=1" >> "$GITHUB_OUTPUT"
           else
             echo "skip=0" >> "$GITHUB_OUTPUT"
@@ -1369,7 +1388,7 @@ jobs:
           # collide with the developer's local ANTHROPIC_API_KEY and so
           # rotating one doesn't disturb the other.
           ANTHROPIC_API_KEY: ${{ secrets.CI_ANTHROPIC_API_KEY }}
-          # Point the runner at the deterministic mock agent — no real
+          # Point the runner at the deterministic mock agent -- no real
           # agent process needed for the gate.
           CLAWMETRY_EVALS_AGENT_CMD: "python3 tests/eval_ci_mock_agent.py"
           GITHUB_SHA: ${{ github.sha }}
@@ -1429,7 +1448,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Setup OpenClaw
-        # Composite action from PR #1545 — installs `openclaw` with `npm ci`
+        # Composite action from PR #1545 -- installs `openclaw` with `npm ci`
         # from its own committed lockfile and exposes it on PATH. The version
         # is pinned there and moved by Dependabot, not passed from here.
         uses: ./.github/actions/setup-openclaw
@@ -1444,7 +1463,7 @@ jobs:
           # on. Rotate via console.anthropic.com if leaked.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         # test_e2e_real_openclaw_pipeline now drives a REAL turn (it used to
-        # seed synthetic JSONL), so it belongs here — the only job with the
+        # seed synthetic JSONL), so it belongs here -- the only job with the
         # openclaw binary + a key. Elsewhere it skips gracefully.
         run: python3 -m pytest tests/test_moat_live_openclaw_e2e.py tests/test_e2e_real_openclaw_pipeline.py -v --tb=short
       - name: Upload gateway logs on failure
