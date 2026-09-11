@@ -683,7 +683,9 @@ def test_endpoint_required_tier_none_when_no_axes(client):
 def test_endpoint_never_5xx_on_body_blowup(client, monkeypatch):
     """Force the body-builder to raise; fallback envelope must still
     return 200 with the same key set."""
-    from routes import entitlement as _re
+    # The helpers live in routes/entitlement/_shared.py; the handler calls
+    # them through that module, so that is where a patch has to land.
+    from routes.entitlement import _shared as _re
 
     def _boom():
         raise RuntimeError("boom")

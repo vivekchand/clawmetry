@@ -28,12 +28,25 @@ code agree on where the map is allowed to appear.
 """
 from __future__ import annotations
 
+import glob
 import os
 import sys
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from clawmetry import runtime_probe  # noqa: E402
+
+
+def _read_entitlement_src(here: str) -> str:
+    """Read the full source of routes/entitlement, whether file or package."""
+    pkg_dir = os.path.join(here, "..", "routes", "entitlement")
+    single = os.path.join(here, "..", "routes", "entitlement.py")
+    if os.path.isdir(pkg_dir):
+        return "\n".join(
+            open(f, encoding="utf-8").read()
+            for f in sorted(glob.glob(os.path.join(pkg_dir, "*.py")))
+        )
+    return open(single, encoding="utf-8").read()
 
 
 def test_every_probe_reports_the_paths_it_checked() -> None:
@@ -99,8 +112,7 @@ def test_detection_endpoint_serves_no_probed_paths() -> None:
     """
     import re
     here = os.path.dirname(os.path.abspath(__file__))
-    src = open(os.path.join(here, "..", "routes", "entitlement.py"),
-               encoding="utf-8").read()
+    src = _read_entitlement_src(here)
     hits = re.findall(r'"paths": list\(p\.get\("paths"\)', src)
     assert not hits, (
         f"{len(hits)} runtime-detection payload builder(s) still forward the "
@@ -151,8 +163,7 @@ def test_endpoint_reports_whether_anything_is_ingesting() -> None:
     the user to go run their agent, which cannot possibly help."""
     import re
     here = os.path.dirname(os.path.abspath(__file__))
-    src = open(os.path.join(here, "..", "routes", "entitlement.py"),
-               encoding="utf-8").read()
+    src = _read_entitlement_src(here)
     assert "def _ingest_is_running(" in src
     # Both payload shapes must carry it, same as `paths`.
     assert len(re.findall(r'"ingest_running"', src)) >= 2, (
@@ -177,8 +188,7 @@ def test_ingest_probe_fails_toward_silence() -> None:
     """A broken probe must not accuse a healthy install of not ingesting."""
     import inspect, re
     here = os.path.dirname(os.path.abspath(__file__))
-    src = open(os.path.join(here, "..", "routes", "entitlement.py"),
-               encoding="utf-8").read()
+    src = _read_entitlement_src(here)
     body = re.search(r"def _ingest_is_running\(\).*?(?=\ndef |\n@)", src, re.S).group(0)
     assert "except Exception:\n        return True" in body, (
         "the ingest probe must answer True on error, so an unrelated failure "

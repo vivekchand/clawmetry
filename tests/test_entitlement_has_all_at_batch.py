@@ -691,7 +691,9 @@ def test_endpoint_never_4xx(client, url):
 
 
 def test_endpoint_never_5xx_on_body_builder_blowup(client, ent, monkeypatch):
-    from routes import entitlement as _routes
+    # The helper lives in routes/entitlement/_shared.py; the handler calls it
+    # through that module, so that is where a patch has to land.
+    from routes.entitlement import _shared as _routes
 
     def _boom():
         raise RuntimeError("boom")

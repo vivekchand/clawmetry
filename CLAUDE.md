@@ -21,7 +21,7 @@ See `ARCHITECTURE.md` for the full deep dive, and `docs/MODULE_MAP.md` (generate
 
 `docs/MODULE_MAP.md` is the **generated** inventory: every module, the blueprints it defines, the URL space it owns, and a coarse size band. `scripts/gen_module_map.py` regenerates it and CI fails when it drifts. The tables below are a short curated index of what you reach for most often, deliberately without line counts (they went stale within weeks every time they were written down).
 
-**Five files are big enough to change how you work on them**: `routes/entitlement.py` (~48k lines), `clawmetry/entitlements.py` (~31k), `clawmetry/sync.py` (~26k), `dashboard.py` (~21k), `clawmetry/local_store.py` (~20k). Drift Bot reads only the head of a long file, so anything added deep inside one is reported as "not implemented" forever. Put new capability in a new short module and re-export it, rather than appending 300 lines to a 20k-line file.
+**Five files are big enough to change how you work on them**: `routes/entitlement/` (~48k lines, now a package: a re-export init, a shared helpers module, and eight endpoint files), `clawmetry/entitlements.py` (~31k), `clawmetry/sync.py` (~26k), `dashboard.py` (~21k), `clawmetry/local_store.py` (~20k). Drift Bot reads only the head of a long file, so anything added deep inside one is reported as "not implemented" forever. Put new capability in a new short module and re-export it, rather than appending 300 lines to a 20k-line file.
 
 ### Core
 | File | Purpose |
@@ -50,7 +50,7 @@ All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, l
 | `routes/hooks.py` | `bp_hooks` — hook install / status / uninstall per runtime, and the gate's decision log |
 | `routes/infra.py` | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
 | `routes/meta.py` | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_cloud_relay` + `bp_otlp_traces` — auth, gateway proxy, OTLP ingestion, version meta |
-| `routes/entitlement.py` | `bp_entitlement` — the resolved entitlement plus the preview / diff / batch family at `/api/entitlement*` |
+| `routes/entitlement/` | `bp_entitlement` — the resolved entitlement plus the preview / diff / batch family at `/api/entitlement*` (package: init re-exports flat namespace, shared helpers module, eight endpoint files with 434 handlers) |
 | `routes/alerts.py` | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
 | `routes/crons.py` | `bp_crons` — cron CRUD + run log + health summary |
 | `routes/signals.py` | `bp_signals` — Behaviour Signals read API: `/api/signals` (rate, count, eligible turns, trend, by model and runtime, coverage, plain-words headline), `/api/signals/<name>/sessions` (sessions, never phrases) |
