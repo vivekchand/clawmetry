@@ -245,6 +245,15 @@ jobs:
       - name: A chat channel appears in all four lists
         run: python3 -m pytest tests/test_channel_four_lists.py -q
 
+      # FLYWHEEL 1f3 bans em-dashes and double-dashes in user-facing copy and
+      # names CHANGELOG release entries explicitly. Nothing checked, so nine
+      # entries shipped with them and 151 more sat in older ones; a Drift Bot
+      # run noticed one by chance days later. FLYWHEEL even prescribes this
+      # grep. A verbatim user quote is exempt (blockquote line): editing what
+      # somebody said to satisfy a style rule is worse than the violation.
+      - name: No em-dashes or double-dashes in the CHANGELOG
+        run: python3 -m pytest tests/test_changelog_no_em_dashes.py -q
+
       # Every `uses:` reference -- workflows AND the composite actions under
       # .github/actions/, whose own `uses:` lines run with the calling job's
       # token -- must stay pinned to a full commit SHA. A tag is mutable: its
@@ -771,6 +780,8 @@ jobs:
             tests/test_detectors_behavioural.py \
             tests/test_detectors_ngram.py \
             tests/test_detectors_secret_value_corpus.py \
+            tests/test_detectors_swarm_gaps.py \
+            tests/test_detectors_coordinated_action.py \
             tests/test_guard_escalation_ladder.py \
             tests/test_guard_policies_api_ladder.py \
             tests/test_guard_policy_enforcement.py \
