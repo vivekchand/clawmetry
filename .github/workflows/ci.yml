@@ -218,6 +218,16 @@ jobs:
       - name: The ingest doc matches the ingest contract
         run: python3 -m pytest tests/test_ingest_doc_drift.py -q
 
+      # A chat channel is FOUR independent lists (_CHANNEL_DIRS,
+      # gateway_tap.CHANNEL_NAMES, entitlements.ALL_CHANNELS, routes/channels).
+      # Each omission is silent and looks like a different bug: miss the
+      # gateway list and live messages never arrive while history ingests
+      # fine, which reads as an ingest fault rather than a missing
+      # subscription. The blueprint's ADR recorded this as caught by review;
+      # this makes it a check. Text-parses the tuples, so no daemon deps.
+      - name: A chat channel appears in all four lists
+        run: python3 -m pytest tests/test_channel_four_lists.py -q
+
       # Every `uses:` reference -- workflows AND the composite actions under
       # .github/actions/, whose own `uses:` lines run with the calling job's
       # token -- must stay pinned to a full commit SHA. A tag is mutable: its
