@@ -12415,6 +12415,83 @@ def _apply_pending_write(qtype: str, q: dict, owner_hash: str | None = None) -> 
     raise ValueError(f"unhandled write type: {qtype}")
 
 
+def _apply_answer_decision(q: dict, approval_id: str, resolver: str,
+                           reason) -> None:
+    """``decision='answer'``: the person answered a question the agent asked
+    (Claude Code AskUserQuestion) from the cloud strip, not from the local
+    Approvals tab.
+
+    The pick arrives as ``sealed_answers``: the browser encrypts
+    ``{"answers": {...}}`` with this node's E2E key (the key the question
+    arrived under), so the cloud relays it without reading it. It is then
+    validated against the question set the hook stored, exactly like a local
+    answer (``question_sets.apply_answer_decision``), and the waiting hook
+    resumes the session with it.
+
+    Anything wrong (no key, a seal from another key, a label that is not one
+    of the options, the row already decided or expired) leaves the row as it
+    is: the hook hands the question to the terminal at its deadline. Never a
+    fabricated answer, never raises."""
+    sealed = q.get("sealed_answers")
+    if not isinstance(sealed, str) or not sealed.strip():
+        log.warning("approval_decision %s: answer carries no sealed_answers",
+                    approval_id)
+        return
+    try:
+        key = str(load_config().get("encryption_key") or "")
+        opened = decrypt_payload(sealed.strip(), key) if key else None
+    except Exception as e:
+        log.warning("approval_decision %s: sealed answer unreadable (%s)",
+                    approval_id, type(e).__name__)
+        return
+    answers = opened.get("answers") if isinstance(opened, dict) else None
+    if not isinstance(answers, dict) or not answers:
+        log.warning("approval_decision %s: sealed answer has no answers",
+                    approval_id)
+        return
+    try:
+        from clawmetry import local_store
+        from clawmetry import question_sets as qsets
+        store = local_store.get_store()
+        row = next((r for r in (store.query_approvals(status="pending",
+                                                      limit=500) or [])
+                    if isinstance(r, dict) and r.get("id") == approval_id),
+                   None)
+    except Exception as e:
+        log.warning("approval_decision %s: local_store unavailable: %s",
+                    approval_id, e)
+        return
+    if row is None:
+        log.debug("[approval] %s relayed answer: no pending row (already "
+                  "decided, expired, or another node)", approval_id)
+        return
+
+    def _write(method: str, **kwargs) -> bool:
+        try:
+            getattr(store, method)(**kwargs)
+            return True
+        except Exception as we:
+            log.warning("approval_decision %s: %s failed: %s",
+                        approval_id, method, we)
+            return False
+
+    ok, msg, _code = qsets.apply_answer_decision(
+        approval_id, row, answers, resolver=resolver, reason=reason,
+        write=_write)
+    if not ok:
+        log.warning("[approval] %s relayed answer rejected: %s",
+                    approval_id, msg)
+        return
+    log.info("[approval] %s answered via %s", approval_id, resolver)
+    try:
+        from clawmetry import audit as _audit
+        _audit.audit_event("approval.decision", actor=resolver,
+                           target=approval_id, result="answered",
+                           source="cloud-relay")
+    except Exception:
+        pass
+
+
 def _apply_approval_decision(q: dict) -> None:
     """Flip an approvals row in local DuckDB based on a cloud-relayed
     decision. Used by `_dispatch_pending_queries`.
@@ -12432,6 +12509,9 @@ def _apply_approval_decision(q: dict) -> None:
         return
     resolver = (q.get("resolver") or "cloud-relay").strip()
     reason = q.get("reason")
+    if decision == "answer":
+        _apply_answer_decision(q, approval_id, resolver, reason)
+        return
     try:
         from clawmetry import local_store
         store = local_store.get_store()
@@ -20822,6 +20902,15 @@ def _refresh_attention_cache(store) -> int:
         store.expire_stale_hook_attention(ATTENTION_HOOK_MAX_AGE_SECONDS)
     except Exception as _pe:  # noqa: BLE001
         log.debug("attention-detect: persist failed (continuing): %s", _pe)
+    # Same safety valve for the approvals queue: a hook that died before its
+    # window ended leaves a row every surface would keep offering buttons on.
+    try:
+        n_expired = store.expire_stale_approvals()
+        if n_expired:
+            log.info("[approval] expired %d request(s) nothing was waiting on",
+                     n_expired)
+    except Exception as _ae:  # noqa: BLE001
+        log.debug("approval sweep failed (continuing): %s", _ae)
     return len(items)
 
 
@@ -22438,6 +22527,43 @@ def _build_loops_slice(store):
     return out
 
 
+def _approval_deadline_ms(row: dict) -> int:
+    """End of a hook-parked approval's window (``args.deadline_ms``), or 0."""
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    try:
+        return max(0, int(args.get("deadline_ms") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _device_question_set(row: dict) -> list:
+    """The approval's question set (``args._cm_questions``, stored by the
+    hook receiver from Claude Code's AskUserQuestion), trimmed for the
+    snapshot: what a surface needs to render the options and nothing else.
+    Empty when the approval is an ordinary yes/no request."""
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    out = []
+    for q in (args.get("_cm_questions") or [])[:4]:
+        if not isinstance(q, dict) or not q.get("question"):
+            continue
+        options = [
+            {"label": str(o.get("label"))[:120],
+             "description": str(o.get("description") or "")[:240]}
+            for o in (q.get("options") or [])[:4]
+            if isinstance(o, dict) and o.get("label")
+        ]
+        if not options:
+            continue
+        out.append({
+            "question": str(q.get("question"))[:400],
+            "header": str(q.get("header") or "")[:40],
+            "multiSelect": bool(q.get("multiSelect")),
+            "allow_free_text": bool(q.get("allow_free_text")),
+            "options": options,
+        })
+    return out
+
+
 def _build_device_summary(spending, daily_usage, efficiency=None):
     """Compact, all-runtime payload for a WiFi hardware companion.
 
@@ -22572,8 +22698,16 @@ def _build_device_summary(spending, daily_usage, efficiency=None):
         pass
     try:
         from clawmetry import waste_flags as _wf
+        now_ms = int(time.time() * 1000)
+        # Only requests something is still waiting on. A hook-parked row
+        # carries its window's end in args.deadline_ms; once that has passed
+        # the runtime has already fallen back to its own terminal prompt, so
+        # Approve/Deny (or an answer) could no longer reach it. Burned
+        # 2026-09-11: a question sat on the cloud strip for 2h38m after the
+        # gate hook lost its receiver and the terminal had taken over.
         ap = [r for r in (store.query_approvals(status="pending", limit=200) or [])
-              if isinstance(r, dict)]
+              if isinstance(r, dict)
+              and not (0 < _approval_deadline_ms(r) <= now_ms)]
         if ap:
             oldest = min(ap, key=lambda r: (r.get("created_at") or ""))
             sid = oldest.get("requestor_session_id") or ""
@@ -22586,6 +22720,17 @@ def _build_device_summary(spending, daily_usage, efficiency=None):
                 # field and got 0 every time because we never sent it (#contract).
                 "waiting_seconds": _seconds_since(oldest.get("created_at")),
             }
+            deadline_ms = _approval_deadline_ms(oldest)
+            if deadline_ms:
+                summary["approval"]["deadline_ms"] = deadline_ms
+            questions = _device_question_set(oldest)
+            if questions:
+                # The runtime asked a question (Claude Code AskUserQuestion),
+                # not for permission: surfaces render its options, and the
+                # pick comes back as an `answer` decision. Rides the E2E
+                # snapshot, so the cloud never reads the question.
+                summary["approval"]["kind"] = "question_set"
+                summary["approval"]["questions"] = questions
     except Exception:
         pass
     # Surface a "something is stuck" alert from the daemon's loop-detection
