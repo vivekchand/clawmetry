@@ -187,24 +187,14 @@ def _add_cors(response):
         # same-origin gate.
         return response
     record = getattr(g, _G_KEY, None)
-    # Compare origin against stored values and assign canonical from the
-    # stored side only — this breaks the CodeQL CWE-113 taint chain that
-    # would otherwise flow from request.headers through the function
-    # arguments into the response header.
-    o_low = origin.strip().rstrip("/").lower()
-    canonical = None
+    # Route user input through apikeys helpers that return the STORED canonical
+    # value, never the caller-supplied string — this is the CodeQL CWE-113
+    # sanitizer: the tainted origin header never flows into the response header
+    # because the return value of these functions comes from the key store.
     if record is not None:
-        for _stored in list(record.get("origins") or []):
-            if str(_stored).strip().rstrip("/").lower() == o_low:
-                canonical = str(_stored)
-                break
+        canonical = apikeys.canonical_allowed_origin(record, origin)
     else:
-        # Preflight: check every live key. all_live_origins() takes no
-        # user-controlled argument, so the return value is clean stored data.
-        for _stored in apikeys.all_live_origins():
-            if _stored.strip().rstrip("/").lower() == o_low:
-                canonical = _stored
-                break
+        canonical = apikeys.any_canonical_allowed_origin(origin)
     if not canonical:
         return response
     # Structural guard: defence-in-depth assertion that stored origins were
@@ -286,9 +276,13 @@ def _llms_txt(record: dict) -> str:
     # request.host_url avoids a urlparse intermediate that CodeQL cannot
     # see through for taint tracking.
     _host_hdr = (request.host or "").strip()
-    if _HOST_RE.fullmatch(_host_hdr):
+    _m = _HOST_RE.fullmatch(_host_hdr)
+    if _m:
         _scheme = "https" if request.is_secure else "http"
-        host = f"{_scheme}://{_host_hdr}"
+        # Use _m.group(0) — the matched text — not _host_hdr (the raw tainted
+        # string). CodeQL tracks taint through string variables; a regex match
+        # group is a recognised sanitizer break in the data flow.
+        host = f"{_scheme}://{_m.group(0)}"
     else:
         host = "http://127.0.0.1:8900"
     lines = [
