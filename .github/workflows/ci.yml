@@ -819,6 +819,7 @@ jobs:
             tests/test_regression_replay_optin.py \
             tests/test_insights_outcome_templates.py \
             tests/test_event_shape.py \
+            tests/test_injected_context.py \
             tests/test_schema_v15_migration.py \
             tests/test_session_cost_intel.py \
             tests/test_session_intent.py \
@@ -885,6 +886,15 @@ jobs:
         env:
           CI: "true"
         run: python3 -m pytest tests/test_question_set_relay.py -q
+
+      # A decision made on a cloud surface is drained by a heartbeat, and the
+      # main loop's heartbeat lands at the END of a cycle: on 2026-09-11 a
+      # 90-second ingest pass swallowed a whole 3-minute answer window and the
+      # person's answer reached nobody. These pin the fast path.
+      - name: Answer-window heartbeat
+        env:
+          CI: "true"
+        run: python3 -m pytest tests/test_answer_window_heartbeat.py -q
 
       # A hook-parked request is stamped ...Z (UTC); _seconds_since must not
       # read it as local wall-clock (2026-09-11: a 4-minute-old question
