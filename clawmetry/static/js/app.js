@@ -17920,9 +17920,23 @@ async function loadHeatmap(days) {
   if (btn7) btn7.className = _heatmapDays === 7 ? 'time-btn active' : 'time-btn';
   if (btn30) btn30.className = _heatmapDays === 30 ? 'time-btn active' : 'time-btn';
   try {
-    var data = await fetch('/api/heatmap?days=' + _heatmapDays).then(r => r.json());
+    // Runtime-scoped like every other card on this tab: without ?runtime the
+    // hosted per-runtime view drew node-wide hours under one runtime's name
+    // (FLYWHEEL 1c).
+    var _hmRt = _cmRuntimeFilter();
+    var _hmQs = '/api/heatmap?days=' + _heatmapDays +
+      ((_hmRt && _hmRt !== 'all') ? '&runtime=' + encodeURIComponent(_hmRt) : '');
+    var data = await fetch(_hmQs).then(r => r.json());
     var grid = document.getElementById('heatmap-grid');
     if (!grid) return;
+    if (!data || !data.days || !data.days.length) {
+      grid.innerHTML = '<span style="color:#555">' + t("app.no_activity_data", null, "No activity data") + '</span>';
+      return;
+    }
+    // What a cell counts depends on the source: DuckDB counts events, the
+    // cloud fallback counts sessions. Say which, rather than labelling a
+    // session count "events".
+    var unit = data.unit || 'events';
     var maxVal = Math.max(1, data.max);
     var html = '<div class="heatmap-label"></div>';
     for (var h = 0; h < 24; h++) { html += '<div class="heatmap-hour-label">' + (h < 10 ? '0' : '') + h + '</div>'; }
@@ -17936,7 +17950,7 @@ async function loadHeatmap(days) {
         else if (intensity < 0.5) color = '#2a6a3a';
         else if (intensity < 0.75) color = '#4a9a2a';
         else color = '#6adb3a';
-        html += '<div class="heatmap-cell" style="background:' + color + ';" title="' + day.label + ' ' + (hi < 10 ? '0' : '') + hi + ':00 — ' + val + ' events"></div>';
+        html += '<div class="heatmap-cell" style="background:' + color + ';" title="' + day.label + ' ' + (hi < 10 ? '0' : '') + hi + ':00 — ' + val + ' ' + unit + '"></div>';
       });
     });
     grid.innerHTML = html;

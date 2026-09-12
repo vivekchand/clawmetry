@@ -158,7 +158,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/connector_health.py` | small | Connector liveness — turn the daemon's ``connector.health`` signal stream into a per-channel ok/degraded/down verdict. |
 | `clawmetry/context_coverage.py` | small | Which context-blowout signals we can actually see, per runtime. |
 | `clawmetry/context_windows.py` | medium | Context-window sizing across every runtime ClawMetry ingests. |
-| `clawmetry/cost_windows.py` | small | One definition of "today", "this week" and "this month" for every cost surface. |
+| `clawmetry/cost_windows.py` | medium | One definition of "today", "this week" and "this month" for every cost surface. |
 | `clawmetry/cursor_connector.py` | medium | Opt-in pull of Cursor cloud-agent usage, with the operator's own key. |
 | `clawmetry/daemon_registration.py` | medium | one place that knows how to make the sync daemon survive a reboot/logoff/crash, on every OS. |
 | `clawmetry/deepeval_bridge.py` | medium | optional DeepEval metric engine (local-first). |

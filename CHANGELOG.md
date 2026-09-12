@@ -1,5 +1,14 @@
 ## Unreleased
 
+### Fixed: the hosted Activity Heatmap was a grid of zeros, for everyone (2026-09-12)
+- **Why:** reported with screenshots for two runtimes on the same node (Claude Code, 2237 sessions; Codex, 25) - the Cost tab's heatmap drew an empty calendar on `app.clawmetry.com` while the same card on localhost was full (`max 1866`). Not a data problem: `clawmetry-cloud`'s `/api/heatmap` handler *built* a 7x24 block of zeros and returned it, and had since the events read was removed (epic #1032). Its comment said the grid would stay empty "until the heartbeat-piggyback path supplies bucketed activity counts". Nothing ever did, and cloud cannot - it holds an opaque encrypted blob by design.
+- **What:** the daemon, which is the only side that can count, now ships the finished grid in the E2E snapshot as `activityHeatmap` (per-hour event counts, node-wide and per runtime, 30 days). `clawmetry-cloud#2416` decrypts and draws it client-side.
+- **Aggregated in SQL:** `LocalStore.activity_heatmap(days, runtime)` buckets with one `GROUP BY`. The route used to pull up to 50k raw event rows through the daemon proxy and loop over them in Python - tens of MB marshalled per render, and a cap that silently emptied the oldest days of a busy node's 30-day window. `activity_heatmap_by_runtime` gets every runtime plus the node-wide grid in ONE scan, so the snapshot slice costs one query per cycle, not N+1.
+- **Hours are node-local:** `cost_windows.hour_expr_sql` / `local_hour`, the hour twins of ADR-046's day bucket. The old path stripped each row's offset before bucketing, so a UTC-writing runtime's afternoon was drawn in the small hours.
+- **Scoped by runtime:** `/api/heatmap?runtime=` filters by session-id prefix and app.js sends the active runtime; an unrecognised runtime returns zero, never the node-wide total. The legacy file scan reads OpenClaw logs only, so a runtime-scoped request that reaches it returns the empty grid in shape rather than OpenClaw's hours under a Codex heading.
+- **Verified:** `tests/test_activity_heatmap_runtime_scope.py` (5 tests: a UTC-stamped and a local-stamped event at the same instant sharing one cell, prefix scoping, an unknown runtime returning zero, the split reconciling with the single-runtime query, and the grid keeping a fixed 30x24 shape), wired into CI's MOAT verifier job by name.
+- **Carries:** #5904.
+
 ### Fixed: the cloud strip said "waiting 2h 2m" for a question asked minutes ago (2026-09-11)
 - **Why:** `sync._seconds_since` stripped the `Z` from a timestamp and compared it against local wall-clock. Hook-parked approvals are stamped in UTC, so on a CEST machine `deviceSummary.approval.waiting_seconds` was two hours too long from the moment a question was asked, and each new question looked like the old one coming back.
 - **What:** a `Z` or `+HH:MM` suffix is honoured (including the py3.9 fallback parser); naive strings stay local wall-clock, which is what most store rows carry.
