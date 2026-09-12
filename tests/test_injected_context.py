@@ -13,6 +13,7 @@ on the reporting machine.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -189,4 +190,9 @@ def test_family_ingest_rev_is_salted_for_the_title_rule():
     from clawmetry import sync
 
     with patch.object(ilm, "version", return_value="9.9.9"):
-        assert sync._family_ingest_rev().endswith("/t1")
+        # The salt moves whenever what ingest WRITES changes (/t2 added
+        # event_count to the family cloud row). Pin that one is present, not
+        # which: pinning the exact value turns every future bump into a test
+        # edit, and the contract is "a change to ingest output carries a salt".
+        salt = sync._family_ingest_rev().rsplit("/", 1)[-1]
+        assert re.fullmatch(r"t\d+", salt), salt
