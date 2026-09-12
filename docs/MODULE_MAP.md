@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-249 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+250 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -174,6 +174,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/efficiency.py` | medium | Efficiency grade + measured savings (pure math). |
 | `clawmetry/endpoints.py` | small | clawmetry.endpoints — single source of truth for cloud endpoint resolution. |
 | `clawmetry/entitlements.py` | huge | open-core entitlement resolution. |
+| `clawmetry/entitlements_capacity_batch.py` | small | has_capacity_batch + has_capacity_batch_at. |
 | `clawmetry/error_signal.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
 | `clawmetry/eval_regression_replay.py` | medium | Phase 3 evals: regression-replay. |
 | `clawmetry/eval_runner.py` | large | Local-first LLM-as-judge scoring of completed sessions. |
