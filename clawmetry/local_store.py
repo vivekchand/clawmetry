@@ -6264,7 +6264,14 @@ class LocalStore(TrailStoreMixin):
                 "team_source": team_src,
             })
 
-        out.sort(key=lambda d: (d.get("last_seen") or "", d["sessions"]), reverse=True)
+        out.sort(
+            key=lambda d: (
+                d.get("last_seen") or "",
+                d["sessions"],
+                d["principal_id"],
+            ),
+            reverse=True,
+        )
         try:
             n = max(1, min(2000, int(limit)))
         except (TypeError, ValueError):
