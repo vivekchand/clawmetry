@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixed: a correct emailed code dropped you back on "Sign in to open the dashboard" (2026-09-12)
+- **Why:** a paying customer reported it after reinstalling: enter the email, enter the code from the email, and the local dashboard shows the sign-in card again, every time. The login wall accepts only the gateway token. Email sign-in succeeded against the cloud but handed the page no credential: it cleared the signed-out marker and reloaded, relying on zero-click `/api/auth/detected-token`. That endpoint refuses unless every strict loopback check passes (client address, Host header, no proxy headers, loopback bind). Wherever one of them fails, zero-click fails on every load, so a correct code reloaded into the same wall forever.
+- **What:** `/api/cloud-cta/verify-otp` returns `dashboard_token` when the request passes that same strict loopback check, or when the account that just verified is the account this machine was already linked to (compared in constant time against the key on disk before pairing). The sign-in card stores it before reloading. With no token it tries zero-click once and otherwise says why the dashboard did not open instead of reloading.
+- **Not widened:** a proxied or DNS-rebound page that signs in with a different account gets no token, and an unlinked machine off strict loopback gets none either.
+- **Verified:** `tests/test_verify_otp_opens_dashboard.py` (6 tests), 4 red on `main` before the fix (the two "no token" cases hold on both sides by design); 48 passing across the verify-otp, OAuth and login-overlay route suites; `node --check` on `auth-bootstrap.js`. Contract recorded in the Cloud Fleet Service blueprint.
+- **Not changed:** the Google/GitHub sign-in buttons reload the same way and are the obvious follow-up.
+- **Carries:** #5918.
+
 ### Fixed: the hosted Activity Heatmap was a grid of zeros, for everyone (2026-09-12)
 - **Why:** reported with screenshots for two runtimes on the same node (Claude Code, 2237 sessions; Codex, 25) - the Cost tab's heatmap drew an empty calendar on `app.clawmetry.com` while the same card on localhost was full (`max 1866`). Not a data problem: `clawmetry-cloud`'s `/api/heatmap` handler *built* a 7x24 block of zeros and returned it, and had since the events read was removed (epic #1032). Its comment said the grid would stay empty "until the heartbeat-piggyback path supplies bucketed activity counts". Nothing ever did, and cloud cannot - it holds an opaque encrypted blob by design.
 - **What:** the daemon, which is the only side that can count, now ships the finished grid in the E2E snapshot as `activityHeatmap` (per-hour event counts, node-wide and per runtime, 30 days). `clawmetry-cloud#2416` decrypts and draws it client-side.
