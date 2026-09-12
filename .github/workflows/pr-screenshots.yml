@@ -135,9 +135,23 @@ jobs:
       # The auth check (routes/meta.py:api_auth_check) compares the token
       # directly against OPENCLAW_GATEWAY_TOKEN in env -- the gateway
       # process itself is NOT in the auth-check path.
+      #
+      # `$/<path>` is GitHub's self-repository syntax: it resolves against this
+      # repository at the commit the workflow is already running, and counts as a
+      # pinned reference for policy purposes, which the older `./<path>` does not.
+      # It is also what the other five callers use (ci, e2e-nightly, openclaw-boot,
+      # oss-golden-path, moat-keystone-drive-nightly); this one was left on the
+      # relative form because its path had to be spelled `./head/...`, this being
+      # the only workflow that checks the repository out under a subdirectory
+      # rather than at the workspace root. `$/` needs no workspace checkout at
+      # all, so the `head/` prefix goes away with it.
+      #
+      # Behaviour is unchanged: the composite action addresses everything through
+      # `${{ github.action_path }}` and installs into its own directory with
+      # `npm ci --prefix`, so it never depended on living under `head/`.
       - name: Setup OpenClaw
         continue-on-error: true
-        uses: ./head/.github/actions/setup-openclaw
+        uses: $/.github/actions/setup-openclaw
         with:
           gateway-token: ${{ env.CLAWMETRY_VISUAL_DIFF_TOKEN }}
 
