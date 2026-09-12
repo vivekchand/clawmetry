@@ -62,8 +62,9 @@ class AgentMetaMixin:
             raise ValueError("agent_meta must include 'agent_key'")
         agent_key = str(agent_key).lower().strip()
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        conn = self._conn  # type: ignore[attr-defined]
         with self._write_lock:  # type: ignore[attr-defined]
-            self._conn.execute("""  # type: ignore[attr-defined]
+            conn.execute("""
                 INSERT INTO agent_meta (agent_key, owner, notes, team, updated_at)
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (agent_key) DO UPDATE SET
