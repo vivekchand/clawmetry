@@ -16,7 +16,7 @@ lê os ficheiros de sessão que os seus agentes de código já escrevem, e junta
 as chamadas de ferramentas e quaisquer dados de tokens e custo que o runtime exponha numa única
 vista — para que consiga distinguir uma execução longa que está a funcionar de uma que está encravada.
 
-Funciona com **31 runtimes de agentes de IA** — Claude Code, OpenAI Codex, Hermes, OpenClaw e mais 27. Um único painel para toda a sua frota de agentes. ([a lista completa](SUPPORTED_RUNTIMES.txt), gerada a partir do catálogo.)
+Funciona com **32 runtimes de agentes de IA** — Claude Code, OpenAI Codex, Hermes, OpenClaw e mais 27. Um único painel para toda a sua frota de agentes. ([a lista completa](SUPPORTED_RUNTIMES.txt), gerada a partir do catálogo.)
 
 > 🌐 **Leia isto em:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [mais →](docs/i18n/)
 
@@ -47,7 +47,7 @@ indica quais, por runtime), e observar uma ação não é o mesmo que conseguir
 bloqueá-la ([quais os controlos reais, por runtime](docs/APPROVALS.md)).
 
 
-## Funciona com 31 runtimes de agentes
+## Funciona com 32 runtimes de agentes
 
 **Gratuito na aplicação open source:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
@@ -81,7 +81,7 @@ comparação de agentes.
 Uma percentagem de utilização só é tão honesta quanto aquilo por que divide. O ClawMetry
 dimensiona a janela por fornecedor a partir de [uma tabela que pode ler e
 propor via PR](clawmetry/context_windows.py), cobrindo Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama e GLM. Não mede os 31
+DeepSeek, Kimi, Qwen, Mistral, Llama e GLM. Não mede os 32
 runtimes com a régua de um único fornecedor. Isso importa: um turno de 300K do GPT-5
 avaliado com a régua de 200K da Anthropic lê-se como ">100%, estourado" quando na
 verdade está a 75% dos 400K do GPT-5. A mesma régua esconde um turno de 130K do DeepSeek
@@ -101,7 +101,7 @@ O ClawMetry só consegue ver eventos de compactação nalguns runtimes. Por isso
 
 | Caminho | Adicionado ao seu agente | Predefinição? |
 |---|---|---|
-| Leitura contínua de ficheiros de sessão (todos os 31 runtimes) | **0**. Processo separado, sem código do ClawMetry no seu agente | ativo |
+| Leitura contínua de ficheiros de sessão (todos os 32 runtimes) | **0**. Processo separado, sem código do ClawMetry no seu agente | ativo |
 | Interceptor HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** por chamada de LLM, ou 0,009% de uma chamada de 5s | inativo |
 | Porta de bloqueio pré-ferramenta (cache quente) | **+44 ms** por chamada de ferramenta bloqueada, acima de um piso de 36 ms do interpretador | inativo |
 | Proxy de enforcement | **+9,7 ms** por chamada de LLM | inativo |

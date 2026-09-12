@@ -214,6 +214,17 @@ RUNTIME_PROBES: tuple = (
                   "~/.config/muse/settings.json",
                   "~/.config/muse/auth.json"),
                  env="CLAWMETRY_MUSE_HOME"),
+    # OpenExecutive writes one SQLite store wherever its API process runs
+    # (EPISODIC_DB_PATH, default ./episodic_memory.db): packages/core/ in a
+    # clone under `make dev`, /data/ inside the Docker image. There is no
+    # fixed home, so the probe globs the clone locations the adapter scans.
+    RuntimeProbe("openexecutive", "OpenExecutive",
+                 ("~/*/packages/core/episodic_memory.db",
+                  "~/projects/*/packages/core/episodic_memory.db",
+                  "~/src/*/packages/core/episodic_memory.db",
+                  "~/code/*/packages/core/episodic_memory.db",
+                  "/data/episodic_memory.db"),
+                 env="CLAWMETRY_OPENEXECUTIVE_DB"),
     RuntimeProbe("openworker", "OpenWorker",
                  ("~/.config/coworker/coworker.db",
                   "~/.config/coworker/conversations",

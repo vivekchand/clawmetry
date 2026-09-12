@@ -13,7 +13,7 @@
 
 **يمكن لوكيل أن ينفّذ مئات من استدعاءات الأدوات دون أن يحقق أي تقدم.** تقرأ ClawMetry ملفات الجلسات التي تكتبها وكلاء الترميز لديك بالفعل، وتضع المخطط الزمني، واستدعاءات الأدوات، وأي بيانات عن الرموز (tokens) والتكلفة يكشف عنها بيئة التشغيل في عرض واحد — بحيث يمكنك التمييز بين تشغيل طويل يعمل بنجاح وآخر متعطّل.
 
-يعمل مع **31 بيئة تشغيل لوكلاء الذكاء الاصطناعي** — Claude Code، OpenAI Codex، Hermes، OpenClaw و27 أخرى. لوحة تحكم واحدة لكل أسطول وكلائك. ([القائمة الكاملة](SUPPORTED_RUNTIMES.txt)، مُولَّدة من الكتالوج.)
+يعمل مع **31 بيئة تشغيل لوكلاء الذكاء الاصطناعي** — Claude Code، OpenAI Codex، Hermes، OpenClaw و28 أخرى. لوحة تحكم واحدة لكل أسطول وكلائك. ([القائمة الكاملة](SUPPORTED_RUNTIMES.txt)، مُولَّدة من الكتالوج.)
 
 > 🌐 **اقرأ هذا بلغة:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [المزيد →](docs/i18n/)
 
