@@ -1,7 +1,9 @@
 """Which git config settings make git execute a program.
 
 One list, in a leaf, because two modules ask the same question and a copy in
-each is a copy that drifts:
+each is a copy that drifts. Neither format overlaps the other: literal exec
+keys (``core.hookspath``) and value-dependent ones (``alias.*``) are resolved
+by the same predicate so both callers rate identically.
 
 * :mod:`clawmetry.repo_scan` asks it of a ``.git/config`` on disk -- that is
   the whole basis of the ``repo_config_exec`` finding;
