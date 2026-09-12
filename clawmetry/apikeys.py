@@ -528,6 +528,22 @@ def any_canonical_allowed_origin(origin: str) -> "str | None":
     return None
 
 
+def all_live_origins() -> list:
+    """All canonical origins stored across every live (non-revoked) key.
+
+    Used by the CORS preflight path in routes/public_api.py to compare
+    against the caller-supplied origin WITHOUT passing user input through
+    this function — that breaks the CodeQL CWE-113 taint chain.
+    """
+    result = []
+    for rec in _read_store()["keys"]:
+        if rec.get("revoked_at"):
+            continue
+        for stored in (rec.get("origins") or []):
+            result.append(str(stored))
+    return result
+
+
 def granted_shapes(record: dict) -> set:
     """Every live q/1 shape this key may dispatch."""
     from clawmetry.query_contract import shapes_for_scopes
