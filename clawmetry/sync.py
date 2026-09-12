@@ -17783,6 +17783,31 @@ def _build_autonomy_snapshot():
         return {}
 
 
+def _build_activity_heatmap_snapshot():
+    """30-day (day x hour) activity grid, node-wide and per runtime.
+
+    Why it rides the snapshot: the hosted Cost tab's Activity Heatmap read
+    ``/api/heatmap``, whose cloud handler has no events to count (the cloud
+    stores an opaque encrypted blob by design) and so returned a grid of
+    zeros — a card that has been blank for every hosted user since the
+    events read was removed. The daemon has the data and is the only side
+    that can bucket it, so it ships the finished grid and the cloud
+    interceptor decrypts and draws it. Cloud stays blind; E2E preserved.
+
+    ``{"all": grid, "<runtime>": grid, ...}``; ``{}`` when the store is
+    unreachable. One GROUP BY per cycle for every runtime at once.
+    """
+    try:
+        from clawmetry import local_store as _ls_hm
+        store = _ls_hm.get_store()
+        if store is None:
+            return {}
+        return store.activity_heatmap_by_runtime(days=30) or {}
+    except Exception as _e_hm:
+        log.debug("snapshot: activity heatmap slice failed: %s", _e_hm)
+        return {}
+
+
 def _build_usage_snapshot():
     """Usage tab slices (anomalies, cost-comparison, cache-trends, cost-breakdown,
     spend-optimization, forecast). Trial-bug #12: these Usage cards were blank on
@@ -23973,6 +23998,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "evals": evals_slice,
         "activityToday": _collect_activity_counters_today() or {},
         "activityTodayByRuntime": _activity_by_rt,
+        # Cost tab heatmap (day x hour), node-wide + per runtime.
+        "activityHeatmap": _build_activity_heatmap_snapshot(),
         "outcomes": _outcomes_slice_for_snapshot(),
         "outcomesByRuntime": _outcomes_by_rt,
         # 7d-over-7d trend behind the Quality tab's "is it getting better?"

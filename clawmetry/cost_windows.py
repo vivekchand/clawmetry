@@ -170,3 +170,41 @@ def day_expr_sql(col: str = "ts") -> str:
         f"COALESCE(CAST(CAST(TRY_CAST({col} AS TIMESTAMPTZ) AS DATE) AS VARCHAR),"
         f" substr({col}, 1, 10))"
     )
+
+
+def local_hour(ts):
+    """Node-local hour of day (0-23) for a source timestamp, or ``None``.
+
+    The hour twin of :func:`local_day`, for the activity heatmap's
+    (day x hour) buckets. Same clock rule: an offset-carrying timestamp is
+    converted to node-local first, a naive one is already local. A heatmap
+    that skipped the conversion drew a UTC-writing runtime's evening work in
+    the small hours — the same two-clocks bug ADR-046 closed for days.
+    """
+    s = str(ts or "").strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(_normalize_ts(s))
+    except (TypeError, ValueError):
+        # Fall back to the literal hour field of an ISO-ish string.
+        hh = s[11:13]
+        return int(hh) if hh.isdigit() and 0 <= int(hh) <= 23 else None
+    if dt.tzinfo is None:
+        return dt.hour
+    return dt.astimezone().hour
+
+
+def hour_expr_sql(col: str = "ts") -> str:
+    """SQL for the same hour bucket, for DuckDB.
+
+    Mirrors :func:`day_expr_sql`: ``TRY_CAST`` to TIMESTAMPTZ (which DuckDB
+    renders in the session timezone, i.e. node-local, and which treats a
+    naive string as already local), with a COALESCE onto the literal hour
+    field so an unparseable row lands where the old string-prefix code put
+    it instead of vanishing from the grid.
+    """
+    return (
+        f"COALESCE(CAST(EXTRACT(hour FROM TRY_CAST({col} AS TIMESTAMPTZ)) AS INTEGER),"
+        f" TRY_CAST(substr({col}, 12, 2) AS INTEGER))"
+    )
