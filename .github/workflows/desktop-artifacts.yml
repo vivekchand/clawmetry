@@ -243,7 +243,7 @@ jobs:
             desktop/sign_mac.sh "$dmg"
           done
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: clawmetry-macos
           path: dist/*.dmg
@@ -350,7 +350,7 @@ jobs:
       # every downstream step stay untouched.
       - name: Azure login (OIDC)
         if: env.HAS_AZ_SIGN == 'true'
-        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -541,7 +541,7 @@ jobs:
           $pfx = Join-Path $Env:RUNNER_TEMP "codesign.pfx"
           if (Test-Path $pfx) { Remove-Item $pfx -Force }
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: clawmetry-windows
           path: |
@@ -713,7 +713,7 @@ jobs:
       - name: Smoke test the AppImage
         run: python3 desktop/smoke_test.py dist/clawmetry-linux.AppImage
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: clawmetry-linux
           path: |

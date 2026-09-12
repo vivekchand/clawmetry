@@ -141,6 +141,11 @@ PAID_RUNTIMES = frozenset(
         # terminal coding agent on Muse Spark. NOT the consumer Muse personal
         # agent, which runs wholly inside Meta's cloud VM and is unobservable.
         "muse_code",
+        # OpenExecutive (github.com/SenteLabsAI/OpenExecutive) -- Sente Labs'
+        # AI executive team: one Executive persona routing to specialist
+        # agents, answering over web chat and chat/email channels, with a
+        # scheduler that sends messages on its own later.
+        "openexecutive",
     }
 )
 
@@ -190,6 +195,7 @@ RUNTIME_LABELS = {
     "lovable": "Lovable",
     "replit": "Replit Agent",
     "muse_code": "Muse Code",
+    "openexecutive": "OpenExecutive",
 
 }
 
@@ -233,6 +239,7 @@ RUNTIME_LANDING_PATHS = {
     "lovable": "/runtimes/lovable",
     "replit": "/runtimes/replit",
     "muse_code": "/runtimes/muse-code",
+    "openexecutive": "/runtimes/openexecutive",
 
 }
 

@@ -1262,6 +1262,23 @@ def _catalog() -> list:
         ),
     ))
 
+    # ── OpenExecutive (github.com/SenteLabsAI/OpenExecutive) ────────
+    # Standing context is the onboarding company profile (profile.yaml) and
+    # the uploaded company docs, both under packages/core/company/ in a
+    # clone; the curated knowledge base is Markdown under knowledge/. MCP
+    # servers are declared in company/mcp_servers.json.
+    oe_company = os.path.join(ws, "packages", "core", "company")
+    catalog.append(RuntimeCatalogEntry(
+        id="openexecutive", label="OpenExecutive", roots=(
+            RootSpec("memory", os.path.join(oe_company, "profile.yaml"),
+                     label="Company profile", scope="project"),
+            RootSpec("memory", os.path.join(ws, "knowledge"),
+                     ("*.md", "*/*.md"), "Knowledge base", "project"),
+            RootSpec("mcp", os.path.join(oe_company, "mcp_servers.json"),
+                     label="mcp_servers.json", scope="project"),
+        ),
+    ))
+
     # ── Replit Agent (replit.com) ───────────────────────────────────
     # Instructions/memory are replit.md at the workspace root — the agent
     # both reads it as standing guidance and rewrites it as project docs.
@@ -1703,7 +1720,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 31 runtimes would be a wall of
+    because listing every absent root for 32 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
