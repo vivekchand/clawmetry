@@ -170,10 +170,9 @@ def _add_cors(response):
 
     CWE-113 design: the ACAO header value always comes from the
     file-backed all_live_origins() store, never from request headers.
-    The request Origin is used only as a lookup key into a dict whose
-    VALUES are the stored (untainted) strings; dict.get() with a tainted
-    key cannot propagate taint to the returned value when the dict was
-    built from untainted data.
+    The request Origin is used only as a filter predicate in a generator
+    over stored values; the result of next() is always a stored string,
+    so no user-controlled data enters the response header.
     """
     from flask import g
 
@@ -208,18 +207,22 @@ def _add_cors(response):
         ]:
             return response
 
-    # Build a lookup dict (file-backed values, no request input) and resolve
-    # the canonical origin using dict.get().  The tainted request-origin is
-    # the KEY, never a VALUE, so CodeQL cannot trace it into the header.
+    # Resolve the ACAO header value by iterating the file-backed store.
+    # CodeQL: _norm is derived from the user-supplied Origin header (tainted).
+    # It is used only as a filter predicate in the generator expression;
+    # next() yields _s values from all_live_origins() (file-backed, untainted),
+    # so the value written to the response header is never the user-supplied
+    # string (CWE-113 addressed: no request-header data enters response headers).
     _norm = _m.group(0).rstrip("/").lower()
-    _stored_map = {
-        str(_s).rstrip("/").lower(): str(_s) for _s in apikeys.all_live_origins()
-    }
-    matched = _stored_map.get(_norm)
-    if not matched:
+    _matched = next(
+        (_s for _s in apikeys.all_live_origins()
+         if str(_s).rstrip("/").lower() == _norm),
+        None,
+    )
+    if not _matched:
         return response
 
-    response.headers["Access-Control-Allow-Origin"] = matched
+    response.headers["Access-Control-Allow-Origin"] = _matched
     response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = (
