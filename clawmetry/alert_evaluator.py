@@ -535,6 +535,8 @@ def _evaluate_one(
         return _eval_outcome_failure_rate(rule, quality)
     if rt == "dollars_per_done_above":
         return _eval_dollars_per_done(rule, quality)
+    # REQ-AGO-001: latency SLOs and alertable AgentOps rates are dispatched
+    # here; _eval_agentops reads the quality slice for the specific figure.
     if rt in AGENTOPS_RULE_TYPES:
         return _eval_agentops(rule, quality)
     # Unknown type — log once and skip. (PRD says: leave a TODO. Here we
