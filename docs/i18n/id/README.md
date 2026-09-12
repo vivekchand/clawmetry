@@ -1,4 +1,4 @@
-<!-- i18n-src:12b97259721e -->
+<!-- i18n-src:a855a14295b0 -->
 > Bahasa Indonesia translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # ClawMetry
@@ -16,7 +16,7 @@ membaca file sesi yang sudah ditulis oleh coding agent Anda, dan menyatukan lini
 tool call, serta data token dan biaya apa pun yang diekspos oleh runtime ke dalam satu
 tampilan — sehingga Anda bisa membedakan proses panjang yang sedang berjalan baik dari yang macet.
 
-Bekerja dengan **31 AI agent runtime** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 27 lainnya. Satu dashboard untuk seluruh armada agent Anda. ([daftar lengkap](SUPPORTED_RUNTIMES.txt), dihasilkan dari katalog.)
+Bekerja dengan **32 AI agent runtime** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 lainnya. Satu dashboard untuk seluruh armada agent Anda. ([daftar lengkap](SUPPORTED_RUNTIMES.txt), dihasilkan dari katalog.)
 
 > 🌐 **Baca dalam bahasa lain:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [lainnya →](docs/i18n/)
 
@@ -47,11 +47,11 @@ data yang sangat berbeda (sebagian tidak mempublikasikan biaya sama sekali —
 suatu tindakan tidak sama dengan mampu memblokirnya ([kontrol mana yang nyata, per runtime](docs/APPROVALS.md)).
 
 
-## Bekerja dengan 31 agent runtime
+## Bekerja dengan 32 agent runtime
 
 **Gratis di aplikasi open source:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-**Pada paket berbayar:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**Pada paket berbayar:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
 Setiap runtime mendapatkan dashboard yang sama. Jalankan beberapa sekaligus dan
 pengalih di header akan menyesuaikan ulang setiap tab ke salah satunya.
@@ -80,7 +80,7 @@ Dua pertanyaan yang layak dijawab sebelum Anda mempercayai alat pembanding agent
 Persentase pemanfaatan hanya sejujur pembaginya. ClawMetry mengukur ukuran
 window per provider dari [sebuah tabel yang bisa Anda baca dan
 ajukan PR-nya](clawmetry/context_windows.py), mencakup Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama, dan GLM. Ia tidak mengukur ke-31
+DeepSeek, Kimi, Qwen, Mistral, Llama, dan GLM. Ia tidak mengukur ke-32
 runtime dengan penggaris satu vendor saja. Ini penting: giliran 300K GPT-5 yang
 dinilai memakai standar 200K milik Anthropic terbaca ">100%, meledak" padahal
 sebenarnya berada di 75% dari 400K milik GPT-5. Penggaris yang sama menyembunyikan
@@ -100,7 +100,7 @@ mengatakannya demikian. [Detail lengkap](docs/CONTEXT_BLOWOUT.md)
 
 | Jalur | Ditambahkan ke agent Anda | Default? |
 |---|---|---|
-| Tailing file sesi (semua 31 runtime) | **0**. Proses terpisah, tanpa kode ClawMetry di agent Anda | aktif |
+| Tailing file sesi (semua 32 runtime) | **0**. Proses terpisah, tanpa kode ClawMetry di agent Anda | aktif |
 | Interceptor HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0,44 md** per panggilan LLM, atau 0,009% dari panggilan 5 detik | nonaktif |
 | Gerbang hook pre-tool (cache hangat) | **+44 md** per tool call yang digerbangi, di atas lantai interpreter 36 md | nonaktif |
 | Proxy penegakan (enforcement proxy) | **+9,7 md** per panggilan LLM | nonaktif |
