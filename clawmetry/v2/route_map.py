@@ -14,14 +14,16 @@ Usage::
 V1_TO_V2: dict[str, str] = {
     "flow": "trace",
     "sessions": "brain",
+    "transcripts": "brain",  # v1 DOM tab id alias for the sessions/transcript view
     "memory": "context",
     "usage": "cost",
     "crons": "ops",
     "logs": "ops",
 }
 
-# Reverse mapping. "crons" and "logs" both map to "ops" in V1_TO_V2,
-# so V2_TO_V1["ops"] resolves to "logs" (last writer wins in dict
-# comprehension). Callers that need to distinguish should consult
-# V1_TO_V2 directly rather than relying on V2_TO_V1["ops"].
+# Reverse mapping. Multiple v1 keys map to the same v2 segment:
+# "sessions" and "transcripts" both map to "brain"; "crons" and "logs"
+# both map to "ops". Last writer wins in the dict comprehension, so
+# V2_TO_V1["brain"] == "transcripts" and V2_TO_V1["ops"] == "logs".
+# Callers that need to distinguish should consult V1_TO_V2 directly.
 V2_TO_V1: dict[str, str] = {v: k for k, v in V1_TO_V2.items()}
