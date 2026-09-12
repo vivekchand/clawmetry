@@ -15096,11 +15096,18 @@ def _family_ingest_rev() -> str:
     ingest, so without the bump every idle Codex session keeps its
     "# AGENTS.md instructions for …" title, locally and in the sealed cloud
     ``title_blob``.
+
+    ``/t2`` (2026-09-11): the family cloud row started carrying
+    ``event_count``, the only count the cloud stores and the number the hosted
+    session page renders as "Messages". That row is written only when a
+    session is processed, so without the bump every session already recorded
+    keeps "Messages 0" until it happens to grow again. Same rule as above: a
+    change to what ingest writes needs a salt, or it reaches new sessions only.
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t1"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t2"
     except Exception:
         return ""
 
