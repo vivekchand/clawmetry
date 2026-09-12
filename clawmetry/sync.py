@@ -15096,11 +15096,18 @@ def _family_ingest_rev() -> str:
     ingest, so without the bump every idle Codex session keeps its
     "# AGENTS.md instructions for …" title, locally and in the sealed cloud
     ``title_blob``.
+
+    ``/t2`` (2026-09-11): the family cloud row started carrying
+    ``event_count``, the only count the cloud stores and the number the hosted
+    session page renders as "Messages". That row is written only when a
+    session is processed, so without the bump every session already recorded
+    keeps "Messages 0" until it happens to grow again. Same rule as above: a
+    change to what ingest writes needs a salt, or it reaches new sessions only.
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t1"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t2"
     except Exception:
         return ""
 
@@ -16353,6 +16360,18 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "total_tokens": int(s.total_tokens or 0),
                     "cost_usd": s.cost_usd,
                     "message_count": int(s.message_count or 0),
+                    # The hosted session page renders "Messages" from
+                    # sessions.event_count, which is the ONLY count the cloud
+                    # stores (its sessions table has no message_count column).
+                    # The OpenClaw row has always sent it; this one never did,
+                    # so every Codex / Cursor / Claude Code session read
+                    # "Messages 0" beside a full transcript (founder report
+                    # 2026-09-11: a Codex session showing 0 against 371
+                    # messages locally). len(_events) is the same raw-row count
+                    # the OpenClaw path sends, and the cloud upsert keeps the
+                    # GREATEST of old and new, so a read capped by
+                    # _family_event_read_cap() can never walk the number back.
+                    "event_count": len(_events),
                     "runtime": runtime,
                     "model": s.model or "",
                     # Cost-intelligence (foundation): carried to the cloud so the
