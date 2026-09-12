@@ -31,6 +31,32 @@ updates:
     cooldown:
       default-days: 7
 
+  # pip — the hash-pinned install sets the supply-chain.yml scanner jobs run on
+  # (.github/requirements/*.txt: pip-audit, cyclonedx-bom, zizmor, bandit,
+  # atheris, and the pytest/requests/certifi those jobs need). The other half of
+  # that pin: --require-hashes makes the install reproducible and
+  # integrity-checked, and this entry is what keeps it moving. Without it the
+  # security scanners would sit on one release indefinitely, which is the frozen
+  # end of the same problem the unpinned install was at the other end of.
+  #
+  # Dependabot rewrites the --hash lines along with the version, so a bump here
+  # arrives already verifiable. Grouped, because these are CI tooling and a
+  # routine week should be one PR rather than five.
+  - package-ecosystem: "pip"
+    directory: "/.github/requirements"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    groups:
+      ci-scanners:
+        patterns:
+          - "*"
+    cooldown:
+      default-days: 7
+
   # Docker base images. Required because the Dockerfile pins its base image by
   # sha256 digest: a digest never moves on its own, so without an updater the
   # image would stay on whatever CVEs it shipped with on the day it was pinned.
