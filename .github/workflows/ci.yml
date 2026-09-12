@@ -588,6 +588,9 @@ jobs:
       # reached `state["last_sync"] = ...`, and since the next cycle reloads
       # the same on-disk state, one bad source froze last_sync forever while
       # the separate heartbeat thread kept reporting the daemon as alive.
+      - name: Email sign-in preserves the linked account and opens the dashboard
+        run: python3 -m pytest tests/test_signin_owner_not_rebound.py tests/test_verify_otp_opens_dashboard.py tests/test_verify_otp_rail_selection.py tests/test_auth_detected_token.py tests/test_login_overlay_fetches_real_routes.py -q
+
       - name: The sync cycle isolates every ingest call
         run: python3 -m pytest tests/test_sync_cycle_fault_isolation.py -q
 
