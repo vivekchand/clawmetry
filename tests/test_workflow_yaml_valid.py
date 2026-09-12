@@ -229,13 +229,50 @@ def test_pytest_jobs_install_what_conftest_needs(entry) -> None:
     if not needed:
         pytest.skip("conftest has no third-party module-scope imports")
 
-    # Jobs that install from a requirements file or the package itself pull
-    # dependencies transitively; only explicit `pip install a b c` lines are
-    # checked, since those are the ones that can silently omit something.
-    if "-r " in runs or "pip install ." in runs or "pip install -e" in runs:
-        pytest.skip("installs from a requirements file or the package itself")
+    # Jobs that install the package itself pull dependencies transitively, so
+    # there is no explicit list here that could omit something.
+    if "pip install ." in runs or "pip install -e" in runs:
+        pytest.skip("installs the package itself")
 
-    missing = [m for m in sorted(needed) if m not in runs]
+    # A `-r <file>` this repo owns is still checkable: read it and treat its
+    # contents as part of the install text. Skipping on sight of `-r` would
+    # mean that hash-pinning a job's installs -- moving the very same package
+    # names out of the `run:` line and into `.github/requirements/*.txt` --
+    # silently retires this guard for that job, which is the opposite of what
+    # pinning is for. A file this repo does NOT own (another repo's checkout,
+    # a file generated at run time) is unreadable here, so that still skips.
+    haystack = runs
+    unreadable = []
+    # The lookbehind keeps `-r` from matching inside a longer flag that merely
+    # ends in it; only a standalone `-r <file>` is a requirements reference.
+    for ref in _re.findall(r"(?<![\w-])-r\s+(\S+)", runs):
+        path = os.path.join(REPO_ROOT, ref)
+        if not os.path.isfile(path):
+            unreadable.append(ref)
+            continue
+        with open(path, encoding="utf-8") as fh:
+            # Comments only, stripped: these files carry a prose header that
+            # names the direct requirements, and matching that would let a
+            # file satisfy this guard by *mentioning* a package it does not
+            # actually pin.
+            haystack += "\n" + "\n".join(
+                line.split("#", 1)[0] for line in fh
+            )
+
+    missing = [m for m in sorted(needed) if m not in haystack]
+
+    # Everything needed was found in what this repo can actually read, so an
+    # unreadable file alongside it changes nothing -- assert rather than skip.
+    # Only when something is still missing does an unreadable file mean "cannot
+    # prove either way": that file may well supply it. Checking what is
+    # readable first is what keeps one run-time-resolved reference (another
+    # repo's checkout) from retiring the guard for the whole job.
+    if missing and unreadable:
+        pytest.skip(
+            "installs from a requirements file not in this repo "
+            f"({', '.join(unreadable)}), which may supply {missing}"
+        )
+
     assert not missing, (
         f"{workflow} job {job_id!r} runs pytest but never installs "
         f"{missing}, which tests/conftest.py imports at module scope. "
