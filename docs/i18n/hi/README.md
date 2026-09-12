@@ -16,7 +16,7 @@
 टूल कॉल्स, और रनटाइम जो भी टोकन और लागत डेटा उजागर करता है उसे एक ही
 व्यू में लाता है — ताकि आप बता सकें कि कौन सा लंबा रन काम कर रहा है और कौन सा अटका हुआ है।
 
-**31 AI एजेंट रनटाइम्स** के साथ काम करता है — Claude Code, OpenAI Codex, Hermes, OpenClaw और 27 अन्य। आपके पूरे एजेंट फ़्लीट के लिए एक डैशबोर्ड। ([पूरी सूची](SUPPORTED_RUNTIMES.txt), कैटलॉग से जनरेट की गई।)
+**32 AI एजेंट रनटाइम्स** के साथ काम करता है — Claude Code, OpenAI Codex, Hermes, OpenClaw और 28 अन्य। आपके पूरे एजेंट फ़्लीट के लिए एक डैशबोर्ड। ([पूरी सूची](SUPPORTED_RUNTIMES.txt), कैटलॉग से जनरेट की गई।)
 
 > 🌐 **इसे इनमें पढ़ें:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [और →](docs/i18n/)
 

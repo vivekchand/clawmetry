@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Added: OpenExecutive as the 32nd runtime (2026-09-12)
+- **Why:** OpenExecutive (SenteLabsAI/OpenExecutive, Apache-2.0) is an AI executive team that answers in Slack and email, consults specialist agents, and runs a scheduler that sends messages later with no one in the loop. What it is about to send is exactly what an operator needs to see, and all of it is recorded in one SQLite store it already writes.
+- **What:** registered in the catalogue, loader, session-prefix sets, probe, memory catalogue, declared records and resume hints; the adapter ships in clawmetry-pro 0.7.26. Sessions include conversations that started in a chat or email channel, specialist consults show as steps with question and answer, failed tools and failed sends are flagged, and pending sends are visible before they go out.
+- **Honest limits:** tokens and cost are declared PARTIAL, because specialist agents write no usage row, so a session total is a floor. Pause and stop are not offered: one API server serves every conversation, and the Guard tab now says so in a sentence via `process_control.SHARED_PROCESS_RUNTIMES` instead of the generic "No signal support" string.
+- **Also fixed:** `muse_code` was missing from `sync._RUNTIME_PREFIXES` and app.js `_CM_RT_PREFIXES`, so its sessions were bucketed as openclaw there.
+- **Verified:** `tests/test_openexecutive_runtime_wiring.py` (13 tests, in CI), and the adapter against a store written by OpenExecutive's own storage code at upstream 8b2a9a7.
+- **Carries:** #5921.
+
 ### Fixed: a correct emailed code dropped you back on "Sign in to open the dashboard" (2026-09-12)
 - **Why:** a paying customer reported it after reinstalling: enter the email, enter the code from the email, and the local dashboard shows the sign-in card again, every time. The login wall accepts only the gateway token. Email sign-in succeeded against the cloud but handed the page no credential: it cleared the signed-out marker and reloaded, relying on zero-click `/api/auth/detected-token`. That endpoint refuses unless every strict loopback check passes (client address, Host header, no proxy headers, loopback bind). Wherever one of them fails, zero-click fails on every load, so a correct code reloaded into the same wall forever.
 - **What:** `/api/cloud-cta/verify-otp` returns `dashboard_token` when the request passes that same strict loopback check, or when the account that just verified is the account this machine was already linked to (compared in constant time against the key on disk before pairing). The sign-in card stores it before reloading. With no token it tries zero-click once and otherwise says why the dashboard did not open instead of reloading.

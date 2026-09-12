@@ -43,6 +43,7 @@ EXPECTED_PAID_RUNTIMES = frozenset({
     "lovable",
     "replit",
     "muse_code",
+    "openexecutive",
 })
 EXPECTED_ALL_RUNTIMES = EXPECTED_FREE_RUNTIMES | EXPECTED_PAID_RUNTIMES
 
