@@ -881,7 +881,7 @@ _RUNTIME_LABELS = {
     "picoclaw": "PicoClaw", "nanoclaw": "NanoClaw", "antigravity": "Antigravity",
     "kimi": "Kimi", "n8n": "n8n", "openhands": "OpenHands", "deepagents": "DeepAgents",
     "lovable": "Lovable", "replit": "Replit", "openworker": "OpenWorker",
-    "muse_code": "Muse Code",
+    "muse_code": "Muse Code", "openexecutive": "OpenExecutive",
 }
 
 

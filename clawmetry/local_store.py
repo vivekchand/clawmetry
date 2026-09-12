@@ -20023,7 +20023,7 @@ _NON_OPENCLAW_RUNTIME_PREFIXES = (
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok",
     "qm", "deepseek_harness", "exo", "kimi", "devin", "gemini_cli",
     "cline", "openhands", "openworker", "grok_bot", "lovable", "replit",
-    "muse_code",
+    "muse_code", "openexecutive",
 )
 
 # Epoch-ms of the outcome-classifier fix (2026-08-15). Any failure label
@@ -20244,7 +20244,7 @@ def _sql_in_clause(values: tuple[str, ...]) -> str:
 # call sites (and tests) have always reached for it via ``local_store``.
 #
 # The old implementation knew exactly two numbers, both Anthropic's, and
-# measured all 31 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
+# measured all 32 runtimes with that ruler: a 300K GPT-5 turn read as ">100%
 # blown" (GPT-5 is 400K, so it was at 75%), and a genuinely blown 130K
 # DeepSeek turn read as a comfortable 65%. See that module's docstring.
 from clawmetry.context_windows import (  # noqa: E402  (kept near its callers)
