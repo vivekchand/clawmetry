@@ -137,8 +137,9 @@ def clean_prompt_text(text: Any) -> str:
     the 80-char title and the full intent always come from the same turn."""
     if not isinstance(text, str):
         return ""
-    stripped = text.strip()
-    if not stripped or stripped.startswith(_PROMPT_SKIP_PREFIXES):
+    from clawmetry.injected_context import human_prompt
+    stripped = human_prompt(text)
+    if not stripped:
         return ""
     return "\n".join(" ".join(line.split()) for line in stripped.splitlines()).strip()
 

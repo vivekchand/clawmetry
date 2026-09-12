@@ -27,6 +27,8 @@ import os
 import re
 from pathlib import Path
 
+from clawmetry.injected_context import human_prompt
+
 TITLE_MAX_CHARS = 80
 
 # Texts that can never be a human prompt: harness-injected wrappers
@@ -49,13 +51,14 @@ _TITLE_CACHE_MAX = 512
 
 
 def clean_prompt_text(text) -> str:
-    """Collapse whitespace; return "" when the text can't be a human title."""
+    """Collapse whitespace; return "" when the text can't be a human title.
+
+    Harness-injected context is told apart from the person by
+    ``injected_context.human_prompt`` (Codex's AGENTS.md turn, Cursor's
+    ``<user_query>`` wrapper, …); ``_SKIP_PREFIXES`` is a subset of its rule."""
     if not isinstance(text, str):
         return ""
-    text = " ".join(text.split())
-    if not text or text.startswith(_SKIP_PREFIXES):
-        return ""
-    return text
+    return " ".join(human_prompt(text).split())
 
 
 def truncate_title(text: str) -> str:
