@@ -751,6 +751,10 @@ jobs:
             tests/test_quality_signals_contract.py \
             tests/test_quality_runtime_conformance.py \
             tests/test_cohort_compare.py \
+            tests/test_agentops_scorecard.py \
+            tests/test_alert_evaluator_unit.py \
+            tests/test_review_queue.py \
+            tests/test_review_surface.py \
             tests/test_outcome_classifier.py \
             tests/test_session_live_state.py \
             tests/test_outcome_trend.py \
