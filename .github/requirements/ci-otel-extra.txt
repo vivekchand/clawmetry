@@ -1,0 +1,46 @@
+# Hash-pinned install set for the OTLP extra in ci.yml's otlp-receiver job.
+#
+# Direct requirements: opentelemetry-proto>=1.20.0 protobuf>=4.21.0
+#
+# Deliberately a SECOND file rather than more names in ci-tests.txt. The
+# otlp-receiver job installs the base set first, then this, because the
+# point of the job is to exercise the receiver with the optional `otel`
+# extra present (setup.py: `clawmetry[otel]`). Folding these two names into
+# the shared file would install them for the other six test jobs too, and
+# would then hide exactly the bug that job exists to catch: OTLP code that
+# imports opentelemetry unconditionally rather than behind the optional
+# guard. Keeping the second install separate keeps every job's dependency
+# surface the same as it was before this pin.
+#
+# Installed with `pip install --require-hashes`, which refuses to install
+# anything not listed here with a matching hash. Every transitive dependency
+# is present because --require-hashes demands the whole closure; here the
+# closure is just the two direct names, which have none of their own.
+#
+# Each version lists the sha256 of EVERY distribution PyPI publishes for it
+# (wheels for each platform, plus the sdist). pip accepts a download that
+# matches any one of them, so the pin does not quietly depend on the runner
+# resolving to the same wheel this file was generated against.
+#
+# Updating: the `/.github/requirements` pip entry in .github/dependabot.yml
+# (group pattern `*`) covers this file; see ci-tests.txt for the note on
+# that entry arriving with PR #5889.
+#
+# Regenerating by hand, on Linux / CPython 3.11 to match the job:
+#   pip install --dry-run --ignore-installed --report r.json \
+#     "opentelemetry-proto>=1.20.0" "protobuf>=4.21.0"
+# then, for each resolved name==version, take every sha256 under `urls` in
+# https://pypi.org/pypi/<name>/<version>/json.
+
+opentelemetry-proto==1.44.0 \
+    --hash=sha256:898b155a0e1557afd867478fb6158e8122a46329ca0bb8dc53cc55e98f017f56 \
+    --hash=sha256:c547a79c2f8c0c515d31509154682e5921c7cfd5ca67b70e1f9266e2c3e103f3
+protobuf==7.36.1 \
+    --hash=sha256:0b53ce95272aad50ad25d7ff03373743209822e8ba42ea7fad27d2bee1547d00 \
+    --hash=sha256:39c518c05586c016d7874ff6079ee115bcec1ea5fbb1d177fbf7867ef4c67e44 \
+    --hash=sha256:3cf2ee25d006cee57294a1196ea43b37feb78e0dcd1e8af5c1aeddb777655aca \
+    --hash=sha256:43d3d37b1eb24c113b9b7d02008cac44e423f00b611b7781ae998d7623972969 \
+    --hash=sha256:51139351435d9b43d88a55eaa49fb6f737fbb478fb0cbf2cf694d1a04a9d3363 \
+    --hash=sha256:7d951e46b3f963d6c264c367c437921de9d5aedd9c3f9612b9077736b4e3ad5c \
+    --hash=sha256:97198b77e369a0abd8e262b8f6c7266c55ddb796a3a12c76d7b8881188ed83aa \
+    --hash=sha256:d0f6470f0ce2b84e3feaea2d4b816378b37ba4d4aa08a274305373de93e2d524

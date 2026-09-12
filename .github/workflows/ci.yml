@@ -699,7 +699,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb pytest requests psutil
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/ci-tests.txt
       - name: Run MOAT verifier suite
         run: |
           # Phase 4 open-core move (#2335) deleted the 9 paid runtime
@@ -879,7 +881,9 @@ jobs:
       # requests is required because tests/conftest.py imports it at module
       # scope, so pytest cannot collect without it.
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb pytest hypothesis requests
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/ci-tests.txt
       - name: Run store invariants
         env:
           CI: "true"
@@ -931,7 +935,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb pytest requests psutil
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/ci-tests.txt
       - name: Run entitlement test suite
         run: |
           python3 -m pytest \
@@ -965,7 +971,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb pytest requests psutil
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/ci-tests.txt
       - name: Run compression/cache-safety eval suite
         run: python3 -m pytest tests/test_compression_safety_eval.py -q
 
@@ -999,7 +1007,9 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb pytest requests psutil
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/ci-tests.txt
       - name: Run red-team corpus regression suite
         run: python3 -m pytest tests/test_redteam_corpus.py -v --tb=short
       - name: Replay the corpus through the audit (exit-code contract)
@@ -1041,8 +1051,8 @@ jobs:
           cache: pip
       - name: Install dependencies (including the otel extra)
         run: |
-          pip install flask waitress cryptography duckdb pytest requests psutil
-          pip install "opentelemetry-proto>=1.20.0" "protobuf>=4.21.0"
+          pip install --require-hashes -r .github/requirements/ci-tests.txt
+          pip install --require-hashes -r .github/requirements/ci-otel-extra.txt
       - name: Assert the protobuf decoder is actually available
         run: |
           python3 -c "
@@ -1105,7 +1115,9 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb requests psutil
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/ci-tests.txt
 
       - name: "Guard: keystone harness file present"
         # Until PR #1672 merges, the keystone script lives only on the

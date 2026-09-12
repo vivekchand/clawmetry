@@ -48,7 +48,9 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install flask waitress cryptography duckdb requests psutil
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/dashboard-boot.txt
 
       - name: Token visibility (presence only)
         env:
