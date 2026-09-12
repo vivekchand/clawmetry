@@ -16,7 +16,7 @@ lee los archivos de sesión que tus agentes de codificación ya generan, y reún
 las llamadas a herramientas y los datos de tokens y costo que el runtime exponga en una sola
 vista, para que puedas distinguir una ejecución larga que está funcionando de una que está atascada.
 
-Funciona con **31 runtimes de agentes de IA**: Claude Code, OpenAI Codex, Hermes, OpenClaw y 27 más. Un solo panel para toda tu flota de agentes. ([la lista completa](SUPPORTED_RUNTIMES.txt), generada a partir del catálogo.)
+Funciona con **32 runtimes de agentes de IA**: Claude Code, OpenAI Codex, Hermes, OpenClaw y 28 más. Un solo panel para toda tu flota de agentes. ([la lista completa](SUPPORTED_RUNTIMES.txt), generada a partir del catálogo.)
 
 > 🌐 **Léelo en:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [más →](docs/i18n/)
 
@@ -46,7 +46,7 @@ distintos (algunos no publican costo alguno; [la matriz](docs/compatibility.md) 
 por runtime), y observar una acción no es lo mismo que poder bloquearla ([qué controles son reales, por runtime](docs/APPROVALS.md)).
 
 
-## Funciona con 31 runtimes de agentes
+## Funciona con 32 runtimes de agentes
 
 **Gratis en la app de código abierto:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
@@ -80,7 +80,7 @@ comparación de agentes.
 Un porcentaje de utilización es tan honesto como el divisor que usa. ClawMetry
 dimensiona la ventana por proveedor a partir de [una tabla que puedes leer y
 proponer en PR](clawmetry/context_windows.py), que cubre Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama y GLM. No mide los 31
+DeepSeek, Kimi, Qwen, Mistral, Llama y GLM. No mide los 32
 runtimes con la regla de un solo proveedor. Eso importa: un turno de GPT-5 de 300K
 comparado contra los 200K de Anthropic se lee como ">100%, desbordado" cuando en realidad
 está al 75% de los 400K de GPT-5. La misma regla oculta un turno de DeepSeek de 130K
@@ -100,7 +100,7 @@ ClawMetry solo puede ver eventos de compactación en algunos runtimes. Por eso
 
 | Ruta | Añadido a tu agente | ¿Por defecto? |
 |---|---|---|
-| Seguimiento de archivos de sesión (los 31 runtimes) | **0**. Proceso separado, sin código de ClawMetry en tu agente | activado |
+| Seguimiento de archivos de sesión (los 32 runtimes) | **0**. Proceso separado, sin código de ClawMetry en tu agente | activado |
 | Interceptor HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0.44 ms** por llamada al LLM, o 0.009% de una llamada de 5s | desactivado |
 | Compuerta del hook previo a la herramienta (caché caliente) | **+44 ms** por llamada a herramienta con gate, sobre un piso de intérprete de 36 ms | desactivado |
 | Proxy de aplicación de políticas | **+9.7 ms** por llamada al LLM | desactivado |
