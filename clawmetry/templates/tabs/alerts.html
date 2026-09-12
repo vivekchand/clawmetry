@@ -124,6 +124,14 @@
         <button data-type="eval_score_below" onclick="alertsPickType('eval_score_below')">⭐ <span data-i18n="alerts.type_quality">Quality</span></button>
         <button data-type="outcome_failure_rate" onclick="alertsPickType('outcome_failure_rate')">🚦 <span data-i18n="alerts.type_failures">Failures</span></button>
         <button data-type="signal_rate_above" onclick="alertsPickType('signal_rate_above')">💬 <span data-i18n="alerts.type_signal">Behaviour</span></button>
+        <button data-type="latency_p95_above" onclick="alertsPickType('latency_p95_above')">🐢 <span data-i18n="alerts.type_slow_sessions">Slow sessions</span></button>
+        <button data-type="tool_latency_p95_above" onclick="alertsPickType('tool_latency_p95_above')">⏳ <span data-i18n="alerts.type_slow_tools">Slow tools</span></button>
+        <button data-type="escalation_rate_above" onclick="alertsPickType('escalation_rate_above')">🙋 <span data-i18n="alerts.type_escalations">Escalations</span></button>
+        <button data-type="guardrail_violation_rate_above" onclick="alertsPickType('guardrail_violation_rate_above')">🚧 <span data-i18n="alerts.type_guardrails">Guardrails</span></button>
+        <button data-type="handoff_failure_rate_above" onclick="alertsPickType('handoff_failure_rate_above')">🤝 <span data-i18n="alerts.type_handoffs">Handoffs</span></button>
+        <button data-type="review_accuracy_below" onclick="alertsPickType('review_accuracy_below')">🔍 <span data-i18n="alerts.type_review">Review accuracy</span></button>
+        <button data-type="ground_truth_accuracy_below" onclick="alertsPickType('ground_truth_accuracy_below')">🎯 <span data-i18n="alerts.type_real_outcomes">Real outcomes</span></button>
+        <button data-type="first_pass_rate_below" onclick="alertsPickType('first_pass_rate_below')">✅ <span data-i18n="alerts.type_first_pass">First pass</span></button>
       </div>
       <div class="alerts-editor-form" id="alerts-editor-form">
         <!-- populated by alertsRenderTypeForm() -->

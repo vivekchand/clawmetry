@@ -162,6 +162,7 @@ from routes.device import bp_device
 from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
 from routes.sla import bp_sla
+from routes.agentops import bp_agentops
 from routes.hitl import bp_hitl
 from routes.rules import bp_rules
 from routes.attention import bp_attention
@@ -3953,6 +3954,16 @@ def _budget_monitor_loop():
                                     {"type": rtype, "message": msg, "timestamp": now},
                                 )
 
+            # SLA policies (routes/sla.py): a red policy notifies someone
+            # instead of only turning red in an API response nobody polls.
+            # _fire_alert owns the cooldown, so a breach that lasts an hour
+            # notifies once per cooldown window, not once a minute.
+            try:
+                from routes.sla import fire_breached_policies
+                fire_breached_policies(_fire_alert)
+            except Exception as e:
+                print(f"Warning: SLA check error: {e}")
+
         except Exception as e:
             print(f"Warning: Budget monitor error: {e}")
 
@@ -6105,6 +6116,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_sla)
+    app.register_blueprint(bp_agentops)
     app.register_blueprint(bp_tracing)
     app.register_blueprint(bp_trail)
     app.register_blueprint(bp_usage)

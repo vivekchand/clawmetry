@@ -990,6 +990,13 @@ _DAEMON_METHODS = frozenset({
     "update_review_decision",
     "query_review_queue",
     "query_review_accuracy",
+    # AgentOps scorecard (routes/agentops.py, routes/sla.py): the quality
+    # window the alert evaluator reads, with latency / handoff / guardrail /
+    # review / ground-truth figures merged in, and the ground-truth outcome
+    # a system of record posts for a session.
+    "query_session_quality_window",
+    "ingest_ground_truth",
+    "query_ground_truth",
     # Issue #1614 — per-session outcome labels (success/failed/escalated/
     # ongoing) for the Overview tile + /api/outcomes endpoint. Inline-
     # classifies any unlabeled rows so the dashboard never paints "0%".
