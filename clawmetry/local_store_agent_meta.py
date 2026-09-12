@@ -29,10 +29,58 @@ class AgentMetaMixin:
         """Return the agent_meta key for a machine-wide label on node_id."""
         return AgentMetaMixin._NODE_SCOPE_PREFIX + str(node_id or "").strip()
 
-    def set_agent_meta(self, agent_key: str, owner=None, notes=None, team=None) -> None:
-        """Upsert one Agent-Inventory label row (owner / notes / team)."""
-        ...
+    def set_agent_meta(
+        self,
+        agent_key: str,
+        owner: str | None = None,
+        notes: str | None = None,
+        team: str | None = None,
+    ) -> None:
+        """Upsert one Agent-Inventory label row (owner / notes / team).
+
+        ``agent_key`` is a principal id (``ap_...``), a machine scope key
+        (``node:<id>``), or a bare runtime name. Partial updates are honored
+        via COALESCE so setting only ``team`` preserves existing ``owner``
+        (and vice versa). ``None`` means "don't touch this field"; an
+        explicit empty string is stored as-is and renders as unassigned in
+        the ladder. Idempotent.
+        """
+        if not agent_key:
+            raise ValueError("agent_meta must include 'agent_key'")
+        agent_key = str(agent_key).lower().strip()
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self._write_lock:
+            self._conn.execute(
+                """
+                INSERT INTO agent_meta (agent_key, owner, notes, team, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT (agent_key) DO UPDATE SET
+                    owner      = COALESCE(excluded.owner,      agent_meta.owner),
+                    notes      = COALESCE(excluded.notes,      agent_meta.notes),
+                    team       = COALESCE(excluded.team,       agent_meta.team),
+                    updated_at = excluded.updated_at
+                """,
+                [agent_key, owner, notes, team, now_iso],
+            )
 
     def query_agent_meta(self) -> dict[str, dict[str, Any]]:
-        """Return {agent_key: {owner, notes, team, updated_at}} for every labeled runtime/scope."""
-        ...
+        """Return ``{agent_key: {owner, notes, team, updated_at}}`` for every
+        labeled runtime/scope. Read-only; uses self._fetch so callers must
+        NOT hold self._write_lock on entry."""
+        sql = """
+            SELECT agent_key, owner, notes, team, updated_at
+            FROM agent_meta
+            ORDER BY agent_key ASC
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for r in self._fetch(sql, []):
+            key = r[0]
+            if not key:
+                continue
+            out[str(key)] = {
+                "owner": r[1] or "",
+                "notes": r[2] or "",
+                "team": r[3] or "",
+                "updated_at": r[4] or "",
+            }
+        return out
