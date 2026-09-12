@@ -22,13 +22,12 @@ Design rules (non-negotiable):
   * **Worst signal wins.** Every matching rule contributes a reason; the
     final level is the maximum. Reasons are plain copy (no em-dashes, no
     jargon) because they surface verbatim in approval prompts.
-  * **This module imports nothing from the rest of clawmetry.** It is the
-    leaf that ``approvals.py`` (and routes) import, so the canonical tool
-    map lives HERE now and ``approvals`` re-exports it (single source of
-    truth, no drift between watcher / replay / hook gate).
-    The git-config-exec predicates (``_git_cfg_executes``,
-    ``_git_cfg_value_known_good``) are inlined below with their constant
-    tables so the blueprint leaf constraint is not violated.
+  * **One clawmetry import is permitted: ``clawmetry.git_config_exec``.**
+    That module is a pure-constant leaf (only imports ``re``) shared by both
+    ``tool_risk`` and ``repo_scan``. The exception is documented in the
+    Governance blueprint (PR #5848). All other clawmetry imports remain
+    prohibited so the tool map stays the leaf that ``approvals.py`` and
+    routes import.
 
 Public API:
   classify_tool_call(tool_name, args) -> {level, rank, category, reasons}
@@ -42,6 +41,9 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+
+from clawmetry.git_config_exec import executes as _git_cfg_executes
+from clawmetry.git_config_exec import value_known_good as _git_cfg_value_known_good
 
 # ── Canonical tool categories (moved verbatim from approvals.py) ──────────
 # Harness-agnostic tool categories. Approval policies are authored against
@@ -286,74 +288,6 @@ _DESTRUCTIVE_HTTP = ("delete",)
 _WRITE_HTTP = ("post", "put", "patch")
 
 
-# ── git config that executes a program (clawmetry-pro#244) ─────────────────
-#
-# `repo_scan` already knows which git config keys run a program -- that list is
-# the whole basis of `repo_config_exec`. Passing the same key on the command
-# line is the same arbitrary code execution, and scored `medium` here purely
-# because nothing connected the two modules. `medium` is rank 1, so a policy
-# with `min_risk: high` held none of these. Mirror of the Google ADK CI/CD
-# finding (Pillar Security, fixed Jul 2026): a command filter that trusted
-# `git` was reached through `core.hooksPath`.
-# Keep git_config_exec.py in sync when adding a new exec key.
-_GCE_EXEC_KEYS = (
-    "core.fsmonitor",
-    "core.hookspath",
-    "core.sshcommand",
-    "core.editor",
-    "core.pager",
-    "core.askpass",
-    "sequence.editor",
-    "credential.helper",
-    "uploadpack.packobjectshook",
-    "diff.external",
-    "gpg.program",
-    "init.templatedir",
-)
-_GCE_EXEC_KEY_PATTERNS = (
-    re.compile(r"^filter\..+\.(clean|smudge|process)$"),
-    re.compile(r"^diff\..+\.(command|textconv)$"),
-    re.compile(r"^merge\..+\.driver$"),
-    re.compile(r"^alias\..+$"),
-)
-_GCE_KNOWN_GOOD_PREFIXES = (
-    ("git-lfs", "clean"), ("git-lfs", "smudge"), ("git-lfs", "filter-process"),
-    ("git", "lfs"),
-    ("cat",), ("true",), ("false",),
-    ("rustfmt",), ("gofmt",), ("black",), ("prettier",),
-    ("less",), ("more",), ("delta",), ("diff-so-fancy",),
-)
-_GCE_SHELL_METACHARS = re.compile(r"[;&|`$><\n\r!#(){}]")
-
-
-def _git_cfg_executes(full_key: str, value: str = "") -> bool:
-    """Does setting this git config key to this value make git run a program?"""
-    key = str(full_key or "").strip().lower()
-    val = str(value or "")
-    if key in _GCE_EXEC_KEYS:
-        return True
-    for rx in _GCE_EXEC_KEY_PATTERNS:
-        if rx.match(key):
-            if key.startswith("alias."):
-                return val.strip().startswith("!")
-            return True
-    return False
-
-
-def _git_cfg_value_known_good(value: str) -> bool:
-    """Is this config value a recognised ordinary tool rather than a payload?"""
-    if _GCE_SHELL_METACHARS.search(value or ""):
-        return False
-    tokens = str(value or "").split()
-    if not tokens:
-        return True
-    lowered = [t.lower() for t in tokens]
-    for prefix in _GCE_KNOWN_GOOD_PREFIXES:
-        if lowered[:len(prefix)] == list(prefix):
-            return True
-    return False
-
-
 # EVERY quantifier below is bounded. Unbounded ones here are a real denial of
 # service, not a theoretical one: this runs on the Brain feed's hot path, which
 # classifies thousands of rows per page-load, over a command string an agent
@@ -401,8 +335,8 @@ def _scan_config_value(cmd: str, start: int, limit: int = 512) -> str:
 def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
     """Flag `git -c <key>=<value>` where the key makes git run a program.
 
-    Uses the inlined ``_git_cfg_executes`` / ``_git_cfg_value_known_good``
-    predicates. Reasons name the key so an operator working the Approvals
+    Uses ``_git_cfg_executes`` / ``_git_cfg_value_known_good`` from
+    ``clawmetry.git_config_exec``. Reasons name the key so an operator working the Approvals
     queue can identify the threat.
     """
     if "git" not in cmd.lower():
