@@ -16,7 +16,7 @@ leest de sessiebestanden die je coding agents al schrijven, en brengt de tijdlij
 de tool calls en welke token- en kostengegevens de runtime ook maar blootgeeft samen in één
 overzicht — zodat je een lange run die werkt kunt onderscheiden van een die vastzit.
 
-Werkt met **31 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 27 meer. Eén dashboard voor je hele agent-vloot. ([de volledige lijst](SUPPORTED_RUNTIMES.txt), gegenereerd uit de catalogus.)
+Werkt met **32 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 27 meer. Eén dashboard voor je hele agent-vloot. ([de volledige lijst](SUPPORTED_RUNTIMES.txt), gegenereerd uit de catalogus.)
 
 > 🌐 **Lees dit in:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [meer →](docs/i18n/)
 
@@ -47,7 +47,7 @@ laat zien welke, per runtime), en het observeren van een actie is niet hetzelfde
 deze te blokkeren ([welke controls echt zijn, per runtime](docs/APPROVALS.md)).
 
 
-## Werkt met 31 agent runtimes
+## Werkt met 32 agent runtimes
 
 **Gratis in de open source app:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
@@ -80,7 +80,7 @@ Twee vragen die het waard zijn om te beantwoorden voordat je een agent-vergelijk
 Een benuttingspercentage is alleen zo eerlijk als waar het door deelt. ClawMetry
 bepaalt de venstergrootte per provider vanuit [een tabel die je kunt lezen en
 er een PR voor kunt indienen](clawmetry/context_windows.py), met dekking voor Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama en GLM. Het meet niet alle 31
+DeepSeek, Kimi, Qwen, Mistral, Llama en GLM. Het meet niet alle 32
 runtimes met de liniaal van één leverancier. Dat maakt uit: een beurt van 300K bij GPT-5 gescoord
 tegen Anthropics 200K leest als ">100%, geblazen" terwijl het eigenlijk op 75% van
 GPT-5's 400K zit. Diezelfde liniaal verbergt een daadwerkelijk overgelopen beurt van 130K bij DeepSeek
@@ -100,7 +100,7 @@ rapporteert `GET /api/context-coverage`, per runtime, of een **nul betekent
 
 | Pad | Toegevoegd aan je agent | Standaard? |
 |---|---|---|
-| Session-file tailing (alle 31 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
+| Session-file tailing (alle 32 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
 | HTTP-interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** per LLM-oproep, oftewel 0,009% van een oproep van 5s | uit |
 | Pre-tool hook gate (warme cache) | **+44 ms** per geblokkeerde tool call, bovenop een interpreter-basis van 36 ms | uit |
 | Enforcement proxy | **+9,7 ms** per LLM-oproep | uit |

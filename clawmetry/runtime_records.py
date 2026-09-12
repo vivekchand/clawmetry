@@ -53,7 +53,7 @@ _STATES = frozenset({ON_DISK, DERIVED, UNAVAILABLE, UNKNOWN, PARTIAL})
 
 # Signals a surface can ask about. Deliberately short: these are the three the
 # broken-looking panels actually depend on. Adding a fourth means being able to
-# answer it for all 31 runtimes, which is the bar that keeps this table true.
+# answer it for all 32 runtimes, which is the bar that keeps this table true.
 SIGNALS = ("tokens", "cost", "model")
 
 
@@ -254,6 +254,16 @@ RUNTIME_RECORDS: dict[str, dict] = {
              "from the pricing table, never reported. Its audit log also "
              "carries token columns; those meter the Auto-Approve reviewer, "
              "not the agent, and are deliberately excluded from session cost.",
+    ),
+    "openexecutive": _e(
+        PARTIAL, PARTIAL, ON_DISK,
+        "Usage rows cover the Executive's own model calls, not the specialist agents'",
+        note="OpenExecutive writes one audit row per model call the Executive "
+             "makes, with the token split, the model and, when routed through "
+             "OpenRouter, the real charge; otherwise cost is derived from the "
+             "pricing table. Its specialist agents call the provider directly "
+             "and write no usage row, so their tokens and dollars are not on "
+             "disk. A session total is a floor, not the full bill.",
     ),
     "lovable": _e(
         UNAVAILABLE, UNAVAILABLE, UNAVAILABLE,
