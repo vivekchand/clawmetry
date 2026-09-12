@@ -243,7 +243,7 @@ jobs:
             desktop/sign_mac.sh "$dmg"
           done
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: clawmetry-macos
           path: dist/*.dmg
@@ -350,7 +350,7 @@ jobs:
       # every downstream step stay untouched.
       - name: Azure login (OIDC)
         if: env.HAS_AZ_SIGN == 'true'
-        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -455,8 +455,14 @@ jobs:
       - name: Zip distribution folder
         working-directory: dist
         shell: pwsh
+        # The resolved version reaches the script through the environment
+        # rather than being expanded into it: a `${{ }}` substitution is
+        # textual, so the runner splices the value into the script body
+        # before pwsh ever parses it. Reading $Env: keeps it a value.
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          $version = "${{ steps.ver.outputs.version }}"
+          $version = $Env:APP_VERSION
           Compress-Archive -Path ClawMetry -DestinationPath "ClawMetry-$version-windows.zip"
           # Fixed-name copy so clawmetry.com/download/windows-zip can link a
           # stable URL (GitHub's /releases/latest/download/<name>) instead
@@ -478,6 +484,9 @@ jobs:
         # wrapper reads CLAWMETRY_SIGN_PW from this step's environment.
         env:
           CLAWMETRY_SIGN_PW: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          # Same reasoning as the zip step above: bound as a value, not
+          # spliced into the script text.
+          APP_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           $makensis = (where.exe makensis 2>$null | Select-Object -First 1)
           if (-not $makensis) {
@@ -487,15 +496,16 @@ jobs:
           # VIVERSION must be numeric x.y.z.w for VIProductVersion; releases
           # are x.y.z so append .0 (non-numeric dev versions fall back to
           # the script's 0.0.0.0 default by passing nothing).
-          $nsisArgs = @("/DVERSION=${{ steps.ver.outputs.version }}")
-          if ("${{ steps.ver.outputs.version }}" -match '^\d+\.\d+\.\d+$') { $nsisArgs += "/DVIVERSION=${{ steps.ver.outputs.version }}.0" }
+          $version = $Env:APP_VERSION
+          $nsisArgs = @("/DVERSION=$version")
+          if ($version -match '^\d+\.\d+\.\d+$') { $nsisArgs += "/DVIVERSION=${version}.0" }
           if ($Env:SIGN_ENABLED -eq 'true') { $nsisArgs += "/DSIGN_CMD=$Env:SIGN_CMD" }
           $nsisArgs += @("/DSRC_DIR=$PWD\dist\ClawMetry", "desktop\installer\windows.nsi")
           & $makensis @nsisArgs
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
-          Move-Item "desktop\installer\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe"
+          Move-Item "desktop\installer\ClawMetry-Setup-${version}.exe" "dist\ClawMetry-Setup-${version}.exe"
           # Fixed-name copy — same stable-URL convention as the zip above.
-          Copy-Item "dist\ClawMetry-Setup-${{ steps.ver.outputs.version }}.exe" "dist\ClawMetry-windows-setup.exe" -Force
+          Copy-Item "dist\ClawMetry-Setup-${version}.exe" "dist\ClawMetry-windows-setup.exe" -Force
 
       # Verify the artifact, not the build log (FLYWHEEL §0b.5): a chained
       # Authenticode signature must actually be on the setup exe and the
@@ -531,7 +541,7 @@ jobs:
           $pfx = Join-Path $Env:RUNNER_TEMP "codesign.pfx"
           if (Test-Path $pfx) { Remove-Item $pfx -Force }
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: clawmetry-windows
           path: |
@@ -632,8 +642,12 @@ jobs:
 
       - name: Tarball distribution folder
         working-directory: dist
+        # Bound through the environment rather than expanded into the script
+        # body — see the Windows zip step for the reasoning.
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
+          VERSION="$APP_VERSION"
           tar czf "clawmetry-${VERSION}-linux-x86_64.tar.gz" clawmetry
           # Fixed-name copy so clawmetry.com/download/linux-tarball can link
           # a stable URL (GitHub's /releases/latest/download/<name>) instead
@@ -649,9 +663,13 @@ jobs:
       # containers).
       - name: Build AppImage
         working-directory: dist
+        # Bound through the environment rather than expanded into the script
+        # body — see the Windows zip step for the reasoning.
+        env:
+          APP_VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -e
-          VERSION="${{ steps.ver.outputs.version }}"
+          VERSION="$APP_VERSION"
           APPDIR="ClawMetry.AppDir"
           mkdir -p "$APPDIR/usr/bin"
           cp -r clawmetry/. "$APPDIR/usr/bin/"
@@ -695,7 +713,7 @@ jobs:
       - name: Smoke test the AppImage
         run: python3 desktop/smoke_test.py dist/clawmetry-linux.AppImage
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: clawmetry-linux
           path: |

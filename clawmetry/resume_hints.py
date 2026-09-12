@@ -171,6 +171,13 @@ _HINTS: Dict[str, Dict[str, str]] = {
                 "argument starts a new one in the current workspace.",
         "source": "clawmetry adapter: MSP session/resume over `muse serve`",
     },
+    "openexecutive": {
+        "command": "",
+        "note": "OpenExecutive has no resume command. Reopen the conversation "
+                "from the Sessions sidebar in the OpenExecutive web UI; a Slack "
+                "or email conversation continues in its own thread.",
+        "source": "clawmetry adapter: episodic_memory.db sessions + audit_log",
+    },
     "openworker": {
         "command": "",
         "note": "OpenWorker is a desktop app. Reopen the conversation in the "
