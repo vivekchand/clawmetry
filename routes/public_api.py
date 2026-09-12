@@ -79,11 +79,9 @@ _RATE_WINDOW_SEC = 60.0
 #: the right origin after the view has run.
 _G_KEY = "_cm_api_key_record"
 
-# Regex that matches only what normalise_origins() ever stores: scheme://host[:port].
-# Used as a CodeQL-recognised sanitizer before setting Access-Control-Allow-Origin
-# (CWE-113): even though canonical_allowed_origin() returns a stored value rather
-# than the caller-supplied origin string, an explicit structural check here
-# makes the invariant machine-verifiable.
+# Structural guard for browser Origin values: scheme://host[:port].
+# Applied in _add_cors BEFORE comparing against stored origins so that
+# structurally invalid values are rejected early.
 _ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9._-]+(:\d{1,5})?$")
 
 # Same pattern for the Host header in llms.txt: RFC 3986 host + optional port.
@@ -172,6 +170,12 @@ def _add_cors(response):
 
     Blueprint-scoped on purpose: nothing else in the dashboard gains a
     CORS header from this file existing.
+
+    CWE-113 design: the Access-Control-Allow-Origin value MUST come from
+    the key store, never from the request Origin header. The implementation
+    achieves this by fetching stored origins WITHOUT passing the request
+    header to any helper function -- origin never flows into stored_origins,
+    so matched (assigned from stored_origins) is provably not tainted.
     """
     from flask import g
 
@@ -186,26 +190,40 @@ def _add_cors(response):
         # module, routes/apikeys_admin.py, behind the dashboard's own
         # same-origin gate.
         return response
+
+    # Structural guard: reject structurally invalid origin values before
+    # any comparison with stored data. This is an early exit, not the
+    # CWE-113 sanitizer (the sanitizer is the stored-value lookup below).
+    _m = _ORIGIN_RE.fullmatch(origin.rstrip("/"))
+    if not _m:
+        return response
+
     record = getattr(g, _G_KEY, None)
-    # Route user input through apikeys helpers that return the STORED canonical
-    # value, never the caller-supplied string -- this is the CodeQL CWE-113
-    # sanitizer: the tainted origin header never flows into the response header
-    # because the return value of these functions comes from the key store.
+
+    # Fetch stored canonical origins WITHOUT passing the request-supplied
+    # origin to any function. This severs the CodeQL CWE-113 taint chain:
+    # stored_origins comes entirely from the key store (no request input),
+    # so any value selected from it is provably not derived from user input.
     if record is not None:
-        canonical = apikeys.canonical_allowed_origin(record, origin)
+        stored_origins = list(record.get("origins") or [])
     else:
-        canonical = apikeys.any_canonical_allowed_origin(origin)
-    if not canonical:
+        # Preflight: no key presented yet. Check whether the origin is named
+        # by any live key. apikeys.all_live_origins() takes no user input.
+        stored_origins = apikeys.all_live_origins()
+
+    # Compare the sanitized origin string against each stored canonical.
+    # The header value is assigned from stored_origins (the key store),
+    # not from the request header or any value derived from it.
+    safe_origin = _m.group(0)
+    matched = None
+    for _stored in stored_origins:
+        if str(_stored).lower() == safe_origin.lower():
+            matched = str(_stored)
+            break
+    if not matched:
         return response
-    # Structural guard: capture the match object and use .group(0) as the
-    # header value. CodeQL tracks taint through string variables; using the
-    # regex match group is the recognised sanitizer that severs the data-flow
-    # chain at the sink (Access-Control-Allow-Origin), even when canonical
-    # itself came from the key store rather than raw user input.
-    _m2 = _ORIGIN_RE.fullmatch(canonical)
-    if not _m2:
-        return response
-    response.headers["Access-Control-Allow-Origin"] = _m2.group(0)
+
+    response.headers["Access-Control-Allow-Origin"] = matched
     response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = (
