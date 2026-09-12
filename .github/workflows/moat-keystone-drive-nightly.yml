@@ -76,7 +76,9 @@ jobs:
 
       - name: Install Python deps
         if: env.KEYSTONE_PRESENT == '1'
-        run: pip install flask waitress cryptography duckdb requests psutil
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/dashboard-boot.txt
 
       - name: Start dashboard
         if: env.KEYSTONE_PRESENT == '1'
