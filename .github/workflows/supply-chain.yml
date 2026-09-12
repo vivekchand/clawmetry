@@ -67,7 +67,9 @@ jobs:
       # requests is needed because tests/conftest.py imports it at module
       # scope, so pytest cannot collect without it. Flagged automatically by
       # tests/test_workflow_yaml_valid.py when this step first gained pytest.
-      - run: python3 -m pip install --quiet certifi pytest requests
+      - run: >-
+          python3 -m pip install --quiet --require-hashes
+          -r .github/requirements/fonts-check.txt
       # Proves the distinction the check depends on: an unreachable upstream is
       # reported as unverified, while a real difference still fails. Runs first
       # and needs no network, so a Google Fonts outage cannot stop it.
@@ -91,7 +93,9 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
-      - run: python3 -m pip install --quiet pip-audit cyclonedx-bom
+      - run: >-
+          python3 -m pip install --quiet --require-hashes
+          -r .github/requirements/python-deps.txt
       - name: Audit declared dependencies for known advisories
         # Non-blocking on PRs: a fresh advisory in a transitive dep should not
         # wedge unrelated work. It still fails the scheduled run, which is the
@@ -100,6 +104,12 @@ jobs:
         run: pip-audit --requirement requirements.txt --strict --progress-spinner off
       - name: Generate CycloneDX SBOM
         run: |
+          # Deliberately NOT hash-pinned, unlike the scanner install above.
+          # This is the live resolve of requirements.txt -- the thing being
+          # measured. An SBOM of a frozen, hash-pinned environment would
+          # describe this file instead of describing what `pip install
+          # clawmetry` actually produces today, which is the only question
+          # the SBOM is published to answer.
           python3 -m pip install --quiet -r requirements.txt
           cyclonedx-py environment --output-format JSON > clawmetry-sbom.json
       - name: Publish SBOM as a build artifact
@@ -125,7 +135,9 @@ jobs:
       # requests is needed because tests/conftest.py imports it at module
       # scope, so pytest exits 4 (collection error) without it, before a
       # single test runs. Asserted by tests/test_workflow_yaml_valid.py.
-      - run: python3 -m pip install --quiet atheris pytest requests
+      - run: >-
+          python3 -m pip install --quiet --require-hashes
+          -r .github/requirements/fuzz.txt
 
       # The seed corpus first: it is the set of inputs that have ALREADY broken
       # these contracts, it runs in under a second, and it fails loudly. If a
@@ -223,7 +235,9 @@ jobs:
           # cache would buy nothing and could only muddy the result. Same
           # reasoning as publish.yml.
           package-manager-cache: false
-      - run: python3 -m pip install --quiet zizmor bandit
+      - run: >-
+          python3 -m pip install --quiet --require-hashes
+          -r .github/requirements/actions-scanners.txt
 
       - name: Audit every workflow definition
         env:
