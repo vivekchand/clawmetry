@@ -64,7 +64,9 @@ jobs:
           package-manager-cache: false
 
       - name: Install build tools
-        run: pip install build twine
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/release-publish.txt
 
       - name: Build v2 React bundle
         run: |
