@@ -1209,7 +1209,15 @@ jobs:
         # duckdb is in requirements.txt and used by the dashboard's local
         # event store; without it the server crashes on import and the
         # health check silently times out.
-        run: pip install flask pytest pytest-playwright requests duckdb
+        #
+        # playwright-e2e.txt is the hash-pinned set the other Playwright jobs
+        # (e2e-nightly, quarantine-sweep) already install from, and it carries
+        # every package this line resolved loosely -- Flask, pytest,
+        # pytest-playwright, requests, duckdb -- at the same Python 3.11 this
+        # job pins.
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/playwright-e2e.txt
       - name: Cache Playwright browsers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -1551,7 +1559,13 @@ jobs:
         with:
           gateway-token: moat-live-e2e-token
       - name: Install Python deps
-        run: pip install flask pytest waitress duckdb cryptography requests
+        # ci-tests.txt is the hash-pinned set seven sibling jobs in this file
+        # already install from, and it carries every package this line resolved
+        # loosely -- Flask, pytest, waitress, duckdb, cryptography, requests --
+        # at the same Python 3.11 this job pins.
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/ci-tests.txt
       - name: Run live OpenClaw E2E
         env:
           # User-provided key (private repo secret) so OpenClaw can make a

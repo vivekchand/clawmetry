@@ -185,9 +185,12 @@ def _add_cors(response):
     Blueprint-scoped on purpose: nothing else in the dashboard gains a
     CORS header from this file existing.
 
-    Security note: the ``Access-Control-Allow-Origin`` value comes from
-    the key store only. See the inline comments below for the CWE-113
-    taint-chain rationale.
+    CWE-113 design: the ACAO header is always set from all_live_origins()
+    (file-backed, no request input), never from record.get("origins") or
+    any function that received a request header as an argument. Per-key
+    filtering is done as a boolean-only guard that does not flow to the
+    header value -- so no taint from Authorization or X-ClawMetry-Key
+    can reach the response header through any code path.
     """
     from flask import g
 
@@ -212,20 +215,30 @@ def _add_cors(response):
 
     record = getattr(g, _G_KEY, None)
 
-    # Fetch stored canonical origins WITHOUT passing the request-supplied
-    # origin to any function. This severs the CodeQL CWE-113 taint chain:
-    # stored_origins comes entirely from the key store (no request input),
-    # so any value selected from it is provably not derived from user input.
+    # CWE-113 fix: the ACAO header value MUST come from all_live_origins()
+    # which takes no user input and returns file-backed untainted data.
+    #
+    # The previous approach (record.get("origins")) was flagged twice by
+    # CodeQL because verify(presented) receives two tainted sources
+    # (Authorization and X-ClawMetry-Key), making record tainted, which
+    # propagates to record.get("origins") -> stored_origins -> matched ->
+    # response header. Both source -> sink chains are eliminated here by
+    # using all_live_origins() instead.
+    #
+    # Per-key gate: when a key was authenticated, restrict to that key's
+    # named origins. This check is BOOLEAN ONLY -- the result is never
+    # assigned to the response header, so no taint can flow through it.
     if record is not None:
-        stored_origins = list(record.get("origins") or [])
-    else:
-        # Preflight: no key presented yet. Check whether the origin is named
-        # by any live key. apikeys.all_live_origins() takes no user input.
-        stored_origins = apikeys.all_live_origins()
+        _safe_lc = _m.group(0).lower()
+        if _safe_lc not in [
+            str(_o).rstrip("/").lower() for _o in (record.get("origins") or [])
+        ]:
+            return response
 
-    # Compare the sanitized origin string against each stored canonical.
-    # The header value is assigned from stored_origins (the key store),
-    # not from the request header or any value derived from it.
+    # Load canonical origin values from the file with no request input.
+    # all_live_origins() returns untainted data; matched is assigned from it,
+    # so the response header value carries no taint from the request headers.
+    stored_origins = apikeys.all_live_origins()
     safe_origin = _m.group(0)
     matched = None
     for _stored in stored_origins:
