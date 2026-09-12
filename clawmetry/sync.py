@@ -8082,6 +8082,7 @@ _LITE_RT_LABELS = {
     "lovable": "Lovable",
     "replit": "Replit Agent",
     "muse_code": "Muse Code",
+    "openexecutive": "OpenExecutive",
 
 }
 
@@ -14913,6 +14914,11 @@ _FAMILY_ADAPTER_SPECS = (
     # inside the workspace shell (`pip install clawmetry` in a Repl) or over
     # a local clone/export pointed at via CLAWMETRY_REPLIT_ROOTS.
     ("clawmetry_pro.adapters.replit", "ReplitAdapter"),
+    # OpenExecutive (github.com/SenteLabsAI/OpenExecutive) -- an AI executive
+    # team on FastAPI. One SQLite store (episodic_memory.db) holds sessions,
+    # the audit log with per-call usage, and the outbound sends its scheduler
+    # has queued. The store has no fixed home, so the adapter discovers it.
+    ("clawmetry_pro.adapters.openexecutive", "OpenExecutiveAdapter"),
 )
 
 
@@ -16753,6 +16759,8 @@ _RUNTIME_PREFIXES = frozenset({
     "openworker",
     "lovable",
     "replit",
+    "muse_code",
+    "openexecutive",
 })
 
 
