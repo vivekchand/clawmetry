@@ -16353,6 +16353,18 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     "total_tokens": int(s.total_tokens or 0),
                     "cost_usd": s.cost_usd,
                     "message_count": int(s.message_count or 0),
+                    # The hosted session page renders "Messages" from
+                    # sessions.event_count, which is the ONLY count the cloud
+                    # stores (its sessions table has no message_count column).
+                    # The OpenClaw row has always sent it; this one never did,
+                    # so every Codex / Cursor / Claude Code session read
+                    # "Messages 0" beside a full transcript (founder report
+                    # 2026-09-11: a Codex session showing 0 against 371
+                    # messages locally). len(_events) is the same raw-row count
+                    # the OpenClaw path sends, and the cloud upsert keeps the
+                    # GREATEST of old and new, so a read capped by
+                    # _family_event_read_cap() can never walk the number back.
+                    "event_count": len(_events),
                     "runtime": runtime,
                     "model": s.model or "",
                     # Cost-intelligence (foundation): carried to the cloud so the

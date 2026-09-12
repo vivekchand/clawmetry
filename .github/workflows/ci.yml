@@ -824,6 +824,7 @@ jobs:
             tests/test_insights_outcome_templates.py \
             tests/test_event_shape.py \
             tests/test_injected_context.py \
+            tests/test_family_cloud_row_event_count.py \
             tests/test_schema_v15_migration.py \
             tests/test_session_cost_intel.py \
             tests/test_session_intent.py \
