@@ -20484,7 +20484,10 @@ function _renderReplayEvent(ev, highlighted) {
   var displayContent = needsTruncate ? content.substring(0, 800) : content;
   var highlightStyle = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
   var html = '<div class="chat-msg ' + cls + '" id="replay-msg-' + ev.originalIndex + '" style="' + highlightStyle + '">';
-  html += '<div class="chat-role">' + (isThinking ? '&#129504; ' + t("app.thinking_internal", null, "thinking (internal)") : escHtml(role)) + '</div>';
+  // Harness-injected context (Codex AGENTS.md / setup, <system-reminder>) is
+  // re-roled server-side to system + type "context"; name it for what it is.
+  var roleLabel = ev.type === 'context' ? 'context' : role;
+  html += '<div class="chat-role">' + (isThinking ? '&#129504; ' + t("app.thinking_internal", null, "thinking (internal)") : escHtml(roleLabel)) + '</div>';
   if (needsTruncate) {
     html += '<div class="chat-content-truncated" id="msg-' + ev.originalIndex + '-short" style="white-space:pre-wrap;word-break:break-word;">' + escHtml(displayContent) + '</div>';
     html += '<div id="msg-' + ev.originalIndex + '-full" style="display:none;white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';

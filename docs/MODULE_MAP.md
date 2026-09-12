@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-247 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+251 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -198,6 +198,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/incident_alerts.py` | medium | deliver a detector incident to a human. |
 | `clawmetry/ingest_auth.py` | medium | the gate in front of the ingest surfaces. |
 | `clawmetry/ingest_contract.py` | medium | what ClawMetry accepts, declared once. |
+| `clawmetry/injected_context.py` | small | Tell what a human typed apart from context a harness injects as a user turn. |
 | `clawmetry/insights.py` | medium | Weekly Insights Digest — LLM-over-DuckDB summary of the last 7 days. |
 | `clawmetry/installs.py` | medium | Install census — find every clawmetry copy on this machine and flag stale ones. |
 | `clawmetry/instrument.py` | medium | ``clawmetry instrument <runtime>`` — switch a runtime's own OpenTelemetry exporter on and point it at the local ClawMetry receiver (WO-57). |

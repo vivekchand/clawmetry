@@ -387,6 +387,8 @@ def _dispatch(shape: str, args: dict) -> dict:
         body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
         if shape == "sessions":
             _attach_nondeterminism(body)
+        if shape == "transcript":
+            _label_injected_context(body)
         return body
     except Exception:
         pass
@@ -407,7 +409,43 @@ def _dispatch(shape: str, args: dict) -> dict:
     body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
     if shape == "sessions":
         _attach_nondeterminism(body, store=store)
+    if shape == "transcript":
+        _label_injected_context(body)
     return body
+
+
+def _label_injected_context(body: dict) -> None:
+    """Stamp ``role: "context"`` on raw transcript rows that are harness
+    context, not the person: Codex ``developer`` setup messages and user-role
+    rows such as its "# AGENTS.md instructions" turn. The hosted session page
+    renders these raw rows and labels a row by ``data.role``, so without this
+    AGENTS.md showed as "you" and setup as "developer" (founder report
+    2026-09-11). Mutates ``body["rows"]`` in place; never raises."""
+    try:
+        import json as _json
+        from clawmetry.injected_context import is_injected_context
+        for r in body.get("rows") or []:
+            if not isinstance(r, dict):
+                continue
+            d = r.get("data")
+            was_str = isinstance(d, str)
+            if was_str:
+                try:
+                    d = _json.loads(d)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(d, dict):
+                continue
+            role = d.get("role")
+            if role == "developer" or (
+                    role == "user"
+                    and (r.get("event_type") or "") not in ("tool_call", "tool_result")
+                    and is_injected_context(d.get("content"))):
+                d = dict(d)
+                d["role"] = "context"
+                r["data"] = _json.dumps(d) if was_str else d
+    except Exception:
+        log.debug("transcript context labelling failed", exc_info=True)
 
 
 # Replay agreement is written by an opt-in scheduler and changes at most a
