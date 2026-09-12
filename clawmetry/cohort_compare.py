@@ -44,8 +44,12 @@ from typing import Any
 
 FILTER_KEYS = (
     "runtime", "model", "runtime_version", "repo", "developer", "branch",
-    "since", "until",
+    "instructions", "since", "until",
 )
+# ``instructions`` is the prompt fingerprint: the sha256 of the instructions
+# file(s) the session ran under (``session_context``), matched by prefix so a
+# 12-character short hash from a suggestion or a URL works. It makes "did the
+# prompt change help?" a cohort key rather than a date range.
 
 # Minimum sessions per side before a verdict is printed. Small fleets are
 # the norm for a solo developer, so "Not enough data" is a first-class
@@ -77,7 +81,7 @@ FAILURE_OUTCOMES = frozenset({"failed", "cognitive_loop", "tool_call_stuck"})
 LOWER_BETTER = (
     "cost_usd", "cost_per_session", "tokens", "tokens_per_session", "steps",
     "steps_per_session", "tool_error_rate", "failure_rate", "cost_per_done",
-    "frustration_rate", "abandoned_rate",
+    "tokens_per_done", "frustration_rate", "abandoned_rate",
 )
 HIGHER_BETTER = ("cache_hit", "done_rate")
 
@@ -156,6 +160,8 @@ def describe_filter(f: dict) -> str:
     for k in ("runtime", "model", "runtime_version", "repo", "developer", "branch"):
         if f.get(k):
             bits.append(f"{k.replace('_', ' ')} {f[k]}")
+    if f.get("instructions"):
+        bits.append(f"prompt {f['instructions'][:12]}")
     if f.get("since") and f.get("until"):
         bits.append(f"{f['since'][:10]} to {f['until'][:10]}")
     elif f.get("since"):
@@ -267,6 +273,10 @@ def session_matches(view: dict, f: dict) -> bool:
         want = f.get(k)
         if want and str(view.get(k) or "").lower() != want.lower():
             return False
+    want_prompt = f.get("instructions")
+    if want_prompt and not str(view.get("instructions_hash") or "").lower().startswith(
+            want_prompt.lower()):
+        return False
     st = _ts_key(view.get("started_at") or "")
     if f.get("since") and st and st < _ts_key(f["since"]):
         return False
@@ -319,6 +329,9 @@ def cohort_stats(views: list[dict], *, signals_available: bool = False) -> dict:
         "done": done,
         "done_rate": round(done / len(finished), 4) if finished else None,
         "cost_per_done": round(cost / done, 4) if done else None,
+        # Quality per token: "same result with 40% fewer tokens" is this
+        # number going down while done_rate holds.
+        "tokens_per_done": int(tokens / done) if done else None,
         "done_basis": done_basis,
         "coverage": {
             "steps": len(step_views),
@@ -611,8 +624,12 @@ def build_suggestions(views: list[dict], *, now: datetime | None = None,
                     "title": (f"Instructions changed on {_pretty_runtime(rt)}: "
                               f"before vs after {first[:10]}"),
                     "why": "The instructions file the agent reads changed.",
-                    "a": {"runtime": rt, "since": before, "until": first},
-                    "b": {"runtime": rt, "since": first},
+                    # Keyed on the fingerprint as well as the date, so a
+                    # session on a third prompt in the same window is on
+                    # neither side instead of polluting one.
+                    "a": {"runtime": rt, "instructions": items[i - 1][1][:12],
+                          "since": before, "until": first},
+                    "b": {"runtime": rt, "instructions": val[:12], "since": first},
                 })
     week_ago = _iso(now - timedelta(days=7))
     two_weeks = _iso(now - timedelta(days=14))
