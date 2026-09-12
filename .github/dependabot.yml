@@ -54,6 +54,18 @@ updates:
       ci-scanners:
         patterns:
           - "*"
+    # These releases cannot install on the Python the CI jobs run (3.11), and
+    # a hash-pinned install fails the whole job rather than the one package.
+    # The 2026-09-12 group bump broke E2E Browser Tests (the required E2E Gate
+    # leg, so every OSS PR), Fuzz and Python dependency audit on main at once.
+    # Lift each rule when its job moves to a Python that can install it.
+    ignore:
+      - dependency-name: "pyee"          # 14.x requires Python >= 3.12
+        versions: [">=14"]
+      - dependency-name: "atheris"       # 3.1.0 has no wheel for the fuzz job
+        versions: [">=3.1"]
+      - dependency-name: "chardet"       # 7.x conflicts with a python-deps.txt pin
+        versions: [">=6"]
     cooldown:
       default-days: 7
 

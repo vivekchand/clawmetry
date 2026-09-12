@@ -42,6 +42,7 @@ _NON_OPENCLAW_PREFIXES = frozenset({
     "lovable",
     "replit",
     "muse_code",
+    "openexecutive",
 })
 
 
