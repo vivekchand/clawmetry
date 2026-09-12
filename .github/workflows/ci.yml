@@ -217,14 +217,6 @@ jobs:
         run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
 
       # Named explicitly because this repo's CI runs FILE LISTS, not
-      # `pytest tests/`. The heatmap buckets on the node-local clock and
-      # scopes by runtime; both are the kind of thing that regresses quietly
-      # (the hosted card drew an all-zero grid for months before anyone
-      # noticed it was not simply a quiet week).
-      - name: Activity heatmap buckets local hours and scopes by runtime
-        run: python3 -m pytest tests/test_activity_heatmap_runtime_scope.py -q
-
-      # Named explicitly because this repo's CI runs FILE LISTS, not
       # `pytest tests/`: a guard added without a line here runs in no job at
       # all. Covers the half `gen_module_map.py --check` cannot: every
       # blueprint dashboard.py registers is in the map, and CLAUDE.md /
@@ -780,6 +772,7 @@ jobs:
             tests/test_scan_read_cache.py \
             tests/test_cache_push_gating.py \
             tests/test_usage_cache_trends_local_store.py \
+            tests/test_activity_heatmap_runtime_scope.py \
             tests/test_transcript_local_store.py \
             tests/test_snapshot_transcripts_runtime_fair.py \
             tests/test_moat_perf_benchmark.py \

@@ -897,6 +897,12 @@ def _try_local_store_heatmap(n_days: int, runtime: str | None = None):
     grid = None
     try:
         from routes.local_query import local_store_via_daemon
+        # Internal daemon RPC (``/__local_query__/<method>``), gated by
+        # ``routes/local_query._DAEMON_METHODS`` — not the q/1 shape registry
+        # in ``clawmetry/query_contract.py``, which governs the PUBLIC
+        # ``/api/local/query?shape=`` surface and the cloud relay. Adding a
+        # fast-path method means the allowlist (checked by
+        # ``make lint-daemon-allowlist``), not a new public shape.
         grid = local_store_via_daemon(
             "activity_heatmap", days=n_days, runtime=runtime
         )
