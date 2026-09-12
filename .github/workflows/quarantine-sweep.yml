@@ -42,9 +42,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install deps
-        run: |
-          pip install flask pytest pytest-playwright requests \
-            duckdb waitress cryptography
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/playwright-e2e.txt
 
       - name: Install Playwright browsers
         run: python3 -m playwright install chromium --with-deps
