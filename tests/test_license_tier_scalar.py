@@ -310,8 +310,9 @@ def test_endpoint_tier_normalises_casing(app):
 
 
 def test_endpoint_tier_never_5xxs(app, monkeypatch):
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_license_tier_snapshot",
@@ -423,8 +424,9 @@ def test_endpoint_is_tier_whitespace_query(app):
 
 
 def test_endpoint_is_tier_never_5xxs(app, monkeypatch):
-    from routes import entitlement as _routes
-
+# The helper lives in routes/entitlement/_shared.py and the handler calls it
+    # through that module, so a patch has to land there.
+    from routes.entitlement import _shared as _routes
     monkeypatch.setattr(
         _routes,
         "_license_tier_snapshot",

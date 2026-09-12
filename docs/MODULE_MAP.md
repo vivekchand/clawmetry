@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-239 modules, 81 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+250 modules, 82 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -27,6 +27,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 |---|---|---|---|---|
 | `routes/_dedupe.py` | small |  |  | sibling-dedupe helper for v3 event sums (issue #1451). |
 | `routes/advisor.py` | medium | `bp_advisor` | `/api/advisor` | ClawMetry Advisor: natural-language Q&A over your agent. |
+| `routes/agentops.py` | small | `bp_agentops` | `/api/agentops`, `/api/ground-truth` | the AgentOps scorecard and the ground-truth endpoint. |
 | `routes/agents.py` | medium | `bp_agents` | `/api/agents` | Multi-agent adapter endpoints. |
 | `routes/alerts.py` | large | `bp_alerts`, `bp_budget` | `/api/_harness`, `/api/agents`, `/api/alert-channels`, `/api/alerts`, `/api/budget`, `/api/emergency-stop` | Budget + Alerts endpoints. |
 | `routes/approval_routing.py` | small | `bp_approval_routing` | `/a`, `/a/decide`, `/api/approvals` | OSS stub after the impl moved to clawmetry-pro. |
@@ -46,7 +47,6 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/delegated.py` | small | `bp_delegated` | `/api/cursor`, `/api/delegated-usage` | Connect a Cursor account from the dashboard, and read delegated usage. |
 | `routes/device.py` | medium | `bp_device` | `/api/device`, `/device-preview` | Device snapshot — a compact, screen-sized JSON for hardware companions. |
 | `routes/dives.py` | medium | `bp_dives` | `/api/dives` | ClawMetry Dives: NL-to-SQL-to-chart over the local DuckDB store. |
-| `routes/entitlement.py` | huge | `bp_entitlement` | `/api/entitlement`, `/api/features`, `/api/license`, `/api/paywall`, `/api/runtimes`, `/api/tiers` | ``bp_entitlement``. |
 | `routes/evals.py` | medium | `bp_evals` | `/api/evals`, `/api/evaluators` | Eval (LLM-as-judge) endpoints. |
 | `routes/extensions.py` | small | `bp_extensions` | `/api/extensions` | diagnostic introspection for the entry-point plugin loader. |
 | `routes/fleet_history.py` | medium | `bp_fleet` | `/api/nodes`, `/fleet` | Multi-node fleet endpoints. |
@@ -86,7 +86,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/sessions.py` | huge | `bp_sessions` | `/api/agents`, `/api/authority`, `/api/compactions`, `/api/cost-split`, `/api/delegation-tree`, `/api/error-triage`, `/api/export`, `/api/fallbacks`, `/api/live-sessions`, `/api/orchestration`, `/api/orchestration-summary`, `/api/outcomes`, `/api/replay-tree`, `/api/run-compare`, `/api/session-errors`, `/api/session-governance`, `/api/session-insight`, `/api/session-lineage`, `/api/session-model-journey`, `/api/session-orchestration`, `/api/session-tools`, `/api/sessions`, `/api/spans`, `/api/subagents`, `/api/task-runs`, `/api/transcript`, `/api/transcript-events`, `/api/transcript-page`, `/api/transcripts`, `/api/waste-summary` | Session / transcript / sub-agent API endpoints. |
 | `routes/signals.py` | medium | `bp_signals` | `/api/briefs`, `/api/signals` | Behaviour Signals read API (WO-58). |
 | `routes/skills.py` | medium | `bp_skills` | `/api/skills` | Skills fidelity telemetry endpoints (GH #687). |
-| `routes/sla.py` | small | `bp_sla` | `/api/sla` | SLA policy CRUD + compliance-status endpoints. |
+| `routes/sla.py` | medium | `bp_sla` | `/api/sla` | SLA policy CRUD, compliance status, and breach firing. |
 | `routes/spend_flow.py` | small | `bp_spend_flow` | `/api/spend-flow` | node-wide AI spend flow (the "where does the money go" Sankey). |
 | `routes/tool_catalog.py` | medium | `bp_tool_catalog` | `/api/mcp-servers`, `/api/tool-catalog` | interactive tool catalog + provenance (PRD P1-3). |
 | `routes/tracing.py` | large | `bp_tracing` | `/api/trace`, `/api/traces` | Phoenix/Arize-style tracing endpoints. |
@@ -96,6 +96,22 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/update_check.py` | large | `bp_update_check` | `/api/update-check` | Auto-update checker with changelog notification. |
 | `routes/usage.py` | huge | `bp_usage` | `/api/activity-today`, `/api/anomalies`, `/api/efficiency`, `/api/forward-progress`, `/api/model-attribution`, `/api/nemo-cap-status`, `/api/runtime-summary`, `/api/sessions`, `/api/skill-attribution`, `/api/skills`, `/api/token-attribution`, `/api/token-velocity`, `/api/usage` | Usage / analytics / anomaly / attribution endpoints. |
 | `routes/workspaces.py` | small | `bp_workspaces` | `/api/workspaces` | Multi-profile OpenClaw workspace discovery + switcher. |
+
+## Entitlement route package (`routes/entitlement/`)
+
+The entitlement API surface, split from a single 47k-line file into a package: a shared helpers module holds the blueprint and helpers; eight endpoint files hold the 434 route handlers.
+
+| Module | Size | Blueprints | Serves | Purpose |
+|---|---|---|---|---|
+| `routes/entitlement/_endpoints_01.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement .. |
+| `routes/entitlement/_endpoints_02.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_missing_features_at_path .. |
+| `routes/entitlement/_endpoints_03.py` | large |  | `/api/entitlement`, `/api/features`, `/api/license`, `/api/runtimes`, `/api/tiers` | endpoint handlers api_entitlement_min_tier .. |
+| `routes/entitlement/_endpoints_04.py` | large |  | `/api/entitlement`, `/api/license`, `/api/paywall` | endpoint handlers api_license_state_at .. |
+| `routes/entitlement/_endpoints_05.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_next_tier_spec .. |
+| `routes/entitlement/_endpoints_06.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_feature_catalog_at_path_batch .. |
+| `routes/entitlement/_endpoints_07.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_lock_reason_at_path .. |
+| `routes/entitlement/_endpoints_08.py` | large |  | `/api/entitlement` | endpoint handlers api_entitlement_min_tier_for_features_batch .. |
+| `routes/entitlement/_shared.py` | huge | `bp_entitlement` |  | imports, constants, the blueprint and every non-handler helper the endpoint modules call. |
 
 ## Shared helpers (`helpers/`)
 
@@ -121,6 +137,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/_gate.py` | medium | Shared 402 ``upgrade_required`` decorator for entitlement-gated routes. |
 | `clawmetry/_paywall.py` | medium | Shared 402 ``upgrade_required`` body builder for OSS stub blueprints. |
 | `clawmetry/_paywall_events.py` | large | In-process rolling store for ``POST /api/paywall/event`` client beacons. |
+| `clawmetry/agentops_metrics.py` | medium | AgentOps window metrics: latency, handoffs, guardrails, review, ground truth. |
 | `clawmetry/alert_evaluator.py` | large | Local alert-rule evaluator — pure logic, no I/O (PRD #779 PR-D part 2). |
 | `clawmetry/approval_events.py` | small | The public seam between approvals and whoever delivers them. |
 | `clawmetry/approvals.py` | large | cloud-mediated approval policy engine. |
@@ -179,6 +196,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/hooks_claude_code.py` | large | Claude Code hooks → ClawMetry: pre-execution approval gate + phone pushes. |
 | `clawmetry/incident_alerts.py` | medium | deliver a detector incident to a human. |
 | `clawmetry/ingest_contract.py` | medium | the declared ingest/1 contract registry. |
+| `clawmetry/injected_context.py` | small | Tell what a human typed apart from context a harness injects as a user turn. |
 | `clawmetry/insights.py` | medium | Weekly Insights Digest — LLM-over-DuckDB summary of the last 7 days. |
 | `clawmetry/installs.py` | medium | Install census — find every clawmetry copy on this machine and flag stale ones. |
 | `clawmetry/instrument.py` | medium | ``clawmetry instrument <runtime>`` — switch a runtime's own OpenTelemetry exporter on and point it at the local ClawMetry receiver (WO-57). |

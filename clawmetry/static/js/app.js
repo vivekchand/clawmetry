@@ -20238,7 +20238,10 @@ function _renderReplayEvent(ev, highlighted) {
   var displayContent = needsTruncate ? content.substring(0, 800) : content;
   var highlightStyle = highlighted ? 'box-shadow:0 0 0 2px #6366f1;' : '';
   var html = '<div class="chat-msg ' + cls + '" id="replay-msg-' + ev.originalIndex + '" style="' + highlightStyle + '">';
-  html += '<div class="chat-role">' + (isThinking ? '&#129504; ' + t("app.thinking_internal", null, "thinking (internal)") : escHtml(role)) + '</div>';
+  // Harness-injected context (Codex AGENTS.md / setup, <system-reminder>) is
+  // re-roled server-side to system + type "context"; name it for what it is.
+  var roleLabel = ev.type === 'context' ? 'context' : role;
+  html += '<div class="chat-role">' + (isThinking ? '&#129504; ' + t("app.thinking_internal", null, "thinking (internal)") : escHtml(roleLabel)) + '</div>';
   if (needsTruncate) {
     html += '<div class="chat-content-truncated" id="msg-' + ev.originalIndex + '-short" style="white-space:pre-wrap;word-break:break-word;">' + escHtml(displayContent) + '</div>';
     html += '<div id="msg-' + ev.originalIndex + '-full" style="display:none;white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
@@ -26604,13 +26607,27 @@ function loadCostOptimizerData(isRefresh) {
     var html = '';
 
     // ══ SECTION 1: Cost Overview ══════════════════════════════════
-    var todayCost = data.todayCost || 0;
-    var monthCost = data.projectedMonthlyCost || 0;
+    // `data.todayCost || 0` then `.toFixed(3)` printed "$0.000" for a figure
+    // nobody had read, which is the exact confusion provenance.js exists to
+    // stop: "a zero and a hole are identical once they are formatted".
+    // Measured live on the hosted dashboard 2026-09-11, the optimizer showed
+    // $0.000 while the same snapshot carried spending.today = 272.36.
+    // cmMoney paints a real measured zero as "$0.00" and an absent figure as
+    // a dimmed "not available" pill, and carries the basis/formula/window in
+    // the tooltip. Same call the Cost tiles already use.
+    var _cm = window.cmMoney;
+    function _costCell(key, label, dp) {
+      if (_cm) return _cm(data, key, { label: label });
+      // Older bundle with no provenance module: keep the previous shape
+      // rather than inventing a second unknown convention here.
+      var v = data[key];
+      return v == null ? 'not available' : '$' + Number(v).toFixed(dp);
+    }
     html += '<div class="cost-overview">';
     html += '<div class="cost-overview-header">💰 Cost Overview</div>';
     html += '<div class="cost-overview-row">';
-    html += '<div class="cost-overview-item"><span class="cost-overview-label">Today</span><span class="cost-overview-value">$' + todayCost.toFixed(3) + '</span></div>';
-    html += '<div class="cost-overview-item"><span class="cost-overview-label">Month Projected</span><span class="cost-overview-value">$' + monthCost.toFixed(2) + '</span></div>';
+    html += '<div class="cost-overview-item"><span class="cost-overview-label">Today</span><span class="cost-overview-value">' + _costCell('todayCost', 'Cost today', 3) + '</span></div>';
+    html += '<div class="cost-overview-item"><span class="cost-overview-label">Month Projected</span><span class="cost-overview-value">' + _costCell('projectedMonthlyCost', 'Projected month', 2) + '</span></div>';
     html += '</div>';
     if (data.potentialSavings) {
       html += '<div class="savings-highlight">[prod] ' + data.potentialSavings + '</div>';

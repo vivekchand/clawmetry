@@ -21,7 +21,7 @@ See `ARCHITECTURE.md` for the full deep dive, and `docs/MODULE_MAP.md` (generate
 
 `docs/MODULE_MAP.md` is the **generated** inventory: every module, the blueprints it defines, the URL space it owns, and a coarse size band. `scripts/gen_module_map.py` regenerates it and CI fails when it drifts. The tables below are a short curated index of what you reach for most often, deliberately without line counts (they went stale within weeks every time they were written down).
 
-**Five files are big enough to change how you work on them**: `routes/entitlement.py` (~48k lines), `clawmetry/entitlements.py` (~31k), `clawmetry/sync.py` (~26k), `dashboard.py` (~21k), `clawmetry/local_store.py` (~20k). Drift Bot reads only the head of a long file, so anything added deep inside one is reported as "not implemented" forever. Put new capability in a new short module and re-export it, rather than appending 300 lines to a 20k-line file.
+**Five files are big enough to change how you work on them**: `routes/entitlement/` (~48k lines, now a package: a re-export init, a shared helpers module, and eight endpoint files), `clawmetry/entitlements.py` (~31k), `clawmetry/sync.py` (~26k), `dashboard.py` (~21k), `clawmetry/local_store.py` (~20k). Drift Bot reads only the head of a long file, so anything added deep inside one is reported as "not implemented" forever. Put new capability in a new short module and re-export it, rather than appending 300 lines to a 20k-line file.
 
 ### Core
 | File | Purpose |
@@ -50,7 +50,7 @@ All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, l
 | `routes/hooks.py` | `bp_hooks` — hook install / status / uninstall per runtime, and the gate's decision log |
 | `routes/infra.py` | `bp_logs` + `bp_memory` + `bp_security` + `bp_config` — logs stream, memory files, security posture, cost-optimizer |
 | `routes/meta.py` | `bp_auth` + `bp_gateway` + `bp_otel` + `bp_version` + `bp_version_impact` + `bp_cloud_relay` + `bp_otlp_traces` — auth, gateway proxy, OTLP ingestion, version meta |
-| `routes/entitlement.py` | `bp_entitlement` — the resolved entitlement plus the preview / diff / batch family at `/api/entitlement*` |
+| `routes/entitlement/` | `bp_entitlement` — the resolved entitlement plus the preview / diff / batch family at `/api/entitlement*` (package: init re-exports flat namespace, shared helpers module, eight endpoint files with 434 handlers) |
 | `routes/alerts.py` | `bp_alerts` + `bp_budget` — alert rules, webhooks, velocity, budget config |
 | `routes/crons.py` | `bp_crons` — cron CRUD + run log + health summary |
 | `routes/signals.py` | `bp_signals` — Behaviour Signals read API: `/api/signals` (rate, count, eligible turns, trend, by model and runtime, coverage, plain-words headline), `/api/signals/<name>/sessions` (sessions, never phrases) |
@@ -163,7 +163,10 @@ The complete surface is generated at `/openapi.json` and browsable at `/api/docs
 - `/api/system-health` — Disk, memory, uptime, GPU
 - `/api/nodes` — Multi-node fleet view
 - `/api/budget/*` — Budget monitoring and alerts
-- `/api/alerts/*` — Custom alert rules (incl. the `signal_rate_above` rule type: a behaviour signal's rate over a window with a minimum sample)
+- `/api/alerts/*` — Custom alert rules (incl. the `signal_rate_above` rule type: a behaviour signal's rate over a window with a minimum sample, and the AgentOps types in `alert_evaluator.AGENTOPS_RULES`: p95 session / tool latency, escalation, guardrail violation, handoff failure, review accuracy, ground-truth accuracy, first-pass rate). Each quality rule reads the window it asked for (`quality_for`), not the widest one any rule asked for
+- `/api/agentops/scorecard` — Every AgentOps figure over one window (`?window=<minutes>&runtime=`), from the same slice the alert evaluator fires on (`clawmetry/agentops_metrics.py`, merged into `query_session_quality_window`)
+- `/api/ground-truth` — POST the real outcome of a session from your system of record (`{session_id, correct, first_pass, label, source}`); feeds accuracy and first-pass rate. GET lists recent reports
+- `/api/sla/status` — SLA policies read the quality slice through the daemon, and a red policy fires `sla_breach` from the dashboard monitor loop
 - `/api/signals` — Behaviour signal rates per window (`1d|7d|30d`) and `?runtime=`, with coverage and headline; `/api/signals/<name>/sessions` lists matching sessions, never phrases
 - `/api/guard/sessions` — What is running, what a detector thinks has gone off track, and whether each session can be controlled at all; `/api/guard/control` is the Pause / Stop / Kill button and `/api/guard/policies` the autonomous rules
 - `/api/entitlement` — The resolved entitlement (tier, allowed runtimes, features, capacity). GRACE mode answers "allowed" for everything until the announced enforce date
@@ -257,6 +260,9 @@ CLAWMETRY_GIT_MAX_BLAME_FILES=40       # Files blamed for line survival (rework)
 CLAWMETRY_GIT_BLAME_BUDGET=10          # Seconds the whole blame pass may take
 CLAWMETRY_GIT_REPO_BUDGET=25           # Seconds one repository's whole scan may take
 CLAWMETRY_SIGNALS=1                    # Behaviour Signals tick on/off; CLAWMETRY_SIGNALS_EVENTS_PER_TICK (2000) and CLAWMETRY_SIGNALS_SCAN_CHARS (2000) bound each pass
+CLAWMETRY_REVIEW_SAMPLE_SIZE=10        # Review queue: sessions sampled per agent per day (count mode, the default)
+CLAWMETRY_REVIEW_SAMPLE_PCT=0          # Review queue: sample this percent of each agent's sessions instead (e.g. 5); every agent gets at least one
+CLAWMETRY_REVIEW_SAMPLE_MAX=200        # Review queue: per-agent cap in percent mode
 
 # Guard / enforcement. Every one of these defaults to the safe side.
 CLAWMETRY_DETECTORS=1                  # Trajectory + behavioural detectors on/off

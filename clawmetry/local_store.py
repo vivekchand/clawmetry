@@ -1582,6 +1582,25 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status, sampled_at)",
     "CREATE INDEX IF NOT EXISTS idx_review_queue_agent  ON review_queue(agent_id, sampled_at)",
+    # AgentOps ground truth (2026-09-11): the real outcome of a session as the
+    # operator's own system of record reports it ("the payer approved it on
+    # the first pass", "the diagnosis code was wrong"). An observer cannot see
+    # correctness in a domain from outside the agent; this is where a system
+    # that can see it tells us (POST /api/ground-truth). One row per session:
+    # a later report fills in or replaces fields, ``reports`` counts posts.
+    """
+    CREATE TABLE IF NOT EXISTS session_ground_truth (
+        session_id   VARCHAR PRIMARY KEY,
+        correct      BOOLEAN,
+        first_pass   BOOLEAN,
+        label        VARCHAR,
+        source       VARCHAR,
+        note         VARCHAR,
+        external_id  VARCHAR,
+        reported_at  BIGINT NOT NULL,
+        reports      INTEGER NOT NULL DEFAULT 1
+    )
+    """,
     # ── Issue #1619 Phase 2 — golden test set runs ────────────────────────
     # Persists one row per (suite, test, run) so trend analysis can chart
     # regression-rate over time and the dashboard can show "evals broken
@@ -5560,8 +5579,14 @@ class LocalStore(TrailStoreMixin):
         since: str | None = None,
         until: str | None = None,
         limit: int = 400,
+        per_runtime_limit: int | None = None,
     ) -> list[dict[str, Any]]:
         """Session rows for the Quality tab, scoped by REAL runtime.
+
+        ``per_runtime_limit`` caps rows per session-id-prefix runtime BEFORE
+        the overall ``limit``. Cross-runtime callers (the Harness Engineering
+        bench) need it: under one cost-ordered cap the loudest runtime took
+        every row and quieter runtimes vanished (2026-09-11: 10 of 12).
 
         Deliberately NOT ``query_outcomes``. That method filters on
         ``sessions.agent_type``, which is a legacy column hardcoded to
@@ -5594,15 +5619,26 @@ class LocalStore(TrailStoreMixin):
             clauses.append(_rt_clause)
             params.extend(_rt_params)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        qualify = ""
+        if per_runtime_limit:
+            qualify = """
+            QUALIFY row_number() OVER (
+                PARTITION BY CASE WHEN strpos(session_id, ':') > 0
+                                  THEN split_part(session_id, ':', 1)
+                                  ELSE 'openclaw' END
+                ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST) <= ?"""
         sql = f"""
             SELECT session_id, title, started_at, last_active_at, ended_at,
                    status, cost_usd, total_tokens, message_count, metadata,
                    outcome, outcome_confidence, cwd, git_branch
             FROM sessions
             {where}
+            {qualify}
             ORDER BY COALESCE(cost_usd, 0) DESC NULLS LAST
             LIMIT ?
         """
+        if per_runtime_limit:
+            params.append(int(per_runtime_limit))
         params.append(int(limit))
         cols = ["session_id", "title", "started_at", "last_active_at",
                 "ended_at", "status", "cost_usd", "total_tokens",
@@ -9052,6 +9088,173 @@ class LocalStore(TrailStoreMixin):
             """, [new_status, decision, reason, resolver, resolved_at,
                   str(approval_id)])
         return 1
+
+    def expire_stale_approvals(self, grace_seconds: int = 120) -> int:
+        """Retire pending approvals whose waiter is gone.
+
+        A hook-parked approval records its window's end in
+        ``args.deadline_ms``, and the hook that parked it writes the timeout
+        itself when the window ends. If that hook dies first (its receiver
+        restarted, Claude Code cancelled it), nothing ever closes the row:
+        the runtime has already fallen back to its own prompt, yet every
+        surface keeps offering buttons that can no longer reach it. Burned
+        2026-09-11: a question sat on the cloud strip for 2h38m.
+
+        Flips rows more than ``grace_seconds`` past their deadline to
+        ``expired`` (a question hook reads that as "ask the terminal", never
+        as a refusal). Rows without a deadline are left alone. Returns rows
+        expired. Never raises into the daemon loop.
+        """
+        if self._read_only:
+            return 0
+        from datetime import datetime, timezone
+        cutoff_ms = int((time.time() - max(30, int(grace_seconds))) * 1000)
+        expired = 0
+        try:
+            with self._write_lock:
+                rows = self._conn.execute(
+                    "SELECT id, args FROM approvals WHERE status = 'pending'"
+                ).fetchall()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                for approval_id, raw in rows:
+                    try:
+                        text = (raw.decode("utf-8")
+                                if isinstance(raw, (bytes, bytearray)) else raw)
+                        args = json.loads(text) if text else {}
+                        deadline_ms = int((args or {}).get("deadline_ms") or 0)
+                    except Exception:
+                        continue
+                    if not deadline_ms or deadline_ms >= cutoff_ms:
+                        continue
+                    self._conn.execute("""
+                        UPDATE approvals
+                        SET status = 'expired', decision = 'expired',
+                            decision_reason = ?, resolver = 'sweep',
+                            resolved_at = ?
+                        WHERE id = ? AND status = 'pending'
+                    """, ["nothing was waiting on this request any more; "
+                          "the agent had already moved on", now_iso,
+                          str(approval_id)])
+                    expired += 1
+        except Exception:
+            log.debug("local store: expire_stale_approvals failed",
+                      exc_info=True)
+        return expired
+
+    # ── Ground truth (AgentOps outcomes endpoint) ─────────────────────────
+    _GROUND_TRUTH_COLS = ("session_id", "correct", "first_pass", "label",
+                          "source", "note", "external_id", "reported_at",
+                          "reports")
+
+    def _resolve_ground_truth_session(self, sid: str) -> tuple[str, bool]:
+        """Canonical session id for a report, and whether the store knows it.
+
+        An external system usually holds the runtime's own id (a bare UUID)
+        while the store keys non-OpenClaw sessions as ``<runtime>:<uuid>``.
+        A bare id that matches exactly one prefixed session resolves to it;
+        anything else is kept as given (the report may arrive before the
+        session is ingested, and is still counted)."""
+        row = self._conn.execute(
+            "SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1", [sid],
+        ).fetchone()
+        if row:
+            return sid, True
+        if ":" not in sid:
+            rows = self._conn.execute(
+                "SELECT session_id FROM sessions WHERE suffix(session_id, ?) LIMIT 2",
+                [":" + sid],
+            ).fetchall()
+            if len(rows) == 1:
+                return str(rows[0][0]), True
+        return sid, False
+
+    def ingest_ground_truth(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Record the real outcome of one session.
+
+        ``record``: ``session_id`` (required), ``correct`` and ``first_pass``
+        (booleans, each optional), ``label`` / ``source`` / ``external_id``
+        (short strings) and ``note``. A second report for the same session
+        fills in the fields it carries and keeps the rest, so a system can
+        post "approved" now and "first pass" later. Returns
+        ``{session_id, session_known, created, reports}``."""
+        sid = str(record.get("session_id") or "").strip()
+        if not sid:
+            raise ValueError("ground truth must include 'session_id'")
+
+        def _flag(v):
+            return v if isinstance(v, bool) else None
+
+        def _text(v, cap):
+            if v is None:
+                return None
+            s = str(v).strip()[:cap]
+            return s or None
+
+        fields = [
+            _flag(record.get("correct")), _flag(record.get("first_pass")),
+            _text(record.get("label"), 64), _text(record.get("source"), 64),
+            _text(record.get("note"), 500), _text(record.get("external_id"), 128),
+        ]
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            resolved, known = self._resolve_ground_truth_session(sid)
+            prev = self._conn.execute(
+                "SELECT reports FROM session_ground_truth WHERE session_id = ?",
+                [resolved],
+            ).fetchone()
+            if prev:
+                self._conn.execute("""
+                    UPDATE session_ground_truth
+                       SET correct     = COALESCE(?, correct),
+                           first_pass  = COALESCE(?, first_pass),
+                           label       = COALESCE(?, label),
+                           source      = COALESCE(?, source),
+                           note        = COALESCE(?, note),
+                           external_id = COALESCE(?, external_id),
+                           reported_at = ?,
+                           reports     = reports + 1
+                     WHERE session_id = ?
+                """, [*fields, now_ms, resolved])
+                reports = int(prev[0] or 0) + 1
+            else:
+                self._conn.execute("""
+                    INSERT INTO session_ground_truth (
+                        session_id, correct, first_pass, label, source, note,
+                        external_id, reported_at, reports
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """, [resolved, *fields, now_ms])
+                reports = 1
+        return {"session_id": resolved, "session_known": known,
+                "created": not prev, "reports": reports}
+
+    def query_ground_truth(
+        self,
+        *,
+        session_id: str | None = None,
+        runtime: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Recent ground-truth reports, newest first. ``session_id`` matches
+        the stored id or, for a bare id, a prefixed one ending in it."""
+        where: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            where.append("(session_id = ? OR suffix(session_id, ?))")
+            params += [str(session_id), ":" + str(session_id)]
+        clause, rt_params = _runtime_session_id_clause(runtime)
+        if clause:
+            where.append(clause)
+            params += rt_params
+        try:
+            limit = max(1, min(int(limit), 1000))
+        except (TypeError, ValueError):
+            limit = 100
+        sql = ("SELECT " + ", ".join(self._GROUND_TRUTH_COLS)
+               + " FROM session_ground_truth"
+               + (" WHERE " + " AND ".join(where) if where else "")
+               + " ORDER BY reported_at DESC LIMIT ?")
+        rows = self._fetch(sql, [*params, limit])
+        return [dict(zip(self._GROUND_TRUTH_COLS, r)) for r in rows]
 
     # ── review_queue helpers (issue #1615) ────────────────────────────────
     def ingest_review_sample(self, sample: dict[str, Any]) -> int:
@@ -15847,7 +16050,8 @@ class LocalStore(TrailStoreMixin):
         except Exception as e:
             log.warning("local store: session quality spend window failed: %s", e)
 
-        return {
+        escalated = int(outcome_counts.get("escalated", 0))
+        out = {
             "window_minutes":    window_minutes,
             "eval_count":        eval_count,
             "eval_avg":          eval_avg,
@@ -15857,7 +16061,19 @@ class LocalStore(TrailStoreMixin):
             "failed_count":      failed_count,
             "failure_rate":      failure_rate,
             "window_spend_usd":  window_spend_usd,
+            # Needed-a-human rate over the same classified cohort.
+            "escalated_count":   escalated,
+            "escalation_rate":   (escalated / classified_total) if classified_total else None,
         }
+        # AgentOps figures (latency, tools, handoffs, guardrails, review,
+        # ground truth) over the same window and runtime. Cached for a minute
+        # inside the module; a failure blanks those keys only.
+        try:
+            from clawmetry import agentops_metrics
+            out.update(agentops_metrics.window_extras(self, window_minutes, runtime))
+        except Exception as e:
+            log.warning("local store: agentops window metrics failed: %s", e)
+        return out
 
     def query_session_eval_detail(
         self,
