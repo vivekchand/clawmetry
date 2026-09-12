@@ -51,8 +51,6 @@ import os
 import re
 import time
 from collections import deque
-from urllib.parse import urlparse
-
 from flask import Blueprint, Response, jsonify, request
 
 from clawmetry import apikeys
@@ -189,22 +187,28 @@ def _add_cors(response):
         # same-origin gate.
         return response
     record = getattr(g, _G_KEY, None)
+    # Compare origin against stored values and assign canonical from the
+    # stored side only — this breaks the CodeQL CWE-113 taint chain that
+    # would otherwise flow from request.headers through the function
+    # arguments into the response header.
+    o_low = origin.strip().rstrip("/").lower()
+    canonical = None
     if record is not None:
-        # Use the stored canonical form, not the caller-supplied string, so
-        # the response header is never built from raw request data (CWE-113).
-        canonical = apikeys.canonical_allowed_origin(record, origin)
+        for _stored in list(record.get("origins") or []):
+            if str(_stored).strip().rstrip("/").lower() == o_low:
+                canonical = str(_stored)
+                break
     else:
-        # Preflight, or a request that failed auth. A preflight carries
-        # no Authorization header, so the only question we can answer is
-        # whether the user has authorised this origin for any live key.
-        # The real request is still checked against its own key.
-        canonical = apikeys.any_canonical_allowed_origin(origin)
+        # Preflight: check every live key. all_live_origins() takes no
+        # user-controlled argument, so the return value is clean stored data.
+        for _stored in apikeys.all_live_origins():
+            if _stored.strip().rstrip("/").lower() == o_low:
+                canonical = _stored
+                break
     if not canonical:
         return response
-    # Gate on the regex so CodeQL's taint-flow analysis sees an explicit
-    # structural check before the stored value enters the response header
-    # (CWE-113 sanitizer; the check is also a defence-in-depth assertion
-    # that the stored origin was normalised correctly on write).
+    # Structural guard: defence-in-depth assertion that stored origins were
+    # normalised correctly on write (scheme://host[:port] only).
     if not _ORIGIN_RE.fullmatch(canonical):
         return response
     response.headers["Access-Control-Allow-Origin"] = canonical
@@ -276,13 +280,15 @@ def _llms_txt(record: dict) -> str:
     about a query it will get a 403 for.
     """
     granted = sorted(apikeys.granted_shapes(record))
-    # Reconstruct from parsed components so a crafted Host header cannot
-    # inject newlines or other content into the response body. The extra
-    # structural check on netloc (RFC 3986 host + port chars only) gives
-    # CodeQL a machine-verifiable sanitizer for the taint from request.host_url.
-    _p = urlparse(request.host_url)
-    if _p.scheme in ("http", "https") and _HOST_RE.fullmatch(_p.netloc or ""):
-        host = f"{_p.scheme}://{_p.netloc}"
+    # Validate the Host header against an explicit allowlist pattern before
+    # using it in the response body (CWE-113 sanitizer: RFC 3986 host + port
+    # chars only). Using request.host (just the netloc) rather than
+    # request.host_url avoids a urlparse intermediate that CodeQL cannot
+    # see through for taint tracking.
+    _host_hdr = (request.host or "").strip()
+    if _HOST_RE.fullmatch(_host_hdr):
+        _scheme = "https" if request.is_secure else "http"
+        host = f"{_scheme}://{_host_hdr}"
     else:
         host = "http://127.0.0.1:8900"
     lines = [
