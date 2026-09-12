@@ -170,6 +170,15 @@ def _mirror_rule_to_duckdb(rule_id, *, alert_type, threshold, runtime,
         for k in _SIGNAL_RULE_EXTRA_KEYS:
             if carried.get(k) is not None:
                 payload["condition_json"][k] = carried[k]
+    elif alert_type in _AGENTOPS_TYPES:
+        carried = extra if isinstance(extra, dict) else None
+        if carried is None:
+            prev = _duckdb_rule_condition(rule_id) or {}
+            carried = {k: prev.get(k) for k in _AGENTOPS_RULE_EXTRA_KEYS
+                       if prev.get(k) is not None}
+        for k in _AGENTOPS_RULE_EXTRA_KEYS:
+            if carried.get(k) is not None:
+                payload["condition_json"][k] = carried[k]
     if not _write_via_store("ingest_alert_rule", rule=payload):
         return False
     # Read back before claiming success. ``ingest_alert_rule`` returns None,
@@ -360,6 +369,19 @@ _EVALUATOR_ONLY = frozenset({
     # daemon's signal_turns / signal_matches tables).
     "signal_rate_above",
 })
+
+# AgentOps scorecard rules (latency SLOs and rates you can alert on) are all
+# evaluator-only: clawmetry.alert_evaluator reads them off the quality slice.
+# The table lives with the evaluator so the two lists cannot drift.
+try:
+    from clawmetry.alert_evaluator import AGENTOPS_RULES as _AGENTOPS_RULES
+except Exception:  # pragma: no cover - the evaluator ships in the same wheel
+    _AGENTOPS_RULES = {}
+_AGENTOPS_TYPES = frozenset(_AGENTOPS_RULES)
+_AGENTOPS_RATE_TYPES = frozenset(
+    t for t, spec in _AGENTOPS_RULES.items() if spec.get("rate"))
+_AGENTOPS_RULE_EXTRA_KEYS = ("window_minutes", "min_sessions", "tool_name")
+_EVALUATOR_ONLY = _EVALUATOR_ONLY | _AGENTOPS_TYPES
 
 # Local ``type`` values with a real ``rtype ==`` branch in dashboard.py's
 # ``_budget_monitor_loop``. Anything stored outside this set is evaluated by
@@ -1259,6 +1281,24 @@ def api_alert_rules():
                         _signal_extra[_k] = max(1, int(_v))
                     except (TypeError, ValueError):
                         pass
+        # AgentOps rules (latency SLOs, rates) take an optional window, a
+        # sample floor and, for tool latency, one tool name. Rates are a
+        # percent, so 100 is the ceiling. ``_signal_extra`` carries every
+        # type-specific field to the DuckDB mirror (the name predates these).
+        if _cloud_type in _AGENTOPS_TYPES:
+            if _cloud_type in _AGENTOPS_RATE_TYPES and threshold > 100:
+                return jsonify({"error": "Threshold is a rate: 0 to 100 percent"}), 400
+            _signal_extra = {}
+            for _k in ("window_minutes", "min_sessions"):
+                _v = data.get(_k)
+                if _v is not None:
+                    try:
+                        _signal_extra[_k] = max(1, int(_v))
+                    except (TypeError, ValueError):
+                        pass
+            _tool = str(data.get("tool_name") or "").strip()[:200]
+            if _tool and _cloud_type == "tool_latency_p95_above":
+                _signal_extra["tool_name"] = _tool
         import uuid
 
         rule_id = str(uuid.uuid4())[:8]

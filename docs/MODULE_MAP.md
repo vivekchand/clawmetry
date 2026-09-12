@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-251 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+252 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -27,6 +27,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 |---|---|---|---|---|
 | `routes/_dedupe.py` | small |  |  | sibling-dedupe helper for v3 event sums (issue #1451). |
 | `routes/advisor.py` | medium | `bp_advisor` | `/api/advisor` | ClawMetry Advisor: natural-language Q&A over your agent. |
+| `routes/agentops.py` | small | `bp_agentops` | `/api/agentops`, `/api/ground-truth` | the AgentOps scorecard and the ground-truth endpoint. |
 | `routes/agents.py` | medium | `bp_agents` | `/api/agents` | Multi-agent adapter endpoints. |
 | `routes/alerts.py` | large | `bp_alerts`, `bp_budget` | `/api/_harness`, `/api/agents`, `/api/alert-channels`, `/api/alerts`, `/api/budget`, `/api/emergency-stop` | Budget + Alerts endpoints. |
 | `routes/apikeys_admin.py` | small | `bp_apikeys_admin` | `/api/apikeys` | create, list and revoke the node's API keys. |
@@ -87,7 +88,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/sessions.py` | huge | `bp_sessions` | `/api/agents`, `/api/authority`, `/api/compactions`, `/api/cost-split`, `/api/delegation-tree`, `/api/error-triage`, `/api/export`, `/api/fallbacks`, `/api/live-sessions`, `/api/orchestration`, `/api/orchestration-summary`, `/api/outcomes`, `/api/replay-tree`, `/api/run-compare`, `/api/session-errors`, `/api/session-governance`, `/api/session-insight`, `/api/session-lineage`, `/api/session-model-journey`, `/api/session-orchestration`, `/api/session-tools`, `/api/sessions`, `/api/spans`, `/api/subagents`, `/api/task-runs`, `/api/transcript`, `/api/transcript-events`, `/api/transcript-page`, `/api/transcripts`, `/api/waste-summary` | Session / transcript / sub-agent API endpoints. |
 | `routes/signals.py` | medium | `bp_signals` | `/api/briefs`, `/api/signals` | Behaviour Signals read API (WO-58). |
 | `routes/skills.py` | medium | `bp_skills` | `/api/skills` | Skills fidelity telemetry endpoints (GH #687). |
-| `routes/sla.py` | small | `bp_sla` | `/api/sla` | SLA policy CRUD + compliance-status endpoints. |
+| `routes/sla.py` | medium | `bp_sla` | `/api/sla` | SLA policy CRUD, compliance status, and breach firing. |
 | `routes/spend_flow.py` | small | `bp_spend_flow` | `/api/spend-flow` | node-wide AI spend flow (the "where does the money go" Sankey). |
 | `routes/tool_catalog.py` | medium | `bp_tool_catalog` | `/api/mcp-servers`, `/api/tool-catalog` | interactive tool catalog + provenance (PRD P1-3). |
 | `routes/tracing.py` | large | `bp_tracing` | `/api/trace`, `/api/traces` | Phoenix/Arize-style tracing endpoints. |
@@ -138,6 +139,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/_gate.py` | medium | Shared 402 ``upgrade_required`` decorator for entitlement-gated routes. |
 | `clawmetry/_paywall.py` | medium | Shared 402 ``upgrade_required`` body builder for OSS stub blueprints. |
 | `clawmetry/_paywall_events.py` | large | In-process rolling store for ``POST /api/paywall/event`` client beacons. |
+| `clawmetry/agentops_metrics.py` | medium | AgentOps window metrics: latency, handoffs, guardrails, review, ground truth. |
 | `clawmetry/alert_evaluator.py` | large | Local alert-rule evaluator — pure logic, no I/O (PRD #779 PR-D part 2). |
 | `clawmetry/apikeys.py` | medium | scoped, revocable read keys for custom UIs. |
 | `clawmetry/approval_events.py` | small | The public seam between approvals and whoever delivers them. |
