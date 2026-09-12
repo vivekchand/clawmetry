@@ -365,10 +365,28 @@ function clawmetryEmailOtpVerify(){
     .then(function(r){ return r.json(); })
     .then(function(v){
       if(v && v.ok && v.token){
-        // Clearing the marker re-arms zero-click auto-login, so the reload
-        // picks the on-disk gateway token back up and drops the wall.
         try { localStorage.removeItem('cm-signed-out'); } catch(e) {}
-        location.reload();
+        // The wall accepts only the gateway token. Store the one verify-otp
+        // hands back; reloading without a credential landed on the same wall
+        // forever wherever zero-click is refused (customer report 2026-09-12).
+        if(v.dashboard_token){
+          try { localStorage.setItem('clawmetry-token', v.dashboard_token); } catch(e) {}
+          location.reload();
+          return;
+        }
+        fetch('/api/auth/detected-token')
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .catch(function(){ return null; })
+          .then(function(d){
+            if(d && d.token){
+              try { localStorage.setItem('clawmetry-token', d.token); } catch(e) {}
+              location.reload();
+              return;
+            }
+            _cmLoginErr('You are signed in, but this dashboard opens only for the account linked to this machine. Sign in with that account, or open the dashboard on the computer running ClawMetry.');
+            var b2 = document.getElementById('login-otp-verify');
+            if(b2){ b2.disabled = false; b2.textContent = 'Verify and open dashboard'; }
+          });
         return;
       }
       _cmLoginErr((v && v.error) || 'Invalid code.');

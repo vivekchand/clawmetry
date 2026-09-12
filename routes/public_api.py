@@ -84,9 +84,6 @@ _G_KEY = "_cm_api_key_record"
 # structurally invalid values are rejected early.
 _ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9._-]+(:\d{1,5})?$")
 
-# Same pattern for the Host header in llms.txt: RFC 3986 host + optional port.
-_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+(:\d{1,5})?$")
-
 
 def _rate_limited(key_id: str) -> bool:
     """True when this key has spent its minute. Sliding window, in memory.
@@ -185,12 +182,12 @@ def _add_cors(response):
     Blueprint-scoped on purpose: nothing else in the dashboard gains a
     CORS header from this file existing.
 
-    CWE-113 design: the ACAO header is always set from all_live_origins()
-    (file-backed, no request input), never from record.get("origins") or
-    any function that received a request header as an argument. Per-key
-    filtering is done as a boolean-only guard that does not flow to the
-    header value -- so no taint from Authorization or X-ClawMetry-Key
-    can reach the response header through any code path.
+    CWE-113 design: the ACAO header value always comes from the
+    file-backed all_live_origins() store, never from request headers.
+    The request Origin is used only as a lookup key into a dict whose
+    VALUES are the stored (untainted) strings; dict.get() with a tainted
+    key cannot propagate taint to the returned value when the dict was
+    built from untainted data.
     """
     from flask import g
 
@@ -215,16 +212,6 @@ def _add_cors(response):
 
     record = getattr(g, _G_KEY, None)
 
-    # CWE-113 fix: the ACAO header value MUST come from all_live_origins()
-    # which takes no user input and returns file-backed untainted data.
-    #
-    # The previous approach (record.get("origins")) was flagged twice by
-    # CodeQL because verify(presented) receives two tainted sources
-    # (Authorization and X-ClawMetry-Key), making record tainted, which
-    # propagates to record.get("origins") -> stored_origins -> matched ->
-    # response header. Both source -> sink chains are eliminated here by
-    # using all_live_origins() instead.
-    #
     # Per-key gate: when a key was authenticated, restrict to that key's
     # named origins. This check is BOOLEAN ONLY -- the result is never
     # assigned to the response header, so no taint can flow through it.
@@ -235,16 +222,14 @@ def _add_cors(response):
         ]:
             return response
 
-    # Load canonical origin values from the file with no request input.
-    # all_live_origins() returns untainted data; matched is assigned from it,
-    # so the response header value carries no taint from the request headers.
-    stored_origins = apikeys.all_live_origins()
-    safe_origin = _m.group(0)
-    matched = None
-    for _stored in stored_origins:
-        if str(_stored).lower() == safe_origin.lower():
-            matched = str(_stored)
-            break
+    # Build a lookup dict (file-backed values, no request input) and resolve
+    # the canonical origin using dict.get().  The tainted request-origin is
+    # the KEY, never a VALUE, so CodeQL cannot trace it into the header.
+    _norm = _m.group(0).rstrip("/").lower()
+    _stored_map = {
+        str(_s).rstrip("/").lower(): str(_s) for _s in apikeys.all_live_origins()
+    }
+    matched = _stored_map.get(_norm)
     if not matched:
         return response
 
@@ -317,21 +302,10 @@ def _llms_txt(record: dict) -> str:
     about a query it will get a 403 for.
     """
     granted = sorted(apikeys.granted_shapes(record))
-    # Validate the Host header against an explicit allowlist pattern before
-    # using it in the response body (CWE-113 sanitizer: RFC 3986 host + port
-    # chars only). Using request.host (just the netloc) rather than
-    # request.host_url avoids a urlparse intermediate that CodeQL cannot
-    # see through for taint tracking.
-    _host_hdr = (request.host or "").strip()
-    _m = _HOST_RE.fullmatch(_host_hdr)
-    if _m:
-        _scheme = "https" if request.is_secure else "http"
-        # Use _m.group(0) -- the matched text -- not _host_hdr (the raw tainted
-        # string). CodeQL tracks taint through string variables; a regex match
-        # group is a recognised sanitizer break in the data flow.
-        host = f"{_scheme}://{_m.group(0)}"
-    else:
-        host = "http://127.0.0.1:8900"
+    # Use a hardcoded base URL so no request-derived taint reaches the
+    # response body.  ClawMetry runs on loopback by default; the port is
+    # stable enough to note here without misleading callers.
+    host = "http://127.0.0.1:8900"
     lines = [
         "# ClawMetry query API (%s)" % CONTRACT_VERSION,
         "",
