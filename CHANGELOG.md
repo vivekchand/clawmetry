@@ -559,3 +559,9 @@
 - **What:** the family cloud row now carries `event_count` too, the same raw-row count the OpenClaw path sends. The cloud upsert keeps `GREATEST(existing, new)`, so a read capped by `_family_event_read_cap()` can never walk a session's count backwards. No cloud-side change: the column the page already reads simply stops being empty.
 - **Verified:** `tests/test_family_cloud_row_event_count.py` drives the real `sync_family_runtimes` with a fake adapter (4 events, `message_count=2`), captures the cloud push and asserts the row carries `event_count == 4` while `message_count` stays. Runs in CI.
 - **Carries:** #5891.
+
+### Fixed: the message count now reaches sessions already recorded (2026-09-11)
+- **Why:** 0.12.871 added `event_count` to the family cloud row, the number the hosted session page renders as "Messages". That row is written only when a session is processed, and the daemon skips sessions whose events have not advanced (`family_event_high_water`). So the fix reached a session the next time it grew and no other: every session already recorded kept "Messages 0" indefinitely. Measured live on app.clawmetry.com after 0.12.871: a session still being written showed "Messages 688", while the idle Codex session from the original report still showed 0.
+- **What:** the family ingest salt moves to `/t2`, which re-reads each family session once. This is the rule the feature blueprint's ADR-003 states: a change to what ingest writes needs a salt, or it applies to new sessions only.
+- **Also:** the test that pinned the exact salt now pins its shape (`t` followed by digits). Pinning the value turns every future bump into a test edit, while the contract worth holding is that a salt is present at all.
+- **Carries:** #5894.
