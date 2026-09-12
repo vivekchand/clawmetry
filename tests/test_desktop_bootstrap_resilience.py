@@ -645,6 +645,76 @@ def test_interpreter_retry_is_windows_only(tmp_path, monkeypatch):
         1, _NO_WHEEL_FOR_INTERPRETER) == (1, _NO_WHEEL_FOR_INTERPRETER)
 
 
+def test_known_good_python_falls_back_to_registry_for_system_install(
+        tmp_path, monkeypatch):
+    """Python 3.12 installed system-wide (registered in HKLM, not at the
+    per-user LOCALAPPDATA path) is found via the Windows Registry and
+    returned as an exact filesystem path — no py launcher involved."""
+    import types
+    _windows(monkeypatch)
+    monkeypatch.setenv("LOCALAPPDATA", "/no-such-localappdata")
+    monkeypatch.setattr(dapp, "_win_subprocess_kwargs", lambda: {})
+
+    system_exe = tmp_path / "python.exe"
+    system_exe.write_text("")
+
+    # Inject a fake winreg that reports tmp_path as the HKLM install dir.
+    fake_winreg = types.ModuleType("winreg")
+    fake_winreg.HKEY_CURRENT_USER = 0x80000001
+    fake_winreg.HKEY_LOCAL_MACHINE = 0x80000002
+
+    class _FakeKey:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def _fake_open(hive, path):
+        if hive == fake_winreg.HKEY_LOCAL_MACHINE:
+            return _FakeKey()
+        raise OSError("not found")
+
+    def _fake_query(key, name):
+        # On Windows the registry stores the path with a trailing backslash;
+        # omit it here so Path(install_dir) / "python.exe" resolves correctly
+        # on the Linux CI runner (a backslash is not a separator on Linux).
+        return (str(tmp_path), 1)
+
+    fake_winreg.OpenKey = _fake_open
+    fake_winreg.QueryValueEx = _fake_query
+    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
+
+    import subprocess as _sp
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == str(system_exe):
+            return _sp.CompletedProcess(cmd, 0, "", "")
+        return _sp.CompletedProcess(cmd, 1, "", "")
+
+    monkeypatch.setattr(dapp.subprocess, "run", fake_run)
+
+    result = dapp._known_good_python()
+    assert result == str(system_exe), (
+        "when the LOCALAPPDATA path is absent, _known_good_python() must "
+        "find a system-wide Python 3.12 via the Windows Registry"
+    )
+
+
+def test_known_good_python_returns_none_when_no_candidates(monkeypatch):
+    """When neither the per-user path nor any registry path provides a
+    usable Python 3.12, _known_good_python() returns None without spawning
+    any subprocess."""
+    _windows(monkeypatch)
+    monkeypatch.setenv("LOCALAPPDATA", "/no-such-localappdata")
+    monkeypatch.setattr(dapp, "_win_subprocess_kwargs", lambda: {})
+    # On Linux winreg is absent (ImportError caught inside the function),
+    # so no registry candidates are added.  subprocess.run must not be called.
+    called = []
+    monkeypatch.setattr(dapp.subprocess, "run",
+                        lambda *a, **k: called.append(a) or None)
+    result = dapp._known_good_python()
+    assert result is None
+    assert not called, "subprocess.run must not be called when no candidates exist"
+
+
 def test_probe_caches_interpreter_version(tmp_path):
     cache = tmp_path / "bootstrap-python.json"
     py = dapp._bootstrap_python(cache)

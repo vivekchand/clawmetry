@@ -4453,7 +4453,8 @@ def _first_user_title(fpath: str) -> str:
                 msg = obj.get("message") if isinstance(obj.get("message"), dict) else obj
                 if msg.get("role") != "user":
                     continue
-                text = _stringify_content(msg.get("content")).strip()
+                from clawmetry.injected_context import human_prompt
+                text = human_prompt(_stringify_content(msg.get("content")))
                 if text:
                     return text[:200]
     except Exception:
@@ -4740,8 +4741,13 @@ def _fill_family_titles(transcripts):
             for r in (_ls_call("query_sessions_table", limit=500) or []):
                 sid = r.get("session_id") or ""
                 title = (r.get("title") or "").strip()
+                # A stored title can be injected context written by an
+                # older daemon ("# AGENTS.md instructions for …"); keep
+                # only the human part, else treat the row as untitled.
                 if sid and title and not _st.looks_like_session_id(title, sid):
-                    stored[sid] = title
+                    title = _st.clean_prompt_text(title)
+                    if title:
+                        stored[sid] = title
         except Exception:
             stored = {}
         for t in missing:
@@ -5266,6 +5272,31 @@ def _extract_decoding_params(obj):
     return out
 
 
+def _mark_injected_context(messages: list) -> None:
+    """Re-role harness-injected context so it stops posing as the person.
+
+    Codex writes the repo's AGENTS.md and ``<environment_context>`` as a
+    ``user`` message and its setup as ``developer`` messages; Claude Code
+    writes ``<system-reminder>`` / ``<task-notification>`` turns as ``user``.
+    Left as-is the replay opened on a "YOU" bubble holding AGENTS.md and
+    every one became a turn anchor (founder report 2026-09-11). They become
+    ``system`` rows typed ``context``: still shown, never a turn, never a
+    title. Mutates in place; never raises."""
+    try:
+        from clawmetry.injected_context import is_injected_context
+    except Exception:
+        return
+    for m in messages:
+        role = m.get("role")
+        if role == "developer":
+            m["role"] = "system"
+            m.setdefault("type", "context")
+        elif (role == "user" and not m.get("tool") and not m.get("type")
+              and is_injected_context(m.get("content"))):
+            m["role"] = "system"
+            m["type"] = "context"
+
+
 def _try_local_store_transcript(session_id: str, _events=None, _msg_cap: int = 500):
     """Read a session transcript directly from the DuckDB events table.
 
@@ -5492,6 +5523,7 @@ def _try_local_store_transcript(session_id: str, _events=None, _msg_cap: int = 5
                 msg_entry["raw"] = raw_payload
             messages.append(msg_entry)
         _stamp_row_usage(messages, _mark, ev)
+    _mark_injected_context(messages)
     if not messages:
         # Same contract as the ``if not rows`` guard above, for the case where
         # rows EXIST but none of them is a transcript turn — e.g. a session_id
