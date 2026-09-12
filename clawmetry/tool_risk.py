@@ -28,9 +28,7 @@ Design rules (non-negotiable):
     truth, no drift between watcher / replay / hook gate).
     The git-config-exec predicates (``_git_cfg_executes``,
     ``_git_cfg_value_known_good``) are inlined below with their constant
-    tables so the blueprint leaf constraint is not violated. They mirror the
-    identical logic in ``clawmetry/git_config_exec.py`` (the shared source
-    ``repo_scan`` imports); keep both in sync when adding a new exec key.
+    tables so the blueprint leaf constraint is not violated.
 
 Public API:
   classify_tool_call(tool_name, args) -> {level, rank, category, reasons}
@@ -297,9 +295,7 @@ _WRITE_HTTP = ("post", "put", "patch")
 # with `min_risk: high` held none of these. Mirror of the Google ADK CI/CD
 # finding (Pillar Security, fixed Jul 2026): a command filter that trusted
 # `git` was reached through `core.hooksPath`.
-# These constants mirror clawmetry/git_config_exec.py exactly (which repo_scan
-# imports). Inlined here to keep tool_risk.py a true leaf with no clawmetry
-# imports. Keep both copies in sync when adding a new exec key.
+# Keep git_config_exec.py in sync when adding a new exec key.
 _GCE_EXEC_KEYS = (
     "core.fsmonitor",
     "core.hookspath",
@@ -406,8 +402,8 @@ def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
     """Flag `git -c <key>=<value>` where the key makes git run a program.
 
     Uses the inlined ``_git_cfg_executes`` / ``_git_cfg_value_known_good``
-    predicates (mirroring clawmetry/git_config_exec.py). Reasons name the key
-    so an operator working the Approvals queue can identify the threat.
+    predicates. Reasons name the key so an operator working the Approvals
+    queue can identify the threat.
     """
     if "git" not in cmd.lower():
         return
