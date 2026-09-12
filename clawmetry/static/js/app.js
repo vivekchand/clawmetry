@@ -12331,6 +12331,9 @@ var _CM_RT_CAPS = {
   // Devin CLI: tokens + ACUs per message, but no subagent lineage in the
   // local store, so no SUBAGENTS panel rather than an empty one.
   devin: ['SESSIONS','EVENTS','COST'],
+  // OpenExecutive: cost is a floor (specialist calls write no usage row);
+  // specialists are steps, not child sessions, so no SUBAGENTS panel.
+  openexecutive: ['SESSIONS','EVENTS','COST'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS'],   // no COST
@@ -24005,6 +24008,7 @@ var _RT_FLOW = {
   gemini_cli: { label:'Gemini CLI', src:['⌨️','Terminal'], accent:'#4285f4', stroke:'#1a73e8', tools:[['⚡','Shell'],['📖','ReadFile'],['📁','ReadFolder'],['🔍','SearchText']] },
   cline: { label:'Cline', src:['⌨️','Terminal'], accent:'#5a4fcf', stroke:'#463cad', tools:[['📖','read_files'],['🔍','search_codebase'],['⚡','run_commands'],['🧩','apply_patch']] },
   openhands: { label:'OpenHands', src:['⌨️','Terminal'], accent:'#c9a227', stroke:'#a8871c', tools:[['⚡','terminal'],['📝','file_editor'],['✅','task_tracker'],['🤝','delegate']] },
+  openexecutive: { label:'OpenExecutive', src:['💬','Chat + Slack'], accent:'#1e3a8a', stroke:'#172f6e', tools:[['🧑‍💼','Specialists'],['🗓️','Scheduler'],['✉️','Send'],['📚','Knowledge']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
 };
@@ -30068,6 +30072,7 @@ function _cmRuntimeIcon(id) {
     devin: '🅓',
     gemini_cli: '♊',
     cline: '🖇',
+    openexecutive: '🏛️',
     openhands: '🙌',
   };
   return map[id] || '•';
