@@ -15090,11 +15090,17 @@ def _family_ingest_rev() -> str:
     ``arguments`` (Codex). ``metadata.quality`` is graded only at ingest, so
     without the bump every already-seen Codex session stays "not measurable"
     and the Harness Engineering bench keeps stamping Codex "Can't see".
+
+    ``/t1`` (2026-09-11): titles skip harness-injected context
+    (``clawmetry/injected_context.py``). Stored titles are written only at
+    ingest, so without the bump every idle Codex session keeps its
+    "# AGENTS.md instructions for …" title, locally and in the sealed cloud
+    ``title_blob``.
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1/q2"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t1"
     except Exception:
         return ""
 
@@ -15803,6 +15809,99 @@ def _ingest_keepalive_heartbeat(config: dict) -> bool:
         return True
 
 
+# ── Answer-window heartbeat ────────────────────────────────────────────────
+# A parked approval is a person's decision an agent is blocked on, and the
+# runtime waits only a few minutes before its own terminal prompt takes over.
+# The decision travels on the cloud relay, which is drained BY A HEARTBEAT —
+# and the main loop's heartbeat lands at the END of a cycle, so one heavy
+# ingest pass can swallow the whole window.
+#
+# Burned 2026-09-11: an answer clicked on the cloud strip 22 s before the
+# deadline was drained 5 s AFTER it. The daemon had spent 90 s syncing 7,388
+# events between two heartbeats, the question went to the terminal, and the
+# person's answer reached nobody. Every surface was correct; the delivery was
+# simply late.
+#
+# While a window is open this thread heartbeats every couple of seconds, so an
+# answer (or an Approve/Deny) reaches the waiting hook in seconds. It costs one
+# indexed read of the pending queue when nobody is waiting, and nothing at all
+# on a node with no cloud account.
+_ANSWER_WINDOW_POLL_SEC = 2.0
+
+
+def _approval_deadline_ms(row: dict) -> int:
+    """End of a hook-parked approval's window (``args.deadline_ms``), or 0.
+
+    Also read by ``_build_device_summary`` further down: a request past its
+    window is not offered on any surface."""
+    args = row.get("args") if isinstance(row.get("args"), dict) else {}
+    try:
+        return max(0, int(args.get("deadline_ms") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _answer_window_open(now_ms: "int | None" = None) -> bool:
+    """True while a parked approval is still inside its answer window.
+
+    Reads the pending queue's ``args.deadline_ms``, stamped by the gate-hook
+    receiver when it parks a call. A request without one carries no runtime
+    clock and never holds this fast path open. Never raises."""
+    try:
+        from clawmetry import local_store
+        rows = local_store.get_store().query_approvals(
+            status="pending", limit=50) or []
+    except Exception:
+        return False
+    now_ms = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        deadline_ms = _approval_deadline_ms(r)
+        if deadline_ms and deadline_ms > now_ms:
+            return True
+    return False
+
+
+def _answer_window_tick(config: dict) -> bool:
+    """One pass: heartbeat when (and only when) somebody is still waiting.
+    Returns True when a heartbeat was sent. Never raises."""
+    if not (config or {}).get("api_key"):
+        return False
+    try:
+        from clawmetry.config import is_cloud_disabled
+        if is_cloud_disabled():
+            return False
+    except Exception:
+        pass
+    if not _answer_window_open():
+        return False
+    try:
+        send_heartbeat(config)
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.debug("answer-window heartbeat failed (non-fatal): %s", e)
+        return False
+
+
+def _start_answer_window_heartbeat(config: dict, stop_event=None) -> None:
+    """Start the background thread that keeps the relay drained while a
+    person's decision is still reachable. Never raises."""
+    def _run():
+        while not (stop_event is not None and stop_event.is_set()):
+            try:
+                _answer_window_tick(config)
+            except Exception as e:  # noqa: BLE001
+                log.debug("answer-window heartbeat tick failed: %s", e)
+            if stop_event is not None:
+                stop_event.wait(timeout=_ANSWER_WINDOW_POLL_SEC)
+            else:
+                time.sleep(_ANSWER_WINDOW_POLL_SEC)
+
+    threading.Thread(target=_run, daemon=True,
+                     name="answer-window-heartbeat").start()
+
+
 # Session.extra keys a family adapter may stamp on a CHILD session (subagent /
 # workflow run / workflow agent) that ride into the ``subagents`` row's data
 # blob verbatim. Everything the orchestration surfaces read lives here; the
@@ -16060,6 +16159,12 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # list-block content, and caches per session so an already-titled
                 # session never re-reads the transcript head. Never raises.
                 _ftitle = (s.display_name or s.title or "").strip()
+                # An adapter's own title can be injected context: Codex
+                # titled every session "# AGENTS.md instructions for …"
+                # (founder report 2026-09-11). Keep only the human part.
+                if _ftitle and not _session_titles.looks_like_session_id(
+                        _ftitle, s.id):
+                    _ftitle = _session_titles.derive_title_from_texts([_ftitle])
                 if not _ftitle or _session_titles.looks_like_session_id(_ftitle, s.id):
                     _ftitle = _session_titles.title_for_family_session(
                         runtime, s.id, _events
@@ -17307,31 +17412,21 @@ def _derive_transcript_title(msgs):
     """
     if not isinstance(msgs, (list, tuple)):
         return ""
+    from clawmetry.injected_context import human_prompt
     for m in msgs:
         if not isinstance(m, dict):
             continue
         if m.get("role") != "user":
             continue
-        c = m.get("content")
-        text = ""
-        if isinstance(c, str):
-            text = c
-        elif isinstance(c, list):
-            for block in c:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    t = block.get("text")
-                    if isinstance(t, str) and t.strip():
-                        text = t
-                        break
-                elif isinstance(block, str) and block.strip():
-                    text = block
-                    break
+        # Only what the person typed: Codex's "# AGENTS.md instructions"
+        # turn, Cursor's <user_query> wrapper and friends are harness
+        # context (founder report 2026-09-11).
+        text = human_prompt(m.get("content"))
         if not text:
             # Some adapters write the prompt under a sibling key.
             for fld in ("text", "prompt", "finalPromptText"):
-                v = m.get(fld)
-                if isinstance(v, str) and v.strip():
-                    text = v
+                text = human_prompt(m.get(fld))
+                if text:
                     break
         text = " ".join((text or "").split())  # collapse all whitespace runs
         if not text:
@@ -17380,12 +17475,16 @@ def _render_transcript_page(page: dict, args: dict) -> dict:
 def _first_user_prompt_index(msgs):
     """Index of the opening user prompt in a transcript message list, or
     ``None``. Mirrors what the replay's turn grouping treats as a turn anchor:
-    ``role == "user"``, not a tool chip, non-empty text content."""
+    ``role == "user"``, not a tool chip, and text the person typed: a bare
+    ``[Image: source: …]`` placeholder row used to win here, so the cap kept
+    it and dropped the real opening prompt (and with it the title) on every
+    session over the cap."""
+    from clawmetry.injected_context import human_prompt
     for i, m in enumerate(msgs):
         if not isinstance(m, dict) or m.get("role") != "user" or m.get("tool"):
             continue
         c = m.get("content")
-        if isinstance(c, str) and c.strip():
+        if isinstance(c, str) and human_prompt(c):
             return i
     return None
 
@@ -22593,15 +22692,6 @@ def _build_loops_slice(store):
     return out
 
 
-def _approval_deadline_ms(row: dict) -> int:
-    """End of a hook-parked approval's window (``args.deadline_ms``), or 0."""
-    args = row.get("args") if isinstance(row.get("args"), dict) else {}
-    try:
-        return max(0, int(args.get("deadline_ms") or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
 def _device_question_set(row: dict) -> list:
     """The approval's question set (``args._cm_questions``, stored by the
     hook receiver from Claude Code's AskUserQuestion), trimmed for the
@@ -25019,6 +25109,17 @@ def run_daemon() -> None:
                  f"(policies: {_approvals.POLICIES_PATH})")
     except Exception as _e:
         log.warning(f"approvals watcher failed to start: {_e}")
+
+    # ── Answer-window heartbeat ──────────────────────────────────────────
+    # While a parked approval is still reachable, drain the relay every few
+    # seconds so a decision made on a cloud surface arrives before the
+    # runtime's own prompt takes over (see _answer_window_open).
+    try:
+        _start_answer_window_heartbeat(config)
+        log.info("answer-window heartbeat thread started "
+                 f"({_ANSWER_WINDOW_POLL_SEC}s while someone is waiting)")
+    except Exception as _e:
+        log.warning(f"answer-window heartbeat failed to start: {_e}")
 
     # ── Inbound approval decisions ────────────────────────────────────
     # Deliberately NOT started here. Bringing a decision back from a chat
