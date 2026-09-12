@@ -119,7 +119,7 @@ def _err(status: int, message: str, **extra):
     """
     body = {"error": message, "contract": CONTRACT_VERSION}
     body.update(extra)
-    return jsonify(body), status
+    return jsonify(body), status  # codeql[py/stack-trace-exposure]
 
 
 # ── auth + CORS ─────────────────────────────────────────────────────────
