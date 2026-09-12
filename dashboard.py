@@ -164,6 +164,7 @@ from routes.device import bp_device
 from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
 from routes.sla import bp_sla
+from routes.agentops import bp_agentops
 from routes.hitl import bp_hitl
 from routes.rules import bp_rules
 from routes.attention import bp_attention
@@ -366,7 +367,7 @@ def _otlp_service_name_to_agent_type(service_name):
     return slug or "custom"
 
 
-__version__ = "0.12.748"
+__version__ = "0.12.872"
 
 # Extensions (Phase 2): import the plugin host now, but defer the actual
 # load_plugins() call until after the Flask app is created below so we can
@@ -5757,6 +5758,16 @@ def _budget_monitor_loop():
                                     {"type": rtype, "message": msg, "timestamp": now},
                                 )
 
+            # SLA policies (routes/sla.py): a red policy notifies someone
+            # instead of only turning red in an API response nobody polls.
+            # _fire_alert owns the cooldown, so a breach that lasts an hour
+            # notifies once per cooldown window, not once a minute.
+            try:
+                from routes.sla import fire_breached_policies
+                fire_breached_policies(_fire_alert)
+            except Exception as e:
+                print(f"Warning: SLA check error: {e}")
+
         except Exception as e:
             print(f"Warning: Budget monitor error: {e}")
 
@@ -7912,6 +7923,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_security)
     app.register_blueprint(bp_sessions)
     app.register_blueprint(bp_sla)
+    app.register_blueprint(bp_agentops)
     app.register_blueprint(bp_tracing)
     app.register_blueprint(bp_trail)
     app.register_blueprint(bp_usage)
@@ -8604,7 +8616,7 @@ DASHBOARD_HTML = r"""
     <!-- History tab hidden until mature -->
     <!-- <div class="nav-tab" onclick="switchTab('history')">History</div> -->
     {% if v2_enabled %}
-    <a class="nav-tab v1-to-v2-link" href="/v2" style="text-decoration:none;color:#E5443A;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
+    <a class="nav-tab v1-to-v2-link" href="/v2" onclick="var _m={'flow':'trace','transcripts':'brain','sessions':'brain','memory':'context','usage':'cost','crons':'ops','logs':'ops'};var _t=window._cmCurrentTab;this.href='/v2?from='+encodeURIComponent(_m[_t]||_t||'')" style="text-decoration:none;color:#E5443A;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
     {% endif %}
   <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
   <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com/cloud','_blank')" style="display:none;margin-left:8px;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>
@@ -8616,7 +8628,7 @@ DASHBOARD_HTML = r"""
      header because the rest of the JS still hides/shows them by id. #}
   <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
     {% if v2_enabled %}
-    <a class="nav-tab v1-to-v2-link" href="/v2" style="text-decoration:none;color:#E5443A;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
+    <a class="nav-tab v1-to-v2-link" href="/v2" onclick="var _m={'flow':'trace','transcripts':'brain','sessions':'brain','memory':'context','usage':'cost','crons':'ops','logs':'ops'};var _t=window._cmCurrentTab;this.href='/v2?from='+encodeURIComponent(_m[_t]||_t||'')" style="text-decoration:none;color:#E5443A;border-color:rgba(229,68,58,0.35);" title="Open the v2 (beta) dashboard">&#10024; Try v2 (beta) &#8599;</a>
     {% endif %}
     <div id="cloud-cta-btn" onclick="openCloudModal()" style="display:none;cursor:pointer;padding:6px 12px;border:1px solid rgba(96,165,250,0.5);border-radius:8px;font-size:12px;font-weight:600;color:#60a5fa;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(96,165,250,0.1)'" onmouseout="this.style.background='transparent'"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle;margin-right:4px"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Enable Cloud Sync</div>
     <div id="cloud-connected-badge" onclick="window.open('https://app.clawmetry.com/cloud','_blank')" style="display:none;cursor:pointer;padding:6px 12px;border:1px solid rgba(34,197,94,0.4);border-radius:8px;font-size:12px;font-weight:600;color:#22c55e;white-space:nowrap;transition:all 0.2s;user-select:none;" onmouseover="this.style.background='rgba(34,197,94,0.08)'" onmouseout="this.style.background='transparent'">&#9679; Cloud Connected</div>

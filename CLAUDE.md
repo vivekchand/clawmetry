@@ -167,7 +167,10 @@ The complete surface is generated at `/openapi.json` and browsable at `/api/docs
 - `/api/system-health` — Disk, memory, uptime, GPU
 - `/api/nodes` — Multi-node fleet view
 - `/api/budget/*` — Budget monitoring and alerts
-- `/api/alerts/*` — Custom alert rules (incl. the `signal_rate_above` rule type: a behaviour signal's rate over a window with a minimum sample)
+- `/api/alerts/*` — Custom alert rules (incl. the `signal_rate_above` rule type: a behaviour signal's rate over a window with a minimum sample, and the AgentOps types in `alert_evaluator.AGENTOPS_RULES`: p95 session / tool latency, escalation, guardrail violation, handoff failure, review accuracy, ground-truth accuracy, first-pass rate). Each quality rule reads the window it asked for (`quality_for`), not the widest one any rule asked for
+- `/api/agentops/scorecard` — Every AgentOps figure over one window (`?window=<minutes>&runtime=`), from the same slice the alert evaluator fires on (`clawmetry/agentops_metrics.py`, merged into `query_session_quality_window`)
+- `/api/ground-truth` — POST the real outcome of a session from your system of record (`{session_id, correct, first_pass, label, source}`); feeds accuracy and first-pass rate. GET lists recent reports
+- `/api/sla/status` — SLA policies read the quality slice through the daemon, and a red policy fires `sla_breach` from the dashboard monitor loop
 - `/api/signals` — Behaviour signal rates per window (`1d|7d|30d`) and `?runtime=`, with coverage and headline; `/api/signals/<name>/sessions` lists matching sessions, never phrases
 - `/api/guard/sessions` — What is running, what a detector thinks has gone off track, and whether each session can be controlled at all; `/api/guard/control` is the Pause / Stop / Kill button and `/api/guard/policies` the autonomous rules
 - `/api/entitlement` — The resolved entitlement (tier, allowed runtimes, features, capacity). GRACE mode answers "allowed" for everything until the announced enforce date
@@ -262,6 +265,9 @@ CLAWMETRY_GIT_MAX_BLAME_FILES=40       # Files blamed for line survival (rework)
 CLAWMETRY_GIT_BLAME_BUDGET=10          # Seconds the whole blame pass may take
 CLAWMETRY_GIT_REPO_BUDGET=25           # Seconds one repository's whole scan may take
 CLAWMETRY_SIGNALS=1                    # Behaviour Signals tick on/off; CLAWMETRY_SIGNALS_EVENTS_PER_TICK (2000) and CLAWMETRY_SIGNALS_SCAN_CHARS (2000) bound each pass
+CLAWMETRY_REVIEW_SAMPLE_SIZE=10        # Review queue: sessions sampled per agent per day (count mode, the default)
+CLAWMETRY_REVIEW_SAMPLE_PCT=0          # Review queue: sample this percent of each agent's sessions instead (e.g. 5); every agent gets at least one
+CLAWMETRY_REVIEW_SAMPLE_MAX=200        # Review queue: per-agent cap in percent mode
 
 # Guard / enforcement. Every one of these defaults to the safe side.
 CLAWMETRY_DETECTORS=1                  # Trajectory + behavioural detectors on/off

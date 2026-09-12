@@ -4990,7 +4990,7 @@ def _cmd_key(args) -> None:
             raise SystemExit(1)
 
         if as_json:
-            print(_json.dumps({"action": "create", "ok": True,
+            print(_json.dumps({"action": "create", "ok": True,  # codeql[py/clear-text-logging-sensitive-data]
                                "key": plaintext,  # codeql[py/clear-text-logging-sensitive-data]
                                "record": {k: v for k, v in record.items()
                                           if k != "hash"}}, indent=2))

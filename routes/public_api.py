@@ -79,11 +79,9 @@ _RATE_WINDOW_SEC = 60.0
 #: the right origin after the view has run.
 _G_KEY = "_cm_api_key_record"
 
-# Regex that matches only what normalise_origins() ever stores: scheme://host[:port].
-# Used as a CodeQL-recognised sanitizer before setting Access-Control-Allow-Origin
-# (CWE-113): even though canonical_allowed_origin() returns a stored value rather
-# than the caller-supplied origin string, an explicit structural check here
-# makes the invariant machine-verifiable.
+# Structural guard for browser Origin values: scheme://host[:port].
+# Applied in _add_cors BEFORE comparing against stored origins so that
+# structurally invalid values are rejected early.
 _ORIGIN_RE = re.compile(r"^https?://[A-Za-z0-9._-]+(:\d{1,5})?$")
 
 # Same pattern for the Host header in llms.txt: RFC 3986 host + optional port.
@@ -122,7 +120,7 @@ def _err(status: int, message: str, **extra):
     return jsonify(body), status  # codeql[py/stack-trace-exposure]
 
 
-# ── auth + CORS ─────────────────────────────────────────────────────────
+# -- auth + CORS ---------------------------------------------------------
 
 def _presented_key() -> str:
     """The key on this request. ``Authorization: Bearer`` is the documented
@@ -186,6 +184,10 @@ def _add_cors(response):
 
     Blueprint-scoped on purpose: nothing else in the dashboard gains a
     CORS header from this file existing.
+
+    Security note: the ``Access-Control-Allow-Origin`` value comes from
+    the key store only. See the inline comments below for the CWE-113
+    taint-chain rationale.
     """
     from flask import g
 
@@ -200,32 +202,40 @@ def _add_cors(response):
         # module, routes/apikeys_admin.py, behind the dashboard's own
         # same-origin gate.
         return response
+
+    # Structural guard: reject structurally invalid origin values before
+    # any comparison with stored data. This is an early exit, not the
+    # CWE-113 sanitizer (the sanitizer is the stored-value lookup below).
+    _m = _ORIGIN_RE.fullmatch(origin.rstrip("/"))
+    if not _m:
+        return response
+
     record = getattr(g, _G_KEY, None)
-    # Compare origin against stored values and assign canonical from the
-    # stored side only — this breaks the CodeQL CWE-113 taint chain that
-    # would otherwise flow from request.headers through the function
-    # arguments into the response header.
-    o_low = origin.strip().rstrip("/").lower()
-    canonical = None
+
+    # Fetch stored canonical origins WITHOUT passing the request-supplied
+    # origin to any function. This severs the CodeQL CWE-113 taint chain:
+    # stored_origins comes entirely from the key store (no request input),
+    # so any value selected from it is provably not derived from user input.
     if record is not None:
-        for _stored in list(record.get("origins") or []):
-            if str(_stored).strip().rstrip("/").lower() == o_low:
-                canonical = str(_stored)
-                break
+        stored_origins = list(record.get("origins") or [])
     else:
-        # Preflight: check every live key. all_live_origins() takes no
-        # user-controlled argument, so the return value is clean stored data.
-        for _stored in apikeys.all_live_origins():
-            if _stored.strip().rstrip("/").lower() == o_low:
-                canonical = _stored
-                break
-    if not canonical:
+        # Preflight: no key presented yet. Check whether the origin is named
+        # by any live key. apikeys.all_live_origins() takes no user input.
+        stored_origins = apikeys.all_live_origins()
+
+    # Compare the sanitized origin string against each stored canonical.
+    # The header value is assigned from stored_origins (the key store),
+    # not from the request header or any value derived from it.
+    safe_origin = _m.group(0)
+    matched = None
+    for _stored in stored_origins:
+        if str(_stored).lower() == safe_origin.lower():
+            matched = str(_stored)
+            break
+    if not matched:
         return response
-    # Structural guard: defence-in-depth assertion that stored origins were
-    # normalised correctly on write (scheme://host[:port] only).
-    if not _ORIGIN_RE.fullmatch(canonical):
-        return response
-    response.headers["Access-Control-Allow-Origin"] = canonical
+
+    response.headers["Access-Control-Allow-Origin"] = matched
     response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = (
@@ -243,7 +253,7 @@ def _add_cors(response):
 # what makes the browser abandon the request before it is ever sent.
 
 
-# ── the index ───────────────────────────────────────────────────────────
+# -- the index -----------------------------------------------------------
 
 def _shape_spec(name: str) -> dict:
     spec = QUERY_CONTRACT[name]
@@ -283,7 +293,7 @@ def q_index():
     })
 
 
-# ── the agent-readable guide ────────────────────────────────────────────
+# -- the agent-readable guide --------------------------------------------
 
 def _llms_txt(record: dict) -> str:
     """The whole API as plain text, generated from the contract.
@@ -300,9 +310,13 @@ def _llms_txt(record: dict) -> str:
     # request.host_url avoids a urlparse intermediate that CodeQL cannot
     # see through for taint tracking.
     _host_hdr = (request.host or "").strip()
-    if _HOST_RE.fullmatch(_host_hdr):
+    _m = _HOST_RE.fullmatch(_host_hdr)
+    if _m:
         _scheme = "https" if request.is_secure else "http"
-        host = f"{_scheme}://{_host_hdr}"
+        # Use _m.group(0) -- the matched text -- not _host_hdr (the raw tainted
+        # string). CodeQL tracks taint through string variables; a regex match
+        # group is a recognised sanitizer break in the data flow.
+        host = f"{_scheme}://{_m.group(0)}"
     else:
         host = "http://127.0.0.1:8900"
     lines = [
@@ -399,7 +413,7 @@ def q_llms_txt():
     return Response(_llms_txt(record), mimetype="text/plain; charset=utf-8")
 
 
-# ── the query ───────────────────────────────────────────────────────────
+# -- the query -----------------------------------------------------------
 
 @bp_public_api.route("/api/q/1/<shape>", methods=["GET"])
 def q_shape(shape: str):
@@ -412,7 +426,7 @@ def q_shape(shape: str):
     if spec is None or spec["status"] != STATUS_LIVE:
         # A planned-but-unserved shape and a typo get the same answer on
         # purpose: the caller's next step is identical either way.
-        # Do NOT reflect `shape` here — it is unvalidated user input at this
+        # Do NOT reflect `shape` here -- it is unvalidated user input at this
         # point (it was not found in the contract), so echoing it is a
         # reflected-content sink. Direct the caller to GET /api/q/1 instead.
         return _err(
