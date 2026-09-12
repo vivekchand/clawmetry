@@ -96,6 +96,11 @@ jobs:
           python-version: "3.11"
 
       - name: Install base deps
+        # This job checks out three repos side by side, so the OSS tree is at
+        # `oss/`, not the workspace root. Running here keeps the requirements
+        # reference repo-relative, which is also what lets
+        # tests/test_workflow_yaml_valid.py resolve and check the file.
+        working-directory: oss
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes \
