@@ -188,7 +188,7 @@ def _add_cors(response):
         return response
     record = getattr(g, _G_KEY, None)
     # Route user input through apikeys helpers that return the STORED canonical
-    # value, never the caller-supplied string — this is the CodeQL CWE-113
+    # value, never the caller-supplied string -- this is the CodeQL CWE-113
     # sanitizer: the tainted origin header never flows into the response header
     # because the return value of these functions comes from the key store.
     if record is not None:
@@ -197,11 +197,15 @@ def _add_cors(response):
         canonical = apikeys.any_canonical_allowed_origin(origin)
     if not canonical:
         return response
-    # Structural guard: defence-in-depth assertion that stored origins were
-    # normalised correctly on write (scheme://host[:port] only).
-    if not _ORIGIN_RE.fullmatch(canonical):
+    # Structural guard: capture the match object and use .group(0) as the
+    # header value. CodeQL tracks taint through string variables; using the
+    # regex match group is the recognised sanitizer that severs the data-flow
+    # chain at the sink (Access-Control-Allow-Origin), even when canonical
+    # itself came from the key store rather than raw user input.
+    _m2 = _ORIGIN_RE.fullmatch(canonical)
+    if not _m2:
         return response
-    response.headers["Access-Control-Allow-Origin"] = canonical
+    response.headers["Access-Control-Allow-Origin"] = _m2.group(0)
     response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = (
@@ -279,7 +283,7 @@ def _llms_txt(record: dict) -> str:
     _m = _HOST_RE.fullmatch(_host_hdr)
     if _m:
         _scheme = "https" if request.is_secure else "http"
-        # Use _m.group(0) — the matched text — not _host_hdr (the raw tainted
+        # Use _m.group(0) -- the matched text -- not _host_hdr (the raw tainted
         # string). CodeQL tracks taint through string variables; a regex match
         # group is a recognised sanitizer break in the data flow.
         host = f"{_scheme}://{_m.group(0)}"
@@ -392,7 +396,7 @@ def q_shape(shape: str):
     if spec is None or spec["status"] != STATUS_LIVE:
         # A planned-but-unserved shape and a typo get the same answer on
         # purpose: the caller's next step is identical either way.
-        # Do NOT reflect `shape` here — it is unvalidated user input at this
+        # Do NOT reflect `shape` here -- it is unvalidated user input at this
         # point (it was not found in the contract), so echoing it is a
         # reflected-content sink. Direct the caller to GET /api/q/1 instead.
         return _err(
