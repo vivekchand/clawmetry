@@ -120,7 +120,7 @@ def _err(status: int, message: str, **extra):
     return jsonify(body), status  # codeql[py/stack-trace-exposure]
 
 
-# ── auth + CORS ─────────────────────────────────────────────────────────
+# -- auth + CORS ---------------------------------------------------------
 
 def _presented_key() -> str:
     """The key on this request. ``Authorization: Bearer`` is the documented
@@ -171,11 +171,9 @@ def _add_cors(response):
     Blueprint-scoped on purpose: nothing else in the dashboard gains a
     CORS header from this file existing.
 
-    CWE-113 design: the Access-Control-Allow-Origin value MUST come from
-    the key store, never from the request Origin header. The implementation
-    achieves this by fetching stored origins WITHOUT passing the request
-    header to any helper function -- origin never flows into stored_origins,
-    so matched (assigned from stored_origins) is provably not tainted.
+    Security note: the ``Access-Control-Allow-Origin`` value comes from
+    the key store only. See the inline comments below for the CWE-113
+    taint-chain rationale.
     """
     from flask import g
 
@@ -241,7 +239,7 @@ def _add_cors(response):
 # what makes the browser abandon the request before it is ever sent.
 
 
-# ── the index ───────────────────────────────────────────────────────────
+# -- the index -----------------------------------------------------------
 
 def _shape_spec(name: str) -> dict:
     spec = QUERY_CONTRACT[name]
@@ -281,7 +279,7 @@ def q_index():
     })
 
 
-# ── the agent-readable guide ────────────────────────────────────────────
+# -- the agent-readable guide --------------------------------------------
 
 def _llms_txt(record: dict) -> str:
     """The whole API as plain text, generated from the contract.
@@ -401,7 +399,7 @@ def q_llms_txt():
     return Response(_llms_txt(record), mimetype="text/plain; charset=utf-8")
 
 
-# ── the query ───────────────────────────────────────────────────────────
+# -- the query -----------------------------------------------------------
 
 @bp_public_api.route("/api/q/1/<shape>", methods=["GET"])
 def q_shape(shape: str):
