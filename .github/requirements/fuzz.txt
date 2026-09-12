@@ -28,10 +28,11 @@
 # then, for each resolved name==version, take every sha256 under `urls` in
 # https://pypi.org/pypi/<name>/<version>/json.
 
-atheris==3.1.0 \
-    --hash=sha256:315a0b5c819852b1ffe1ca72efc389c7724881f2c33e4aacb8c6bcec49bd5011 \
-    --hash=sha256:ec5e11f21a4c197fe91f7aea2b2de88e623c73a21fc07b105ac6329a1588457b \
-    --hash=sha256:f8a9f51ce8369026e8eb7b7174835e8c4c85a1a6db5d9add36c15100779d2a39
+atheris==3.0.0 \
+    --hash=sha256:8a5c8a781467c187da40fd29139784193e2647058831f837f675d0bb8cbd8746 \
+    --hash=sha256:510e502c57b6dc615fb174066407af620d4c7f73cf08a782c86e7761bf12c4eb \
+    --hash=sha256:a402cdca8a650d1371050b1f9552eb4cdc488d2db64950d603c4560318365eac \
+    --hash=sha256:1f0929c7bc3040f3fe4102e557718734190cf2d7718bbb8e3ce6d3eb56ef5bb3
 certifi==2026.7.22 \
     --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
     --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
