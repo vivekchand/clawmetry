@@ -718,6 +718,11 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    # Activity heatmap (day x hour event counts), aggregated in SQL. The
+    # route used to pull 50k raw event rows through this proxy and bucket
+    # them in Python; on a busy node the cap silently emptied the oldest
+    # days of the 30-day grid.
+    "activity_heatmap",
     # Cohort compare + similar runs (WO-60): routes/cohort.py reads both
     # through the proxy; the similarity walk runs in the daemon process.
     "query_cohort_sessions",

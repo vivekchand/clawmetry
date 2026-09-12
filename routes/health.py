@@ -873,9 +873,16 @@ def api_reliability():
         return jsonify({"error": str(e), "direction": "insufficient_data"}), 500
 
 
-def _try_local_store_heatmap(n_days: int):
-    """Issue #1088 fast path for /api/heatmap. Bucket events into a (days × 24h)
-    grid using DuckDB ``query_events`` instead of scanning every log + JSONL.
+def _try_local_store_heatmap(n_days: int, runtime: str | None = None):
+    """Issue #1088 fast path for /api/heatmap. Returns the (days × 24h) grid
+    from DuckDB instead of scanning every log + JSONL.
+
+    The bucketing is a SQL GROUP BY inside ``LocalStore.activity_heatmap``.
+    It used to be a Python loop over up to 50k raw event rows shipped through
+    the daemon proxy, which (a) marshalled tens of MB per render and (b)
+    capped the window, so a busy node's oldest days came back empty, and
+    (c) stripped each row's timezone, drawing a UTC-writing runtime's work
+    in the wrong hour.
 
     Tries the daemon HTTP proxy FIRST (cross-process safe — under the standard
     install the daemon owns the writer lock and direct opens fail), then falls
@@ -887,65 +894,51 @@ def _try_local_store_heatmap(n_days: int):
       - the events table is empty inside the requested window
       - any unexpected error happens
     """
-    now = datetime.now()
-    cutoff = now - timedelta(days=n_days)
-    since_iso = cutoff.replace(microsecond=0).isoformat()
-    rows = None
+    grid = None
     try:
         from routes.local_query import local_store_via_daemon
-        # Heatmap is bounded: 90 days × 24h = 2160 cells. 50k events is a
-        # generous cap that covers a very busy single-user node and still
-        # finishes in <50ms on a laptop.
-        rows = local_store_via_daemon("query_events", limit=50000, since=since_iso)
+        # Internal daemon RPC (``/__local_query__/<method>``), gated by
+        # ``routes/local_query._DAEMON_METHODS`` — not the q/1 shape registry
+        # in ``clawmetry/query_contract.py``, which governs the PUBLIC
+        # ``/api/local/query?shape=`` surface and the cloud relay. Adding a
+        # fast-path method means the allowlist (checked by
+        # ``make lint-daemon-allowlist``), not a new public shape.
+        grid = local_store_via_daemon(
+            "activity_heatmap", days=n_days, runtime=runtime
+        )
     except Exception:
-        rows = None
+        grid = None
     # Single-process fallback: open the DuckDB ourselves (tests / dev mode).
-    if rows is None:
+    if not isinstance(grid, dict):
         try:
             from clawmetry import local_store
             store = local_store.get_store(read_only=True)
-            rows = store.query_events(since=since_iso, limit=50000)
+            grid = store.activity_heatmap(days=n_days, runtime=runtime)
         except Exception:
             return None
-    if not rows:
+    if not isinstance(grid, dict) or not grid.get("days"):
+        return None
+    if not grid.get("max"):
+        # No events in the window — let the legacy file scan have a go
+        # rather than painting a confidently empty grid.
         return None
 
-    grid: dict[str, list[int]] = {}
-    day_labels = []
-    for i in range(n_days - 1, -1, -1):
-        d = now - timedelta(days=i)
-        ds = d.strftime("%Y-%m-%d")
-        grid[ds] = [0] * 24
-        lbl = d.strftime("%b %d") if n_days > 7 else d.strftime("%a %d")
-        day_labels.append({"date": ds, "label": lbl})
-
-    counted = 0
-    for ev in rows:
-        ts = ev.get("ts")
-        if not ts:
-            continue
-        try:
-            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        except Exception:
-            continue
-        # Drop tz to match the naive ``datetime.now()`` grid keys.
-        if dt.tzinfo is not None:
-            dt = dt.replace(tzinfo=None)
-        day_key = dt.strftime("%Y-%m-%d")
-        if day_key in grid:
-            grid[day_key][dt.hour] += 1
-            counted += 1
-    if counted == 0:
-        return None
-
-    max_val = max(max(hours) for hours in grid.values()) if grid else 0
     days_out = []
-    for dl in day_labels:
-        days_out.append({"label": dl["label"], "hours": grid.get(dl["date"], [0] * 24)})
+    for row in grid["days"]:
+        try:
+            d = datetime.strptime(row.get("date") or "", "%Y-%m-%d")
+        except (TypeError, ValueError):
+            continue
+        lbl = d.strftime("%b %d") if n_days > 7 else d.strftime("%a %d")
+        hours = row.get("hours") or [0] * 24
+        days_out.append({"label": lbl, "date": row.get("date"), "hours": hours})
+    if not days_out:
+        return None
     return {
         "days": days_out,
-        "max": max_val,
+        "max": int(grid.get("max") or 0),
         "n_days": n_days,
+        "runtime": runtime or "all",
         "_source": "local_store",
     }
 
@@ -955,22 +948,51 @@ def api_heatmap():
     """Activity heatmap - events per hour for the last N days (default 7, max 90).
 
     Query params:
-      days: int  number of days to show (1-90, default 7)
+      days:    int  number of days to show (1-90, default 7)
+      runtime: str  scope to one runtime (claude_code, codex, openclaw, …).
+                    Absent / "all" = node-wide. The DuckDB path filters by
+                    session-id prefix; the legacy file scan below is
+                    OpenClaw-only by construction, so a runtime-scoped
+                    request never falls through to it.
     """
     import dashboard as _d
     try:
         n_days = max(1, min(90, int(request.args.get("days", 7))))
     except (ValueError, TypeError):
         n_days = 7
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime in ("", "all"):
+        runtime = None
 
     # Epic #964 / Issue #1088 — opt-in DuckDB fast path. When
     # CLAWMETRY_LOCAL_STORE_READ=1 AND the store has events in the window,
     # serve from DuckDB via the daemon HTTP proxy (cross-process safe).
     # Falls through to the JSONL/log scan otherwise.
     if is_local_store_read_enabled():
-        fast = _try_local_store_heatmap(n_days)
+        fast = _try_local_store_heatmap(n_days, runtime)
         if fast is not None:
             return jsonify(fast)
+
+    if runtime:
+        # The file scan below reads OpenClaw logs + OpenClaw session JSONL
+        # only. Returning it for ?runtime=codex would draw OpenClaw's hours
+        # under a Codex heading. Hand back the empty grid in the right shape
+        # instead, so the card renders its calendar rather than collapsing.
+        _blank = datetime.now()
+        return jsonify({
+            "days": [
+                {
+                    "label": (_blank - timedelta(days=i)).strftime(
+                        "%b %d" if n_days > 7 else "%a %d"
+                    ),
+                    "date": (_blank - timedelta(days=i)).strftime("%Y-%m-%d"),
+                    "hours": [0] * 24,
+                }
+                for i in range(n_days - 1, -1, -1)
+            ],
+            "max": 0, "n_days": n_days,
+            "runtime": runtime, "_source": "unavailable",
+        })
 
     now = datetime.now()
     # Initialize N days × 24 hours grid

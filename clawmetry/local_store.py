@@ -652,8 +652,11 @@ _HEARTBEAT_DATA_MAX_VALUE_BYTES = 64 * 1024
 # class ADR-046 exists to close, so a test pins them against each other.
 from clawmetry.cost_windows import day_expr_sql as _day_expr_sql  # noqa: E402
 from clawmetry.cost_windows import local_day as _local_day  # noqa: E402
+from clawmetry.cost_windows import hour_expr_sql as _hour_expr_sql  # noqa: E402
+from clawmetry.cost_windows import now_local as _cw_now_local  # noqa: E402
 
 _DAY_EXPR = _day_expr_sql("ts")
+_HOUR_EXPR = _hour_expr_sql("ts")
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -18493,6 +18496,133 @@ class LocalStore(TrailStoreMixin):
             with _AGG_CACHE_LOCK:
                 _AGG_CACHE[_ck] = (time.monotonic(), _rows)
         return _rows
+
+    def activity_heatmap(
+        self,
+        *,
+        days: int = 7,
+        runtime: str | None = None,
+    ) -> dict[str, Any]:
+        """(day x hour) event counts for the activity heatmap, aggregated in SQL.
+
+        One GROUP BY instead of shipping every event row to Python: the
+        previous heatmap path pulled up to 50k rows per render and bucketed
+        them in a loop, which is both slow and capped — a busy node's 30-day
+        window is well past 50k events, so the oldest days quietly came back
+        empty. It also stripped the timezone off each row, which put a
+        UTC-writing runtime's work in the wrong hour; ``_DAY_EXPR`` /
+        ``_HOUR_EXPR`` bucket on the node-local clock (ADR-046) instead.
+
+        ``runtime`` scopes to one runtime by session-id prefix, so the hosted
+        per-runtime view never shows another runtime's activity (FLYWHEEL
+        SS1c). Returns::
+
+            {"days": [{"date": "YYYY-MM-DD", "hours": [24 ints]}, ...],
+             "max": <busiest single hour>, "n_days": N}
+
+        Days with no events are present with a zero row — the grid is a fixed
+        shape, and a missing day would silently shift the calendar.
+        """
+        n_days = max(1, min(90, int(days or 7)))
+        now = _cw_now_local()
+        first = (now - timedelta(days=n_days - 1)).strftime("%Y-%m-%d")
+        # Two filters on purpose: the raw ``ts >= ?`` uses idx_events_ts to
+        # skip the bulk of the table (widened by a day so a UTC-stamped row
+        # near the boundary is not dropped before the local-day filter sees
+        # it), then the exact day filter runs on that slice only.
+        raw_floor = (now - timedelta(days=n_days)).strftime("%Y-%m-%d")
+        clauses = ["ts >= ?", f"{_DAY_EXPR} >= ?"]
+        params: list[Any] = [raw_floor, first]
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
+        sql = f"""
+            SELECT {_DAY_EXPR} AS day, {_HOUR_EXPR} AS hr, COUNT(*) AS n
+            FROM events
+            WHERE {" AND ".join(clauses)}
+            GROUP BY 1, 2
+        """
+        grid: dict[str, list[int]] = {}
+        for i in range(n_days - 1, -1, -1):
+            grid[(now - timedelta(days=i)).strftime("%Y-%m-%d")] = [0] * 24
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            log.debug("activity_heatmap: query failed", exc_info=True)
+            rows = []
+        for r in rows:
+            day, hr, n = r[0], r[1], r[2]
+            if hr is None or day not in grid:
+                continue
+            h = int(hr)
+            if 0 <= h <= 23:
+                grid[day][h] += int(n or 0)
+        max_val = max((max(hours) for hours in grid.values()), default=0)
+        return {
+            "days": [{"date": d, "hours": grid[d]} for d in sorted(grid)],
+            "max": max_val,
+            "n_days": n_days,
+        }
+
+    def activity_heatmap_by_runtime(self, *, days: int = 30) -> dict[str, Any]:
+        """Every runtime's activity grid plus the node-wide one, in ONE scan.
+
+        The snapshot builder needs a grid per runtime so the hosted dashboard
+        can re-scope the heatmap with the runtime switcher. Calling
+        :meth:`activity_heatmap` once per runtime would re-scan the events
+        table N+1 times per sync cycle; this groups by the runtime prefix
+        instead and splits in Python.
+
+        Returns ``{"all": <grid>, "<runtime>": <grid>, ...}`` where each grid
+        is the :meth:`activity_heatmap` shape. Runtimes with no events in the
+        window are absent (empty == nothing ran).
+        """
+        n_days = max(1, min(90, int(days or 30)))
+        now = _cw_now_local()
+        first = (now - timedelta(days=n_days - 1)).strftime("%Y-%m-%d")
+        raw_floor = (now - timedelta(days=n_days)).strftime("%Y-%m-%d")
+        placeholders = ", ".join(["?"] * len(_NON_OPENCLAW_RUNTIME_PREFIXES))
+        rt_expr = (
+            f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders})"
+            f" THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
+        )
+        params: list[Any] = list(_NON_OPENCLAW_RUNTIME_PREFIXES) + [raw_floor, first]
+        sql = f"""
+            SELECT {rt_expr} AS rt, {_DAY_EXPR} AS day, {_HOUR_EXPR} AS hr,
+                   COUNT(*) AS n
+            FROM events
+            WHERE ts >= ? AND {_DAY_EXPR} >= ?
+            GROUP BY 1, 2, 3
+        """
+        dates = [
+            (now - timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(n_days - 1, -1, -1)
+        ]
+        grids: dict[str, dict[str, list[int]]] = {"all": {d: [0] * 24 for d in dates}}
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            log.debug("activity_heatmap_by_runtime: query failed", exc_info=True)
+            return {}
+        for r in rows:
+            rt, day, hr, n = r[0] or "openclaw", r[1], r[2], int(r[3] or 0)
+            if hr is None or day not in grids["all"]:
+                continue
+            h = int(hr)
+            if not (0 <= h <= 23):
+                continue
+            grids.setdefault(rt, {d: [0] * 24 for d in dates})
+            grids[rt][day][h] += n
+            grids["all"][day][h] += n
+        out: dict[str, Any] = {}
+        for rt, grid in grids.items():
+            out[rt] = {
+                "days": [{"date": d, "hours": grid[d]} for d in dates],
+                "max": max((max(hours) for hours in grid.values()), default=0),
+                "n_days": n_days,
+            }
+        return out
 
     # ── ops / maintenance ──────────────────────────────────────────────
 
