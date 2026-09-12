@@ -17783,6 +17783,31 @@ def _build_autonomy_snapshot():
         return {}
 
 
+def _build_activity_heatmap_snapshot():
+    """30-day (day x hour) activity grid, node-wide and per runtime.
+
+    Why it rides the snapshot: the hosted Cost tab's Activity Heatmap read
+    ``/api/heatmap``, whose cloud handler has no events to count (the cloud
+    stores an opaque encrypted blob by design) and so returned a grid of
+    zeros — a card that has been blank for every hosted user since the
+    events read was removed. The daemon has the data and is the only side
+    that can bucket it, so it ships the finished grid and the cloud
+    interceptor decrypts and draws it. Cloud stays blind; E2E preserved.
+
+    ``{"all": grid, "<runtime>": grid, ...}``; ``{}`` when the store is
+    unreachable. One GROUP BY per cycle for every runtime at once.
+    """
+    try:
+        from clawmetry import local_store as _ls_hm
+        store = _ls_hm.get_store()
+        if store is None:
+            return {}
+        return store.activity_heatmap_by_runtime(days=30) or {}
+    except Exception as _e_hm:
+        log.debug("snapshot: activity heatmap slice failed: %s", _e_hm)
+        return {}
+
+
 def _build_usage_snapshot():
     """Usage tab slices (anomalies, cost-comparison, cache-trends, cost-breakdown,
     spend-optimization, forecast). Trial-bug #12: these Usage cards were blank on
@@ -23973,6 +23998,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "evals": evals_slice,
         "activityToday": _collect_activity_counters_today() or {},
         "activityTodayByRuntime": _activity_by_rt,
+        # Cost tab heatmap (day x hour), node-wide + per runtime.
+        "activityHeatmap": _build_activity_heatmap_snapshot(),
         "outcomes": _outcomes_slice_for_snapshot(),
         "outcomesByRuntime": _outcomes_by_rt,
         # 7d-over-7d trend behind the Quality tab's "is it getting better?"
@@ -27181,20 +27208,54 @@ def _alerts_quality_window_minutes(rules: list) -> int:
                 cond = _json.loads(cond)
             if not isinstance(cond, dict):
                 continue
+            # A cloud-authored rule carries its window inside ``config``.
+            cond = alert_evaluator.flatten_condition(cond)
             rtype = cond.get("type") or cond.get("alert_type")
             if rtype not in quality_types:
                 continue
             wm = cond.get("window_minutes")
             if wm is None and cond.get("window_sec") is not None:
                 wm = int(cond.get("window_sec")) // 60
+            # AgentOps review / ground-truth rules default to a week, not the
+            # hour the other quality rules use.
+            type_default = ((getattr(alert_evaluator, "AGENTOPS_RULES", {})
+                             .get(rtype) or {}).get("window_minutes", default_window))
             try:
-                wm = int(wm) if wm is not None else default_window
+                wm = int(wm) if wm is not None else int(type_default)
             except (TypeError, ValueError):
-                wm = default_window
+                wm = int(type_default)
             widest = max(widest, max(1, wm))
         except Exception:
             continue
     return widest
+
+
+def _alerts_quality_fetcher(store, seed_window=0, seed_node=None,
+                            seed_by_runtime=None):
+    """``quality_for`` for ``alert_evaluator.evaluate``: the quality slice for
+    one ``(window, runtime)``, fetched on first use and reused for the tick.
+
+    Each quality rule reads the window it asked for. Before this, every rule
+    read the one slice fetched at the widest window any rule asked for, and
+    the cloud-dispatch path never fetched a per-runtime slice at all, so a
+    runtime-scoped quality rule there could not fire. The slices already
+    prefetched for this tick seed the memo so nothing is queried twice."""
+    memo: dict = {}
+    if seed_window and seed_node is not None:
+        memo[(int(seed_window), "all")] = seed_node
+    for rt, q in (seed_by_runtime or {}).items():
+        if seed_window and q is not None:
+            memo[(int(seed_window), rt)] = q
+
+    def _quality_for(window_minutes, runtime=None):
+        key = (int(window_minutes), runtime or "all")
+        if key not in memo:
+            memo[key] = store.query_session_quality_window(
+                window_minutes=int(window_minutes), runtime=runtime,
+            )
+        return memo[key]
+
+    return _quality_for
 
 
 def _alerts_signal_windows(rules: list, store) -> tuple:
@@ -27219,6 +27280,8 @@ def _alerts_signal_windows(rules: list, store) -> tuple:
                 cond = json.loads(cond)
             if not isinstance(cond, dict):
                 continue
+            # A cloud-authored rule carries signal / window inside ``config``.
+            cond = alert_evaluator.flatten_condition(cond)
             rtype = cond.get("type") or cond.get("alert_type")
             if rtype not in sig_types:
                 continue
@@ -27702,6 +27765,8 @@ def _evaluate_alerts_local(config: dict, state: dict) -> int:
             quality_by_runtime=quality_by_runtime,
             signals=sig_node, signals_by_runtime=sig_by_rt,
             loop_signals=loop_sigs,
+            quality_for=_alerts_quality_fetcher(
+                store, quality_window, quality, quality_by_runtime),
         )
     except Exception as e:
         log.warning("alerts(local): evaluator errored: %s", e)
@@ -27846,7 +27911,9 @@ def evaluate_alerts(config: dict, state: dict) -> int:
     try:
         matches = alert_evaluator.evaluate(rules, events, last_eval_state, quality,
                                            signals=sig_node, signals_by_runtime=sig_by_rt,
-                                           loop_signals=loop_sigs)
+                                           loop_signals=loop_sigs,
+                                           quality_for=_alerts_quality_fetcher(
+                                               store, quality_window, quality))
     except Exception as e:
         log.warning("alerts: evaluator errored: %s", e)
         state["alerts_last_eval_ts"] = _iso_now()

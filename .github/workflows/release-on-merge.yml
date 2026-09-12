@@ -51,7 +51,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tools
-        run: pip install build twine
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/release-publish.txt
 
       # ─── Accuracy meta-harness gate (closes #1396) ────────────────────────
       # Hard-gates [RELEASE] PRs on `scripts/accuracy_harness/all.py`. The

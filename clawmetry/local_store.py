@@ -652,8 +652,11 @@ _HEARTBEAT_DATA_MAX_VALUE_BYTES = 64 * 1024
 # class ADR-046 exists to close, so a test pins them against each other.
 from clawmetry.cost_windows import day_expr_sql as _day_expr_sql  # noqa: E402
 from clawmetry.cost_windows import local_day as _local_day  # noqa: E402
+from clawmetry.cost_windows import hour_expr_sql as _hour_expr_sql  # noqa: E402
+from clawmetry.cost_windows import now_local as _cw_now_local  # noqa: E402
 
 _DAY_EXPR = _day_expr_sql("ts")
+_HOUR_EXPR = _hour_expr_sql("ts")
 
 # ── Two-layer schema (multi-agent) ──────────────────────────────────────────
 #
@@ -1582,6 +1585,25 @@ _DDL = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_review_queue_status ON review_queue(status, sampled_at)",
     "CREATE INDEX IF NOT EXISTS idx_review_queue_agent  ON review_queue(agent_id, sampled_at)",
+    # AgentOps ground truth (2026-09-11): the real outcome of a session as the
+    # operator's own system of record reports it ("the payer approved it on
+    # the first pass", "the diagnosis code was wrong"). An observer cannot see
+    # correctness in a domain from outside the agent; this is where a system
+    # that can see it tells us (POST /api/ground-truth). One row per session:
+    # a later report fills in or replaces fields, ``reports`` counts posts.
+    """
+    CREATE TABLE IF NOT EXISTS session_ground_truth (
+        session_id   VARCHAR PRIMARY KEY,
+        correct      BOOLEAN,
+        first_pass   BOOLEAN,
+        label        VARCHAR,
+        source       VARCHAR,
+        note         VARCHAR,
+        external_id  VARCHAR,
+        reported_at  BIGINT NOT NULL,
+        reports      INTEGER NOT NULL DEFAULT 1
+    )
+    """,
     # ── Issue #1619 Phase 2 — golden test set runs ────────────────────────
     # Persists one row per (suite, test, run) so trend analysis can chart
     # regression-rate over time and the dashboard can show "evals broken
@@ -9122,6 +9144,121 @@ class LocalStore(TrailStoreMixin):
                       exc_info=True)
         return expired
 
+    # ── Ground truth (AgentOps outcomes endpoint) ─────────────────────────
+    _GROUND_TRUTH_COLS = ("session_id", "correct", "first_pass", "label",
+                          "source", "note", "external_id", "reported_at",
+                          "reports")
+
+    def _resolve_ground_truth_session(self, sid: str) -> tuple[str, bool]:
+        """Canonical session id for a report, and whether the store knows it.
+
+        An external system usually holds the runtime's own id (a bare UUID)
+        while the store keys non-OpenClaw sessions as ``<runtime>:<uuid>``.
+        A bare id that matches exactly one prefixed session resolves to it;
+        anything else is kept as given (the report may arrive before the
+        session is ingested, and is still counted)."""
+        row = self._conn.execute(
+            "SELECT 1 FROM sessions WHERE session_id = ? LIMIT 1", [sid],
+        ).fetchone()
+        if row:
+            return sid, True
+        if ":" not in sid:
+            rows = self._conn.execute(
+                "SELECT session_id FROM sessions WHERE suffix(session_id, ?) LIMIT 2",
+                [":" + sid],
+            ).fetchall()
+            if len(rows) == 1:
+                return str(rows[0][0]), True
+        return sid, False
+
+    def ingest_ground_truth(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Record the real outcome of one session.
+
+        ``record``: ``session_id`` (required), ``correct`` and ``first_pass``
+        (booleans, each optional), ``label`` / ``source`` / ``external_id``
+        (short strings) and ``note``. A second report for the same session
+        fills in the fields it carries and keeps the rest, so a system can
+        post "approved" now and "first pass" later. Returns
+        ``{session_id, session_known, created, reports}``."""
+        sid = str(record.get("session_id") or "").strip()
+        if not sid:
+            raise ValueError("ground truth must include 'session_id'")
+
+        def _flag(v):
+            return v if isinstance(v, bool) else None
+
+        def _text(v, cap):
+            if v is None:
+                return None
+            s = str(v).strip()[:cap]
+            return s or None
+
+        fields = [
+            _flag(record.get("correct")), _flag(record.get("first_pass")),
+            _text(record.get("label"), 64), _text(record.get("source"), 64),
+            _text(record.get("note"), 500), _text(record.get("external_id"), 128),
+        ]
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            resolved, known = self._resolve_ground_truth_session(sid)
+            prev = self._conn.execute(
+                "SELECT reports FROM session_ground_truth WHERE session_id = ?",
+                [resolved],
+            ).fetchone()
+            if prev:
+                self._conn.execute("""
+                    UPDATE session_ground_truth
+                       SET correct     = COALESCE(?, correct),
+                           first_pass  = COALESCE(?, first_pass),
+                           label       = COALESCE(?, label),
+                           source      = COALESCE(?, source),
+                           note        = COALESCE(?, note),
+                           external_id = COALESCE(?, external_id),
+                           reported_at = ?,
+                           reports     = reports + 1
+                     WHERE session_id = ?
+                """, [*fields, now_ms, resolved])
+                reports = int(prev[0] or 0) + 1
+            else:
+                self._conn.execute("""
+                    INSERT INTO session_ground_truth (
+                        session_id, correct, first_pass, label, source, note,
+                        external_id, reported_at, reports
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+                """, [resolved, *fields, now_ms])
+                reports = 1
+        return {"session_id": resolved, "session_known": known,
+                "created": not prev, "reports": reports}
+
+    def query_ground_truth(
+        self,
+        *,
+        session_id: str | None = None,
+        runtime: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Recent ground-truth reports, newest first. ``session_id`` matches
+        the stored id or, for a bare id, a prefixed one ending in it."""
+        where: list[str] = []
+        params: list[Any] = []
+        if session_id:
+            where.append("(session_id = ? OR suffix(session_id, ?))")
+            params += [str(session_id), ":" + str(session_id)]
+        clause, rt_params = _runtime_session_id_clause(runtime)
+        if clause:
+            where.append(clause)
+            params += rt_params
+        try:
+            limit = max(1, min(int(limit), 1000))
+        except (TypeError, ValueError):
+            limit = 100
+        sql = ("SELECT " + ", ".join(self._GROUND_TRUTH_COLS)
+               + " FROM session_ground_truth"
+               + (" WHERE " + " AND ".join(where) if where else "")
+               + " ORDER BY reported_at DESC LIMIT ?")
+        rows = self._fetch(sql, [*params, limit])
+        return [dict(zip(self._GROUND_TRUTH_COLS, r)) for r in rows]
+
     # ── review_queue helpers (issue #1615) ────────────────────────────────
     def ingest_review_sample(self, sample: dict[str, Any]) -> int:
         """Insert one sampled session into the review queue.
@@ -15916,7 +16053,8 @@ class LocalStore(TrailStoreMixin):
         except Exception as e:
             log.warning("local store: session quality spend window failed: %s", e)
 
-        return {
+        escalated = int(outcome_counts.get("escalated", 0))
+        out = {
             "window_minutes":    window_minutes,
             "eval_count":        eval_count,
             "eval_avg":          eval_avg,
@@ -15926,7 +16064,19 @@ class LocalStore(TrailStoreMixin):
             "failed_count":      failed_count,
             "failure_rate":      failure_rate,
             "window_spend_usd":  window_spend_usd,
+            # Needed-a-human rate over the same classified cohort.
+            "escalated_count":   escalated,
+            "escalation_rate":   (escalated / classified_total) if classified_total else None,
         }
+        # AgentOps figures (latency, tools, handoffs, guardrails, review,
+        # ground truth) over the same window and runtime. Cached for a minute
+        # inside the module; a failure blanks those keys only.
+        try:
+            from clawmetry import agentops_metrics
+            out.update(agentops_metrics.window_extras(self, window_minutes, runtime))
+        except Exception as e:
+            log.warning("local store: agentops window metrics failed: %s", e)
+        return out
 
     def query_session_eval_detail(
         self,
@@ -18346,6 +18496,133 @@ class LocalStore(TrailStoreMixin):
             with _AGG_CACHE_LOCK:
                 _AGG_CACHE[_ck] = (time.monotonic(), _rows)
         return _rows
+
+    def activity_heatmap(
+        self,
+        *,
+        days: int = 7,
+        runtime: str | None = None,
+    ) -> dict[str, Any]:
+        """(day x hour) event counts for the activity heatmap, aggregated in SQL.
+
+        One GROUP BY instead of shipping every event row to Python: the
+        previous heatmap path pulled up to 50k rows per render and bucketed
+        them in a loop, which is both slow and capped — a busy node's 30-day
+        window is well past 50k events, so the oldest days quietly came back
+        empty. It also stripped the timezone off each row, which put a
+        UTC-writing runtime's work in the wrong hour; ``_DAY_EXPR`` /
+        ``_HOUR_EXPR`` bucket on the node-local clock (ADR-046) instead.
+
+        ``runtime`` scopes to one runtime by session-id prefix, so the hosted
+        per-runtime view never shows another runtime's activity (FLYWHEEL
+        SS1c). Returns::
+
+            {"days": [{"date": "YYYY-MM-DD", "hours": [24 ints]}, ...],
+             "max": <busiest single hour>, "n_days": N}
+
+        Days with no events are present with a zero row — the grid is a fixed
+        shape, and a missing day would silently shift the calendar.
+        """
+        n_days = max(1, min(90, int(days or 7)))
+        now = _cw_now_local()
+        first = (now - timedelta(days=n_days - 1)).strftime("%Y-%m-%d")
+        # Two filters on purpose: the raw ``ts >= ?`` uses idx_events_ts to
+        # skip the bulk of the table (widened by a day so a UTC-stamped row
+        # near the boundary is not dropped before the local-day filter sees
+        # it), then the exact day filter runs on that slice only.
+        raw_floor = (now - timedelta(days=n_days)).strftime("%Y-%m-%d")
+        clauses = ["ts >= ?", f"{_DAY_EXPR} >= ?"]
+        params: list[Any] = [raw_floor, first]
+        _rt_clause, _rt_params = _runtime_session_id_clause(runtime)
+        if _rt_clause:
+            clauses.append(_rt_clause)
+            params.extend(_rt_params)
+        sql = f"""
+            SELECT {_DAY_EXPR} AS day, {_HOUR_EXPR} AS hr, COUNT(*) AS n
+            FROM events
+            WHERE {" AND ".join(clauses)}
+            GROUP BY 1, 2
+        """
+        grid: dict[str, list[int]] = {}
+        for i in range(n_days - 1, -1, -1):
+            grid[(now - timedelta(days=i)).strftime("%Y-%m-%d")] = [0] * 24
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            log.debug("activity_heatmap: query failed", exc_info=True)
+            rows = []
+        for r in rows:
+            day, hr, n = r[0], r[1], r[2]
+            if hr is None or day not in grid:
+                continue
+            h = int(hr)
+            if 0 <= h <= 23:
+                grid[day][h] += int(n or 0)
+        max_val = max((max(hours) for hours in grid.values()), default=0)
+        return {
+            "days": [{"date": d, "hours": grid[d]} for d in sorted(grid)],
+            "max": max_val,
+            "n_days": n_days,
+        }
+
+    def activity_heatmap_by_runtime(self, *, days: int = 30) -> dict[str, Any]:
+        """Every runtime's activity grid plus the node-wide one, in ONE scan.
+
+        The snapshot builder needs a grid per runtime so the hosted dashboard
+        can re-scope the heatmap with the runtime switcher. Calling
+        :meth:`activity_heatmap` once per runtime would re-scan the events
+        table N+1 times per sync cycle; this groups by the runtime prefix
+        instead and splits in Python.
+
+        Returns ``{"all": <grid>, "<runtime>": <grid>, ...}`` where each grid
+        is the :meth:`activity_heatmap` shape. Runtimes with no events in the
+        window are absent (empty == nothing ran).
+        """
+        n_days = max(1, min(90, int(days or 30)))
+        now = _cw_now_local()
+        first = (now - timedelta(days=n_days - 1)).strftime("%Y-%m-%d")
+        raw_floor = (now - timedelta(days=n_days)).strftime("%Y-%m-%d")
+        placeholders = ", ".join(["?"] * len(_NON_OPENCLAW_RUNTIME_PREFIXES))
+        rt_expr = (
+            f"CASE WHEN split_part(session_id, ':', 1) IN ({placeholders})"
+            f" THEN split_part(session_id, ':', 1) ELSE 'openclaw' END"
+        )
+        params: list[Any] = list(_NON_OPENCLAW_RUNTIME_PREFIXES) + [raw_floor, first]
+        sql = f"""
+            SELECT {rt_expr} AS rt, {_DAY_EXPR} AS day, {_HOUR_EXPR} AS hr,
+                   COUNT(*) AS n
+            FROM events
+            WHERE ts >= ? AND {_DAY_EXPR} >= ?
+            GROUP BY 1, 2, 3
+        """
+        dates = [
+            (now - timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(n_days - 1, -1, -1)
+        ]
+        grids: dict[str, dict[str, list[int]]] = {"all": {d: [0] * 24 for d in dates}}
+        try:
+            rows = self._fetch(sql, params)
+        except Exception:
+            log.debug("activity_heatmap_by_runtime: query failed", exc_info=True)
+            return {}
+        for r in rows:
+            rt, day, hr, n = r[0] or "openclaw", r[1], r[2], int(r[3] or 0)
+            if hr is None or day not in grids["all"]:
+                continue
+            h = int(hr)
+            if not (0 <= h <= 23):
+                continue
+            grids.setdefault(rt, {d: [0] * 24 for d in dates})
+            grids[rt][day][h] += n
+            grids["all"][day][h] += n
+        out: dict[str, Any] = {}
+        for rt, grid in grids.items():
+            out[rt] = {
+                "days": [{"date": d, "hours": grid[d]} for d in dates],
+                "max": max((max(hours) for hours in grid.values()), default=0),
+                "n_days": n_days,
+            }
+        return out
 
     # ── ops / maintenance ──────────────────────────────────────────────
 
