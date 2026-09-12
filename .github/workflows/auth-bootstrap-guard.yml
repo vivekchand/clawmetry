@@ -54,7 +54,9 @@ jobs:
             node -e "const fs=require('fs'); const s=fs.readFileSync(0,'utf8'); if (/location\\.reload\\s*\\(/.test(s) || /window\\.location\\.reload\\s*\\(/.test(s)) { console.error('auth bootstrap IIFE must not call location.reload()'); process.exit(1); }"
 
       - name: Install runtime deps
-        run: pip install flask requests waitress cryptography
+        run: >-
+          pip install --require-hashes
+          -r .github/requirements/dashboard-boot.txt
 
       # `npm install playwright` resolved the registry's moving `latest` on
       # every run, with no lockfile and so no integrity check on any tarball
