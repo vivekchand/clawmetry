@@ -81,7 +81,15 @@ runs:
       shell: bash
       env:
         ACTION_DIR: ${{ github.action_path }}
-      run: |
+      # zizmor github-env, analysed and accepted: the audit fires on any
+      # $GITHUB_PATH write, because a write whose value an attacker controls
+      # puts a directory of their choosing ahead of the real tools. The value
+      # here is `github.action_path` — the runner's own checkout path for this
+      # action, not a caller input, not event data — bound through env rather
+      # than expanded into the script. Exposing its own node_modules/.bin is
+      # the whole point of the step, and there is no other way to put a
+      # composite action's binaries on PATH for the steps that follow.
+      run: | # zizmor: ignore[github-env]
         set -e
         npm ci --no-audit --no-fund --prefix "$ACTION_DIR"
         echo "$ACTION_DIR/node_modules/.bin" >> "$GITHUB_PATH"
@@ -103,7 +111,15 @@ runs:
       shell: bash
       env:
         OPENCLAW_GATEWAY_TOKEN_INPUT: ${{ inputs.gateway-token }}
-      run: |
+      # zizmor github-env, analysed and accepted: the audit fires on any
+      # $GITHUB_ENV write built from a value the step did not define itself,
+      # because $GITHUB_ENV is line-oriented and a newline in the value
+      # defines extra variables for every later step in the job. That is
+      # exactly the case the `case` guard below rejects, loudly and before
+      # the write — which is the mitigation the audit asks for, and predates
+      # this declaration. The value also reaches the script through env
+      # rather than being expanded into it, so it is never parsed as shell.
+      run: | # zizmor: ignore[github-env]
         set -e
         # Downstream workflow steps read this to authenticate dashboard
         # requests against the running gateway. Empty token = dashboard
