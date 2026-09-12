@@ -18,6 +18,8 @@ jobs:
     name: Cross-Browser Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Dependabot PRs run without repo secrets; skip rather than fail.
+    if: github.actor != 'dependabot[bot]'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
