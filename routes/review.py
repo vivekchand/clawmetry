@@ -51,6 +51,33 @@ _VALID_STATUSES = frozenset({
 DEFAULT_SAMPLE_SIZE = int(os.environ.get("CLAWMETRY_REVIEW_SAMPLE_SIZE", "10"))
 
 
+def _env_float(name, default=0.0):
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+# Percentage sampling: review a share of each agent's sessions instead of a
+# fixed count (the AgentOps practice is "review 5%"). Off by default so an
+# existing install keeps its fixed 10 a day; ``CLAWMETRY_REVIEW_SAMPLE_PCT=5``
+# turns it on. Every agent with any session gets at least one row, and
+# ``CLAWMETRY_REVIEW_SAMPLE_MAX`` caps a busy agent so the queue stays usable.
+DEFAULT_SAMPLE_PCT = _env_float("CLAWMETRY_REVIEW_SAMPLE_PCT", 0.0)
+MAX_SAMPLE_PER_AGENT = int(_env_float("CLAWMETRY_REVIEW_SAMPLE_MAX", 200))
+
+
+def per_agent_quota(pool_size: int, count: int, pct: float) -> int:
+    """How many of one agent's ``pool_size`` sessions to sample."""
+    if pool_size <= 0:
+        return 0
+    if pct and pct > 0:
+        import math
+        want = math.ceil(pool_size * min(float(pct), 100.0) / 100.0)
+        return max(1, min(want, max(1, MAX_SAMPLE_PER_AGENT)))
+    return max(0, int(count))
+
+
 def _store_call(method_name, **kwargs):
     """Cross-process LocalStore call with single-process fallback. Mirrors
     the helper used by routes/sessions.py — daemon HTTP proxy first
@@ -82,19 +109,28 @@ def _store_call(method_name, **kwargs):
 def sample_yesterday_for_review(
     *,
     sample_size: int | None = None,
+    pct: float | None = None,
     now: datetime | None = None,
     rng: random.Random | None = None,
 ) -> dict:
-    """Pick N random sessions per agent_id from yesterday and insert into
-    the review queue. Idempotent — re-running the same day is a no-op
-    because ``ingest_review_sample`` short-circuits on duplicate
-    session_id. Returns ``{sampled, skipped, agents}`` for logging.
+    """Pick sessions per agent_id from yesterday and insert them into the
+    review queue: ``pct`` percent of each agent's sessions when a percentage
+    is set (argument, else ``CLAWMETRY_REVIEW_SAMPLE_PCT``), otherwise a
+    fixed ``sample_size`` (default ``CLAWMETRY_REVIEW_SAMPLE_SIZE``). An
+    explicit ``sample_size`` wins over the env percentage. Idempotent:
+    re-running the same day is a no-op because ``ingest_review_sample``
+    short-circuits on duplicate session_id. Returns
+    ``{sampled, skipped, agents, mode, pct}`` for logging.
 
     ``now`` + ``rng`` are injectable for deterministic tests.
     """
+    if pct is None and sample_size is None:
+        pct = DEFAULT_SAMPLE_PCT
+    pct = float(pct or 0.0)
     n = int(sample_size or DEFAULT_SAMPLE_SIZE)
-    if n <= 0:
-        return {"sampled": 0, "skipped": 0, "agents": 0}
+    mode = "percent" if pct > 0 else "count"
+    if mode == "count" and n <= 0:
+        return {"sampled": 0, "skipped": 0, "agents": 0, "mode": mode, "pct": None}
     when = now or datetime.now(timezone.utc)
     rng = rng or random.Random()
     yesterday = (when - timedelta(days=1)).date().isoformat()
@@ -121,7 +157,8 @@ def sample_yesterday_for_review(
     skipped = 0
     for agent_id, session_ids in by_agent.items():
         rng.shuffle(session_ids)
-        for sid in session_ids[:n]:
+        quota = per_agent_quota(len(session_ids), n, pct)
+        for sid in session_ids[:quota]:
             inserted = _store_call(
                 "ingest_review_sample",
                 sample={
@@ -135,7 +172,8 @@ def sample_yesterday_for_review(
                 sampled += 1
             else:
                 skipped += 1
-    return {"sampled": sampled, "skipped": skipped, "agents": len(by_agent)}
+    return {"sampled": sampled, "skipped": skipped, "agents": len(by_agent),
+            "mode": mode, "pct": pct if mode == "percent" else None}
 
 
 # ── HTTP surface ───────────────────────────────────────────────────────────
@@ -244,9 +282,15 @@ def post_review_sample():
     doesn't have to wait until midnight to see the workflow.
     """
     body = request.get_json(silent=True) or {}
+    # ``pct`` samples a share of each agent's sessions, ``size`` a fixed
+    # count; neither falls back to the node's configured default.
+    pct = size = None
     try:
-        size = int(body.get("size") or DEFAULT_SAMPLE_SIZE)
+        if body.get("pct") is not None:
+            pct = max(0.0, min(100.0, float(body.get("pct"))))
+        elif body.get("size") is not None:
+            size = int(body.get("size")) or DEFAULT_SAMPLE_SIZE
     except (TypeError, ValueError):
-        size = DEFAULT_SAMPLE_SIZE
-    result = sample_yesterday_for_review(sample_size=size)
+        return jsonify({"error": "pct must be a number from 0 to 100 and size a whole number"}), 400
+    result = sample_yesterday_for_review(sample_size=size, pct=pct)
     return jsonify(result)
