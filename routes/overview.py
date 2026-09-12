@@ -1978,6 +1978,37 @@ def cloud_cta_send_otp():
         ), 502
 
 
+def _dashboard_token_for_signin(_d, cm_key, prev_key):
+    """The gateway token for a browser that just verified an emailed code, or None.
+
+    The login wall accepts only the gateway token. Email sign-in used to hand
+    the page nothing and reload, relying on the zero-click
+    /api/auth/detected-token, which refuses unless every strict loopback check
+    passes. Where one fails on a machine, a correct code reloaded into the same
+    wall forever (customer report 2026-09-12).
+
+    Hand it over when the request passes that same strict check, or when the
+    verified account is the one this machine was already linked to: that
+    needed the owner's inbox, so a Host/proxy quirk cannot lock the owner out,
+    while a DNS-rebound page signing in with its own email gets nothing.
+    """
+    import hmac as _hm
+
+    gw = (getattr(_d, "GATEWAY_TOKEN", None) or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "") or "").strip()
+    if not gw:
+        return None
+    try:
+        from routes.meta import _is_loopback_request
+
+        if _is_loopback_request(request):
+            return gw
+    except Exception:
+        pass
+    if prev_key and _hm.compare_digest(prev_key, cm_key):
+        return gw
+    return None
+
+
 @bp_overview.route("/api/cloud-cta/verify-otp", methods=["POST"])
 def cloud_cta_verify_otp():
     import dashboard as _d
@@ -2001,6 +2032,11 @@ def cloud_cta_verify_otp():
             mode = "selfhost" if _d._selfhost_intent() else "managed"
         except Exception:
             mode = "managed"
+    # Who this machine was linked to BEFORE pairing overwrites it.
+    try:
+        _prev_key = _d._read_cloud_token() or ""
+    except Exception:
+        _prev_key = ""
     try:
         from clawmetry.endpoints import app_url as _resolve_app_url
         _body = _jr.dumps({"email": email, "code": code}).encode()
@@ -2055,12 +2091,16 @@ def cloud_cta_verify_otp():
                         _d._write_cloud_token(cm_key)
                     except Exception:
                         pass
-                return jsonify({
+                _out = {
                     "ok": True,
                     "token": cm_key,
                     "trial": trial,
                     "mode": mode,
-                })
+                }
+                _dash = _dashboard_token_for_signin(_d, cm_key, _prev_key)
+                if _dash:
+                    _out["dashboard_token"] = _dash
+                return jsonify(_out)
             # A 200 carrying neither a key nor an error is a shape we do not
             # understand. Say that, rather than blaming the code the user
             # typed — a wrong code comes back as a 401 and is handled below.
