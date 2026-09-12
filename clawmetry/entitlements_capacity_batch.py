@@ -3,7 +3,8 @@ clawmetry/entitlements_capacity_batch.py — has_capacity_batch + has_capacity_b
 
 Short module extracted so Drift Bot can read the public API at the head of
 entitlements.py via the re-export there. Both functions use late imports to
-avoid a circular dependency with entitlements.py.
+avoid a circular dependency with entitlements.py. Grace-independent by
+construction: every axis falls back to None, never raises, and never blocks.
 
 Re-exported from clawmetry.entitlements as part of the public surface.
 """
