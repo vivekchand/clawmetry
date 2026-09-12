@@ -49,6 +49,7 @@ from clawmetry import ccr as _ccr  # reversible event-payload compression (#2843
 from clawmetry import event_shape as _event_shape  # v15 typed event columns
 from clawmetry import nonsecret_hash as _nsh
 from clawmetry.trail_store import TrailStoreMixin  # intent / back-fill / git join
+from clawmetry.local_store_agent_meta import AgentMetaMixin  # agent meta label surface (short module for Drift Bot)
 import threading
 import time
 import uuid
@@ -3557,7 +3558,7 @@ def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:
     return fallback or "openclaw"
 
 
-class LocalStore(TrailStoreMixin):
+class LocalStore(AgentMetaMixin, TrailStoreMixin):
     """Thread-safe local event store with a background batched flusher.
 
     `read_only=True` opens the DuckDB in RO mode — read paths work the same,
@@ -6009,87 +6010,8 @@ class LocalStore(TrailStoreMixin):
                 now_iso,
             ])
 
-    def set_agent_meta(
-        self,
-        agent_key: str,
-        owner: str | None = None,
-        notes: str | None = None,
-        team: str | None = None,
-    ) -> None:
-        """Upsert one Agent-Inventory label row (owner / notes) for a runtime.
-
-        ``agent_key`` is the runtime key (``_runtime_of_session`` prefix, with
-        ``"openclaw"`` for the default bucket). Partial updates are honored via
-        COALESCE so setting only ``notes`` preserves an existing ``owner`` (and
-        vice versa). An explicit empty string is stored as-is (the client
-        renders an empty owner as "me"); ``None`` means "don't touch this
-        field". Idempotent; mirrors the ``ingest_channel_config`` write-lock
-        idiom. The daemon owns the writer lock, so this goes through the daemon
-        proxy from the dashboard process (see ``set_agent_meta`` in
-        ``routes/local_query._DAEMON_METHODS``)."""
-        if not agent_key:
-            raise ValueError("agent_meta must include 'agent_key'")
-        agent_key = str(agent_key).lower().strip()
-        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        with self._write_lock:
-            self._conn.execute("""
-                INSERT INTO agent_meta (agent_key, owner, notes, team, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (agent_key) DO UPDATE SET
-                    owner      = COALESCE(excluded.owner, agent_meta.owner),
-                    notes      = COALESCE(excluded.notes, agent_meta.notes),
-                    team       = COALESCE(excluded.team,  agent_meta.team),
-                    updated_at = excluded.updated_at
-            """, [
-                agent_key,
-                owner,
-                notes,
-                team,
-                now_iso,
-            ])
-
-    def query_agent_meta(self) -> dict[str, dict[str, Any]]:
-        """Return ``{agent_key: {owner, notes, team, updated_at}}`` for every labeled
-        runtime. Read-only. Goes through ``self._fetch`` (which already takes
-        the write lock for read+write serialization), so callers MUST NOT wrap
-        this in an outer ``with self._write_lock`` (regular Lock, would deadlock
-        per memory ``feedback_local_store_fetch_takes_writelock``)."""
-        sql = """
-            SELECT agent_key, owner, notes, team, updated_at
-            FROM agent_meta
-            ORDER BY agent_key ASC
-        """
-        out: dict[str, dict[str, Any]] = {}
-        for r in self._fetch(sql, []):
-            key = r[0]
-            if not key:
-                continue
-            out[str(key)] = {
-                "owner": r[1],
-                "notes": r[2],
-                "team": r[3],
-                "updated_at": r[4],
-            }
-        return out
-
-    # A label can be attached to a whole MACHINE, not just to one agent or one
-    # runtime. Same free-form key space as the principal ids and runtime names
-    # that already live in agent_meta, namespaced so the three cannot collide:
-    # principal ids start "ap_", runtime names are bare words, machine scopes
-    # are "node:<node_id>".
-    #
-    # Why a machine rung at all: on a real install every principal tends to be
-    # (machine, runtime, "main"), so "everything on this build box belongs to
-    # Platform" is the sentence an administrator actually wants, and without it
-    # they must label each runtime on each box by hand. That is the labelling
-    # that does not get done, which is why ownership stays empty.
-    _NODE_SCOPE_PREFIX = "node:"
-
-    @staticmethod
-    def node_scope_key(node_id: str) -> str:
-        """agent_meta key for a machine-wide label."""
-        return LocalStore._NODE_SCOPE_PREFIX + str(node_id or "").strip()
-
+    # set_agent_meta / query_agent_meta / node_scope_key / _NODE_SCOPE_PREFIX
+    # are provided by AgentMetaMixin (imported near the top of this file).
     # Stable prefix for a derived agent principal id. Short, greppable, and
     # obviously not a session id when it shows up in an audit row.
     _PRINCIPAL_PREFIX = "ap_"
