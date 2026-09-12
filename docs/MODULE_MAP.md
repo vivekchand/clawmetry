@@ -69,7 +69,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/overview.py` | large | `bp_overview` | `/api/activity-heatmap`, `/api/channels`, `/api/cloud-cta`, `/api/cloud-proxy`, `/api/device`, `/api/health-timeline`, `/api/overview`, `/api/prompt-errors`, `/api/sync`, `/api/timeline` | Main-dashboard endpoints. |
 | `routes/paywall_lifecycle.py` | small |  |  | the paywall beacons that reach the funnel. |
 | `routes/plugins.py` | medium | `bp_plugins` | `/api/plugins` | Plugin registry: unified view of installed plugins (#692). |
-| `routes/policy.py` | medium | `bp_policy` | `/api/approvals`, `/api/approvals-audit`, `/api/policy`, `/api/tool-policy` | tool-policy + sandbox + exec-approval policy (PRD P1-1). |
+| `routes/policy.py` | medium | `bp_policy` | `/api/approvals`, `/api/approvals-audit`, `/api/policy`, `/api/tool-policy` | tool-policy + sandbox + exec-approval audit (PRD P1-1). |
 | `routes/quality.py` | medium | `bp_quality` | `/api/quality` | the Quality tab endpoint. |
 | `routes/readiness.py` | small | `bp_readiness` | `/api/repo-readiness` | ``bp_readiness`` — repo AI-readiness. |
 | `routes/reasoning.py` | medium | `bp_reasoning` | `/api/reasoning` | Reasoning chain viewer endpoint. |
