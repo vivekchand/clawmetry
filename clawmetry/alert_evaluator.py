@@ -90,6 +90,16 @@ _LEGACY_ALERT_TYPE_MAP = {
     # a threshold. Fed by the ``signal_turns`` / ``signal_matches`` tables the
     # daemon fills (clawmetry/behaviour_signals.py), never by matched text.
     "signal_rate_above": "signal_rate_above",
+    # AgentOps scorecard rule types: latency SLOs and rates you can alert on
+    # (AGENTOPS_RULES below). Quality-slice fed, each maps to itself.
+    "latency_p95_above":              "latency_p95_above",
+    "tool_latency_p95_above":         "tool_latency_p95_above",
+    "escalation_rate_above":          "escalation_rate_above",
+    "guardrail_violation_rate_above": "guardrail_violation_rate_above",
+    "handoff_failure_rate_above":     "handoff_failure_rate_above",
+    "review_accuracy_below":          "review_accuracy_below",
+    "ground_truth_accuracy_below":    "ground_truth_accuracy_below",
+    "first_pass_rate_below":          "first_pass_rate_below",
     # Silent-failure rule types (fed by the Guard detectors' loop_signals rows
     # and the event stream's cost column). Map to themselves.
     "stuck_session":    "stuck_session",
@@ -125,8 +135,65 @@ _ATTENTION_SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 # labels) instead of the raw event stream. The daemon only bothers to query
 # that slice when at least one such rule is enabled (it is otherwise wasted
 # DuckDB work — see ``sync.py:evaluate_alerts``).
+# AgentOps scorecard rule types (IBM's AgentOps checklist, scored against
+# ClawMetry on 2026-09-11). Each reads one figure that
+# clawmetry/agentops_metrics.py merges into the quality slice. ``scale``
+# converts the stored unit into the threshold's unit (seconds -> minutes,
+# ms -> seconds). ``rate`` rules take a percent, or a fraction <= 1 the way
+# outcome_failure_rate does. ``min_sample`` is the default floor on
+# ``sample`` so one slow session or one denied approval cannot page anyone;
+# ``condition.min_sessions`` overrides it. ``window_minutes`` is the default
+# window when the rule omits one: review and ground-truth verdicts arrive a
+# few a day, so an hour would never gather a sample.
+AGENTOPS_RULES: dict[str, dict[str, Any]] = {
+    "latency_p95_above": {
+        "value": "session_duration_p95_sec", "sample": "timed_sessions",
+        "direction": "above", "scale": 60.0, "unit": "min", "min_sample": 3,
+        "label": "p95 session duration", "noun": "session(s)",
+    },
+    "tool_latency_p95_above": {
+        "value": "tool_latency_p95_ms", "sample": "timed_tool_calls",
+        "direction": "above", "scale": 1000.0, "unit": "s", "min_sample": 20,
+        "label": "p95 tool latency", "noun": "timed call(s)",
+    },
+    "escalation_rate_above": {
+        "value": "escalation_rate", "sample": "classified_total",
+        "direction": "above", "rate": True, "min_sample": 3,
+        "label": "needed-a-human rate", "noun": "finished session(s)",
+    },
+    "guardrail_violation_rate_above": {
+        "value": "guardrail_violation_rate", "sample": "guardrail_sessions",
+        "direction": "above", "rate": True, "min_sample": 3,
+        "label": "guardrail violation rate", "noun": "active session(s)",
+    },
+    "handoff_failure_rate_above": {
+        "value": "handoff_failure_rate", "sample": "handoffs_finished",
+        "direction": "above", "rate": True, "min_sample": 5,
+        "label": "handoff failure rate", "noun": "finished handoff(s)",
+    },
+    "review_accuracy_below": {
+        "value": "review_accuracy", "sample": "reviews",
+        "direction": "below", "rate": True, "min_sample": 5,
+        "label": "reviewer-marked accuracy", "noun": "review(s)",
+        "window_minutes": 7 * 24 * 60,
+    },
+    "ground_truth_accuracy_below": {
+        "value": "ground_truth_accuracy", "sample": "ground_truth_judged",
+        "direction": "below", "rate": True, "min_sample": 5,
+        "label": "accuracy against your records", "noun": "reported outcome(s)",
+        "window_minutes": 7 * 24 * 60,
+    },
+    "first_pass_rate_below": {
+        "value": "first_pass_rate", "sample": "first_pass_known",
+        "direction": "below", "rate": True, "min_sample": 5,
+        "label": "first-pass rate", "noun": "reported outcome(s)",
+        "window_minutes": 7 * 24 * 60,
+    },
+}
+AGENTOPS_RULE_TYPES = frozenset(AGENTOPS_RULES)
+
 QUALITY_RULE_TYPES = frozenset({"eval_score_below", "outcome_failure_rate",
-                                "dollars_per_done_above"})
+                                "dollars_per_done_above"}) | AGENTOPS_RULE_TYPES
 
 # Default window + min-sample floors for the quality rules, used when the
 # rule body omits them. Tuned so a single low-scoring session can't trip an
@@ -178,8 +245,16 @@ def evaluate(
     signals: dict[str, Any] | None = None,
     signals_by_runtime: dict[str, dict[str, Any]] | None = None,
     loop_signals: list[dict[str, Any]] | None = None,
+    quality_for: Any = None,
 ) -> list[dict[str, Any]]:
     """Pure evaluator. Walks ``events`` against ``rules``, returns matches.
+
+    ``quality_for(window_minutes, runtime_or_None) -> dict | None`` lets each
+    quality rule read the window IT asked for. Without it every quality rule
+    reads the one prefetched ``quality`` slice, whose window is the widest any
+    rule asked for, so a 60-minute failure-rate rule sitting next to a 7-day
+    review-accuracy rule would be judged over 7 days. Calls are memoised per
+    ``(window, runtime)`` inside one ``evaluate`` pass.
 
     ``signals`` / ``signals_by_runtime``: the behaviour-signal rate slice for
     the ``signal_rate_above`` rule type, keyed ``{rule_id: rate_window}``
@@ -237,6 +312,7 @@ def evaluate(
 
     matches: list[dict[str, Any]] = []
     now = time.time()
+    quality_memo: dict = {}
     for raw_rule in rules:
         try:
             rule = _normalise_rule(raw_rule)
@@ -277,6 +353,17 @@ def evaluate(
             rule_quality = quality
             rule_signals = signals or {}
 
+        if quality_for is not None and rule.get("type") in QUALITY_RULE_TYPES:
+            qkey = (_quality_window_minutes(rule), rule_rt)
+            if qkey not in quality_memo:
+                try:
+                    quality_memo[qkey] = quality_for(
+                        qkey[0], None if rule_rt == "all" else rule_rt)
+                except Exception as e:
+                    log.warning("alerts: quality slice %s failed: %s", qkey, e)
+                    quality_memo[qkey] = None
+            rule_quality = quality_memo[qkey]
+
         try:
             match = _evaluate_one(rule, rule_events, rule_quality,
                                   signal_window=(rule_signals or {}).get(rid),
@@ -312,6 +399,39 @@ def evaluate(
 # ── Rule normalisation ────────────────────────────────────────────────────────
 
 
+# Type-specific fields a rule may carry. A cloud-authored rule reaches the
+# daemon as the cloud's stored body (sync.py ``alert_rule_upsert``), and the
+# cloud stores only its named columns plus a free-form ``config`` object, so
+# these fields arrive nested under ``config``, not at the top level where the
+# evaluators read them. Without lifting them, a hosted-dashboard rule silently
+# ran on defaults: a signal rule lost its signal, a latency rule its window.
+CONFIG_FIELDS = ("signal", "window_minutes", "window_sec", "min_turns",
+                 "min_sessions", "tool_name", "kinds")
+
+
+def flatten_condition(cond: dict[str, Any]) -> dict[str, Any]:
+    """Lift :data:`CONFIG_FIELDS` out of a nested ``config`` object into the
+    condition. A top-level value always wins; nothing else in ``config`` is
+    touched. Returns a new dict (or ``cond`` itself when there is nothing to
+    lift)."""
+    cfg = cond.get("config")
+    if isinstance(cfg, str):
+        import json as _json
+        try:
+            cfg = _json.loads(cfg)
+        except Exception:
+            cfg = None
+    if not isinstance(cfg, dict):
+        return cond
+    lifted = {k: cfg[k] for k in CONFIG_FIELDS
+              if cfg.get(k) is not None and cond.get(k) is None}
+    if not lifted:
+        return cond
+    out = dict(cond)
+    out.update(lifted)
+    return out
+
+
 def _normalise_rule(raw_rule: dict[str, Any]) -> dict[str, Any] | None:
     """Project a raw DuckDB ``alert_rules`` row into the evaluator's expected
     shape. Reads ``condition_json`` (the cloud rule body) and surfaces the
@@ -332,6 +452,7 @@ def _normalise_rule(raw_rule: dict[str, Any]) -> dict[str, Any] | None:
             return None
     if not isinstance(cond, dict):
         return None
+    cond = flatten_condition(cond)
 
     rule_type = cond.get("type")
     if not rule_type:
@@ -414,6 +535,10 @@ def _evaluate_one(
         return _eval_outcome_failure_rate(rule, quality)
     if rt == "dollars_per_done_above":
         return _eval_dollars_per_done(rule, quality)
+    # REQ-AGO-001: latency SLOs and alertable AgentOps rates are dispatched
+    # here; _eval_agentops reads the quality slice for the specific figure.
+    if rt in AGENTOPS_RULE_TYPES:
+        return _eval_agentops(rule, quality)
     # Unknown type — log once and skip. (PRD says: leave a TODO. Here we
     # explicitly under-fire instead of mis-firing.)
     log.debug("alerts: unsupported rule type %r — skipped (rule_id=%s)",
@@ -434,7 +559,8 @@ def _quality_window_minutes(rule: dict[str, Any]) -> int:
     if cond.get("window_sec") is not None:
         secs = _coerce_int(cond.get("window_sec"), DEFAULT_QUALITY_WINDOW_MINUTES * 60)
         return max(1, secs // 60)
-    return DEFAULT_QUALITY_WINDOW_MINUTES
+    spec = AGENTOPS_RULES.get(rule.get("type")) or {}
+    return int(spec.get("window_minutes", DEFAULT_QUALITY_WINDOW_MINUTES))
 
 
 def _quality_min_sessions(rule: dict[str, Any]) -> int:
@@ -544,6 +670,76 @@ def _eval_outcome_failure_rate(
             "outcome_counts":   quality.get("outcome_counts") or {},
             "min_sessions":     min_sessions,
             "window_minutes":   window_minutes,
+        },
+    }
+
+
+def _eval_agentops(
+    rule: dict[str, Any],
+    quality: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """One evaluator for every :data:`AGENTOPS_RULES` type.
+
+    Reads the spec's figure off the quality slice, converts it to the
+    threshold's unit and compares in the spec's direction. No sample, a
+    sample under the floor, or a figure the store could not compute
+    (``None``) is a no-fire: a latency SLO must never page on an empty hour.
+    ``tool_latency_p95_above`` may name one tool (``condition.tool_name``);
+    it then reads that tool's row instead of the node-wide figure."""
+    spec = AGENTOPS_RULES.get(rule.get("type") or "")
+    if not spec or not isinstance(quality, dict):
+        return None
+    threshold = rule.get("threshold")
+    if threshold is None:
+        return None
+    threshold = float(threshold)
+    cond = rule.get("condition") or {}
+    value = quality.get(spec["value"])
+    sample = int(quality.get(spec["sample"]) or 0)
+    tool = ""
+    if rule.get("type") == "tool_latency_p95_above":
+        tool = str(cond.get("tool_name") or "").strip()
+    if tool:
+        row = next((t for t in (quality.get("tool_latency_by_tool") or [])
+                    if t.get("name") == tool), None)
+        if not row:
+            return None
+        value, sample = row.get("p95_ms"), int(row.get("timed_calls") or 0)
+    min_sample = max(1, _coerce_int(cond.get("min_sessions"), spec["min_sample"]))
+    window_minutes = _quality_window_minutes(rule)
+    if value is None or sample < min_sample:
+        return None
+
+    is_rate = bool(spec.get("rate"))
+    if is_rate:
+        limit = threshold if threshold <= 1.0 else threshold / 100.0
+        measured = float(value)
+        shown, limit_shown = f"{measured:.1%}", f"{limit:.1%}"
+    else:
+        limit = threshold
+        measured = float(value) / float(spec["scale"])
+        shown = f"{measured:.2f} {spec['unit']}"
+        limit_shown = f"{limit:g} {spec['unit']}"
+    above = spec["direction"] == "above"
+    if limit <= 0 or (measured <= limit if above else measured >= limit):
+        return None
+
+    subject = spec["label"] + (f" for {tool}" if tool else "")
+    return {
+        "event": _quality_pseudo_event(rule["type"], window_minutes),
+        "summary": (f"rule fired: {subject} {shown} over {sample} "
+                    f"{spec['noun']} in {window_minutes}m "
+                    f"({'above' if above else 'below'} {limit_shown})"),
+        "metadata": {
+            "metric":         spec["value"],
+            "value":          round(measured, 4),
+            "threshold":      round(limit, 4),
+            "unit":           "rate" if is_rate else spec["unit"],
+            "direction":      spec["direction"],
+            "sample":         sample,
+            "min_sample":     min_sample,
+            "window_minutes": window_minutes,
+            "tool_name":      tool or None,
         },
     }
 
