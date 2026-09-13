@@ -1,4 +1,4 @@
-<!-- i18n-src:12b97259721e -->
+<!-- i18n-src:a855a14295b0 -->
 > Deutsch translation of [README](../../../README.md), auto-generated from the English source. English is canonical; open a PR against `README.md` for content changes.
 
 # ClawMetry
@@ -11,12 +11,12 @@
 [![Security policy](https://img.shields.io/badge/security-policy-informational)](SECURITY.md)
 [![Egress: documented](https://img.shields.io/badge/egress-documented-informational)](docs/EGRESS.md)
 
-**Ein Agent kann hundert Tool-Aufrufe ausführen, ohne dabei voranzukommen.** ClawMetry
-liest die Session-Dateien, die deine Coding-Agenten ohnehin schon schreiben, und bringt die Zeitachse,
-die Tool-Aufrufe und alle Token- und Kostendaten, die die Laufzeitumgebung offenlegt, in eine einzige
-Ansicht — so kannst du einen langen, funktionierenden Lauf von einem unterscheiden, der feststeckt.
+**Ein Agent kann hundert Tool-Aufrufe machen, ohne dabei voranzukommen.** ClawMetry
+liest die Session-Dateien, die deine Coding-Agenten ohnehin schon schreiben, und bringt die Zeitleiste,
+die Tool-Aufrufe und alle Token- und Kostendaten, die die Runtime offenlegt, in eine einzige
+Ansicht — damit du einen langen, funktionierenden Lauf von einem hängengebliebenen unterscheiden kannst.
 
-Funktioniert mit **31 KI-Agenten-Laufzeitumgebungen** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 weitere. Ein Dashboard für deine gesamte Agenten-Flotte. ([die vollständige Liste](SUPPORTED_RUNTIMES.txt), generiert aus dem Katalog.)
+Funktioniert mit **32 KI-Agent-Runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 weitere. Ein Dashboard für deine gesamte Agenten-Flotte. ([die vollständige Liste](SUPPORTED_RUNTIMES.txt), generiert aus dem Katalog.)
 
 > 🌐 **Lies dies auf:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [mehr →](docs/i18n/)
 
@@ -26,8 +26,8 @@ Ein Befehl. Keine Konfiguration. Erkennt alles automatisch.
 pip install clawmetry && clawmetry
 ```
 
-Öffnet sich unter **http://localhost:8900**. Keine Konfiguration nötig: Es findet die Agenten-Laufzeitumgebungen,
-die du bereits hast, liest sie nur lesend und ändert nichts an ihrer Funktionsweise.
+Öffnet sich unter **http://localhost:8900**. Keine Konfiguration nötig: Es findet die Agent-Runtimes,
+die du bereits hast, liest sie nur lesend aus und ändert nichts daran, wie sie laufen.
 
 ![ClawMetry dashboard: every AI agent runtime on one machine with 24h and lifetime cost per agent](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/hero.png)
 
@@ -36,129 +36,129 @@ die du bereits hast, liest sie nur lesend und ändert nichts an ihrer Funktionsw
 | | |
 |---|---|
 | **Was es tut** | Liest die Session-Dateien und Logs, die deine Agenten ohnehin schon schreiben. Kein SDK, keine Codeänderung, keine Instrumentierung in deiner App. |
-| **Was du siehst** | Session-Zeitachse, Tool-für-Tool-Wiedergabe, Token- und Kostenaufschlüsselung sowie Trajektoriensignale (Schleifen, wiederholte Fehlschläge) — pro Laufzeitumgebung. |
-| **Was kostenlos ist** | `pip install clawmetry` liest **OpenClaw, NVIDIA NemoClaw und Goose** ohne Konto, ohne Schlüssel und ohne Netzwerkaufruf. Die anderen 27 — Claude Code, Codex, Cursor und der Rest — werden vom closed-source `clawmetry-pro`-Begleitprogramm gelesen, das mit der 7-tägigen Testphase oder einem Plan verfügbar wird — siehe [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) für die genaue Aufteilung. |
-| **Wie du startest** | `pip install clawmetry && clawmetry`, dann localhost:8900 öffnen. Noch keine Agenten auf dieser Maschine? `clawmetry --sample` öffnet mit drei beschrifteten synthetischen Sessions. |
-| **Was deine Maschine verlässt** | Keine Session-Daten, außer du führst `clawmetry connect` aus. Zwei Dinge laufen standardmäßig, beide opt-out und keines davon trägt Session-Inhalte: ein anonymer Installations-Ping und eine PyPI-Versionsprüfung. Jedes Ziel ist in [docs/EGRESS.md](docs/EGRESS.md) inventarisiert, erstellt aus einer Netzwerkmitschnitt-Analyse statt aus dem Lesen von Kommentaren. |
+| **Was du siehst** | Session-Zeitleiste, Tool-für-Tool-Wiedergabe, Token- und Kostenaufschlüsselung sowie Trajektoriensignale (Schleifen, wiederholte Fehlschläge) — pro Runtime. |
+| **Was kostenlos ist** | `pip install clawmetry` liest **OpenClaw, NVIDIA NemoClaw und Goose** ohne Konto, ohne Schlüssel und ohne Netzwerkaufruf. Die anderen 27 — Claude Code, Codex, Cursor und der Rest — werden vom Closed-Source-Begleiter `clawmetry-pro` gelesen, der mit der 7-tägigen Testversion oder einem Plan kommt — siehe [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) für die genaue Aufteilung. |
+| **Wie man startet** | `pip install clawmetry && clawmetry`, dann localhost:8900 öffnen. Noch keine Agenten auf dieser Maschine? `clawmetry --sample` öffnet sich mit drei beschrifteten synthetischen Sessions. |
+| **Was deine Maschine verlässt** | Keine Session-Daten, außer du führst `clawmetry connect` aus. Standardmäßig laufen zwei Dinge, beide opt-out und keines mit Session-Inhalten: ein anonymer Installations-Ping und eine PyPI-Versionsprüfung. Jedes Ziel ist in [docs/EGRESS.md](docs/EGRESS.md) aufgeführt, erstellt aus einer Netzwerk-Mitschnitt-Analyse statt aus dem Lesen von Kommentaren. |
 
-Zwei Einschränkungen, die es wert sind, vor der Beurteilung der Ausgabe zu kennen: Laufzeitumgebungen legen sehr
+Zwei Einschränkungen, die es sich zu kennen lohnt, bevor du die Ausgabe beurteilst: Runtimes legen sehr
 unterschiedliche Daten offen (manche veröffentlichen überhaupt keine Kosten — [die Matrix](docs/compatibility.md)
-zeigt, welche das sind, pro Laufzeitumgebung), und eine Aktion zu beobachten ist nicht dasselbe wie sie
-blockieren zu können ([welche Kontrollen real sind, pro Laufzeitumgebung](docs/APPROVALS.md)).
+zeigt, welche, pro Runtime), und eine Aktion zu beobachten ist nicht dasselbe wie sie
+blockieren zu können ([welche Kontrollen real sind, pro Runtime](docs/APPROVALS.md)).
 
 
-## Funktioniert mit 31 Laufzeitumgebungen
+## Funktioniert mit 32 Agent-Runtimes
 
 **Kostenlos in der Open-Source-App:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)**
 
-**Im kostenpflichtigen Plan:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
+**Im kostenpflichtigen Plan:** ◆ **[Claude Code](https://clawmetry.com/runtimes/claude-code)** · **[Cursor](https://clawmetry.com/runtimes/cursor)** · 🐙 **[GitHub Copilot](https://clawmetry.com/runtimes/copilot)** · ⬡ **[OpenAI Codex](https://clawmetry.com/runtimes/codex)** · ♊ **[Gemini CLI](https://clawmetry.com/runtimes/gemini-cli)** · 💗 **[Lovable](https://clawmetry.com/runtimes/lovable)** · ⠕ **[Replit Agent](https://clawmetry.com/runtimes/replit)** · 🖇 **[Cline](https://clawmetry.com/runtimes/cline)** · 🙌 **[OpenHands](https://clawmetry.com/runtimes/openhands)** · 🧑‍💼 **[OpenWorker](https://clawmetry.com/runtimes/openworker)** · 🎭 **[Muse Code](https://clawmetry.com/runtimes/muse-code)** · 🏛️ **[OpenExecutive](https://clawmetry.com/runtimes/openexecutive)** · **[opencode](https://clawmetry.com/runtimes/opencode)** · **[Aider](https://clawmetry.com/runtimes/aider)** · 🔗 **[n8n](https://clawmetry.com/runtimes/n8n)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)** · 🅳 **[Devin](https://clawmetry.com/runtimes/devin)** · 🪐 **[Antigravity](https://clawmetry.com/runtimes/antigravity)** · **[Grok Build](https://clawmetry.com/runtimes/grok)** · 🤖 **[Grok Bot](https://clawmetry.com/runtimes/grok-bot)** · ⚡ **[Hermes](https://clawmetry.com/runtimes/hermes)** · **[Pi](https://clawmetry.com/runtimes/pi)** · **[Deep Agents](https://clawmetry.com/runtimes/deep-agents)** · 🌙 **[Kimi CLI](https://clawmetry.com/runtimes/kimi)** · 🐋 **[DeepSeek Harness](https://clawmetry.com/runtimes/deepseek-harness)** · 🦾 **[Exo](https://clawmetry.com/runtimes/exo)** · **[NanoClaw](https://clawmetry.com/runtimes/nanoclaw)** · **[PicoClaw](https://clawmetry.com/runtimes/picoclaw)** · **[QM](https://clawmetry.com/runtimes/qm)**
 
-Jede Laufzeitumgebung erhält dasselbe Dashboard. Führe mehrere gleichzeitig aus, und der
-Umschalter im Header skopiert jeden Tab neu auf eine davon.
+Jede Runtime bekommt dasselbe Dashboard. Führe mehrere gleichzeitig aus, und der
+Umschalter im Header richtet jeden Tab neu auf eine davon aus.
 
-Hast du deinen eigenen Agenten auf einem SDK gebaut? Der Interceptor erfasst auch dessen LLM-Aufrufe.
-Siehe [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
+Hast du deinen eigenen Agenten auf einem SDK gebaut statt darauf? Der Interceptor erfasst auch dessen
+LLM-Aufrufe. Siehe [docs/SDK_TRACKING.md](docs/SDK_TRACKING.md).
 
 ## Was du bekommst
 
 - **Sessions & Transkripte**: was jeder Agent getan hat, Zug um Zug, mit Wiedergabe
-- **Kosten & Tokens**: pro Laufzeitumgebung, Modell, Session und Tag, mit Anomaliekennzeichnung
-- **Flow**: Live-Diagramm von Nachrichten, die durch Kanäle, Modelle und Tools wandern
-- **Brain**: der Reasoning- und Tool-Aufruf-Eventstream in Echtzeit
-- **Context-Blowout**: Fenstergröße pro Anbieter, Kompaktierung vs. erzwungener Overflow, plus eine Karte pro Laufzeitumgebung, was wir *nicht* sehen können ([wie](docs/CONTEXT_BLOWOUT.md))
-- **Memory & Skills**: die Dateien und Skills, die jede Laufzeitumgebung tatsächlich geladen hat
-- **Health & Logs**: Speicherplatz, RAM, Fehlerraten, Rate-Limits, Live-Log-Stream
+- **Kosten & Tokens**: pro Runtime, Modell, Session und Tag, mit Anomalie-Markierungen
+- **Flow**: Live-Diagramm der Nachrichten, die durch Kanäle, Modelle und Tools laufen
+- **Brain**: der Strom von Reasoning- und Tool-Aufruf-Ereignissen, während er passiert
+- **Context Blowout**: Fensterauslastung, angepasst pro Anbieter, Kompaktierung vs. erzwungenes Überlaufen, plus eine Übersicht pro Runtime darüber, was wir *nicht* sehen können ([wie](docs/CONTEXT_BLOWOUT.md))
+- **Memory & Skills**: die Dateien und Skills, die jede Runtime tatsächlich geladen hat
+- **Health & Logs**: Festplatte, Speicher, Fehlerraten, Rate-Limits, Live-Log-Stream
 - **Alerts**: Budgetgrenzen, Fehlerspitzen, Agent-offline, weitergeleitet an Slack, Discord, PagerDuty, Telegram, E-Mail
-- **Approvals**: riskante Tool-Aufrufe *vor* der Ausführung pausieren und vom Handy aus genehmigen ([wie](docs/APPROVALS.md))
+- **Approvals**: riskante Tool-Aufrufe pausieren, *bevor* sie ausgeführt werden, und von deinem Handy aus genehmigen ([wie](docs/APPROVALS.md))
 
-## Context-Blowout, und was das Beobachten kostet
+## Context Blowout, und was das Beobachten kostet
 
-Zwei Fragen, die es wert sind, beantwortet zu werden, bevor du irgendeinem Agenten-Vergleichstool vertraust.
+Zwei Fragen, die sich zu beantworten lohnen, bevor du irgendeinem Tool zum Agentenvergleich vertraust.
 
-**Wie geht es mit Context-Window-Blowout über verschiedene Laufzeitumgebungen hinweg um?**
+**Wie geht es mit Context-Window-Blowout über Runtimes hinweg um?**
 
-Ein Auslastungsprozentsatz ist nur so ehrlich wie das, wodurch er dividiert. ClawMetry
+Ein Auslastungsprozentsatz ist nur so ehrlich wie das, wodurch er geteilt wird. ClawMetry
 bemisst das Fenster pro Anbieter anhand [einer Tabelle, die du lesen und
 per PR ändern kannst](clawmetry/context_windows.py), die Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama und GLM abdeckt. Es misst nicht alle 31
-Laufzeitumgebungen mit dem Lineal eines einzigen Anbieters. Das ist wichtig: Ein 300K-GPT-5-Turn,
-gemessen gegen Anthropics 200K, liest sich als ">100%, blown", obwohl er tatsächlich bei 75% von
-GPT-5s 400K liegt. Dasselbe Lineal verbirgt einen tatsächlich übergelaufenen 130K-DeepSeek-Turn
-als bequeme 65%.
+DeepSeek, Kimi, Qwen, Mistral, Llama und GLM abdeckt. Es misst nicht alle 32
+Runtimes mit dem Lineal eines einzigen Anbieters. Das ist wichtig: Ein 300K-GPT-5-Turn,
+bewertet gegen Anthropics 200K, liest sich als ">100%, blown", obwohl er tatsächlich bei 75% von
+GPT-5s 400K liegt. Dasselbe Lineal versteckt einen tatsächlich übergelaufenen 130K-DeepSeek-Turn
+als komfortable 65%.
 
-Jedes Fenster wird mit seiner Herkunft ausgeliefert: `model_table`, `explicit_marker`,
+Jedes Fenster liefert seine Herkunft mit: `model_table`, `explicit_marker`,
 `observed_floor`, oder ein ehrliches `default`, wenn wir das Modell nicht kennen. Eine
-auf einer Vermutung basierende Anzeige wird nie mit derselben Autorität dargestellt wie eine,
-die auf einem Nachschlagen basiert.
+Anzeige, die auf einer Vermutung basiert, wird nie mit derselben Autorität dargestellt wie eine, die auf
+einem Nachschlagen basiert.
 
-ClawMetry kann Kompaktierungsereignisse nur bei manchen Laufzeitumgebungen sehen. Deshalb meldet
-`GET /api/context-coverage` pro Laufzeitumgebung, ob eine **Null bedeutet "sauber gelaufen" oder "wir sind
-blind"**. Eine `0`, die tatsächlich blind bedeutet, sagt das auch so.
+ClawMetry kann Kompaktierungsereignisse nur bei manchen Runtimes sehen. Deshalb meldet
+`GET /api/context-coverage` pro Runtime, ob eine **Null bedeutet "sauber gelaufen" oder
+"wir sind blind"**. Eine `0`, die eigentlich blind bedeutet, sagt das auch so.
 [Vollständige Details](docs/CONTEXT_BLOWOUT.md)
 
 **Was kostet die Instrumentierung?**
 
 | Pfad | Zu deinem Agenten hinzugefügt | Standard? |
 |---|---|---|
-| Session-Datei-Tailing (alle 31 Laufzeitumgebungen) | **0**. Separater Prozess, kein ClawMetry-Code in deinem Agenten | an |
+| Session-Datei-Tailing (alle 32 Runtimes) | **0**. Separater Prozess, kein ClawMetry-Code in deinem Agenten | an |
 | HTTP-Interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** pro LLM-Aufruf, oder 0,009% eines 5s-Aufrufs | aus |
-| Pre-Tool-Hook-Gate (warmer Cache) | **+44 ms** pro gegatetem Tool-Aufruf, über einem 36-ms-Interpreter-Boden | aus |
+| Pre-Tool-Hook-Gate (warmer Cache) | **+44 ms** pro gegatetem Tool-Aufruf, über einem Interpreter-Sockel von 36 ms | aus |
 | Enforcement-Proxy | **+9,7 ms** pro LLM-Aufruf | aus |
 
-Daemon-Host-Kosten: **2.762 Events/Sek.** Ingest, **710 Bytes/Event** auf der Festplatte
-(67,7 MB pro 100.000 Events), und **~12% eines Kerns** dauerhaft bei einer stark ausgelasteten
-Installation. Diese letzte Zahl liegt über unserem eigenen angegebenen 5-10%-Budget, daher wird sie
+Daemon-Host-Kosten: **2.762 Ereignisse/Sek.** Ingest, **710 Bytes/Ereignis** auf der Festplatte
+(67,7 MB pro 100.000 Ereignisse), und **~12% eines Kerns** dauerhaft bei einer stark ausgelasteten
+Installation. Diese letzte Zahl liegt über unserem eigenen angegebenen Budget von 5-10%, deshalb wird sie
 als zu behebender Fehler veröffentlicht, statt von der Seite weggelassen zu werden.
 
 Gemessen auf einem Apple M2 Pro mit `benchmarks/overhead.py`. Der Test-Harness führt
-jede Bedingung in einem separaten Prozess aus, wechselt deren Reihenfolge ab und **weigert sich,
-eine Zahl auszugeben, wenn sich die Durchläufe im Vorzeichen widersprechen**. Führe ihn in einer Minute
-auf deiner eigenen Maschine aus:
+jede Bedingung in einem separaten Prozess aus, wechselt ihre Reihenfolge ab und **weigert sich,
+eine Zahl auszugeben, wenn die Durchläufe sich beim Vorzeichen widersprechen**. Führe ihn auf deiner eigenen
+Maschine in einer Minute aus:
 
 ```bash
 pip install clawmetry && python -m benchmarks.overhead
 ```
 
 Jeder Pfad wird gemessen, einschließlich der Hook-Gates und des Enforcement-Proxys,
-und der Harness läuft in CI auf Linux, macOS und Windows. Zwei Ergebnisse, die es wert sind zu
-kennen: Der Proxy kostet auf Windows etwa siebenmal mehr als auf Linux, und
-der Daemon hält aktuell etwa 12% eines Kerns aufrecht, über unserem eigenen 5-10%-
-Budget. Die Rohdaten als JSON, die Methode und was noch ungemessen ist, stehen in
+und der Harness läuft in CI unter Linux, macOS und Windows. Zwei Ergebnisse, die es sich zu wissen
+lohnt: Der Proxy kostet unter Windows etwa siebenmal mehr als unter Linux, und
+der Daemon hält derzeit etwa 12% eines Kerns aufrecht, über unserem eigenen Budget von 5-10%.
+Die Rohdaten als JSON, die Methode und was noch ungemessen ist, stehen in
 [docs/OVERHEAD.md](docs/OVERHEAD.md).
 
 ## Preise
 
-| Plan | Was er abdeckt | Preis |
+| Plan | Was abgedeckt ist | Preis |
 |---|---|---|
 | **Free** | OpenClaw + NVIDIA NemoClaw + Goose, vollständiges Dashboard, nur lokal | $0 |
-| **Starter** | Jede andere oben genannte Laufzeitumgebung, Fleet-Ansicht, Cloud-Sync | $9 pro Node / Monat |
-| **Pro** | Starter + Kontrolle und Evaluierung: Approvals, Tool-Risikorichtlinien, Evals, Anomalieerkennung, Kostenoptimierer, OTel-Export, manipulationssicheres Audit-Log | $19 pro Node / Monat |
+| **Starter** | Jede andere oben genannte Runtime, Flottenansicht, Cloud-Sync | $9 pro Knoten / Monat |
+| **Pro** | Starter + Kontrolle und Auswertung: Approvals, Tool-Risiko-Richtlinien, Evals, Anomalieerkennung, Kostenoptimierer, OTel-Export, manipulationssicheres Audit-Log | $19 pro Knoten / Monat |
 
 Jahrespläne, Enterprise und die aktuellen Zahlen findest du unter
 **[clawmetry.com/pricing](https://clawmetry.com/pricing)**. Selbst gehostete Lizenzschlüssel
-funktionieren ohne die Cloud (`clawmetry license`). Die genaue Aufteilung zwischen kostenlos und kostenpflichtig steht
+funktionieren ohne die Cloud (`clawmetry license`). Die genaue Aufteilung zwischen kostenlos/kostenpflichtig steht
 in [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md).
 
 ## Deine Daten bleiben auf deiner Maschine
 
 ClawMetry liest lokale Session-Dateien und Logs. **Keine Session-Daten verlassen deine Maschine,
 außer du führst `clawmetry connect` aus** — keine Prompts, Antworten, Tool-Argumente, Dateiinhalte
-oder Log-Zeilen. Wenn du dich verbindest, wird der Snapshot Ende-zu-Ende verschlüsselt
-mit einem Schlüssel, der deine Maschine nie verlässt, und in deinem Browser entschlüsselt. Wenn ein
-Node keinen Schlüssel hat, wird der Upload übersprungen statt im Klartext gesendet, und keine
-Serverantwort kann das abschalten.
+oder Log-Zeilen. Wenn du dich verbindest, ist der Snapshot Ende-zu-Ende verschlüsselt
+mit einem Schlüssel, der deine Maschine nie verlässt, und wird in deinem Browser entschlüsselt. Wenn ein
+Knoten keinen Schlüssel hat, wird der Upload übersprungen, statt im Klartext gesendet zu werden, und keine
+Server-Antwort kann das abschalten.
 
-Zwei Dinge laufen standardmäßig, bevor du dich verbindest, beide opt-out und keines davon
-enthält Session-Daten: ein anonymer Installations-Ping und eine Versionsprüfung gegen
-PyPI. Eine Standardinstallation schlägt außerdem einmal deine öffentliche IP nach für eine Startbanner-
-Zeile. Jedes Ziel, was es überträgt und wie man es abschaltet, ist aufgelistet in
+Standardmäßig laufen zwei Dinge, bevor du dich verbindest, beide opt-out und keines
+trägt Session-Daten: ein anonymer Installations-Ping und eine Versionsprüfung gegen
+PyPI. Eine Standardinstallation sucht auch einmal deine öffentliche IP für eine Startbanner-
+Zeile nach. Jedes Ziel, was es trägt und wie man es abschaltet, ist aufgeführt in
 [docs/EGRESS.md](docs/EGRESS.md); selbst gehostete, umgeleitete und abgeschottete (air-gapped) Installationen
 tätigen überhaupt keine optionalen ausgehenden Aufrufe.
 
-Die Entschlüsselung geschieht in deinem Browser, in Code, den wir dir ausliefern. Das war früher
+Die Entschlüsselung geschieht in deinem Browser, in Code, den wir dir bereitstellen. Das war früher
 ein Versprechen; jetzt ist es etwas, das du überprüfen kannst. Jede Zeile, die deinen Schlüssel berührt,
-lebt in einer lesbaren Datei, [`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js),
-die im Wheel-Paket ausgeliefert und unverändert bereitgestellt wird, verankert mit einem Subresource-
+lebt in einer einzigen lesbaren Datei, [`clawmetry/static/js/cm-e2e.js`](clawmetry/static/js/cm-e2e.js),
+die im Wheel mitgeliefert und wortgetreu ausgeliefert wird, verankert mit einem Subresource-
 Integrity-Hash. Um zu bestätigen, dass der Browser das ausführt, was wir veröffentlicht haben:
 
 ```bash
@@ -168,11 +168,11 @@ unzip -p /tmp/cm/clawmetry-*.whl clawmetry/static/js/cm-e2e.js > published.js
 diff served.js published.js && echo identical
 ```
 
-Was das nicht beweist: Wir liefern die Seite aus, die die Datei lädt, also könnten wir
-eine andere Seite ausliefern. Integrity-Hashes schützen dich vor einem kompromittierten CDN,
-nicht vor dem Anbieter selbst. Was du gewinnst, ist, dass jeder Austausch absichtlich,
-im Seitenquelltext sichtbar und anders sein muss als ein Artefakt auf PyPI,
-das jeder abrufen kann. Selbst zu hosten oder rein lokal zu bleiben, entfernt die
+Was das nicht beweist: Wir liefern die Seite aus, die die Datei lädt, wir könnten also eine
+andere Seite ausliefern. Integrity-Hashes schützen dich vor einem kompromittierten CDN,
+nicht vor dem Anbieter. Was du gewinnst, ist, dass jede Ersetzung
+absichtlich, im Seitenquelltext sichtbar und anders sein müsste als ein Artefakt auf PyPI,
+das jeder abrufen kann. Selbst-Hosting oder rein lokales Bleiben entfernt die
 Abhängigkeit vollständig.
 
 ## Installation
@@ -181,13 +181,13 @@ Abhängigkeit vollständig.
 pip install clawmetry     # dann: clawmetry
 ```
 
-Oder die Ein-Zeilen-Variante: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
+Oder der Einzeiler: `curl -sSL https://raw.githubusercontent.com/vivekchand/clawmetry/main/install.sh | bash`
 
-Benötigt Python 3.8+ auf macOS, Linux oder Windows, und mindestens eine Agenten-Laufzeitumgebung auf
+Benötigt Python 3.8+ unter macOS, Linux oder Windows, und mindestens eine Agent-Runtime auf
 derselben Maschine. Docker-Anleitung: [docs/DOCKER.md](docs/DOCKER.md).
 
-Oder lass den Agenten es für dich einrichten. Der [`agent-kill-switch`](skills/agent-kill-switch/SKILL.md)-
-Skill bringt Claude Code, Codex, Cursor, Gemini CLI, Copilot oder OpenCode bei,
+Oder lass den Agenten es für dich einrichten. Der Skill [`agent-kill-switch`](skills/agent-kill-switch/SKILL.md)
+bringt Claude Code, Codex, Cursor, Gemini CLI, Copilot oder OpenCode bei,
 ClawMetry zu installieren, zu berichten, was die Agenten auf der Maschine tun und ausgeben,
 eine Session auf Anfrage zu stoppen und riskante Tool-Aufrufe zur Genehmigung zurückzuhalten:
 
@@ -199,35 +199,35 @@ npx skills add vivekchand/clawmetry --skill agent-kill-switch
 
 | | |
 |---|---|
-| [Runtime-Kompatibilität](docs/compatibility.md) | Was jeder Adapter liest, und wie man eine Laufzeitumgebung hinzufügt |
-| [Context-Blowout](docs/CONTEXT_BLOWOUT.md) | Fenster pro Anbieter, Kompaktierung vs. Overflow, Abdeckung pro Laufzeitumgebung |
+| [Runtime-Kompatibilität](docs/compatibility.md) | Was jeder Adapter liest, und wie man eine Runtime hinzufügt |
+| [Context Blowout](docs/CONTEXT_BLOWOUT.md) | Fenster pro Anbieter, Kompaktierung vs. Überlauf, Abdeckung pro Runtime |
 | [Overhead](docs/OVERHEAD.md) | Was Instrumentierung kostet, gemessen, mit dem Harness zum Nachvollziehen |
 | [Entitlements](docs/ENTITLEMENTS.md) | Kostenlos vs. kostenpflichtig, Tier-Matrix, Lizenz-CLI |
-| [Approvals & Policies](docs/APPROVALS.md) | Pre-Execution-Gating, Risikobewertung, Genehmigungen per Handy |
+| [Approvals & Richtlinien](docs/APPROVALS.md) | Gating vor der Ausführung, Risikobewertung, Genehmigungen per Handy |
 | [OpenTelemetry](docs/OPENTELEMETRY.md) | Traces überallhin exportieren, OTLP von überall einlesen |
-| [Bring your own agent](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore, Pydantic AI, LangChain end to end, mit lauffähigen Beispielen |
-| [SDK-Tracking](docs/SDK_TRACKING.md) | Kostenzuordnung für selbst gebaute Agenten |
+| [Bring your own Agent](docs/BRING_YOUR_OWN_AGENT.md) | AWS AgentCore, Pydantic AI, LangChain End-to-End, mit lauffähigen Beispielen |
+| [SDK-Tracking](docs/SDK_TRACKING.md) | Kostenzuordnung für Agenten, die du selbst gebaut hast |
 | [Chat-Kanäle](docs/CHANNELS.md) | Die in Flow angezeigten Chat-Adapter |
-| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Sandboxed NVIDIA NemoClaw-Setups |
+| [NemoClaw / OpenShell](docs/NEMOCLAW.md) | Sandboxed NVIDIA-NemoClaw-Setups |
 | [Docker](docs/DOCKER.md) | Image, Compose, Volume-Mounts |
-| [Architektur](ARCHITECTURE.md) · [Entwicklung](docs/DEVELOPMENT.md) | Wie es innen funktioniert; Ausführung aus dem Quellcode |
+| [Architektur](ARCHITECTURE.md) · [Entwicklung](docs/DEVELOPMENT.md) | Wie es intern funktioniert; Ausführung aus dem Quellcode |
 | [Telemetrie](docs/TELEMETRY.md) | Die anonymen Installations- und Desktop-Öffnungs-Pings, und wie man sie abschaltet |
 
 ## Screenshots
 
-Jede Zahl unten stammt von einer echten Maschine, nur lesend, ohne dass etwas vorbereitet wurde.
+Jede Zahl unten stammt von einer echten Maschine, nur lesend, ohne jegliche Vorbefüllung.
 
 **Es sagt dir, wenn etwas nicht stimmt, nicht nur, was passiert ist.**
-Zwei Anomalie-Banner oben: Ausgaben laufen auf dem 7-Fachen des Tagesdurchschnitts, und ein
-4,2-facher Kostensprung. Darunter 324 von 667 aktuellen Sessions mit einem Verschwendungssignal,
+Zwei Anomalie-Banner ganz oben: Ausgaben laufen auf dem 7-fachen des Tagesdurchschnitts, und eine
+4,2-fache Kostenspitze. Darunter, 324 von 667 letzten Sessions mit einem Verschwendungssignal,
 aufgeschlüsselt nach Ursache.
 
 ![Overview: spending anomaly and cost spike banners over live agent work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/overview.png)
 
 **Es zeigt dir, wohin das Geld geflossen ist, in jedem Zeitfenster.**
 $252,47 heute, $513,15 diese Woche, $1.312,92 diesen Monat, jeweils mit den Tokens
-dahinter und wie viel davon dein Abo bereits abdeckt. Darunter etwa $1.128/Monat, aufgeschlüsselt
-als wiedergewinnbar, und bereits $17.256/Monat gespart durch Cache-Wiederverwendung.
+dahinter und wie viel davon dein Abonnement bereits abdeckt. Darunter, etwa $1.128/Monat
+als wiedergewinnbar aufgeschlüsselt und $17.256/Monat bereits durch Cache-Wiederverwendung eingespart.
 
 ![Cost: today, this week and this month, with an efficiency grade and itemised savings ideas](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/cost.png)
 
@@ -239,50 +239,50 @@ durch sie hindurchfließt.
 ![Flow: live diagram from you through the gateway to the model and its tools](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/flow.png)
 
 **Jeder Agent auf der Maschine, in einer Tabelle.**
-Was er ausführt, was er in den letzten 24 Stunden und über seine gesamte Lebensdauer gekostet hat, wann
-er zuletzt gesehen wurde, wem er gehört, und ob ein Abo die Rechnung abdeckt. 14 Agenten hier,
-3 Sessions in Arbeit, 13 ruhig.
+Was er ausführt, was er in den letzten 24 Stunden und über seine Lebensdauer kostet, wann
+er zuletzt gesehen wurde, wem er gehört, und ob ein Abonnement die
+Rechnung abdeckt. 14 Agenten hier, 3 Sessions in Arbeit, 13 ruhig.
 
 ![Agents: every runtime on the machine with cost, owner, last seen and current work](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/agents.png)
 
 **Es zeigt, wohin die Zeit und das Geld eines Turns geflossen sind, Tool für Tool.**
 Ein Turn einer echten Session: 11 Tools in 11,2 Minuten für $1,16. Jeder Bash-
-Aufruf und Modellaufruf bekommt seinen eigenen Balken auf der Zeitachse, sodass der Befehl, der 4,1 Minuten
+Aufruf und Modellaufruf bekommt seinen eigenen Balken auf der Zeitleiste, sodass der Befehl, der 4,1 Minuten
 lief, und der, der 226 ms lief, auf einen Blick unterschieden werden können.
 
 ![Sessions: one agent turn on a timeline, every tool call with its own duration and the turn's cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/sessions.png)
 
 **Es bewertet die Arbeit, nicht nur die Ausgaben.**
-Ein A diese Woche: 54 Aufgaben kamen sauber zurück, 2 grobe kosteten $48,57, und die
-Läufe mit zu wenig Aktivität, um sie zu beurteilen, werden von der Bewertung ausgeschlossen, statt
-als Erfolge gezählt zu werden. Jeder grobe Lauf verlinkt zu seinem Trace.
+Ein A diese Woche: 54 Aufgaben kamen sauber zurück, 2 unrunde kosteten $48,57, und die
+Läufe mit zu wenig Aktivität zum Beurteilen werden aus der Bewertung ausgeschlossen, statt
+als Erfolge gezählt zu werden. Jeder unrunde Lauf verlinkt zu seiner Trace.
 
 ![Quality: this week's report card with the rough runs and what they cost](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/quality.png)
 
-**Es zeigt, warum sich das Context-Window immer wieder füllt.**
+**Es zeigt, warum sich das Context-Window immer weiter füllt.**
 715K von einem 1M-Token-Fenster im letzten Turn, ein Spitzenwert von 83,3%, 4 Kompaktierungen,
-die alle proaktiv ausgelöst wurden statt bei einem Overflow, sowie die Auslastung
-jedes vorangegangenen Turns.
+die alle proaktiv statt bei einem Überlauf ausgelöst wurden, sowie die Auslastung von
+jedem Turn dahinter.
 
 ![Context usage: window utilisation per turn, compaction events and tokens reclaimed](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/context.png)
 
-**Erkennung läuft, ohne dass du irgendetwas konfigurierst.**
+**Die Erkennung läuft, ohne dass du irgendetwas konfigurierst.**
 Die eingebauten Detektoren sind ab der Installation aktiv: Agent ist verstummt, Telemetrie-Feed
-gestoppt, Kostensprung, Token-Burst, steigende Fehler, Fehlerspitze, Budget-
-Schwellenwert, Bedrohungssignatur erkannt, Sicherheitstool-Fund, geänderte Sicherheitslage.
-Deine eigenen Regeln sind optional obendrauf.
+gestoppt, Kostenspitze, Token-Ausbruch, steigende Fehler, Fehlerspitze, Budget-
+Schwelle, Bedrohungssignatur erkannt, Fund eines Sicherheitstools, Sicherheitslage
+geändert. Deine eigenen Regeln sind optional zusätzlich möglich.
 
 ![Alerts: built-in detectors plus optional custom rules](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/alerts.png)
 
-**Das Zurückhalten eines riskanten Aufrufs ist opt-in, und standardmäßig deaktiviert.**
+**Das Zurückhalten eines riskanten Aufrufs ist opt-in, und wird deaktiviert ausgeliefert.**
 Rekursive Löschungen, Force-Pushes, sudo, Secrets, Paketinstallationen und ausgehende
-Aufrufe bekommen jeweils eine Regel, die du aktivieren kannst. Bis du das tust, beobachtet ClawMetry nur und
-ändert nichts. Sobald eine aktiviert ist, warten passende Aufrufe hier (oder auf deinem Handy)
+Aufrufe bekommen jeweils eine Regel, die du aktivieren kannst. Bis du das tust, beobachtet ClawMetry
+und ändert nichts. Sobald eine aktiv ist, warten passende Aufrufe hier (oder auf deinem Handy)
 auf ein Genehmigen oder Ablehnen.
 
 ![Approvals: protection rules for risky tool calls, all off until you enable them](https://raw.githubusercontent.com/vivekchand/clawmetry/main/screenshots/approvals.png)
 
-Mehr, pro Laufzeitumgebung: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
+Mehr, pro Runtime: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHOTS.md).
 
 ## Anerkennung
 
@@ -301,6 +301,6 @@ Mehr, pro Laufzeitumgebung: [docs/RUNTIME_SCREENSHOTS.md](docs/RUNTIME_SCREENSHO
 
 ## Lizenz
 
-MIT · Entwickelt von [@vivekchand](https://github.com/vivekchand) · [clawmetry.com](https://clawmetry.com)
+MIT · Erstellt von [@vivekchand](https://github.com/vivekchand) · [clawmetry.com](https://clawmetry.com)
 
 <!-- osai-verify: f3ac716d40002c1ad6dd -->
