@@ -2063,6 +2063,17 @@ def cloud_cta_verify_otp():
                 or ""
             ).strip()
             if cm_key:
+                # Decide access BEFORE pairing can replace the machine's
+                # account. Otherwise a rejected account becomes prev_key
+                # and receives the gateway token on its second attempt.
+                _dash = _dashboard_token_for_signin(_d, cm_key, _prev_key)
+                _gateway = (getattr(_d, "GATEWAY_TOKEN", None)
+                            or os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")).strip()
+                if _gateway and not _dash:
+                    return jsonify({
+                        "ok": False,
+                        "error": "Sign in with the account already linked to this machine, or open ClawMetry directly on this computer.",
+                    }), 403
                 # managed: route through _full_connect_with_key so this path
                 # is symmetric with the OAuth loopback bridge AND with
                 # `clawmetry connect --start-sync-now` — persist identity
@@ -2097,10 +2108,11 @@ def cloud_cta_verify_otp():
                     "trial": trial,
                     "mode": mode,
                 }
-                _dash = _dashboard_token_for_signin(_d, cm_key, _prev_key)
                 if _dash:
                     _out["dashboard_token"] = _dash
-                return jsonify(_out)
+                response = jsonify(_out)
+                response.headers["Cache-Control"] = "no-store"
+                return response
             # A 200 carrying neither a key nor an error is a shape we do not
             # understand. Say that, rather than blaming the code the user
             # typed — a wrong code comes back as a 401 and is handled below.
