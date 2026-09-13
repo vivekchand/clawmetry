@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-250 modules, 82 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+251 modules, 82 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -50,7 +50,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/evals.py` | medium | `bp_evals` | `/api/evals`, `/api/evaluators` | Eval (LLM-as-judge) endpoints. |
 | `routes/extensions.py` | small | `bp_extensions` | `/api/extensions` | diagnostic introspection for the entry-point plugin loader. |
 | `routes/fleet_history.py` | medium | `bp_fleet` | `/api/nodes`, `/fleet` | Multi-node fleet endpoints. |
-| `routes/govern.py` | small | `bp_govern` | `/api/govern` | agent identity: a principal you can attach things to. |
+| `routes/govern.py` | medium | `bp_govern` | `/api/govern` | agent identity: a principal you can attach things to. |
 | `routes/guard.py` | medium | `bp_guard` | `/api/guard` | Guard — live session control and enforcement policies. |
 | `routes/harness.py` | small | `bp_harness` | `/api/harness` | ``bp_harness`` — the per-harness custom-tab API. |
 | `routes/health.py` | large | `bp_health` | `/api/_internal`, `/api/agent-presence`, `/api/authority-violations`, `/api/backups`, `/api/config-diagnostics`, `/api/diagnostics`, `/api/doctor-findings`, `/api/gateway-health`, `/api/handler-latency`, `/api/health`, `/api/health-stream`, `/api/heartbeat-ping`, `/api/heartbeat-status`, `/api/heatmap`, `/api/loop-detection`, `/api/loop-signals`, `/api/mcp-stats`, `/api/rate-limits`, `/api/reliability`, `/api/sandbox-status`, `/api/security-threats`, `/api/service-status`, `/api/system-health`, `/api/version-health`, `/healthz` | Health / reliability / diagnostics / rate-limits endpoints. |
@@ -206,6 +206,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/lifecycle_coverage.py` | medium | Which lifecycle facts each runtime can put on a session's trail. |
 | `clawmetry/local_server.py` | medium | HTTP query server hosted INSIDE the sync daemon process. |
 | `clawmetry/local_store.py` | huge | Local DuckDB event store — Phase 1 of the local-first refactor (#964). |
+| `clawmetry/local_store_agent_meta.py` | small | AgentMetaMixin for LocalStore. |
 | `clawmetry/mcp_install.py` | medium | Register the ClawMetry MCP server with each runtime's MCP configuration (WO-59, REQ-SELF-001). |
 | `clawmetry/mcp_server.py` | medium | ClawMetry MCP server — exposes local telemetry as MCP tools (stdio transport). |
 | `clawmetry/narrator.py` | small | LLM-narrated alert enrichment (issue #1412, Feature C). |
