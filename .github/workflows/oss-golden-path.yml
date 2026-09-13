@@ -66,13 +66,13 @@ jobs:
       # the full E2E flow.
       - name: Build wheel
         run: |
-          python -m pip install --upgrade pip build
+          python -m pip install --require-hashes -r .github/requirements/pip-build-bootstrap.txt
           python -m build --wheel
 
       - name: Install wheel in isolated venv
         run: |
           python -m venv /tmp/oss-golden
-          /tmp/oss-golden/bin/pip install --upgrade pip
+          /tmp/oss-golden/bin/pip install --require-hashes -r .github/requirements/pip-bootstrap.txt
           /tmp/oss-golden/bin/pip install \
             dist/clawmetry-*.whl \
             flask waitress cryptography duckdb requests \
