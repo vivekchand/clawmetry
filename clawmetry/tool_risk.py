@@ -22,10 +22,12 @@ Design rules (non-negotiable):
   * **Worst signal wins.** Every matching rule contributes a reason; the
     final level is the maximum. Reasons are plain copy (no em-dashes, no
     jargon) because they surface verbatim in approval prompts.
-  * **This module imports nothing from the rest of clawmetry.** It is the
-    leaf that ``approvals.py`` (and routes) import, so the canonical tool
-    map lives HERE now and ``approvals`` re-exports it (single source of
-    truth, no drift between watcher / replay / hook gate).
+  * **One clawmetry import is permitted: ``clawmetry.git_config_exec``.**
+    That module is a pure-constant leaf (only imports ``re``) shared by both
+    ``tool_risk`` and ``repo_scan``. The exception is documented in the
+    Governance blueprint (PR #5848). All other clawmetry imports remain
+    prohibited so the tool map stays the leaf that ``approvals.py`` and
+    routes import.
 
 Public API:
   classify_tool_call(tool_name, args) -> {level, rank, category, reasons}
@@ -39,6 +41,9 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+
+from clawmetry.git_config_exec import executes as _git_cfg_executes
+from clawmetry.git_config_exec import value_known_good as _git_cfg_value_known_good
 
 # ── Canonical tool categories (moved verbatim from approvals.py) ──────────
 # Harness-agnostic tool categories. Approval policies are authored against
@@ -148,9 +153,23 @@ def _rx(p: str) -> "re.Pattern[str]":
 # targeting root, home, or a bare glob of either.
 _RM_RECURSIVE_FORCE = _rx(
     r"\brm\s+(?=[^|;&]*\s-\w*r)(?=[^|;&]*\s-\w*f)")
+# Quantifiers are bounded because `[^|;&]*` and the `\s+` that follows it both
+# match a space, so the engine backtracks between them: CodeQL py/polynomial-
+# redos, "slow on strings with many repetitions of ' '". This regex predates
+# the git-config work but is the one the alerts on this file actually blame,
+# and it runs on every exec classification, which the Brain feed performs
+# thousands of times per page-load. An `rm` invocation longer than these
+# bounds is not something this rule can usefully judge anyway.
+# Was compiled INLINE inside _classify_exec, so it was rebuilt on every exec
+# classification -- thousands per Brain page-load -- and `\w*r\w*` let the
+# engine backtrack between the two runs (CodeQL py/polynomial-redos). Hoisted
+# and bounded.
+_RM_DASH_R = _rx(r"\brm\s{1,8}-\w{0,8}r\w{0,8}\s")
+
 _RM_ROOT_TARGET = _rx(
-    r"\brm\s+[^|;&]*\s+(?:--?\w+\s+)*(?:/|/\*|~|~/|\$home\b|\$\{home\}|"
-    r"%userprofile%|c:\\\\?\s*$|c:\\\\?\*)\s*(?:$|[|;&])")
+    r"\brm\s{1,8}[^|;&]{0,256}\s{1,8}(?:--?\w{1,32}\s{1,8}){0,8}"
+    r"(?:/|/\*|~|~/|\$home\b|\$\{home\}|"
+    r"%userprofile%|c:\\\\?\s*$|c:\\\\?\*)\s{0,8}(?:$|[|;&])")
 
 _CMD_RULES: list[tuple["re.Pattern[str]", str, str]] = [
     # ── critical: irreversible machine or data destruction ──
@@ -213,7 +232,11 @@ _CMD_RULES: list[tuple["re.Pattern[str]", str, str]] = [
     (_rx(r"\b(?:env|printenv|set)\b\s*(?:$|[|;&])[^|;&]*"
          r"\b(?:curl|wget|nc)\b"), "high",
      "dumps environment variables toward the network"),
-    (_rx(r"\b\w*(?:api[_-]?key|secret|token|passwd|password|credential)\w*\s*="),
+    # Bounded: `\w*` on BOTH sides of the alternation lets the engine
+    # backtrack between them (CodeQL py/polynomial-redos). An identifier
+    # longer than these bounds is not one this rule can usefully judge.
+    (_rx(r"\b\w{0,32}(?:api[_-]?key|secret|token|passwd|password|credential)"
+         r"\w{0,32}\s{0,8}="),
      "high", "references secret-looking values"),
     (_rx(r"\breg\s+add\s+hklm\b"), "high",
      "writes to the Windows machine registry"),
@@ -265,13 +288,111 @@ _DESTRUCTIVE_HTTP = ("delete",)
 _WRITE_HTTP = ("post", "put", "patch")
 
 
+# EVERY quantifier below is bounded. Unbounded ones here are a real denial of
+# service, not a theoretical one: this runs on the Brain feed's hot path, which
+# classifies thousands of rows per page-load, over a command string an agent
+# (or whatever prompted it) chose. CodeQL py/polynomial-redos flagged the
+# unbounded first cut. A git config key is short and a value longer than the
+# cap is not something we can usefully rate anyway.
+_GIT_CONFIG_INLINE = _rx(r"(?:^|\s)-c[ \t]{0,4}([A-Za-z0-9._*-]{1,64})=")
+_GIT_CONFIG_ENV_OPT = _rx(
+    r"(?:^|\s)--config-env[=\s]([A-Za-z0-9._*-]{1,64})=")
+# Environment forms of the same keys, set inline on the command.
+_GIT_EXEC_ENVVARS = _rx(
+    r"\b(GIT_SSH_COMMAND|GIT_EXTERNAL_DIFF|GIT_EDITOR|GIT_PAGER|GIT_ASKPASS"
+    r"|GIT_SEQUENCE_EDITOR)=")
+# Not an exec KEY: it names no program. It enables the ext:: transport so the
+# program comes from the URL argument, which is why repo_scan's key list does
+# not (and should not) contain it.
+_GIT_EXT_TRANSPORT = _rx(r"\bprotocol\.ext\.allow\s*=")
+
+
+def _scan_config_value(cmd: str, start: int, limit: int = 512) -> str:
+    """The value after ``-c key=``, read by one left-to-right scan.
+
+    Honours a single level of shell quoting and stops at the first unquoted
+    whitespace or command separator. Linear and allocation-bounded by
+    construction: no regex, so no backtracking to be polynomial about.
+    """
+    out: list = []
+    quote = ""
+    for ch in cmd[start:start + limit]:
+        if quote:
+            if ch == quote:
+                quote = ""
+            else:
+                out.append(ch)
+            continue
+        if ch in "\"'":
+            quote = ch
+            continue
+        if ch.isspace() or ch in ";|&":
+            break
+        out.append(ch)
+    return "".join(out)
+
+
+def _classify_git_exec_config(cmd: str, hits: list[tuple[str, str]]) -> None:
+    """Flag `git -c <key>=<value>` where the key makes git run a program.
+
+    Uses ``_git_cfg_executes`` / ``_git_cfg_value_known_good`` from
+    ``clawmetry.git_config_exec``. Reasons name the key so an operator working the Approvals
+    queue can identify the threat.
+    """
+    if "git" not in cmd.lower():
+        return
+    seen: set = set()
+    for m in _GIT_CONFIG_INLINE.finditer(cmd):
+        key = m.group(1)
+        k = key.lower()
+        # The VALUE is scanned, never matched. A regex alternation over
+        # quoted-or-unquoted is ambiguous -- the unquoted branch also matches a
+        # quote -- which is a polynomial backtrack on a hot path
+        # (CodeQL py/polynomial-redos). A single left-to-right scan cannot
+        # backtrack at all. Shell quoting is the caller's, not git's:
+        # `alias.x='!payload'` must read as `!payload` or the value-dependent
+        # alias rule never fires.
+        val = _scan_config_value(cmd, m.end())
+        if k in seen:
+            continue
+        if not _git_cfg_executes(k, val):
+            continue
+        seen.add(k)
+        if _git_cfg_value_known_good(val):
+            # Recognition, not suppression: `core.pager=less` executes by
+            # definition and is ordinary. Say what it is and leave the level
+            # to the other rules rather than promoting a common command.
+            hits.append(("medium",
+                         f"sets git {key} to a recognised tool ({val.split()[0]})"))
+            continue
+        hits.append(("high", f"sets git {key}, which git executes"))
+    # --config-env names an ENV VAR holding the value, so the value is not
+    # visible here; the predicate is called with an empty value, which matches
+    # literal exec keys and deliberately does not fire on value-dependent ones.
+    for key in _GIT_CONFIG_ENV_OPT.findall(cmd):
+        k = key.lower()
+        if k not in seen and _git_cfg_executes(k):
+            seen.add(k)
+            hits.append(("high",
+                         f"sets git {key} from the environment, which git executes"))
+    for name in _GIT_EXEC_ENVVARS.findall(cmd):
+        hits.append(("high", f"sets {name}, which git executes"))
+    if _GIT_EXT_TRANSPORT.search(cmd):
+        hits.append(("high",
+                     "enables the git ext:: transport, which runs a program "
+                     "named in the remote URL"))
+
+
 def _classify_exec(cmd: str, hits: list[tuple[str, str]]) -> None:
     low = cmd.lower()
     for rx_, level, reason in _CMD_RULES:
         if rx_.search(low):
             hits.append((level, reason))
+    # Read from the ORIGINAL command, not `low`: an alias's executability
+    # depends on its value, and lowercasing a path can change it.
+    _classify_git_exec_config(cmd, hits)
     # rm -rf aimed at root or home escalates to critical.
-    if _RM_RECURSIVE_FORCE.search(low) or _rx(r"\brm\s+-\w*r\w*\s").search(low):
+    if _RM_RECURSIVE_FORCE.search(low) or _RM_DASH_R.search(low):
         if _RM_ROOT_TARGET.search(low):
             hits.append(("critical",
                          "recursive delete targets the filesystem root or home"))
