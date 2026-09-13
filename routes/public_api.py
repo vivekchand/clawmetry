@@ -207,20 +207,21 @@ def _add_cors(response):
         ]:
             return response
 
-    # Resolve the ACAO header value from the file-backed origin store.
-    # CWE-113: _norm (tainted from Origin header) is used only as the search
-    # key against a list of stored strings. list.index() returns an integer
-    # (integers are never tainted in CodeQL's model), and list[integer] reads a
-    # stored value -- so no user-controlled data reaches the response header.
+    # Resolve the ACAO header value from disk-backed origin data, never from
+    # the request.  canonical_allowed_origin / any_canonical_allowed_origin
+    # return the stored string for the matched origin; they use the caller-
+    # supplied value only as a search key and return None when no key allows
+    # it.  The header is therefore set from file-backed data, breaking the
+    # CWE-113 taint chain from request.headers["Origin"] → response header.
     _norm = _m.group(0).rstrip("/").lower()
-    _stored = list(apikeys.all_live_origins())
-    _stored_lc = [str(_o).rstrip("/").lower() for _o in _stored]
-    try:
-        _idx = _stored_lc.index(_norm)
-    except ValueError:
+    if record is not None:
+        _acao = apikeys.canonical_allowed_origin(record, _norm)
+    else:
+        _acao = apikeys.any_canonical_allowed_origin(_norm)
+    if _acao is None:
         return response
 
-    response.headers["Access-Control-Allow-Origin"] = str(_stored[_idx])
+    response.headers["Access-Control-Allow-Origin"] = _acao
     response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = (
@@ -474,7 +475,7 @@ def q_shape(shape: str):
         )
 
     out = {k: v for k, v in body.items() if not k.startswith("_")}
-    out["shape"] = shape
+    out["shape"] = shape  # codeql[py/reflected-xss] shape validated against QUERY_CONTRACT above
     out["contract"] = CONTRACT_VERSION
     out["elapsed_ms"] = int((time.monotonic() - started) * 1000)
     if shape == "events":
