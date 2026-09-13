@@ -658,6 +658,13 @@ jobs:
       - name: The sync cycle isolates every ingest call
         run: python3 -m pytest tests/test_sync_cycle_fault_isolation.py -q
 
+      # Issue #5932: when the stall watchdog fires it must also write a full
+      # thread-stack dump to ~/.clawmetry/daemon_stall_diag.txt so Windows +
+      # py3.13 hangs are diagnosable. The dump runs in a nested try so a write
+      # failure never kills the heartbeat thread.
+      - name: Stall watchdog writes a thread-stack diagnostic file
+        run: python3 -m pytest tests/test_sync_stall_diag.py -q
+
       # The module map is generated from each module's docstring, and the
       # generator took the first LINE, so a docstring whose opening sentence
       # wrapped produced a row cut mid-clause. Nothing failed: the generator
