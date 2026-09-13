@@ -1,0 +1,45 @@
+# Hash-pinned install set for the pip bootstrap step.
+#
+# Direct requirements: pip
+#
+# This is the `python -m pip install --upgrade pip` that opens a job, before
+# anything else is installed. It was the last unpinned resolve left in the
+# jobs that already install everything else with --require-hashes: the job
+# would fetch whatever pip PyPI served that minute, and then use THAT pip to
+# verify every hash below it. Pinning the verifier is the point -- a
+# hash-checked install is only worth as much as the installer doing the
+# checking.
+#
+# `--upgrade` is not needed and not used: naming an exact version installs
+# exactly that version over whatever actions/setup-python shipped, which is
+# what the upgrade was reaching for anyway.
+#
+# Installed with `pip install --require-hashes`, which refuses to install
+# anything not listed here with a matching hash -- so the job gets the exact
+# artifacts this file names, or it fails. pip has no dependencies of its own,
+# so the whole closure is the one name.
+#
+# Each version lists the sha256 of EVERY distribution PyPI publishes for it
+# (wheels for each platform, plus the sdist). pip accepts a download that
+# matches any one of them, so the pin does not quietly depend on the runner
+# resolving to the same wheel this file was generated against. That is what
+# lets the same file serve the ubuntu/macos/windows matrix in
+# overhead-bench.yml.
+#
+# pip 26.x requires Python >= 3.10. Every job installing this file runs on
+# 3.11 (all ten call sites pin `python-version: "3.11"`). A job on 3.9 must
+# not use this file without pinning a pip that supports it.
+#
+# Updating: Dependabot owns the routine bumps (see the /.github/requirements
+# pip entry in .github/dependabot.yml) and rewrites the hashes with them. A
+# pin with no updater is the frozen end of the same problem an unpinned
+# install is at the other end of.
+#
+# Regenerating by hand, on Linux / CPython 3.11 to match the job:
+#   pip install --dry-run --ignore-installed --report r.json pip
+# then, for each resolved name==version, take every sha256 under `urls` in
+# https://pypi.org/pypi/<name>/<version>/json.
+
+pip==26.2.1 \
+    --hash=sha256:71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e \
+    --hash=sha256:f6ad667e89a1fe78046c8f13232b247200f5258d7828f3f7883d660878e0813f

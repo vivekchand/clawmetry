@@ -1,0 +1,60 @@
+# Hash-pinned install set for the pip + build bootstrap step.
+#
+# Direct requirements: pip build
+#
+# The three jobs that build the wheel from source open with
+# `python -m pip install --upgrade pip build`. That is the same bootstrap
+# pinned in pip-bootstrap.txt, plus PyPA `build`, which is the tool that
+# produces the artifact those jobs then test. An unpinned resolve there means
+# the wheel under test was assembled by whatever build backend PyPI served
+# that minute.
+#
+# Deliberately a SECOND file rather than folding `build` into
+# pip-bootstrap.txt. Seven of the ten bootstrap call sites do not build
+# anything -- three of them bootstrap a throwaway venv that the E2E suites
+# then use to prove a freshly installed wheel boots on its own. Adding
+# `build` and its closure to those venvs would widen the dependency surface
+# the test is measuring, which is exactly the bug an isolated-venv test
+# exists to catch. Keeping the two sets apart keeps every job's installed set
+# identical to what it was before this pin.
+#
+# Installed with `pip install --require-hashes`, which refuses to install
+# anything not listed here with a matching hash. Every transitive dependency
+# is present because --require-hashes demands the whole closure; `packaging`
+# and `pyproject_hooks` are build's, not padding.
+#
+# `colorama` is deliberately absent: build declares it only under
+# `os_name == "nt"`, and all three call sites run on ubuntu-latest. A Windows
+# job adopting this file needs colorama added, or pip will refuse the install
+# rather than silently skip it.
+#
+# Each version lists the sha256 of EVERY distribution PyPI publishes for it
+# (wheels for each platform, plus the sdist). pip accepts a download that
+# matches any one of them, so the pin does not quietly depend on the runner
+# resolving to the same wheel this file was generated against.
+#
+# pip 26.x and build 1.6.x require Python >= 3.10. All three call sites pin
+# `python-version: "3.11"`.
+#
+# Updating: Dependabot owns the routine bumps (see the /.github/requirements
+# pip entry in .github/dependabot.yml) and rewrites the hashes with them. A
+# pin with no updater is the frozen end of the same problem an unpinned
+# install is at the other end of.
+#
+# Regenerating by hand, on Linux / CPython 3.11 to match the job:
+#   pip install --dry-run --ignore-installed --report r.json pip build
+# then, for each resolved name==version, take every sha256 under `urls` in
+# https://pypi.org/pypi/<name>/<version>/json.
+
+build==1.6.1 \
+    --hash=sha256:ecd351a4be9d35a9eaaba244a7687143c9c7d4aea6ac964e7e7ddab20cbcf4e7 \
+    --hash=sha256:51cc11666391ab6f092070437ac747002ff46f3e4113a3622177ee6b488bfc53
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c \
+    --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79
+pip==26.2.1 \
+    --hash=sha256:71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e \
+    --hash=sha256:f6ad667e89a1fe78046c8f13232b247200f5258d7828f3f7883d660878e0813f
+pyproject_hooks==1.2.0 \
+    --hash=sha256:9e5c6bfa8dcc30091c74b0cf803c81fdd29d94f01992a7707bc97babb1141913 \
+    --hash=sha256:1e859bd5c40fae9448642dd871adf459e5e2084186e8d2c2a79a824c970da1f8

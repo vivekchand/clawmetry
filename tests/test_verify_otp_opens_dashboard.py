@@ -105,7 +105,7 @@ def test_other_account_off_strict_loopback_gets_no_token(env, client, monkeypatc
     handed this machine's gateway token."""
     monkeypatch.setattr(env, "_read_cloud_token", lambda: "cm_the_real_owner")
     body = _verify(client, base_url="http://evil.example:8900")
-    assert body["ok"] is True
+    assert body["ok"] is False
     assert "dashboard_token" not in body
 
 

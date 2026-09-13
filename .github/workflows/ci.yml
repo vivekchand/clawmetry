@@ -588,6 +588,9 @@ jobs:
       # reached `state["last_sync"] = ...`, and since the next cycle reloads
       # the same on-disk state, one bad source froze last_sync forever while
       # the separate heartbeat thread kept reporting the daemon as alive.
+      - name: Email sign-in preserves the linked account and opens the dashboard
+        run: python3 -m pytest tests/test_signin_owner_not_rebound.py tests/test_verify_otp_opens_dashboard.py tests/test_verify_otp_rail_selection.py tests/test_auth_detected_token.py tests/test_login_overlay_fetches_real_routes.py -q
+
       - name: The sync cycle isolates every ingest call
         run: python3 -m pytest tests/test_sync_cycle_fault_isolation.py -q
 
@@ -1368,12 +1371,12 @@ jobs:
           python-version: "3.11"
       - name: Build wheel
         run: |
-          python -m pip install --upgrade pip build
+          python -m pip install --require-hashes -r .github/requirements/pip-build-bootstrap.txt
           python -m build --wheel
       - name: Install wheel in isolated venv
         run: |
           python -m venv /tmp/vwheel
-          /tmp/vwheel/bin/pip install --upgrade pip
+          /tmp/vwheel/bin/pip install --require-hashes -r .github/requirements/pip-bootstrap.txt
           /tmp/vwheel/bin/pip install dist/clawmetry-*.whl flask waitress cryptography pytest requests
       - name: Verify runtime assets shipped in wheel
         run: |
@@ -1463,7 +1466,7 @@ jobs:
           cache: pip
       - name: Install ClawMetry (editable) + eval deps
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r .github/requirements/pip-bootstrap.txt
           pip install -e . pyyaml httpx
       - name: Check kill-switch
         id: gate
