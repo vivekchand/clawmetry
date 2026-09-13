@@ -4984,7 +4984,7 @@ def _cmd_key(args) -> None:
             print(_json.dumps({"action": "create", "ok": True,  # codeql[py/clear-text-logging-sensitive-data]
                                "key": plaintext,  # codeql[py/clear-text-logging-sensitive-data]
                                "record": {k: v for k, v in record.items()
-                                          if k != "hash"}}, indent=2))
+                                          if k != "hash"}}, indent=2))  # codeql[py/clear-text-logging-sensitive-data]
             return
 
         print("Key created. It is shown once and is not stored anywhere in")
