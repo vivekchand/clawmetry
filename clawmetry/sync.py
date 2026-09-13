@@ -446,6 +446,26 @@ def _report_if_ingest_stalled() -> None:
 
         _fr.report_daemon_failure("daemon_ingest_stalled",
                                   version=_get_version())
+        # Capture all thread stacks so the next occurrence is diagnosable
+        # (#5932: Windows+py3.13 hang with no stack trace). Written locally
+        # only — never transmitted. The heartbeat thread keeps running even
+        # when the main loop is wedged, so the dump shows the main thread's
+        # last Python frame before whatever syscall/lock it is blocked in.
+        try:
+            import traceback as _tb
+            _frames = sys._current_frames()
+            _lines = [
+                f"daemon_ingest_stalled diagnostic — {datetime.now(timezone.utc).isoformat()}",
+                f"python={sys.version}  platform={sys.platform}",
+            ]
+            for _tid, _frame in _frames.items():
+                _lines.append(f"\n--- Thread {_tid} ---")
+                _lines.extend(_tb.format_stack(_frame))
+            _diag = Path(os.path.expanduser("~/.clawmetry/daemon_stall_diag.txt"))
+            _diag.parent.mkdir(parents=True, exist_ok=True)
+            _diag.write_text("\n".join(_lines))
+        except Exception:
+            pass
     except Exception as e:  # noqa: BLE001 - the watchdog must never die
         log.debug("stall check skipped: %s", e)
 
