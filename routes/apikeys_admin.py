@@ -135,4 +135,6 @@ def api_keys_revoke(key_id: str):
             "ok": False,
             "error": "There is no active key with that id on this machine.",
         }), 404
-    return jsonify({"ok": True, "id": key_id})
+    # The caller supplied key_id in the URL; echoing it back would reflect
+    # user-controlled input into the response body (CodeQL CWE-79).
+    return jsonify({"ok": True})

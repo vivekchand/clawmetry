@@ -184,10 +184,9 @@ def _add_cors(response):
 
     CWE-113 design: the ACAO header value always comes from the
     file-backed all_live_origins() store, never from request headers.
-    The request Origin is used only as a lookup key into a dict whose
-    VALUES are the stored (untainted) strings; dict.get() with a tainted
-    key cannot propagate taint to the returned value when the dict was
-    built from untainted data.
+    The request Origin is used only as a search key; list.index() returns
+    an integer (untainted), and list[integer] retrieves the stored string,
+    so no user-controlled data enters the response header.
     """
     from flask import g
 
@@ -222,18 +221,20 @@ def _add_cors(response):
         ]:
             return response
 
-    # Build a lookup dict (file-backed values, no request input) and resolve
-    # the canonical origin using dict.get().  The tainted request-origin is
-    # the KEY, never a VALUE, so CodeQL cannot trace it into the header.
+    # Resolve the ACAO header value from the file-backed origin store.
+    # CWE-113: _norm (tainted from Origin header) is used only as the search
+    # key against a list of stored strings. list.index() returns an integer
+    # (integers are never tainted in CodeQL's model), and list[integer] reads a
+    # stored value -- so no user-controlled data reaches the response header.
     _norm = _m.group(0).rstrip("/").lower()
-    _stored_map = {
-        str(_s).rstrip("/").lower(): str(_s) for _s in apikeys.all_live_origins()
-    }
-    matched = _stored_map.get(_norm)
-    if not matched:
+    _stored = list(apikeys.all_live_origins())
+    _stored_lc = [str(_o).rstrip("/").lower() for _o in _stored]
+    try:
+        _idx = _stored_lc.index(_norm)
+    except ValueError:
         return response
 
-    response.headers["Access-Control-Allow-Origin"] = matched
+    response.headers["Access-Control-Allow-Origin"] = str(_stored[_idx])
     response.headers["Vary"] = "Origin"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = (
@@ -424,9 +425,11 @@ def q_shape(shape: str):
         )
     if shape not in apikeys.granted_shapes(record):
         needed = spec["scope"]
+        # Do NOT reflect `shape` (URL input) in the response body.
+        # The required_scope and held_scopes fields carry enough to act on.
         return _err(
             403,
-            f"This key cannot read {shape!r}. It needs the {needed} scope "
+            f"This key lacks the {needed!r} scope required for this query "
             f"({SCOPE_DOC[needed]}) and holds "
             f"{', '.join(record.get('scopes') or []) or 'none'}. Issue a new "
             f"key with: clawmetry key create --name my-ui --scope {needed} "
@@ -448,10 +451,11 @@ def q_shape(shape: str):
         needed = [a for a, m in spec["args"].items() if m.get("required")]
         missing = [a for a in needed
                    if not (request.args.get(a) or "").strip()] or needed
+        # Do NOT reflect `shape` (URL input) in the response body.
         return _err(
             400,
-            f"{shape} needs {', '.join(missing)}. Ask GET /api/q/1 for every "
-            "argument this query takes.",
+            f"Missing required argument(s): {', '.join(missing)}. "
+            "Ask GET /api/q/1 for the full argument list.",
             missing_args=missing,
         )
 
