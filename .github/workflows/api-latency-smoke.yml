@@ -48,7 +48,7 @@ jobs:
       - name: Build wheel
         if: matrix.source == 'wheel'
         run: |
-          python -m pip install --upgrade pip build
+          python -m pip install --require-hashes -r .github/requirements/pip-build-bootstrap.txt
           python -m build --wheel
 
       - name: Install into isolated venv
@@ -63,7 +63,7 @@ jobs:
           SOURCE: ${{ matrix.source }}
         run: |
           python -m venv /tmp/vsmoke
-          /tmp/vsmoke/bin/pip install --upgrade pip
+          /tmp/vsmoke/bin/pip install --require-hashes -r .github/requirements/pip-bootstrap.txt
           if [ "$SOURCE" = "pypi" ]; then
             /tmp/vsmoke/bin/pip install --no-cache-dir clawmetry flask waitress cryptography duckdb requests
           else
