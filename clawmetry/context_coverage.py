@@ -103,6 +103,10 @@ UNSUPPORTED_COMPACTION = frozenset({
     # compactions, ran clean" for a session that has compacted, which is the
     # exact failure this module exists to prevent. Delist once the adapter
     # emits a compaction event, and only once the WHEEL carrying that ships.
+    # OpenExecutive keeps only the last N turns in its short-term window
+    # (memory/short_term.py) and records nothing when older turns fall out,
+    # so a zero here is absence of evidence, not a clean run.
+    "openexecutive",
     "openworker",
     # Grok Bot compacts (if at all) on its cloud VM; the desktop client
     # store has no compaction entry kind, so absence proves nothing.

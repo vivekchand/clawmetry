@@ -315,6 +315,12 @@ def runtime_control_support(runtime: str, session_id: str = "",
                            "offered and inert"),
                 "platform": plat}
 
+    if rt in SHARED_PROCESS_RUNTIMES:
+        return {"controllable": False, "runtime": rt, "actions": [],
+                "state": "unsupported",
+                "reason": SHARED_PROCESS_RUNTIMES[rt],
+                "platform": plat}
+
     return {"controllable": False, "runtime": rt, "actions": [],
             "state": "unsupported",
             "reason": f"No signal support for {rt or 'unknown runtime'}",
@@ -396,6 +402,16 @@ SUPPORTED_RUNTIMES = frozenset(
      "qwen_code", "pi", "grok", "deepseek_harness", "kimi"}
 )
 UNSUPPORTED_RUNTIMES = frozenset({"cursor"})
+
+# Runtimes where ONE process serves every session, so no per-session signal
+# exists and signalling the process would halt all of them at once. Each maps
+# to the sentence the Guard tab shows beside the disabled controls.
+SHARED_PROCESS_RUNTIMES = {
+    "openexecutive": ("One OpenExecutive API server handles every conversation, "
+                      "every chat channel and the scheduler, so there is no "
+                      "separate process for this conversation. Pausing or "
+                      "stopping the server would halt all of them."),
+}
 
 # Runtimes that almost certainly CAN be signalled but have no resolver yet, so
 # we do not know which pid belongs to a given session. Kept apart from
