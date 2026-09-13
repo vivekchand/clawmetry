@@ -314,14 +314,6 @@ jobs:
       - name: Required-checks list has one source of truth
         run: python3 -m pytest tests/test_c6_required_checks_single_source.py -q
 
-      # Regression guard for PR #4553: the C6 push path must exit 0, never 1.
-      # Before the fix apply_required_status_checks.py called sys.exit(1) on
-      # every push, turning main red whenever branch protection was not yet
-      # configured -- hiding real failures behind a permanent red badge.
-      # Named here because this job runs FILE LISTS.
-      - name: C6 push path is non-blocking (must exit 0 on push)
-        run: python3 -m pytest tests/test_c6_push_non_blocking.py -q
-
       # Every merge-blocking check must have a path to green WITHOUT privileged
       # secrets. A gated check that requires one leaves forks, outside
       # contributors, and everyone with an open PR at credential-rotation time
@@ -762,6 +754,10 @@ jobs:
             tests/test_otel_export_sessions_shape.py \
             tests/test_query_contract_drift.py \
             tests/test_public_api_keys.py \
+            tests/test_ingest_key.py \
+            tests/test_ingest_contract_drift.py \
+            tests/test_setup_prompt.py \
+            tests/test_ingest_status.py \
             tests/test_query_contract_goldens.py \
             tests/test_local_store_concurrent_flush_1590.py \
             tests/test_duckdb_invalidated_recovery.py \

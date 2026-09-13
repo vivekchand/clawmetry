@@ -1,130 +1,153 @@
-# ClawMetry Ingest Contract (ingest/1)
+# Sending data to ClawMetry (ingest/1)
 
-> GENERATED FILE — do not edit by hand. Source of truth:
+> GENERATED FILE, do not edit by hand. Source of truth:
 > `clawmetry/ingest_contract.py`. Regenerate with
 > `python3 scripts/gen_ingest_doc.py` (CI fails on drift).
 
-Two surfaces accept inbound data: the **OTLP receiver** (standard
-OpenTelemetry HTTP) and the **run/event ingest API** (structured
-run/step records for custom runtimes). Both bind on the same port as
-the dashboard (default `127.0.0.1:8900`).
+Most people never read this page. ClawMetry detects the agents on
+the machine it runs on and starts observing them with no
+configuration at all.
 
-## Evolution rule
+This page is for the other case: an agent that is **not** on that
+machine — running in CI, in a container, in a serverless function,
+inside a hosted product, or on somebody else's laptop. Those push to
+ClawMetry instead of being detected by it.
 
-Inside `ingest/1` evolution is **additive only**: new endpoints,
-content-types, and attributes may be added. Removing or renaming one
-requires bumping the contract to `ingest/2`.
+## Authentication
 
-## OTLP receiver
+| Mode | When | How |
+|---|---|---|
+| Loopback | The agent and ClawMetry are on the same machine. | Nothing to configure. This is the zero-config path and it is what most installs use. |
+| Gateway token | An exporter elsewhere on a trusted LAN. | Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN |
+| Ingest key | Anything that is not on this machine: CI, a container, a serverless function, a hosted product, a teammate's laptop. | clawmetry key create --name ci --scope write:ingest, then x-clawmetry-key: cmk_... |
 
-Point any OpenTelemetry-instrumented app at the dashboard port:
-```
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8900
-OTEL_EXPORTER_OTLP_PROTOCOL=http/json
-```
+An ingest key can **only push**. It grants no read scope, so a key
+left in a CI runner cannot read a prompt, a cost or a session back
+out. It is never given a CORS header and cannot be created with a
+browser origin: ingest is server-to-server.
 
-### Endpoints
+## Endpoints
 
-| Method | Path | Description |
-| - | - | - |
-| `POST` | `/v1/metrics` | OTLP metrics. Ingests ``gen_ai.client.token.usage`` counters and ``gen_ai.client.operation.duration`` histograms into the token/cost tiles. |
-| `POST` | `/v1/traces` | OTLP traces. Ingests GenAI spans (LLM calls, tool calls, sub-agent spawns) into the span tree and session timeline. |
-| `POST` | `/v1/logs` | OTLP logs. Ingests the agent event stream exported by Claude Code, Codex, and other runtimes (cost/token/model per log record) into the cost and usage tiles. |
+| Method | Path | Accepts | |
+|---|---|---|---|
+| `POST` | `/v1/traces` | OTLP traces | Spans. The GenAI convention's model-call spans land here, and this is the surface an OTel SDK or Collector already speaks. |
+| `POST` | `/v1/metrics` | OTLP metrics | Counters and histograms. |
+| `POST` | `/v1/logs` | OTLP logs | Log records. Claude Code and Codex export their per-turn event stream this way, with cost and tokens per record. |
+| `POST` | `/api/v1/runs` | JSON | Open a run; returns run_id. For engines that would rather push typed records than build OTLP. |
+| `POST` | `/api/v1/runs/<id>/events` | JSON | Append one event or a batch of up to 1000. |
+| `POST` | `/api/v1/runs/<id>/end` | JSON | Mark the run ended. Optional. |
+| `GET` | `/api/v1/runs/<id>` | - | Read back: was the run persisted? |
+| `GET` | `/api/v1/runtimes` | - | The runtimes ClawMetry knows about. Free, no key needed. |
 
-### Accepted content types
+## Encodings
 
-| `Content-Type` | Description |
-| - | - |
-| `application/x-protobuf` | Binary protobuf encoding. Requires ``pip install clawmetry[otel]`` (``opentelemetry-proto`` + ``protobuf``). Raises HTTP 501 when the extra is absent. |
-| `application/json` | OTLP/JSON encoding. Works on a plain ``pip install clawmetry`` with no extras. ``ignore_unknown_fields`` is set, so forward-compat keys from newer producers do not cause a 400. |
+| `Content-Type` | |
+|---|---|
+| `application/x-protobuf` | OTLP protobuf. The default for the OTel Collector and the SDKs, and smaller on the wire. |
+| `application/json` | OTLP/JSON. Useful when a client cannot produce protobuf -- a script, a serverless function, a platform that only emits JSON. |
 
-**`Content-Encoding`:** `identity`, `gzip`.
+| `Content-Encoding` | |
+|---|---|
+| `gzip` | Accepted on every surface. |
 
-### Size limits
+## Headers
 
-Decompressed body cap: **64 MB** (override: `CLAWMETRY_OTLP_MAX_DECOMPRESSED_MB`).
-Anything larger is rejected with HTTP 400 before the body is parsed.
+| Header | Required | |
+|---|---|---|
+| `x-clawmetry-key` | for a caller that is not on this machine | An ingest key: clawmetry key create --name ci --scope write:ingest |
+| `x-clawmetry-runtime` | no | Which runtime is pushing -- claude_code, my-engine, anything matching [a-z0-9][a-z0-9_-]{0,39}. An unrecognised name is accepted: in-house engines are a supported case. Sets the resource's service.name, which is what the runtime is derived from. Without it the runtime comes from service.name as sent. |
+| `x-clawmetry-env` | no | Environment or project label -- production, team-a.staging. Sets deployment.environment. This is the one grouping axis above runtime, and deliberately the only one. |
+| `Content-Type` | yes, on OTLP | application/x-protobuf or application/json. See encodings. |
+| `Content-Encoding` | no | gzip, if you compressed the body. |
 
-### Response codes
+`x-clawmetry-runtime` and `x-clawmetry-env` are resolved once per request
+and applied to every event in it. They are written into the resource
+attributes the mappers already read, so a header is exactly as
+powerful as the equivalent exporter setting — and the header wins,
+because it is the one you set per request.
 
-| Code | Meaning |
-| - | - |
-| `200` | Accepted. Response body is ``{}`` (empty JSON object). |
-| `400` | Malformed or undecodable body. Response body contains ``{"error": "<reason>"}``. |
-| `429` | Budget limit exceeded; OTLP intake is paused. Response body contains ``{"paused": true}``. |
-| `501` | Binary protobuf body received but ``opentelemetry-proto`` is not installed. Install with ``pip install clawmetry[otel]`` or switch to OTLP/JSON (``Content-Type: application/json``). |
+There is one grouping axis above runtime, on purpose. A
+dataset/collection/tag taxonomy is what a log platform needs when it
+has thousands of unrelated sources. This is not that.
 
-### `gen_ai.*` attributes read
+## Limits
 
-Spans and log records are mapped by `dashboard.py::_otel_to_row`. Every attribute below is tried in order; the first non-empty value wins.
+| | |
+|---|---|
+| Body | 10 MB |
+| Events per batch | 1000 |
 
-| Primary attribute | Fallbacks | Description |
-| - | - | - |
-| `gen_ai.request.model` | `gen_ai.response.model`, `llm.model`, `model` | Model name used for the request. |
-| `gen_ai.usage.input_tokens` | `llm.usage.prompt_tokens`, `input_tokens` | Input token count. |
-| `gen_ai.usage.output_tokens` | `llm.usage.completion_tokens`, `output_tokens` | Output token count. |
-| `gen_ai.usage.total_tokens` | `llm.usage.total_tokens`, `total_tokens` | Total token count. |
-| `gen_ai.usage.cache_read.input_tokens` | `gen_ai.usage.cache_read_input_tokens`, `cache_read_input_tokens` | Cached input tokens read (Anthropic / OpenAI prompt caching). |
-| `gen_ai.usage.cache_creation.input_tokens` | `gen_ai.usage.cache_creation_input_tokens`, `cache_creation_input_tokens` | Cache-write tokens (Anthropic prompt caching). |
-| `gen_ai.usage.cost_usd` | `llm.usage.cost`, `cost_usd` | Pre-computed cost in USD. When absent, ClawMetry prices the tokens locally. |
-| `gen_ai.provider.name` | `gen_ai.system`, `llm.provider`, `provider` | Provider string (e.g. ``anthropic``, ``openai``). |
-| `gen_ai.tool.name` | `tool.name`, `code.function` | Name of the tool called (on ``execute_tool`` spans). |
-| `gen_ai.conversation.id` | `session.id`, `openclaw.session_id`, `session_id` | Session or conversation identifier. |
-| `gen_ai.agent.id` | `agent.id`, `openclaw.agent_id`, `agent_id` | Agent identifier. |
-| `gen_ai.input.messages` | `gen_ai.prompt` | Input message list (current GenAI semconv). |
-| `gen_ai.output.messages` | `gen_ai.completion` | Output message list (current GenAI semconv). |
-| `gen_ai.operation.name` | — | Operation kind (``chat``, ``text_completion``, ``generate_content``). Read to decide whether a span counts as a run: OpenLLMetry and traceloop-sdk name LLM spans ``<vendor>.chat`` / ``<vendor>.completion`` and tag the operation here, so without it a bring-your-own-agent install records spans while the live Runs tile stays at zero. |
+## Responses
 
-Attributes that appear in GenAI semconv but are **not yet consumed**: `gen_ai.agent.name`.
+Every response carries a sentence in its body, not only a code.
+These get read inside an agent's terminal output with no
+documentation open.
 
-## Run / event ingest API
+| Code | Means |
+|---|---|
+| `200` | Accepted. |
+| `400` | The body did not decode, or a routing header was malformed. The message names what was expected. |
+| `401` | No key, or a key this ClawMetry does not know. It may have been revoked, or belong to a different install. |
+| `403` | A valid key that lacks write:ingest. Different from 401 on purpose: 'your key is wrong' and 'your key is fine and may not do this' send you to different fixes. |
+| `413` | Body over 10 MB. Split the batch, or compress with Content-Encoding: gzip. |
+| `429` | Intake is paused because a budget limit was exceeded. |
+| `501` | OTLP support is not installed on this ClawMetry: pip install clawmetry[otel] |
 
-Push structured run and event records from any agent runtime. The write endpoints are a **Pro feature** (OSS returns HTTP 402). `GET /api/v1/runtimes` is free on all tiers.
-
-### Endpoints
-
-| Method | Path | Tier | Description |
-| - | - | - | - |
-| `GET` | `/api/v1/runtimes` | Free | List runtimes ClawMetry knows about. Same data the runtime switcher reads. |
-| `POST` | `/api/v1/runs` | Pro | Open a run. Returns ``{ok, run_id, runtime}``. |
-| `POST` | `/api/v1/runs/<run_id>/events` | Pro | Append one or many events to an open run. |
-| `POST` | `/api/v1/runs/<run_id>/end` | Pro | Mark the run ended. Optional — the run also closes on inactivity. |
-| `GET` | `/api/v1/runs/<run_id>` | Pro | Read-back: confirm the run was persisted and return its metadata. |
-
-### Auth
-
-Two modes; the dashboard picks based on environment:
-
-1. **Localhost-only (default):** if `CLAWMETRY_INGEST_TOKEN` is unset, only loopback (`127.0.0.1` / `::1`) requests are accepted.
-2. **Token header:** set `CLAWMETRY_INGEST_TOKEN=<secret>`; clients must send `X-ClawMetry-Token: <secret>`. The comparison is constant-time.
-
-### Response codes
-
-| Code | Meaning |
-| - | - |
-| `200` | Success (GET requests). |
-| `201` | Accepted (POST requests). |
-| `400` | Malformed request body. |
-| `401` | Token required but missing or incorrect. |
-| `402` | Pro plan required; OSS stub returns this on all write endpoints. |
-| `429` | Rate limit or budget pause. |
-
-### Quickstart
+## Example
 
 ```bash
-# Start a run
-curl -s http://localhost:8900/api/v1/runs \
-  -H 'content-type: application/json' \
-  -d '{"runtime": "my_engine", "metadata": {"build": "abc123"}}'
-# -> {"ok": true, "run_id": "run_a1b2c3d4...", "runtime": "my_engine"}
+clawmetry key create --name ci --scope write:ingest
 
-# Push an event
-curl -s http://localhost:8900/api/v1/runs/run_a1b2c3d4/events \
-  -H 'content-type: application/json' \
-  -d '{"event": {"id": "evt_1", "event_type": "model.completed", \
-    "model": "claude-sonnet-5", "data": {"input_tokens": 1240, "output_tokens": 312}}}'
-
-# Close the run
-curl -s http://localhost:8900/api/v1/runs/run_a1b2c3d4/end \
-  -H 'content-type: application/json' -d '{}'
+curl -X POST http://localhost:8900/v1/traces \
+  -H "x-clawmetry-key: $CLAWMETRY_KEY" \
+  -H 'x-clawmetry-runtime: my-engine' \
+  -H 'x-clawmetry-env: production' \
+  -H 'Content-Type: application/json' \
+  --data-binary @spans.json
 ```
+
+## GenAI attributes
+
+ClawMetry reads the OpenTelemetry GenAI semantic conventions, so an
+app instrumented with any conforming library needs no
+ClawMetry-specific SDK.
+
+### Read
+
+| Attribute | |
+|---|---|
+| `gen_ai.operation.name` | Marks the span as a model call. |
+| `gen_ai.request.model` | The model asked for. |
+| `gen_ai.response.model` | The model actually served. |
+| `gen_ai.provider.name` | Provider; gen_ai.system is read as the older name. |
+| `gen_ai.usage.input_tokens` | Input tokens. |
+| `gen_ai.usage.output_tokens` | Output tokens. |
+| `gen_ai.usage.cache_read.input_tokens` | Prompt-cache reads, current convention (dot before the noun). |
+| `gen_ai.usage.cache_read_input_tokens` | Prompt-cache reads, earlier spelling. Both are read; a span carrying both is counted once. |
+| `gen_ai.usage.cache_creation.input_tokens` | Prompt-cache writes, current convention. |
+| `gen_ai.usage.cache_creation_input_tokens` | Prompt-cache writes, earlier spelling. |
+| `gen_ai.usage.cost_usd` | Cost, when the exporter states one. An explicit cost always wins over a derived one. |
+| `gen_ai.tool.name` | Tool name on execute_tool spans. |
+| `gen_ai.conversation.id` | Session id. |
+| `gen_ai.agent.id` | Agent id. |
+| `gen_ai.input.messages` | Prompt content, when the exporter sends it. |
+| `gen_ai.output.messages` | Response content, when the exporter sends it. |
+
+### Not read
+
+Listed because a reference that only says what works is not one you
+can plan against.
+
+| Attribute | |
+|---|---|
+| `gen_ai.usage.reasoning.output_tokens` | Reasoning tokens. There is no column to put them in yet, so they are dropped rather than mis-filed into output tokens. |
+| `gen_ai.response.finish_reasons` | Not yet read. Would let us spot truncation and unusual stops. |
+| `gen_ai.response.time_to_first_chunk` | Not yet read. Streaming latency per span. |
+
+## What ClawMetry does not accept
+
+There is no endpoint that takes syslog, CEF, GELF, Apache logs or
+raw text. ClawMetry's inputs are typed on arrival, and a parser
+layer would exist only to accept data this product has nothing to
+say about. If you want general log ingestion, use a log platform —
+and point it at ClawMetry's own export, which speaks OTLP.

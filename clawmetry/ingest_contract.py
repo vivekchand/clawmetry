@@ -1,210 +1,255 @@
-"""clawmetry/ingest_contract.py — the declared ingest/1 contract registry.
+"""clawmetry/ingest_contract.py -- what ClawMetry accepts, declared once.
 
-Single source of truth for the two ingest surfaces ClawMetry exposes:
+Why this module exists
+----------------------
+Four things describe the ingest surface, and until now none of them
+shared a source:
 
-* **OTLP receiver** — ``/v1/metrics``, ``/v1/traces``, ``/v1/logs``
-  (standard OpenTelemetry HTTP/JSON and HTTP/protobuf, plus gzip).
-* **Run/event ingest API** — ``/api/v1/runs*``
-  (structured run/step records from custom runtimes; Pro feature).
+1. the server, which validates requests;
+2. ``docs/INGEST.md``, which a person reads;
+3. the per-runtime setup prompts, which an AGENT reads -- and where a
+   wrong header name is a silent failure, because the agent will
+   confidently write it;
+4. the public reference on the landing site, where a claim the repo
+   denies now fails the truthfulness gate.
 
-``docs/INGEST.md`` is generated from this module by
-``scripts/gen_ingest_doc.py``; ``tests/test_ingest_doc_drift.py`` fails CI
-when the committed doc drifts from the generator output.
+Four hand-maintained descriptions of one contract is four chances to
+drift, and the drift is worst in (3): a prompt that teaches an agent a
+header we do not accept is worse than no prompt at all.
 
-Versioning: evolution inside ``ingest/1`` is additive only. Adding an
-endpoint, a content-type, or an attribute is fine. Removing or renaming
-one requires bumping to ``ingest/2``.
+So the contract is data. The server reads its constants from here, the
+doc is generated from here, and CI fails when the committed doc and this
+file disagree -- the same shape as ``query_contract.py`` and
+``gen_query_contract_doc.py`` for the read side.
+
+What this is NOT
+----------------
+Not a schema validator and not a parser registry. ClawMetry's inputs are
+typed on arrival: OTLP has its own proto, and the run/event API takes a
+declared shape. There is deliberately no "accepts any format" surface
+here to describe, because accepting syslog, CEF or raw text would mean
+accepting data this product has nothing to say about.
 """
+
 from __future__ import annotations
 
 CONTRACT_VERSION = "ingest/1"
 
-# ── OTLP receiver ────────────────────────────────────────────────────────────
+# ── Headers ─────────────────────────────────────────────────────────────
+# Lower-case on the wire. HTTP header lookup is case-insensitive, but
+# every example we publish uses this spelling so a copy-paste, a grep and
+# an agent's guess all agree.
 
-# Endpoints served by ``routes/meta.py`` (bp_otel / bp_otlp_traces).
-OTLP_ENDPOINTS: dict[str, dict] = {
-    "/v1/metrics": {
-        "methods": ["POST"],
-        "doc": (
-            "OTLP metrics. Ingests ``gen_ai.client.token.usage`` counters "
-            "and ``gen_ai.client.operation.duration`` histograms into the "
-            "token/cost tiles."
-        ),
-        "json_support": True,
-        "protobuf_support": True,
+HEADER_KEY = "x-clawmetry-key"
+HEADER_RUNTIME = "x-clawmetry-runtime"
+HEADER_ENV = "x-clawmetry-env"
+HEADER_LEGACY_TOKEN = "X-ClawMetry-Token"
+
+#: Body cap, enforced before decode. A 40 MB protobuf is refused with a
+#: sentence rather than parsed until something runs out of patience.
+MAX_BODY_BYTES = 10 * 1024 * 1024
+
+#: Events per run/event request. Already the write API's cap.
+MAX_EVENTS_PER_BATCH = 1000
+
+HEADERS = (
+    {
+        "name": HEADER_KEY,
+        "required": "for a caller that is not on this machine",
+        "doc": "An ingest key: clawmetry key create --name ci --scope write:ingest",
     },
-    "/v1/traces": {
-        "methods": ["POST"],
+    {
+        "name": HEADER_RUNTIME,
+        "required": "no",
         "doc": (
-            "OTLP traces. Ingests GenAI spans (LLM calls, tool calls, "
-            "sub-agent spawns) into the span tree and session timeline."
+            "Which runtime is pushing -- claude_code, my-engine, anything "
+            "matching [a-z0-9][a-z0-9_-]{0,39}. An unrecognised name is "
+            "accepted: in-house engines are a supported case. Sets the "
+            "resource's service.name, which is what the runtime is derived "
+            "from. Without it the runtime comes from service.name as sent."
         ),
-        "json_support": True,
-        "protobuf_support": True,
     },
-    "/v1/logs": {
-        "methods": ["POST"],
+    {
+        "name": HEADER_ENV,
+        "required": "no",
         "doc": (
-            "OTLP logs. Ingests the agent event stream exported by "
-            "Claude Code, Codex, and other runtimes (cost/token/model "
-            "per log record) into the cost and usage tiles."
+            "Environment or project label -- production, team-a.staging. "
+            "Sets deployment.environment. This is the one grouping axis "
+            "above runtime, and deliberately the only one."
         ),
-        "json_support": True,
-        "protobuf_support": True,
     },
-}
+    {
+        "name": "Content-Type",
+        "required": "yes, on OTLP",
+        "doc": "application/x-protobuf or application/json. See encodings.",
+    },
+    {
+        "name": "Content-Encoding",
+        "required": "no",
+        "doc": "gzip, if you compressed the body.",
+    },
+)
 
-# Content-Type values accepted on all three OTLP endpoints.
-# Source: ``dashboard.py::_otlp_decode``.
-OTLP_CONTENT_TYPES: dict[str, str] = {
-    "application/x-protobuf": (
-        "Binary protobuf encoding. Requires ``pip install clawmetry[otel]`` "
-        "(``opentelemetry-proto`` + ``protobuf``). Raises HTTP 501 when the "
-        "extra is absent."
-    ),
-    "application/json": (
-        "OTLP/JSON encoding. Works on a plain ``pip install clawmetry`` with "
-        "no extras. ``ignore_unknown_fields`` is set, so forward-compat keys "
-        "from newer producers do not cause a 400."
-    ),
-}
+# ── Surfaces ────────────────────────────────────────────────────────────
 
-# Content-Encoding values accepted on all OTLP endpoints.
-# Source: ``dashboard.py::_gunzip_safe``.
-OTLP_ENCODINGS: list[str] = ["identity", "gzip"]
+SURFACES = (
+    {
+        "path": "/v1/traces",
+        "method": "POST",
+        "accepts": "OTLP traces",
+        "doc": (
+            "Spans. The GenAI convention's model-call spans land here, and "
+            "this is the surface an OTel SDK or Collector already speaks."
+        ),
+    },
+    {
+        "path": "/v1/metrics",
+        "method": "POST",
+        "accepts": "OTLP metrics",
+        "doc": "Counters and histograms.",
+    },
+    {
+        "path": "/v1/logs",
+        "method": "POST",
+        "accepts": "OTLP logs",
+        "doc": (
+            "Log records. Claude Code and Codex export their per-turn event "
+            "stream this way, with cost and tokens per record."
+        ),
+    },
+    {
+        "path": "/api/v1/runs",
+        "method": "POST",
+        "accepts": "JSON",
+        "doc": "Open a run; returns run_id. For engines that would rather "
+               "push typed records than build OTLP.",
+    },
+    {
+        "path": "/api/v1/runs/<id>/events",
+        "method": "POST",
+        "accepts": "JSON",
+        "doc": f"Append one event or a batch of up to {MAX_EVENTS_PER_BATCH}.",
+    },
+    {
+        "path": "/api/v1/runs/<id>/end",
+        "method": "POST",
+        "accepts": "JSON",
+        "doc": "Mark the run ended. Optional.",
+    },
+    {
+        "path": "/api/v1/runs/<id>",
+        "method": "GET",
+        "accepts": "-",
+        "doc": "Read back: was the run persisted?",
+    },
+    {
+        "path": "/api/v1/runtimes",
+        "method": "GET",
+        "accepts": "-",
+        "doc": "The runtimes ClawMetry knows about. Free, no key needed.",
+    },
+)
 
-# Hard cap on the decompressed body size.
-# Source: ``dashboard.py::_OTLP_MAX_DECOMPRESSED``.
-OTLP_MAX_DECOMPRESSED_MB: int = 64
-OTLP_MAX_DECOMPRESSED_ENVVAR: str = "CLAWMETRY_OTLP_MAX_DECOMPRESSED_MB"
+# ── Encodings ───────────────────────────────────────────────────────────
 
-# HTTP response codes returned by the OTLP receiver.
-# Source: ``routes/meta.py::_otlp_receive``.
-OTLP_RESPONSE_CODES: dict[int, str] = {
-    200: "Accepted. Response body is ``{}`` (empty JSON object).",
-    400: "Malformed or undecodable body. Response body contains ``{\"error\": \"<reason>\"}``.",
-    429: "Budget limit exceeded; OTLP intake is paused. Response body contains ``{\"paused\": true}``.",
-    501: (
-        "Binary protobuf body received but ``opentelemetry-proto`` is not "
-        "installed. Install with ``pip install clawmetry[otel]`` or switch "
-        "to OTLP/JSON (``Content-Type: application/json``)."
-    ),
-}
+CONTENT_TYPES = (
+    ("application/x-protobuf", "OTLP protobuf. The default for the OTel "
+                               "Collector and the SDKs, and smaller on the wire."),
+    ("application/json", "OTLP/JSON. Useful when a client cannot produce "
+                         "protobuf -- a script, a serverless function, a "
+                         "platform that only emits JSON."),
+)
 
-# ── gen_ai.* attribute mapping ───────────────────────────────────────────────
+CONTENT_ENCODINGS = (
+    ("gzip", "Accepted on every surface."),
+)
 
-# Span / log-record attributes read by ``dashboard.py::_otel_to_row``.
-# Values are (description, fallback_attrs) tuples.
-GEN_AI_ATTRS_READ: dict[str, tuple[str, list[str]]] = {
-    "gen_ai.request.model": (
-        "Model name used for the request.",
-        ["gen_ai.response.model", "llm.model", "model"],
-    ),
-    "gen_ai.usage.input_tokens": (
-        "Input token count.",
-        ["llm.usage.prompt_tokens", "input_tokens"],
-    ),
-    "gen_ai.usage.output_tokens": (
-        "Output token count.",
-        ["llm.usage.completion_tokens", "output_tokens"],
-    ),
-    "gen_ai.usage.total_tokens": (
-        "Total token count.",
-        ["llm.usage.total_tokens", "total_tokens"],
-    ),
-    "gen_ai.usage.cache_read.input_tokens": (
-        "Cached input tokens read (Anthropic / OpenAI prompt caching).",
-        ["gen_ai.usage.cache_read_input_tokens", "cache_read_input_tokens"],
-    ),
-    "gen_ai.usage.cache_creation.input_tokens": (
-        "Cache-write tokens (Anthropic prompt caching).",
-        ["gen_ai.usage.cache_creation_input_tokens", "cache_creation_input_tokens"],
-    ),
-    "gen_ai.usage.cost_usd": (
-        "Pre-computed cost in USD. When absent, ClawMetry prices the tokens locally.",
-        ["llm.usage.cost", "cost_usd"],
-    ),
-    "gen_ai.provider.name": (
-        "Provider string (e.g. ``anthropic``, ``openai``).",
-        ["gen_ai.system", "llm.provider", "provider"],
-    ),
-    "gen_ai.tool.name": (
-        "Name of the tool called (on ``execute_tool`` spans).",
-        ["tool.name", "code.function"],
-    ),
-    "gen_ai.conversation.id": (
-        "Session or conversation identifier.",
-        ["session.id", "openclaw.session_id", "session_id"],
-    ),
-    "gen_ai.agent.id": (
-        "Agent identifier.",
-        ["agent.id", "openclaw.agent_id", "agent_id"],
-    ),
-    "gen_ai.input.messages": (
-        "Input message list (current GenAI semconv).",
-        ["gen_ai.prompt"],
-    ),
-    "gen_ai.output.messages": (
-        "Output message list (current GenAI semconv).",
-        ["gen_ai.completion"],
-    ),
-    "gen_ai.operation.name": (
-        "Operation kind (``chat``, ``text_completion``, ``generate_content``). "
-        "Read to decide whether a span counts as a run: OpenLLMetry and "
-        "traceloop-sdk name LLM spans ``<vendor>.chat`` / ``<vendor>.completion`` "
-        "and tag the operation here, so without it a bring-your-own-agent "
-        "install records spans while the live Runs tile stays at zero.",
-        [],
-    ),
-}
+# ── Responses ───────────────────────────────────────────────────────────
+# Every one of these carries a sentence in its body, not only a code.
+# These are read inside an agent's terminal with no documentation open.
 
-# Attributes that appear in GenAI semconv but are NOT yet consumed.
-#
-# This list is published in docs/INGEST.md, so a name here is a promise to the
-# reader that sending it changes nothing. ``gen_ai.operation.name`` was listed
-# and was in fact read by ``dashboard.py::_process_otlp_traces`` to classify a
-# span as a run -- caught by this module's own drift check (#5682). Verify
-# against the code before adding a name, not against intent.
-#
-# ``gen_ai.agent.name`` is genuinely unread on the ingest path: ClawMetry's own
-# exporter WRITES it (``clawmetry/otel_exporter.py``), and nothing reads it back.
-GEN_AI_ATTRS_NOT_READ: list[str] = [
-    "gen_ai.agent.name",
+RESPONSES = (
+    (200, "Accepted."),
+    (400, "The body did not decode, or a routing header was malformed. The "
+          "message names what was expected."),
+    (401, "No key, or a key this ClawMetry does not know. It may have been "
+          "revoked, or belong to a different install."),
+    (403, "A valid key that lacks write:ingest. Different from 401 on "
+          "purpose: 'your key is wrong' and 'your key is fine and may not "
+          "do this' send you to different fixes."),
+    (413, f"Body over {MAX_BODY_BYTES // (1024 * 1024)} MB. Split the batch, "
+          "or compress with Content-Encoding: gzip."),
+    (429, "Intake is paused because a budget limit was exceeded."),
+    (501, "OTLP support is not installed on this ClawMetry: "
+          "pip install clawmetry[otel]"),
+)
+
+# ── Authentication ──────────────────────────────────────────────────────
+
+AUTH_MODES = (
+    {
+        "name": "Loopback",
+        "when": "The agent and ClawMetry are on the same machine.",
+        "how": "Nothing to configure. This is the zero-config path and it is "
+               "what most installs use.",
+    },
+    {
+        "name": "Gateway token",
+        "when": "An exporter elsewhere on a trusted LAN.",
+        "how": "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN",
+    },
+    {
+        "name": "Ingest key",
+        "when": "Anything that is not on this machine: CI, a container, a "
+                "serverless function, a hosted product, a teammate's laptop.",
+        "how": f"clawmetry key create --name ci --scope write:ingest, then "
+               f"{HEADER_KEY}: cmk_...",
+    },
+)
+
+# ── GenAI attributes ────────────────────────────────────────────────────
+# Saying what we do NOT read is what makes the rest of this credible, and
+# it is checked against the source: tests/test_ingest_contract_drift.py
+# asserts every name below appears (or does not appear) in the mapper.
+
+GENAI_READ = (
+    ("gen_ai.operation.name", "Marks the span as a model call."),
+    ("gen_ai.request.model", "The model asked for."),
+    ("gen_ai.response.model", "The model actually served."),
+    ("gen_ai.provider.name", "Provider; gen_ai.system is read as the older name."),
+    ("gen_ai.usage.input_tokens", "Input tokens."),
+    ("gen_ai.usage.output_tokens", "Output tokens."),
+    ("gen_ai.usage.cache_read.input_tokens",
+     "Prompt-cache reads, current convention (dot before the noun)."),
+    ("gen_ai.usage.cache_read_input_tokens",
+     "Prompt-cache reads, earlier spelling. Both are read; a span carrying "
+     "both is counted once."),
+    ("gen_ai.usage.cache_creation.input_tokens",
+     "Prompt-cache writes, current convention."),
+    ("gen_ai.usage.cache_creation_input_tokens",
+     "Prompt-cache writes, earlier spelling."),
+    ("gen_ai.usage.cost_usd", "Cost, when the exporter states one. An "
+                              "explicit cost always wins over a derived one."),
+    ("gen_ai.tool.name", "Tool name on execute_tool spans."),
+    ("gen_ai.conversation.id", "Session id."),
+    ("gen_ai.agent.id", "Agent id."),
+    ("gen_ai.input.messages", "Prompt content, when the exporter sends it."),
+    ("gen_ai.output.messages", "Response content, when the exporter sends it."),
+)
+
+GENAI_NOT_READ = (
+    ("gen_ai.usage.reasoning.output_tokens",
+     "Reasoning tokens. There is no column to put them in yet, so they are "
+     "dropped rather than mis-filed into output tokens."),
+    ("gen_ai.response.finish_reasons",
+     "Not yet read. Would let us spot truncation and unusual stops."),
+    ("gen_ai.response.time_to_first_chunk",
+     "Not yet read. Streaming latency per span."),
+)
+
+__all__ = [
+    "CONTRACT_VERSION", "HEADER_KEY", "HEADER_RUNTIME", "HEADER_ENV",
+    "HEADER_LEGACY_TOKEN", "MAX_BODY_BYTES", "MAX_EVENTS_PER_BATCH",
+    "HEADERS", "SURFACES", "CONTENT_TYPES", "CONTENT_ENCODINGS",
+    "RESPONSES", "AUTH_MODES", "GENAI_READ", "GENAI_NOT_READ",
 ]
-
-# ── Run / event ingest API ───────────────────────────────────────────────────
-
-# Endpoints served by ``routes/runtime_ingest.py`` (bp_runtime_ingest).
-# The stub OSS blueprint returns HTTP 402 on all Pro-gated write paths.
-RUN_ENDPOINTS: dict[str, dict] = {
-    "GET /api/v1/runtimes": {
-        "tier": "free",
-        "doc": "List runtimes ClawMetry knows about. Same data the runtime switcher reads.",
-    },
-    "POST /api/v1/runs": {
-        "tier": "pro",
-        "doc": "Open a run. Returns ``{ok, run_id, runtime}``.",
-    },
-    "POST /api/v1/runs/<run_id>/events": {
-        "tier": "pro",
-        "doc": "Append one or many events to an open run.",
-    },
-    "POST /api/v1/runs/<run_id>/end": {
-        "tier": "pro",
-        "doc": "Mark the run ended. Optional — the run also closes on inactivity.",
-    },
-    "GET /api/v1/runs/<run_id>": {
-        "tier": "pro",
-        "doc": "Read-back: confirm the run was persisted and return its metadata.",
-    },
-}
-
-# HTTP response codes for the run/event endpoints.
-RUN_RESPONSE_CODES: dict[int, str] = {
-    200: "Success (GET requests).",
-    201: "Accepted (POST requests).",
-    400: "Malformed request body.",
-    401: "Token required but missing or incorrect.",
-    402: "Pro plan required; OSS stub returns this on all write endpoints.",
-    429: "Rate limit or budget pause.",
-}

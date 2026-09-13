@@ -2,15 +2,21 @@
 routes/meta.py — Auth / gateway / OTLP / version / version-impact.
 
 Extracted from dashboard.py as Phase 5.12 of the incremental modularisation.
-Six small Blueprints bundled into one file because each is tiny (1-3 routes)
-and they are all auth/meta/observability plumbing:
+Several small Blueprints bundled into one file because they are all
+auth/meta/observability plumbing. Keep this index accurate: it is the
+first thing a reader (human or tool) sees, and a route missing from it
+reads as a route that does not exist.
 
-  bp_version        (2)  — /api/version, /api/update
+  bp_version        (4)  — /api/version, /api/update, ...
   bp_gateway        (3)  — /api/gw/{config,invoke,rpc}
-  bp_auth           (3)  — /api/auth/check, /auth, /  (main page)
-  bp_otel           (3)  — /v1/metrics, /v1/traces, /api/otel-status
+  bp_auth           (5)  — /api/auth/check, /auth, /  (main page), ...
+  bp_otel           (6)  — /v1/metrics, /v1/traces, /v1/logs (the OTLP
+                           receiver), /api/setup-prompt (the prompt that
+                           points an off-box agent here, #5681),
+                           /api/otel-status, /api/otel/rollup
   bp_version_impact (1)  — /api/version-impact
   bp_cloud_relay    (1)  — /api/cloud/subscribe
+  bp_otlp_traces    (1)  — OTLP trace query surface
 
 Module-level helpers (``_auto_discover_gateway``, ``_gw_invoke_docker``,
 ``_gw_invoke``, ``_gw_ws_rpc``, ``_load_gw_config``, ``_ext_emit``,
@@ -1273,17 +1279,41 @@ def index():
 
 
 def _otlp_receive(signal, process):
-    """Shared OTLP/HTTP receive path. ``process`` is the dashboard mapper."""
+    """Shared OTLP/HTTP receive path. ``process`` is the dashboard mapper.
+
+    Three ways in, all of them ending here:
+
+    * loopback, with nothing at all -- the zero-config local exporter;
+    * the OpenClaw gateway token, for a LAN exporter;
+    * an ingest key (``clawmetry key create --scope write:ingest``), for
+      an agent that is not on this machine at all: CI, a container, a
+      serverless function, a teammate's laptop.
+
+    The key path is the one ``clawmetry/ingest_auth.py`` owns. It is the
+    ONLY gate on a keyed request -- ``dashboard.py::_check_auth`` steps
+    aside for one -- so a bad key has to be refused here.
+    """
     import dashboard as _d
+    from clawmetry import ingest_auth as _ia
+
     if _d._budget_paused:
         return jsonify(
             {"error": "Budget limit exceeded - intake paused", "paused": True}
         ), 429
+
+    body = request.get_data()
+    ctx, err = _ia.prologue(request.headers, body)
+    if err:
+        payload, status = err
+        return jsonify(payload), status
+
     try:
         process(
-            request.get_data(),
+            body,
             content_encoding=request.headers.get("Content-Encoding"),
             content_type=request.headers.get("Content-Type"),
+            runtime=ctx["runtime"],
+            env=ctx["env"],
         )
         return "{}", 200, {"Content-Type": "application/json"}
     except OtlpProtobufUnavailable as e:
@@ -1303,7 +1333,16 @@ def _otlp_receive(signal, process):
             )
         except Exception:
             pass
-        return jsonify({"error": str(e)}), 400
+        return jsonify({
+            "error": "bad_request",
+            "message": (
+                f"That body did not decode as OTLP {signal}. Send OTLP "
+                "protobuf (Content-Type: application/x-protobuf) or "
+                "OTLP/JSON (application/json); gzip is accepted with "
+                "Content-Encoding: gzip."
+            ),
+            "detail": str(e),
+        }), 400
 
 
 @bp_otel.route("/v1/metrics", methods=["POST"])
@@ -1329,6 +1368,43 @@ def otlp_logs():
     per record), mapping them into the cost + usage tiles. Closes obs-gap #2596."""
     import dashboard as _d
     return _otlp_receive("logs", _d._process_otlp_logs)
+
+
+@bp_otel.route("/api/setup-prompt")
+def api_setup_prompt():
+    """The copy-paste prompt for pointing an off-box agent at this
+    ClawMetry (#5681).
+
+    Rendered from ``clawmetry.ingest_contract`` so it cannot drift from
+    what the server actually accepts -- a setup prompt that names a
+    header we do not take is worse than no prompt, because the agent
+    writes it confidently and the failure is invisible.
+
+    The prompt carries a placeholder, never a key. Secrets are stored
+    only as a SHA-256, so a real one could not be substituted here even
+    if that were desirable -- and it is not: an endpoint that hands back
+    a working key is a way to read one out. The prompt tells the agent
+    the placeholder is a placeholder and to ask for the real key rather
+    than invent one, which is the failure mode worth designing against.
+    """
+    from clawmetry import setup_prompt as _sp
+
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime and not _sp.VALID_RUNTIME.match(runtime):
+        return jsonify({
+            "error": "bad_runtime",
+            "message": "runtime must be a short name like claude_code or "
+                       "my-engine: lower-case letters, digits, underscore "
+                       "and dash, 40 characters at most.",
+        }), 400
+
+    endpoint = request.host_url.rstrip("/")
+    text = _sp.render(runtime, endpoint=endpoint)
+    return jsonify({
+        "runtime": runtime,
+        "endpoint": endpoint,
+        "prompt": text,
+    })
 
 
 @bp_otel.route("/api/otel-status")

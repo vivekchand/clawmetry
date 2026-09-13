@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-253 modules, 84 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+255 modules, 84 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -62,7 +62,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/insights.py` | medium | `bp_insights` | `/api/insights`, `/insights` | Weekly Insights Digest endpoints. |
 | `routes/inventory.py` | medium | `bp_inventory` | `/api/inventory` | Agent Inventory tab API. |
 | `routes/local_query.py` | large | `bp_local_query` | `/__local_query__`, `/api/local` | coherent local query API over the DuckDB store. |
-| `routes/meta.py` | large | `bp_auth`, `bp_cloud_relay`, `bp_gateway`, `bp_otel`, `bp_otlp_traces`, `bp_version`, `bp_version_impact` | `/.well-known/security.txt`, `/api/anon-auth-fail-ping`, `/api/auth`, `/api/cloud`, `/api/export`, `/api/gw`, `/api/install-age`, `/api/otel`, `/api/otel-status`, `/api/update`, `/api/version`, `/api/version-impact`, `/auth`, `/v1/logs`, `/v1/metrics`, `/v1/traces` | Auth / gateway / OTLP / version / version-impact. |
+| `routes/meta.py` | large | `bp_auth`, `bp_cloud_relay`, `bp_gateway`, `bp_otel`, `bp_otlp_traces`, `bp_version`, `bp_version_impact` | `/.well-known/security.txt`, `/api/anon-auth-fail-ping`, `/api/auth`, `/api/cloud`, `/api/export`, `/api/gw`, `/api/install-age`, `/api/otel`, `/api/otel-status`, `/api/setup-prompt`, `/api/update`, `/api/version`, `/api/version-impact`, `/auth`, `/v1/logs`, `/v1/metrics`, `/v1/traces` | Auth / gateway / OTLP / version / version-impact. |
 | `routes/nemoclaw.py` | small | `bp_nemoclaw` | `/api/nemoclaw` | OSS stub after the impl moved to clawmetry-pro. |
 | `routes/onboarding.py` | medium | `bp_onboarding` | `/api/account`, `/api/onboarding` | the first-run onboarding gate state machine. |
 | `routes/org_analytics.py` | small | `bp_org_analytics` | `/api/org-analytics` | OSS stub after the impl lives in clawmetry-pro. |
@@ -198,7 +198,8 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/hooks.py` | medium | Hook lifecycle manager — install manifest and atomic install/uninstall API. |
 | `clawmetry/hooks_claude_code.py` | large | Claude Code hooks → ClawMetry: pre-execution approval gate + phone pushes. |
 | `clawmetry/incident_alerts.py` | medium | deliver a detector incident to a human. |
-| `clawmetry/ingest_contract.py` | medium | the declared ingest/1 contract registry. |
+| `clawmetry/ingest_auth.py` | medium | the gate in front of the ingest surfaces. |
+| `clawmetry/ingest_contract.py` | medium | what ClawMetry accepts, declared once. |
 | `clawmetry/injected_context.py` | small | Tell what a human typed apart from context a harness injects as a user turn. |
 | `clawmetry/insights.py` | medium | Weekly Insights Digest — LLM-over-DuckDB summary of the last 7 days. |
 | `clawmetry/installs.py` | medium | Install census — find every clawmetry copy on this machine and flag stale ones. |
@@ -253,6 +254,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/selfhosted.py` | small | clawmetry.selfhosted — ClawMetry Enterprise single-tenant server mode. |
 | `clawmetry/session_context.py` | medium | Inputs & context: what the agent was actually given, per session. |
 | `clawmetry/session_titles.py` | medium | ChatGPT-style session titles from the first real user prompt. |
+| `clawmetry/setup_prompt.py` | small | the copy-paste prompt you hand your agent. |
 | `clawmetry/siem.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
 | `clawmetry/signal_shifts.py` | medium | Signal shifts (WO-62): notice when a behaviour-signal rate moves, explain what moved it, and open an issue the operator can resolve or ignore. |
 | `clawmetry/span_reconstruct.py` | medium | Runtime-agnostic span reconstruction for family runtimes (Agent Graph WS-A). |

@@ -34,9 +34,14 @@ holder named. Concretely:
   is created with ``--origin none`` and simply never gets a CORS header.
 * Scopes are least-revealing-first and ``read:content`` is never
   granted implicitly -- it has to be asked for by name.
-* Keys are read-only. Nothing in this module can pause, stop or kill an
-  agent, and ``routes/public_api.py`` dispatches only ``q/1`` read
-  shapes, so this adds nothing to ClawMetry's control plane.
+* Read scopes are read-only. ``routes/public_api.py`` dispatches only
+  ``q/1`` read shapes, so a browser-resident key adds nothing to
+  ClawMetry's control plane.
+* There is exactly one write scope, ``write:ingest``, and it can only
+  push telemetry IN. It cannot read a single byte back, and nothing in
+  this module can pause, stop or kill an agent. An ingest key is
+  server-to-server: it is never granted a CORS header, so a page cannot
+  hold one usefully (see ``ingest_auth``).
 
 Storage
 -------
@@ -57,7 +62,11 @@ import secrets
 import time
 from typing import Any, Optional
 
-from clawmetry.query_contract import SCOPE_CONTENT, SCOPE_DOC, SCOPES
+from clawmetry.query_contract import (
+    SCOPE_CONTENT,
+    SCOPE_DOC as _READ_SCOPE_DOC,
+    SCOPES as READ_SCOPES,
+)
 
 # ── Shape of the thing ──────────────────────────────────────────────────
 
@@ -76,6 +85,23 @@ _DIR_MODE = 0o700
 #: A machine is not a key management product. The cap exists so a runaway
 #: script cannot grow the file without bound; it is not a paywall.
 MAX_KEYS = 50
+
+#: The one write scope. It lives here rather than in ``query_contract``
+#: on purpose: that module declares what can be READ, shape by shape,
+#: and a scope with no shape behind it would be a lie in that table.
+#: Ingest is the opposite direction and has no q/1 method at all.
+SCOPE_INGEST = "write:ingest"
+
+#: Every scope a key may carry. Read scopes stay in their declared
+#: least-revealing-first order; the write scope sorts last because it is
+#: the one a reader should notice.
+SCOPES: tuple = tuple(READ_SCOPES) + (SCOPE_INGEST,)
+
+SCOPE_DOC: dict = dict(_READ_SCOPE_DOC)
+SCOPE_DOC[SCOPE_INGEST] = (
+    "Push telemetry in: OTLP logs, metrics and traces, and run events. "
+    "Grants no read access of any kind."
+)
 
 #: Sentinel origin meaning "this key is not used from a browser". Stored
 #: as an empty origin list; kept as a word so the CLI can say it back.
@@ -292,6 +318,25 @@ def create(name: str, scopes, origins, *, note: str = "") -> tuple:
     scope_list = normalise_scopes(scopes)
     origin_list = normalise_origins(origins)
 
+    # An ingest key is server-to-server and is never granted a CORS
+    # header, so browser origins on one would be dead configuration that
+    # reads like a permission. Refusing the mix also keeps a single key
+    # from being both "pasted into a web page" and "allowed to write",
+    # which is the combination worth not having.
+    if SCOPE_INGEST in scope_list:
+        if len(scope_list) > 1:
+            raise ApiKeyError(
+                "An ingest key does one job. Create it with write:ingest "
+                "alone, and mint a separate read key for anything that "
+                "needs to read data back."
+            )
+        if origin_list:
+            raise ApiKeyError(
+                "An ingest key is used by a server, a container or a CI "
+                "job, never by a browser, so it takes no origin. Create "
+                "it with --origin none."
+            )
+
     doc = _read_store()
     live = [k for k in doc["keys"] if not k.get("revoked_at")]
     if len(live) >= MAX_KEYS:
@@ -507,22 +552,41 @@ def granted_shapes(record: dict) -> set:
 
 
 def scope_catalogue() -> list:
-    """``[{scope, doc, methods, sensitive}]`` for the UI and the CLI help.
+    """``[{scope, kind, doc, methods, sensitive}]`` for the UI and CLI help.
 
-    Derived from the query contract, so a method added there shows up
-    here with no second list to update.
+    Read scopes are derived from the query contract, so a method added
+    there shows up here with no second list to update.
+
+    ``write:ingest`` has no ``q/1`` method behind it and never will --
+    it is the other direction. It carries ``methods: []`` with
+    ``kind: "write"``, so a caller can tell "this scope reads nothing"
+    apart from "this scope's method list failed to load". An empty list
+    with no explanation is the kind of thing that sends someone to the
+    source to find out whether the UI is broken.
     """
     from clawmetry.query_contract import live_methods_by_scope
 
-    return [
-        {
+    rows = []
+    for s in SCOPES:
+        write = s == SCOPE_INGEST
+        rows.append({
             "scope": s,
+            "kind": "write" if write else "read",
             "doc": SCOPE_DOC[s],
-            "methods": live_methods_by_scope(s),
+            "methods": [] if write else live_methods_by_scope(s),
             "sensitive": s == SCOPE_CONTENT,
-        }
-        for s in SCOPES
-    ]
+        })
+    return rows
+
+
+def allows_ingest(record: dict) -> bool:
+    """True when this key may push telemetry in.
+
+    The single question the ingest path asks. Kept next to the scope it
+    checks so a future scope rename cannot leave a stale string literal
+    behind in a route module.
+    """
+    return SCOPE_INGEST in (record.get("scopes") or [])
 
 
 def redact(presented: str) -> str:
