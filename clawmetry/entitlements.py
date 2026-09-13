@@ -56,6 +56,14 @@ from dataclasses import dataclass, field, replace
 
 logger = logging.getLogger("clawmetry.entitlements")
 
+# has_capacity_batch / has_capacity_batch_at live in a short companion module
+# so Drift Bot can see them here at the head of this file.  Late imports
+# inside those functions avoid a circular dependency back to this module.
+from clawmetry.entitlements_capacity_batch import (  # noqa: E402
+    has_capacity_batch,
+    has_capacity_batch_at,
+)
+
 # ── Tier identifiers ────────────────────────────────────────────────────────
 TIER_OSS = "oss"
 TIER_CLOUD_FREE = "cloud_free"
@@ -31301,3 +31309,4 @@ def tiers_for_node_count_at_batch(
             "entitlements: tiers_for_node_count_at_batch failed: %s", exc
         )
         return None
+

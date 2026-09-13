@@ -4536,3 +4536,4 @@ def api_entitlement_has_retention_window_at_batch():
         return _shared.jsonify(
             _shared._has_capacity_at_batch_fallback(tier_in, "retention_window")
         )
+
