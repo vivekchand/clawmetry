@@ -46,7 +46,7 @@ Primary repo behaviour (clawmetry):
 When run locally (GITHUB_REPOSITORY not set), the script applies all 3
 checks and requires a token with cross-repo admin access.
 
-Tracking: vivekchand/clawmetry#4552 (C6)
+Tracking: vivekchand/clawmetry#5266 (C6)
 """
 from __future__ import annotations
 
@@ -249,18 +249,30 @@ def remove_required_check(repo: str, context: str, token: str) -> None:
     path = f"/repos/{OWNER}/{repo}/branches/main/protection/required_status_checks"
     try:
         current = _api("GET", path, token=token)
-        existing: list[str] = list(current.get("contexts") or [])
+        ctx_contexts: list[str] = list(current.get("contexts") or [])
+        ctx_checks: list[dict] = list(current.get("checks") or [])
     except RuntimeError:
         print(f"  [{repo}] no branch protection found, skipping removal of: {context!r}")
         return
 
-    if context not in existing:
+    in_contexts = context in ctx_contexts
+    in_checks = any(
+        isinstance(c, dict) and c.get("context") == context for c in ctx_checks
+    )
+    if not in_contexts and not in_checks:
         print(f"  [{repo}] not present (clean), nothing to remove: {context!r}")
         return
 
-    updated = [c for c in existing if c != context]
-    _api("PATCH", path, body={"strict": False, "contexts": updated}, token=token)
-    print(f"  [{repo}] removed deprecated check ({len(updated)} remaining): {context!r}")
+    updated_contexts = [c for c in ctx_contexts if c != context]
+    body: dict = {"strict": False, "contexts": updated_contexts}
+    if in_checks:
+        # Also remove from the 'checks' array (Settings-UI-configured checks land here).
+        body["checks"] = [
+            c for c in ctx_checks
+            if not (isinstance(c, dict) and c.get("context") == context)
+        ]
+    _api("PATCH", path, body=body, token=token)
+    print(f"  [{repo}] removed deprecated check ({len(updated_contexts)} remaining): {context!r}")
 
 
 def _get_branch_protection_contexts(repo: str, token: str) -> set[str] | None:
@@ -474,7 +486,7 @@ def main() -> None:
                 "  Fix: re-run the workflow and paste a fine-grained PAT into the 'pat_token' field.\n"
                 "  PAT permissions: Administration (read+write) on clawmetry, clawmetry-cloud, clawmetry-landing.\n"
                 "  Alternative: bash scripts/close-c6.sh (uses your gh CLI session, ~30 sec).\n"
-                "  Tracking: vivekchand/clawmetry#4552 (C6)"
+                "  Tracking: vivekchand/clawmetry#5266 (C6)"
             )
         # Read-only path: GITHUB_TOKEN cannot write branch protection rules.
         # Scope verification to the current repo only to avoid cross-repo 403s.
