@@ -18873,8 +18873,9 @@ def _resolve_spending(daily_usage, state_spending):
     if all(live.get(src_key) is not None for _, src_key in keys):
         out = {out_key: float(live.get(src_key)) for out_key, src_key in keys}
         out["source"] = "live"
+        from clawmetry import cost_basis as _cb
         return _prov.stamp(out, {
-            k: _prov.derived(
+            k: _cb.published_rate(
                 "the runtime's own cost when it reported one, otherwise "
                 "measured token counts priced against the provider's "
                 "published rate card",
@@ -18887,12 +18888,14 @@ def _resolve_spending(daily_usage, state_spending):
     # presented as the current spend.
     out = {out_key: float(stale.get(out_key) or 0) for out_key, _ in keys}
     out["source"] = "state"
+    from clawmetry import cost_basis as _cb
     return _prov.stamp(out, {
-        k: _prov.estimated(
+        k: _cb.published_rate(
             "the last spend the daemon successfully recorded, standing in "
             "for a live read that did not answer this tick, so it may be out "
             "of date",
             "~/.clawmetry/state.json",
+            basis=_prov.ESTIMATED,
             window=windows[k])
         for k, _src in keys})
 
@@ -19042,6 +19045,7 @@ def _build_daily_usage(days=14):
 def _daily_usage_provenance():
     """Provenance entries for the ``dailyUsage`` snapshot slice."""
     from clawmetry import provenance as _prov
+    from clawmetry import cost_basis as _cb
     src = "DuckDB rollup_daily / rollup_runtime_daily on this node"
     formula = ("the runtime's own cost when it reported one, otherwise "
                "measured input, output and cache token counts priced against "
@@ -19053,15 +19057,15 @@ def _daily_usage_provenance():
     }
     entries = {}
     for w, text in windows.items():
-        entries[w + "Cost"] = _prov.derived(formula, src, window=text)
+        entries[w + "Cost"] = _cb.published_rate(formula, src, window=text)
         entries[w] = _prov.measured(
             "sum of token counts on deduped call events in the window",
             src, window=text)
-    entries["days[].cost_usd"] = _prov.derived(
+    entries["days[].cost_usd"] = _cb.published_rate(
         formula, src, window="one local calendar day per bucket")
-    entries["byRuntime[].cost_usd"] = _prov.derived(
+    entries["byRuntime[].cost_usd"] = _cb.published_rate(
         formula, src, window="one local calendar day per bucket")
-    entries["cost_usd"] = _prov.derived(formula, src,
+    entries["cost_usd"] = _cb.published_rate(formula, src,
                                         window="the row's own bucket")
     return entries
 

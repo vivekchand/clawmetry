@@ -577,6 +577,48 @@
       "text": "When the token count behind a cost row was not recorded, the system shall say the token count was not recorded rather than label the row \"unknown tokens\"."
     },
     {
+      "id": "AC-OBS-CEA-025.1",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Each cost figure on the Overview spend tile; on the Usage tab's period cost cards, Cost Breakdown table, subscription coverage banner, both Top Sessions by Cost tables and the session cost chart; on the Flow brain panel's cost card and per-call cost list; and in the hosted snapshot's cost slice shall carry a financial basis of exactly one of: usage value at published rates, expected contract spend, allocated actual spend, or unavailable, shown as visible text beside the figure or on the heading or caption of the column, list or chart that holds it."
+    },
+    {
+      "id": "AC-OBS-CEA-025.2",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "The system shall not label a figure expected contract spend unless it records the contract rate version it was priced from, and shall not label a figure allocated actual spend unless it records the invoice or billing-ledger reference it was drawn from; a request for either label without that evidence shall produce an unavailable basis with the reason, never a silently upgraded label."
+    },
+    {
+      "id": "AC-OBS-CEA-025.3",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "A cost the runtime reported itself shall be identified as the runtime's own figure (its source), and shall still be labelled usage value at published rates rather than actual spend."
+    },
+    {
+      "id": "AC-OBS-CEA-025.4",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Where a subscription is detected, the Usage tab shall show the API-equivalent value of subscription-covered usage separately from usage on metered routes, and shall never present the subscription-covered value as an additional bill nor state that the covered usage cost the operator nothing."
+    },
+    {
+      "id": "AC-OBS-CEA-025.5",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Where the billing route of part of the usage was not detected, the system shall label that part's route as not detected rather than as metered or as covered."
+    },
+    {
+      "id": "AC-OBS-CEA-025.6",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Where the provider does not expose the plan fee, included allowance or overage to ClawMetry, the system shall say that those are not included rather than show them as zero."
+    },
+    {
+      "id": "AC-OBS-CEA-025.7",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Hovering or keyboard-focusing a basis label shall show how the figure was computed: the formula, the source of the rate, the window, and the billing route where one applies."
+    },
+    {
       "id": "AC-OBS-GHA-001.1",
       "doc": "Governance and Human Approval",
       "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
@@ -1111,6 +1153,54 @@
       "text": "Claude Code is a paid runtime: the instrument command and every Claude Code specific mapping (session join, typed events, cache token tiles, waiting-on-you, span materialization) follow the claude_code runtime entitlement; without it the receiver still accepts batches and keeps only the generic ledger and span rows, and the command reports the plan requirement instead of writing."
     },
     {
+      "id": "AC-GOV-ATR-001.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall pin, for every replayed case study, the ATLAS edition and source revision, the case identifier and name, each procedure step with the technique identifier published for it in that edition, and the ATLAS mitigations published against those techniques (ATLAS links mitigations to techniques, not to case studies, so the case to mitigation mapping is derived and labelled as such). A source report whose revision cannot be retrieved shall be named in the scorecard as not pinned."
+    },
+    {
+      "id": "AC-GOV-ATR-001.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "For each scenario the system shall record the runtime, the evaluation tier, the policy set in force and the expected outcome of every stage."
+    },
+    {
+      "id": "AC-GOV-ATR-002.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall score every stage of every scenario as unobservable, observed, partial, detected or held before action, naming the finding kinds that fired and the timestamp of the first flagged event, and shall roll each case up to caught, partial or missed."
+    },
+    {
+      "id": "AC-GOV-ATR-002.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "A fixture replay shall never score a stage as held before action, and its results shall be labelled fixture replay, distinct from isolated execution evidence."
+    },
+    {
+      "id": "AC-GOV-ATR-002.3",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The suite shall include benign controls, an intentional allow and at least one failure mode of a pre-action control, and shall report any finding on a benign control as a false positive."
+    },
+    {
+      "id": "AC-GOV-ATR-003.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall generate the scorecard from the replay, and continuous integration shall fail when the committed scorecard and the replay disagree, or when a stage outcome changes without its pinned expectation changing."
+    },
+    {
+      "id": "AC-GOV-ATR-003.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The scorecard shall state that fixture replay does not establish protection against CVE-2026-25253 or against prompt injection in general, and shall list the residual gaps."
+    },
+    {
+      "id": "AC-GOV-ATR-003.3",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall produce a redacted evidence bundle that contains pins and sha256 of every fixture and stage outcomes, but no raw commands or file paths, and the bundle shall be deterministic given the same generated_at timestamp."
+    },
+    {
       "id": "AC-GOV-FWM-001.1",
       "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
       "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
@@ -1157,6 +1247,84 @@
       "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
       "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
       "text": "The coverage document shall describe coverage and not compliance, and shall list the framework items Guard does not cover as gaps."
+    },
+    {
+      "id": "AC-OBS-PRP-001.1",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When a report is requested for a commit range, the system shall link each changed file to the sessions that wrote it, recording for each link its basis (a commit trailer naming the session, or a write tool call on that path recorded by the session), and shall list changed files with no link as unattributed rather than omitting them."
+    },
+    {
+      "id": "AC-OBS-PRP-001.2",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall present a file-to-session link as association and not as proof that the session caused a finding on that file; every link and every annotated finding shall carry its basis."
+    },
+    {
+      "id": "AC-OBS-PRP-001.3",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall emit the report as SARIF 2.1.0 in which each Guard finding raised by a linked session is a result on each file that session is linked to, with its level mapped from the finding's severity (critical to error, warning to warning, anything else to note)."
+    },
+    {
+      "id": "AC-OBS-PRP-001.4",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When scanner SARIF is supplied, the system shall reproduce its findings and annotate each finding located on a linked file with the session identifier, runtime, model and link basis, and shall leave findings on unlinked files unannotated. The system shall produce no finding of its own about code content."
+    },
+    {
+      "id": "AC-OBS-PRP-001.5",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The SARIF, the markdown summary and the console output shall contain no prompt text, no tool output and no credential-shaped value; text copied from supplied scanner findings shall pass through secret redaction."
+    },
+    {
+      "id": "AC-OBS-PRP-001.6",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall produce the report from an exported provenance bundle with no local store and no network access, as well as from the local store."
+    },
+    {
+      "id": "AC-OBS-PRP-001.7",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "An exported bundle shall record the commits it covers and a content digest. When the digest does not match the content, or the bundle covers no commit in the evaluated range, the system shall treat the bundle as invalid evidence; when commits in the range are not covered, the system shall report them as missing evidence. The system shall state that the digest is an integrity check and not proof of authenticity."
+    },
+    {
+      "id": "AC-OBS-PRP-001.8",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The gate shall be off unless explicitly enabled, and while off the report shall exit successfully whatever it finds. Enabling the gate shall require a threshold and an explicit choice of behaviour for missing, stale or invalid evidence; the system shall refuse to evaluate a gate enabled without that choice."
+    },
+    {
+      "id": "AC-OBS-PRP-001.9",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When the gate is enabled, a finding at or above the threshold on a linked file shall fail the run unless an unexpired exception names it; an expired exception shall not apply and shall be reported as expired."
+    },
+    {
+      "id": "AC-OBS-PRP-001.10",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "Every gate evaluation shall record its outcome, rule version, threshold, evidence behaviour, actor, time, evaluated head commit and the exceptions it applied."
+    },
+    {
+      "id": "AC-OBS-PRP-001.11",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When the report is posted to a pull request, the system shall maintain a single comment identified by a marker, updating it on later runs rather than adding another."
+    },
+    {
+      "id": "AC-OBS-PRP-001.12",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When reading the local store, the system shall resolve a session's relative write paths only against that session's recorded working directory, and shall not link a session working in another directory or repository to the change through a relative path; a session with no recorded working directory shall be linked through a relative path only when a commit trailer in the change names it, and relative writes it cannot place that match a changed file shall be reported as missing evidence without naming the session."
+    },
+    {
+      "id": "AC-OBS-PRP-001.13",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When any read limit truncates the evidence (sessions listed, sessions read, events or Guard findings per session, or commits in the range), the system shall report the evidence as partial with the reason, both in the report and in an exported bundle, so that an enabled gate applies the operator's missing-evidence behaviour rather than passing silently."
     }
   ]
 }

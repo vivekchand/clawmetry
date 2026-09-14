@@ -3832,32 +3832,49 @@ function renderBillingCoverageBanner(cov, usageData) {
     host.innerHTML = '';
     return;
   }
-  function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
+  // REQ-OBS-CEA-025: every figure here is usage value at PUBLISHED RATES.
+  // Subscription-covered value is shown apart from metered usage and is
+  // never described as a bill, or as costing the operator nothing: ClawMetry
+  // cannot see the plan fee, the included allowance or overages.
+  function fig(value, key, label) {
+    var entry = window.cmProv ? window.cmProv.of(usageData || {}, key) : null;
+    if (window.cmProv) return window.cmProv.figure(value, entry, { label: label, noBadge: true });
+    return escHtml(Number(value || 0).toFixed(2)) + ' USD';
+  }
   var plan = _planLabel(cov) || 'your subscription';
   var monthCost  = Number((usageData && usageData.monthCost) || 0);
   var monthCovered = Number((cov.month && cov.month.covered_usd) || 0);
-  var monthOOP     = Number((cov.month && cov.month.out_of_pocket_usd) || 0);
+  var monthRest    = Number((cov.month && cov.month.out_of_pocket_usd) || 0);
+  var unseen = t('usage.cov_plan_terms_unseen', null,
+    'ClawMetry cannot see your plan fee, included allowance or overages, so none of them are counted here.');
   var color, icon, title, body;
   if (cov.all_covered) {
     color = { bg: 'rgba(34,197,94,0.10)', bd: 'rgba(34,197,94,0.45)', fg: '#16a34a' };
     icon = '✅';
-    title = "You're covered by " + plan;
-    body = 'The costs below are the <strong>API-equivalent</strong> — what these tokens would cost against a raw API key. '
-         + 'Your actual out-of-pocket spend is <strong>$0</strong>: ' + plan + ' already covers this usage. '
-         + 'This month: ' + fmtCost(monthCost) + ' shown, <strong>$0</strong> billed to you.';
-  } else if (cov.any_subscription && cov.any_metered) {
+    title = t('usage.cov_included_title', { plan: plan }, 'Usage included in ' + plan);
+    body = 'The figures below are <strong>usage value at published rates</strong>: what these tokens would cost at the provider\'s list price. '
+         + escHtml(plan) + ' includes this usage, so this value is <strong>not an extra bill</strong>. '
+         + 'This month: ' + fig(monthCost, 'monthCost', 'Usage value this month') + ' of usage value included in your plan. '
+         + escHtml(unseen);
+  } else if (cov.any_subscription && monthCovered > 0.005) {
+    // Part of the usage is included in the plan. The rest is metered only
+    // when a metered runtime was actually detected; otherwise its route is
+    // "not detected", never guessed.
+    var restLabel = cov.any_metered
+      ? t('usage.cov_rest_metered', null, 'Metered usage (billed per token)')
+      : t('usage.cov_rest_unknown', null, 'Usage whose billing route was not detected');
     color = { bg: 'rgba(59,130,246,0.10)', bd: 'rgba(59,130,246,0.45)', fg: '#2563eb' };
     icon = '🧾';
-    title = 'Partly covered — ' + plan;
-    body = plan + ' covers the OAuth/included models below (~<strong>' + fmtCost(monthCovered) + '</strong> this month, billed as $0 to you). '
-         + 'API-keyed models are billed per-token: about <strong>' + fmtCost(monthOOP) + '</strong> this month. '
-         + 'The card numbers are API-equivalent so both parts compare on the same axis.';
-    if (cov.metered_labels && cov.metered_labels.length) {
+    title = t('usage.cov_partly_title', { plan: plan }, 'Part of this usage is included in ' + plan);
+    body = escHtml(restLabel) + ': about <strong>' + fig(monthRest, 'out_of_pocket_usd', restLabel) + '</strong> this month at published rates. '
+         + 'Included in ' + escHtml(plan) + ': about <strong>' + fig(monthCovered, 'covered_usd', 'Included in your plan') + '</strong> of usage value this month, not an extra bill. '
+         + escHtml(unseen);
+    if (cov.any_metered && cov.metered_labels && cov.metered_labels.length) {
       body += ' <span style="opacity:0.7;">Metered: ' + cov.metered_labels.map(escHtml).join(', ') + '.</span>';
     }
   } else {
-    // Subscription detected but every model looks API-keyed — the plan
-    // won't help; fall through to no banner rather than misleading UX.
+    // Subscription detected but none of this usage looks included in it:
+    // the plan does not change these figures, so no banner.
     host.style.display = 'none';
     host.innerHTML = '';
     return;
@@ -4810,7 +4827,9 @@ function _renderOverviewHero() {
   if (sessions != null) stats.push('💬 <strong style="color:var(--text-primary);">' + sessions + (sessions === 1 ? ' session' : ' sessions') + '</strong>' + ((!_scope && _todayKnown) ? ' today' : ''));
   // Show nothing rather than a placeholder: an unlabelled '$0.00' next to
   // live sessions reads as a real reading, not as 'still loading'.
-  if (_costKnown) stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (free ? ' <span style="color:#22c55e;">free on your plan</span>' : ''));
+  // A plan includes usage; it does not make it free (REQ-OBS-CEA-025.4).
+  var _heroIncluded = free && !/^\$0(\.00)?$/.test(cost);
+  if (_costKnown) stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (_heroIncluded ? ' <span style="color:#22c55e;">included in your plan, not an extra bill</span>' : ''));
   // Efficiency chip (design spec §1a): grade next to cost answers "what did it
   // cost me, and is that reasonable?" in one read. Renders only when the
   // daemon slice is fresh for the CURRENT runtime filter and passes the trust
@@ -4978,11 +4997,8 @@ async function loadAll() {
 }
 
 async function loadMiniWidgets(overview, usage) {
-  // 💰 Cost Ticker
-  function fmtCost(c) {
-    if (window.cmProv) return window.cmProv.fmtMoney(c);
-    return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00';
-  }
+  // 💰 Cost Ticker. provenance.js loads before app.js (asserted by
+  // tests/test_provenance.py), so every figure below goes through it.
   // How these three numbers were obtained, on the tile's label. One badge for
   // the tile: today, week and month all come out of the same rollup by the
   // same rule, so they share a basis.
@@ -5013,7 +5029,7 @@ async function loadMiniWidgets(overview, usage) {
       el.innerHTML = window.cmProv.money(usage, key,
                                          { label: label, noBadge: true });
     } else {
-      el.textContent = fmtCost(usage[key] || 0);
+      el.textContent = (usage[key] == null) ? 'not available' : String(usage[key]);
     }
   };
   _setCost('cost-today', 'todayCost', 'Cost today');
@@ -5049,7 +5065,7 @@ async function loadMiniWidgets(overview, usage) {
   if (infoIcon) {
     if (isOauthLikely || isMixed) {
       infoIcon.style.display = '';
-      infoIcon.title = 'Equivalent if billed from token usage. OAuth/included models may be billed $0 at provider level.';
+      infoIcon.title = 'Usage value at published rates (tokens × list price). Usage included in a subscription is value, not an extra bill.';
     } else {
       infoIcon.style.display = 'none';
       infoIcon.title = '';
@@ -12950,7 +12966,7 @@ function _invRosterRow(a, rtFilter) {
   if (a.billingMode === 'subscription') {
     covChip = ' <span class="inv-cov-chip inv-cov-sub" title="'
       + escHtml((a.billingLabel || 'Subscription'))
-      + ' covers this agent. Usage adds $0 extra; the cost columns show API-equivalent value.">'
+      + ' includes this agent\'s usage. The cost columns show usage value at published rates, not an extra bill.">'
       + t('inventory.covered_chip', null, 'covered') + '</span>';
   } else if (a.billingMode === 'metered') {
     covChip = ' <span class="inv-cov-chip inv-cov-met" title="Billed per token at API rates.">'
@@ -18333,21 +18349,43 @@ async function loadUsage() {
       var s = document.getElementById(valId + '-cost');
       var costStr = fmtCost(cost || 0);
       var tokStr = fmtTokens(tokens || 0);
-      if (v) v.textContent = t('usage.cost_about', { cost: costStr }, 'about ' + costStr);
+      var costKey = periodKey ? periodKey + 'Cost' : '';
+      var costEntry = (window.cmProv && costKey) ? window.cmProv.of(data, costKey) : null;
+      if (v) {
+        // The value says which kind of money it is (REQ-OBS-CEA-025); an
+        // unknown figure reads "not available", never "about $0.00".
+        if (window.cmProv && costEntry) {
+          v.innerHTML = (window.cmProv.isUnknown(costEntry) || cost == null)
+            ? window.cmProv.figure(null, costEntry, { label: 'Usage value' })
+            : escHtml(t('usage.cost_about', { cost: costStr }, 'about ' + costStr))
+              + window.cmProv.badge(costEntry, { label: 'Usage value' });
+        } else {
+          v.textContent = t('usage.cost_about', { cost: costStr }, 'about ' + costStr);
+        }
+      }
       if (!s) return;
       var subText = t('usage.tokens_sub', { tokens: tokStr }, tokStr + ' tokens');
       var coverExtra = '';
       var period = periodKey && _cov[periodKey];
+      var planName = _planLabel(_cov) || 'your subscription';
+      var money = function (val, key) {
+        return window.cmProv ? window.cmProv.text(val, window.cmProv.of(data, key)) : Number(val || 0).toFixed(2) + ' USD';
+      };
       if (_cov.all_covered && (cost || 0) > 0) {
-        coverExtra = ' · $0 out-of-pocket';
+        coverExtra = ' · ' + t('usage.card_included', { plan: planName }, 'included in ' + planName + ', not an extra bill');
       } else if (period && _cov.any_subscription && (period.covered_usd || 0) > 0.005) {
-        coverExtra = ' · ~' + fmtCost(period.covered_usd) + ' covered';
+        coverExtra = ' · ' + t('usage.card_split', {
+            covered: money(period.covered_usd, 'covered_usd'),
+            rest: money(period.out_of_pocket_usd, 'out_of_pocket_usd') },
+          money(period.covered_usd, 'covered_usd') + ' included in plan, '
+          + money(period.out_of_pocket_usd, 'out_of_pocket_usd')
+          + (_cov.any_metered ? ' metered' : ' route not detected'));
       }
       s.textContent = subText + coverExtra;
       if (coverExtra) {
         s.style.color = 'var(--success, #16a34a)';
-        s.title = 'Covered by ' + (_planLabel(_cov) || 'your subscription') +
-                  ' — this portion of the shown API-equivalent cost is $0 to you.';
+        s.title = 'Included in ' + planName + ': usage value at published rates, not an extra bill. '
+                + 'ClawMetry cannot see the plan fee, included allowance or overages.';
       } else {
         s.style.color = '';
         s.title = '';
@@ -18427,13 +18465,13 @@ async function loadUsage() {
       if (bs && bs !== 'likely_api_key') {
         usageInfoIcon.style.display = '';
         if (_plan && _cov.all_covered) {
-          usageInfoIcon.title = 'API-equivalent (tokens × API rates). Your ' + _plan + ' subscription covers this — actual out-of-pocket cost is $0.';
+          usageInfoIcon.title = 'Usage value at published rates (tokens × list price). ' + _plan + ' includes this usage, so it is not an extra bill. ClawMetry cannot see the plan fee, included allowance or overages.';
         } else if (_plan) {
-          usageInfoIcon.title = 'API-equivalent (tokens × API rates). ' + _plan + ' covers the OAuth/included portion; API-keyed models bill separately.';
+          usageInfoIcon.title = 'Usage value at published rates (tokens × list price). ' + _plan + ' includes part of this usage (value, not an extra bill); the rest is billed per token or its billing route was not detected.';
         } else if (bs === 'likely_oauth_or_included' || bs === 'mixed') {
-          usageInfoIcon.title = 'API-equivalent (tokens × API rates). OAuth/included models are typically billed $0 at the provider — your subscription covers them.';
+          usageInfoIcon.title = 'Usage value at published rates (tokens × list price). Usage signed in through a subscription is included in that plan, so its value here is not an extra bill.';
         } else {
-          usageInfoIcon.title = 'API-equivalent (tokens × API rates). Billing basis unconfirmed — if your account is on a subscription plan (e.g. Claude Max via the Claude CLI), the actual incremental cost is $0.';
+          usageInfoIcon.title = 'Usage value at published rates (tokens × list price). The billing route was not detected, so this is not necessarily what you are billed.';
         }
       } else {
         usageInfoIcon.style.display = 'none';
@@ -18486,6 +18524,10 @@ async function loadUsage() {
     // Load session cost breakdown
     fetch('/api/sessions/cost-breakdown').then(r => r.json()).then(function(cbd) {
       window._sessionCostData = cbd.top10 || [];
+      // Keep the basis with the rows (REQ-OBS-CEA-025.1): the chart and its
+      // table print these costs, so they print what kind of money they are.
+      window._sessionCostEntry = window.cmProv
+        ? window.cmProv.of(cbd, 'top10[].cost_usd') : null;
       renderSessionCostChart();
     }).catch(function() {
       var el = document.getElementById('usage-session-cost-table');
@@ -18604,12 +18646,8 @@ function _renderUsageCapCTA(capped) {
 function renderTopSessionsByCost(rows, usageData) {
   var el = document.getElementById('usage-top-sessions-table');
   if (!el) return;
-  // One money formatter for the whole app lives in static/js/provenance.js;
-  // this is the local fallback for a cached page that predates it.
-  function fmtCost(c) {
-    if (window.cmProv) return window.cmProv.fmtMoney(c);
-    return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00';
-  }
+  // One money formatter for the whole app lives in static/js/provenance.js,
+  // which loads before app.js.
   // Every row in this table was priced the same way, so the basis belongs on
   // the column heading rather than repeated down forty rows.
   var costEntry = (window.cmProv && usageData)
@@ -18648,7 +18686,7 @@ function renderTopSessionsByCost(rows, usageData) {
         + (window.cmProv
             ? window.cmProv.figure(r.total_cost_usd, costEntry,
                                    { label: 'Session cost', noBadge: true })
-            : fmtCost(r.total_cost_usd || 0))
+            : escHtml(String(r.total_cost_usd == null ? 'not available' : r.total_cost_usd)))
         + '</td>'
       + '<td style="text-align:right;">' + (r.message_count || 0) + '</td>'
       + '<td style="color:var(--text-muted);font-size:12px;">' + escHtml(fmtDate(r.started_at)) + '</td>'
@@ -19129,6 +19167,16 @@ function renderSessionCostChart() {
   var rows = window._sessionCostData || [];
   var canvas = document.getElementById('usage-session-cost-bar');
   var tableEl = document.getElementById('usage-session-cost-table');
+  // The bars are drawn on a canvas, which cannot hold a focusable badge, so
+  // the basis for the bar values sits in a caption above it
+  // (REQ-OBS-CEA-025.1). No entry (an older daemon): no invented label.
+  var costEntry = window._sessionCostEntry || null;
+  var basisEl = document.getElementById('usage-session-cost-basis');
+  if (basisEl) {
+    basisEl.innerHTML = (costEntry && window.cmProv && rows.length)
+      ? 'Bar values and the Cost column: ' + window.cmProv.badge(costEntry, { label: 'Session cost' })
+      : '';
+  }
   var threshold = parseFloat((document.getElementById('session-cost-threshold') || {}).value || '0.5') || 0;
   if (!canvas) return;
   var ctx = canvas.getContext('2d');
@@ -19190,7 +19238,9 @@ function renderSessionCostChart() {
     tableHtml += '<thead><tr style="color:var(--text-muted);font-size:11px;">';
     tableHtml += '<th style="text-align:left;padding:4px 8px;">Session</th>';
     tableHtml += '<th style="text-align:right;padding:4px 8px;">Tokens</th>';
-    tableHtml += '<th style="text-align:right;padding:4px 8px;">Cost</th>';
+    tableHtml += '<th style="text-align:right;padding:4px 8px;">Cost'
+      + ((costEntry && window.cmProv) ? ' ' + window.cmProv.badge(costEntry, { label: 'Session cost' }) : '')
+      + '</th>';
     tableHtml += '<th style="text-align:left;padding:4px 8px;">Model</th>';
     tableHtml += '<th style="text-align:left;padding:4px 8px;">Date</th>';
     tableHtml += '</tr></thead><tbody>';
@@ -19198,9 +19248,16 @@ function renderSessionCostChart() {
       var over = threshold > 0 && (r.cost_usd||0) >= threshold;
       var rowStyle = over ? 'background:rgba(239,68,68,0.1);' : '';
       tableHtml += '<tr style="border-top:1px solid var(--border-secondary);' + rowStyle + '">';
-      tableHtml += '<td style="padding:4px 8px;font-family:monospace;font-size:11px;color:var(--text-muted);">' + (r.session_id||'').slice(-16) + (over ? ' <span style="color:#ef4444;">⚠</span>' : '') + '</td>';
+      tableHtml += '<td style="padding:4px 8px;font-family:monospace;font-size:11px;color:var(--text-muted);">' + escHtml((r.session_id||'').slice(-16)) + (over ? ' <span style="color:#ef4444;">⚠</span>' : '') + '</td>';
       tableHtml += '<td style="text-align:right;padding:4px 8px;font-size:12px;">' + ((r.tokens||0) >= 1000 ? ((r.tokens||0)/1000).toFixed(0)+'K' : (r.tokens||0)) + '</td>';
-      tableHtml += '<td style="text-align:right;padding:4px 8px;font-size:12px;color:' + (over ? '#ef4444' : 'var(--text-success)') + ';font-weight:600;">$' + (r.cost_usd||0).toFixed(4) + '</td>';
+      // Four decimals, as this table always showed; the column heading
+      // carries the basis, and an unknown cost reads "not available".
+      tableHtml += '<td style="text-align:right;padding:4px 8px;font-size:12px;color:' + (over ? '#ef4444' : 'var(--text-success)') + ';font-weight:600;">'
+        + (window.cmProv
+            ? window.cmProv.figure(r.cost_usd == null ? null : '$' + Number(r.cost_usd).toFixed(4), costEntry,
+                                   { format: 'raw', noBadge: true, label: 'Session cost' })
+            : escHtml(r.cost_usd == null ? 'not available' : '$' + Number(r.cost_usd).toFixed(4)))
+        + '</td>';
       tableHtml += '<td style="padding:4px 8px;font-size:11px;color:var(--text-muted);">' + escHtml(r.model||'') + '</td>';
       tableHtml += '<td style="padding:4px 8px;font-size:11px;color:var(--text-muted);">' + escHtml(r.day||'') + '</td>';
       tableHtml += '</tr>';
@@ -26537,8 +26594,16 @@ function loadBrainData(isRefresh) {
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">';
     html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;cursor:help;" title="' + callsTooltip + '"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + (s.today_calls||0) + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">API Calls Today</div>' + (avgTokPerCall ? '<div style="font-size:10px;color:var(--text-tertiary);margin-top:2px;">~' + avgTokFmt + ' tok/call avg</div>' : '') + '</div>';
     html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + fmtTok + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">Tokens</div></div>';
-    var costColor = parseFloat((s.today_cost||'$0').replace('$','')) > 50 ? '#f59e0b' : parseFloat((s.today_cost||'$0').replace('$','')) > 100 ? '#ef4444' : '#22c55e';
-    html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;"><div style="font-size:24px;font-weight:700;color:' + costColor + ';">' + (s.today_cost||'$0.00') + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">Cost</div></div>';
+    // A number with its basis when the endpoint sends one (REQ-OBS-CEA-025);
+    // the legacy pre-formatted string otherwise. Thresholds are checked
+    // largest first (the old order made the red branch unreachable).
+    var _brainCostNum = (typeof s.today_cost_usd === 'number') ? s.today_cost_usd
+      : parseFloat(String(s.today_cost || '').replace(/[^0-9.]/g, ''));
+    var costColor = _brainCostNum > 100 ? '#ef4444' : _brainCostNum > 50 ? '#f59e0b' : '#22c55e';
+    var _brainCostHtml = (window.cmProv && s.provenance && s.provenance.today_cost_usd)
+      ? window.cmProv.money(s, 'today_cost_usd', { label: 'Cost today' })
+      : escapeHtml(s.today_cost || 'not available');
+    html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;"><div style="font-size:24px;font-weight:700;color:' + costColor + ';">' + _brainCostHtml + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">Cost</div></div>';
     html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px 14px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + ((s.avg_response_ms||0) >= 1000 ? ((s.avg_response_ms/1000).toFixed(1)+'s') : ((s.avg_response_ms||0)+'ms')) + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px;">Avg Response</div></div>';
     html += '</div>';
 
@@ -26570,20 +26635,37 @@ function loadBrainData(isRefresh) {
     if (calls.length === 0) {
       html += '<div style="text-align:center;padding:20px;color:var(--text-muted);">No LLM calls found today</div>';
     } else {
+      // Every call's cost is the same kind of money, so the list is labelled
+      // once, above it (REQ-OBS-CEA-025.1). No entry (an older daemon or a
+      // hosted payload): the legacy string, and no invented label.
+      var callCostEntry = (window.cmProv && data.provenance)
+        ? window.cmProv.of(data, 'calls[].cost_usd') : null;
+      if (callCostEntry) {
+        html += '<div class="brain-call-cost-basis" style="font-size:10px;color:var(--text-muted);margin-bottom:6px;">Cost per call: '
+          + window.cmProv.badge(callCostEntry, { label: 'Call cost' }) + '</div>';
+      }
       html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto;">';
       var TOOL_ICONS = {read:'📄',write:'✏️',edit:'🔧',exec:'⚡',process:'⚙️',browser:'🌐',web_search:'🔍',web_fetch:'🌍',message:'💬',tts:'🔊',image:'🖼️',canvas:'🎨',nodes:'📱'};
       var TOOL_COLORS = {exec:'#f59e0b',browser:'#3b82f6',web_search:'#8b5cf6',web_fetch:'#06b6d4',message:'#ec4899',read:'#6b7280',write:'#22c55e',edit:'#f97316',tts:'#a855f7',image:'#ef4444',canvas:'#14b8a6',nodes:'#6366f1',process:'#64748b'};
       calls.forEach(function(c) {
         var ts = c.timestamp ? new Date(c.timestamp).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
-        var costVal = parseFloat((c.cost||'$0').replace('$',''));
-        var cColor = costVal > 0.50 ? '#f59e0b' : costVal > 1.0 ? '#ef4444' : '#22c55e';
+        var costVal = (typeof c.cost_usd === 'number') ? c.cost_usd
+          : parseFloat(String(c.cost || '0').replace('$', ''));
+        // Largest threshold first: the old order made red unreachable.
+        var cColor = costVal > 1.0 ? '#ef4444' : costVal > 0.50 ? '#f59e0b' : '#22c55e';
         var dur = c.duration_ms > 0 ? (c.duration_ms >= 1000 ? (c.duration_ms/1000).toFixed(1)+'s' : c.duration_ms+'ms') : '--';
         html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:11px;flex-wrap:wrap;">';
         html += '<span style="color:var(--text-tertiary);min-width:58px;">' + ts + '</span>';
         html += '<span style="color:var(--text-muted);font-size:10px;min-width:50px;">' + escapeHtml(c.session||'main') + '</span>';
         html += '<span style="color:#3b82f6;min-width:45px;" title="In">' + (c.tokens_in>=1000?(c.tokens_in/1000).toFixed(1)+'K':c.tokens_in) + '-></span>';
         html += '<span style="color:#8b5cf6;min-width:40px;" title="Out">' + (c.tokens_out>=1000?(c.tokens_out/1000).toFixed(1)+'K':c.tokens_out) + '</span>';
-        html += '<span style="color:' + cColor + ';min-width:50px;">' + (c.cost||'$0') + '</span>';
+        // Four decimals, as the list always showed. A call with tokens but
+        // no price reads "not available", never $0.0000.
+        var callCostHtml = callCostEntry
+          ? window.cmProv.figure(c.cost_usd == null ? null : '$' + Number(c.cost_usd).toFixed(4), callCostEntry,
+                                 { format: 'raw', noBadge: true, label: 'Call cost' })
+          : escapeHtml(c.cost || 'not available');
+        html += '<span style="color:' + (c.cost_usd === null ? 'var(--text-muted)' : cColor) + ';min-width:50px;">' + callCostHtml + '</span>';
         html += '<span style="color:var(--text-muted);min-width:35px;">' + dur + '</span>';
         if (c.thinking) html += '<span style="background:#7c3aed22;color:#7c3aed;padding:1px 5px;border-radius:4px;font-size:10px;" title="Thinking enabled">🧠</span>';
         if (c.cache_read > 0) html += '<span style="background:#22c55e22;color:#22c55e;padding:1px 5px;border-radius:4px;font-size:10px;" title="Cache hit: ' + c.cache_read + ' tokens">💾' + (c.cache_read>=1000?(c.cache_read/1000).toFixed(0)+'K':c.cache_read) + '</span>';

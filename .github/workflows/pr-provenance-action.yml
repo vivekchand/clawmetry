@@ -1,0 +1,88 @@
+name: PR provenance action (demo repository)
+
+# Runs the composite action in integrations/github-action against a scratch
+# demo repository: an agent commit writes a known SQL injection, a scanner
+# reports it, and the action must attach the agent session to that finding,
+# leave the human-written file's finding alone, and gate as configured.
+# Upload and commenting are off here: this job proves the action runs and
+# produces the right SARIF, it does not publish results about a fixture.
+# The store-export half and every gate failure path are covered by
+# tests/test_pr_provenance.py in ci.yml's MOAT Verifier job.
+
+on:
+  pull_request:
+    paths:
+      - clawmetry/pr_provenance.py
+      - clawmetry/cli.py
+      - integrations/github-action/**
+      - scripts/pr_provenance_demo.py
+      - tests/test_pr_provenance.py
+      - .github/workflows/pr-provenance-action.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-provenance-action-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  demo:
+    name: Provenance action on the demo repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Build the demo repository
+        id: demo
+        run: python3 scripts/pr_provenance_demo.py build --out "$RUNNER_TEMP/provenance-demo"
+
+      - name: Report only (gate off)
+        id: report_only
+        uses: ./integrations/github-action
+        with:
+          install-from: ${{ github.workspace }}
+          working-directory: ${{ steps.demo.outputs.repo }}
+          bundle: .clawmetry/pr-provenance.json
+          base: ${{ steps.demo.outputs.base }}
+          head: HEAD
+          scanner-sarif: ${{ steps.demo.outputs.scanner }}
+          upload-sarif: "false"
+          comment: "false"
+
+      - name: Check the report-only result
+        env:
+          SARIF: ${{ steps.report_only.outputs.sarif-file }}
+          REPORT: ${{ steps.report_only.outputs.report-json }}
+        run: python3 scripts/pr_provenance_demo.py verify --sarif "$SARIF" --report "$REPORT" --expect-gate disabled
+
+      - name: Gate on, with approved exceptions
+        id: gated
+        uses: ./integrations/github-action
+        with:
+          install-from: ${{ github.workspace }}
+          working-directory: ${{ steps.demo.outputs.repo }}
+          bundle: .clawmetry/pr-provenance.json
+          base: ${{ steps.demo.outputs.base }}
+          head: HEAD
+          scanner-sarif: ${{ steps.demo.outputs.scanner }}
+          fail-on: critical
+          on-missing-evidence: fail
+          exceptions: ${{ steps.demo.outputs.exceptions }}
+          sarif-file: gated.sarif
+          upload-sarif: "false"
+          comment: "false"
+
+      - name: Check the gated result
+        env:
+          SARIF: ${{ steps.gated.outputs.sarif-file }}
+          REPORT: ${{ steps.gated.outputs.report-json }}
+        run: python3 scripts/pr_provenance_demo.py verify --sarif "$SARIF" --report "$REPORT" --expect-gate pass

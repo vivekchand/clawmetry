@@ -3248,6 +3248,47 @@ body.has-profile-menu #logout-btn { display: none !important; }
   background: transparent;
 }
 
+/* A cost figure's financial basis (REQ-OBS-CEA-025). The badge text is the
+   words ("published rates"), so the case stays as written rather than
+   shouted, and "not available" keeps the dashed look of an unknown. */
+.cm-cost-published_rate,
+.cm-cost-contract,
+.cm-cost-allocated_actual,
+.cm-cost-unknown {
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+/* The explanation, reachable without a mouse: a keyboard user who focuses a
+   badge sees what a mouse user sees in the title tooltip. provenance.js puts
+   it in one element on <body>, so no card's overflow:hidden can clip it (a
+   ::after on the badge was clipped to one line on the Overview tile).
+   Fixed is safe here only because the tip is a child of <body>, outside
+   #zoom-wrapper, whose transform would otherwise capture it. */
+.cm-prov[data-tip]:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 1px;
+}
+#cm-prov-focus-tip {
+  position: fixed;
+  z-index: 10000;
+  width: max-content;
+  max-width: min(320px, 80vw);
+  padding: 6px 8px;
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.45;
+  text-align: left;
+  text-transform: none;
+  white-space: pre-line;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
 /* One letter, for a table cell where the word would crowd the number. */
 .cm-prov-compact {
   margin-left: 4px;

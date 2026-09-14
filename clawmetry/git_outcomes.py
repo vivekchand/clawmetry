@@ -126,7 +126,15 @@ _READ_ONLY_SUBCOMMANDS = frozenset({
     "config",       # only ever with --get; see _git()
     "remote",       # only ever with get-url; see _git()
     "ls-files",
+    # PR provenance (clawmetry/pr_provenance.py, #5946): a pull request's
+    # changed files are the tree diff from the merge base to the head.
+    "merge-base",
+    "diff-tree",
 })
+
+#: Options that make an otherwise read-only subcommand write a file.
+#: ``git log --output=<file>`` and ``git diff-tree --output=<file>`` both do.
+_WRITING_OPTIONS = ("--output",)
 
 #: Second-word restrictions for subcommands that have both readers and
 #: writers under the same name. ``git config x y`` writes; ``git config --get x``
@@ -153,6 +161,10 @@ def _assert_read_only(args: Sequence[str]) -> None:
     sub = args[0]
     if sub not in _READ_ONLY_SUBCOMMANDS:
         raise UnsafeGitCommand(f"git {sub}: not a read-only subcommand")
+    for arg in args[1:]:
+        text = str(arg)
+        if any(text == opt or text.startswith(opt + "=") for opt in _WRITING_OPTIONS):
+            raise UnsafeGitCommand(f"git {sub} {text}: writes a file")
     allowed_first = _READ_ONLY_FIRST_ARG.get(sub)
     if allowed_first is not None:
         first = args[1] if len(args) > 1 else ""

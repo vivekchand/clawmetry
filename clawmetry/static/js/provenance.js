@@ -47,6 +47,23 @@
   HINT[ESTIMATED] = 'Estimated: modelled, with an assumption that can be wrong.';
   HINT[UNKNOWN] = 'No basis: this number is not available, so nothing is shown.';
 
+  // What kind of money a cost figure is (REQ-OBS-CEA-025). Orthogonal to
+  // the basis above: "derived" says how a number was computed, this says
+  // whether it is an invoice. Mirrors clawmetry/cost_basis.py; the server
+  // sends its own words, these are the fallback for an older daemon.
+  var COST_LABEL = {
+    published_rate: 'published rates',
+    contract: 'contract rate',
+    allocated_actual: 'actual spend',
+    unknown: 'not available'
+  };
+  var COST_HINT = {
+    published_rate: 'Usage value at published rates: what this usage costs at the provider\'s list price. It is not an invoice.',
+    contract: 'Expected contract spend: this usage priced at your negotiated rate. It is not an invoice.',
+    allocated_actual: 'Allocated actual spend: drawn from an invoice or billing ledger.',
+    unknown: 'No financial basis: it is not known what kind of money this is, so no amount is shown.'
+  };
+
   // One letter for dense tables, where the full word would crowd out the
   // number it is describing.
   var INITIAL = {};
@@ -98,6 +115,9 @@
     if (!entry) return UNLABELLED.hint;
     var lines = [];
     if (label) lines.push(label);
+    if (entry.cost_basis) {
+      lines.push(entry.cost_basis_hint || COST_HINT[entry.cost_basis] || '');
+    }
     lines.push(entry.hint || HINT[entry.basis] || '');
     if (entry.reason) lines.push('Why: ' + entry.reason);
     if (entry.formula) lines.push('How: ' + entry.formula + '.');
@@ -111,6 +131,8 @@
       }
       if (bits.length) lines.push('From: ' + bits.join(', ') + '.');
     }
+    if (entry.rate_source) lines.push('Rate: ' + entry.rate_source + '.');
+    if (entry.billing_route_label) lines.push('Billing route: ' + entry.billing_route_label + '.');
     if (entry.source) lines.push('Source: ' + entry.source + '.');
     if (entry.note) lines.push('Note: ' + entry.note + '.');
     return lines.filter(Boolean).join('\n');
@@ -119,17 +141,28 @@
   // ── The badge ───────────────────────────────────────────────────────────
   // opts.compact  one letter instead of the word (dense tables)
   // opts.label    a name for the figure, shown as the tooltip's first line
+  // A cost figure's badge names its financial basis ("published rates")
+  // rather than the arithmetic word, because that is the question a reader
+  // of a dollar amount is asking. The explanation is reachable without a
+  // mouse: the badge takes keyboard focus, shows the same text on focus
+  // (data-tip, styled in dashboard.css) and carries it as a description.
   function badge(entry, opts) {
     opts = opts || {};
     var e = entry || UNLABELLED;
     var basis = e.basis || UNKNOWN;
+    var cost = e.cost_basis || '';
     var text = opts.compact
       ? (INITIAL[basis] || '?')
-      : (e.label || LABEL[basis] || basis);
+      : (cost ? (e.cost_basis_label || COST_LABEL[cost] || cost)
+              : (e.label || LABEL[basis] || basis));
+    var t = tip(e, opts.label);
     return '<span class="cm-prov cm-prov-' + esc(basis)
+      + (cost ? ' cm-cost-' + esc(cost) : '')
       + (opts.compact ? ' cm-prov-compact' : '')
-      + '" title="' + esc(tip(e, opts.label)) + '"'
-      + ' aria-label="' + esc((opts.label ? opts.label + ': ' : '') + text)
+      + '" tabindex="0" role="note" title="' + esc(t) + '"'
+      + ' data-tip="' + esc(t) + '"'
+      + ' aria-label="' + esc((opts.label ? opts.label + ': ' : '') + text
+                              + '. ' + t.replace(/\n/g, ' '))
       + '">' + esc(text) + '</span>';
   }
 
@@ -206,10 +239,64 @@
     return fmtMoney(value);
   }
 
+  // ── The explanation for a keyboard user ─────────────────────────────────
+  // A mouse user gets the title tooltip. A keyboard user who focuses a badge
+  // gets the same text in ONE floating element on <body>. A CSS ::after on
+  // the badge itself was tried first and was clipped to a single line by the
+  // Overview tile's overflow:hidden, covering the figure it explains. Shown
+  // only on :focus-visible, so a mouse click does not pop it.
+  var TIP_ID = 'cm-prov-focus-tip';
+  function hideFocusTip() {
+    var el = document.getElementById(TIP_ID);
+    if (el) el.hidden = true;
+  }
+  function showFocusTip(badgeEl) {
+    var text = badgeEl.getAttribute('data-tip');
+    if (!text) return;
+    var el = document.getElementById(TIP_ID);
+    if (!el) {
+      el = document.createElement('div');
+      el.id = TIP_ID;
+      el.setAttribute('role', 'tooltip');
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.hidden = false;
+    // Viewport coordinates: the tip is position:fixed on <body>, outside
+    // #zoom-wrapper, so the badge's own rectangle is exactly where it goes.
+    var r = badgeEl.getBoundingClientRect();
+    var maxLeft = Math.max(8, (window.innerWidth || 0) - el.offsetWidth - 8);
+    var below = r.bottom + 6;
+    var top = (below + el.offsetHeight > (window.innerHeight || 0) - 8)
+      ? Math.max(8, r.top - el.offsetHeight - 6) : below;
+    el.style.left = Math.min(Math.max(8, r.left), maxLeft) + 'px';
+    el.style.top = top + 'px';
+  }
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('focusin', function (ev) {
+      var t = ev.target;
+      var b = (t && t.closest) ? t.closest('.cm-prov[data-tip]') : null;
+      var visible = false;
+      try { visible = !!(b && b.matches(':focus-visible')); } catch (_e) { visible = !!b; }
+      if (visible) showFocusTip(b); else hideFocusTip();
+    });
+    document.addEventListener('focusout', hideFocusTip);
+    // Tab navigation scrolls the focused badge into view, and that scroll
+    // arrives AFTER focusin. Hiding on scroll hid the tip the moment a
+    // keyboard user reached it, so follow the badge while it keeps focus.
+    document.addEventListener('scroll', function () {
+      var tipEl = document.getElementById(TIP_ID);
+      if (!tipEl || tipEl.hidden) return;
+      var a = document.activeElement;
+      if (a && a.matches && a.matches('.cm-prov[data-tip]')) showFocusTip(a);
+      else hideFocusTip();
+    }, true);
+  }
+
   window.cmProv = {
     MEASURED: MEASURED, DERIVED: DERIVED,
     ESTIMATED: ESTIMATED, UNKNOWN: UNKNOWN,
-    LABEL: LABEL, HINT: HINT,
+    LABEL: LABEL, HINT: HINT, COST_LABEL: COST_LABEL, COST_HINT: COST_HINT,
     of: of, isUnknown: isUnknown, tip: tip, badge: badge,
     figure: figure, money: money, score: score, text: text,
     fmtMoney: fmtMoney, fmtScore: fmtScore

@@ -28,8 +28,62 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
+from clawmetry import cost_basis as _cost_basis
+from clawmetry import provenance as _prov
 
 bp_components = Blueprint('components', __name__)
+
+
+def _brain_cost_stats(stats, total_cost, unpriced_calls, source):
+    """Put the brain panel's cost on the payload as a number with its basis.
+
+    ``today_cost`` stays the pre-formatted string older renderers print;
+    ``today_cost_usd`` is the figure, labelled usage value at published rates
+    (REQ-OBS-CEA-025). When calls carried tokens but no price, the total is a
+    floor and says so; when nothing at all could be priced it is unavailable,
+    never a confident $0.00. Never raises.
+    """
+    try:
+        stats["today_cost_usd"] = round(float(total_cost or 0.0), 6)
+        stats["unpriced_calls"] = int(unpriced_calls or 0)
+        window = "today, the local calendar day"
+        if unpriced_calls and not total_cost:
+            entry = _cost_basis.unavailable(
+                "%d call(s) today carried tokens but no price, so their cost "
+                "is not known" % unpriced_calls, source=source, window=window)
+        else:
+            entry = _cost_basis.published_rate(
+                "sum of each assistant call's cost today",
+                source, window=window,
+                inputs={"unpriced_calls": int(unpriced_calls or 0)},
+                note=("%d call(s) carried tokens but no price, so this is a "
+                      "floor" % unpriced_calls) if unpriced_calls else None)
+        _prov.stamp(stats, {"today_cost_usd": entry})
+    except Exception:
+        pass
+    return stats
+
+
+def _brain_call_costs(result, source):
+    """Label the brain panel's per-call cost list (REQ-OBS-CEA-025.1).
+
+    Each call gets ``cost_usd``: the call's cost as a number, or ``None``
+    when the call carried tokens but no price, so an unpriced call reads
+    "not available" rather than a confident $0.0000. The list is labelled
+    once, under ``calls[].cost_usd``. ``cost`` stays the pre-formatted
+    string older renderers print. Never raises.
+    """
+    try:
+        for c in result.get("calls") or []:
+            raw = float(c.get("cost_raw") or 0.0)
+            tokens = int(c.get("tokens_in") or 0) + int(c.get("tokens_out") or 0)
+            c["cost_usd"] = None if (raw == 0 and tokens > 0) else round(raw, 6)
+        _prov.stamp(result, {"calls[].cost_usd": _cost_basis.published_rate(
+            "this one call's cost", source, window="one assistant call",
+            note="a call with tokens but no price shows as not available")})
+    except Exception:
+        pass
+    return result
 
 # Per-tool response cache (15s TTL) — only used by api_component_tool
 _api_tool_cache = {}
@@ -1687,6 +1741,7 @@ def _try_local_store_component_brain(limit: int, offset: int):
     total_cache_read = 0
     total_cache_write = 0
     total_cost = 0.0
+    unpriced_calls = 0
     durations = []
     models_seen = set()
 
@@ -1738,6 +1793,8 @@ def _try_local_store_component_brain(limit: int, offset: int):
         total_cache_read += cache_read
         total_cache_write += cache_write
         total_cost += call_cost
+        if call_cost == 0 and (tokens_in + tokens_out) > 0:
+            unpriced_calls += 1
 
         sid = r.get("session_id") or ""
         session_label = "subagent:" + sid[:8] if "subagent" in sid.lower() else "main"
@@ -1771,8 +1828,8 @@ def _try_local_store_component_brain(limit: int, offset: int):
     thinking_count = sum(1 for c in calls if c.get("thinking"))
     cache_hit_count = sum(1 for c in calls if c.get("cache_read", 0) > 0)
 
-    return {
-        "stats": {
+    return _brain_call_costs({
+        "stats": _brain_cost_stats({
             "today_calls":     total,
             "today_tokens":    {
                 "input":       total_input,
@@ -1785,11 +1842,12 @@ def _try_local_store_component_brain(limit: int, offset: int):
             "avg_response_ms": avg_ms,
             "thinking_calls":  thinking_count,
             "cache_hits":      cache_hit_count,
-        },
+        }, total_cost, unpriced_calls,
+            "duckdb:events (message events), the runtime's own per-call cost"),
         "calls":   calls[offset: offset + limit],
         "total":   total,
         "_source": "local_store",
-    }
+    }, "duckdb:events (message events), the runtime's own per-call cost")
 
 
 @bp_components.route("/api/component/brain")
@@ -1820,6 +1878,7 @@ def api_component_brain():
     total_output = 0
     total_cache_read = 0
     total_cost = 0.0
+    unpriced_calls = 0
     durations = []
     models_seen = set()
 
@@ -1926,6 +1985,8 @@ def api_component_brain():
                         total_output += tokens_out
                         total_cache_read += cache_read
                         total_cost += call_cost
+                        if call_cost == 0 and (tokens_in + tokens_out) > 0:
+                            unpriced_calls += 1
 
                         # Detect thinking blocks
                         has_thinking = False
@@ -2002,7 +2063,7 @@ def api_component_brain():
     total_cache_write = sum(c.get("cache_write", 0) for c in calls)
 
     result = {
-        "stats": {
+        "stats": _brain_cost_stats({
             "today_calls": total,
             "today_tokens": {
                 "input": total_input,
@@ -2015,11 +2076,15 @@ def api_component_brain():
             "avg_response_ms": avg_ms,
             "thinking_calls": thinking_count,
             "cache_hits": cache_hit_count,
-        },
+        }, total_cost, unpriced_calls,
+            "session transcripts: the runtime's own per-call cost, else "
+            "ClawMetry's published price table"),
         "calls": calls[offset : offset + limit],
         "total": total,
     }
-    return jsonify(result)
+    return jsonify(_brain_call_costs(
+        result, "session transcripts: the runtime's own per-call cost, else "
+                "ClawMetry's published price table"))
 
 
 def _try_local_store_component_mcp():
