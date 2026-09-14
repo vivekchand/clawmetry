@@ -457,6 +457,9 @@ def api_guard_sessions():
             "spend_basis": str(details.get("spend_basis") or "unknown"),
             "evidence": details.get("evidence")
             if isinstance(details.get("evidence"), dict) else {},
+            # Framework references (REQ-GOV-FWM-002). A row written before the
+            # references existed is labelled from the current contract.
+            "frameworks": _frameworks_for(details),
         }
         # A session can trip several detectors at once. The one that gets the
         # row is the one that costs the most to ignore, falling back to
@@ -985,5 +988,36 @@ def api_guard_actions():
     except (TypeError, ValueError):
         limit = 50
     rows = _ls_call("query_policy_actions", limit=limit) or []
+    rows = [_with_decision_evidence(r) for r in rows if isinstance(r, dict)]
     return jsonify({"actions": rows, "count": len(rows),
                     "server_time": int(time.time())})
+
+
+def _frameworks_for(details) -> dict:
+    """The framework references a stored finding carries, or the current
+    contract's references for its kind when the row predates them."""
+    try:
+        from clawmetry import framework_map as _fm
+        stored = details.get("frameworks") if isinstance(details, dict) else None
+        if isinstance(stored, dict) and stored.get("mapping_version"):
+            return stored
+        return _fm.framework_tags((details or {}).get("kind"))
+    except Exception:
+        return {}
+
+
+def _with_decision_evidence(row: dict) -> dict:
+    """A policy decision row plus its framework references and how strong the
+    evidence is: configured, exercised or failed, never effective
+    (REQ-GOV-FWM-002, clawmetry/framework_map.py)."""
+    out = dict(row)
+    try:
+        from clawmetry import framework_map as _fm
+        out["frameworks"] = _fm.framework_tags(row.get("kind"))
+        out["evidence_level"] = _fm.evidence_level(
+            row.get("action"), row.get("enforced"), row.get("result_ok"),
+            row.get("result_detail"))
+    except Exception:
+        out.setdefault("frameworks", {})
+        out.setdefault("evidence_level", "configured")
+    return out

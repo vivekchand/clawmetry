@@ -39,6 +39,7 @@ import re
 from typing import Optional
 
 from clawmetry import git_config_exec as _gce
+from clawmetry.framework_map import framework_tags as _framework_tags
 
 #: Every file a scan READS, relative to the workspace. Declared here so the
 #: daemon's cache stamp cannot miss one: the stamp is what decides whether a
@@ -316,6 +317,8 @@ def _finding(kind: str, severity: str, title: str, detail: str,
         # dollar number is worse than not sorting it at all.
         "spend_at_risk_usd": 0.0,
         "spend_basis": "unknown",
+        # Framework items this kind is relevant to (clawmetry/framework_map.py).
+        "frameworks": _framework_tags(kind),
     }
 
 

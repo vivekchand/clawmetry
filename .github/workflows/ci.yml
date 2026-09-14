@@ -123,6 +123,13 @@ jobs:
       - name: Module map matches the source tree
         run: python3 scripts/gen_module_map.py --check
 
+      # docs/FRAMEWORK_COVERAGE.md is the public OWASP LLM 2026 / OWASP
+      # Agentic 2026 / MITRE ATLAS coverage table for Guard findings. It is
+      # rendered from clawmetry/framework_map.py, because a coverage table that
+      # disagrees with the detectors is trusted and wrong (issue #5943).
+      - name: Framework coverage doc matches the mapping contract
+        run: python3 scripts/gen_framework_coverage.py --check
+
       # Acceptance-criteria traceability (FLYWHEEL.md 1g). Drift Bot asks "does
       # this diff contradict a Blueprint?"; it is a changed-code check and has
       # no opinion on whether untouched code still SATISFIES a criterion
@@ -861,6 +868,7 @@ jobs:
             tests/test_guard_escalation_ladder.py \
             tests/test_guard_policies_api_ladder.py \
             tests/test_guard_policy_enforcement.py \
+            tests/test_guard_framework_map.py \
             tests/test_waste_flags_free_default.py \
             tests/test_alert_rule_types_new.py \
             tests/test_regression_replay_optin.py \

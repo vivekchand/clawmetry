@@ -91,6 +91,9 @@ from clawmetry.detector_money import (  # noqa: F401
 from clawmetry.detector_behaviour import (  # noqa: F401
     credential_access, file_blast_radius, network_egress, privilege_change,
 )
+# Which OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS items each kind is
+# relevant to (REQ-GOV-FWM-001). ``run_all`` stamps ``incident["frameworks"]``.
+from clawmetry.framework_map import framework_tags, tag_incident  # noqa: F401
 # The workspace surface (``repo_scan``) emits incidents in this module's shape
 # but is not a detector: it reads the FOLDER, not the tool stream. Its kinds are
 # re-exported here so a consumer needs one import to know every kind the product
@@ -1326,13 +1329,16 @@ def run_all(events: Iterable[dict], session_id: str,
         if inc:
             out.append(inc)
 
-    return annotate_spend(
+    priced = annotate_spend(
         out,
         cost_usd=f.get("cost_usd") or 0.0,
         bad_for_seconds=f.get("bad_for_seconds") or 0.0,
         session_seconds=f.get("session_seconds") or 0.0,
         window_steps=len(steps),
     )
+    # Every finding says which framework items it is relevant to, and that it
+    # is a detection, not a pre-action control (clawmetry/framework_map.py).
+    return [tag_incident(inc) for inc in priced]
 
 
 def _incident(kind: str, session_id: str, runtime: str, severity: str,

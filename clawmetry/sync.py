@@ -22368,6 +22368,8 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         # cooldown latch held or nothing is configured; the
                         # incident_alerts table has the last delivery time.
                         "delivered_via": delivered_via,
+                        # Framework references, as stamped when it was found.
+                        "frameworks": inc.get("frameworks"),
                     },
                 )
                 memo[memo_key] = now
@@ -22520,6 +22522,7 @@ def _emit_fleet_incidents(store, state: dict, fleet_fps: dict, now: float) -> li
                         "spend_at_risk_usd": None,
                         "spend_basis": "unknown",
                         "delivered_via": delivered_via,
+                        "frameworks": per.get("frameworks"),
                     },
                 )
                 memo[memo_key] = now

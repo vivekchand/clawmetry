@@ -80,6 +80,7 @@ All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, l
 | `clawmetry/detector_calibration.py` | Where a threshold comes from: module defaults → `RUNTIME_PROFILES` → the cohort's learned baseline → a per-runtime env override. `resolve_thresholds` reports which layer set each value |
 | `clawmetry/detector_money.py` | `spend_at_risk_usd` and the ranking. Only a measured basis may promote a warning to `critical` |
 | `clawmetry/policy_engine.py` | **Pure** Guard policy evaluator — detector incident + policies → at most one enforcement decision per session, including the escalation ladder |
+| `clawmetry/framework_map.py` | **Pure** mapping contract from every Guard finding kind to OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS identifiers, with edition, rationale, limits and tests. Stamps `incident["frameworks"]`; renders `docs/FRAMEWORK_COVERAGE.md` |
 | `clawmetry/guard_actuator.py` | The one place a decision becomes a signal. Both the manual and the automatic path go through it |
 | `clawmetry/process_control.py` | Signal actuators — pause (SIGSTOP / `NtSuspendProcess`), stop (SIGINT / a console Ctrl+C), kill (SIGTERM→SIGKILL tree / `taskkill /T`), pid-reuse guarded. Owns `runtime_control_support()` |
 | `clawmetry/resume_hints.py` | A verified resume command per runtime, with its native session id. Coverage is CI-enforced |
@@ -115,6 +116,7 @@ All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, l
 | `docs/QUERY_CONTRACT.md` | **Generated** node query surface (`clawmetry/query_contract.py`) |
 | `docs/ENTITLEMENTS.md` | Open-core split: FREE runtimes/features, paid tiers, GRACE mode, `/api/entitlement` shape, `clawmetry license` CLI |
 | `docs/EGRESS.md` | Every outbound destination, what it carries, and how to verify it on the wire |
+| `docs/FRAMEWORK_COVERAGE.md` | **Generated** Guard framework coverage (coverage, not compliance) with gaps (`scripts/gen_framework_coverage.py --check`) |
 | `docs/HOOK_COEXISTENCE.md` | How ClawMetry shares a runtime's hook config with other writers |
 | `docs/CUSTOM_RUNTIME_INGEST.md` | The HTTP ingest API for a runtime with no adapter |
 | `docs/EVENT_RETENTION.md` | Store growth and trimming |

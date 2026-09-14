@@ -1156,7 +1156,53 @@
       "id": "AC-GOV-ATR-003.3",
       "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
       "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The system shall export a redacted, reproducible evidence bundle carrying the pinned versions, a digest of every scenario and every stage outcome."
+      "text": "The system shall export a redacted, reproducible evidence bundle carrying the pinned versions, a digest of every scenario and every stage outcome.",
+    "id": "AC-GOV-FWM-001.1",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "When a detector, workspace or fleet finding kind exists in the product, the system shall declare for it either at least one framework reference or an explicit \"none\" with the reason no identifier applies."
+    },
+    {
+      "id": "AC-GOV-FWM-001.2",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "The system shall state one mapping version for the whole contract and, for each framework, the edition and source revision its identifiers were verified against."
+    },
+    {
+      "id": "AC-GOV-FWM-001.3",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "When a kind is mapped, the system shall carry a rationale, a stated limit of what the finding can and cannot establish, and references to a test that fires on the behaviour and a test that stays quiet on benign work."
+    },
+    {
+      "id": "AC-GOV-FWM-001.4",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "The system shall reference only identifiers present in the pinned edition of their framework, and shall keep MITRE ATLAS techniques, mitigations and case studies distinguishable."
+    },
+    {
+      "id": "AC-GOV-FWM-002.1",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "When the system reports a Guard finding, the finding shall carry the framework references for its kind, the mapping version and its capability mode."
+    },
+    {
+      "id": "AC-GOV-FWM-002.2",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "When the system lists a Guard policy decision, the decision shall carry the framework references of the finding kind it acted on and an evidence level of configured, exercised or failed; the system shall not report a decision as effective unless an independent outcome check exists."
+    },
+    {
+      "id": "AC-GOV-FWM-003.1",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "The system shall generate the public framework coverage document from the mapping contract, and continuous integration shall fail when the document and the contract disagree."
+    },
+    {
+      "id": "AC-GOV-FWM-003.2",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "The coverage document shall describe coverage and not compliance, and shall list the framework items Guard does not cover as gaps."
     }
   ]
 }
