@@ -91,12 +91,20 @@ EVIDENCE_BEHAVIOURS = ("fail", "pass")
 #: Evidence states. Only ``ok`` means every commit in the range was examined
 #: by whoever produced the evidence.
 EVIDENCE_OK = "ok"
-EVIDENCE_PARTIAL = "partial"    # commits in the range the bundle never saw
+EVIDENCE_PARTIAL = "partial"    # commits the bundle never saw, or a read limit cut it short
 EVIDENCE_STALE = "stale"        # older than the operator's freshness window
 EVIDENCE_INVALID = "invalid"    # digest mismatch, wrong kind, or another change's bundle
 EVIDENCE_MISSING = "missing"    # no bundle and no store
 
+#: Read limits. Hitting any of them is recorded as an evidence gap, which makes
+#: the evidence ``partial`` (AC-OBS-PRP-001.13): a gate must never pass on
+#: evidence the report did not read.
 _MAX_COMMITS = 500
+_MAX_SESSION_ROWS = 1000
+_MAX_SESSIONS = 50
+_MAX_EVENTS_PER_PAGE = 5000
+_MAX_EVENT_PAGES = 10
+_MAX_INCIDENTS_PER_SESSION = 200
 _PATH_KEYS = ("file_path", "path", "filename", "notebook_path", "target_file")
 _PATCH_HEADER = re.compile(
     r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$|^\+\+\+ b/(.+?)\s*$",
@@ -281,12 +289,14 @@ def iter_tool_calls(event: dict) -> Iterable[tuple]:
                 yield blk.get("name"), blk.get("input") or blk.get("arguments")
 
 
-def repo_relative(path: str, repo_root: str, cwd: str | None = None) -> str | None:
+def repo_relative(path: str, repo_root: str, cwd: str | None = None,
+                  relative_without_cwd: bool = True) -> str | None:
     """Normalise a tool's path argument to a repository-relative POSIX path.
 
     Returns None when the path lies outside the repository. A relative path
     with no known working directory is taken as repository-relative, which is
-    what an agent running at the repository root writes.
+    what an agent running at the repository root writes, unless
+    ``relative_without_cwd`` is False: then it cannot be placed and is None.
     """
     p = str(path or "").strip()
     if not p:
@@ -296,6 +306,8 @@ def repo_relative(path: str, repo_root: str, cwd: str | None = None) -> str | No
     if not os.path.isabs(p):
         if cwd:
             p = os.path.join(cwd, p)
+        elif not relative_without_cwd:
+            return None
         else:
             rel = os.path.normpath(p).replace(os.sep, "/")
             return None if rel.startswith("..") or rel == "." else rel
@@ -316,11 +328,14 @@ def repo_relative(path: str, repo_root: str, cwd: str | None = None) -> str | No
 
 
 def observed_writes(events: Iterable[dict], repo_root: str, *, cwd: str | None = None,
-                    until: _dt.datetime | None = None) -> set:
+                    until: _dt.datetime | None = None, relative_without_cwd: bool = True,
+                    unplaced: set | None = None) -> set:
     """Repository-relative paths a session wrote, from its own events.
 
     ``until`` drops events after the head commit: a write made after the
-    change was committed cannot be in it.
+    change was committed cannot be in it. With ``relative_without_cwd``
+    False and no ``cwd``, relative paths are not attributed; they are added,
+    normalised, to ``unplaced`` so the caller can report what it could not place.
     """
     vocab = _write_vocab()
     out: set = set()
@@ -333,9 +348,13 @@ def observed_writes(events: Iterable[dict], repo_root: str, *, cwd: str | None =
             if not is_write_tool(name, vocab):
                 continue
             for raw in _paths_from_input(inp):
-                rel = repo_relative(raw, repo_root, cwd)
+                rel = repo_relative(raw, repo_root, cwd, relative_without_cwd)
                 if rel:
                     out.add(rel)
+                elif unplaced is not None and not cwd and not relative_without_cwd:
+                    guess = repo_relative(raw, repo_root, None, True)
+                    if guess and not os.path.isabs(str(raw).strip()):
+                        unplaced.add(guess)
     return out
 
 
@@ -407,13 +426,17 @@ def _incident_row(inc: dict) -> dict:
 def build_bundle(*, project: str | None, base_sha: str, head_sha: str, commits: list,
                  changed_files: list, links: dict, sessions: dict,
                  incidents_by_session: dict, generated_at: _dt.datetime | None = None,
-                 generated_by: str | None = None) -> dict:
+                 generated_by: str | None = None,
+                 evidence_gaps: Iterable[str] | None = None) -> dict:
     """Assemble the exportable bundle. No prompts, no tool output, no paths
     outside the repository: it may be committed to a public pull request.
 
     ``sessions`` maps a session id to ``{runtime, models, cost_usd,
     started_at}``; ``cost_usd`` of None means the cost is unknown and is
-    labelled so rather than rendered as zero.
+    labelled so rather than rendered as zero. ``evidence_gaps`` are the
+    sentences :func:`collect_from_store` returned for read limits it hit; a
+    bundle carrying any is ``partial`` evidence wherever it is read
+    (AC-OBS-PRP-001.13). They name no session.
     """
     linked_ids = sorted({row["session_id"] for rows in links.values() for row in rows})
     sess_out = []
@@ -452,6 +475,7 @@ def build_bundle(*, project: str | None, base_sha: str, head_sha: str, commits: 
         "changed_files": sorted(changed_files),
         "links": {path: rows for path, rows in sorted(links.items())},
         "sessions": sess_out,
+        "evidence_gaps": list(dict.fromkeys(str(g) for g in (evidence_gaps or ()) if g)),
     }
     bundle["digest"] = bundle_digest(bundle)
     bundle["digest_note"] = DIGEST_NOTE
@@ -515,12 +539,32 @@ def assess_evidence(bundle: dict | None, *, range_shas: list, head_sha: str,
             out.update(status=EVIDENCE_STALE,
                        reason=f"bundle is older than {max_age_hours:g} hours")
             return out
+    reasons = []
     if missing:
-        out.update(status=EVIDENCE_PARTIAL,
-                   reason=f"{len(missing)} commit(s) in this change are not covered by the bundle")
+        reasons.append(f"{len(missing)} commit(s) in this change are not covered by the bundle")
+    # The exporter hit a read limit: what it did not read cannot be "ok".
+    gaps = [str(g) for g in (bundle.get("evidence_gaps") or []) if g]
+    out["gaps"] = gaps
+    reasons.extend(gaps)
+    if reasons:
+        out.update(status=EVIDENCE_PARTIAL, reason="; ".join(reasons))
         return out
     out.update(status=EVIDENCE_OK, reason="")
     return out
+
+
+def with_gaps(evidence: dict, gaps: Iterable[str]) -> dict:
+    """Downgrade ``ok`` evidence to ``partial`` when there are gaps, and add
+    their reasons to evidence that is already partial. Stale, invalid and
+    missing evidence keep their status: they are already not ``ok``."""
+    new = [str(g) for g in (gaps or ()) if g and str(g) not in (evidence.get("gaps") or [])]
+    if not new:
+        return evidence
+    evidence["gaps"] = list(evidence.get("gaps") or []) + new
+    if evidence.get("status") in (EVIDENCE_OK, EVIDENCE_PARTIAL):
+        reason = "; ".join([r for r in [evidence.get("reason") or ""] if r] + new)
+        evidence.update(status=EVIDENCE_PARTIAL, reason=reason)
+    return evidence
 
 
 # ── SARIF ──────────────────────────────────────────────────────────────────
@@ -958,6 +1002,11 @@ def upsert_pr_comment(*, repository: str, pr_number: int, token: str, body: str,
     One comment per pull request however many times CI runs
     (AC-OBS-PRP-001.11). Returns ``{"ok", "action"}`` or ``{"ok": False,
     "error"}``; never raises.
+
+    Only a comment written by this token's identity is edited, so a person
+    who quotes the marker never has their comment overwritten. A personal
+    token answers ``GET /user`` with its login; the Actions token cannot,
+    and its comments are the ones a bot account wrote.
     """
     import urllib.error
     import urllib.request
@@ -975,11 +1024,24 @@ def upsert_pr_comment(*, repository: str, pr_number: int, token: str, body: str,
             return json.loads(raw) if raw else None
 
     try:
+        try:
+            me = str((_call("GET", f"{base}/user") or {}).get("login") or "")
+        except Exception:
+            me = ""
+
+        def _ours(c: dict) -> bool:
+            user = c.get("user") if isinstance(c.get("user"), dict) else {}
+            if COMMENT_MARKER not in str(c.get("body") or ""):
+                return False
+            if me:
+                return str(user.get("login") or "") == me
+            return str(user.get("type") or "") == "Bot"
+
         existing = None
         for page in range(1, 11):
             rows = _call("GET", f"{base}/repos/{repository}/issues/{int(pr_number)}/comments"
                                 f"?per_page=100&page={page}") or []
-            existing = next((c for c in rows if COMMENT_MARKER in str(c.get("body") or "")), None)
+            existing = next((c for c in rows if _ours(c)), None)
             if existing or len(rows) < 100:
                 break
         if existing:
@@ -1075,47 +1137,158 @@ def git_commits(repo: str, base: str, head: str) -> list:
     return list(reversed(commits))
 
 
+def commit_limit_gap(commits: list) -> str | None:
+    """The evidence gap when ``git_commits`` hit its ceiling, else None."""
+    if len(commits or ()) >= _MAX_COMMITS:
+        return (f"the change has at least {_MAX_COMMITS} commits, the read limit; "
+                "older commits were not examined")
+    return None
+
+
+def _session_cwd(store: Any, sid: str, events: Iterable[dict]) -> str:
+    """The working directory a session recorded, or "" when unknown.
+
+    The session row is keyed ``(agent_type, session_id)``: family runtimes
+    under the prefixed id, OpenClaw under the bare one, so the bare lookup is
+    scoped to the prefix's runtime rather than matching another runtime's id.
+    Falls back to a ``cwd`` carried on the session's own events.
+    """
+    getter = getattr(store, "get_session_location", None)
+    if callable(getter):
+        tries = [{"session_id": sid}]
+        if ":" in sid:
+            prefix, bare = sid.split(":", 1)
+            tries.append({"session_id": bare, "agent_type": prefix})
+        for kw in tries:
+            try:
+                row = getter(**kw)
+            except Exception:
+                continue
+            if isinstance(row, dict) and str(row.get("cwd") or "").strip():
+                return str(row["cwd"]).strip()
+    for ev in events or ():
+        data = _as_dict(ev.get("data"))
+        for value in (ev.get("cwd"), data.get("cwd"), _as_dict(data.get("message")).get("cwd")):
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _read_session_events(store: Any, sid: str) -> tuple:
+    """``(events, complete)``: every event of one session, newest first.
+
+    ``query_events`` is newest first with a limit, so a session that kept
+    working after the head commit can fill a page with events the head filter
+    then discards. Pages walk back by timestamp until a short page;
+    ``complete`` is False when the page budget ran out or the walk could not
+    advance (a whole page sharing one timestamp).
+    """
+    seen: set = set()
+    out: list = []
+    until = None
+    for _ in range(_MAX_EVENT_PAGES):
+        kw = {"session_id": sid, "limit": _MAX_EVENTS_PER_PAGE}
+        if until:
+            kw["until"] = until
+        page = [dict(e) for e in (store.query_events(**kw) or [])]
+        added = 0
+        for ev in page:
+            key = ev.get("id") or json.dumps([ev.get("ts"), ev.get("event_type"), ev.get("data")],
+                                             sort_keys=True, default=str)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(ev)
+            added += 1
+        if len(page) < _MAX_EVENTS_PER_PAGE:
+            return out, True
+        oldest = str(page[-1].get("ts") or "")
+        if not added or not oldest or oldest == until:
+            return out, False
+        until = oldest
+    return out, False
+
+
 def collect_from_store(store: Any, *, repo: str, commits: list, changed_files: list,
-                       window_s: int = 7200, max_sessions: int = 50) -> tuple:
+                       window_s: int = 7200, max_sessions: int | None = None) -> tuple:
     """Read linked sessions, their writes and their Guard findings.
 
     Candidates are the sessions a trailer names plus sessions active from
     ``window_s`` before the first commit to the head commit. Returns
-    ``(links, sessions_meta, incidents_by_session)``.
+    ``(links, sessions_meta, incidents_by_session, gaps)``.
+
+    A candidate's relative write paths resolve only against its own recorded
+    working directory, so a session working in another repository on the
+    same machine is never linked by a relative path such as ``README.md``
+    (AC-OBS-PRP-001.12). With no recorded directory, relative paths count
+    only for a session a commit trailer names.
+
+    ``gaps`` are sentences for every read limit hit and every read that
+    failed; the caller turns any gap into ``partial`` evidence
+    (AC-OBS-PRP-001.13). A gap never names a session: the sessions it is
+    about are, by construction, ones this change may not involve.
     """
+    max_sessions = _MAX_SESSIONS if max_sessions is None else int(max_sessions)
+    gaps: list = []
     head_ts = max((c.get("ts") or 0 for c in commits), default=0)
     first_ts = min((c.get("ts") or 0 for c in commits if c.get("ts")), default=0)
     until = (_dt.datetime.fromtimestamp(head_ts + 60, tz=_dt.timezone.utc) if head_ts else None)
+    window_start = first_ts - window_s
 
     try:
-        rows = [dict(r) for r in (store.query_sessions(limit=1000) or [])]
+        rows = [dict(r) for r in (store.query_sessions(limit=_MAX_SESSION_ROWS) or [])]
     except Exception as exc:
         logger.warning("session query failed: %s", exc)
         rows = []
+        gaps.append("the session list could not be read from the store")
+    if head_ts and len(rows) >= _MAX_SESSION_ROWS:
+        # Rows come newest-activity first, so the cut rows are no newer than
+        # the oldest returned. Only a cut inside the window can hide a session.
+        ends = [_parse_time(r.get("updated_at") or r.get("started_at")) for r in rows]
+        oldest = min((e for e in ends if e is not None), default=None)
+        if oldest is None or oldest.timestamp() >= window_start:
+            gaps.append(f"the session list reached its {_MAX_SESSION_ROWS}-session read limit "
+                        "inside this change's time window; older sessions were not considered")
     by_id = {r.get("session_id"): r for r in rows if r.get("session_id")}
-    candidates = list(dict.fromkeys(c["session_id"] for c in commits if c.get("session_id")))
+    trailer_named = list(dict.fromkeys(c["session_id"] for c in commits if c.get("session_id")))
+    candidates = list(trailer_named)
     if head_ts:
         for r in rows:
             start = _parse_time(r.get("started_at"))
             end = _parse_time(r.get("updated_at") or r.get("ended_at") or r.get("last_active_at")) or start
             if start is None:
                 continue
-            if start.timestamp() <= head_ts + 60 and end.timestamp() >= first_ts - window_s:
+            if start.timestamp() <= head_ts + 60 and end.timestamp() >= window_start:
                 candidates.append(r["session_id"])
-    candidates = list(dict.fromkeys(candidates))[:max_sessions]
+    candidates = list(dict.fromkeys(candidates))
+    if len(candidates) > max_sessions:
+        gaps.append(f"{len(candidates) - max_sessions} active session(s) beyond the "
+                    f"{max_sessions}-session read limit were not read")
+        candidates = candidates[:max_sessions]
 
+    wanted = set(changed_files or ())
+    named = set(trailer_named)
+    counts = {"events_cut": 0, "events_failed": 0, "unplaced": 0}
+    incidents_short: dict = {}
     writes: dict = {}
     meta: dict = {}
     incidents: dict = {}
     for sid in candidates:
         try:
-            events = [dict(e) for e in (store.query_events(session_id=sid, limit=5000) or [])]
+            events, complete = _read_session_events(store, sid)
+            if not complete:
+                counts["events_cut"] += 1
         except Exception as exc:
             logger.warning("events for %s unavailable: %s", sid, exc)
             events = []
+            counts["events_failed"] += 1
         row = by_id.get(sid) or {}
-        cwd = row.get("cwd")
-        writes[sid] = observed_writes(events, repo, cwd=cwd, until=until)
+        cwd = _session_cwd(store, sid, events)
+        unplaced: set = set()
+        writes[sid] = observed_writes(events, repo, cwd=cwd or None, until=until,
+                                      relative_without_cwd=sid in named, unplaced=unplaced)
+        if unplaced & wanted:
+            counts["unplaced"] += 1
         # Cost comes from the session row, which the store de-duplicates (an
         # OpenClaw turn is stamped on two sibling events, #1460). A session no
         # event ever priced has an UNKNOWN cost, not a zero one: the row's
@@ -1135,13 +1308,39 @@ def collect_from_store(store: Any, *, repo: str, commits: list, changed_files: l
                 "runtime": runtime if ":" not in sid else runtime_of(sid),
                 "models": sorted({str(e["model"]) for e in events if e.get("model")}),
                 "cost_usd": cost,
-                "started_at": row.get("started_at") or (events[0].get("ts") if events else ""),
+                # Events are newest first: the earliest timestamp is the start.
+                "started_at": row.get("started_at") or min(
+                    (str(e["ts"]) for e in events if e.get("ts")), default=""),
             }
         try:
-            incidents[sid] = list(store.query_guard_incidents(session_id=sid, since_secs=0,
-                                                              limit=200) or [])
+            incidents[sid] = list(store.query_guard_incidents(
+                session_id=sid, since_secs=0, limit=_MAX_INCIDENTS_PER_SESSION) or [])
+            if len(incidents[sid]) >= _MAX_INCIDENTS_PER_SESSION:
+                incidents_short[sid] = "cut"
         except Exception as exc:
             logger.warning("Guard findings for %s unavailable: %s", sid, exc)
             incidents[sid] = []
+            incidents_short[sid] = "failed"
     links = link_files(changed_files, commits, writes)
-    return links, meta, incidents
+
+    if counts["events_cut"]:
+        gaps.append(f"events of {counts['events_cut']} session(s) exceeded the "
+                    f"{_MAX_EVENTS_PER_PAGE * _MAX_EVENT_PAGES}-event read limit; "
+                    "earlier writes may be missing")
+    if counts["events_failed"]:
+        gaps.append(f"events of {counts['events_failed']} session(s) could not be read "
+                    "from the store")
+    if counts["unplaced"]:
+        gaps.append(f"{counts['unplaced']} session(s) with no recorded working directory "
+                    "wrote relative paths matching changed files; those writes were not "
+                    "attributed")
+    # Findings only gate through a linked session, so only those gaps count.
+    linked = {r["session_id"] for rows_ in links.values() for r in rows_}
+    cut = sum(1 for s, why in incidents_short.items() if s in linked and why == "cut")
+    failed = sum(1 for s, why in incidents_short.items() if s in linked and why == "failed")
+    if cut:
+        gaps.append(f"Guard findings of {cut} linked session(s) reached the "
+                    f"{_MAX_INCIDENTS_PER_SESSION}-finding read limit")
+    if failed:
+        gaps.append(f"Guard findings of {failed} linked session(s) could not be read")
+    return links, meta, incidents, gaps

@@ -90,6 +90,7 @@ def _from_bundle(args, repo, commits, changed, base_sha, head_sha):
         range_shas=[c["sha"] for c in commits], head_sha=head_sha,
         max_age_hours=args.max_evidence_age_hours, ignored_shas=ignored)
     evidence["source"] = "bundle"
+    pp.with_gaps(evidence, [pp.commit_limit_gap(commits)])
     # Invalid evidence contributes nothing: its links cannot be trusted.
     accepted = raw if evidence["status"] != pp.EVIDENCE_INVALID else {}
     view = dict(accepted or {})
@@ -110,16 +111,22 @@ def _from_store(args, repo, commits, changed, base_sha, head_sha):
         store, source = None, ""
         evidence.update(status=pp.EVIDENCE_MISSING, source="none",
                         reason=f"no provenance bundle and the local store is unavailable ({exc})")
+    gaps = []
     if store is not None:
-        links, meta, incidents = pp.collect_from_store(
+        links, meta, incidents, gaps = pp.collect_from_store(
             store, repo=repo, commits=commits, changed_files=changed)
         evidence["source"] = f"store ({source})"
     else:
         links, meta, incidents = {p: [] for p in changed}, {}, {}
+    gaps = [g for g in list(gaps) + [pp.commit_limit_gap(commits)] if g]
+    # A read limit hit is partial evidence here and, through the bundle's
+    # evidence_gaps, on the CI runner that reads the export (AC-OBS-PRP-001.13).
+    # No local username in the bundle: it is meant to be committed to a PR.
     view = pp.build_bundle(
         project=pp.git_project(repo), base_sha=base_sha, head_sha=head_sha, commits=commits,
         changed_files=changed, links=links, sessions=meta, incidents_by_session=incidents,
-        generated_by=os.environ.get("USER") or "")
+        evidence_gaps=gaps)
+    pp.with_gaps(evidence, gaps)
     return view, evidence, store is not None
 
 

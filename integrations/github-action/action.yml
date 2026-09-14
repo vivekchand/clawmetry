@@ -169,7 +169,9 @@ runs:
         fi
 
     - name: Upload SARIF to code scanning
-      if: always() && inputs.upload-sarif == 'true' && steps.report.outputs.exit-code != '2'
+      # Only when the report actually ran: an install failure leaves exit-code
+      # unset and no SARIF file to upload.
+      if: always() && inputs.upload-sarif == 'true' && (steps.report.outputs.exit-code == '0' || steps.report.outputs.exit-code == '1')
       uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
       with:
         sarif_file: ${{ steps.report.outputs.sarif-file }}

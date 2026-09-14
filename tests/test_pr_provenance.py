@@ -39,6 +39,15 @@ which is exactly what a CI runner has.
   ``test_gate_decision_is_auditable``.
 * AC-OBS-PRP-001.11 -- one pull-request comment, updated in place:
   ``test_pr_comment_is_created_once_then_updated``.
+* AC-OBS-PRP-001.12 -- a session working in another repository is never
+  linked by a relative path; no recorded cwd links only a trailer-named session:
+  ``test_session_in_another_repository_is_not_linked_and_does_not_gate``,
+  ``test_relative_writes_with_no_working_directory_are_partial_evidence``,
+  ``test_relative_paths_resolve_only_against_the_sessions_own_directory``.
+* AC-OBS-PRP-001.13 -- any read limit hit is partial evidence, in the report
+  and in the exported bundle:
+  ``test_sessions_beyond_the_read_limit_make_the_gate_apply_missing_evidence``,
+  ``test_every_read_limit_is_a_gap_and_event_pages_walk_past_post_head_activity``.
 """
 from __future__ import annotations
 
@@ -181,6 +190,10 @@ def _seed_store(st, repo):
     ]
     st.ingest_many(events)
     st.flush()
+    # codex:demo-2 writes a RELATIVE path: it links only because the session
+    # recorded that it worked in this repository.
+    st.ingest_session({"session_id": "codex:demo-2", "agent_type": "codex", "started_at": ts})
+    st.update_session_location("codex:demo-2", agent_type="codex", cwd=repo)
     st.ingest_loop_signal(
         "claude_code:demo-1", "daemon_detect_credential_access", 1, severity="critical",
         agent_type="claude_code",
@@ -442,11 +455,15 @@ class _FakeGitHub(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path == "/user":   # what the Actions token answers
+            self._reply(403, {"message": "Resource not accessible by integration"})
+            return
         self._reply(200, self.comments)
 
     def do_POST(self):
         payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        self.comments.append({"id": len(self.comments) + 1, "body": payload["body"]})
+        self.comments.append({"id": len(self.comments) + 100, "body": payload["body"],
+                              "user": {"login": "github-actions[bot]", "type": "Bot"}})
         self._reply(201, self.comments[-1])
 
     def do_PATCH(self):
@@ -459,7 +476,11 @@ class _FakeGitHub(http.server.BaseHTTPRequestHandler):
 
 
 def test_pr_comment_is_created_once_then_updated():
-    _FakeGitHub.comments = [{"id": 99, "body": "an unrelated human comment"}]
+    # A person quoting the marker keeps their comment: only the bot's is edited.
+    quoted = "quoting the report:\n" + pp.COMMENT_MARKER
+    _FakeGitHub.comments = [{"id": 99, "body": "an unrelated human comment",
+                             "user": {"login": "dev", "type": "User"}},
+                            {"id": 98, "body": quoted, "user": {"login": "dev", "type": "User"}}]
     server = http.server.HTTPServer(("127.0.0.1", 0), _FakeGitHub)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -472,9 +493,10 @@ def test_pr_comment_is_created_once_then_updated():
     finally:
         server.shutdown()
     assert first["action"] == "created" and second["action"] == "updated"
-    ours = [c for c in _FakeGitHub.comments if pp.COMMENT_MARKER in c["body"]]
+    ours = [c for c in _FakeGitHub.comments if (c.get("user") or {}).get("type") == "Bot"]
     assert len(ours) == 1 and ours[0]["body"].startswith("two")
-    assert len(_FakeGitHub.comments) == 2
+    assert len(_FakeGitHub.comments) == 3
+    assert next(c for c in _FakeGitHub.comments if c["id"] == 98)["body"] == quoted
 
 
 # ── the user's repository is read, never written ───────────────────────────
@@ -548,8 +570,9 @@ def test_demo_repo_store_export_then_ci_run_from_bundle(demo_repo, store, tmp_pa
     commits = pp.git_commits(repo, base, demo_repo["head"])
     changed = pp.git_changed_files(repo, base, demo_repo["head"])
     assert changed == ["app/db.py", "app/util.py", "docs/notes.md"]
-    links, meta, incidents = pp.collect_from_store(store, repo=repo, commits=commits,
-                                                   changed_files=changed)
+    links, meta, incidents, gaps = pp.collect_from_store(store, repo=repo, commits=commits,
+                                                         changed_files=changed)
+    assert gaps == []
     assert {"session_id": "claude_code:demo-1", "basis": pp.BASIS_TRAILER} in links["app/db.py"]
     assert {"session_id": "claude_code:demo-1", "basis": pp.BASIS_WRITE} in links["app/db.py"]
     assert links["app/util.py"] == [{"session_id": "codex:demo-2", "basis": pp.BASIS_WRITE}]
@@ -689,3 +712,259 @@ def test_committed_bundle_gate_behaviours_end_to_end(demo_repo, tmp_path, no_net
     _write(repo, rel, json.dumps(tampered))
     assert run("--fail-on", "critical", "--on-missing-evidence", "fail") == 1
     assert gate()["evidence_status"] == pp.EVIDENCE_INVALID
+
+
+# ── store path: other repositories and read limits ─────────────────────────
+
+class _StubStore:
+    """The store surface collect_from_store reads, with the store's ordering:
+    sessions newest activity first, events newest first, ``until`` inclusive."""
+
+    def __init__(self, sessions=(), events=None, incidents=None, cwds=None):
+        self.sessions = list(sessions)
+        self.events = events or {}
+        self.incidents = incidents or {}
+        self.cwds = cwds or {}
+
+    def query_sessions(self, limit=100, **_):
+        return sorted(self.sessions, key=lambda r: r["updated_at"], reverse=True)[:limit]
+
+    def query_events(self, session_id=None, until=None, limit=500, **_):
+        evs = sorted(self.events.get(session_id, []), key=lambda e: e["ts"], reverse=True)
+        if until:
+            evs = [e for e in evs if e["ts"] <= until]
+        return evs[:limit]
+
+    def query_guard_incidents(self, session_id=None, limit=100, **_):
+        return list(self.incidents.get(session_id, []))[:limit]
+
+    def get_session_location(self, session_id=None, agent_type=None):
+        cwd = self.cwds.get(session_id)
+        return {"session_id": session_id, "cwd": cwd} if cwd else None
+
+
+def _iso_ago(minutes):
+    return (dt.datetime.now(UTC) - dt.timedelta(minutes=minutes)).isoformat()
+
+
+def _session_row(sid, minutes_ago=10):
+    return {"session_id": sid, "started_at": _iso_ago(minutes_ago),
+            "updated_at": _iso_ago(minutes_ago - 5), "cost_usd": 0.1}
+
+
+def _write_event(path, minutes_ago=10, eid=None, name="Write"):
+    return {"id": eid or f"w-{path}-{minutes_ago}", "ts": _iso_ago(minutes_ago),
+            "event_type": "tool_call", "data": {"name": name, "input": {"file_path": path}}}
+
+
+def _patch_event(rel, minutes_ago=10):
+    return {"id": f"p-{rel}", "ts": _iso_ago(minutes_ago), "event_type": "tool_call",
+            "data": {"name": "apply_patch",
+                     "input": f"*** Begin Patch\n*** Update File: {rel}\n+x\n*** End Patch\n"}}
+
+
+def _run_store_report(monkeypatch, tmp_path, demo_repo, store, *extra):
+    """``clawmetry trace report`` on the developer's machine, reading ``store``."""
+    from clawmetry import cli
+    import clawmetry.cli_cmds._common as common
+
+    monkeypatch.setattr(common, "get_read_store", lambda: (store, "direct"))
+    # Never let the report reach the machine's own ~/.clawmetry.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ex = str(tmp_path / "demo-exception.json")
+    with open(ex, "w") as fh:   # the demo session's own finding is accepted
+        json.dump({"exceptions": [{"id": "EX-DEMO", "rule": "clawmetry/guard/credential_access",
+                                   "path": "app/db.py", "expires": "2999-01-01",
+                                   "approved_by": "sec-lead", "reason": "fixture"}]}, fh)
+    bundle, js = str(tmp_path / "export.json"), str(tmp_path / "store-report.json")
+    rc = cli.trace_main(["report", "--repo", demo_repo["repo"], "--base", demo_repo["base"],
+                         "--export-bundle", bundle, "--json-out", js, "--exceptions", ex, *extra])
+    with open(bundle, encoding="utf-8") as fh:
+        bundle_text = fh.read()
+    return rc, json.load(open(js)), bundle_text
+
+
+@needs_git
+def test_session_in_another_repository_is_not_linked_and_does_not_gate(
+        demo_repo, store, tmp_path, monkeypatch):
+    """Review of #5974: every session active near the commits was a candidate
+    and its relative paths were read as this repository's. A Codex session in
+    another project patching its own ``docs/notes.md`` got linked to the human
+    edit here and failed the gate with its own Guard finding, and its id went
+    into the bundle meant for the pull request."""
+    repo = demo_repo["repo"]
+    _seed_store(store, repo)
+    other = str(tmp_path / "other-project")
+    os.makedirs(other)
+    ts = _iso_ago(10)
+    store.ingest_many([{"id": "o1", "node_id": "n1", "session_id": "codex:other-project",
+                        "agent_type": "codex", "event_type": "tool_call", "ts": ts,
+                        "model": "gpt-5-codex", "data": _patch_event("docs/notes.md")["data"]}])
+    store.flush()
+    store.ingest_session({"session_id": "codex:other-project", "agent_type": "codex",
+                          "started_at": ts})
+    store.update_session_location("codex:other-project", agent_type="codex", cwd=other)
+    store.ingest_loop_signal(
+        "codex:other-project", "daemon_detect_privilege_change", 1, severity="critical",
+        agent_type="codex", details={"kind": "privilege_change", "spend_basis": "unknown"})
+
+    rc, report, bundle_text = _run_store_report(
+        monkeypatch, tmp_path, demo_repo, store,
+        "--fail-on", "critical", "--on-missing-evidence", "fail")
+    assert report["links"]["docs/notes.md"] == []
+    assert report["evidence"]["status"] == pp.EVIDENCE_OK, report["evidence"]
+    assert report["gate"]["outcome"] == "pass" and rc == 0, report["gate"]
+    assert "other-project" not in bundle_text
+    assert "other-project" not in json.dumps(report)
+    # The session that did work here, by relative path, is still linked.
+    assert report["links"]["app/util.py"] == [{"session_id": "codex:demo-2",
+                                               "basis": pp.BASIS_WRITE}]
+
+
+@needs_git
+def test_relative_writes_with_no_working_directory_are_partial_evidence(
+        demo_repo, store, tmp_path, monkeypatch):
+    """A session with no recorded directory may have worked anywhere. Its
+    relative write on a changed file is neither linked nor ignored: the
+    evidence is partial, and the operator's missing-evidence choice decides."""
+    repo = demo_repo["repo"]
+    _seed_store(store, repo)
+    store.ingest_many([{"id": "n1", "node_id": "n1", "session_id": "codex:nowhere",
+                        "agent_type": "codex", "event_type": "tool_call", "ts": _iso_ago(10),
+                        "data": _patch_event("docs/notes.md")["data"]}])
+    store.flush()
+    rc, report, bundle_text = _run_store_report(
+        monkeypatch, tmp_path, demo_repo, store,
+        "--fail-on", "critical", "--on-missing-evidence", "fail")
+    assert report["links"]["docs/notes.md"] == []
+    assert report["evidence"]["status"] == pp.EVIDENCE_PARTIAL
+    assert "no recorded working directory" in report["evidence"]["reason"]
+    assert rc == 1 and report["gate"]["outcome"] == "fail"
+    assert "nowhere" not in bundle_text
+    # The CI runner reading that export sees the same partial evidence.
+    exported = json.loads(bundle_text)
+    ev = pp.assess_evidence(exported, range_shas=[c["sha"] for c in exported["commits"]],
+                            head_sha=exported["head_sha"])
+    assert ev["status"] == pp.EVIDENCE_PARTIAL and ev["gaps"]
+
+
+def test_relative_paths_resolve_only_against_the_sessions_own_directory(tmp_path):
+    repo = str(tmp_path / "repo")
+    other = str(tmp_path / "other")
+    os.makedirs(repo)
+    os.makedirs(other)
+    now = int(dt.datetime.now(UTC).timestamp())
+    commits = [{"sha": "c1", "ts": now, "session_id": "claude_code:named", "files": ["x.md"]}]
+    changed = ["README.md", "x.md", "sub/y.py"]
+    store = _StubStore(
+        sessions=[_session_row(s) for s in ("codex:elsewhere", "codex:here", "codex:unknown",
+                                            "claude_code:named")],
+        events={"codex:elsewhere": [_patch_event("README.md")],
+                "codex:here": [_patch_event("y.py")],
+                "codex:unknown": [_patch_event("README.md"),
+                                  _write_event(os.path.join(repo, "x.md"), eid="abs")],
+                "claude_code:named": [_patch_event("README.md")]},
+        cwds={"codex:elsewhere": other, "codex:here": os.path.join(repo, "sub")})
+    links, meta, _, gaps = pp.collect_from_store(store, repo=repo, commits=commits,
+                                                 changed_files=changed)
+    who = {p: sorted(r["session_id"] for r in rows) for p, rows in links.items()}
+    assert who["sub/y.py"] == ["codex:here"]                      # relative to its own cwd
+    assert "codex:elsewhere" not in who["README.md"]               # another repository
+    assert "codex:unknown" not in who["README.md"]                 # cannot be placed
+    assert "codex:unknown" in who["x.md"]                          # an absolute path still links
+    assert "claude_code:named" in who["README.md"]                 # a trailer names it
+    assert len(gaps) == 1 and "no recorded working directory" in gaps[0]
+    assert "unknown" not in gaps[0]
+    # The started_at fallback is the earliest event, not the newest.
+    store.sessions = []
+    store.events["claude_code:named"] = [_patch_event("README.md", 30), _write_event("a", 5)]
+    _, meta, _, _ = pp.collect_from_store(store, repo=repo, commits=commits, changed_files=changed)
+    assert meta["claude_code:named"]["started_at"] == min(
+        e["ts"] for e in store.events["claude_code:named"])
+
+
+@needs_git
+def test_sessions_beyond_the_read_limit_make_the_gate_apply_missing_evidence(
+        demo_repo, tmp_path, monkeypatch):
+    """Review of #5974: 60 active sessions, the 56th wrote a changed file and
+    raised a critical finding. Only 50 were read, the file came back
+    unattributed, the evidence said ok and an enabled gate passed."""
+    repo = demo_repo["repo"]
+    sids = [f"claude_code:busy-{i:02d}" for i in range(60)]
+    rows = [dict(_session_row(s), updated_at=_iso_ago(5 + i)) for i, s in enumerate(sids)]
+    culprit = sids[55]
+    store = _StubStore(sessions=rows,
+                       events={culprit: [_write_event(os.path.join(repo, "docs", "notes.md"))]},
+                       incidents={culprit: [_incident()]})
+    rc, report, bundle_text = _run_store_report(
+        monkeypatch, tmp_path, demo_repo, store,
+        "--fail-on", "critical", "--on-missing-evidence", "fail")
+    assert report["evidence"]["status"] == pp.EVIDENCE_PARTIAL, report["evidence"]
+    assert "beyond the 50-session read limit" in report["evidence"]["reason"]
+    assert rc == 1 and report["gate"]["outcome"] == "fail"
+    exported = json.loads(bundle_text)
+    assert exported["evidence_gaps"] and pp.verify_bundle(exported) == (True, "")
+    rc, report, _ = _run_store_report(monkeypatch, tmp_path, demo_repo, store,
+                                      "--fail-on", "critical", "--on-missing-evidence", "pass")
+    assert rc == 0 and "allowed by --on-missing-evidence pass" in report["gate"]["reasons"][0]
+
+
+def test_every_read_limit_is_a_gap_and_event_pages_walk_past_post_head_activity(
+        tmp_path, monkeypatch):
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    target = os.path.join(repo, "README.md")
+    now = int(dt.datetime.now(UTC).timestamp())
+    commits = [{"sha": "c1", "ts": now, "session_id": None, "files": ["README.md"]}]
+    ok = {"status": pp.EVIDENCE_OK, "reason": ""}
+
+    # A session that kept working after the head commit: its write is older
+    # than a full page of later events, and paging still reaches it.
+    later = [dict(_write_event(os.path.join(repo, "late.txt")), id=f"late{i}",
+                  ts=(dt.datetime.now(UTC) + dt.timedelta(minutes=10 + i)).isoformat())
+             for i in range(4)]
+    store = _StubStore(sessions=[_session_row("codex:long")],
+                       events={"codex:long": later + [_write_event(target)]})
+    monkeypatch.setattr(pp, "_MAX_EVENTS_PER_PAGE", 3)
+    monkeypatch.setattr(pp, "_MAX_EVENT_PAGES", 3)
+    links, _, _, gaps = pp.collect_from_store(store, repo=repo, commits=commits,
+                                              changed_files=["README.md"])
+    assert links["README.md"] == [{"session_id": "codex:long", "basis": pp.BASIS_WRITE}]
+    assert gaps == []
+    monkeypatch.setattr(pp, "_MAX_EVENT_PAGES", 1)
+    links, _, _, gaps = pp.collect_from_store(store, repo=repo, commits=commits,
+                                              changed_files=["README.md"])
+    assert links["README.md"] == [] and any("event read limit" in g for g in gaps)
+    assert pp.with_gaps(dict(ok), gaps)["status"] == pp.EVIDENCE_PARTIAL
+    monkeypatch.setattr(pp, "_MAX_EVENT_PAGES", 10)
+
+    # Guard findings cut short on a linked session.
+    store = _StubStore(sessions=[_session_row("codex:loud")],
+                       events={"codex:loud": [_write_event(target)]},
+                       incidents={"codex:loud": [_incident(), _incident(kind="stuck_loop")]})
+    monkeypatch.setattr(pp, "_MAX_INCIDENTS_PER_SESSION", 2)
+    _, _, _, gaps = pp.collect_from_store(store, repo=repo, commits=commits,
+                                          changed_files=["README.md"])
+    assert any("finding read limit" in g for g in gaps)
+
+    # The session list cut inside the window.
+    monkeypatch.setattr(pp, "_MAX_SESSION_ROWS", 2)
+    store = _StubStore(sessions=[_session_row(f"codex:s{i}") for i in range(3)])
+    _, _, _, gaps = pp.collect_from_store(store, repo=repo, commits=commits,
+                                          changed_files=["README.md"])
+    assert any("session read limit" in g for g in gaps)
+
+    # A store that fails to answer is not an empty store.
+    class _Broken(_StubStore):
+        def query_events(self, **_):
+            raise RuntimeError("daemon busy")
+    _, _, _, gaps = pp.collect_from_store(_Broken(sessions=[_session_row("codex:x")]),
+                                          repo=repo, commits=commits,
+                                          changed_files=["README.md"])
+    assert any("could not be read" in g for g in gaps)
+
+    # The commit ceiling, and stale/invalid evidence keep their own status.
+    assert pp.commit_limit_gap([{}] * pp._MAX_COMMITS)
+    assert pp.commit_limit_gap([{}]) is None
+    assert pp.with_gaps({"status": pp.EVIDENCE_INVALID, "reason": "x"}, ["g"])["status"] == \
+        pp.EVIDENCE_INVALID

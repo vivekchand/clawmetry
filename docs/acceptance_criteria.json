@@ -1223,6 +1223,18 @@
       "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
       "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
       "text": "When the report is posted to a pull request, the system shall maintain a single comment identified by a marker, updating it on later runs rather than adding another."
+    },
+    {
+      "id": "AC-OBS-PRP-001.12",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When reading the local store, the system shall resolve a session's relative write paths only against that session's recorded working directory, and shall not link a session working in another directory or repository to the change through a relative path; a session with no recorded working directory shall be linked through a relative path only when a commit trailer in the change names it, and relative writes it cannot place that match a changed file shall be reported as missing evidence without naming the session."
+    },
+    {
+      "id": "AC-OBS-PRP-001.13",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When any read limit truncates the evidence (sessions listed, sessions read, events or Guard findings per session, or commits in the range), the system shall report the evidence as partial with the reason, both in the report and in an exported bundle, so that an enabled gate applies the operator's missing-evidence behaviour rather than passing silently."
     }
   ]
 }

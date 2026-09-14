@@ -28,6 +28,15 @@ Issue: vivekchand/clawmetry#5946.
   a generated file, or a write into a different checkout of the same
   repository. Such a file is reported as **unattributed**, never guessed,
   unless a commit trailer names the session.
+
+  A relative path (Codex's `apply_patch` writes `README.md`, not an absolute
+  path) is resolved only against the working directory the session recorded.
+  A session working in another repository on the same machine is therefore
+  never linked to this change by a relative path, and its id, model, cost and
+  findings never reach the bundle or the comment. A session with no recorded
+  working directory could have been anywhere: its relative writes count only
+  if a commit trailer names it. Otherwise, when one matches a changed file, the
+  evidence is `partial`, and the reason names no session.
 - **Not deployment authorization.** Your CI owns that. The gate is one input
   your pipeline may opt into.
 
@@ -71,7 +80,7 @@ the bundle is not counted against coverage.
 | evidence status | when |
 |---|---|
 | `ok` | every commit in the change was examined by the bundle's exporter (or the report read the store directly) |
-| `partial` | commits in the change are not in the bundle, for example pushed after the export |
+| `partial` | commits in the change are not in the bundle, for example pushed after the export; or a read limit cut the evidence short (more than 50 active sessions, more than 50,000 events or 200 Guard findings for one session, 1,000 sessions listed inside the change's time window, 500 commits), or a store read failed, or a session with no recorded working directory wrote a changed file by relative path. The exported bundle carries these as `evidence_gaps`, so the runner sees `partial` too |
 | `stale` | the bundle is older than `--max-evidence-age-hours` |
 | `invalid` | the digest does not match the content, or the bundle covers none of this change's commits (it belongs to another change) |
 | `missing` | no bundle and no store |
@@ -79,6 +88,14 @@ the bundle is not counted against coverage.
 The bundle's `digest` is a sha256 over its content. It detects a bundle edited
 after export. **It is an integrity check, not proof of authenticity**:
 authenticity rests on where the bundle is stored and who can write there.
+
+**A bundle committed to the pull request is not a control against the pull
+request's author.** Anyone who can push to the branch, including an agent with
+push access, can rewrite the bundle and recompute its digest. A gate reading
+that bundle catches accidental staleness, a bundle from another change and
+naive edits. It does not stop someone determined to hide a session. Where that
+matters, export the bundle from a machine the author does not control, and
+hand it to CI through an artifact store the author cannot write.
 
 ## The gate
 
@@ -143,7 +160,14 @@ jobs:
 
 The action installs clawmetry and runs the report. It uploads the SARIF to code
 scanning and keeps one pull-request comment, found by a hidden marker and
-edited on later runs. It writes the markdown to the job summary and then
+edited on later runs. Only a comment written by the token's own identity is
+edited: a person who quotes the marker keeps their comment. The SARIF holds the
+scanner runs you passed in as well as the ClawMetry run. If you already upload
+that scanner's SARIF under its own category, set `upload-sarif: false` and read
+the session annotations from the job's SARIF artifact, or expect the scanner's
+alerts to appear under both categories. Neither the upload nor a live comment
+has yet been verified against github.com: the workflow in this repository runs
+with both turned off. It writes the markdown to the job summary and then
 applies the gate's exit code. A pull request from a fork gets a read-only token,
 so the upload and the comment fail there. This repository runs the action
 against a scratch demo repository in `.github/workflows/pr-provenance-action.yml`.
