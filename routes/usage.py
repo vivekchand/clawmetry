@@ -654,12 +654,22 @@ def _ls_top_sessions_by_cost(limit=20, runtime=None):
         msg_count = s.get("message_count")
         if msg_count is None:
             msg_count = s.get("event_count") or 0
+        # Issue #5979: query_sessions's own SQL already folds "no event ever
+        # priced this session" and "genuinely free" into the same
+        # cost_usd == 0.0 (COALESCE(SUM(cost_usd), 0)). Tokens with a zero
+        # recorded cost is unpriced, not free — same heuristic
+        # routes/components.py::_brain_call_costs uses for the identical
+        # shape of problem on the Flow brain panel. A session with no
+        # tokens at all and $0 cost is legitimately idle and stays $0.00.
+        raw_cost = float(s.get("cost_usd") or 0.0)
+        tokens = int(s.get("token_count") or 0)
+        is_unpriced = raw_cost == 0 and tokens > 0
         out.append({
             "session_id":      sid,
             "agent_id":        s.get("agent_id") or "",
             "model":           model,
-            "total_tokens":    int(s.get("token_count") or 0),
-            "total_cost_usd":  round(float(s.get("cost_usd") or 0.0), 6),
+            "total_tokens":    tokens,
+            "total_cost_usd":  None if is_unpriced else round(raw_cost, 6),
             "message_count":   int(msg_count or 0),
             "started_at":      s.get("started_at") or "",
         })

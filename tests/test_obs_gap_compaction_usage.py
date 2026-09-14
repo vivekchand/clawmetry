@@ -9,6 +9,8 @@ Two gaps:
 """
 from __future__ import annotations
 
+import pytest
+
 from clawmetry.adapters.openclaw import OpenClawAdapter
 from clawmetry.sync import _extract_cost_tokens_model
 
@@ -123,3 +125,31 @@ def test_extract_cost_tokens_compaction_cost_only():
     cost_usd, token_count, _model = _extract_cost_tokens_model(obj)
     assert cost_usd == 0.005
     assert token_count is None
+
+
+def test_derive_at_ingest_reads_openclaw_native_usage_keys():
+    """#5980: OpenClaw's own usage keys (input/output/cacheRead/cacheWrite,
+    no cost.total) must still derive a real cost, not $0.00.
+
+    _extract_cost_tokens_model's derive-at-ingest step (#2049) only looked
+    for Anthropic/OpenAI-shaped key names; an OpenClaw event with no
+    cost.total and only its native keys fell through to `_in == _out ==
+    _cr == _cw == 0`, so cost_usd stayed None (renders as $0.00 downstream).
+    """
+    obj = {
+        "type": "message",
+        "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "usage": {
+                "input": 200000,
+                "output": 40000,
+                "cacheRead": 1000000,
+                "cacheWrite": 100000,
+            },
+        },
+    }
+    cost_usd, _token_count, model = _extract_cost_tokens_model(obj)
+    assert model == "claude-sonnet-4-5"
+    assert cost_usd is not None, "unpriced fallback: native OpenClaw usage keys were not read"
+    assert cost_usd == pytest.approx(1.875, rel=1e-3)
