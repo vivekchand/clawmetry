@@ -1153,6 +1153,42 @@
       "text": "Claude Code is a paid runtime: the instrument command and every Claude Code specific mapping (session join, typed events, cache token tiles, waiting-on-you, span materialization) follow the claude_code runtime entitlement; without it the receiver still accepts batches and keeps only the generic ledger and span rows, and the command reports the plan requirement instead of writing."
     },
     {
+      "id": "AC-OBS-OTG-001.1",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "When a received trace contains a span describing a tool call in a known session, the system shall record it as a tool call, and a tool result, that the detectors evaluate exactly as they evaluate a machine-observed tool call, and each recorded event shall retain the trace, span and session it came from."
+    },
+    {
+      "id": "AC-OBS-OTG-001.2",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "The system shall not record a tool call for a span that does not identify itself as a tool execution or that belongs to no session, and where a tool span does not carry its arguments, the system shall not treat that call as identical to any other call."
+    },
+    {
+      "id": "AC-OBS-OTG-001.3",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Where the tool calls of one session arrive both as log records and as trace spans, or are also observed on the machine, the system shall record them from one source only, so that no tool call is counted twice."
+    },
+    {
+      "id": "AC-OBS-OTG-001.4",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Before a received span is stored, the system shall apply the secret and personal-data redaction it applies to observed events to the span's prompts, responses, tool arguments, attributes (including URLs and paths), span events (including exception events), links, name and status message, and the same redaction shall apply to the attributes kept in the received log-record ledger."
+    },
+    {
+      "id": "AC-OBS-OTG-001.5",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Where a span value cannot be scanned, because it is too large or the scanner fails, the system shall withhold that value and mark the span as withheld rather than store it unscanned. Where the operator has turned redaction off, spans shall be stored as received, as events are."
+    },
+    {
+      "id": "AC-OBS-OTG-001.6",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "An incident raised only from received telemetry shall state that the action was observed after it ran and shall not state or imply that the action was prevented."
+    },
+    {
       "id": "AC-GOV-ATR-001.1",
       "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
       "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
@@ -1325,6 +1361,66 @@
       "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
       "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
       "text": "When any read limit truncates the evidence (sessions listed, sessions read, events or Guard findings per session, or commits in the range), the system shall report the evidence as partial with the reason, both in the report and in an exported bundle, so that an enabled gate applies the operator's missing-evidence behaviour rather than passing silently."
+    },
+    {
+      "id": "AC-OBS-SHI-001.1",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "When an open-source release is published, the system shall publish a self-hosted server image for linux/amd64 and linux/arm64 to a public registry, built from the exact wheel published for that release after verifying that wheel's build provenance."
+    },
+    {
+      "id": "AC-OBS-SHI-001.2",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The published image shall carry a keyless signature, an SBOM attestation bound to its digest, and a build provenance attestation, each verifiable by anyone without ClawMetry credentials."
+    },
+    {
+      "id": "AC-OBS-SHI-001.3",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The image shall contain only the open-source package and its public dependencies, and shall not contain the proprietary Pro plugin."
+    },
+    {
+      "id": "AC-OBS-SHI-002.1",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "After publishing, the release pipeline shall pull the image by digest with no registry credentials on each published architecture, verify its signature and SBOM attestation, and fail naming the reason when the image cannot be pulled anonymously."
+    },
+    {
+      "id": "AC-OBS-SHI-002.2",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The verification shall start the pulled image with persistent storage, send a non-sensitive event through the node ingest API from outside the container, restart the container, and confirm the event is still returned by the audit export and the node still appears on the fleet page."
+    },
+    {
+      "id": "AC-OBS-SHI-002.3",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The same image build and persistence check shall run on every pull request that changes the image definition or its verification, against an image built from that branch, so a broken image is caught before a release."
+    },
+    {
+      "id": "AC-OBS-SHI-003.1",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "Only after verification passes, the system shall propose a change pinning the Compose deployment to the verified image by version and digest in place of the source build, and the Compose file shall never reference the published image by a tag alone."
+    },
+    {
+      "id": "AC-OBS-SHI-003.2",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The self-hosting documentation shall state how to verify the signature and SBOM, how to update and roll back by digest, how to back up and restore, and the actual authentication and transport defaults, and shall mark deployment targets and identity integrations that have not been verified as not available."
+    },
+    {
+      "id": "AC-OBS-SHI-004.1",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "When the server runs in self-hosted mode, requests to the self-hosted server's own API routes shall be authorised by that server's node token or admin credentials regardless of the caller's network address, and shall not be refused for lacking a local gateway token."
+    },
+    {
+      "id": "AC-OBS-SHI-004.2",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "Every other API route shall keep the existing rule for non-loopback callers, and a self-hosted route called without its own credentials shall still be refused."
     }
   ]
 }

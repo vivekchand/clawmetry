@@ -1,0 +1,341 @@
+name: Self-hosted server image
+
+# Publishes and verifies ghcr.io/vivekchand/clawmetry, the self-hosted server
+# image (deploy/self-hosted/Dockerfile.release). Refs vivekchand/clawmetry#5948.
+#
+# Three jobs, three questions, in this order:
+#
+#   publish -> built from the wheel PyPI actually serves for the version (after
+#              checking that wheel's build provenance), for linux/amd64 AND
+#              linux/arm64, signed keylessly, SBOM attested per platform,
+#              build provenance attested?
+#   verify  -> can a STRANGER pull it? No registry login, an empty Docker
+#              config, a native runner per architecture: probe the registry
+#              anonymously, pull by digest, check the signature and SBOM, confirm
+#              no Pro plugin is inside, and keep an event across a restart.
+#              "Verified by reading the workflow" is not verified.
+#   pin     -> only after verify passes: propose the digest for
+#              deploy/self-hosted/docker-compose.yml.
+#
+# Trigger: release-on-merge.yml dispatches this after the PyPI upload. A tag
+# pushed with GITHUB_TOKEN does not cascade into other workflows (same reason
+# it dispatches desktop-artifacts.yml and release-canary.yml), and building
+# from the tag would be wrong anyway: the release job bumps __version__ in its
+# working tree without committing it, so the tag's source reports the previous
+# version. Can also be dispatched by hand for an already-published version.
+#
+# FIRST PUBLISH: GHCR creates a new package as PRIVATE. The verify job will
+# fail naming that, and nothing gets pinned, until the owner makes the package
+# public once. That failure is the check working, not a flake.
+#
+# The pull_request leg builds the image from the branch's own wheel on both
+# architectures and runs the same contents + persistence check (no signature:
+# nothing is pushed from a pull request).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published clawmetry version to package (e.g. 0.12.900)"
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - deploy/self-hosted/**
+      - scripts/verify_selfhosted_image.py
+      - scripts/pin_selfhosted_compose.py
+      - clawmetry/selfhosted.py
+      - routes/selfhosted_ingest.py
+      - .github/workflows/container-image.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-image-${{ github.event.inputs.version || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/vivekchand/clawmetry
+
+jobs:
+  pr-image:
+    name: Branch image (${{ matrix.arch }})
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      # The same hash-pinned build tooling the release uses, so the branch
+      # wheel is produced the way the published one is.
+      - name: Build the branch wheel
+        run: |
+          pip install --require-hashes -r .github/requirements/release-publish.txt
+          python3 -m build --wheel --outdir deploy/self-hosted/dist
+      - name: Build the image from that wheel
+        run: >-
+          docker build
+          --file deploy/self-hosted/Dockerfile.release
+          --tag clawmetry-selfhosted:branch
+          deploy/self-hosted
+      - name: Verify architecture, contents, and that an event survives a restart
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: >-
+          python3 scripts/verify_selfhosted_image.py
+          --image clawmetry-selfhosted:branch
+          --expect-arch "$ARCH"
+          --skip-signature
+      - name: The Compose file never names the published image by a tag alone
+        run: python3 scripts/pin_selfhosted_compose.py check
+
+  publish:
+    name: Publish signed image
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # Push to ghcr.io/vivekchand/clawmetry with the workflow's own token;
+      # there is no long-lived registry credential anywhere.
+      packages: write
+      # Keyless cosign signature and the provenance attestation are both
+      # bound to this workflow's OIDC identity.
+      id-token: write
+      attestations: write
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      # The dispatch input is bound to an env var and validated before
+      # anything reads it: an input is data, never program text.
+      - name: Resolve version
+        id: ver
+        shell: python
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          import os, re
+          want = os.environ.get("INPUT_VERSION", "").strip()
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", want):
+              raise SystemExit(f"not a release version, refusing to continue: {want!r}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"version={want}\n")
+          print(f"packaging clawmetry=={want}")
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # The wheel PyPI serves, not a rebuild. release-on-merge dispatches this
+      # seconds after the upload and the simple index can lag by minutes, so
+      # poll the real download path.
+      - name: Download the published wheel
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p deploy/self-hosted/dist
+          WHEEL="deploy/self-hosted/dist/clawmetry-${VERSION}-py3-none-any.whl"
+          for i in $(seq 1 40); do
+            if pip download --no-deps --only-binary=:all: \
+                 --dest deploy/self-hosted/dist "clawmetry==${VERSION}"; then
+              break
+            fi
+            echo "clawmetry==${VERSION} not downloadable yet (attempt $i); waiting"
+            sleep 15
+          done
+          test -f "$WHEEL" || { echo "::error::no wheel for clawmetry==${VERSION} on PyPI"; exit 1; }
+          ls -l deploy/self-hosted/dist
+
+      # The release job attests dist/* before twine uploads the same files, so
+      # the downloaded wheel must verify against this repository. An image
+      # built from a wheel nobody can trace would make every signature below
+      # vouch for the wrong thing.
+      - name: Verify the wheel's build provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: >-
+          gh attestation verify
+          "deploy/self-hosted/dist/clawmetry-${VERSION}-py3-none-any.whl"
+          --repo vivekchand/clawmetry
+
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # BuildKit's own SBOM/provenance are off: they are not checkable with
+      # `cosign verify-attestation`, and they add unknown/unknown entries to
+      # the index. The explicit signature and attestations below replace them.
+      - name: Build and push linux/amd64 + linux/arm64
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: deploy/self-hosted
+          file: deploy/self-hosted/Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          build-args: |
+            CLAWMETRY_VERSION=${{ steps.ver.outputs.version }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
+            ${{ env.IMAGE }}:latest
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign the index and every platform manifest (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes --recursive "${IMAGE}@${DIGEST}"
+
+      - uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        id: syft
+
+      # One SBOM per platform, attested to that platform's manifest digest:
+      # the two architectures install different binary wheels, so a single
+      # SBOM would describe one of them and claim both.
+      - name: SBOM per platform, attested to its digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SYFT: ${{ steps.syft.outputs.cmd }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" --raw > sbom/index.json
+          python3 - <<'PY' > sbom/platforms.txt
+          import json
+          for m in json.load(open("sbom/index.json")).get("manifests", []):
+              p = m.get("platform") or {}
+              if p.get("os") == "linux" and p.get("architecture") in ("amd64", "arm64"):
+                  print(p["architecture"], m["digest"])
+          PY
+          test "$(wc -l < sbom/platforms.txt)" -eq 2 || { cat sbom/platforms.txt; echo "::error::expected amd64 and arm64 in the index"; exit 1; }
+          while read -r arch pdigest; do
+            out="sbom/clawmetry-${VERSION}-linux-${arch}.spdx.json"
+            "$SYFT" "${IMAGE}@${pdigest}" -o "spdx-json=${out}"
+            cosign attest --yes --type spdxjson --predicate "$out" "${IMAGE}@${pdigest}"
+          done < sbom/platforms.txt
+
+      - name: Attest build provenance to the registry
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: selfhosted-image-sbom
+          path: sbom/
+          retention-days: 90
+
+  verify:
+    name: Anonymous pull and verify (${{ matrix.arch }})
+    needs: publish
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    # Read-only and no registry login anywhere in this job: the whole point is
+    # to see what someone with no credentials sees.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Pull with no credentials, verify signature and SBOM, restart with data
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+        run: >-
+          python3 scripts/verify_selfhosted_image.py
+          --anonymous
+          --image "${IMAGE}@${DIGEST}"
+          --expect-arch "$ARCH"
+          --expect-version "$VERSION"
+
+  pin:
+    name: Propose the verified digest for Compose
+    needs: [publish, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Credentials persisted on purpose: this job pushes the pin branch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Pin the Compose file and open a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.publish.outputs.version }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/pin_selfhosted_compose.py pin --version "$VERSION" --digest "$DIGEST"
+          python3 scripts/pin_selfhosted_compose.py check
+          if git diff --quiet; then
+            echo "Compose is already pinned to ${VERSION}@${DIGEST}"
+            exit 0
+          fi
+          BRANCH="auto-pin/selfhosted-image-v${VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add deploy/self-hosted/docker-compose.yml
+          git commit -m "chore: pin self-hosted Compose to verified image v${VERSION}"
+          git push origin "$BRANCH"
+          cat > /tmp/pin-body.md <<EOF
+          Pins \`deploy/self-hosted/docker-compose.yml\` to \`${IMAGE}:${VERSION}@${DIGEST}\`.
+
+          Opened by \`container-image.yml\` (${RUN_URL}) only after the verify job pulled that digest with no registry credentials on linux/amd64 and linux/arm64, checked its keyless signature and per-platform SBOM attestation, confirmed no Pro plugin is inside, and restarted it with an event intact.
+
+          Opened with the workflow token, so checks do not start on their own: push an empty commit to this branch (or close and reopen) before merging.
+
+          Product record: https://factory.8090.ai/project/b415065f-ab2f-4f53-8864-0c009fd098cb/requirements/49529742-f381-4957-9abf-c92efe7b7d65
+          EOF
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore: pin self-hosted Compose to verified image v${VERSION}" \
+            --body-file /tmp/pin-body.md

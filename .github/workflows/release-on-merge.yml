@@ -560,6 +560,21 @@ jobs:
             -f version="${{ steps.bump.outputs.new }}" \
             || echo "⚠ release-canary dispatch failed (non-blocking)"
 
+          # The self-hosted server image is built from the wheel just uploaded
+          # (container-image.yml downloads it from PyPI and checks its
+          # provenance), so it can only be dispatched from here, after the
+          # upload. Same GITHUB_TOKEN cascade rule as the two dispatches above.
+          # Non-blocking: a failed image run leaves the wheel published and the
+          # Compose file unpinned, and is visible in its own run.
+          # tests/test_selfhosted_image_publish.py asserts this dispatch stays
+          # after the PyPI upload.
+          echo "▸ Dispatching container-image.yml for ${{ steps.bump.outputs.new }}"
+          gh workflow run container-image.yml \
+            --repo ${{ github.repository }} \
+            --ref main \
+            -f version="${{ steps.bump.outputs.new }}" \
+            || echo "⚠ container-image dispatch failed (non-blocking)"
+
       - name: Open PR for version bump
         # Branch protection on main blocks direct pushes. The wheel is
         # already on PyPI + the release tag exists, so this step just keeps

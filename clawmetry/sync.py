@@ -4159,10 +4159,10 @@ def _extract_cost_tokens_model(obj: dict) -> tuple:
                         pass
             return 0
 
-        _in = _utok("input_tokens", "inputTokens", "prompt_tokens", "promptTokens")
-        _out = _utok("output_tokens", "outputTokens", "completion_tokens", "completionTokens")
-        _cr = _utok("cache_read_input_tokens", "cacheReadInputTokens", "cache_read_tokens")
-        _cw = _utok("cache_creation_input_tokens", "cacheCreationInputTokens", "cache_write_tokens")
+        _in = _utok("input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "input")
+        _out = _utok("output_tokens", "outputTokens", "completion_tokens", "completionTokens", "output")
+        _cr = _utok("cache_read_input_tokens", "cacheReadInputTokens", "cache_read_tokens", "cacheRead")
+        _cw = _utok("cache_creation_input_tokens", "cacheCreationInputTokens", "cache_write_tokens", "cacheWrite")
         if _in or _out or _cr or _cw:
             try:
                 from clawmetry.providers_pricing import estimate_event_cost_usd
@@ -7052,21 +7052,15 @@ def sync_voice_log_events(config: dict, state: dict, paths: dict) -> int:
     return len(rows)
 
 
-def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
-    """Tail ~/.openclaw/clawmetry-intercepted.jsonl and ingest external_api_call
-    rows into the local DuckDB store. Uses a byte-offset cursor in state so
-    only new lines are read each tick. Returns the number of rows ingested."""
-    openclaw_dir = paths.get("openclaw_dir", str(Path.home() / ".openclaw"))
-    fpath = Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
+def _tail_intercepted_file(fpath: Path, offset_key: str, state: dict, store, node_id: str) -> int:
+    """Tail one intercepted-events JSONL file from its byte-offset cursor in
+    state, ingesting external_api_call/llm_call rows. Shared by
+    sync_intercepted_events for the current and legacy file locations."""
     if not fpath.exists():
         return 0
-    node_id = config.get("node_id", "")
-    offset_key = "last_intercepted_offset"
     offset = state.get(offset_key, 0)
     ingested = 0
     try:
-        from clawmetry import local_store as _ls
-        store = _ls.get_store()
         with open(fpath, "r", errors="replace") as f:
             f.seek(0, 2)
             size = f.tell()
@@ -7095,7 +7089,34 @@ def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
                         log.debug("ingest_external_call failed: %s", _ie)
             state[offset_key] = f.tell()
     except Exception as e:
+        log.warning("sync_intercepted_events error (%s): %s", fpath, e)
+    return ingested
+
+
+def sync_intercepted_events(config: dict, state: dict, paths: dict) -> int:
+    """Tail the interceptor's output file(s) and ingest external_api_call rows
+    into the local DuckDB store. The interceptor (clawmetry/interceptor.py)
+    writes to $CLAWMETRY_HOME/intercepted.jsonl (default ~/.clawmetry); older
+    installs may still have events under the legacy
+    ~/.openclaw/clawmetry-intercepted.jsonl location (#2969 moved the write
+    path but the daemon kept tailing only the old one — #5984). Both are
+    tailed, each with its own byte-offset cursor in state, so only new lines
+    are read each tick. Returns the number of rows ingested."""
+    node_id = config.get("node_id", "")
+    try:
+        from clawmetry import local_store as _ls
+        store = _ls.get_store()
+    except Exception as e:
         log.warning("sync_intercepted_events error: %s", e)
+        return 0
+
+    cm_home = os.environ.get("CLAWMETRY_HOME", str(Path.home() / ".clawmetry"))
+    current_fpath = Path(cm_home) / "intercepted.jsonl"
+    openclaw_dir = paths.get("openclaw_dir", str(Path.home() / ".openclaw"))
+    legacy_fpath = Path(openclaw_dir) / "clawmetry-intercepted.jsonl"
+
+    ingested = _tail_intercepted_file(current_fpath, "last_intercepted_offset", state, store, node_id)
+    ingested += _tail_intercepted_file(legacy_fpath, "last_intercepted_offset_legacy", state, store, node_id)
     return ingested
 
 
@@ -22281,6 +22302,18 @@ def _emit_detector_incidents(store, state: dict) -> int:
             log.warning("detectors: run_all errored for %s: %s", sid, e)
             incidents = []
         if incidents:
+            # A session whose whole tool stream was RECEIVED as telemetry was
+            # seen after each action ran; nothing held it. Say so on the
+            # incident rather than let a Guard row read as prevention
+            # (REQ-OBS-OTG-001).
+            try:
+                from clawmetry import otlp_guard as _og
+                _obs = _og.observation_label(events)
+                if _obs:
+                    for _inc in incidents:
+                        _og.label_incident(_inc, _obs)
+            except Exception as _oe:  # noqa: BLE001
+                log.debug("detectors: observation label skipped: %s", _oe)
             all_incidents.extend(incidents)
             # Remember when this session FIRST looked wrong, so the next tick
             # can say how long it has been that way (and price the stretch).
@@ -22372,6 +22405,10 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         # cooldown latch held or nothing is configured; the
                         # incident_alerts table has the last delivery time.
                         "delivered_via": delivered_via,
+                        # Present only when the session was seen through
+                        # received telemetry alone: observed after the fact,
+                        # never prevented (REQ-OBS-OTG-001).
+                        "observation": inc.get("observation"),
                         # Framework references, as stamped when it was found.
                         "frameworks": inc.get("frameworks"),
                     },
