@@ -1109,6 +1109,54 @@
       "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
       "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
       "text": "Claude Code is a paid runtime: the instrument command and every Claude Code specific mapping (session join, typed events, cache token tiles, waiting-on-you, span materialization) follow the claude_code runtime entitlement; without it the receiver still accepts batches and keeps only the generic ledger and span rows, and the command reports the plan requirement instead of writing."
+    },
+    {
+      "id": "AC-GOV-ATR-001.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall pin, for every replayed case study, the ATLAS edition and source revision, the case identifier and name, and each procedure step with the technique identifier published for it in that edition."
+    },
+    {
+      "id": "AC-GOV-ATR-001.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "For each scenario the system shall record the runtime, the evaluation tier, the policy set in force and the expected outcome of every stage."
+    },
+    {
+      "id": "AC-GOV-ATR-002.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall score every stage of every scenario as unobservable, observed, partial, detected or held before action, naming the finding kinds that fired and the timestamp of the first flagged event, and shall roll each case up to caught, partial or missed."
+    },
+    {
+      "id": "AC-GOV-ATR-002.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "A fixture replay shall never score a stage as held before action, and its results shall be labelled fixture replay, distinct from isolated execution evidence."
+    },
+    {
+      "id": "AC-GOV-ATR-002.3",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The suite shall include benign controls, an intentional allow and at least one failure mode of a pre-action control, and shall report any finding on a benign control as a false positive."
+    },
+    {
+      "id": "AC-GOV-ATR-003.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall generate the scorecard from the replay, and continuous integration shall fail when the committed scorecard and the replay disagree, or when a stage outcome changes without its pinned expectation changing."
+    },
+    {
+      "id": "AC-GOV-ATR-003.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The scorecard shall state that fixture replay does not establish protection against CVE-2026-25253 or against prompt injection in general, and shall list the residual gaps."
+    },
+    {
+      "id": "AC-GOV-ATR-003.3",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall export a redacted, reproducible evidence bundle carrying the pinned versions, a digest of every scenario and every stage outcome."
     }
   ]
 }

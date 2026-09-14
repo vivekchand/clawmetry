@@ -1063,6 +1063,26 @@ jobs:
             1) echo "::error::Red-team audit found gaps (exit 1): a disclosed attack in the corpus is no longer detected."; exit 1 ;;
             *) echo "::error::Red-team audit exited $code (unexpected)"; exit 1 ;;
           esac
+      # MITRE ATLAS OpenClaw case studies (AML.CS0048-CS0051) replayed through
+      # the real detectors, workspace scan and policy engine (#5944). Unlike the
+      # corpus above, outcomes here are partial / observed / unobservable as
+      # often as detected, so each stage's outcome is PINNED and the published
+      # scorecard is regenerated and compared. Verified RED by lowering
+      # network_egress first-time severity to info and by hand-editing the doc.
+      - name: ATLAS OpenClaw replay (stage outcomes pinned)
+        run: python3 -m pytest tests/test_atlas_openclaw_replay.py -v --tb=short
+      - name: ATLAS OpenClaw scorecard is regenerated and current
+        run: |
+          python3 scripts/gen_atlas_openclaw_scorecard.py --check
+          python3 scripts/gen_atlas_openclaw_scorecard.py --bundle "$RUNNER_TEMP/atlas-openclaw-evidence.json"
+      - name: Upload the ATLAS OpenClaw evidence bundle
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atlas-openclaw-evidence
+          path: ${{ runner.temp }}/atlas-openclaw-evidence.json
+          if-no-files-found: warn
+          retention-days: 30
 
   # ── OTLP receiver (daemon-free intake path, WO-7) ────────────────────────────────────────
   # The ONLY job that installs opentelemetry-proto. Without it every OTLP

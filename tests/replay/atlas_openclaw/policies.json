@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "The Guard policy set every replayed finding is evaluated against.",
+    "pause-on-critical and monitor-everything are the shape an operator writes first.",
+    "codex-only-kill is the intentional allow: it is scoped to another runtime, so it must never decide anything for these OpenClaw and Claude Code sessions.",
+    "The replay never calls the actuator, so every decision is evidence level 'configured'."
+  ],
+  "version": "guard-replay-policies@2026-09-14.1",
+  "policies": [
+    {
+      "policy_id": "pause-on-critical",
+      "enabled": true,
+      "scope_runtime": "",
+      "scope_agent_id": "",
+      "trigger_kind": "",
+      "min_severity": "critical",
+      "action": "pause"
+    },
+    {
+      "policy_id": "monitor-everything",
+      "enabled": true,
+      "scope_runtime": "",
+      "scope_agent_id": "",
+      "trigger_kind": "",
+      "min_severity": "info",
+      "action": "monitor"
+    },
+    {
+      "policy_id": "codex-only-kill",
+      "enabled": true,
+      "scope_runtime": "codex",
+      "scope_agent_id": "",
+      "trigger_kind": "",
+      "min_severity": "info",
+      "action": "kill"
+    }
+  ]
+}
