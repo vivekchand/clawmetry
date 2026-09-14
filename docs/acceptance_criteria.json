@@ -1156,8 +1156,10 @@
       "id": "AC-GOV-ATR-003.3",
       "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
       "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The system shall export a redacted, reproducible evidence bundle carrying the pinned versions, a digest of every scenario and every stage outcome.",
-    "id": "AC-GOV-FWM-001.1",
+      "text": "The system shall produce a redacted evidence bundle that contains pins and sha256 of every fixture and stage outcomes, but no raw commands or file paths, and the bundle shall be deterministic given the same generated_at timestamp."
+    },
+    {
+      "id": "AC-GOV-FWM-001.1",
       "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
       "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
       "text": "When a detector, workspace or fleet finding kind exists in the product, the system shall declare for it either at least one framework reference or an explicit \"none\" with the reason no identifier applies."
