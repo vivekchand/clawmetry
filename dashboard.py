@@ -8268,6 +8268,11 @@ def _get_billing_coverage(model_billing, today_cost, week_cost, month_cost,
         # token usage looks OAuth/included).
         "all_covered": bool(any_sub) and not any_metered and ratio > 0.999,
         "covered_token_share": round(ratio, 4),
+        # The plan fee, included allowance and overages are not exposed by
+        # any provider we detect. None (never 0.0): a plan whose fee we
+        # cannot see is not a free plan (REQ-OBS-CEA-025.6).
+        "plan_fee_usd": None,
+        "plan_terms_known": False,
         "today": _split(today_cost),
         "week": _split(week_cost),
         "month": _split(month_cost),

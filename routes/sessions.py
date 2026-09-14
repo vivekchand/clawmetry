@@ -3999,6 +3999,66 @@ def api_export_otlp():
     return jsonify({"resourceSpans": resource_spans})
 
 
+def _stamp_cost_breakdown(payload, source, *, blended_rows=0):
+    """Label every figure on a ``/api/sessions/cost-breakdown`` payload.
+
+    Each is usage value at published rates (REQ-OBS-CEA-025). The transcript
+    fallback prices a session with no recorded cost at one blended
+    per-token rate, which is an assumption, so when any row used it the
+    session figures are labelled estimated and say how many. The per-session
+    intelligence figures are labelled for what they are: reasoning and cache
+    write cost price measured tokens, the cache saving and compressible spend
+    are counterfactuals. Never raises.
+    """
+    try:
+        from clawmetry import cost_basis as _cb
+        from clawmetry import provenance as _pv
+        whole = "the whole session"
+        if blended_rows:
+            session_cost = _cb.published_rate(
+                "the session's recorded cost; a session with none is priced "
+                "at one blended per-token rate, which assumes its model mix",
+                source, basis=_pv.ESTIMATED, window=whole,
+                inputs={"sessions_priced_at_blended_rate": int(blended_rows)})
+        else:
+            session_cost = _cb.published_rate(
+                "sum of each call's recorded cost in the session",
+                source, window=whole)
+        table = "ClawMetry's published price table (clawmetry/providers_pricing.py)"
+        entries = {
+            "sessions[].cost_usd": session_cost,
+            "top10[].cost_usd": session_cost,
+            "total_cost_usd": _cb.published_rate(
+                "sum of the session costs listed", source,
+                basis=session_cost["basis"], window="every session listed"),
+            "sessions[].downstream_cost_usd": _cb.published_rate(
+                "sum of the recorded cost of the session's sub-agents",
+                source, window=whole),
+            "sessions[].reasoning_cost_usd": _cb.published_rate(
+                "reasoning tokens priced at the model's output rate",
+                source, rate_source=table, window=whole),
+            "sessions[].cache_write_cost_usd": _cb.published_rate(
+                "cache write tokens priced at the model's cache write rate",
+                source, rate_source=table, window=whole),
+            "sessions[].cache_saved_usd": _cb.published_rate(
+                "cache read tokens priced at the full input rate minus the "
+                "cache read rate. A counterfactual: nobody was billed it",
+                source, basis=_pv.ESTIMATED, rate_source=table, window=whole),
+            "sessions[].compression_recoverable_usd": _cb.published_rate(
+                "compressible tool-output tokens priced at the input rate, "
+                "which assumes they could have been compressed away",
+                source, basis=_pv.ESTIMATED, rate_source=table, window=whole),
+        }
+        for row_key in ("reasoning_cost_usd", "cache_write_cost_usd",
+                        "cache_saved_usd", "compression_recoverable_usd",
+                        "downstream_cost_usd"):
+            entries["top10[]." + row_key] = entries["sessions[]." + row_key]
+        _pv.stamp(payload, entries)
+    except Exception:
+        pass
+    return payload
+
+
 def _try_local_store_cost_breakdown():
     """Fast path for /api/sessions/cost-breakdown. Aggregates per-session
     total cost + tokens straight out of DuckDB's ``sessions`` view.
@@ -4137,12 +4197,12 @@ def _try_local_store_cost_breakdown():
     result.sort(key=lambda x: x["cost_usd"], reverse=True)
     top10 = result[:10]
     total_cost = sum(r["cost_usd"] for r in result)
-    return {
+    return _stamp_cost_breakdown({
         "sessions": result,
         "top10": top10,
         "total_cost_usd": round(total_cost, 4),
         "_source": "local_store",
-    }
+    }, "duckdb:sessions (per-session sum of recorded call cost)")
 
 
 @bp_sessions.route("/api/sessions/cost-breakdown")
@@ -4159,6 +4219,7 @@ def api_sessions_cost_breakdown():
     analytics = _d._compute_transcript_analytics()
     sessions = analytics.get("sessions", [])
     usd_per_token = _d._estimate_usd_per_token()
+    blended_rows = 0
     result = []
     for s in sessions:
         cost = s.get("cost_usd", 0.0) or 0.0
@@ -4166,6 +4227,7 @@ def api_sessions_cost_breakdown():
         # Estimate cost from tokens if cost is zero
         if cost == 0.0 and tokens > 0:
             cost = tokens * usd_per_token
+            blended_rows += 1
         result.append(
             {
                 "session_id": s.get("session_id", ""),
@@ -4179,9 +4241,11 @@ def api_sessions_cost_breakdown():
     result.sort(key=lambda x: x["cost_usd"], reverse=True)
     top10 = result[:10]
     total_cost = sum(r["cost_usd"] for r in result)
-    return jsonify(
-        {"sessions": result, "top10": top10, "total_cost_usd": round(total_cost, 4)}
-    )
+    return jsonify(_stamp_cost_breakdown(
+        {"sessions": result, "top10": top10, "total_cost_usd": round(total_cost, 4)},
+        "transcript scan (the local store was unavailable)",
+        blended_rows=blended_rows,
+    ))
 
 
 @bp_sessions.route("/api/sessions/<session_id>/stop", methods=["POST"])

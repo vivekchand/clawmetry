@@ -45,6 +45,7 @@ from typing import Optional
 from flask import Blueprint, jsonify, make_response, request
 from clawmetry._gate import gate
 from clawmetry import provenance as _prov
+from clawmetry import cost_basis as _cost_basis
 from clawmetry.config import is_local_store_read_enabled
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
@@ -334,7 +335,8 @@ _WINDOW_TEXT = {
 }
 
 
-def _usage_provenance(source: str, *, runtime=None, coverage=None):
+def _usage_provenance(source: str, *, runtime=None, coverage=None,
+                      coverage_block=None):
     """Provenance entries for an ``/api/usage`` payload.
 
     ``source`` is the store the numbers were read out of, so a reader can
@@ -363,31 +365,25 @@ def _usage_provenance(source: str, *, runtime=None, coverage=None):
     for window in ("today", "week", "month"):
         cost_key = window + "Cost"
         if blind_reason:
-            entries[cost_key] = _prov.unknown(
+            entries[cost_key] = _cost_basis.unavailable(
                 blind_reason, source=source, window=_WINDOW_TEXT[window])
         else:
-            entries[cost_key] = _prov.derived(
+            # What kind of money (REQ-OBS-CEA-025): usage value at published
+            # rates. A runtime-reported cost is a source, not an invoice.
+            entries[cost_key] = _cost_basis.published_rate(
                 _COST_FORMULA, source, window=_WINDOW_TEXT[window],
                 inputs={"scope": scope})
         entries[window] = _prov.measured(
             _TOKEN_FORMULA, source, window=_WINDOW_TEXT[window],
             inputs={"scope": scope})
-    entries["days[].cost"] = _prov.derived(
+    entries["days[].cost"] = _cost_basis.published_rate(
         _COST_FORMULA, source, window="one local calendar day per bucket")
-    entries["sessions[].total_cost_usd"] = _prov.derived(
+    entries["sessions[].total_cost_usd"] = _cost_basis.published_rate(
         _COST_FORMULA, source, window="the whole session")
-    entries["sessionCosts"] = _prov.derived(
+    entries["sessionCosts"] = _cost_basis.published_rate(
         _COST_FORMULA, source, window="the whole session")
-    entries["billingCoverage.covered_usd"] = _prov.estimated(
-        "the API-equivalent cost of the models a detected subscription "
-        "covers, which assumes the detected plan is the one actually billed",
-        "clawmetry subscription detection")
-    entries["billingCoverage.out_of_pocket_usd"] = _prov.estimated(
-        "API-equivalent cost minus the covered share, on the same assumption",
-        "clawmetry subscription detection")
-    entries["covered_usd"] = entries["billingCoverage.covered_usd"]
-    entries["out_of_pocket_usd"] = entries["billingCoverage.out_of_pocket_usd"]
-    entries["cost_usd"] = _prov.derived(
+    entries.update(_cost_basis.coverage_entries(coverage_block))
+    entries["cost_usd"] = _cost_basis.published_rate(
         _COST_FORMULA, source, window="the row's own window")
     entries["total_cost_usd"] = entries["cost_usd"]
     return entries
@@ -397,14 +393,18 @@ def _stamp_usage(result, source, *, runtime=None):
     """Attach the Cost tab's provenance to a built payload. Never raises."""
     try:
         entries = _usage_provenance(
-            source, runtime=runtime, coverage=result.get("coverage"))
+            source, runtime=runtime, coverage=result.get("coverage"),
+            coverage_block=result.get("billingCoverage"))
         if "routing_savings_usd" in result:
-            entries["routing_savings_usd"] = _prov.estimated(
+            entries["routing_savings_usd"] = _cost_basis.published_rate(
                 "for each substitution the enforcement proxy made, the price "
                 "of the model that was asked for minus the price of the model "
                 "that ran, at the measured token count. It is a "
                 "counterfactual: nobody was billed the larger number",
                 "duckdb:events(auto_downgraded).estimated_saved_usd",
+                basis=_prov.ESTIMATED,
+                rate_source="ClawMetry's published price table "
+                            "(clawmetry/providers_pricing.py)",
                 window="the last 30 days")
             entries["saved_usd"] = entries["routing_savings_usd"]
         _prov.stamp(result, entries)

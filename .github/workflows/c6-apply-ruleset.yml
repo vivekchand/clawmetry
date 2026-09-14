@@ -29,7 +29,7 @@ name: Apply E2E required checks via Rulesets API (C6)
 #   C6 must be closed via: github.com/vivekchand/clawmetry/settings/branches
 #   (60 seconds) or by setting E2E_ADMIN_PAT secret for c6-schedule-heal.yml.
 #
-# Tracking: vivekchand/clawmetry#3970 (C6)
+# Tracking: vivekchand/clawmetry#5266
 
 on:
   push:
@@ -141,7 +141,7 @@ jobs:
                       "github.com/vivekchand/clawmetry/settings/branches > "
                       "Edit main > Require status checks > add 'E2E Gate (required)'. "
                       "Or: bash scripts/close-c6.sh. "
-                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/5266"
                   )
                   set_output("created", "false")
                   sys.exit(1)
@@ -214,7 +214,7 @@ jobs:
                       "Fastest fix (60 s): github.com/vivekchand/clawmetry/settings/branches "
                       "> Edit main > Require status checks > add 'E2E Gate (required)'. "
                       "Or: bash scripts/close-c6.sh. "
-                      "Tracking: https://github.com/vivekchand/clawmetry/issues/3970"
+                      "Tracking: https://github.com/vivekchand/clawmetry/issues/5266"
                   )
                   set_output("created", "false")
                   sys.exit(1)
@@ -322,7 +322,7 @@ jobs:
           TOKEN = os.environ["GITHUB_TOKEN"]
           OWNER = "vivekchand"
           REPO = "clawmetry"
-          TRACKING_ISSUE = 3970
+          TRACKING_ISSUE = 5266
           MARKER = "<!-- c6-ruleset-applied -->"
           RUN_URL = (
               f"https://github.com/{OWNER}/{REPO}/actions/runs/"

@@ -577,6 +577,48 @@
       "text": "When the token count behind a cost row was not recorded, the system shall say the token count was not recorded rather than label the row \"unknown tokens\"."
     },
     {
+      "id": "AC-OBS-CEA-025.1",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Each cost figure on the Overview spend tile; on the Usage tab's period cost cards, Cost Breakdown table, subscription coverage banner, both Top Sessions by Cost tables and the session cost chart; on the Flow brain panel's cost card and per-call cost list; and in the hosted snapshot's cost slice shall carry a financial basis of exactly one of: usage value at published rates, expected contract spend, allocated actual spend, or unavailable, shown as visible text beside the figure or on the heading or caption of the column, list or chart that holds it."
+    },
+    {
+      "id": "AC-OBS-CEA-025.2",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "The system shall not label a figure expected contract spend unless it records the contract rate version it was priced from, and shall not label a figure allocated actual spend unless it records the invoice or billing-ledger reference it was drawn from; a request for either label without that evidence shall produce an unavailable basis with the reason, never a silently upgraded label."
+    },
+    {
+      "id": "AC-OBS-CEA-025.3",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "A cost the runtime reported itself shall be identified as the runtime's own figure (its source), and shall still be labelled usage value at published rates rather than actual spend."
+    },
+    {
+      "id": "AC-OBS-CEA-025.4",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Where a subscription is detected, the Usage tab shall show the API-equivalent value of subscription-covered usage separately from usage on metered routes, and shall never present the subscription-covered value as an additional bill nor state that the covered usage cost the operator nothing."
+    },
+    {
+      "id": "AC-OBS-CEA-025.5",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Where the billing route of part of the usage was not detected, the system shall label that part's route as not detected rather than as metered or as covered."
+    },
+    {
+      "id": "AC-OBS-CEA-025.6",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Where the provider does not expose the plan fee, included allowance or overage to ClawMetry, the system shall say that those are not included rather than show them as zero."
+    },
+    {
+      "id": "AC-OBS-CEA-025.7",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Hovering or keyboard-focusing a basis label shall show how the figure was computed: the formula, the source of the rate, the window, and the billing route where one applies."
+    },
+    {
       "id": "AC-OBS-GHA-001.1",
       "doc": "Governance and Human Approval",
       "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
