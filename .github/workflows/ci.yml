@@ -221,7 +221,7 @@ jobs:
         run: python3 -m pytest tests/test_auto_quarantine.py -q
 
       - name: Published provider pricing and cache accounting
-        run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
+        run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py tests/test_price_book.py -q
 
       # #5979: a session with tokens but no priced event must render as
       # unknown cost on the Usage tab, never a confident $0.00. Named here

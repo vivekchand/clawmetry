@@ -158,6 +158,7 @@ from routes.spend_flow import bp_spend_flow
 from routes.entitlement import bp_entitlement
 from routes.extensions import bp_extensions
 from routes.otel_export import bp_otel_export
+from routes.pricing import bp_pricing
 from routes.device import bp_device
 from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
@@ -6112,6 +6113,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_memory)
     app.register_blueprint(bp_otel)
     app.register_blueprint(bp_otel_export)
+    app.register_blueprint(bp_pricing)
     # Custom-runtime HTTP ingest is a Pro feature; the impl lives in
     # clawmetry-pro. When that package is installed, its blueprint was
     # already registered by ``_ext_load(app)`` above and won the URL

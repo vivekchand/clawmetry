@@ -182,7 +182,12 @@ def _is_llm_url(url: str) -> bool:
     if not url:
         return False
     url_lower = url.lower()
-    return any(pattern in url_lower for pattern in _LLM_URL_PATTERNS)
+    if any(pattern in url_lower for pattern in _LLM_URL_PATTERNS):
+        return True
+    # Azure OpenAI lives on a customer-named resource host (#5936), so it
+    # cannot be a fixed pattern; the parser also requires the /openai/ path.
+    from clawmetry.providers_pricing import parse_azure_openai_url
+    return parse_azure_openai_url(url) is not None
 
 
 def _is_tts_url(url: str) -> bool:
@@ -237,6 +242,9 @@ def _build_external_event(
 def _detect_provider(url: str) -> str:
     """Detect provider name from URL."""
     url_lower = url.lower()
+    from clawmetry.providers_pricing import parse_azure_openai_url
+    if parse_azure_openai_url(url) is not None:
+        return "azure-openai"
     if "anthropic.com" in url_lower:
         return "anthropic"
     if "openai.com" in url_lower:
@@ -348,7 +356,7 @@ def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> dict[str,
                 or 0
             )
 
-        elif provider in ("openai", "openrouter"):
+        elif provider in ("openai", "openrouter", "azure-openai"):
             usage = body.get("usage", {})
             result["input_tokens"] = usage.get("prompt_tokens", 0)
             result["output_tokens"] = usage.get("completion_tokens", 0)
@@ -406,7 +414,16 @@ def _build_event(
     reasoning_tokens: int = 0,
 ) -> dict[str, Any]:
     """Build the event dict to write to JSONL."""
-    cost = _estimate_cost(model or "", input_tokens, output_tokens)
+    azure = None
+    if provider == "azure-openai":
+        from clawmetry.providers_pricing import parse_azure_openai_url
+        azure = parse_azure_openai_url(url)
+    # An Azure deployment name says nothing about the model behind it, so with
+    # no model reported there is no rate to estimate from (#5936).
+    cost = (
+        None if (azure is not None and not model)
+        else _estimate_cost(model or "", input_tokens, output_tokens)
+    )
     event: dict[str, Any] = {
         "type": "llm_call",
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -421,6 +438,10 @@ def _build_event(
     }
     if model:
         event["model"] = model
+    if azure is not None:
+        event["endpoint_host"] = azure["resource"]
+        if azure.get("deployment"):
+            event["deployment"] = azure["deployment"]
     if cost is not None:
         event["cost_usd"] = cost
     if reasoning_tokens:

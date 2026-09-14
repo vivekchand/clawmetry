@@ -1153,6 +1153,72 @@
       "text": "Claude Code is a paid runtime: the instrument command and every Claude Code specific mapping (session join, typed events, cache token tiles, waiting-on-you, span materialization) follow the claude_code runtime entitlement; without it the receiver still accepts batches and keeps only the generic ledger and span rows, and the command reports the plan requirement instead of writing."
     },
     {
+      "id": "AC-OBS-CEA-024.1",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The system shall accept a local price book whose entries identify a model exactly, by prefix, or by a validated pattern, carry an effective start date, and state either explicit per-token rates or a percentage discount off the published rate."
+    },
+    {
+      "id": "AC-OBS-CEA-024.2",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The system shall reject each malformed entry, and each pair of entries that would claim the same usage over overlapping dates, with a stated reason per entry, and shall continue to accept the valid remainder of the book rather than failing it whole."
+    },
+    {
+      "id": "AC-OBS-CEA-024.3",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "When more than one valid entry could apply to a usage record and the documented precedence does not separate them, the system shall report the record as ambiguous and shall not choose a rate."
+    },
+    {
+      "id": "AC-OBS-CEA-024.4",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "An entry shall apply to usage observed at or after its effective start and strictly before its effective end; usage with no observed time shall not be matched to a dated rate."
+    },
+    {
+      "id": "AC-OBS-CEA-024.5",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The system shall resolve an Azure OpenAI deployment name to a model through an explicit alias, scoped to its resource where the alias names one, and shall prefer that alias over a model name reported by the response."
+    },
+    {
+      "id": "AC-OBS-CEA-024.6",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The system shall resolve AWS Bedrock model identifiers, including region prefixes, vendor prefixes and version suffixes, to the same model a price book entry names."
+    },
+    {
+      "id": "AC-OBS-CEA-024.7",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Every edit to the price book shall produce a new version identifier; a version once recorded shall never be altered; and resolving usage against an earlier version shall return the rate that version held."
+    },
+    {
+      "id": "AC-OBS-CEA-024.8",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "When no published rate exists for a model and no price book entry applies, the system shall report the price as unknown rather than substitute a generic default rate."
+    },
+    {
+      "id": "AC-OBS-CEA-024.9",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Every valuation the system returns shall state its basis (vendor reported, contract, list, default or unknown), the rate version and effective interval it used, and whether it restates an earlier valuation; a valuation lacking these shall not be returned."
+    },
+    {
+      "id": "AC-OBS-CEA-024.10",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "For each usage record, the system shall state whether that source counts cached input tokens inside its input token total, so that a valuation neither adds nor subtracts them twice."
+    },
+    {
+      "id": "AC-OBS-CEA-024.11",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The price book, its rates and its recorded versions shall remain on the machine where they were written, and no path that sends data off the machine shall read them."
+    },
+    {
       "id": "AC-OBS-OTG-001.1",
       "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
       "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
