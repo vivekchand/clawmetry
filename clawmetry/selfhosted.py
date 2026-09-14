@@ -120,6 +120,50 @@ def check_admin_or_token(request) -> bool:
     return check_api_key(request.headers.get("X-Api-Key"))
 
 
+#: Self-hosted server views under ``/api/`` that decide who the caller is
+#: themselves (node token, or admin HTTP Basic), keyed by Flask endpoint name.
+#:
+#: The dashboard's own gate refuses every non-loopback ``/api/*`` call that
+#: lacks a local gateway token. Inside a container EVERY request is
+#: non-loopback (it arrives from the bridge through a published port), so that
+#: gate answered 401 "Gateway token not configured" to the admin, export and
+#: approval APIs even with the right admin credentials: the deployment guide's
+#: own verification step failed. These views are therefore exempted from that
+#: gate and only from it; their own check still runs.
+#:
+#: Explicit, not "every selfhosted_ingest endpoint": ``sh_policies`` answers
+#: without any credential, so it stays behind the dashboard gate. A new view
+#: joins this set only once it authenticates the caller, and
+#: tests/test_selfhosted_container_auth.py fails if a listed view ever answers
+#: an uncredentialed remote caller, or if a new /api view is neither listed
+#: nor deliberately excluded.
+SELF_AUTHENTICATING_ENDPOINTS = frozenset(
+    "selfhosted_ingest." + name
+    for name in (
+        "sh_register",  # refuses everyone (403): self-registration is disabled
+        "sh_api_ingest",
+        "sh_subscribe",
+        "sh_cache_get",
+        "sh_brain_get",
+        "sh_alerts_dispatch",
+        "sh_approval_request",
+        "sh_approval_status",
+        "sh_approval_decide",
+        "sh_export_events",
+        "sh_nodes",
+        "sh_status",
+    )
+)
+
+
+def route_carries_own_auth(endpoint) -> bool:
+    """True when the matched view is a self-hosted route that authenticates itself.
+
+    Always False outside self-hosted mode, where these views are not registered.
+    """
+    return bool(endpoint) and endpoint in SELF_AUTHENTICATING_ENDPOINTS and is_self_hosted()
+
+
 # ── Optional license/version ping (off by default) ──────────────────────────
 
 _ping_thread_started = False

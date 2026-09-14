@@ -4813,6 +4813,9 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     # on the session so turn anatomy can sum them.
     _otlp_wait_events = []
     _wait_tool_by_span = {}  # span_id -> tool_name, to name a wait by its parent
+    # REQ-OBS-OTG-001: tool spans normalised into the tool_call / tool_result
+    # events Guard's detectors read (clawmetry/otlp_guard.py).
+    _otlp_tool_events = []
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -4944,6 +4947,16 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         _wsuf = (_wprof.wait_span_suffix if _wprof is not None else "") or ""
                         if _wprof is not None and _row.get("tool_name"):
                             _wait_tool_by_span[str(_hex(span.span_id))] = _row.get("tool_name")
+                        # A tool span becomes the tool_call / tool_result events
+                        # Guard evaluates. A wait span is a human, not a tool.
+                        if not (_wsuf and span.name.lower().endswith(_wsuf.lower())):
+                            try:
+                                from clawmetry import otlp_guard as _og
+                                _otlp_tool_events.extend(_og.tool_events_from_span(
+                                    _row, attrs, profiled=_wprof is not None,
+                                    received_at=ts))
+                            except Exception:
+                                pass
                         if (_wsuf and _sid
                                 and span.name.lower().endswith(_wsuf.lower())):
                             try:
@@ -4996,7 +5009,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                         except Exception:
                             pass
 
-    if _store is not None and _otlp_wait_events:
+    if _store is not None and (_otlp_wait_events or _otlp_tool_events):
         # A wait span may carry no tool name of its own (measured live); its
         # parent tool span does.
         for _wev in _otlp_wait_events:
@@ -5020,12 +5033,15 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
             except Exception:
                 pass
         try:
-            _store.put_otlp_batch(records=[], events=_otlp_wait_events)
+            # One hop for the whole export batch: wait events and the tool
+            # events Guard reads (the proxy forwards kwargs only).
+            _store.put_otlp_batch(
+                records=[], events=_otlp_wait_events + _otlp_tool_events)
         except Exception as e:
             try:
                 import logging as _lg
                 _lg.getLogger("clawmetry.dashboard").warning(
-                    "waiting_on_user events write failed: %s", e)
+                    "OTLP span events write failed: %s", e)
             except Exception:
                 pass
 
@@ -7730,6 +7746,17 @@ def _check_auth():
         # else fall through to the standard token check below
     if request.path.startswith("/api/nodes"):
         return  # Fleet API uses its own X-Fleet-Key authentication
+    # Self-hosted server routes authenticate the caller themselves (node token
+    # or admin Basic auth). Behind a container port every caller is
+    # non-loopback, so the gateway-token rule below refused them even with
+    # valid admin credentials. The allowlist lives in clawmetry/selfhosted.py.
+    try:
+        from clawmetry.selfhosted import route_carries_own_auth as _sh_own_auth
+
+        if _sh_own_auth(request.endpoint):
+            return
+    except Exception:
+        pass  # fall through to the standard gate: never fail open on an import error
     # OTLP ingestion (/v1/metrics|traces|logs) accepts UNTRUSTED data that lands
     # in cost/usage analytics, so it must not be open to the network. Gate it
     # like /api/*: loopback is trusted (zero-config local exporters keep working),

@@ -131,12 +131,33 @@ rows are never updated or deleted by the server.
 
 ## Upgrade path
 
+Each release publishes a signed image, `ghcr.io/vivekchand/clawmetry`, and once
+a digest has passed anonymous-pull verification the release opens a pull
+request pinning this Compose file to it
+(`image: ghcr.io/vivekchand/clawmetry:<version>@sha256:<digest>`). Check the
+image before you run it and upgrade by digest:
+[docs/self-hosting.md](../../docs/self-hosting.md).
+
+With a pinned digest:
+
 ```bash
 cd deploy/self-hosted
-git pull                      # or check out the release tag you validated
-docker compose build --pull
+docker compose pull
 docker compose up -d          # recreates the container; the volume persists
 ```
+
+Roll back by setting `image:` back to the previous digest. While this file
+still has a `build:` block, no image has passed verification yet and Compose
+builds from your checkout:
+
+```bash
+git pull                      # or check out the release tag you validated
+docker compose build --pull
+docker compose up -d
+```
+
+To build from source after the file is pinned, add the override:
+`docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`.
 
 Schema migrations are additive (`CREATE TABLE IF NOT EXISTS`); downgrades are
 not supported, snapshot the volume before upgrading (see Backups).
@@ -145,12 +166,11 @@ not supported, snapshot the volume before upgrading (see Backups).
 
 All state lives on the `clawmetry-data` volume (`/root/.clawmetry` in the
 container): `selfhosted.db` (SQLite ingest/audit store), `events.duckdb`
-(local event store), `config.json`. SQLite in WAL mode is safe to back up
-with:
+(local event store), `config.json`. The image has no `sqlite3` binary;
+Python's backup API is safe with SQLite in WAL mode:
 
 ```bash
-docker compose exec clawmetry \
-  sqlite3 /root/.clawmetry/selfhosted.db ".backup /root/.clawmetry/backup.db"
+docker compose exec clawmetry python3 -c "import sqlite3; s = sqlite3.connect('/root/.clawmetry/selfhosted.db'); d = sqlite3.connect('/root/.clawmetry/backup.db'); s.backup(d); d.close(); s.close()"
 docker cp "$(docker compose ps -q clawmetry)":/root/.clawmetry/backup.db ./
 ```
 
@@ -163,3 +183,5 @@ mounting the volume into a scratch compose project.
   dashboard remains the rich per-node UI. Full multi-node dashboard parity
   with ClawMetry Cloud is on the Enterprise roadmap.
 - No Kubernetes/Helm yet, this compose file is the supported deployment.
+- What is and is not available (SSO, platform quickstarts, offline install):
+  [docs/self-hosting.md](../../docs/self-hosting.md#not-available-yet).

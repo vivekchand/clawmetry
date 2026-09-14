@@ -1,0 +1,61 @@
+# ClawMetry self-hosted server image, as published to ghcr.io/vivekchand/clawmetry.
+#
+# This is NOT the source build. .github/workflows/container-image.yml puts the
+# exact wheel PyPI serves for a release into dist/ (after checking that wheel's
+# build provenance) and installs it here, so the image carries the same bytes a
+# `pip install clawmetry==<version>` user gets, and nothing else from the repo.
+# The repository's root Dockerfile (what docker-compose.build.yml builds) stays
+# the from-source path for development.
+#
+# What must never be in this image: the proprietary Pro plugin. It is not on
+# PyPI and nothing here fetches it; scripts/verify_selfhosted_image.py fails the
+# release if a clawmetry-pro distribution or module is importable inside it.
+#
+# Base pinned by digest, same digest and same reasoning as the root Dockerfile;
+# .github/dependabot.yml watches this directory so the pin does not rot.
+FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
+
+ARG CLAWMETRY_VERSION=""
+
+LABEL org.opencontainers.image.title="ClawMetry self-hosted server" \
+      org.opencontainers.image.description="Dashboard, node ingest API, fleet page and audit export for a single-tenant ClawMetry deployment" \
+      org.opencontainers.image.source="https://github.com/vivekchand/clawmetry" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${CLAWMETRY_VERSION}"
+
+# Defaults for a self-hosted server. Each can be overridden at `docker run`.
+#   SELF_HOSTED=true           registers the node ingest API and fleet page
+#   CLAWMETRY_NO_TELEMETRY=1   no install telemetry
+#   CLAWMETRY_NO_CLOUD=1       no managed-cloud sync
+#   CLAWMETRY_AUTO_UPDATE=0    a signed image must never pip-install a different
+#                              version into itself; upgrade by pulling a new digest
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    SELF_HOSTED=true \
+    CLAWMETRY_NO_TELEMETRY=1 \
+    CLAWMETRY_NO_CLOUD=1 \
+    CLAWMETRY_AUTO_UPDATE=0
+
+COPY dist/ /tmp/dist/
+
+# Exactly one clawmetry wheel, installed with the OTLP decoder extra: the
+# daemon-free intake path (runtimes exporting OTLP straight to this server)
+# answers 501 to http/protobuf without it.
+RUN set -eu; \
+    set -- /tmp/dist/clawmetry-*.whl; \
+    if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then \
+      echo "expected exactly one clawmetry wheel in dist/, found: $*" >&2; exit 1; \
+    fi; \
+    pip install --no-cache-dir "$1[otel]"; \
+    rm -rf /tmp/dist
+
+# HOME=/root, so the store lives in /root/.clawmetry: the volume path the
+# Compose file has always mounted. Changing it would strand existing data.
+WORKDIR /root
+
+EXPOSE 8900
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8900/api/health', timeout=5)" || exit 1
+
+CMD ["clawmetry", "--host", "0.0.0.0", "--port", "8900"]

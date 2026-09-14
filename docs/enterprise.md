@@ -41,7 +41,9 @@ entirely (see `clawmetry/telemetry.py`, `routes/meta.py:_anon_forward_cloud`).
 
 Single-tenant server for a customer VPC or on-prem box. See
 [`deploy/self-hosted/README.md`](../deploy/self-hosted/README.md) for the
-runbook; short version:
+runbook, and [`docs/self-hosting.md`](self-hosting.md) for the signed image
+(`ghcr.io/vivekchand/clawmetry`), how to verify it, operations and current
+limits; short version:
 
 ```bash
 cd deploy/self-hosted
@@ -161,9 +163,11 @@ or `GET /api/otel-status`, whose `persisted` field is the DuckDB row count.
 
 Prerequisite: the ingest image ships `opentelemetry-proto`, because the default
 exporter protocol is `http/protobuf` and without it the receiver answers 501.
-The `Dockerfile` that `deploy/self-hosted/docker-compose.yml` builds installs
-it; a bare `pip install clawmetry` needs `pip install clawmetry[otel]` (OTLP/JSON
-alone decodes with the stdlib and needs no extra).
+Both images install it: the published `ghcr.io/vivekchand/clawmetry` image
+(`deploy/self-hosted/Dockerfile.release`, which installs the release wheel with
+the `otel` extra) and the source build from the root `Dockerfile`. A bare
+`pip install clawmetry` needs `pip install clawmetry[otel]` (OTLP/JSON alone
+decodes with the stdlib and needs no extra).
 
 ## Audit export
 
