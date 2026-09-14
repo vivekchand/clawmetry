@@ -9716,22 +9716,46 @@ class LocalStore(TrailStoreMixin):
             raise RuntimeError(
                 "local_store: ingest_span() called on read-only store"
             )
-        rows: dict[str, list[Any]] = {}
+        # REQ-OBS-OTG-001: a span's prompts, tool arguments, attributes and
+        # exception events rest in DuckDB plaintext exactly like events do, so
+        # the same redaction applies before they are written. This is the one
+        # write path every span takes (the OTLP receiver and the runtime
+        # adapters' span reconstruction alike).
+        redact = None
+        try:
+            from clawmetry import redaction as _redaction
+            if not _redaction._disabled():
+                redact = _redaction.redact_span
+        except Exception:
+            redact = None  # partial install: never block ingest
+        rows: dict[str, tuple[list[Any], dict[str, Any], str]] = {}
         for span in spans:
             params = _span_row(span)
-            rows[str(params[0])] = params
+            # Change detection hashes what was RECEIVED, before redaction:
+            # an unchanged span re-sent every tick is skipped without paying
+            # for a scan (FLYWHEEL 1e), and hashes stored before redaction
+            # existed still match, so an upgrade does not rewrite the table.
+            # created_at is not content.
+            rows[str(params[0])] = (params, span, _content_hash(params[:-1]))
         if not rows:
             return 0
         with self._write_lock:
             cache = self._span_hashes_locked()
-            to_write: list[list[Any]] = []
-            for sid, params in rows.items():
-                h = _content_hash(params[:-1])  # created_at is not content
-                if cache is not None and cache.get(sid) == h:
-                    continue
-                to_write.append(params + [h])
-            if not to_write:
-                return 0
+            pending = [
+                (params, span, h) for sid, (params, span, h) in rows.items()
+                if not (cache is not None and cache.get(sid) == h)
+            ]
+        if not pending:
+            return 0
+        to_write: list[list[Any]] = []
+        for params, span, h in pending:
+            if redact is not None:
+                # Outside the write lock: a scan over a large prompt must not
+                # stall every other writer.
+                params = _span_row(redact(span))
+            to_write.append(params + [h])
+        with self._write_lock:
+            cache = self._span_hashes_locked()
             with _txn(self._conn):
                 ids = [p[0] for p in to_write]
                 for off in range(0, len(ids), 500):
@@ -9888,6 +9912,14 @@ class LocalStore(TrailStoreMixin):
         """
         if self._read_only:
             raise RuntimeError("local_store: put_otlp_batch() on read-only store")
+        # The ledger's attributes blob holds every record attribute as sent,
+        # prompt text and tool parameters included. Scrub it like a span
+        # (REQ-OBS-OTG-001); the identity it keeps in typed columns is left
+        # as sent (AC-OBS-006.2).
+        try:
+            from clawmetry.otlp_guard import scrub_ledger_attributes as _scrub_attrs
+        except Exception:
+            _scrub_attrs = None
         rows: dict[str, list[Any]] = {}
         for rec in records or []:
             if not isinstance(rec, dict):
@@ -9939,7 +9971,8 @@ class LocalStore(TrailStoreMixin):
                 _f("cost_usd"), _i("tokens_input"), _i("tokens_output"),
                 _i("token_count"), _f("duration_ms"),
                 _s("tool_name"), _s("decision"), success,
-                _to_blob(rec.get("attributes")),
+                _to_blob(_scrub_attrs(rec.get("attributes"))
+                         if _scrub_attrs is not None else rec.get("attributes")),
             ]
 
         written = 0
@@ -9993,16 +10026,58 @@ class LocalStore(TrailStoreMixin):
             except Exception:
                 log.warning("otlp events: ownership probe failed", exc_info=True)
 
+        # One OTLP SIGNAL owns a session's tool stream (REQ-OBS-OTG-001). A
+        # runtime that exports both log records and traces describes every
+        # tool call twice (``otlp:<record>`` from /v1/logs, ``otlp:span:...``
+        # from /v1/traces). Keeping both would double every trajectory
+        # threshold and page twice for one action, so whichever signal
+        # reported the session's tool calls first keeps reporting them. Known
+        # gap, stated like the daemon one above: two exports landing in the
+        # same instant can both pass this probe.
+        try:
+            from clawmetry.otlp_guard import TRACE_EVENT_ID_PREFIX as _trace_prefix
+        except Exception:
+            _trace_prefix = "otlp:span:"
+        tool_stream_owner: dict[str, str] = {}
+        if want_sessions:
+            try:
+                placeholders = ", ".join(["?"] * len(want_sessions))
+                like = _trace_prefix + "%"
+                for sid, has_trace, has_log in self._fetch(
+                    "SELECT session_id, "
+                    "MAX(CASE WHEN id LIKE ? THEN 1 ELSE 0 END), "
+                    "MAX(CASE WHEN id LIKE ? THEN 0 ELSE 1 END) "
+                    "FROM events WHERE id LIKE 'otlp:%' "
+                    "AND event_type IN ('tool_call', 'tool_result') "
+                    f"AND session_id IN ({placeholders}) GROUP BY session_id",
+                    [like, like] + list(want_sessions),
+                ):
+                    if has_trace and not has_log:
+                        tool_stream_owner[str(sid)] = "trace"
+                    elif has_log and not has_trace:
+                        tool_stream_owner[str(sid)] = "log"
+            except Exception:
+                log.warning("otlp events: signal ownership probe failed", exc_info=True)
+
         ev_written = 0
         ev_skipped = 0
+        ev_skipped_signal = 0
         for ev in events or []:
             if not isinstance(ev, dict):
                 continue
-            if (str(ev.get("session_id") or "") in owned_by_daemon
-                    and str(ev.get("event_type") or "")
-                    in self._OTLP_DAEMON_DUPLICATE_TYPES):
+            ev_sid = str(ev.get("session_id") or "")
+            ev_type = str(ev.get("event_type") or "")
+            if (ev_sid in owned_by_daemon
+                    and ev_type in self._OTLP_DAEMON_DUPLICATE_TYPES):
                 ev_skipped += 1
                 continue
+            if ev_type in ("tool_call", "tool_result") and ev_sid:
+                signal = ("trace" if str(ev.get("id") or "").startswith(_trace_prefix)
+                          else "log")
+                owner = tool_stream_owner.setdefault(ev_sid, signal)
+                if owner != signal:
+                    ev_skipped_signal += 1
+                    continue
             try:
                 self.ingest(ev)
                 ev_written += 1
@@ -10021,6 +10096,7 @@ class LocalStore(TrailStoreMixin):
             "records": written,
             "events": ev_written,
             "events_skipped_daemon_owned": ev_skipped,
+            "events_skipped_other_signal": ev_skipped_signal,
         }
 
     def materialize_otlp_sessions(

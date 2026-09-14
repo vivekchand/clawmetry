@@ -1,0 +1,13 @@
+# Build the self-hosted server from this source checkout instead of pulling
+# the published image. For development and for testing an unreleased change:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# A source build is not the signed artifact: it has no signature, no SBOM and
+# no provenance. Production deployments pull the digest pinned in
+# docker-compose.yml (see docs/self-hosting.md).
+services:
+  clawmetry:
+    build:
+      context: ../..
+    image: clawmetry-selfhosted:source

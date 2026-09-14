@@ -402,23 +402,29 @@ def redact_pii(text: str, categories: "dict[str, bool] | None" = None) -> str:
         return text
     cats = categories if categories is not None else pii_status()["categories"]
     try:
-        out = text
-        if cats.get("email"):
-            out = _EMAIL.sub("[email]", out)
-        if cats.get("iban"):
-            out = _sub_checked(_IBAN_CANDIDATE, iban_valid, "[iban]", out)
-        if cats.get("card"):
-            out = _sub_checked(_CARD_CANDIDATE, card_valid, "[card]", out)
-        if cats.get("phone"):
-            out = _sub_checked(_PHONE_CANDIDATE, phone_valid, "[phone]", out)
-        if cats.get("national_id"):
-            out = _SSN.sub("[national_id]", out)
-            out = _NINO.sub("[national_id]", out)
-            out = _sub_checked(_AADHAAR, aadhaar_valid, "[national_id]", out)
-            out = _sub_checked(_BSN, bsn_valid, "[national_id]", out)
-        return out
+        return _pii_core(text, cats)
     except Exception:
         return text
+
+
+def _pii_core(text: str, cats: "dict[str, bool]") -> str:
+    """The personal-data substitutions with no error handling, for callers
+    that must know when scrubbing failed (see :func:`scrub_payload`)."""
+    out = text
+    if cats.get("email"):
+        out = _EMAIL.sub("[email]", out)
+    if cats.get("iban"):
+        out = _sub_checked(_IBAN_CANDIDATE, iban_valid, "[iban]", out)
+    if cats.get("card"):
+        out = _sub_checked(_CARD_CANDIDATE, card_valid, "[card]", out)
+    if cats.get("phone"):
+        out = _sub_checked(_PHONE_CANDIDATE, phone_valid, "[phone]", out)
+    if cats.get("national_id"):
+        out = _SSN.sub("[national_id]", out)
+        out = _NINO.sub("[national_id]", out)
+        out = _sub_checked(_AADHAAR, aadhaar_valid, "[national_id]", out)
+        out = _sub_checked(_BSN, bsn_valid, "[national_id]", out)
+    return out
 
 
 def redact_text(text: str) -> str:
@@ -427,24 +433,46 @@ def redact_text(text: str) -> str:
     if _disabled() or not text or len(text) > _MAX_SCAN:
         return text
     try:
-        out = _PRIVATE_KEY.sub("[REDACTED:private-key]", text)
-        # Bearer before keyval so "Authorization: Bearer <tok>" redacts the
-        # token, not the scheme word.
-        out = _BEARER.sub(lambda m: "Bearer " + _fingerprint(m.group(1)), out)
-        out = _KEYVAL.sub(lambda m: m.group(1) + m.group(2) + _fingerprint(m.group(3)), out)
-        for pat in _TOKEN_PATTERNS:
-            out = pat.sub(lambda m: _fingerprint(m.group(0)), out)
-        # Personal-data tier, after secrets so a token that happens to look
-        # like an identifier is fingerprinted rather than typed.
-        if not _pii_tier_disabled():
-            out = redact_pii(out)
-        return out
+        return _scrub_text(text)
     except Exception:
         return text  # never lose data on a redaction bug
 
 
+def _scrub_text(text: str) -> str:
+    """Secret tier, then personal-data tier. No size cap and no error
+    handling: :func:`redact_text` returns the input when this fails (the event
+    path's "never lose data" rule) and :func:`scrub_payload` withholds it."""
+    out = _PRIVATE_KEY.sub("[REDACTED:private-key]", text)
+    # Bearer before keyval so "Authorization: Bearer <tok>" redacts the
+    # token, not the scheme word.
+    out = _BEARER.sub(lambda m: "Bearer " + _fingerprint(m.group(1)), out)
+    out = _KEYVAL.sub(lambda m: m.group(1) + m.group(2) + _fingerprint(m.group(3)), out)
+    for pat in _TOKEN_PATTERNS:
+        out = pat.sub(lambda m: _fingerprint(m.group(0)), out)
+    # Personal-data tier, after secrets so a token that happens to look
+    # like an identifier is fingerprinted rather than typed.
+    if not _pii_tier_disabled():
+        out = _pii_core(out, pii_status()["categories"])
+    return out
+
+
+# Nested OpenTelemetry identifiers (a span event's link, a trace-derived tool
+# event's provenance). A span id is 16 hex characters and can be all digits,
+# which a Luhn-valid run would otherwise mask as ``[card]`` and so erase the
+# join back to the trace. Passed through only under these exact names AND only
+# when the value is a bare 16- or 32-character hex id.
+_OTEL_ID_KEYS = frozenset({"trace_id", "span_id", "parent_span_id"})
+_OTEL_HEX_ID = re.compile(r"(?:[0-9a-fA-F]{16}|[0-9a-fA-F]{32})")
+
+
+def _is_otel_id(key: str, value: str) -> bool:
+    return key in _OTEL_ID_KEYS and bool(_OTEL_HEX_ID.fullmatch(value))
+
+
 def _redact_value(value: Any, key: str = "") -> Any:
     if isinstance(value, str):
+        if _is_otel_id(key, value):
+            return value
         if key and key.lower() not in _COUNT_KEYS and _SENSITIVE_KEY.match(key) and len(value) >= 6:
             return _fingerprint(value)
         return redact_text(value)
@@ -468,3 +496,128 @@ def redact_event(event: dict[str, Any]) -> dict[str, Any]:
         }
     except Exception:
         return event
+
+
+# ── Spans (OTLP traces) and other received payloads ─────────────────────────
+#
+# Span rows used to bypass everything above: the event chokepoint is
+# ``LocalStore.ingest``, and spans are written by ``ingest_spans_batch``, so a
+# prompt, a tool argument or an exception message received over /v1/traces
+# rested in DuckDB exactly as sent (REQ-OBS-OTG-001). The same two tiers apply
+# here, with one deliberate difference. The event path returns the ORIGINAL
+# text when scrubbing fails or the value is too large to scan ("never lose
+# data"). A span value that could not be scanned is WITHHELD instead, and the
+# row says so, because storing it unscanned while the posture reads "applied"
+# is a false claim of scrubbing.
+
+# Typed span columns that are identifiers, times, numbers or model/tool names.
+_SPAN_STRUCTURAL_KEYS = frozenset({
+    "span_id", "trace_id", "parent_span_id", "agent_type", "agent_id",
+    "node_id", "session_id", "service_name", "kind", "status_code",
+    "start_ts", "end_ts", "duration_ms", "duration_ns", "model", "tool_name",
+    "cost_usd", "token_count", "tokens_input", "tokens_output", "ts",
+    "created_at",
+})
+
+WITHHELD_TOO_LARGE = "[WITHHELD:too-large-to-scan]"
+WITHHELD_ERROR = "[WITHHELD:redaction-error]"
+REDACTION_MARKER_KEY = "clawmetry.redaction"
+
+
+def _leaf_key(key: Any) -> str:
+    """``http.request.header.authorization`` -> ``authorization``. OTel
+    attribute names are dotted; the sensitive-name rule is written for the
+    last segment."""
+    if not isinstance(key, str):
+        return ""
+    return key.rsplit(".", 1)[-1]
+
+
+def _scrub_strict(value: Any, key: str, withheld: list) -> Any:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        try:
+            value = bytes(value).decode("utf-8")
+        except Exception:
+            withheld.append("error")
+            return WITHHELD_ERROR
+    if isinstance(value, str):
+        if len(value) > _MAX_SCAN:
+            withheld.append("too_large")
+            return WITHHELD_TOO_LARGE
+        if _is_otel_id(key, value):
+            return value
+        leaf = _leaf_key(key)
+        try:
+            if (leaf and leaf.lower() not in _COUNT_KEYS
+                    and _SENSITIVE_KEY.match(leaf) and len(value) >= 6):
+                return _fingerprint(value)
+            return _scrub_text(value)
+        except Exception:
+            withheld.append("error")
+            return WITHHELD_ERROR
+    if isinstance(value, dict):
+        return {k: _scrub_strict(v, k if isinstance(k, str) else "", withheld)
+                for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        # An attribute array inherits its name: semconv sends
+        # ``http.request.header.authorization`` as a list of strings.
+        return [_scrub_strict(v, key, withheld) for v in value]
+    return value
+
+
+def scrub_payload(value: Any, key: str = "") -> "tuple[Any, list[str]]":
+    """Scrub one received payload (a span's attributes, a ledger row's
+    attributes, ...). Returns ``(scrubbed, withheld_reasons)``: an empty list
+    means every string in it was scanned. With ``CLAWMETRY_REDACT=0`` the
+    value comes back untouched, matching the event path. Never raises."""
+    if _disabled():
+        return value, []
+    withheld: list = []
+    try:
+        return _scrub_strict(value, key, withheld), sorted(set(withheld))
+    except Exception:
+        return WITHHELD_ERROR, ["error"]
+
+
+def mark_withheld(attributes: Any, reasons: "list[str]") -> Any:
+    """Stamp ``clawmetry.redaction: withheld:<reasons>`` on an attributes
+    value, whatever its shape. No reasons: returned unchanged."""
+    if not reasons:
+        return attributes
+    note = "withheld:" + ",".join(reasons)
+    if isinstance(attributes, dict):
+        out = dict(attributes)
+        out[REDACTION_MARKER_KEY] = note
+        return out
+    if attributes in (None, "", b""):
+        return {REDACTION_MARKER_KEY: note}
+    return {"_value": attributes, REDACTION_MARKER_KEY: note}
+
+
+def redact_span(span: dict[str, Any]) -> dict[str, Any]:
+    """A redacted copy of one span row dict (the ``LocalStore.ingest_span``
+    shape). Identifier, time and number columns pass through; ``name``,
+    ``status``, ``status_message``, ``input``, ``output``, ``attributes``,
+    ``events`` and ``links`` are scrubbed. A value that could not be scanned
+    is withheld and the span's attributes carry the marker. Never raises."""
+    if _disabled() or not isinstance(span, dict):
+        return span
+    reasons: set = set()
+    try:
+        out: dict[str, Any] = {}
+        for k, v in span.items():
+            if k in _SPAN_STRUCTURAL_KEYS:
+                out[k] = v
+                continue
+            scrubbed, why = scrub_payload(v)
+            out[k] = scrubbed
+            reasons.update(why)
+    except Exception:
+        out = {k: (v if k in _SPAN_STRUCTURAL_KEYS else WITHHELD_ERROR)
+               for k, v in span.items()}
+        reasons.add("error")
+    if reasons:
+        out["attributes"] = mark_withheld(
+            out.get("attributes") if out.get("attributes") != WITHHELD_ERROR else None,
+            sorted(reasons))
+    return out

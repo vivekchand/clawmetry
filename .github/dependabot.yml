@@ -81,6 +81,18 @@ updates:
     labels:
       - "dependencies"
 
+  # The published self-hosted server image (deploy/self-hosted/Dockerfile.release)
+  # pins the same base by digest, and a second pin with no updater would freeze
+  # the signed image at today's CVEs while the source build moved on.
+  - package-ecosystem: "docker"
+    directory: "/deploy/self-hosted"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
