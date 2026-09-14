@@ -86,6 +86,45 @@ def test_hosted_runtimes_offer_no_command():
         assert hint["note"], rt
 
 
+@pytest.mark.parametrize("sid", [
+    "copilot:vscode-10b2b0c1-4a5e-4c53-9d0b-6f2a7c1e9e11",
+    "vscode-10b2b0c1-4a5e-4c53-9d0b-6f2a7c1e9e11",
+])
+def test_copilot_vscode_conversation_never_gets_a_cli_command(sid):
+    """A Copilot Chat conversation inside VS Code shares the ``copilot``
+    runtime with the CLI, but ``copilot --session-id vscode-…`` cannot resume
+    it. The Guard tab renders any ``command`` hint as copyable code and drops
+    the row's control_reason, so this must be an ``app`` answer in words."""
+    hint = resume_hints.resume_hint("copilot", sid)
+    assert hint["kind"] != "command"
+    assert hint["kind"] == "app"
+    assert hint["command"] == ""
+    assert "VS Code" in hint["note"]
+    assert hint["session_id"].startswith("vscode-")
+
+
+def test_copilot_vscode_hint_holds_without_process_control(monkeypatch):
+    """Cloud instances can lack process_control; the fallback must agree."""
+    import builtins
+    real_import = builtins.__import__
+
+    def _no_pc(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "clawmetry" and fromlist and "process_control" in fromlist:
+            raise ImportError("process_control unavailable")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _no_pc)
+    hint = resume_hints.resume_hint("copilot", "copilot:vscode-abc")
+    assert hint["kind"] == "app"
+    assert hint["command"] == ""
+
+
+def test_copilot_cli_session_keeps_its_resume_command():
+    hint = resume_hints.resume_hint("copilot", "copilot:4f1d2c3b-aaaa-bbbb")
+    assert hint["kind"] == "command"
+    assert hint["command"] == "copilot --session-id 4f1d2c3b-aaaa-bbbb"
+
+
 def test_unverified_runtime_says_so_rather_than_guessing():
     hint = resume_hints.resume_hint("nemoclaw", "nemoclaw:1")
     assert hint["kind"] == "unknown"

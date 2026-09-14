@@ -197,6 +197,80 @@ def test_dashboard_update_thread_never_checks_pypi_when_private(monkeypatch, env
     assert update_check._check_for_update() is None
 
 
+@pytest.fixture(autouse=True)
+def _clean_narrator_coalesce(monkeypatch):
+    """``_coalesce_last`` is a module-level dict, not reset by the env
+    fixture above -- without this, a later narrator test/param sharing the
+    same (event_type, rule_id) key falls inside the 60s coalesce window and
+    silently short-circuits before ever reaching the outbound-call check,
+    passing for the wrong reason."""
+    from clawmetry import narrator
+
+    monkeypatch.setattr(narrator, "_coalesce_last", {})
+    yield
+
+
+@pytest.mark.parametrize("env", PRIVATE_ENVS)
+def test_narrator_never_calls_out_when_private(monkeypatch, env):
+    """The alert narrator is the one outbound call site the gate missed.
+
+    It fires whenever an alert fires and ANTHROPIC_API_KEY is set -- unlike
+    the evals/limit-probe paths, that condition is common, not opt-in -- so a
+    self-hosted/air-gapped deployment with a key in its environment still
+    posted the alert message and rule id to api.anthropic.com.
+    """
+    from clawmetry import narrator
+
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+
+    # narrate() deliberately never raises (its docstring guarantees it), so an
+    # AssertionError thrown from inside a monkeypatched urlopen would be
+    # swallowed by its own broad except -- record the call instead of relying
+    # on the exception to propagate.
+    reached = []
+
+    def _record(*a, **kw):  # pragma: no cover - must never run
+        reached.append(a)
+        raise RuntimeError("stop here — reaching the call is the assertion")
+
+    monkeypatch.setattr("urllib.request.urlopen", _record)
+    assert narrator.narrate("threshold", {"rule_id": "r1"}) is None
+    assert not reached, "narrator reached api.anthropic.com in a private deployment"
+
+
+def test_narrator_still_calls_out_on_a_managed_install(monkeypatch):
+    """The gate must suppress private installs only -- not disable narration."""
+    from clawmetry import narrator
+
+    for key in ALL_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key")
+    monkeypatch.setattr(endpoints, "_cfg_cache", None)
+    monkeypatch.setattr(endpoints, "CONFIG_PATH", "/nonexistent/clawmetry/config.json")
+
+    reached = []
+
+    def _record(*a, **kw):
+        reached.append(a)
+        raise RuntimeError("stop here — reaching the call is the assertion")
+
+    monkeypatch.setattr("urllib.request.urlopen", _record)
+    narrator.narrate("threshold", {"rule_id": "r1"})
+    assert reached, "a managed install must still be able to narrate alerts"
+
+
+def test_narrator_fails_closed_when_the_gate_raises(monkeypatch):
+    """If the suppression check itself raises, suppress rather than call out."""
+    from clawmetry import narrator
+
+    monkeypatch.setattr(
+        endpoints, "egress_suppressed", lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+    assert narrator._egress_suppressed() is True
+
+
 def test_dashboard_update_thread_still_checks_on_a_managed_install(monkeypatch):
     """The gate must suppress private installs only — not disable updates."""
     import routes.update_check as update_check

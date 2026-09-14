@@ -117,6 +117,20 @@ def _resolve_api_key() -> str | None:
     return os.environ.get("ANTHROPIC_API_KEY", "").strip() or None
 
 
+def _egress_suppressed() -> bool:
+    """True when this install must not call out to api.anthropic.com.
+
+    Fails closed: a self-hosted/air-gapped install that cannot even resolve
+    the gate must not narrate, same as the other suppression call sites in
+    this codebase (see clawmetry.endpoints.egress_suppressed docstring).
+    """
+    try:
+        from clawmetry import endpoints
+        return bool(endpoints.egress_suppressed())
+    except Exception:
+        return True
+
+
 def narrate(
     event_type: str,
     context: dict[str, Any],
@@ -129,6 +143,8 @@ def narrate(
     truthy and fall back to the original raw message otherwise.
     """
     if not is_enabled():
+        return None
+    if _egress_suppressed():
         return None
     try:
         if not _check_coalesce(event_type, context):

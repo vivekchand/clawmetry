@@ -36,6 +36,7 @@ import time
 from typing import Optional
 
 from clawmetry.detector_calibration import EGRESS_SETTLE_HOURS
+from clawmetry.framework_map import framework_tags as _framework_tags
 from clawmetry.detector_payload import _SEGMENT_SPLIT_RE, _program, _segment_write_hosts
 
 #: The incident kinds only a fleet-wide pass can produce. Re-exported through
@@ -232,6 +233,7 @@ def coordinated_action(fingerprints_by_session: dict, *,
                 },
                 "first_bad_step": None,
                 "participants": sessions,
+                "frameworks": _framework_tags("coordinated_action"),
             })
         out.sort(key=lambda inc: -inc["evidence"]["families"])
         return out

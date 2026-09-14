@@ -299,6 +299,16 @@ def runtime_control_support(runtime: str, session_id: str = "",
                 "state": "controllable",
                 "reason": "", "resolved_pid": pid, "platform": plat}
 
+    if rt == "copilot" and is_copilot_editor_session(session_id):
+        # Checked BEFORE the blanket SUPPORTED_RUNTIMES branch below: the CLI
+        # sessions of this runtime are signalable, its VS Code chat sessions
+        # are not, and answering per runtime would light four buttons on a
+        # conversation that lives inside the editor's own process.
+        return {"controllable": False, "runtime": rt, "actions": [],
+                "state": "unsupported",
+                "reason": COPILOT_EDITOR_SESSION_REASON,
+                "platform": plat}
+
     if rt == "claude_code" or rt in SUPPORTED_RUNTIMES:
         return {"controllable": True, "runtime": rt,
                 "actions": ["pause", "resume", "stop", "kill"],
@@ -440,6 +450,28 @@ UNVERIFIED_RUNTIMES = frozenset({"muse_code"})
 # would be a lie for half this runtime's sessions, which is why it is absent
 # from that set even though some of its sessions are killable.
 SPLIT_SUPPORT_RUNTIMES = frozenset({"cursor"})
+
+# GitHub Copilot is observed through two products under ONE runtime id: the
+# Copilot CLI (a real process per session, resolved from its per-process
+# logs) and Copilot Chat inside VS Code, which clawmetry-pro's copilot adapter
+# surfaces with a ``vscode-`` native session id. A VS Code chat session is a
+# conversation inside the editor's own extension host; there is no process
+# that belongs to it. Worse than inert: the argv+cwd fallback would match a
+# Copilot CLI running in the same folder and signal THAT session instead.
+# Such sessions are refused explicitly, before any resolver runs.
+COPILOT_EDITOR_SESSION_PREFIX = "vscode-"
+COPILOT_EDITOR_SESSION_REASON = (
+    "This GitHub Copilot conversation runs inside VS Code's own process, so "
+    "there is no separate process to pause or stop; only Copilot CLI "
+    "sessions can be signalled")
+
+
+def is_copilot_editor_session(session_id: str) -> bool:
+    """True for a Copilot Chat session that lives inside VS Code.
+
+    Accepts the store's ``copilot:``-namespaced id or the native id."""
+    native = native_session_id("copilot", str(session_id or "").strip())
+    return native.startswith(COPILOT_EDITOR_SESSION_PREFIX)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -2606,6 +2638,10 @@ def resolve_session(runtime: str, session_id: str = "",
     if runtime == "claude_code":
         return resolve_claude_code(session_id)
     if runtime == "copilot":
+        if is_copilot_editor_session(session_id):
+            return {"ok": False, "runtime": runtime, "unsupported": True,
+                    "reason": "copilot_editor_session_no_per_session_signal",
+                    "session_id": session_id}
         info = resolve_copilot(session_id)
         if info.get("ok") or not cwd:
             return info

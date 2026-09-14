@@ -484,6 +484,33 @@ def test_entitled_plan_respects_optout_and_never_disables(monkeypatch):
     S._sync_auto_update_with_plan("cloud_free"); assert state["auto_update"] is True
 
 
+def test_entitled_plan_respects_stored_optout(monkeypatch):
+    """Regression for #5955: a human's explicit POST opt-out
+    (``auto_update_user_set``, set by ``api_update_check_config_post``) must
+    survive the entitled-plan heartbeat, the same guard
+    ``_heal_stale_auto_update_flag`` already applies to its own re-enable.
+    Before the fix, ``_sync_auto_update_with_plan`` checked only
+    ``cfg.get("auto_update")`` and re-flipped it to True on every heartbeat
+    for ANY entitled tier -- so a stored opt-out was overwritten within one
+    cloud heartbeat of being set, with no env kill switch in play."""
+    import clawmetry.sync as S
+    import routes.update_check as uc
+    state = {"auto_update": False, "auto_update_user_set": True}
+    monkeypatch.setattr(uc, "_get_update_check_config", lambda: dict(state))
+    monkeypatch.setattr(uc, "_set_update_check_config", lambda upd: state.update(upd))
+    monkeypatch.delenv("CLAWMETRY_AUTO_UPDATE", raising=False)
+    # These tests simulate a USER machine; GitHub Actions exports CI=true,
+    # which now implicitly disables auto-update (ephemeral runners must
+    # never swap themselves for a newer wheel mid-job).
+    monkeypatch.delenv("CI", raising=False)
+    S._sync_auto_update_with_plan("pro", allow_provision=False)
+    assert state["auto_update"] is False, \
+        "a stored user opt-out must survive the entitled-plan heartbeat"
+    S._sync_auto_update_with_plan("cloud_pro", allow_provision=False)
+    assert state["auto_update"] is False, \
+        "the opt-out must survive repeated heartbeats, not just the first"
+
+
 def test_update_respawn_relaunch_env_forces_utf8(monkeypatch, tmp_path):
     """The relaunched process writes stdout to the log FILE, so without
     PYTHONIOENCODING the Windows locale codec (cp1252) kills the startup

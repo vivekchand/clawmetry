@@ -92,6 +92,8 @@ A decision::
       "is_final_step": bool,  # nothing escalates after this one
       "next_action": str,     # "" when this was the last rung
       "next_after_secs": int, # how long until the next rung becomes due
+      "frameworks":  dict,    # the triggering incident's framework references
+                              # (clawmetry/framework_map.py), {} if it had none
     }
 
 Safety invariants enforced here (the daemon adds two more — the enforce env
@@ -496,6 +498,10 @@ def evaluate(incidents: Iterable[Dict[str, Any]],
                 "is_final_step": is_final,
                 "next_action": "" if nxt is None else nxt["action"],
                 "next_after_secs": 0 if nxt is None else int(nxt["after_secs"]),
+                # What the decision acted on, in framework terms, so a
+                # reviewer reading the decision needs no second lookup.
+                "frameworks": dict(incident.get("frameworks"))
+                if isinstance(incident.get("frameworks"), dict) else {},
             }
 
             current = best_by_session.get(session_id)

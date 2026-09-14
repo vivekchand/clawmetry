@@ -123,6 +123,13 @@ jobs:
       - name: Module map matches the source tree
         run: python3 scripts/gen_module_map.py --check
 
+      # docs/FRAMEWORK_COVERAGE.md is the public OWASP LLM 2026 / OWASP
+      # Agentic 2026 / MITRE ATLAS coverage table for Guard findings. It is
+      # rendered from clawmetry/framework_map.py, because a coverage table that
+      # disagrees with the detectors is trusted and wrong (issue #5943).
+      - name: Framework coverage doc matches the mapping contract
+        run: python3 scripts/gen_framework_coverage.py --check
+
       # Acceptance-criteria traceability (FLYWHEEL.md 1g). Drift Bot asks "does
       # this diff contradict a Blueprint?"; it is a changed-code check and has
       # no opinion on whether untouched code still SATISFIES a criterion
@@ -433,6 +440,21 @@ jobs:
       - name: Desktop bootstrap resilience
         run: python3 -m pytest tests/test_desktop_bootstrap_resilience.py -q
 
+      # Auto-update plan sync (#5955): an entitled-plan heartbeat must never
+      # overwrite a human's explicit auto_update=false opt-out. Scoped to the
+      # entitled-plan-sync tests only -- most of tests/test_auto_update.py
+      # drives _maybe_auto_update, which bails out via
+      # _running_from_source_checkout() on any git checkout (this CI runner
+      # included) and was never wired into a job for that reason; those tests
+      # need their own fix, tracked separately.
+      - name: Auto-update respects a stored opt-out
+        run: |
+          python3 -m pytest \
+            tests/test_auto_update.py::test_entitled_plan_enables_auto_update \
+            tests/test_auto_update.py::test_entitled_plan_respects_optout_and_never_disables \
+            tests/test_auto_update.py::test_entitled_plan_respects_stored_optout \
+            -q
+
       # The conversion funnel's two blind spots, both silent by construction:
       # the onboarding gate's free-runtimes escape (markup + handler +
       # endpoint must agree or it is a dead link) and the paywall beacons
@@ -462,6 +484,16 @@ jobs:
 
       - name: Werkzeug debugger only on loopback bind
         run: python3 -m pytest tests/test_debugger_loopback_only.py -q
+
+      # A self-hosted/air-gapped install must make no discretionary outbound
+      # call (SECURITY.md's "your data never leaves your network" claim).
+      # This file existed, was green locally, and ran in NO job at all -- so
+      # the alert narrator shipped a live exception: it posted every alert's
+      # message and rule id to api.anthropic.com whenever ANTHROPIC_API_KEY
+      # was set, whatever SELF_HOSTED/CLAWMETRY_OFFLINE said (#5956). Named
+      # here because this job runs FILE LISTS.
+      - name: Discretionary egress is suppressed for private deployments
+        run: python3 -m pytest tests/test_egress_suppression.py -q
 
       # The Overview "Active Tasks" panel told four lies on one screen under
       # ?runtime=codex: a hardcoded personal-project pill said OpenClaw, no
@@ -836,6 +868,7 @@ jobs:
             tests/test_guard_escalation_ladder.py \
             tests/test_guard_policies_api_ladder.py \
             tests/test_guard_policy_enforcement.py \
+            tests/test_guard_framework_map.py \
             tests/test_waste_flags_free_default.py \
             tests/test_alert_rule_types_new.py \
             tests/test_regression_replay_optin.py \

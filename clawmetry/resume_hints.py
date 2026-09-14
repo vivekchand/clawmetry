@@ -257,6 +257,24 @@ def _native_session_id(runtime: str, session_id: str) -> str:
         return sid[len(head):] if rt and sid.startswith(head) else sid
 
 
+_COPILOT_EDITOR_NOTE = ("This is a Copilot Chat conversation inside VS Code, "
+                        "not a Copilot CLI session. Reopen it from the Copilot "
+                        "Chat history in VS Code.")
+
+
+def _is_copilot_editor_session(native_id: str) -> bool:
+    """Whether a native Copilot id belongs to a VS Code chat conversation.
+
+    Delegates to ``process_control.is_copilot_editor_session`` so the Guard
+    verdict and this hint read one predicate; falls back to the same prefix
+    check when process_control cannot be imported (cloud instances)."""
+    try:
+        from clawmetry import process_control as _pc
+        return bool(_pc.is_copilot_editor_session(native_id))
+    except Exception:  # noqa: BLE001 — never break a hint over an import
+        return str(native_id or "").strip().startswith("vscode-")
+
+
 def resume_hint(runtime: str, session_id: str = "",
                 extra: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """How to resume this session by hand: ``{kind, command, note, source}``.
@@ -285,6 +303,17 @@ def resume_hint(runtime: str, session_id: str = "",
                     "source": "runtime",
                     "session_id": native,
                 }
+
+    # A Copilot Chat conversation inside VS Code shares the ``copilot`` runtime
+    # with the Copilot CLI but is not a CLI session: ``copilot --session-id
+    # vscode-<uuid>`` does not resume it, and printing that line with a Copy
+    # button would also hide the Guard row's "why not controllable" sentence.
+    if rt == "copilot" and _is_copilot_editor_session(native):
+        return {"runtime": rt, "kind": "app", "command": "",
+                "note": _COPILOT_EDITOR_NOTE,
+                "source": "clawmetry-pro copilot adapter: VS Code chatSessions "
+                          "store (vscode- session id)",
+                "session_id": native}
 
     entry = _HINTS.get(rt)
     if not entry:

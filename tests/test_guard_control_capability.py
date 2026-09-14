@@ -264,3 +264,47 @@ def test_claude_session_map_memo_invalidates_when_a_session_appears(tmp_path,
     (sessions / "77.json").write_text(json.dumps(
         {"pid": 77, "sessionId": "fresh", "cwd": "/repo"}))
     assert "fresh" in pc.claude_code_session_map()
+
+
+# ── GitHub Copilot: CLI sessions vs Copilot Chat inside VS Code ───────────
+# clawmetry-pro's copilot adapter surfaces VS Code chat sessions under the
+# SAME runtime id as the Copilot CLI, with a ``vscode-`` native id. A VS Code
+# chat is a conversation inside the editor's own process: nothing to signal.
+# ``copilot`` is in SUPPORTED_RUNTIMES, so without a per-session check every
+# such row lit Pause/Stop/Kill, and the resolver's argv+cwd fallback would
+# have matched a Copilot CLI running in the same folder and signalled THAT
+# session instead.
+def test_copilot_vscode_chat_session_is_refused_with_a_readable_reason():
+    for sid in ("vscode-10b2b0c1-1141-47c7-9864-20118cb69600",
+                "copilot:vscode-10b2b0c1-1141-47c7-9864-20118cb69600"):
+        sup = pc.runtime_control_support("copilot", sid, "/repo")
+        assert sup["controllable"] is False and sup["actions"] == []
+        assert sup["state"] == "unsupported"
+        assert "inside VS Code" in sup["reason"]
+        assert "_no_per_session_signal" not in sup["reason"]
+
+
+def test_copilot_vscode_chat_session_never_reaches_the_cwd_fallback(monkeypatch):
+    """The dangerous half: a VS Code chat row must not be resolved by folder,
+    or Kill lands on whichever Copilot CLI shares that working directory."""
+    calls = []
+    monkeypatch.setattr(pc, "resolve_by_cwd",
+                        lambda rt, cwd: calls.append((rt, cwd)) or
+                        {"ok": True, "runtime": rt, "pid": 4242})
+    monkeypatch.setattr(pc, "resolve_copilot",
+                        lambda sid: calls.append(("copilot_logs", sid)) or
+                        {"ok": False, "runtime": "copilot",
+                         "reason": "session_not_in_copilot_logs"})
+    info = pc.resolve_session("copilot", "copilot:vscode-abc", "/repo")
+    assert info["ok"] is False and info.get("unsupported") is True
+    assert info["reason"] == "copilot_editor_session_no_per_session_signal"
+    assert calls == []
+
+
+def test_copilot_cli_sessions_keep_their_controls(monkeypatch):
+    sup = pc.runtime_control_support("copilot", "copilot:42ddf424-ddf9-46ed-8045-25ecb41cc42f")
+    assert sup["controllable"] is True
+    assert sup["actions"] == ["pause", "resume", "stop", "kill"]
+    # A CLI id that merely CONTAINS the marker is still a CLI id.
+    assert pc.is_copilot_editor_session("copilot:42ddf424-vscode-x") is False
+    assert pc.is_copilot_editor_session("") is False

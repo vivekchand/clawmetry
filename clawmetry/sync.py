@@ -1886,10 +1886,14 @@ def _sync_auto_update_with_plan(
     staleness rail). This is what makes "I'm on Pro, the node should just stay
     current" real without a manual ``pip install -U``.
 
-    Safety: respects an explicit opt-out (``CLAWMETRY_AUTO_UPDATE`` in
-    0/false/no/off), only ever ENABLES (never auto-disables, so a user's manual
-    choice survives a downgrade), and no-ops for free / inactive plans. Best
-    effort — never raises.
+    Safety: respects an explicit opt-out, either the env kill switch
+    (``CLAWMETRY_AUTO_UPDATE`` in 0/false/no/off) or a stored ``auto_update:
+    false`` a human actually POSTed (``auto_update_user_set``, set by
+    ``api_update_check_config_post``) -- otherwise every heartbeat on an
+    entitled plan would silently flip that choice back to True. Only ever
+    ENABLES (never auto-disables, so a user's manual choice survives a
+    downgrade), and no-ops for free / inactive plans. Best effort — never
+    raises.
 
     ``allow_provision=False`` keeps this side-effect-free over the network:
     the local auto-update flag is still reconciled, but the clawmetry-pro
@@ -1906,7 +1910,7 @@ def _sync_auto_update_with_plan(
             _set_update_check_config as _succ,
         )
         cfg = _gucc() or {}
-        if not cfg.get("auto_update"):
+        if not cfg.get("auto_update") and not cfg.get("auto_update_user_set"):
             _succ({"auto_update": True})
             log.info(
                 "auto-update enabled for entitled plan (%s) — this node will keep "
@@ -22364,6 +22368,8 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         # cooldown latch held or nothing is configured; the
                         # incident_alerts table has the last delivery time.
                         "delivered_via": delivered_via,
+                        # Framework references, as stamped when it was found.
+                        "frameworks": inc.get("frameworks"),
                     },
                 )
                 memo[memo_key] = now
@@ -22516,6 +22522,7 @@ def _emit_fleet_incidents(store, state: dict, fleet_fps: dict, now: float) -> li
                         "spend_at_risk_usd": None,
                         "spend_basis": "unknown",
                         "delivered_via": delivered_via,
+                        "frameworks": per.get("frameworks"),
                     },
                 )
                 memo[memo_key] = now

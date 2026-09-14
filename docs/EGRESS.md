@@ -223,7 +223,7 @@ opted in with `CLAWMETRY_ALLOW_REMOTE_PROMPTS=1` or
 |---|---|---|---|
 | `pypi.org` | version check; a newer release is pip-installed | every 60 s from the daemon (`CLAWMETRY_UPDATE_CHECK_SECS`). Not contacted by self-hosted, air-gapped or repointed installs | on; `CLAWMETRY_AUTO_UPDATE=0` stops installs, `CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS` adds a stability window. Every attempt is recorded locally |
 | `api.anthropic.com` / `api.openai.com` | transcript quality scoring with your own key: a redacted 8 KB head-and-tail excerpt per session | after a session ends | **off**; `CLAWMETRY_EVALS_ENABLED=1` or `"evals": true` in config |
-| `api.anthropic.com` | alert narration: the alert message and rule id | when an alert fires and `ANTHROPIC_API_KEY` is set | on; `CLAWMETRY_NARRATOR_ENABLED=0` |
+| `api.anthropic.com` | alert narration: the alert message and rule id | when an alert fires and `ANTHROPIC_API_KEY` is set. Not contacted by self-hosted, air-gapped or repointed installs | on; `CLAWMETRY_NARRATOR_ENABLED=0` |
 | `api.anthropic.com` with the Claude Code OAuth token | a one-token request to read rate-limit headers | every 5 min | **off**; `CLAWMETRY_CLAUDE_LIMIT_PROBE=1` |
 | `api.ipify.org` | public IP for one cosmetic startup banner line | dashboard start, managed cloud only | on; any suppression condition |
 

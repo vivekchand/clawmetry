@@ -102,7 +102,7 @@ moat-check:
 moat-check-drive:
 	@python3 scripts/accuracy_harness/keystone_e2e.py
 
-lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count lint-ac-coverage lint-module-map lint-ci-test-coverage
+lint: lint-py lint-py39 lint-js lint-daemon-allowlist lint-runtime-count lint-ac-coverage lint-module-map lint-framework-coverage lint-ci-test-coverage
 
 # Issue #1267: every `local_store_via_daemon("X")` / `_ls_call("X")` call
 # in routes/ must reference a method that's in the daemon's allowlist
@@ -140,6 +140,11 @@ lint-runtime-count:
 # Fix drift with: python3 scripts/gen_module_map.py
 lint-module-map:
 	@python3 scripts/gen_module_map.py --check
+
+# docs/FRAMEWORK_COVERAGE.md is rendered from clawmetry/framework_map.py.
+# Fix drift with: python3 scripts/gen_framework_coverage.py
+lint-framework-coverage:
+	@python3 scripts/gen_framework_coverage.py --check
 
 # CI test-file coverage ratchet (issue #5813). 82% of test files were in no
 # CI job. This guard stops the hole from growing: new tests must be wired
