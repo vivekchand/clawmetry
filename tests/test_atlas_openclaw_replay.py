@@ -6,8 +6,11 @@ hold both to the honesty rules in the requirement.
 
 Acceptance criteria (REQ-GOV-ATR, Software Factory 7616fb6b):
 
-* AC-GOV-ATR-001.1 -- ATLAS edition, revision, cases and every published step are pinned:
-  ``test_manifest_pins_the_atlas_edition_and_every_published_step``.
+* AC-GOV-ATR-001.1 -- ATLAS edition, revision, cases, every published step and the derived
+  mitigations are pinned, and the unpinned source report is named:
+  ``test_manifest_pins_the_atlas_edition_and_every_published_step``,
+  ``test_verify_atlas_checks_the_derived_mitigations``,
+  ``test_scorecard_states_its_limits_and_lists_gaps``.
 * AC-GOV-ATR-001.2 -- each scenario records runtime, tier, policy set and expectations:
   ``test_every_scenario_records_runtime_tier_policy_and_expectations``.
 * AC-GOV-ATR-002.1 -- stages scored separately with the kinds that fired and a timestamp,
@@ -84,6 +87,17 @@ def test_manifest_pins_the_atlas_edition_and_every_published_step():
             assert s["technique_name"] and s["tactic_name"]
             seen.append(s["step"])
         assert seen == sorted(seen) and len(set(seen)) == len(seen)
+        # Mitigations ATLAS publishes against the step techniques, derived and
+        # labelled as derived: never a technique outside this case's steps.
+        step_techs = {s["technique"] for s in case["steps"]}
+        mits = case["mitigations"]
+        assert mits, f"{case['id']} pins no mitigations"
+        assert [mt["id"] for mt in mits] == sorted({mt["id"] for mt in mits})
+        for mt in mits:
+            assert re.fullmatch(r"AML\.M\d{4}", mt["id"]), mt
+            assert mt["name"] and mt["techniques"], mt
+            assert set(mt["techniques"]) <= step_techs, (case["id"], mt)
+    assert m["atlas"]["mitigation_mapping"].startswith("derived")
 
     # Every published step is either replayed in exactly one stage or listed
     # as not replayed, with a reason. None is silently dropped.
@@ -97,6 +111,54 @@ def test_manifest_pins_the_atlas_edition_and_every_published_step():
             assert nr["reason"]
             accounted.extend(nr["steps"])
         assert sorted(accounted) == [s["step"] for s in case["steps"]], case["id"]
+
+
+def _atlas_data_matching(manifest):
+    """A minimal parsed ATLAS data file that agrees with every pin, so the
+    verifier can be exercised without PyYAML or MITRE's file."""
+    data = {"collection": {"version": manifest["atlas"]["edition"]},
+            "case-studies": {}, "techniques": {}, "tactics": {},
+            "mitigations": {}, "relationships": {}}
+    rels = data["relationships"]
+    for case in manifest["cases"]:
+        data["case-studies"][case["id"]] = {"name": case["name"],
+                                            "modified-date": case["modified_date"]}
+        rels[case["id"]] = {"employs": [
+            {"source": case["id"], "target": s["technique"], "tactic": s["tactic"],
+             "step-id": s["step"]} for s in case["steps"]]}
+        for s in case["steps"]:
+            data["techniques"][s["technique"]] = {"name": s["technique_name"]}
+            data["tactics"][s["tactic"]] = {"name": s["tactic_name"]}
+        for mt in case["mitigations"]:
+            data["mitigations"][mt["id"]] = {"name": mt["name"]}
+            edges = rels.setdefault(mt["id"], {"mitigates": []})["mitigates"]
+            for t in mt["techniques"]:
+                if not any(e["target"] == t for e in edges):
+                    edges.append({"source": mt["id"], "target": t})
+    return data
+
+
+def test_verify_atlas_checks_the_derived_mitigations():
+    m = replay.load_manifest()
+    good = _atlas_data_matching(m)
+    assert gen.verify_atlas_data(m, good) == []
+
+    # MITRE withdraws one mitigation edge: the pin no longer matches.
+    dropped = copy.deepcopy(good)
+    mid = m["cases"][0]["mitigations"][0]["id"]
+    dropped["relationships"][mid]["mitigates"] = []
+    assert any("mitigations differ" in p for p in gen.verify_atlas_data(m, dropped))
+
+    # MITRE publishes a new mitigation against a step technique we replay.
+    added = copy.deepcopy(good)
+    tech = m["cases"][0]["steps"][0]["technique"]
+    added["relationships"]["AML.M9999"] = {"mitigates": [{"source": "AML.M9999", "target": tech}]}
+    assert any("mitigations differ" in p for p in gen.verify_atlas_data(m, added))
+
+    # A mitigation is renamed.
+    renamed = copy.deepcopy(good)
+    renamed["mitigations"][mid]["name"] = "Something else"
+    assert any("mitigation name changed" in p for p in gen.verify_atlas_data(m, renamed))
 
 
 def test_every_scenario_records_runtime_tier_policy_and_expectations(report):
@@ -294,6 +356,15 @@ def test_scorecard_states_its_limits_and_lists_gaps(report):
         doc = f.read()
     assert "does not establish protection against CVE-2026-25253" in doc
     assert "does not establish protection against prompt injection in general" in doc
+    # What is NOT pinned is said, not left for a reader to assume: the source
+    # report revision, and that case to mitigation lists are derived.
+    assert "| Source report | **not pinned.**" in doc
+    assert "PR-26-00176-1" in doc
+    assert "**derived**, not published by MITRE for the case" in doc
+    assert "- **NX-5 The source report revision.**" in doc
+    for case in report["cases"]:
+        assert f"ATLAS mitigations published against this case's step techniques (derived, " \
+               f"{len(case['mitigations'])})" in doc
     gaps = report["residual_gaps"]
     assert gaps
     stage_names = set()

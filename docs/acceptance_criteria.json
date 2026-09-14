@@ -1114,7 +1114,7 @@
       "id": "AC-GOV-ATR-001.1",
       "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
       "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The system shall pin, for every replayed case study, the ATLAS edition and source revision, the case identifier and name, and each procedure step with the technique identifier published for it in that edition."
+      "text": "The system shall pin, for every replayed case study, the ATLAS edition and source revision, the case identifier and name, each procedure step with the technique identifier published for it in that edition, and the ATLAS mitigations published against those techniques (ATLAS links mitigations to techniques, not to case studies, so the case to mitigation mapping is derived and labelled as such). A source report whose revision cannot be retrieved shall be named in the scorecard as not pinned."
     },
     {
       "id": "AC-GOV-ATR-001.2",

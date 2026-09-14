@@ -2,15 +2,17 @@
   "_comment": [
     "Pinned source data for the ATLAS OpenClaw replay (vivekchand/clawmetry#5944).",
     "Every case and procedure step below is copied from the ATLAS data file named in 'atlas'.",
-    "Re-verify against a fresh copy: python3 scripts/gen_atlas_openclaw_scorecard.py --verify-atlas <ATLAS-2026.08.yaml>"
+    "Re-verify against a fresh copy: python3 scripts/gen_atlas_openclaw_scorecard.py --verify-atlas <ATLAS-2026.08.yaml>",
+    "Each case's 'mitigations' are DERIVED: ATLAS links a mitigation to a technique ('mitigates'), never to a case study, so a case lists every mitigation published against one of its step techniques (exact technique id match)."
   ],
-  "suite_version": "2026-09-14.1",
+  "suite_version": "2026-09-14.2",
   "atlas": {
     "edition": "2026.08",
     "repository": "https://github.com/mitre-atlas/atlas-data",
     "path": "dist/v6/ATLAS-2026.08.yaml",
     "git_blob": "dfd4e180fdca949eb26cb59555d9c346adcd6781",
-    "format_version": "6.0.0"
+    "format_version": "6.0.0",
+    "mitigation_mapping": "derived: mitigations published against the case's step techniques; ATLAS publishes no direct case to mitigation link"
   },
   "host_substitutions": {
     "_why": "Attacker hostnames from the disclosures are replaced with reserved .example names (RFC 2606) so a fixture never names a live attacker host. The lookalike shape is kept.",
@@ -101,6 +103,119 @@
           "technique_name": "External Harms: User Harm",
           "tactic": "AML.TA0011",
           "tactic_name": "Impact"
+        }
+      ],
+      "mitigations": [
+        {
+          "id": "AML.M0000",
+          "name": "Limit Public Release of Information",
+          "techniques": [
+            "AML.T0000"
+          ]
+        },
+        {
+          "id": "AML.M0005",
+          "name": "Control Access to AI Models and Data at Rest",
+          "techniques": [
+            "AML.T0025",
+            "AML.T0069.002"
+          ]
+        },
+        {
+          "id": "AML.M0019",
+          "name": "Control Access to AI Models and Data in Production",
+          "techniques": [
+            "AML.T0069.002"
+          ]
+        },
+        {
+          "id": "AML.M0020",
+          "name": "Generative AI Guardrails",
+          "techniques": [
+            "AML.T0053",
+            "AML.T0069.002"
+          ]
+        },
+        {
+          "id": "AML.M0021",
+          "name": "Generative AI Guidelines",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0022",
+          "name": "Generative AI Model Alignment",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0024",
+          "name": "AI Telemetry Logging",
+          "techniques": [
+            "AML.T0051.001",
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0026",
+          "name": "Privileged AI Agent Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0027",
+          "name": "Single-User AI Agent Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0028",
+          "name": "AI Agent Tools Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0029",
+          "name": "Human In-the-Loop for AI Agent Actions",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0030",
+          "name": "Restrict AI Agent Tool Invocation on Untrusted Data",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0032",
+          "name": "Segmentation of AI Agent Components",
+          "techniques": [
+            "AML.T0053",
+            "AML.T0098"
+          ]
+        },
+        {
+          "id": "AML.M0033",
+          "name": "Input and Output Validation for AI Agent Components",
+          "techniques": [
+            "AML.T0051.001",
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0035",
+          "name": "AI Red Team",
+          "techniques": [
+            "AML.T0051.001",
+            "AML.T0053"
+          ]
         }
       ]
     },
@@ -199,6 +314,117 @@
           "tactic": "AML.TA0011",
           "tactic_name": "Impact"
         }
+      ],
+      "mitigations": [
+        {
+          "id": "AML.M0011",
+          "name": "Restrict Library Loading",
+          "techniques": [
+            "AML.T0074"
+          ]
+        },
+        {
+          "id": "AML.M0016",
+          "name": "Vulnerability Scanning",
+          "techniques": [
+            "AML.T0115.002"
+          ]
+        },
+        {
+          "id": "AML.M0020",
+          "name": "Generative AI Guardrails",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0021",
+          "name": "Generative AI Guidelines",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0022",
+          "name": "Generative AI Model Alignment",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0024",
+          "name": "AI Telemetry Logging",
+          "techniques": [
+            "AML.T0051.001",
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0025",
+          "name": "Maintain AI Dataset Provenance",
+          "techniques": [
+            "AML.T0074"
+          ]
+        },
+        {
+          "id": "AML.M0026",
+          "name": "Privileged AI Agent Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0027",
+          "name": "Single-User AI Agent Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0028",
+          "name": "AI Agent Tools Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0029",
+          "name": "Human In-the-Loop for AI Agent Actions",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0030",
+          "name": "Restrict AI Agent Tool Invocation on Untrusted Data",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0032",
+          "name": "Segmentation of AI Agent Components",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0033",
+          "name": "Input and Output Validation for AI Agent Components",
+          "techniques": [
+            "AML.T0051.001",
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0035",
+          "name": "AI Red Team",
+          "techniques": [
+            "AML.T0010.005",
+            "AML.T0051.001",
+            "AML.T0053"
+          ]
+        }
       ]
     },
     {
@@ -276,6 +502,44 @@
           "technique_name": "Command and Scripting Interpreter",
           "tactic": "AML.TA0005",
           "tactic_name": "Execution"
+        }
+      ],
+      "mitigations": [
+        {
+          "id": "AML.M0005",
+          "name": "Control Access to AI Models and Data at Rest",
+          "techniques": [
+            "AML.T0012"
+          ]
+        },
+        {
+          "id": "AML.M0011",
+          "name": "Restrict Library Loading",
+          "techniques": [
+            "AML.T0050"
+          ]
+        },
+        {
+          "id": "AML.M0016",
+          "name": "Vulnerability Scanning",
+          "techniques": [
+            "AML.T0106",
+            "AML.T0107"
+          ]
+        },
+        {
+          "id": "AML.M0019",
+          "name": "Control Access to AI Models and Data in Production",
+          "techniques": [
+            "AML.T0012"
+          ]
+        },
+        {
+          "id": "AML.M0035",
+          "name": "AI Red Team",
+          "techniques": [
+            "AML.T0081"
+          ]
         }
       ]
     },
@@ -416,6 +680,138 @@
           "tactic": "AML.TA0011",
           "tactic_name": "Impact"
         }
+      ],
+      "mitigations": [
+        {
+          "id": "AML.M0005",
+          "name": "Control Access to AI Models and Data at Rest",
+          "techniques": [
+            "AML.T0069.000",
+            "AML.T0069.001"
+          ]
+        },
+        {
+          "id": "AML.M0011",
+          "name": "Restrict Library Loading",
+          "techniques": [
+            "AML.T0074"
+          ]
+        },
+        {
+          "id": "AML.M0019",
+          "name": "Control Access to AI Models and Data in Production",
+          "techniques": [
+            "AML.T0069.000"
+          ]
+        },
+        {
+          "id": "AML.M0020",
+          "name": "Generative AI Guardrails",
+          "techniques": [
+            "AML.T0053",
+            "AML.T0054",
+            "AML.T0069.000",
+            "AML.T0069.001",
+            "AML.T0078",
+            "AML.T0108",
+            "AML.T0112.000"
+          ]
+        },
+        {
+          "id": "AML.M0021",
+          "name": "Generative AI Guidelines",
+          "techniques": [
+            "AML.T0053",
+            "AML.T0054"
+          ]
+        },
+        {
+          "id": "AML.M0022",
+          "name": "Generative AI Model Alignment",
+          "techniques": [
+            "AML.T0053",
+            "AML.T0054"
+          ]
+        },
+        {
+          "id": "AML.M0024",
+          "name": "AI Telemetry Logging",
+          "techniques": [
+            "AML.T0051.000",
+            "AML.T0051.001",
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0025",
+          "name": "Maintain AI Dataset Provenance",
+          "techniques": [
+            "AML.T0074"
+          ]
+        },
+        {
+          "id": "AML.M0026",
+          "name": "Privileged AI Agent Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0027",
+          "name": "Single-User AI Agent Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0028",
+          "name": "AI Agent Tools Permissions Configuration",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0029",
+          "name": "Human In-the-Loop for AI Agent Actions",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0030",
+          "name": "Restrict AI Agent Tool Invocation on Untrusted Data",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0032",
+          "name": "Segmentation of AI Agent Components",
+          "techniques": [
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0033",
+          "name": "Input and Output Validation for AI Agent Components",
+          "techniques": [
+            "AML.T0051.000",
+            "AML.T0051.001",
+            "AML.T0053"
+          ]
+        },
+        {
+          "id": "AML.M0035",
+          "name": "AI Red Team",
+          "techniques": [
+            "AML.T0051.000",
+            "AML.T0051.001",
+            "AML.T0053",
+            "AML.T0054",
+            "AML.T0080.001",
+            "AML.T0081"
+          ]
+        }
       ]
     }
   ],
@@ -473,6 +869,11 @@
       "id": "NX-4",
       "title": "The isolated execution tier",
       "text": "A disposable OpenClaw lab, a harmless canary secret, a real gateway or hook receipt, and an independently observed side effect. Not run. No stage in this scorecard is held before action, and none can be until that tier exists."
+    },
+    {
+      "id": "NX-5",
+      "title": "The source report revision",
+      "text": "Issue #5944 names MITRE's OpenClaw investigation report PR-26-00176-1. It is not in the ATLAS data file and was not retrieved, so its revision is not pinned and nothing here is checked against it. What is pinned and checked is the ATLAS data file: every case, procedure step, technique and tactic, and the mitigations ATLAS publishes against those techniques. The check against MITRE's file (--verify-atlas) needs that file locally and is run by hand, not in CI; CI checks the committed pins against the replay and this document."
     }
   ],
   "residual_gaps": [

@@ -107,6 +107,12 @@ def render(report: dict) -> str:
     w("|---|---|")
     w(f"| ATLAS edition | {atlas['edition']} |")
     w(f"| ATLAS source | `{atlas['path']}` in {atlas['repository']}, git blob `{atlas['git_blob']}` |")
+    w("| ATLAS mappings pinned | case study, every procedure step with its technique and tactic, and the "
+      "mitigations ATLAS publishes against those techniques. ATLAS links mitigations to techniques, not to "
+      "case studies, so each case's mitigation list is **derived**, not published by MITRE for the case |")
+    w("| Source report | **not pinned.** MITRE's OpenClaw investigation report PR-26-00176-1 (named in the "
+      "tracking issue) is not in the ATLAS data file and was not retrieved, so nothing here is checked "
+      "against it (NX-5) |")
     w(f"| Scenario suite | `{report['suite_version']}` |")
     w(f"| Policy set | `{report['policy_set']}` |")
     w("| Runtimes | " + ", ".join(sorted({s['runtime'] for s in scenarios})) + " |")
@@ -198,6 +204,11 @@ def render(report: dict) -> str:
         for nr in raw.get("not_replayed") or []:
             w(f"- **{', '.join(nr['steps'])}** (not replayed): {nr['reason']}")
         w("")
+        mits = c.get("mitigations") or []
+        w(f"ATLAS mitigations published against this case's step techniques (derived, {len(mits)}): " +
+          ("; ".join(f"`{mt['id']}` {_cell(mt['name'])} ({', '.join(mt['techniques'])})" for mt in mits)
+           if mits else "none") + ". A listed mitigation is MITRE's guidance, not a ClawMetry control.")
+        w("")
 
     w("## Benign controls")
     w("")
@@ -256,6 +267,10 @@ def render(report: dict) -> str:
     w("python3 scripts/gen_atlas_openclaw_scorecard.py --verify-atlas ATLAS-2026.08.yaml")
     w("```")
     w("")
+    w("CI runs the first three. `--verify-atlas` needs MITRE's data file on disk and needs PyYAML, so it "
+      "is run by hand when the pins change; it checks every pinned case, step, technique, tactic and "
+      "derived mitigation against that file.")
+    w("")
     return "\n".join(L)
 
 
@@ -265,6 +280,12 @@ def verify_atlas(manifest: dict, yaml_path: str) -> list:
     import yaml  # optional: only this local check needs it
     with open(yaml_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
+    return verify_atlas_data(manifest, data)
+
+
+def verify_atlas_data(manifest: dict, data: dict) -> list:
+    """The comparison itself, over an already-parsed ATLAS data file, so it
+    is testable without PyYAML or MITRE's file."""
     problems = []
     edition = str((data.get("collection") or {}).get("version") or "")
     if edition != manifest["atlas"]["edition"]:
@@ -275,10 +296,14 @@ def verify_atlas(manifest: dict, yaml_path: str) -> list:
     rels = data.get("relationships") or {}
     rel_items = rels.values() if isinstance(rels, dict) else rels
     published = {}
+    mitigated_by = {}
     for r in rel_items:
         for e in (r or {}).get("employs") or []:
             published.setdefault(e.get("source"), {})[e.get("step-id")] = (
                 e.get("target"), e.get("tactic"))
+        for e in (r or {}).get("mitigates") or []:
+            mitigated_by.setdefault(e.get("target"), set()).add(e.get("source"))
+    mitigations = data.get("mitigations") or {}
     for case in manifest["cases"]:
         src = cs_all.get(case["id"])
         if not src:
@@ -298,6 +323,19 @@ def verify_atlas(manifest: dict, yaml_path: str) -> list:
                 problems.append(f"{case['id']} {s['step']}: technique name changed")
             if (tactics.get(s["tactic"]) or {}).get("name") != s["tactic_name"]:
                 problems.append(f"{case['id']} {s['step']}: tactic name changed")
+        # Mitigations: ATLAS links them to techniques, so the case's list is
+        # derived from its step techniques and must match exactly.
+        derived = {}
+        for s in case["steps"]:
+            for mid in mitigated_by.get(s["technique"], ()):
+                derived.setdefault(mid, set()).add(s["technique"])
+        pinned = {mt["id"]: set(mt["techniques"]) for mt in case.get("mitigations") or []}
+        if pinned != derived:
+            problems.append(f"{case['id']} mitigations differ: pinned {sorted(pinned)} "
+                            f"!= derived {sorted(derived)} (or their techniques differ)")
+        for mt in case.get("mitigations") or []:
+            if (mitigations.get(mt["id"]) or {}).get("name") != mt["name"]:
+                problems.append(f"{case['id']} {mt['id']}: mitigation name changed")
     return problems
 
 
@@ -315,7 +353,7 @@ def main() -> int:
             print(f"MISMATCH {p}")
         if problems:
             return 1
-        print("every pinned case and procedure step matches the ATLAS data file")
+        print("every pinned case, procedure step and derived mitigation matches the ATLAS data file")
         return 0
 
     report = replay.replay_all()

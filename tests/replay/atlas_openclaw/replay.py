@@ -444,7 +444,10 @@ def evidence_bundle(report: dict, generated_at: str = "") -> dict:
         "suite_version": report["suite_version"],
         "atlas": report["atlas"],
         "policy_set": report["policy_set"],
-        "product": {"package": "clawmetry", "version_in_tree": version},
+        "product": {"package": "clawmetry", "version_in_tree": version,
+                    "version_note": "__version__ string in dashboard.py at this commit; main "
+                                    "lags the released PyPI version by design, so this is not "
+                                    "a release number"},
         "environment": {"python": platform.python_version(),
                         "os": platform.system()},
         "file_digests": dict(sorted(files.items())),
