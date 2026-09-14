@@ -43,7 +43,7 @@ _BADGED = ("cmProv.figure", "cmProv.money", "cmProv.score", "cmProv.badge",
 # are not figures. Over-counting is the safe direction for a ratchet, and
 # ``test_the_ceiling_is_not_padded`` keeps the slack from growing into room
 # for a real one to hide in.
-UNBADGED_CEILING = 63
+UNBADGED_CEILING = 62
 
 # A badged figure's legacy fallback branch usually lands a line or two below
 # the shared call. Count the render as covered when the shared component
