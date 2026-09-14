@@ -718,7 +718,8 @@ def annotate_scanner_runs(scanner_sarif: Iterable[dict], bundle: dict,
                 if not path or path not in linked:
                     continue
                 props = _link_props(path, bundle)
-                res.setdefault("properties", {})["clawmetry"] = props
+                # SARIF result property bag, not any config file.
+                res.setdefault("properties", {}).update({"clawmetry": props})
                 sessions = ", ".join(
                     f"{p['session_id']} ({p['runtime']}, {'+'.join(p['basis'])})" for p in props)
                 msg = res.setdefault("message", {})

@@ -91,8 +91,8 @@ def _from_bundle(args, repo, commits, changed, base_sha, head_sha):
         max_age_hours=args.max_evidence_age_hours, ignored_shas=ignored)
     evidence["source"] = "bundle"
     # Invalid evidence contributes nothing: its links cannot be trusted.
-    trusted = raw if evidence["status"] != pp.EVIDENCE_INVALID else {}
-    view = dict(trusted or {})
+    accepted = raw if evidence["status"] != pp.EVIDENCE_INVALID else {}
+    view = dict(accepted or {})
     view["links"] = {p: list((view.get("links") or {}).get(p) or []) for p in changed}
     view.setdefault("sessions", [])
     view.setdefault("base_sha", base_sha)
