@@ -1,0 +1,188 @@
+name: ClawMetry agent provenance
+description: >-
+  Link a pull request's changed files to the AI agent sessions that wrote
+  them, as SARIF annotations and one pull-request comment, with an opt-in gate.
+  Not a code scanner: it annotates the findings your scanners already produce.
+author: ClawMetry
+branding:
+  icon: git-pull-request
+  color: orange
+
+inputs:
+  bundle:
+    description: >-
+      Path (relative to working-directory) of the provenance bundle exported on
+      the developer's machine with `clawmetry trace report --export-bundle`.
+      Leave empty only on a self-hosted runner that has the ClawMetry local store.
+    required: false
+    default: ""
+  base:
+    description: Base commit. Defaults to the pull request's base SHA.
+    required: false
+    default: ""
+  head:
+    description: Head commit. Defaults to the pull request's head SHA, else HEAD.
+    required: false
+    default: ""
+  scanner-sarif:
+    description: Newline-separated SARIF files from existing scanners to annotate.
+    required: false
+    default: ""
+  fail-on:
+    description: "Enable the gate at this severity: warning or critical. Empty means report only."
+    required: false
+    default: ""
+  on-missing-evidence:
+    description: "Required when fail-on is set: fail or pass for missing, stale or invalid evidence."
+    required: false
+    default: ""
+  max-evidence-age-hours:
+    description: Treat a bundle older than this as stale. Empty means no age limit.
+    required: false
+    default: ""
+  exceptions:
+    description: JSON file of approved exceptions (id, rule, expires, approved_by, reason).
+    required: false
+    default: ""
+  sarif-file:
+    description: Where to write the SARIF, relative to working-directory.
+    required: false
+    default: clawmetry-provenance.sarif
+  upload-sarif:
+    description: Upload the SARIF to GitHub code scanning (needs security-events write).
+    required: false
+    default: "true"
+  sarif-category:
+    description: Code-scanning category for the upload.
+    required: false
+    default: clawmetry-provenance
+  comment:
+    description: Post or update one pull-request comment (needs pull-requests write).
+    required: false
+    default: "true"
+  clawmetry-version:
+    description: pip requirement for clawmetry, for example "clawmetry==0.12.900". Empty installs the latest release.
+    required: false
+    default: ""
+  install-from:
+    description: Install clawmetry from this local path instead of PyPI.
+    required: false
+    default: ""
+  python-version:
+    description: Python used to run clawmetry.
+    required: false
+    default: "3.11"
+  working-directory:
+    description: The repository checkout to report on.
+    required: false
+    default: "."
+  github-token:
+    description: Token for the pull-request comment.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  exit-code:
+    description: "0 report written and gate passed or off, 1 gate failed, 2 configuration error."
+    value: ${{ steps.report.outputs.exit-code }}
+  sarif-file:
+    description: Absolute path of the SARIF written.
+    value: ${{ steps.report.outputs.sarif-file }}
+  report-json:
+    description: Absolute path of the JSON report (evidence status and the gate decision).
+    value: ${{ steps.report.outputs.report-json }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install clawmetry
+      shell: bash
+      env:
+        CM_VERSION: ${{ inputs.clawmetry-version }}
+        CM_FROM: ${{ inputs.install-from }}
+      run: |
+        set -euo pipefail
+        if [ -n "$CM_FROM" ]; then
+          python -m pip install --quiet "$CM_FROM"
+        elif [ -n "$CM_VERSION" ]; then
+          python -m pip install --quiet "$CM_VERSION"
+        else
+          python -m pip install --quiet clawmetry
+        fi
+
+    - name: Report agent provenance
+      id: report
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        IN_BUNDLE: ${{ inputs.bundle }}
+        IN_BASE: ${{ inputs.base }}
+        IN_HEAD: ${{ inputs.head }}
+        IN_SCANNERS: ${{ inputs.scanner-sarif }}
+        IN_FAIL_ON: ${{ inputs.fail-on }}
+        IN_ON_MISSING: ${{ inputs.on-missing-evidence }}
+        IN_MAX_AGE: ${{ inputs.max-evidence-age-hours }}
+        IN_EXCEPTIONS: ${{ inputs.exceptions }}
+        IN_SARIF: ${{ inputs.sarif-file }}
+        IN_COMMENT: ${{ inputs.comment }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -uo pipefail
+        if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+          echo "::warning::shallow checkout: use actions/checkout with fetch-depth: 0 so the base commit and every commit in the change are present"
+        fi
+        sarif="$(pwd)/$IN_SARIF"
+        report_json="${RUNNER_TEMP}/clawmetry-provenance.json"
+        args=(trace report --sarif-out "$sarif" --json-out "$report_json"
+              --markdown-out "${RUNNER_TEMP}/clawmetry-provenance.md")
+        base="${IN_BASE:-${PR_BASE:-}}"
+        head="${IN_HEAD:-${PR_HEAD:-HEAD}}"
+        if [ -n "$base" ]; then args+=(--base "$base"); fi
+        args+=(--head "$head")
+        if [ -n "$IN_BUNDLE" ]; then args+=(--bundle "$IN_BUNDLE"); fi
+        while IFS= read -r f; do
+          if [ -n "$f" ]; then args+=(--scanner-sarif "$f"); fi
+        done <<< "$IN_SCANNERS"
+        if [ -n "$IN_FAIL_ON" ]; then args+=(--fail-on "$IN_FAIL_ON"); fi
+        if [ -n "$IN_ON_MISSING" ]; then args+=(--on-missing-evidence "$IN_ON_MISSING"); fi
+        if [ -n "$IN_MAX_AGE" ]; then args+=(--max-evidence-age-hours "$IN_MAX_AGE"); fi
+        if [ -n "$IN_EXCEPTIONS" ]; then args+=(--exceptions "$IN_EXCEPTIONS"); fi
+        if [ "$IN_COMMENT" = "true" ] && [ -n "${PR_NUMBER:-}" ]; then
+          args+=(--comment-pr "$PR_NUMBER")
+        fi
+        clawmetry "${args[@]}"
+        code=$?
+        {
+          echo "exit-code=$code"
+          echo "sarif-file=$sarif"
+          echo "report-json=$report_json"
+        } >> "$GITHUB_OUTPUT"
+        if [ -f "${RUNNER_TEMP}/clawmetry-provenance.md" ]; then
+          cat "${RUNNER_TEMP}/clawmetry-provenance.md" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Upload SARIF to code scanning
+      if: always() && inputs.upload-sarif == 'true' && steps.report.outputs.exit-code != '2'
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+      with:
+        sarif_file: ${{ steps.report.outputs.sarif-file }}
+        category: ${{ inputs.sarif-category }}
+
+    - name: Apply the gate result
+      if: always()
+      shell: bash
+      env:
+        CODE: ${{ steps.report.outputs.exit-code }}
+      run: |
+        case "${CODE:-2}" in
+          0) exit 0 ;;
+          1) echo "::error::ClawMetry provenance gate failed; see the job summary for the decision"; exit 1 ;;
+          *) echo "::error::ClawMetry provenance report could not run (configuration error)"; exit 2 ;;
+        esac

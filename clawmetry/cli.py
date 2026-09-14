@@ -5027,6 +5027,12 @@ def trace_main(argv) -> int:
     if sub == "capture":
         return _trace_capture(rest)
 
+    if sub == "report":
+        # Agent-session provenance for a change, as SARIF + markdown with an
+        # opt-in gate. Lives in its own short module (REQ-OBS-PRP-001).
+        from clawmetry.pr_provenance_cli import report_main
+        return report_main(rest)
+
     if sub == "autopublish":
         # Driven by the pre-push hook. ALWAYS exits 0: an observability tool
         # must never be the reason a push fails.
@@ -5115,7 +5121,7 @@ def trace_main(argv) -> int:
 
     if sub in ("status", "--help", "-h", "help"):
         if sub in ("--help", "-h", "help"):
-            print("usage: clawmetry trace [init|status|uninstall|stamp <file>|\n                    capture --range A..B [--pr N] [--out DIR]] [--repo PATH]")
+            print("usage: clawmetry trace [init|status|uninstall|stamp <file>|\n                    capture --range A..B [--pr N] [--out DIR]|\n                    report [--base SHA] [--head SHA] [--bundle FILE] [--sarif-out FILE] ...] [--repo PATH]\n       clawmetry trace report --help   (agent-session provenance as SARIF, opt-in gate)")
             return 0
         st = trace_stamp.status(repo)
         print(f"hook installed : {'yes' if st['hook_installed'] else 'no'}")

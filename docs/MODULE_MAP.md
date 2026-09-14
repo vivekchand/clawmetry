@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-253 modules, 82 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+255 modules, 82 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -224,6 +224,8 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/otlp_json.py` | medium | stdlib OTLP/JSON decoder (issue #4781). |
 | `clawmetry/outcome_classifier.py` | large | Auto-label every session with an outcome. |
 | `clawmetry/policy_engine.py` | medium | Guard policies — turn a detector incident into an enforcement decision. |
+| `clawmetry/pr_provenance.py` | large | Pull-request provenance: which agent sessions wrote which changed files. |
+| `clawmetry/pr_provenance_cli.py` | medium | ``clawmetry trace report``: agent-session provenance for a change. |
 | `clawmetry/process_control.py` | large | host-side process control for runaway agents. |
 | `clawmetry/provenance.py` | medium | Every number says how it was obtained. |
 | `clawmetry/providers_pricing.py` | medium | ClawMetry provider detection and pricing table. |

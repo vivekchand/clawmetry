@@ -1157,6 +1157,72 @@
       "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
       "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
       "text": "The coverage document shall describe coverage and not compliance, and shall list the framework items Guard does not cover as gaps."
+    },
+    {
+      "id": "AC-OBS-PRP-001.1",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When a report is requested for a commit range, the system shall link each changed file to the sessions that wrote it, recording for each link its basis (a commit trailer naming the session, or a write tool call on that path recorded by the session), and shall list changed files with no link as unattributed rather than omitting them."
+    },
+    {
+      "id": "AC-OBS-PRP-001.2",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall present a file-to-session link as association and not as proof that the session caused a finding on that file; every link and every annotated finding shall carry its basis."
+    },
+    {
+      "id": "AC-OBS-PRP-001.3",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall emit the report as SARIF 2.1.0 in which each Guard finding raised by a linked session is a result on each file that session is linked to, with its level mapped from the finding's severity (critical to error, warning to warning, anything else to note)."
+    },
+    {
+      "id": "AC-OBS-PRP-001.4",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When scanner SARIF is supplied, the system shall reproduce its findings and annotate each finding located on a linked file with the session identifier, runtime, model and link basis, and shall leave findings on unlinked files unannotated. The system shall produce no finding of its own about code content."
+    },
+    {
+      "id": "AC-OBS-PRP-001.5",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The SARIF, the markdown summary and the console output shall contain no prompt text, no tool output and no credential-shaped value; text copied from supplied scanner findings shall pass through secret redaction."
+    },
+    {
+      "id": "AC-OBS-PRP-001.6",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall produce the report from an exported provenance bundle with no local store and no network access, as well as from the local store."
+    },
+    {
+      "id": "AC-OBS-PRP-001.7",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "An exported bundle shall record the commits it covers and a content digest. When the digest does not match the content, or the bundle covers no commit in the evaluated range, the system shall treat the bundle as invalid evidence; when commits in the range are not covered, the system shall report them as missing evidence. The system shall state that the digest is an integrity check and not proof of authenticity."
+    },
+    {
+      "id": "AC-OBS-PRP-001.8",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The gate shall be off unless explicitly enabled, and while off the report shall exit successfully whatever it finds. Enabling the gate shall require a threshold and an explicit choice of behaviour for missing, stale or invalid evidence; the system shall refuse to evaluate a gate enabled without that choice."
+    },
+    {
+      "id": "AC-OBS-PRP-001.9",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When the gate is enabled, a finding at or above the threshold on a linked file shall fail the run unless an unexpired exception names it; an expired exception shall not apply and shall be reported as expired."
+    },
+    {
+      "id": "AC-OBS-PRP-001.10",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "Every gate evaluation shall record its outcome, rule version, threshold, evidence behaviour, actor, time, evaluated head commit and the exceptions it applied."
+    },
+    {
+      "id": "AC-OBS-PRP-001.11",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When the report is posted to a pull request, the system shall maintain a single comment identified by a marker, updating it on later runs rather than adding another."
     }
   ]
 }
