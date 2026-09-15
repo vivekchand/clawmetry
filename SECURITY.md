@@ -163,14 +163,19 @@ answer is worse than a missing one.
 | SOC 2 Type II | Not started |
 | ISO 27001 / ISO 42001 | Not started |
 | Independent penetration test | Not yet commissioned |
-| DPA / sub-processor list | Available on request; not yet published |
+| Sub-processor list | **Available** — [clawmetry.com/subprocessors](https://clawmetry.com/subprocessors) |
+| DPA | In progress — first draft complete, legal review next, then offered for signature; see [clawmetry.com/dpa](https://clawmetry.com/dpa) |
 | GDPR EU representative / lead supervisory authority | Being determined |
-| SSO / SAML / SCIM | Not implemented |
+| SSO (SAML / OIDC) | In progress — managed cloud only, brokered by WorkOS (listed on [clawmetry.com/subprocessors](https://clawmetry.com/subprocessors)); not yet verified against a live identity provider; customer-hosted has no SSO |
+| SCIM | Not implemented |
 
 ClawMetry is published by **Instalabs LLC**, a Wyoming, United States entity.
 Self-hosted and air-gapped deployments avoid the data-protection question
 entirely, because no personal data reaches us at all — see
 [docs/EGRESS.md](docs/EGRESS.md).
+
+The same status, with the legal entity and contacts, is published at
+[clawmetry.com/compliance](https://clawmetry.com/compliance).
 
 If you need one of the missing items to evaluate ClawMetry, say so at
 security@clawmetry.com — that demand is how this list gets reordered.

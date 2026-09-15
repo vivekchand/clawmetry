@@ -325,7 +325,7 @@ def _try_local_store_flow_events(limit=200, since=None):
     return events
 
 
-def _try_local_store_cost_optimizer():
+def _try_local_store_cost_optimizer(call=None):
     """DuckDB fast path for /api/cost-optimizer's data-derived fields.
 
     Tier-1 surface #12 in the 2026-05-17 DuckDB coverage audit
@@ -352,10 +352,15 @@ def _try_local_store_cost_optimizer():
         ``expensiveOps`` (descending by cost). Capped at 200 rows so a
         many-week DuckDB stays cheap to scan.
     """
-    from routes.sessions import _ls_call  # late import to avoid cycle
     from datetime import datetime as _dt, timezone as _tz
 
-    agg_rows = _ls_call("query_aggregates") or []
+    # ``call`` lets the daemon build the hosted snapshot slice on its OWN store
+    # handle (clawmetry/cost_optimizer_snapshot.py, AC-OBS-CEA-023.9) with the
+    # exact rules this route uses; the dashboard goes through the proxy.
+    if call is None:
+        from routes.sessions import _ls_call as call  # late import to avoid cycle
+
+    agg_rows = call("query_aggregates") or []
     if not agg_rows:
         # No cost-bearing rows in DuckDB → defer to legacy path so a
         # fresh install still gets the in-memory ring values (which
@@ -389,7 +394,7 @@ def _try_local_store_cost_optimizer():
     # _get_expensive_operations builds (model + cost + tokens + timeAgo).
     expensive_ops: list[dict] = []
     try:
-        evs = _ls_call("query_events", limit=200) or []
+        evs = call("query_events", limit=200) or []
     except Exception:
         evs = []
     candidates = []
@@ -2253,9 +2258,9 @@ def api_cost_optimizer():
             ]
             window = _adv.INTERCEPTOR_WINDOW
 
-        usage = _adv.observed_usage(usage_rows)
-        advice = _adv.local_advice(usage)
-        task_recs = _adv.experiments(usage, window)
+        # Same function the hosted snapshot slice uses (AC-OBS-CEA-023.9).
+        fields = _adv.advice_fields(usage_rows, window)
+        advice = fields["localAdvice"]
 
         ollama_installed = False
         llmfit_raw = {}
@@ -2336,10 +2341,7 @@ def api_cost_optimizer():
             "scope": "all runtimes on this computer",
             "system": system_out,
             "localModels": local_models,
-            "localAdvice": advice,
-            "modelUsage": usage[:10],
-            "taskRecommendations": task_recs,
-            "recommendationsNote": _adv.recommendations_note(usage, task_recs),
+            **fields,
             "todayCost": costs.get("today"),
             # No ``today * 30`` fallback: a projection nobody could compute
             # is unknown, not a multiple of today.
@@ -2358,10 +2360,7 @@ def api_cost_optimizer():
                 payload["expensiveOps"] = ls_slice["expensiveOps"]
             payload["_source"] = "local_store"
         # A token count nobody recorded is "not recorded", not "unknown tokens".
-        payload["expensiveOps"] = [
-            dict(op, tokens=(None if op.get("tokens") in (None, "", "0", "unknown") else op.get("tokens")))
-            for op in (payload["expensiveOps"] or []) if isinstance(op, dict)
-        ]
+        payload["expensiveOps"] = _adv.tokens_recorded_or_none(payload["expensiveOps"])
         return jsonify(_prov.stamp(payload, _adv.cost_provenance(source)))
     except Exception as e:
         import logging

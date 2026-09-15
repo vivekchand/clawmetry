@@ -1,0 +1,1427 @@
+{
+ "resourceSpans": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "telemetry.sdk.language",
+      "value": {
+       "stringValue": "python"
+      }
+     },
+     {
+      "key": "telemetry.sdk.name",
+      "value": {
+       "stringValue": "opentelemetry"
+      }
+     },
+     {
+      "key": "telemetry.sdk.version",
+      "value": {
+       "stringValue": "1.44.0"
+      }
+     },
+     {
+      "key": "service.instance.id",
+      "value": {
+       "stringValue": "bb657b32-8a45-408a-8241-9532f06d7326"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "invoice-agent"
+      }
+     },
+     {
+      "key": "deployment.environment",
+      "value": {
+       "stringValue": "dev"
+      }
+     }
+    ]
+   },
+   "scopeSpans": [
+    {
+     "scope": {
+      "name": "opentelemetry.instrumentation.langchain",
+      "version": "0.62.3"
+     },
+     "spans": [
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langchain_chat_model"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_step",
+         "value": {
+          "intValue": "1"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_node",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_triggers",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "branch:to:agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_path",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "__pregel_pull"
+            },
+            {
+             "stringValue": "agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+         "value": {
+          "stringValue": "agent:2db0a1af-3fa0-9d19-79e5-d8c5f78912d3"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.checkpoint_ns",
+         "value": {
+          "stringValue": "agent:2db0a1af-3fa0-9d19-79e5-d8c5f78912d3"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_provider",
+         "value": {
+          "stringValue": "stubchatmodel"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_model_type",
+         "value": {
+          "stringValue": "chat"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_model_name",
+         "value": {
+          "stringValue": "claude-sonnet-4-5"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.lc_versions",
+         "value": {
+          "stringValue": "{'langchain-core': '1.6.3'}"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langchain"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "chat"
+         }
+        },
+        {
+         "key": "gen_ai.input.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What is the status of invoice INV-1042?\"}]}]"
+         }
+        },
+        {
+         "key": "gen_ai.response.model",
+         "value": {
+          "stringValue": "claude-sonnet-4-5"
+         }
+        },
+        {
+         "key": "gen_ai.request.model",
+         "value": {
+          "stringValue": "claude-sonnet-4-5"
+         }
+        },
+        {
+         "key": "gen_ai.usage.input_tokens",
+         "value": {
+          "intValue": "120"
+         }
+        },
+        {
+         "key": "gen_ai.usage.output_tokens",
+         "value": {
+          "intValue": "18"
+         }
+        },
+        {
+         "key": "gen_ai.usage.total_tokens",
+         "value": {
+          "intValue": "138"
+         }
+        },
+        {
+         "key": "gen_ai.output.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"tool_call\", \"id\": \"call_1\", \"name\": \"lookup_invoice\", \"arguments\": {\"invoice_id\": \"INV-1042\"}}], \"finish_reason\": \"\"}]"
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259788565000",
+       "flags": 256,
+       "kind": "SPAN_KIND_CLIENT",
+       "name": "StubChatModel.chat",
+       "parentSpanId": "bdc2ff8f23c620a9",
+       "spanId": "7beb3e1954a8bdad",
+       "startTimeUnixNano": "1789358259780349000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_step",
+         "value": {
+          "intValue": "1"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_node",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_triggers",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "branch:to:agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_path",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "__pregel_pull"
+            },
+            {
+             "stringValue": "agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+         "value": {
+          "stringValue": "agent:2db0a1af-3fa0-9d19-79e5-d8c5f78912d3"
+         }
+        },
+        {
+         "key": "traceloop.span.kind",
+         "value": {
+          "stringValue": "task"
+         }
+        },
+        {
+         "key": "traceloop.entity.name",
+         "value": {
+          "stringValue": "tools_condition"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "execute_task"
+         }
+        },
+        {
+         "key": "gen_ai.task.name",
+         "value": {
+          "stringValue": "tools_condition"
+         }
+        },
+        {
+         "key": "gen_ai.task.id",
+         "value": {
+          "stringValue": "01a09e10-3e4f-76b1-9863-d01ffb8a0e03"
+         }
+        },
+        {
+         "key": "gen_ai.task.parent.id",
+         "value": {
+          "stringValue": "01a09e10-3e43-7cb2-b454-e4bd0ba20217"
+         }
+        },
+        {
+         "key": "traceloop.entity.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", "
+         }
+        },
+        {
+         "key": "gen_ai.task.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", "
+         }
+        },
+        {
+         "key": "gen_ai.task.status",
+         "value": {
+          "stringValue": "success"
+         }
+        },
+        {
+         "key": "traceloop.entity.output",
+         "value": {
+          "stringValue": "{\"outputs\": \"tools\", \"kwargs\": {\"tags\": [\"seq:step:3\"]}}"
+         }
+        },
+        {
+         "key": "gen_ai.task.output",
+         "value": {
+          "stringValue": "{\"outputs\": \"tools\", \"kwargs\": {\"tags\": [\"seq:step:3\"]}}"
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259791430000",
+       "flags": 256,
+       "kind": "SPAN_KIND_INTERNAL",
+       "name": "execute_task tools_condition",
+       "parentSpanId": "bdc2ff8f23c620a9",
+       "spanId": "c3da411e1751cd1f",
+       "startTimeUnixNano": "1789358259791227000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_step",
+         "value": {
+          "intValue": "1"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_node",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_triggers",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "branch:to:agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_path",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "__pregel_pull"
+            },
+            {
+             "stringValue": "agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+         "value": {
+          "stringValue": "agent:2db0a1af-3fa0-9d19-79e5-d8c5f78912d3"
+         }
+        },
+        {
+         "key": "traceloop.span.kind",
+         "value": {
+          "stringValue": "task"
+         }
+        },
+        {
+         "key": "traceloop.entity.name",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "execute_task"
+         }
+        },
+        {
+         "key": "gen_ai.task.name",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "gen_ai.task.id",
+         "value": {
+          "stringValue": "01a09e10-3e43-7cb2-b454-e4bd0ba20217"
+         }
+        },
+        {
+         "key": "gen_ai.task.parent.id",
+         "value": {
+          "stringValue": "01a09e10-3e42-7f70-babb-36d33697715a"
+         }
+        },
+        {
+         "key": "traceloop.entity.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}]}, \"tags\": [\"graph:step:1\"], \"metadata\": {\"ls_integrat"
+         }
+        },
+        {
+         "key": "gen_ai.task.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}]}, \"tags\": [\"graph:step:1\"], \"metadata\": {\"ls_integrat"
+         }
+        },
+        {
+         "key": "gen_ai.task.status",
+         "value": {
+          "stringValue": "success"
+         }
+        },
+        {
+         "key": "traceloop.entity.output",
+         "value": {
+          "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"response_metadata\": {\"model_name\": \"claude-sonnet-4-5\"}, \"type\": \"ai\", \"id\": \"lc_run--01a09e10-3e44-7f80-87d1-e486c85aa89c-0\", \"tool_calls\": [{\"name\": \"lookup"
+         }
+        },
+        {
+         "key": "gen_ai.task.output",
+         "value": {
+          "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"\", \"response_metadata\": {\"model_name\": \"claude-sonnet-4-5\"}, \"type\": \"ai\", \"id\": \"lc_run--01a09e10-3e44-7f80-87d1-e486c85aa89c-0\", \"tool_calls\": [{\"name\": \"lookup"
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259791493000",
+       "flags": 256,
+       "kind": "SPAN_KIND_INTERNAL",
+       "name": "execute_task agent",
+       "parentSpanId": "ac42f3e0b2cc4e44",
+       "spanId": "bdc2ff8f23c620a9",
+       "startTimeUnixNano": "1789358259779291000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": "tools"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_step",
+         "value": {
+          "intValue": "2"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_node",
+         "value": {
+          "stringValue": "tools"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_triggers",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "branch:to:tools"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_path",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "__pregel_pull"
+            },
+            {
+             "stringValue": "tools"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+         "value": {
+          "stringValue": "tools:c3721ba1-5902-6201-4b3a-679bd12f132b"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.checkpoint_ns",
+         "value": {
+          "stringValue": "tools:c3721ba1-5902-6201-4b3a-679bd12f132b"
+         }
+        },
+        {
+         "key": "traceloop.span.kind",
+         "value": {
+          "stringValue": "tool"
+         }
+        },
+        {
+         "key": "traceloop.entity.name",
+         "value": {
+          "stringValue": "lookup_invoice"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "execute_tool"
+         }
+        },
+        {
+         "key": "gen_ai.tool.name",
+         "value": {
+          "stringValue": "lookup_invoice"
+         }
+        },
+        {
+         "key": "gen_ai.tool.type",
+         "value": {
+          "stringValue": "function"
+         }
+        },
+        {
+         "key": "gen_ai.tool.description",
+         "value": {
+          "stringValue": "Look up one invoice by its id."
+         }
+        },
+        {
+         "key": "traceloop.entity.input",
+         "value": {
+          "stringValue": "{\"input_str\": \"{'invoice_id': 'INV-1042'}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"langgraph\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"branch:to:tools\"], \"langgraph_path\": [\"__pregel_pull\", \"tools\"], \"langgraph_checkpoint_ns\": \"tools:c3721ba1-5902-620"
+         }
+        },
+        {
+         "key": "gen_ai.tool.call.arguments",
+         "value": {
+          "stringValue": "{\"input_str\": \"{'invoice_id': 'INV-1042'}\", \"tags\": [\"seq:step:1\"], \"metadata\": {\"ls_integration\": \"langgraph\", \"langgraph_step\": 2, \"langgraph_node\": \"tools\", \"langgraph_triggers\": [\"branch:to:tools\"], \"langgraph_path\": [\"__pregel_pull\", \"tools\"], \"langgraph_checkpoint_ns\": \"tools:c3721ba1-5902-620"
+         }
+        },
+        {
+         "key": "gen_ai.task.status",
+         "value": {
+          "stringValue": "success"
+         }
+        },
+        {
+         "key": "traceloop.entity.output",
+         "value": {
+          "stringValue": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"Invoice INV-1042: $1,240.00, due 2026-10-15, status OPEN.\", \"type\": \"tool\", \"name\": \"lookup_invoice\", \"tool_call_id\": \"call_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq"
+         }
+        },
+        {
+         "key": "gen_ai.tool.call.result",
+         "value": {
+          "stringValue": "{\"output\": {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"Invoice INV-1042: $1,240.00, due 2026-10-15, status OPEN.\", \"type\": \"tool\", \"name\": \"lookup_invoice\", \"tool_call_id\": \"call_1\", \"status\": \"success\"}}, \"kwargs\": {\"tags\": [\"seq"
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259796074000",
+       "flags": 256,
+       "kind": "SPAN_KIND_INTERNAL",
+       "name": "execute_tool lookup_invoice",
+       "parentSpanId": "12541f2db56cc9c6",
+       "spanId": "51a5eeca21d36abe",
+       "startTimeUnixNano": "1789358259795223000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_step",
+         "value": {
+          "intValue": "2"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_node",
+         "value": {
+          "stringValue": "tools"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_triggers",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "branch:to:tools"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_path",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "__pregel_pull"
+            },
+            {
+             "stringValue": "tools"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+         "value": {
+          "stringValue": "tools:c3721ba1-5902-6201-4b3a-679bd12f132b"
+         }
+        },
+        {
+         "key": "traceloop.span.kind",
+         "value": {
+          "stringValue": "task"
+         }
+        },
+        {
+         "key": "traceloop.entity.name",
+         "value": {
+          "stringValue": "tools"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "execute_task"
+         }
+        },
+        {
+         "key": "gen_ai.task.name",
+         "value": {
+          "stringValue": "tools"
+         }
+        },
+        {
+         "key": "gen_ai.task.id",
+         "value": {
+          "stringValue": "01a09e10-3e4f-76b1-9863-d028bcfc28d2"
+         }
+        },
+        {
+         "key": "gen_ai.task.parent.id",
+         "value": {
+          "stringValue": "01a09e10-3e42-7f70-babb-36d33697715a"
+         }
+        },
+        {
+         "key": "traceloop.entity.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", "
+         }
+        },
+        {
+         "key": "gen_ai.task.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", "
+         }
+        },
+        {
+         "key": "gen_ai.task.status",
+         "value": {
+          "stringValue": "success"
+         }
+        },
+        {
+         "key": "traceloop.entity.output",
+         "value": {
+          "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"Invoice INV-1042: $1,240.00, due 2026-10-15, status OPEN.\", \"type\": \"tool\", \"name\": \"lookup_invoice\", \"tool_call_id\": \"call_1\", \"status\": \"success\"}}]}, \"kwargs"
+         }
+        },
+        {
+         "key": "gen_ai.task.output",
+         "value": {
+          "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"ToolMessage\"], \"kwargs\": {\"content\": \"Invoice INV-1042: $1,240.00, due 2026-10-15, status OPEN.\", \"type\": \"tool\", \"name\": \"lookup_invoice\", \"tool_call_id\": \"call_1\", \"status\": \"success\"}}]}, \"kwargs"
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259806430000",
+       "flags": 256,
+       "kind": "SPAN_KIND_INTERNAL",
+       "name": "execute_task tools",
+       "parentSpanId": "ac42f3e0b2cc4e44",
+       "spanId": "12541f2db56cc9c6",
+       "startTimeUnixNano": "1789358259792041000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langchain_chat_model"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_step",
+         "value": {
+          "intValue": "3"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_node",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_triggers",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "branch:to:agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_path",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "__pregel_pull"
+            },
+            {
+             "stringValue": "agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+         "value": {
+          "stringValue": "agent:22c97b55-c57f-0bc6-49dc-958310c38a9e"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.checkpoint_ns",
+         "value": {
+          "stringValue": "agent:22c97b55-c57f-0bc6-49dc-958310c38a9e"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_provider",
+         "value": {
+          "stringValue": "stubchatmodel"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_model_type",
+         "value": {
+          "stringValue": "chat"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_model_name",
+         "value": {
+          "stringValue": "claude-sonnet-4-5"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.lc_versions",
+         "value": {
+          "stringValue": "{'langchain-core': '1.6.3'}"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langchain"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "chat"
+         }
+        },
+        {
+         "key": "gen_ai.input.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"What is the status of invoice INV-1042?\"}]}, {\"role\": \"assistant\", \"parts\": [{\"type\": \"tool_call\", \"id\": \"call_1\", \"name\": \"lookup_invoice\", \"arguments\": {\"invoice_id\": \"INV-1042\"}}]}, {\"role\": \"tool\", \"parts\": [{\"type\": \"tool_call_response\", "
+         }
+        },
+        {
+         "key": "gen_ai.response.model",
+         "value": {
+          "stringValue": "claude-sonnet-4-5"
+         }
+        },
+        {
+         "key": "gen_ai.request.model",
+         "value": {
+          "stringValue": "claude-sonnet-4-5"
+         }
+        },
+        {
+         "key": "gen_ai.usage.input_tokens",
+         "value": {
+          "intValue": "160"
+         }
+        },
+        {
+         "key": "gen_ai.usage.output_tokens",
+         "value": {
+          "intValue": "9"
+         }
+        },
+        {
+         "key": "gen_ai.usage.total_tokens",
+         "value": {
+          "intValue": "169"
+         }
+        },
+        {
+         "key": "gen_ai.output.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"Here is what I found. Invoice INV-1042: $1,240.00, due 2026-10-15, status OPEN.\"}], \"finish_reason\": \"\"}]"
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259808280000",
+       "flags": 256,
+       "kind": "SPAN_KIND_CLIENT",
+       "name": "StubChatModel.chat",
+       "parentSpanId": "e16df00cdfb0ae23",
+       "spanId": "f9c3da886b4b2433",
+       "startTimeUnixNano": "1789358259807864000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_step",
+         "value": {
+          "intValue": "3"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_node",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_triggers",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "branch:to:agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_path",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "__pregel_pull"
+            },
+            {
+             "stringValue": "agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+         "value": {
+          "stringValue": "agent:22c97b55-c57f-0bc6-49dc-958310c38a9e"
+         }
+        },
+        {
+         "key": "traceloop.span.kind",
+         "value": {
+          "stringValue": "task"
+         }
+        },
+        {
+         "key": "traceloop.entity.name",
+         "value": {
+          "stringValue": "tools_condition"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "execute_task"
+         }
+        },
+        {
+         "key": "gen_ai.task.name",
+         "value": {
+          "stringValue": "tools_condition"
+         }
+        },
+        {
+         "key": "gen_ai.task.id",
+         "value": {
+          "stringValue": "01a09e10-3e60-7250-b819-15588f114bae"
+         }
+        },
+        {
+         "key": "gen_ai.task.parent.id",
+         "value": {
+          "stringValue": "01a09e10-3e5f-7921-bdb9-34c12d5d852f"
+         }
+        },
+        {
+         "key": "traceloop.entity.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", "
+         }
+        },
+        {
+         "key": "gen_ai.task.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", "
+         }
+        },
+        {
+         "key": "gen_ai.task.status",
+         "value": {
+          "stringValue": "success"
+         }
+        },
+        {
+         "key": "traceloop.entity.output",
+         "value": {
+          "stringValue": "{\"outputs\": \"__end__\", \"kwargs\": {\"tags\": [\"seq:step:3\"]}}"
+         }
+        },
+        {
+         "key": "gen_ai.task.output",
+         "value": {
+          "stringValue": "{\"outputs\": \"__end__\", \"kwargs\": {\"tags\": [\"seq:step:3\"]}}"
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259808950000",
+       "flags": 256,
+       "kind": "SPAN_KIND_INTERNAL",
+       "name": "execute_task tools_condition",
+       "parentSpanId": "e16df00cdfb0ae23",
+       "spanId": "ad5847a127f9090d",
+       "startTimeUnixNano": "1789358259808489000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_step",
+         "value": {
+          "intValue": "3"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_node",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_triggers",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "branch:to:agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_path",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "__pregel_pull"
+            },
+            {
+             "stringValue": "agent"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "traceloop.association.properties.langgraph_checkpoint_ns",
+         "value": {
+          "stringValue": "agent:22c97b55-c57f-0bc6-49dc-958310c38a9e"
+         }
+        },
+        {
+         "key": "traceloop.span.kind",
+         "value": {
+          "stringValue": "task"
+         }
+        },
+        {
+         "key": "traceloop.entity.name",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "execute_task"
+         }
+        },
+        {
+         "key": "gen_ai.task.name",
+         "value": {
+          "stringValue": "agent"
+         }
+        },
+        {
+         "key": "gen_ai.task.id",
+         "value": {
+          "stringValue": "01a09e10-3e5f-7921-bdb9-34c12d5d852f"
+         }
+        },
+        {
+         "key": "gen_ai.task.parent.id",
+         "value": {
+          "stringValue": "01a09e10-3e42-7f70-babb-36d33697715a"
+         }
+        },
+        {
+         "key": "traceloop.entity.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", "
+         }
+        },
+        {
+         "key": "gen_ai.task.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", "
+         }
+        },
+        {
+         "key": "gen_ai.task.status",
+         "value": {
+          "stringValue": "success"
+         }
+        },
+        {
+         "key": "traceloop.entity.output",
+         "value": {
+          "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Here is what I found. Invoice INV-1042: $1,240.00, due 2026-10-15, status OPEN.\", \"response_metadata\": {\"model_name\": \"claude-sonnet-4-5\"}, \"type\": \"ai\", \"id\": \"l"
+         }
+        },
+        {
+         "key": "gen_ai.task.output",
+         "value": {
+          "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"AIMessage\"], \"kwargs\": {\"content\": \"Here is what I found. Invoice INV-1042: $1,240.00, due 2026-10-15, status OPEN.\", \"response_metadata\": {\"model_name\": \"claude-sonnet-4-5\"}, \"type\": \"ai\", \"id\": \"l"
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259809043000",
+       "flags": 256,
+       "kind": "SPAN_KIND_INTERNAL",
+       "name": "execute_task agent",
+       "parentSpanId": "ac42f3e0b2cc4e44",
+       "spanId": "e16df00cdfb0ae23",
+       "startTimeUnixNano": "1789358259807147000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "traceloop.workflow.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "traceloop.entity.path",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "traceloop.association.properties.ls_integration",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "traceloop.span.kind",
+         "value": {
+          "stringValue": "workflow"
+         }
+        },
+        {
+         "key": "traceloop.entity.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "invoke_agent"
+         }
+        },
+        {
+         "key": "gen_ai.agent.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "gen_ai.agent.id",
+         "value": {
+          "stringValue": "01a09e10-3e42-7f70-babb-36d33697715a"
+         }
+        },
+        {
+         "key": "traceloop.entity.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [[\"user\", \"What is the status of invoice INV-1042?\"]]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langgraph\"}, \"kwargs\": {\"name\": \"LangGraph\"}}"
+         }
+        },
+        {
+         "key": "gen_ai.task.input",
+         "value": {
+          "stringValue": "{\"inputs\": {\"messages\": [[\"user\", \"What is the status of invoice INV-1042?\"]]}, \"tags\": [], \"metadata\": {\"ls_integration\": \"langgraph\"}, \"kwargs\": {\"name\": \"LangGraph\"}}"
+         }
+        },
+        {
+         "key": "gen_ai.task.status",
+         "value": {
+          "stringValue": "success"
+         }
+        },
+        {
+         "key": "traceloop.entity.output",
+         "value": {
+          "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\","
+         }
+        },
+        {
+         "key": "gen_ai.task.output",
+         "value": {
+          "stringValue": "{\"outputs\": {\"messages\": [{\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\", \"schema\", \"messages\", \"HumanMessage\"], \"kwargs\": {\"content\": \"What is the status of invoice INV-1042?\", \"type\": \"human\", \"id\": \"34eec27e-08d5-4902-b980-e214c36eaace\"}}, {\"lc\": 1, \"type\": \"constructor\", \"id\": [\"langchain\","
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259809454000",
+       "flags": 256,
+       "kind": "SPAN_KIND_INTERNAL",
+       "name": "LangGraph.workflow",
+       "parentSpanId": "0333827132310cf1",
+       "spanId": "ac42f3e0b2cc4e44",
+       "startTimeUnixNano": "1789358259778246000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      },
+      {
+       "attributes": [
+        {
+         "key": "gen_ai.provider.name",
+         "value": {
+          "stringValue": "langgraph"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "invoke_agent"
+         }
+        },
+        {
+         "key": "gen_ai.agent.name",
+         "value": {
+          "stringValue": "LangGraph"
+         }
+        },
+        {
+         "key": "gen_ai.workflow.nodes",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "agent"
+            },
+            {
+             "stringValue": "tools"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "gen_ai.workflow.edges",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "agent -> tools"
+            },
+            {
+             "stringValue": "tools -> agent"
+            }
+           ]
+          }
+         }
+        }
+       ],
+       "endTimeUnixNano": "1789358259809483000",
+       "flags": 256,
+       "kind": "SPAN_KIND_INTERNAL",
+       "name": "invoke_agent LangGraph",
+       "spanId": "0333827132310cf1",
+       "startTimeUnixNano": "1789358259773514000",
+       "status": {},
+       "traceId": "ef535c2eb32bca789ae9da5eea1025f3"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

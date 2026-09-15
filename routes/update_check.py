@@ -749,6 +749,27 @@ def _schedule_exec_restart(delay_secs: float = 2.0) -> None:
     t.start()
 
 
+# Per-process verdict of clawmetry.fleet_install.self_update_blocked(): who
+# owns the install does not change under a running process, so probe once.
+_self_update_blocked_verdict = None
+
+
+def _install_not_self_updatable() -> bool:
+    global _self_update_blocked_verdict
+    if _self_update_blocked_verdict is None:
+        try:
+            from clawmetry.fleet_install import self_update_blocked
+            _self_update_blocked_verdict = self_update_blocked()
+        except Exception as exc:
+            log.debug("auto-update: install writability probe failed: %s", exc)
+            _self_update_blocked_verdict = {"blocked": False}
+        if _self_update_blocked_verdict.get("blocked"):
+            log.info("auto-update: skipped (managed install: %s is not writable by "
+                     "this user; update by re-running the fleet install with a new pin)",
+                     _self_update_blocked_verdict.get("path"))
+    return bool(_self_update_blocked_verdict.get("blocked"))
+
+
 def _maybe_auto_update(current, target, latest=None):
     """Install ``target`` (the newest aged-in release, chosen by
     ``_newest_aged_in_version``) automatically when ``auto_update`` is enabled.
@@ -783,6 +804,13 @@ def _maybe_auto_update(current, target, latest=None):
     # processes re-exec in place (POSIX) or detach-respawn (Windows), they
     # do not exit-and-die. CLAWMETRY_AUTO_UPDATE=0 remains the kill switch.
     if not target or not _version_gt(target, current):
+        return
+    # Administrator-owned fleet install (AC-OBS-FLEET-001.4): an isolated
+    # environment this user cannot write can never be upgraded by this
+    # process. Without this skip the Windows respawn plan exited every
+    # signed-in user's collector, pip failed three times, and the in-memory
+    # backoff died with the process, so it looped every few minutes.
+    if _install_not_self_updatable():
         return
     # Failed-install backoff: with the 60s check loop, a target whose pip
     # install failed must not be retried every minute. The stored value is

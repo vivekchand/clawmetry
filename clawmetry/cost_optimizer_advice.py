@@ -273,7 +273,7 @@ _PRICED = (
 )
 
 
-def cost_provenance(source: str) -> Dict[str, Dict[str, Any]]:
+def cost_provenance(source: str, where: str = "this computer") -> Dict[str, Dict[str, Any]]:
     """Provenance for the optimizer's figures, by where they were read.
 
     ``source`` is ``local_store`` (daemon rollup), ``interceptor`` (this
@@ -282,7 +282,7 @@ def cost_provenance(source: str) -> Dict[str, Dict[str, Any]]:
     ``provenance.stamp`` then nulls them, so neither can render as $0.00.
     """
     if source == "local_store":
-        src = "local store (DuckDB) on this computer"
+        src = "local store (DuckDB) on " + where
         return {
             "todayCost": _prov.derived(
                 "sum over today's recorded events of " + _PRICED, src,
@@ -310,13 +310,39 @@ def cost_provenance(source: str) -> Dict[str, Dict[str, Any]]:
                 "sum per model of intercepted calls priced at published rates", src,
                 window=INTERCEPTOR_WINDOW),
         }
-    reason = (
-        "the cost analysis could not read spend just now"
-        if source == "error"
-        else "no spend has been recorded yet: the local store holds no cost rows and this "
-             "dashboard has intercepted no model calls since it started"
-    )
+    if source == "error":
+        reason = "the cost analysis could not read spend just now"
+    elif source == "store_empty":
+        # The hosted snapshot has no in-process interceptor ring to fall back
+        # on, so the reason names only the store it actually read.
+        reason = "no spend has been recorded on %s yet: its local store holds no cost rows" % where
+    else:
+        reason = ("no spend has been recorded yet: the local store holds no cost rows and this "
+                  "dashboard has intercepted no model calls since it started")
     return {
         "todayCost": _prov.unknown(reason),
         "projectedMonthlyCost": _prov.unknown(reason),
     }
+
+
+# ── Shared by the local route and the hosted snapshot slice ─────────────────
+
+def advice_fields(usage_rows: Iterable[Mapping[str, Any]], window: str) -> Dict[str, Any]:
+    """The data-derived advice block, identical for the local route and the
+    hosted snapshot (AC-OBS-CEA-023.9): one function, so the two cannot drift."""
+    usage = observed_usage(usage_rows)
+    recs = experiments(usage, window)
+    return {
+        "localAdvice": local_advice(usage),
+        "modelUsage": usage[:10],
+        "taskRecommendations": recs,
+        "recommendationsNote": recommendations_note(usage, recs),
+    }
+
+
+def tokens_recorded_or_none(ops: Any) -> List[Dict[str, Any]]:
+    """A token count nobody recorded is ``None`` ("not recorded"), not "unknown tokens"."""
+    return [
+        dict(op, tokens=(None if op.get("tokens") in (None, "", "0", "unknown") else op.get("tokens")))
+        for op in (ops or []) if isinstance(op, Mapping)
+    ]

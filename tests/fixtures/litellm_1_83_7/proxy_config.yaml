@@ -1,0 +1,21 @@
+model_list:
+  - model_name: fast-alias
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: sk-not-used
+      mock_response: "hello from the mock"
+  - model_name: broken-alias
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: sk-not-used
+      mock_response: "litellm.InternalServerError"
+      num_retries: 2
+
+litellm_settings:
+  callbacks: ["otel"]
+  cache: true
+  cache_params:
+    type: local
+
+general_settings:
+  master_key: sk-master-test

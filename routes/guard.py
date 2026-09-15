@@ -409,10 +409,23 @@ def api_guard_sessions():
         limit = max(1, min(int(request.args.get("limit", 50)), 200))
     except (TypeError, ValueError):
         limit = 50
+    return jsonify(build_guard_sessions_body(limit))
 
-    sessions = _ls_call("query_sessions_table", limit=limit) or []
-    signals = _ls_call("query_recent_loop_signals", limit=200,
-                       since_minutes=30) or []
+
+def build_guard_sessions_body(limit: int = 50, call=None) -> dict:
+    """The ``/api/guard/sessions`` body, shared by the route and the daemon.
+
+    The hosted dashboard has no store, so the daemon builds this same body for
+    the ``guardSessions`` snapshot slice. It passes ``call`` bound to its OWN
+    store handle: going through ``_ls_call`` from inside the daemon would try
+    the daemon's own proxy and then a ``read_only`` re-open, which is the
+    writer-lock deadlock FLYWHEEL section 1 forbids. One builder, so the local
+    and hosted Guard tabs cannot list different sessions.
+    """
+    call = call or _ls_call
+    sessions = call("query_sessions_table", limit=limit) or []
+    signals = call("query_recent_loop_signals", limit=200,
+                   since_minutes=30) or []
 
     # Newest incident per session wins; a session can trip several detectors.
     #
@@ -585,7 +598,7 @@ def api_guard_sessions():
     ), reverse=True)
 
     flagged = [r for r in out if r.get("incident") or r.get("workspace")]
-    return jsonify({
+    return {
         "sessions": out,
         "count": len(out),
         "flagged": len(flagged),
@@ -594,7 +607,7 @@ def api_guard_sessions():
         "spend_at_risk_usd": round(sum(
             float((r.get("incident") or {}).get("spend_at_risk_usd") or 0)
             for r in flagged), 2),
-    })
+    }
 
 
 def _validated_target(data) -> tuple:

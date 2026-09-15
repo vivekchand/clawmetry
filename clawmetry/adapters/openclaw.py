@@ -176,6 +176,84 @@ def _openclaw_doctor_findings() -> list:
         return []
 
 
+# #5935: ``openclaw doctor --json`` takes 5-10 s, and ``detect()`` runs inside
+# page requests (/api/agents, /api/inventory). Run uncached, two of those
+# requests held two of the browser's six connections for 12-15 s on every cold
+# dashboard load and starved the rest of startup into client timeouts. The
+# findings are slow-changing diagnostics, so serve them stale-while-revalidate:
+# a read never waits for the subprocess; one background run refreshes the cache
+# at most once per TTL, and concurrent readers share it. Before the first run
+# finishes the findings are ABSENT (unknown), never reported as "no findings".
+_DOCTOR_CACHE: dict = {"at": 0.0, "value": None, "refreshing": False}
+_DOCTOR_LOCK = None  # created lazily; module import must stay cheap
+
+
+def _doctor_cache_ttl() -> float:
+    try:
+        return float(os.environ.get("CLAWMETRY_OPENCLAW_DOCTOR_TTL", "300"))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _refresh_doctor_cache() -> None:
+    """Background-thread target — never called from a page request.
+    Runs _openclaw_doctor_findings() (the synchronous subprocess call) in a
+    daemon thread so detect() and every page request can return immediately
+    while the cache warms behind them."""
+    import time as _time
+    try:
+        value = _openclaw_doctor_findings()
+    except Exception:  # never raises, but a refresh thread must not die loud
+        value = []
+    with _doctor_lock():
+        _DOCTOR_CACHE["value"] = value
+        _DOCTOR_CACHE["at"] = _time.monotonic()
+        _DOCTOR_CACHE["refreshing"] = False
+
+
+def _doctor_lock():
+    global _DOCTOR_LOCK
+    if _DOCTOR_LOCK is None:
+        import threading as _threading
+        _DOCTOR_LOCK = _threading.Lock()
+    return _DOCTOR_LOCK
+
+
+def _openclaw_doctor_findings_cached() -> list:
+    """Doctor findings without blocking the caller. Returns the cached list
+    (possibly stale while a refresh runs), or ``[]`` before the first run has
+    finished. ``CLAWMETRY_OPENCLAW_DOCTOR_TTL=0`` restores a synchronous run on
+    every read. Never raises."""
+    ttl = _doctor_cache_ttl()
+    if ttl <= 0:
+        return _openclaw_doctor_findings()
+    try:
+        import shutil as _sh
+        if not _sh.which("openclaw"):
+            return []
+    except Exception:
+        return []
+    import time as _time
+    with _doctor_lock():
+        value = _DOCTOR_CACHE["value"]
+        if value is not None and (_time.monotonic() - _DOCTOR_CACHE["at"]) < ttl:
+            return value
+        start = not _DOCTOR_CACHE["refreshing"]
+        if start:
+            _DOCTOR_CACHE["refreshing"] = True
+    if start:
+        try:
+            import threading as _threading
+            _threading.Thread(
+                target=_refresh_doctor_cache,
+                name="clawmetry-openclaw-doctor",
+                daemon=True,
+            ).start()
+        except Exception:
+            with _doctor_lock():
+                _DOCTOR_CACHE["refreshing"] = False
+    return value or []
+
 
 def _clawrouter_detect() -> dict:
     """Detect the ClawRouter bundled provider plugin (OpenClaw 2026.7.1, #99658).
@@ -2673,7 +2751,9 @@ class OpenClawAdapter(AgentAdapter):
             # `openclaw doctor --json` (harness 2026.7.1). Categories:
             # auth-profile, workspace, device-pairing, channel-plugin,
             # memory-provider, systemd-exhaustion, Windows LAN-firewall.
-            _doctor = _openclaw_doctor_findings()
+            # Served stale-while-revalidate (#5935): the subprocess takes
+            # 5-10 s and detect() runs inside page requests.
+            _doctor = _openclaw_doctor_findings_cached()
             if _doctor:
                 meta["doctorFindings"] = _doctor
             # ClawRouter bundled provider plugin (#3524, OpenClaw 2026.7.1
