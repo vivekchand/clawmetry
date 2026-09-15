@@ -375,7 +375,9 @@ def test_traces_then_logs_count_each_tool_call_once(store):
     _d._process_otlp_logs(_logs(_log_tool_call("conv-both2")))
     tool = _tool_events(store, "conv-both2")
     assert [e["event_type"] for e in tool].count("tool_call") == 1
-    assert all(str(e["id"]).startswith("otlp:span:") for e in tool)
+    # The log records carry no call id, so the trace that reported first
+    # keeps the session (clawmetry/otlp_sources.py).
+    assert all(e["data"]["_otlp_signal"] == "trace" for e in tool)
 
 
 def test_a_session_the_daemon_observes_keeps_the_daemon_copy(store):

@@ -1546,7 +1546,8 @@ def api_health_timeline():
     events_per_session = max(1, min(int(request.args.get("events_per_session") or 500), 500))
     dots_per_runtime = max(1, min(int(request.args.get("dots_per_runtime") or 30), 200))
 
-    cache_key = (session_limit, events_per_session, dots_per_runtime)
+    runtime = _runtime_arg()
+    cache_key = (session_limit, events_per_session, dots_per_runtime, runtime)
     with _health_timeline_cache_lock:
         cached = _health_timeline_cache.get("value")
         cached_key = _health_timeline_cache.get("key")
@@ -1558,9 +1559,18 @@ def api_health_timeline():
             return jsonify(cached)
 
     try:
-        sessions = local_store_via_daemon("query_sessions", limit=session_limit) or []
+        # Under ?runtime the newest sessions node-wide can all belong to a
+        # louder runtime, so read deeper and keep this runtime's own newest.
+        sessions = local_store_via_daemon(
+            "query_sessions",
+            limit=min(session_limit * 10, 1000) if runtime else session_limit,
+        ) or []
     except Exception as exc:
         return jsonify({"runtimes": [], "error": f"sessions unavailable: {exc}"}), 503
+    if runtime:
+        sessions = [
+            s for s in sessions if _session_matches_runtime(s.get("session_id"), runtime)
+        ][:session_limit]
 
     buckets: dict = {}
     for s in sessions:
@@ -1607,7 +1617,7 @@ def api_health_timeline():
         reverse=True,
     )
 
-    payload = {"runtimes": runtimes_out, "generated_at": _time.time()}
+    payload = {"runtimes": runtimes_out, "generated_at": _time.time(), "runtime": runtime or "all"}
     with _health_timeline_cache_lock:
         _health_timeline_cache["ts"] = _time.time()
         _health_timeline_cache["key"] = cache_key
@@ -1707,14 +1717,39 @@ def api_prompt_errors():
     return jsonify({"errors": errors, "count": len(errors)})
 
 
+def _runtime_arg() -> str:
+    """The ``?runtime=`` filter, lower-cased; ``""`` means every runtime."""
+    rt = (request.args.get("runtime") or "").strip().lower()
+    return "" if rt == "all" else rt
+
+
+def _session_matches_runtime(session_id, runtime: str) -> bool:
+    """Whether a session belongs to ``runtime``, from its id prefix.
+
+    NemoClaw runs the OpenClaw adapter, so its sessions carry OpenClaw ids.
+    """
+    from clawmetry.local_store import _runtime_of_session_id
+
+    got = _runtime_of_session_id(str(session_id or ""))
+    return got == runtime or (runtime == "nemoclaw" and got == "openclaw")
+
+
 @bp_overview.route("/api/activity-heatmap")
 def api_activity_heatmap():
-    """30-day session activity heatmap data (#875)."""
+    """30-day session activity heatmap data (#875).
+
+    ``?runtime=<id>`` keeps only that runtime's sessions so the Overview card
+    follows the runtime switcher. The response echoes the runtime it counted,
+    which lets the page tell a scoped answer from an older node-wide one.
+    """
     from datetime import datetime, timedelta
 
+    runtime = _runtime_arg()
     now = datetime.now()
     cutoff = (now - timedelta(days=29)).strftime("%Y-%m-%d") + "T00:00:00"
     rows = _ls_call("query_sessions", since=cutoff, limit=10000) or []
+    if runtime:
+        rows = [r for r in rows if _session_matches_runtime(r.get("session_id"), runtime)]
 
     day_sessions: dict = {}
     day_tokens: dict = {}
@@ -1738,7 +1773,7 @@ def api_activity_heatmap():
             "tokens": day_tokens.get(ds, 0),
             "cost": round(day_cost.get(ds, 0), 4),
         })
-    return jsonify({"days": days})
+    return jsonify({"days": days, "runtime": runtime or "all"})
 
 
 @bp_overview.route("/api/cloud-cta/status")
