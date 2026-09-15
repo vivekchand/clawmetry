@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -402,6 +403,24 @@ def _write_event(event: dict[str, Any]) -> None:
         pass  # Never crash the host application
 
 
+#: A module every LiteLLM proxy process has loaded, and a LiteLLM SDK call made
+#: inside an ordinary app does not.
+_LITELLM_PROXY_MODULE = "litellm.proxy.proxy_server"
+
+#: ``clawmetry.gateway_litellm.GATEWAY_SOURCE``, repeated here so the
+#: interceptor (which runs inside the host application) imports nothing extra.
+_LITELLM_GATEWAY_SOURCE = "gateway:litellm"
+
+
+def _inside_litellm_proxy() -> str:
+    """The gateway source when this process is a LiteLLM proxy, else ``""``.
+    Never raises."""
+    try:
+        return _LITELLM_GATEWAY_SOURCE if _LITELLM_PROXY_MODULE in sys.modules else ""
+    except Exception:
+        return ""
+
+
 def _build_event(
     provider: str,
     url: str,
@@ -442,6 +461,17 @@ def _build_event(
         event["endpoint_host"] = azure["resource"]
         if azure.get("deployment"):
             event["deployment"] = azure["deployment"]
+    via_gateway = _inside_litellm_proxy()
+    if via_gateway:
+        # This process IS a LiteLLM proxy, so this call is the upstream leg of
+        # a request the proxy served (an Azure OpenAI deployment, say). The
+        # proxy's own telemetry is that request's usage record, with the cost
+        # LiteLLM charged (REQ-OBS-GWY-001, clawmetry/gateway_litellm.py), and
+        # the agent that called the proxy already counts it in its own cost.
+        # Pricing it again here would be a third copy, so the call is recorded
+        # without a cost and says which gateway holds the figure.
+        event["via_gateway"] = via_gateway
+        cost = None
     if cost is not None:
         event["cost_usd"] = cost
     if reasoning_tokens:

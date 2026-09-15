@@ -429,6 +429,15 @@ jobs:
       - name: First-run report gate
         run: python3 -m pytest tests/test_first_run_gate_js.py -q
 
+      # Dashboard cold load (#5935). Startup used to send ~100 requests in its
+      # first 10 s -- the whole Overview, a Crons and Memory prefetch and twelve
+      # Flow tool details while the page sat on Sessions -- against the
+      # browser's six connections per origin, so the visible screen's own
+      # requests timed out in the browser queue. Node-based, named explicitly
+      # because this job runs FILE LISTS.
+      - name: Dashboard cold load boot
+        run: python3 -m pytest tests/test_cold_load_boot_js.py -q
+
       # Trail page + session-first landing: the live HTML must include
       # tabs/trail.html (Jinja render, not a template grep), the default
       # active page must be the Sessions list, and every Trail string must
@@ -836,6 +845,7 @@ jobs:
             tests/test_usage_cache_trends_local_store.py \
             tests/test_activity_heatmap_runtime_scope.py \
             tests/test_cost_optimizer_route_honesty.py \
+            tests/test_cost_optimizer_snapshot_slice.py \
             tests/test_cost_basis_labels.py \
             tests/test_provenance.py \
             tests/test_provenance_render_coverage.py \
@@ -847,6 +857,7 @@ jobs:
             tests/test_family_runtime_ingest.py \
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
+            tests/test_openclaw_doctor_cache.py \
             tests/test_repo_scan_daemon_wiring.py \
             tests/test_guard_workspace_kinds.py \
             tests/test_tool_risk.py \
@@ -876,6 +887,7 @@ jobs:
             tests/test_guard_live_probe.py \
             tests/test_process_control.py \
             tests/test_process_control_windows.py \
+            tests/test_fleet_install.py \
             tests/test_detector_incident_delivery.py \
             tests/test_blocked_agent_always_notifies.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
@@ -1164,6 +1176,7 @@ jobs:
             tests/test_otlp_rollup_cpu_budget.py \
             tests/test_spans_otlp_edge_cases.py \
             tests/test_otlp_session_materialization.py \
+            tests/test_litellm_gateway_ingest.py \
             -q
           # NOT listed: tests/test_e2e_otlp_ingest.py -- it drives a LIVE
           # dashboard over HTTP (BASE_URL), which this job does not boot. It

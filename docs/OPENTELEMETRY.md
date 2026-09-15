@@ -56,3 +56,5 @@ You get the zero-config, local-first ClawMetry dashboard **and** your data in wh
 
 The scheduled push exporter (Pro) has its own page:
 [OTEL_PUSH_EXPORTER.md](OTEL_PUSH_EXPORTER.md).
+
+**Routing model calls through a LiteLLM proxy?** Point LiteLLM's own OpenTelemetry callback at this receiver and the Usage tab shows the proxy's spend by team, person and virtual key, as LiteLLM priced it, kept apart from your agents' own costs: [LITELLM.md](LITELLM.md).

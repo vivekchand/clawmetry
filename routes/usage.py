@@ -3734,8 +3734,16 @@ def api_usage_by_team():
       {
         "teams": [{"label": str, "cost_usd": float, "tokens": int,
                    "sessions": int, "runtimes": [str]}],
-        "window_days": int
+        "window_days": int,
+        "gateway": {...}
       }
+
+    ``gateway`` (REQ-OBS-GWY-001) is a LiteLLM proxy's usage by team, user and
+    key, as LiteLLM authenticated and priced it. It is a SEPARATE subtotal:
+    nothing in it is added to ``teams``, because a call an agent made through
+    the proxy is already in that agent's own cost. Shape in
+    ``clawmetry/gateway_litellm.py::gateway_usage``; ``{"available": false}``
+    when the store could not be read.
     """
     try:
         window_days = max(1, min(int(request.args.get('window', 7)), 365))
@@ -3745,7 +3753,10 @@ def api_usage_by_team():
     rows = _ls_call_team('query_usage_by_team', window_days=window_days)
     if rows is None:
         rows = []
-    return jsonify({'teams': rows, 'window_days': window_days})
+    gateway = _ls_call_team('query_gateway_usage', window_days=window_days)
+    if not isinstance(gateway, dict):
+        gateway = {'available': False}
+    return jsonify({'teams': rows, 'window_days': window_days, 'gateway': gateway})
 
 
 @bp_usage.route('/api/usage/team-mappings', methods=['GET'])

@@ -162,7 +162,17 @@ const els = {};
 function el(id) { return els[id] || (els[id] = {innerHTML: '', textContent: ''}); }
 const ctx = {
   console, setTimeout, clearTimeout, AbortController, JSON, Number, String, Math, Date,
-  document: {getElementById: el},
+  document: {
+    getElementById: el,
+    createElement: function(tag) {
+      var _t = '';
+      return {
+        get textContent() { return _t; },
+        set textContent(v) { _t = String(v == null ? '' : v); },
+        get innerHTML() { return _t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+      };
+    }
+  },
   t: function(k, n, f) { return f; },
   escapeHtml: function(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); },
   isCompModalActive: function() { return true; },

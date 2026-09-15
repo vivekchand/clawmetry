@@ -17841,6 +17841,23 @@ def _build_activity_heatmap_snapshot():
         return {}
 
 
+def _build_cost_optimizer_snapshot():
+    """Cost Optimizer slice for the hosted dashboard (AC-OBS-CEA-023.9).
+
+    The same experiments, local-model advice and basis-labelled figures the
+    local /api/cost-optimizer derives, built on the daemon's own store handle
+    by ``clawmetry/cost_optimizer_snapshot.py``. ``{}`` on any failure.
+    """
+    try:
+        from clawmetry import local_store as _ls_co
+        from clawmetry.cost_optimizer_snapshot import build_slice
+
+        return build_slice(_ls_co.get_store()) or {}
+    except Exception as _e_co:
+        log.debug("snapshot: cost optimizer slice failed: %s", _e_co)
+        return {}
+
+
 def _build_usage_snapshot():
     """Usage tab slices (anomalies, cost-comparison, cache-trends, cost-breakdown,
     spend-optimization, forecast). Trial-bug #12: these Usage cards were blank on
@@ -24113,6 +24130,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         "cronHealthSummary": _build_cron_health_summary_snapshot(),
         "harness": _build_harness_snapshot(),
         "usage": _build_usage_snapshot(),
+        # Cost Optimizer experiments + basis-labelled figures (AC-OBS-CEA-023.9).
+        # Read by the cloud cm-cloud-overview interceptor for /api/cost-optimizer.
+        "costOptimizer": _build_cost_optimizer_snapshot(),
         # Inputs & context per session (Trail triad). Read by the cloud
         # cm-cloud-session-context interceptor for /api/sessions/<id>/context.
         "sessionContext": _build_session_context_snapshot(),

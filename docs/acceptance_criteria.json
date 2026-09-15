@@ -577,6 +577,12 @@
       "text": "When the token count behind a cost row was not recorded, the system shall say the token count was not recorded rather than label the row \"unknown tokens\"."
     },
     {
+      "id": "AC-OBS-CEA-023.9",
+      "doc": "Cost Optimizer: honest, fast and provider-aware",
+      "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",
+      "text": "When the operator opens the Cost Optimizer on the hosted dashboard, the system shall show the same experiments, local-model advice and basis-labelled figures that the local dashboard derives for that computer from its recorded usage, computed on that computer and readable only in the operator's browser; and when the connected computer does not yet send them, the system shall say so rather than show recommendations that cite no observed usage or figures without a basis."
+    },
+    {
       "id": "AC-OBS-CEA-025.1",
       "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
       "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
@@ -1255,6 +1261,54 @@
       "text": "An incident raised only from received telemetry shall state that the action was observed after it ran and shall not state or imply that the action was prevented."
     },
     {
+      "id": "AC-OBS-FLEET-001.1",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When a Linux user registers the collector for fleet use, the system shall request that the user's services persist after logout and report whether persistence is enabled, and if it could not be enabled, the exact administrator command that enables it."
+    },
+    {
+      "id": "AC-OBS-FLEET-001.2",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When an administrator registers the collector for all users on Windows, the system shall register a single logon registration that starts a separate collector as each signed-in user, and shall not run the collector under a privileged account."
+    },
+    {
+      "id": "AC-OBS-FLEET-001.3",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When fleet registration is removed, the system shall remove every registration it created and report what was removed."
+    },
+    {
+      "id": "AC-OBS-FLEET-001.4",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When the collector runs from an isolated environment that the running user cannot write (an administrator-owned fleet install), the system shall not attempt an unattended self-update or restart for one, and fleet status shall report automatic updates as off with that reason and how the install is updated instead."
+    },
+    {
+      "id": "AC-OBS-FLEET-002.1",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When an operator requests fleet status, the system shall report, per operating system, whether collection continues after the user logs off, and when it does not, the reason."
+    },
+    {
+      "id": "AC-OBS-FLEET-002.2",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When the local data directory is readable by other local users, the system shall report it as not private, and fleet registration shall restrict it to the owning user."
+    },
+    {
+      "id": "AC-OBS-FLEET-003.1",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "The system shall provide a silent install example for Windows management tooling and one for Linux configuration management, each exercised in automated verification on that operating system."
+    },
+    {
+      "id": "AC-OBS-FLEET-003.2",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "The install examples shall not embed an enrollment credential and shall not print one to their output."
+    },
+    {
       "id": "AC-GOV-ATR-001.1",
       "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
       "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
@@ -1535,6 +1589,66 @@
       "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
       "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
       "text": "Every other API route shall keep the existing rule for non-loopback callers, and a self-hosted route called without its own credentials shall still be refused."
+    },
+    {
+      "id": "AC-OBS-GWY-001.1",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "When a LiteLLM proxy exports request telemetry to the receiver, the system shall record one usage record per proxied request, attributed to the team, user and virtual key that LiteLLM authenticated for that request."
+    },
+    {
+      "id": "AC-OBS-GWY-001.2",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Team, user and organisation attribution shall come only from the identity LiteLLM derived from the authenticated key. Labels a caller supplies in the request body shall not change which team or user a request is attributed to."
+    },
+    {
+      "id": "AC-OBS-GWY-001.3",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Each record shall retain the actual provider and model alongside the alias the caller requested, input and output token counts, whether the call streamed, whether it succeeded, its timestamps, and its trace, parent-span and provider response identifiers."
+    },
+    {
+      "id": "AC-OBS-GWY-001.4",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Gateway spend shall be labelled as reported by the gateway, in the gateway's currency, and shall not be re-priced by ClawMetry or presented as a vendor invoice. When the gateway reports no cost for a request, that request shall be counted as having no reported cost, never as costing zero."
+    },
+    {
+      "id": "AC-OBS-GWY-001.5",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Receiving the same exported request again shall not change any total. A request the gateway recorded as a separate request shall be counted separately."
+    },
+    {
+      "id": "AC-OBS-GWY-001.6",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "A response the gateway served from its own response cache, identified by carrying the same provider response identifier as an earlier request, shall be counted as a request but not charged a second time, whichever of the two arrives first."
+    },
+    {
+      "id": "AC-OBS-GWY-001.7",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Gateway spend shall be presented as its own subtotal, shall not be added to agent runtime totals, and gateway requests shall not create agent sessions. The surface shall state how many gateway requests share a trace with telemetry from another source and how many could not be correlated."
+    },
+    {
+      "id": "AC-OBS-GWY-001.8",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Failed gateway requests shall be counted per team and shown separately from successful ones."
+    },
+    {
+      "id": "AC-OBS-GWY-001.9",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Team, user and key labels shall be displayed as text and never interpreted as markup."
+    },
+    {
+      "id": "AC-OBS-GWY-001.10",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "A real LiteLLM proxy at a pinned version, with two teams and two virtual keys backed by its own database, shall be exercised in continuous integration, and the per-team spend the system reports shall agree with LiteLLM's own spend log for the same requests, with any residual printed."
     }
   ]
 }

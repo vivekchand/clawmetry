@@ -962,6 +962,9 @@ _DAEMON_METHODS = frozenset({
     "query_otlp_records",
     "query_otlp_rollup",
     "count_otlp_records",
+    # REQ-OBS-GWY-001: a LiteLLM proxy's usage by team / user / key, the
+    # separate subtotal inside /api/usage/by-team. Read-only.
+    "query_gateway_usage",
     # latest_otlp_record(service_name=..., agent_type=...) — WO-57 status.
     "latest_otlp_record",
     # Issue #1364 (Tier-1 2026-05-15): /api/fallbacks model/provider

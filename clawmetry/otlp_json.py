@@ -318,10 +318,24 @@ class _Resource:
         self.attributes = _attrs(raw.get("attributes"))
 
 
-class _ScopeSpans:
-    __slots__ = ("spans",)
+class _Scope:
+    """The instrumentation scope (``scope.name`` / ``scope.version``). Read to
+    recognise telemetry by the library that emitted it: LiteLLM's proxy exports
+    every span under the ``litellm`` scope (REQ-OBS-GWY-001), and the protobuf
+    decoder already exposed it, so an OTLP/JSON exporter must too."""
+    __slots__ = ("name", "version")
 
     def __init__(self, raw: dict):
+        self.name = str(raw.get("name") or "")
+        self.version = str(raw.get("version") or "")
+
+
+class _ScopeSpans:
+    __slots__ = ("scope", "spans")
+
+    def __init__(self, raw: dict):
+        scope = raw.get("scope")
+        self.scope = _Scope(scope if isinstance(scope, dict) else {})
         self.spans = [_Span(s) for s in _seq(raw.get("spans")) if isinstance(s, dict)]
 
 

@@ -2355,6 +2355,80 @@ def _strip_clawmetry_from_openclaw_json() -> "tuple[bool, str]":
         return False, str(p)
 
 
+def _cmd_service(args) -> None:
+    """clawmetry service install|status|uninstall — register the collector
+    for shared and virtual desktops (#5942). See clawmetry/fleet_install.py
+    and deploy/fleet/README.md. One collector per user, running as that user.
+    Exit code 0 only when the requested state was actually reached."""
+    import json as _json
+    from clawmetry import fleet_install as _fi
+
+    action = getattr(args, "service_action", None) or "status"
+    as_json = bool(getattr(args, "json", False))
+
+    if action == "install":
+        result = _fi.install(all_users=bool(getattr(args, "all_users", False)))
+    elif action == "uninstall":
+        result = _fi.uninstall()
+    else:
+        result = _fi.fleet_status()
+        result["ok"] = True
+
+    _step_names = {
+        "data_dir": "Data directory", "linger": "Keep running after logout",
+        "systemd_user_unit": "Collector service", "all_users_task": "All-users logon task",
+        "per_user_task": "Logon task", "launchd": "Login agent",
+        "all_users": "All users", "supervisor": "Service",
+    }
+    _state_words = {
+        "enabled": "on", "disabled": "off", "active": "running",
+        "registered": "registered", "failed": "failed", "denied": "refused",
+        "needs_admin": "needs an administrator", "unavailable": "not available here",
+        "unsupported": "not supported here", "not_needed": "not needed",
+    }
+    if as_json:
+        print(_json.dumps(result, indent=2, sort_keys=True))
+    elif action == "status":
+        print(f"  Collector:        per user ({result.get('user')})")
+        print(f"  Supervisor:       {result.get('supervisor')}")
+        survives = "yes" if result.get("survives_logoff") else "no"
+        print(f"  Survives logoff:  {survives} ({result.get('reason')})")
+        dd = result.get("data_dir") or {}
+        private = dd.get("private")
+        private_word = ("yes" if private else "not checked (Windows profile permissions)"
+                        if private is None else "no")
+        print(f"  Data private:     {private_word} ({dd.get('path')})")
+        au = result.get("auto_update") or {}
+        if au:
+            print(f"  Auto-update:      {au.get('state')} ({au.get('reason')})")
+    elif action == "install":
+        for name, step in (result.get("steps") or {}).items():
+            state = step.get("state") if isinstance(step, dict) else step
+            if name == "data_dir" and isinstance(step, dict):
+                state = ("private" if step.get("private")
+                         else "not checked" if step.get("private") is None
+                         else "readable by other users")
+            else:
+                state = _state_words.get(state, state)
+            print(f"  {_step_names.get(name, name)}: {state}")
+            if isinstance(step, dict) and step.get("reason"):
+                print(f"    {step['reason']}")
+            if isinstance(step, dict) and step.get("admin_command"):
+                print(f"    An administrator can enable it with: {step['admin_command']}")
+        print("  Fleet registration complete." if result.get("ok")
+              else "  Fleet registration incomplete (see above).")
+    else:
+        for item in result.get("removed") or []:
+            print(f"  Removed {item}")
+        for item in result.get("remaining") or []:
+            print(f"  Could not remove {item}")
+        if not result.get("removed") and not result.get("remaining"):
+            print("  No fleet registration found.")
+        if result.get("note"):
+            print(f"  {result['note']}")
+    sys.exit(0 if result.get("ok") else 1)
+
+
 def _cmd_uninstall(args=None) -> None:
     """clawmetry uninstall — fully remove clawmetry, stop daemons, delete all files.
 
@@ -2694,6 +2768,16 @@ def _cmd_uninstall(args=None) -> None:
         # purge: Windows cannot delete files a live process holds open, so
         # a running daemon crashed uninstall on its own sync.log (#3914).
         _stray_win = _stop_windows_processes()
+        # Scheduled Tasks would restart the daemon at the next logon after
+        # the package is gone: remove the per-user task and the fleet
+        # all-users task (#5942). The all-users one needs an elevated prompt.
+        if not _dry_run:
+            try:
+                from clawmetry import fleet_install as _fi_un
+                for _task_line in _fi_un.uninstall(system="Windows").get("remaining") or []:
+                    print(f"  ⚠️  Could not remove {_task_line}")
+            except Exception:
+                pass
         if _stray_win:
             print(f"  ✅  Stopped {_stray_win} clawmetry process(es)")
     # The bootout above kills launchd-managed processes; this sweeps up
@@ -8500,6 +8584,33 @@ def main() -> None:
         help="List everything that would be removed without touching disk.",
     )
 
+    # service — fleet registration for shared / virtual desktops (#5942)
+    p_service = sub.add_parser(
+        "service",
+        help="Register the collector for shared or virtual desktops "
+        "(Linux linger, Windows all-users logon task)",
+    )
+    service_sub = p_service.add_subparsers(dest="service_action")
+    p_service_install = service_sub.add_parser(
+        "install", help="Register the per-user collector so it outlives logout where the OS allows"
+    )
+    p_service_install.add_argument(
+        "--all-users",
+        action="store_true",
+        dest="all_users",
+        help="Windows, elevated: one logon task that starts a separate collector "
+        "as each signed-in user",
+    )
+    p_service_install.add_argument("--json", action="store_true", help="Machine-readable result")
+    p_service_status = service_sub.add_parser(
+        "status", help="Does collection survive logoff, and is the data private?"
+    )
+    p_service_status.add_argument("--json", action="store_true", help="Machine-readable result")
+    p_service_uninstall = service_sub.add_parser(
+        "uninstall", help="Remove the registrations `service install` created"
+    )
+    p_service_uninstall.add_argument("--json", action="store_true", help="Machine-readable result")
+
     # activate — install a self-hosted Pro/Enterprise license key
     p_activate = sub.add_parser(
         "activate", help="Activate a self-hosted Pro/Enterprise license key"
@@ -9056,6 +9167,7 @@ def main() -> None:
         "mcp",
         "update",
         "uninstall",
+        "service",
         "activate",
         "license",
         "cursor",
@@ -9201,6 +9313,8 @@ def main() -> None:
             _cmd_update(args)
         elif args.cmd == "uninstall":
             _cmd_uninstall(args)
+        elif args.cmd == "service":
+            _cmd_service(args)
         elif args.cmd == "activate":
             _cmd_activate(args)
         elif args.cmd == "team":
