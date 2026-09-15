@@ -10196,135 +10196,31 @@ class LocalStore(ProjectsMixin, TrailStoreMixin):
                             failed += 1
                             log.warning("otlp_records: row not written", exc_info=True)
 
-        # Sessions whose behaviour stream a DAEMON already owns. On a machine
-        # that runs the daemon AND has the org's OTEL config pushed to it, the
-        # same session arrives twice: once read from the transcript on disk,
-        # once pushed by the runtime. Writing both would double the session's
-        # spend and show every tool call twice — and a cost figure that
-        # doubles because two collectors both worked is worse than a missing
-        # one. The transcript read is strictly richer (real tool arguments,
-        # assistant text), so the daemon wins and the OTLP copies of what it
-        # already records are dropped; OTLP-only facts still attach (WO-57).
-        # The identity/spend LEDGER above is unaffected: it is a separate
-        # table with its own dedup key, and the org rollups still see every
-        # record.
+        # Which source records each OTLP event, and the write itself, live in
+        # clawmetry/otlp_sources.py (REQ-OBS-OTG-001, AC-OBS-OTG-001.3/.8):
+        # a session the daemon observes keeps the daemon's copy; a tool call
+        # both signals identify by call id is recorded once, from the span,
+        # whichever arrives first; a call without one belongs to the first
+        # signal that reported the session. Counts come back as
+        # ``events_skipped_daemon_owned`` / ``events_skipped_other_signal`` /
+        # ``events_skipped_duplicate`` / ``events_replaced_by_trace``. The
+        # identity/spend LEDGER above is unaffected: it is a separate table
+        # with its own dedup key.
         #
         # Known gap, stated rather than hidden: if the OTLP record arrives
-        # BEFORE the daemon has ingested that session's transcript, this check
-        # sees no daemon rows yet and lets the events through. The window is
-        # the first ingest tick of a brand-new session.
-        owned_by_daemon: set[str] = set()
-        want_sessions = sorted({
-            str(ev.get("session_id")) for ev in (events or [])
-            if isinstance(ev, dict) and ev.get("session_id")
-        })
-        if want_sessions:
-            try:
-                placeholders = ", ".join(["?"] * len(want_sessions))
-                rows = self._fetch(
-                    "SELECT DISTINCT session_id FROM events "
-                    f"WHERE session_id IN ({placeholders}) "
-                    "AND id NOT LIKE 'otlp:%'",
-                    list(want_sessions),
-                )
-                owned_by_daemon = {str(r[0]) for r in rows if r and r[0]}
-            except Exception:
-                log.warning("otlp events: ownership probe failed", exc_info=True)
-
-        # One OTLP SIGNAL owns a session's tool stream (REQ-OBS-OTG-001). A
-        # runtime that exports both log records and traces describes every
-        # tool call twice (``otlp:<record>`` from /v1/logs, ``otlp:span:...``
-        # from /v1/traces). Keeping both would double every trajectory
-        # threshold and page twice for one action, so whichever signal
-        # reported the session's tool calls first keeps reporting them. Known
-        # gap, stated like the daemon one above: two exports landing in the
-        # same instant can both pass this probe.
-        try:
-            from clawmetry.otlp_guard import TRACE_EVENT_ID_PREFIX as _trace_prefix
-        except Exception:
-            _trace_prefix = "otlp:span:"
-        tool_stream_owner: dict[str, str] = {}
-        if want_sessions:
-            try:
-                placeholders = ", ".join(["?"] * len(want_sessions))
-                like = _trace_prefix + "%"
-                for sid, has_trace, has_log in self._fetch(
-                    "SELECT session_id, "
-                    "MAX(CASE WHEN id LIKE ? THEN 1 ELSE 0 END), "
-                    "MAX(CASE WHEN id LIKE ? THEN 0 ELSE 1 END) "
-                    "FROM events WHERE id LIKE 'otlp:%' "
-                    "AND event_type IN ('tool_call', 'tool_result') "
-                    f"AND session_id IN ({placeholders}) GROUP BY session_id",
-                    [like, like] + list(want_sessions),
-                ):
-                    if has_trace and not has_log:
-                        tool_stream_owner[str(sid)] = "trace"
-                    elif has_log and not has_trace:
-                        tool_stream_owner[str(sid)] = "log"
-            except Exception:
-                log.warning("otlp events: signal ownership probe failed", exc_info=True)
-
-        ev_written = 0
-        ev_skipped = 0
-        ev_rejected = 0
-        ev_failed = 0
-        ev_skipped_signal = 0
-        for ev in events or []:
-            if not isinstance(ev, dict):
-                ev_rejected += 1
-                continue
-            ev_sid = str(ev.get("session_id") or "")
-            ev_type = str(ev.get("event_type") or "")
-            if (ev_sid in owned_by_daemon
-                    and ev_type in self._OTLP_DAEMON_DUPLICATE_TYPES):
-                ev_skipped += 1
-                continue
-            if ev_type in ("tool_call", "tool_result") and ev_sid:
-                signal = ("trace" if str(ev.get("id") or "").startswith(_trace_prefix)
-                          else "log")
-                owner = tool_stream_owner.setdefault(ev_sid, signal)
-                if owner != signal:
-                    ev_skipped_signal += 1
-                    continue
-            try:
-                self.ingest(ev)
-                ev_written += 1
-            except ValueError:
-                # ingest() raises ValueError for an event missing a required
-                # key: malformed, and a retry would be refused the same way.
-                ev_rejected += 1
-                log.warning("otlp events: row rejected", exc_info=True)
-            except Exception:
-                ev_failed += 1
-                log.warning("otlp events: row not written", exc_info=True)
-        # The receiver is a request handler, not the daemon's ingest loop, so
-        # there is no flusher tick coming to drain the ring on its own
-        # schedule. Flush now: "data survives a restart" is this path's
-        # acceptance criterion, and a batch sitting in the ring does not.
-        flush_failed = False
-        if ev_written:
-            try:
-                self._flush_now()
-            except Exception:
-                # The ring still holds the batch and the flusher will retry
-                # it, but the receiver may not call it stored: a restart
-                # before that tick loses it. The sender retries instead, and
-                # event ids make the replay idempotent.
-                flush_failed = True
-                log.warning("otlp events: flush failed", exc_info=True)
-        return {
+        # BEFORE the daemon has ingested that session's transcript, the
+        # daemon check sees no daemon rows yet and lets the events through.
+        from clawmetry import otlp_sources as _otlp_sources
+        counts = _otlp_sources.write_events(self, events)
+        result = {
             "records": written,
-            "events": ev_written,
-            "events_skipped_daemon_owned": ev_skipped,
-            "events_skipped_other_signal": ev_skipped_signal,
             "records_rejected": rejected,
             "records_duplicate_in_batch": dup_in_batch,
             "records_already_stored": already_stored,
             "records_failed": failed,
-            "events_rejected": ev_rejected,
-            "events_failed": ev_failed,
-            "events_flush_failed": flush_failed,
         }
+        result.update(counts)
+        return result
 
     def materialize_otlp_sessions(
         self,
@@ -10462,6 +10358,17 @@ class LocalStore(ProjectsMixin, TrailStoreMixin):
         if not batch:
             return 0
         return self.ingest_sessions_batch(batch)
+
+    def rescrub_spans(self, apply: bool = False, after: str = "",
+                      limit: int = 200) -> dict[str, Any]:
+        """One page of ``clawmetry maintenance rescrub-spans``
+        (clawmetry/span_rescrub.py, AC-OBS-OTG-001.10). A dry run unless
+        ``apply``; rewrites content columns only. Call by keyword."""
+        if apply and self._read_only:
+            raise RuntimeError("local_store: rescrub_spans(apply=True) on read-only store")
+        from clawmetry import span_rescrub as _rescrub
+        return _rescrub.rescrub_batch(self, apply=bool(apply), after=after or "",
+                                      limit=limit)
 
     def query_otlp_records(
         self,

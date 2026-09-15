@@ -31920,6 +31920,13 @@ function loadGuardSessions() {
       } else {
         statusCell = '<span class="pill pill-ok">Running</span>';
       }
+      // Seen only in telemetry the agent exported, after the action ran.
+      // Guard observed it; nothing held it (REQ-OBS-OTG-001).
+      if (inc && inc.observation && inc.observation.prevented === false) {
+        statusCell += ' <span class="muted guard-observed" title="' +
+          guardEsc('Seen in telemetry the agent exported after the action ran. ClawMetry did not hold or block it.') +
+          '">&middot; seen after it ran</span>';
+      }
       // What is in the FOLDER this agent was pointed at. A second pill rather
       // than a replacement: "looping" and "the checkout runs its own code"
       // are different questions and an operator needs both. It carries no

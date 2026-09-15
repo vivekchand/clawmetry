@@ -1405,6 +1405,30 @@
       "text": "An incident raised only from received telemetry shall state that the action was observed after it ran and shall not state or imply that the action was prevented."
     },
     {
+      "id": "AC-OBS-OTG-001.7",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "When an incident is raised on a node from received telemetry and the node is connected to the hosted dashboard, the hosted Guard tab shall list that session with the incident, under the runtime its telemetry names (so a runtime filter finds it), with the observed-after-the-fact label, and shall show the session as not controllable from any machine with a sentence saying why, rather than offering Pause, Stop or Kill."
+    },
+    {
+      "id": "AC-OBS-OTG-001.8",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Where the same tool call, identified by the same call id, arrives both as a log record and as a trace span, the system shall record exactly one tool call and one tool result for it, taken from the trace span, whichever signal arrives first. A tool call that only one signal reports shall still be recorded. Where a call carries no call id, the system shall keep the first signal to report that session's tool calls and count the other signal's copies as skipped."
+    },
+    {
+      "id": "AC-OBS-OTG-001.9",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "The operator shall be able to choose how much content received telemetry keeps: `full` (content kept, secrets still masked, personal data not filtered), `redacted` (the default: content kept, secrets masked, personal data filtered per its own switches) or `metadata` (no prompt, response, argument, result or free-text attribute stored; each withheld field is labelled on the stored row). Secret masking shall follow only its own switch under every profile, personal-data filtering shall remain separately switchable, and the security posture shall state the active profile, what it keeps, and which personal data is not detected."
+    },
+    {
+      "id": "AC-OBS-OTG-001.10",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Spans stored before scrubbing existed shall not be rewritten unless the operator runs an explicit rescrub. The rescrub shall report how many stored spans would change without changing anything unless the operator confirms, shall rewrite only content fields, and shall report how many it rewrote and that copies already sent off the machine are unaffected."
+    },
+    {
       "id": "AC-OBS-FLEET-001.1",
       "doc": "Fleet Install on Shared and Virtual Desktops",
       "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",

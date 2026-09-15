@@ -1813,7 +1813,7 @@ def _attach_price_book(result, runtime):
 def _try_local_store_token_velocity():
     """Fast path for /api/token-velocity (issue #1565, Tier-1).
 
-    Reads the last ~5 min of events from DuckDB and computes:
+    Reads the last ~30 min of events from DuckDB and computes:
       * ``velocity_2min`` — total tokens billed across the trailing 2-min
         window (deduped via ``build_sibling_bucket_max`` so v3 sibling
         pairs aren't counted twice — same risk as
@@ -1828,7 +1828,7 @@ def _try_local_store_token_velocity():
     user-prompt row (matches the legacy JSONL heuristic).
 
     Returns ``None`` when the store isn't reachable OR when zero events
-    are present in the trailing 5-min window — the legacy JSONL walker
+    are present in the trailing 30-min window — the legacy JSONL walker
     is cheap on a quiet system (mtime filter skips every file with no
     recent writes) so we don't try to short-circuit it with a zero shell.
     """
@@ -1844,9 +1844,12 @@ def _try_local_store_token_velocity():
 
     now = time.time()
     window_2min = now - 120
-    # Pull 5 min of context so the tool-chain walker has enough history
-    # for the consecutive-run heuristic without re-fetching.
-    since_iso = datetime.fromtimestamp(now - 300, tz=timezone.utc).isoformat()
+    # Pull 30 min of context so the tool-chain walker has enough history
+    # for the consecutive-run heuristic without re-fetching. Wider than
+    # the 2-min token window intentionally: a chain that started >2 min ago
+    # still needs to be measured, and DuckDB's columnar scan at limit=5000
+    # keeps this fast even on busy stores.
+    since_iso = datetime.fromtimestamp(now - 1800, tz=timezone.utc).isoformat()
 
     try:
         rows = store.query_events(since=since_iso, limit=5000) or []

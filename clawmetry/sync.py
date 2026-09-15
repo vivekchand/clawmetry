@@ -22386,7 +22386,16 @@ def _emit_detector_incidents(store, state: dict) -> int:
         # Derived from the session id, not from agent_type: see
         # _detector_runtime. Getting this wrong silently merges every runtime
         # into one cohort.
-        runtime = _detector_runtime(sid, s.get("agent_type") or "") or None
+        runtime = None
+        try:
+            # A session materialised from received spans names its own
+            # runtime; the id-prefix guess reads ``openclaw`` for it on a Free
+            # install and would file its incident there (AC-OBS-OTG-001.7).
+            from clawmetry.otlp_guard import observe_only_runtime as _oor
+            runtime = _oor(s)
+        except Exception:  # noqa: BLE001
+            runtime = None
+        runtime = runtime or _detector_runtime(sid, s.get("agent_type") or "") or None
         baseline = _guard_baseline_for(store, baseline_cache, runtime or "",
                                        facts.get("agent_id") or "")
         try:
