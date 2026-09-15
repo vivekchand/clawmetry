@@ -130,6 +130,8 @@ LangChain does not stamp a conversation id on its spans, so put one on the resou
 Resource.create({"service.name": "support-triage", "session.id": run_id})
 ```
 
+LangGraph needs no resource id: pass a `thread_id` in the run config and every run on that thread is one session. That path has a runnable recipe checked in CI on every change, with the exact versions verified: [`docs/OTEL_RECIPE_LANGGRAPH.md`](OTEL_RECIPE_LANGGRAPH.md).
+
 ClawMetry also understands OpenLLMetry's indexed prompt attributes (`gen_ai.prompt.0.role` and friends), so message content shows in the span detail where the instrumentation records it.
 
 ## Troubleshooting

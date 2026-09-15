@@ -1,0 +1,277 @@
+# Fleet install on shared hosts and virtual desktops (#5942).
+#
+# Real-runner proof for deploy/fleet/: the Ansible playbook on Linux with two
+# unprivileged users, and the Intune PowerShell script on Windows. These are
+# GitHub-hosted runners, not an Azure Virtual Desktop / multi-session host;
+# deploy/fleet/README.md says so.
+name: Fleet install
+
+on:
+  pull_request:
+    paths:
+      - "clawmetry/fleet_install.py"
+      - "clawmetry/daemon_registration.py"
+      - "clawmetry/cli.py"
+      - "deploy/fleet/**"
+      - "tests/test_fleet_install.py"
+      - ".github/workflows/fleet-install-test.yml"
+  push:
+    branches: [main]
+    paths:
+      - "clawmetry/fleet_install.py"
+      - "clawmetry/daemon_registration.py"
+      - "deploy/fleet/**"
+      - ".github/workflows/fleet-install-test.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fleet-install-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-ansible:
+    name: Linux, Ansible, two users with linger
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Build the wheel under test
+        run: python -m pip wheel --no-deps -w "$RUNNER_TEMP/dist" .
+      - name: Create desktop users
+        run: |
+          set -euo pipefail
+          for u in cmalice cmbob cmcarol; do sudo useradd -m -s /bin/bash "$u"; done
+          # World-readable homes (older Debian/Ubuntu default), so the
+          # isolation check below tests the collector's own directory mode
+          # rather than the distribution's home-directory mode.
+          sudo chmod 755 /home/cmalice /home/cmbob /home/cmcarol
+      - name: Make sure the system Python can create environments
+        run: /usr/bin/python3 -m venv "$RUNNER_TEMP/venv-probe" || (sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv)
+      - name: Run the Ansible playbook
+        run: |
+          set -euo pipefail
+          command -v ansible-playbook || { echo "ansible-playbook is not on this runner image"; exit 1; }
+          WHEEL=$(ls "$RUNNER_TEMP"/dist/clawmetry-*.whl)
+          ansible-playbook -i localhost, -c local deploy/fleet/ansible/clawmetry.yml \
+            -e "{\"clawmetry_users\": [\"cmalice\", \"cmbob\"], \"clawmetry_package\": \"$WHEEL\", \"clawmetry_python\": \"/usr/bin/python3\"}" \
+            | tee "$RUNNER_TEMP/ansible.log"
+          if grep -Eq 'cm_[A-Za-z0-9]{8,}' "$RUNNER_TEMP/ansible.log"; then echo "credential-shaped string in output"; exit 1; fi
+          # Every user's collector imports this environment: no desktop user
+          # may be able to write any of it (the first run found 0777 here).
+          bad=$(sudo find /opt/clawmetry-fleet ! -type l \( -perm -g+w -o -perm -o+w -o ! -user root \) | head -5)
+          if [ -n "$bad" ]; then echo "shared environment writable by desktop users: $bad"; exit 1; fi
+          echo "shared environment: root-owned, not group or world writable"
+      - name: Each user's collector runs as that user, with no login session, privately
+        run: |
+          set -euo pipefail
+          for u in cmalice cmbob; do
+            uid=$(id -u "$u")
+            as_user() { sudo -u "$u" env HOME="/home/$u" XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"; }
+            # Nobody logged in as this user: anything running, runs because of linger.
+            if loginctl list-sessions --no-legend | awk '{print $3}' | grep -qx "$u"; then echo "unexpected login session for $u"; exit 1; fi
+            for _ in $(seq 1 45); do sudo test -f "/home/$u/.clawmetry/sync.pid" && break; sleep 2; done
+            as_user systemctl --user is-active clawmetry-sync
+            pid=$(sudo cat "/home/$u/.clawmetry/sync.pid")
+            owner=$(ps -o user= -p "$pid" | tr -d ' ')
+            [ "$owner" = "$u" ] || { echo "collector for $u runs as '$owner'"; exit 1; }
+            # What this user's interpreter actually sees, so an auto-update
+            # verdict below is self-explaining.
+            (cd / && as_user /opt/clawmetry-fleet/bin/python -c 'import sys, os, tempfile, clawmetry; from pathlib import Path; d = Path(clawmetry.__file__).resolve().parent.parent; print("prefix", sys.prefix, "base", sys.base_prefix, "pkg", d, "mode", oct(os.stat(d).st_mode), "uid", os.stat(d).st_uid, "euid", os.geteuid()); tempfile.mkstemp(dir=str(d)) and print("CREATE SUCCEEDED")' || true)
+            as_user /opt/clawmetry-fleet/bin/clawmetry service status --json > "$RUNNER_TEMP/status-$u.json"
+            cat "$RUNNER_TEMP/status-$u.json"
+            python3 - "$RUNNER_TEMP/status-$u.json" <<'PY'
+          import json, sys
+          s = json.load(open(sys.argv[1]))
+          assert s["survives_logoff"] is True, s
+          assert s["linger"]["state"] == "enabled", s
+          assert s["data_dir"]["private"] is True, s
+          # Root-owned /opt venv: this user's collector must not try to
+          # update itself (AC-OBS-FLEET-001.4).
+          assert s["auto_update"]["state"] == "off", s
+          assert s["auto_update"]["basis"] == "install_not_writable", s
+          PY
+          done
+          # Per-user isolation: one user cannot list or read the other's store.
+          if sudo -u cmbob ls /home/cmalice/.clawmetry >/dev/null 2>&1; then echo "cmbob can list cmalice's data"; exit 1; fi
+          if sudo -u cmbob cat /home/cmalice/.clawmetry/sync.pid >/dev/null 2>&1; then echo "cmbob can read cmalice's data"; exit 1; fi
+          if sudo -u cmalice ls /home/cmbob/.clawmetry >/dev/null 2>&1; then echo "cmalice can list cmbob's data"; exit 1; fi
+          echo "two collectors, two owners, no cross-user read"
+      - name: A user without linger is told, not misled
+        run: |
+          set -euo pipefail
+          u=cmcarol
+          set +e
+          sudo -u "$u" env HOME="/home/$u" /opt/clawmetry-fleet/bin/clawmetry service install --json > "$RUNNER_TEMP/carol.json"
+          rc=$?
+          set -e
+          cat "$RUNNER_TEMP/carol.json"
+          python3 - "$RUNNER_TEMP/carol.json" "$rc" "$u" <<'PY'
+          import json, os, sys
+          r = json.load(open(sys.argv[1])); rc = int(sys.argv[2]); user = sys.argv[3]
+          actual = os.path.exists(f"/var/lib/systemd/linger/{user}")
+          linger = r["steps"]["linger"]
+          # The report must match what logind actually has.
+          assert (linger["state"] == "enabled") == actual, (linger, actual)
+          if not actual:
+              assert linger["admin_command"] == f"sudo loginctl enable-linger {user}", linger
+              assert rc != 0 and r["ok"] is False, (rc, r)
+          PY
+      - name: Record idle overhead (runner reference only)
+        run: |
+          set -euo pipefail
+          sleep 60
+          {
+            echo "### Idle collector overhead, ubuntu-latest runner, no agent workload"
+            echo
+            echo "Reference point only: a GitHub-hosted runner, not a virtual desktop image."
+            echo
+            echo "| user | RSS MB | CPU % (lifetime avg) | elapsed | data dir |"
+            echo "|---|---|---|---|---|"
+            for u in cmalice cmbob; do
+              pid=$(sudo cat "/home/$u/.clawmetry/sync.pid")
+              read -r rss pcpu etime < <(ps -o rss=,pcpu=,etime= -p "$pid")
+              size=$(sudo du -sh "/home/$u/.clawmetry" | cut -f1)
+              echo "| $u | $((rss / 1024)) | $pcpu | $etime | $size |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Uninstall removes the registration
+        run: |
+          set -euo pipefail
+          u=cmalice; uid=$(id -u "$u")
+          sudo -u "$u" env HOME="/home/$u" XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            /opt/clawmetry-fleet/bin/clawmetry service uninstall --json > "$RUNNER_TEMP/un.json"
+          cat "$RUNNER_TEMP/un.json"
+          python3 -c "import json,sys; r=json.load(open(sys.argv[1])); assert r['ok'] and r['removed'], r" "$RUNNER_TEMP/un.json"
+          if sudo test -f "/home/$u/.config/systemd/user/clawmetry-sync.service"; then echo "unit file still present"; exit 1; fi
+          if sudo -u "$u" env XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" systemctl --user is-active clawmetry-sync; then echo "unit still active"; exit 1; fi
+
+  windows-intune:
+    name: Windows, Intune script, all-users logon task
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Build the wheel under test
+        shell: pwsh
+        run: python -m pip wheel --no-deps -w "$env:RUNNER_TEMP\dist" .
+      - name: Run the Intune install script
+        shell: pwsh
+        run: |
+          $wheel = (Get-ChildItem "$env:RUNNER_TEMP\dist\clawmetry-*.whl").FullName
+          $py = (Get-Command python).Source
+          $out = & powershell.exe -ExecutionPolicy Bypass -NoProfile -File deploy\fleet\intune\Install-ClawMetry.ps1 -Package $wheel -PythonExe $py | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 0) { throw "Install-ClawMetry.ps1 exited $code" }
+          if ($out -match 'cm_[A-Za-z0-9]{8,}') { throw "credential-shaped string in output" }
+      - name: The task starts a collector as each signed-in user, least privilege
+        shell: pwsh
+        run: |
+          $raw = schtasks /query /tn ClawMetrySyncDaemonAllUsers /xml | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "all-users task is not registered" }
+          # Print what Task Scheduler actually stored, so a failure below is
+          # self-explaining.
+          Write-Host $raw
+          [xml]$t = $raw
+          # Namespace-aware node lookups with explicit $null tests. The
+          # PowerShell XML adapter turns an element with no children (the
+          # exported <LogonTrigger/>, whose settings are all defaults) into a
+          # falsy value, so `-not $t.Task.Triggers.LogonTrigger` is true for a
+          # trigger that exists.
+          $ns = New-Object System.Xml.XmlNamespaceManager($t.NameTable)
+          $ns.AddNamespace('t', 'http://schemas.microsoft.com/windows/2004/02/mit/task')
+          $P = '/t:Task/t:Principals/t:Principal'
+          $groupNode = $t.SelectSingleNode("$P/t:GroupId", $ns)
+          if ($null -eq $groupNode) { throw "principal has no GroupId" }
+          $g = $groupNode.InnerText
+          if ($g -notmatch '^S-1-') {
+            $g = (New-Object System.Security.Principal.NTAccount($g)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          }
+          if ($g -ne 'S-1-5-32-545') { throw "principal is not BUILTIN\Users (GroupId='$($groupNode.InnerText)')" }
+          $userNode = $t.SelectSingleNode("$P/t:UserId", $ns)
+          if ($null -ne $userNode) { throw "task is pinned to account $($userNode.InnerText)" }
+          # LeastPrivilege is the schema default and the export omits
+          # defaults: absent means LeastPrivilege; any explicit other value
+          # (HighestAvailable) fails.
+          $rl = $t.SelectSingleNode("$P/t:RunLevel", $ns)
+          if ($null -ne $rl -and $rl.InnerText -ne 'LeastPrivilege') { throw "run level is $($rl.InnerText)" }
+          $trig = $t.SelectSingleNode('/t:Task/t:Triggers/t:LogonTrigger', $ns)
+          if ($null -eq $trig) { throw "no logon trigger" }
+          $trigUser = $t.SelectSingleNode('/t:Task/t:Triggers/t:LogonTrigger/t:UserId', $ns)
+          if ($null -ne $trigUser) { throw "logon trigger limited to $($trigUser.InnerText)" }
+          # Parallel is not the default (IgnoreNew is), so it must be present.
+          $mip = $t.SelectSingleNode('/t:Task/t:Settings/t:MultipleInstancesPolicy', $ns)
+          if ($null -eq $mip -or $mip.InnerText -ne 'Parallel') { throw "instances policy is '$($mip.InnerText)'" }
+          Write-Host "task: BUILTIN\Users, any logon, least privilege, one instance per user"
+      - name: Status reports the Windows logoff limit honestly
+        shell: pwsh
+        run: |
+          $cli = Join-Path $env:ProgramFiles "ClawMetry\venv\Scripts\clawmetry.exe"
+          $s = & $cli service status --json | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "status exited $LASTEXITCODE" }
+          Write-Host $s
+          $j = $s | ConvertFrom-Json
+          if ($j.supervisor -ne 'task_all_users') { throw "supervisor is $($j.supervisor)" }
+          if ($j.survives_logoff -ne $false) { throw "claimed to survive logoff on Windows" }
+          if ($null -ne $j.data_dir.private) { throw "claimed a Windows privacy verdict it did not check" }
+      - name: Desktop users cannot write the shared environment
+        shell: pwsh
+        run: |
+          # Users, Authenticated Users, Everyone, Interactive: none may hold a
+          # write-type right (WriteData, AppendData, Delete, WriteDAC,
+          # WriteOwner, GENERIC_WRITE, GENERIC_ALL) on the install.
+          $mask = [int64]0x500D0006
+          $desktop = @('S-1-5-32-545', 'S-1-5-11', 'S-1-1-0', 'S-1-5-4')
+          foreach ($p in @("ClawMetry", "ClawMetry\venv\Lib\site-packages")) {
+            $path = Join-Path $env:ProgramFiles $p
+            $bad = (Get-Acl $path).Access | Where-Object {
+              $sid = try { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { '' }
+              $_.AccessControlType -eq 'Allow' -and ($desktop -contains $sid) -and (([int64]$_.FileSystemRights -band $mask) -ne 0)
+            }
+            if ($bad) { $bad | Format-List | Out-String | Write-Host; throw "desktop users can write $path" }
+            Write-Host "${path}: no write access for desktop users"
+          }
+      - name: The self-update probe honours a Windows ACL that denies writes
+        shell: pwsh
+        # One create attempt takes milliseconds. A hang here is the
+        # tempfile.mkstemp retry loop coming back; fail fast rather than
+        # burning the whole job timeout.
+        timeout-minutes: 3
+        run: |
+          # os.access ignores ACLs on Windows; the probe must not. A deny ACE
+          # for the runner's own account applies even to its admin token.
+          $py = Join-Path $env:ProgramFiles "ClawMetry\venv\Scripts\python.exe"
+          $d = Join-Path $env:RUNNER_TEMP "acl-probe"
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+          icacls $d /deny "${me}:(OI)(CI)(W)" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "icacls failed" }
+          $code = "import os, sys; from pathlib import Path; from clawmetry.fleet_install import self_update_blocked as b; r = b(Path(sys.argv[1]), isolated=True); print(r, 'os.access says writable:', os.access(sys.argv[1], os.W_OK)); sys.exit(0 if r['blocked'] and not r['writable'] else 1)"
+          & $py -c $code $d
+          if ($LASTEXITCODE -ne 0) { throw "probe did not see the deny ACE" }
+          & $py -c "import sys; from pathlib import Path; from clawmetry.fleet_install import self_update_blocked as b; r = b(Path(sys.argv[1]), isolated=True); print(r); sys.exit(0 if not r['blocked'] else 1)" $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw "probe called a writable directory unwritable" }
+      - name: Uninstall removes the task
+        shell: pwsh
+        run: |
+          $cli = Join-Path $env:ProgramFiles "ClawMetry\venv\Scripts\clawmetry.exe"
+          $r = & $cli service uninstall --json | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $r
+          if ($code -ne 0) { throw "uninstall exited $code" }
+          schtasks /query /tn ClawMetrySyncDaemonAllUsers 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "task still registered after uninstall" }
+          $global:LASTEXITCODE = 0

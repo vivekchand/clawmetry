@@ -69,7 +69,7 @@ Spans and log records are mapped by `dashboard.py::_otel_to_row`. Every attribut
 | `gen_ai.usage.cost_usd` | `llm.usage.cost`, `cost_usd` | Pre-computed cost in USD. When absent, ClawMetry prices the tokens locally. |
 | `gen_ai.provider.name` | `gen_ai.system`, `llm.provider`, `provider` | Provider string (e.g. ``anthropic``, ``openai``). |
 | `gen_ai.tool.name` | `tool.name`, `code.function` | Name of the tool called (on ``execute_tool`` spans). |
-| `gen_ai.conversation.id` | `session.id`, `openclaw.session_id`, `session_id` | Session or conversation identifier. |
+| `gen_ai.conversation.id` | `traceloop.association.properties.thread_id`, `session.id`, `openclaw.session_id`, `session_id` | Session or conversation identifier. Fallbacks are read in the order listed, so a LangGraph thread (``traceloop.association.properties.thread_id``, what OpenLLMetry stamps on every span below the run's top span) outranks ``session.id`` on the span or the resource. |
 | `gen_ai.agent.id` | `agent.id`, `openclaw.agent_id`, `agent_id` | Agent identifier. |
 | `gen_ai.input.messages` | `gen_ai.prompt` | Input message list (current GenAI semconv). |
 | `gen_ai.output.messages` | `gen_ai.completion` | Output message list (current GenAI semconv). |

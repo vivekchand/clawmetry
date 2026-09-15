@@ -1,0 +1,155 @@
+# LiteLLM gateway, end to end, against a REAL proxy (REQ-OBS-GWY-001, #5940).
+#
+# A LiteLLM 1.83.7 proxy backed by its own Postgres database (teams and
+# virtual keys need one) exports its OpenTelemetry traces to a real ClawMetry
+# dashboard. scripts/litellm_gateway_ci.py creates two teams and two keys,
+# sends ordinary, cached, streamed, failing and team-spoofing requests, and
+# checks /api/usage/by-team against LiteLLM's own /spend/logs, printing the
+# residual per team. The dashboard is then restarted and the same answer must
+# come back from the store.
+#
+# The unit-level guard (tests/test_litellm_gateway_ingest.py) runs in ci.yml
+# on every PR from a fixture captured from this same proxy version. This job
+# is the part a fixture cannot prove: that the proxy still emits what the
+# fixture says. It runs when the ingest path or this integration changes.
+#
+# The proxy lives in its own virtualenv from a hash-locked requirements file
+# (LiteLLM has had compromised PyPI releases). Postgres is the runner's
+# preinstalled server, so there is no container image to pin.
+name: LiteLLM gateway (real proxy)
+
+on:
+  pull_request:
+    paths:
+      - "dashboard.py"
+      - "clawmetry/gateway_litellm.py"
+      - "clawmetry/local_store.py"
+      - "clawmetry/otlp_json.py"
+      - "routes/usage.py"
+      - "routes/local_query.py"
+      - "scripts/litellm_gateway_ci.py"
+      - "tests/fixtures/litellm_1_83_7/**"
+      - ".github/requirements/ci-litellm-proxy.txt"
+      - ".github/workflows/litellm-gateway.yml"
+  push:
+    branches: [main]
+    paths:
+      - "dashboard.py"
+      - "clawmetry/gateway_litellm.py"
+      - "clawmetry/local_store.py"
+      - "clawmetry/otlp_json.py"
+      - "routes/usage.py"
+      - "routes/local_query.py"
+      - "scripts/litellm_gateway_ci.py"
+      - "tests/fixtures/litellm_1_83_7/**"
+      - ".github/requirements/ci-litellm-proxy.txt"
+      - ".github/workflows/litellm-gateway.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: litellm-gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  litellm-proxy:
+    name: LiteLLM proxy -> ClawMetry Usage (two teams, reconciled)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLAWMETRY_PORT: 8900
+      CLAWMETRY_TOKEN: ci-test-token
+      LITELLM_PORT: 4000
+      LITELLM_MASTER_KEY: sk-master-test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install the dashboard (with the otel extra LiteLLM's protobuf export needs)
+        run: |
+          pip install --require-hashes -r .github/requirements/ci-tests.txt
+          pip install --require-hashes -r .github/requirements/ci-otel-extra.txt
+
+      - name: Install LiteLLM 1.83.7 into its own virtualenv (hash-locked)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/litellm"
+          "$RUNNER_TEMP/litellm/bin/pip" install --require-hashes -r .github/requirements/ci-litellm-proxy.txt
+          proxy_dir="$("$RUNNER_TEMP/litellm/bin/python" -c 'import litellm, os; print(os.path.join(os.path.dirname(litellm.__file__), "proxy"))')"
+          cd "$proxy_dir"
+          PATH="$RUNNER_TEMP/litellm/bin:$PATH" prisma generate --schema schema.prisma
+
+      - name: Assert LiteLLM's otel callback can actually export
+        # LiteLLM treats a missing OpenTelemetry install as a non-blocking
+        # error: the proxy starts, serves requests and exports nothing, so the
+        # job would only fail two minutes later on "0 requests". Fail here, and
+        # say why.
+        run: |
+          "$RUNNER_TEMP/litellm/bin/python" -c "
+          from opentelemetry.sdk.trace import TracerProvider
+          from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+          from litellm.integrations.opentelemetry import OpenTelemetry
+          print('LiteLLM otel callback importable')
+          "
+
+      - name: Start Postgres for LiteLLM's teams and keys
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -v ON_ERROR_STOP=1 \
+            -c "CREATE USER llm WITH PASSWORD 'llm';" \
+            -c "CREATE DATABASE litellm OWNER llm;"
+
+      - name: Start the ClawMetry dashboard
+        run: |
+          mkdir -p "$RUNNER_TEMP/cmhome"
+          HOME="$RUNNER_TEMP/cmhome" CLAWMETRY_OFFLINE=1 OPENCLAW_GATEWAY_TOKEN=ci-test-token \
+            nohup python3 dashboard.py --port 8900 --no-debug > "$RUNNER_TEMP/dashboard.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -H "Authorization: Bearer ci-test-token" http://127.0.0.1:8900/api/health >/dev/null && echo "dashboard ready" && exit 0
+            sleep 1
+          done
+          echo "::error::dashboard did not start"; exit 1
+
+      - name: Start the LiteLLM proxy, exporting traces to ClawMetry
+        run: |
+          cd tests/fixtures/litellm_1_83_7
+          DATABASE_URL="postgresql://llm:llm@127.0.0.1:5432/litellm" \
+          LITELLM_LOCAL_MODEL_COST_MAP=True \
+          OTEL_EXPORTER=otlp_http \
+          OTEL_ENDPOINT=http://127.0.0.1:8900/v1/traces \
+          OTEL_SERVICE_NAME=litellm-gateway \
+          PATH="$RUNNER_TEMP/litellm/bin:$PATH" \
+            nohup litellm --config proxy_config.yaml --host 127.0.0.1 --port 4000 > "$RUNNER_TEMP/litellm.log" 2>&1 &
+          for i in $(seq 1 180); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/health/readiness || true)"
+            [ "$code" = "200" ] && echo "proxy ready after ${i}s" && exit 0
+            sleep 1
+          done
+          echo "::error::LiteLLM proxy did not become ready"; exit 1
+
+      - name: Drive two teams through the proxy and reconcile with LiteLLM's spend log
+        run: python3 scripts/litellm_gateway_ci.py drive --snapshot "$RUNNER_TEMP/gateway.json"
+
+      - name: Restart the dashboard; the stored answer must not change
+        run: |
+          pkill -f "dashboard.py --port 8900" || true
+          for i in $(seq 1 30); do pgrep -f "dashboard.py --port 8900" >/dev/null || break; sleep 1; done
+          HOME="$RUNNER_TEMP/cmhome" CLAWMETRY_OFFLINE=1 OPENCLAW_GATEWAY_TOKEN=ci-test-token \
+            nohup python3 dashboard.py --port 8900 --no-debug >> "$RUNNER_TEMP/dashboard.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -H "Authorization: Bearer ci-test-token" http://127.0.0.1:8900/api/health >/dev/null && break
+            sleep 1
+          done
+          python3 scripts/litellm_gateway_ci.py after-restart --snapshot "$RUNNER_TEMP/gateway.json"
+
+      - name: Logs on failure
+        if: failure()
+        run: |
+          echo "== dashboard =="; tail -n 200 "$RUNNER_TEMP/dashboard.log" || true
+          echo "== litellm =="; tail -n 200 "$RUNNER_TEMP/litellm.log" || true

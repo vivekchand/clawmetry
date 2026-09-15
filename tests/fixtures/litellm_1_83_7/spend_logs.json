@@ -1,0 +1,62 @@
+[
+ {
+  "request_id": "chatcmpl-b95234b9-3bfc-4f01-b6a0-3a8d89917631",
+  "spend": 1.35e-05,
+  "team_id": "team-beta",
+  "user": "bob",
+  "api_key": "bf7f46e1d63e01df73f245a9557fc2adf4a26adcaf92f53ff50bd77bea5b4200",
+  "cache_hit": "None",
+  "status": "success",
+  "model": "openai/gpt-4o-mini",
+  "model_group": "fast-alias",
+  "total_tokens": 30
+ },
+ {
+  "request_id": "fd76f69d-d373-4c77-aaf3-d08cf7e2cda7",
+  "spend": 0.0,
+  "team_id": "team-beta",
+  "user": "bob",
+  "api_key": "bf7f46e1d63e01df73f245a9557fc2adf4a26adcaf92f53ff50bd77bea5b4200",
+  "cache_hit": "False",
+  "status": "failure",
+  "model": "openai/gpt-4o-mini",
+  "model_group": "broken-alias",
+  "total_tokens": 0
+ },
+ {
+  "request_id": "chatcmpl-c48f6ccc-0351-418a-acc7-7f624cbf4f7e",
+  "spend": 3.75e-06,
+  "team_id": "team-beta",
+  "user": "bob",
+  "api_key": "bf7f46e1d63e01df73f245a9557fc2adf4a26adcaf92f53ff50bd77bea5b4200",
+  "cache_hit": "False",
+  "status": "success",
+  "model": "openai/gpt-4o-mini",
+  "model_group": "fast-alias",
+  "total_tokens": 13
+ },
+ {
+  "request_id": "chatcmpl-602b6e58-68d4-4752-839b-f58a1c87a119_cache_hit1789346181.978574",
+  "spend": 0.0,
+  "team_id": "team-alpha",
+  "user": "alice",
+  "api_key": "e68b04742087cc8b008f46a950e0b2b6826299c6fa2db13b00b2b693ba215fa9",
+  "cache_hit": "True",
+  "status": "success",
+  "model": "openai/gpt-4o-mini",
+  "model_group": "fast-alias",
+  "total_tokens": 30
+ },
+ {
+  "request_id": "chatcmpl-602b6e58-68d4-4752-839b-f58a1c87a119",
+  "spend": 1.35e-05,
+  "team_id": "team-alpha",
+  "user": "alice",
+  "api_key": "e68b04742087cc8b008f46a950e0b2b6826299c6fa2db13b00b2b693ba215fa9",
+  "cache_hit": "None",
+  "status": "success",
+  "model": "openai/gpt-4o-mini",
+  "model_group": "fast-alias",
+  "total_tokens": 30
+ }
+]

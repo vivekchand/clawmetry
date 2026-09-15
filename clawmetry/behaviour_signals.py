@@ -1029,3 +1029,65 @@ def build_snapshot_slices(store) -> tuple[dict, dict]:
         log.debug("behaviour signals: snapshot slice failed: %s", e)
         return {}, {}
     return node, per_rt
+
+
+SNAPSHOT_SESSION_LIMIT = 25
+
+
+def _json_safe(v):
+    """Store timestamps come back as datetimes; the snapshot wants strings."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    iso = getattr(v, "isoformat", None)
+    return iso() if callable(iso) else str(v)
+
+
+def build_session_slice(store, node: dict, per_rt: dict,
+                        limit: int = SNAPSHOT_SESSION_LIMIT) -> dict:
+    """``signalSessions`` for ``sync_system_snapshot``: the rows
+    ``/api/signals/<name>/sessions`` serves, per runtime, window and signal.
+
+    Without it the hosted drill-down had nothing to list and read as "no
+    sessions matched" beside a rate that said two did. Keyed
+    ``byRuntime[<runtime>|"all"][window][signal]`` and built per runtime
+    rather than filtered out of one node-wide list, so a quiet runtime is not
+    starved by a loud one's top rows. Only signals that actually matched in
+    that window are queried, which is why this stays cheap: the ``node`` and
+    ``per_rt`` rates from :func:`build_snapshot_slices` say which ones did.
+    Sessions and counts only, never the matched phrases. Never raises.
+    """
+    out: dict = {}
+    now_ms = int(time.time() * 1000)
+
+    def _rows(signal, days, rt):
+        rows = store.query_signal_sessions(
+            signal=signal, since_ms=now_ms - days * _DAY_MS,
+            runtime=rt, limit=limit) or []
+        return [{k: _json_safe(v) for k, v in r.items()}
+                for r in rows if isinstance(r, dict)]
+
+    def _fill(bucket, rates_by_window, rt):
+        for key, days in WINDOWS_DAYS.items():
+            sigs = ((rates_by_window or {}).get(key) or {}).get("signals") or {}
+            for name, s in sigs.items():
+                if name not in SIGNALS or not int((s or {}).get("count") or 0):
+                    continue
+                rows = _rows(name, days, rt)
+                if rows:
+                    bucket.setdefault(key, {})[name] = rows
+
+    try:
+        by_rt: dict = {}
+        all_bucket: dict = {}
+        _fill(all_bucket, node, None)
+        by_rt["all"] = all_bucket
+        for rt, rates in (per_rt or {}).items():
+            bucket: dict = {}
+            _fill(bucket, rates, rt)
+            by_rt[rt] = bucket
+        out = {"byRuntime": by_rt, "limit": limit,
+               "generated_at": now_ms}
+    except Exception as e:  # noqa: BLE001
+        log.debug("behaviour signals: session slice failed: %s", e)
+        return {}
+    return out

@@ -272,6 +272,78 @@ _LOCAL_PROVIDERS = frozenset({"ollama", "llamacpp", "llama.cpp", "lmstudio", "lo
 
 def _get_rates(provider: str, model: str) -> tuple[float, float]:
     """Return (input_per_1m, output_per_1m) for a provider+model combo."""
+    input_rate, output_rate, _basis = rate_basis(provider, model)
+    return input_rate, output_rate
+
+
+#: What backs a rate from :func:`rate_basis`. ``model`` is a published rate for
+#: that model; ``provider_baseline`` is one representative model's rate standing
+#: in for a model the table does not list; ``unknown_default`` is the generic
+#: conservative rate used when neither the model nor the provider is known.
+RATE_BASES = ("local", "model", "provider_baseline", "unknown_default")
+
+#: Azure OpenAI endpoint host suffixes. A request only counts as Azure OpenAI
+#: when the path is also under ``/openai/`` (``cognitiveservices.azure.com``
+#: hosts speech, vision and other non-LLM services too).
+AZURE_OPENAI_HOST_SUFFIXES = (
+    ".openai.azure.com",
+    ".cognitiveservices.azure.com",
+    ".services.ai.azure.com",
+)
+
+#: Providers whose usage reports count cached input tokens INSIDE the input
+#: token total (the cached slice replaces part of the ordinary input charge).
+#: Anthropic, including Claude on Bedrock, reports cache reads and writes in
+#: addition to input tokens. Mirrors estimate_event_cost_usd below.
+_CACHE_INSIDE_INPUT = frozenset({"openai", "azure-openai", "meta"})
+_CACHE_OUTSIDE_INPUT = frozenset({"anthropic"})
+
+
+def cache_tokens_included_in_input(provider: str):
+    """True when ``provider`` counts cached tokens inside input tokens, False
+    when they are additional, None when the convention is not known. Never
+    raises."""
+    prov = (provider or "").lower()
+    if prov in _CACHE_INSIDE_INPUT:
+        return True
+    if prov in _CACHE_OUTSIDE_INPUT:
+        return False
+    return None
+
+
+def parse_azure_openai_url(url: str):
+    """Split an Azure OpenAI request URL into its resource host and deployment.
+
+    ``https://myres.openai.azure.com/openai/deployments/prod-chat/chat/completions``
+    -> ``{"resource": "myres.openai.azure.com", "deployment": "prod-chat"}``.
+    The v1 surface (``/openai/v1/...``) names the model in the request body,
+    so ``deployment`` is None there. Returns None for anything that is not an
+    Azure OpenAI endpoint. Never raises.
+    """
+    try:
+        from urllib.parse import unquote, urlsplit
+
+        parts = urlsplit(url or "")
+        host = (parts.hostname or "").lower()
+        if not host or not host.endswith(AZURE_OPENAI_HOST_SUFFIXES):
+            return None
+        path = parts.path or ""
+        if not path.lower().startswith("/openai/"):
+            return None
+        m = re.match(r"^/openai/deployments/([^/]+)", path, re.IGNORECASE)
+        deployment = unquote(m.group(1)) if m else None
+        return {"resource": host, "deployment": deployment}
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def rate_basis(provider: str, model: str) -> tuple[float, float, str]:
+    """Return ``(input_per_1m, output_per_1m, basis)`` for a provider+model.
+
+    ``basis`` is one of :data:`RATE_BASES`, so a caller can tell a published
+    model rate from a stand-in. The two rates are exactly what ``_get_rates``
+    has always returned.
+    """
     prov_lower = (provider or "").lower()
     model_lower = (model or "").lower()
 
@@ -279,7 +351,7 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
     if prov_lower in _LOCAL_PROVIDERS or any(
         model_lower.startswith(p + "/") for p in _LOCAL_PROVIDERS
     ):
-        return 0.0, 0.0
+        return 0.0, 0.0, "local"
 
     # `provider_for_model` returns "google" for Gemini, but the pricing tables
     # key on "gemini" — without this alias every Gemini call fell through to the
@@ -288,10 +360,16 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
     if prov_lower == "google":
         prov_lower = "gemini"
 
+    # Azure OpenAI serves OpenAI's models; OpenAI's published rate is the list
+    # estimate. Azure's own list can differ by region and deployment type,
+    # which is what a price book entry is for.
+    if prov_lower == "azure-openai":
+        prov_lower = "openai"
+
     if prov_lower == "openai":
         prices = _openai_prices(model)
         if prices is not None:
-            return prices[0], prices[1]
+            return prices[0], prices[1], "model"
 
     if model:
         # Strip a leading provider namespace so OpenRouter ids
@@ -319,14 +397,14 @@ def _get_rates(provider: str, model: str) -> tuple[float, float]:
                     best_len = len(prefix)
                     best_rates = rates
         if best_rates is not None:
-            return best_rates
+            return best_rates[0], best_rates[1], "model"
 
     # Fall back to provider baseline
     for info in PROVIDER_MAP.values():
         if info["name"] == prov_lower:
-            return info["input_per_1m"], info["output_per_1m"]
+            return info["input_per_1m"], info["output_per_1m"], "provider_baseline"
 
-    return 1.0, 3.0  # unknown provider — conservative default
+    return 1.0, 3.0, "unknown_default"  # unknown provider — conservative default
 
 
 # #2049: self-hosted / local model name hints. Routed to the "local" provider
@@ -592,7 +670,7 @@ def estimate_event_cost_usd(
                 total_input = max(0, int(input_tokens))
                 cached = min(total_input, max(0, int(cache_read_tokens)))
                 cost += cached / 1_000_000 * (cached_rate - input_rate)
-        elif prov == "openai":
+        elif prov in ("openai", "azure-openai"):
             prices = _openai_prices(model)
             if prices is not None:
                 total_input = max(0, int(input_tokens))

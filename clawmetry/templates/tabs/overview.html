@@ -660,17 +660,18 @@
         }
       };
 
-      // Self-poll /api/overview so the card stays live without coupling to
-      // app.js. The backend caches the heartbeat block for 30s so this is
-      // cheap; we still poll every 60s to keep the gap counter ticking.
+      // #5935 (AC 3): the heartbeat card has no request of its own. It reads
+      // the overview answer ONLY through _cmFetchOverviewShared() from app.js,
+      // the same shared in-flight promise loadAll and initFlow get, so it never
+      // adds a request beside theirs. app.js is loaded before DOMContentLoaded
+      // fires, which is when the first read runs. The backend caches the
+      // heartbeat block for 30s; reading every 60s keeps the gap counter live.
+      // tests/test_cold_load_boot_js.py fails if any template or script names
+      // that URL outside the shared helper.
       function pollOnce(){
-        // #2019: skip the poll when the browser tab is hidden. This is a
-        // second, independent /api/overview poller (decoupled from app.js's
-        // loadAll on purpose), so it can't ride loadAll's coalesce window —
-        // gate it directly so it doesn't fetch every 60s while backgrounded.
+        // #2019: skip the read when the browser tab is hidden.
         if (typeof document !== 'undefined' && document.hidden) return;
-        fetch('/api/overview', {credentials: 'same-origin'})
-          .then(function(r){ return r.ok ? r.json() : null; })
+        _cmFetchOverviewShared()
           .then(function(d){
             if(d && d.heartbeat){ window.renderOverviewHeartbeat(d.heartbeat); }
           })
