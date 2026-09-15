@@ -36,7 +36,12 @@ def test_codex_cost_token_span_lands_in_tiles(monkeypatch):
     monkeypatch.setattr(_d, "_add_metric", lambda cat, e: captured.append((cat, e)))
 
     now = int(time.time() * 1e9)
+    # Real exporters always set both ids (OTLP requires them). A span without
+    # them is refused by the store, so it no longer lights a tile it would
+    # never be stored behind (REQ-OBS-OIA-001).
+    _d._otlp_seen_ids.discard("span:%s:%s" % ("0a" * 16, "0b" * 8))
     span = trace_pb2.Span(name="codex.api_request",
+                          trace_id=bytes.fromhex("0a" * 16), span_id=bytes.fromhex("0b" * 8),
                           start_time_unix_nano=now, end_time_unix_nano=now + 500_000_000)
     span.attributes.extend([
         _kv("model", s="gpt-5.4"),

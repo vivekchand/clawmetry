@@ -449,6 +449,50 @@ def test_span_payloads_are_scrubbed_before_storage(store):
         assert canary not in events
 
 
+def test_spans_written_one_at_a_time_after_a_data_error_are_still_scrubbed(
+        store, monkeypatch):
+    """A span carrying a value the store cannot hold fails the batch write,
+    and the store then writes the batch one span at a time (REQ-OBS-OIA-001).
+    That retry must write the SAME redacted rows as the batch attempt: a
+    fallback that re-derived rows from the received spans would store the
+    valid span's prompt as sent.
+
+    AC-OBS-OTG-001.4
+    """
+    calls = []
+    real_write = _ls.LocalStore._write_span_rows_locked
+
+    def _spy(self, to_write):
+        calls.append(len(to_write))
+        return real_write(self, to_write)
+
+    monkeypatch.setattr(_ls.LocalStore, "_write_span_rows_locked", _spy)
+
+    prompt = json.dumps([{"role": "user", "content":
+                          "I am %s and my key is %s" % (EMAIL, ANTHROPIC_KEY)}])
+    good = _chat_span(0x6A, "conv-retry", extra=[
+        _kv("gen_ai.input.messages", s=prompt),
+    ])
+    # OTLP carries int64; the spans token column is INTEGER.
+    unholdable = _chat_span(0x6B, "conv-retry", off_s=1, extra=[
+        _kv("gen_ai.usage.total_tokens", i=3_000_000_000),
+        _kv("gen_ai.input.messages", s=prompt),
+    ])
+    unholdable.attributes.extend([_kv("gen_ai.usage.input_tokens", i=3_000_000_000)])
+    result = _d._process_otlp_traces(_traces([good, unholdable]))
+
+    # The batch attempt failed and the one-span retry actually ran.
+    assert calls and calls[0] == 2 and calls[1:] == [1, 1], calls
+    assert result["rejected"] == 1, result
+
+    spans = store.query_spans(session_id="conv-retry", limit=10)
+    assert [s["span_id"] for s in spans] == ["6a" * 8]
+    stored = json.dumps(spans, default=str)
+    for canary in (EMAIL, ANTHROPIC_KEY):
+        assert canary not in stored, "%s rested unscrubbed via the retry path" % canary
+    assert "[email]" in stored and "[REDACTED:" in stored
+
+
 def test_the_log_record_ledger_is_scrubbed_and_keeps_its_identity(store):
     """
     AC-OBS-OTG-001.4

@@ -21,12 +21,19 @@ from clawmetry.ingest_contract import (  # noqa: E402
     CONTRACT_VERSION,
     GEN_AI_ATTRS_NOT_READ,
     GEN_AI_ATTRS_READ,
+    OTLP_ACKNOWLEDGEMENT,
+    OTLP_AUTH,
     OTLP_CONTENT_TYPES,
     OTLP_ENCODINGS,
     OTLP_ENDPOINTS,
+    OTLP_INTAKE_STATUS,
+    OTLP_LIVE_VIEW_ONLY,
     OTLP_MAX_DECOMPRESSED_ENVVAR,
     OTLP_MAX_DECOMPRESSED_MB,
+    OTLP_REDELIVERY_IDENTITY,
     OTLP_RESPONSE_CODES,
+    OTLP_RETRY_AFTER_SECONDS,
+    OTLP_SESSION_IDENTITY,
     RUN_ENDPOINTS,
     RUN_RESPONSE_CODES,
 )
@@ -102,6 +109,46 @@ def _render_otlp() -> list[str]:
     lines.append("| - | - |")
     for code, doc in sorted(OTLP_RESPONSE_CODES.items()):
         lines.append(f"| `{code}` | {doc} |")
+    lines.append("")
+
+    lines.append("### Acknowledgement and retry")
+    lines.append("")
+    lines.append(OTLP_ACKNOWLEDGEMENT)
+    lines.append("")
+    lines.append(
+        f"`Retry-After` on a 503: **{OTLP_RETRY_AFTER_SECONDS} seconds**."
+    )
+    lines.append("")
+
+    lines.append("### Recognising a re-delivery")
+    lines.append("")
+    lines.append("| Path | Identity |")
+    lines.append("| - | - |")
+    for path, doc in OTLP_REDELIVERY_IDENTITY.items():
+        lines.append(f"| `{path}` | {doc} |")
+    lines.append("")
+
+    lines.append("### Session identity when the sender names none")
+    lines.append("")
+    lines.append("| Path | Session |")
+    lines.append("| - | - |")
+    for path, doc in OTLP_SESSION_IDENTITY.items():
+        lines.append(f"| `{path}` | {doc} |")
+    lines.append("")
+
+    lines.append("### Held only in the live view")
+    lines.append("")
+    lines.append(OTLP_LIVE_VIEW_ONLY)
+    lines.append("")
+
+    lines.append("### Authentication")
+    lines.append("")
+    lines.append(OTLP_AUTH)
+    lines.append("")
+
+    lines.append("### Intake status")
+    lines.append("")
+    lines.append(OTLP_INTAKE_STATUS)
     lines.append("")
 
     return lines

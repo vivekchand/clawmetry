@@ -2241,6 +2241,7 @@ function switchTab(name) {
   if (name === 'guard') { if (typeof loadGuardTab === 'function') loadGuardTab(); }
   if (name === 'signals') { if (typeof loadSignalsTab === 'function') loadSignalsTab(); }
   if (name === 'compliance') { if (typeof loadComplianceTab === 'function') loadComplianceTab(); }
+  if (name === 'price-book') { if (typeof loadPriceBookTab === 'function') loadPriceBookTab(); }
   if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
   if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
@@ -10656,6 +10657,8 @@ var LOOP_KIND_LABEL = {
   rate_limited: 'Being rate limited by its provider',
   blocked_on_user: 'Waiting for you to answer',
   crashed: 'Crashed and restarted',
+  // Content: text the agent read tried to give it instructions.
+  prompt_injection: 'Read text that tried to give it orders',
   // Fleet-wide: several unrelated agents doing the same unusual thing.
   // Mirrors clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Acting in step with unrelated agents',
@@ -18584,6 +18587,8 @@ async function loadUsage() {
     setUsageCard('usage-today', data.todayCost, data.today, 'today');
     setUsageCard('usage-week', data.weekCost, data.week, 'week');
     setUsageCard('usage-month', data.monthCost, data.month, 'month');
+    // Contract-rate card (static/js/price-book.js, #5936). Local installs only.
+    try { if (typeof renderUsagePriceBook === 'function') renderUsagePriceBook(data); } catch (_ePb) { console.error('renderUsagePriceBook failed', _ePb); }
     try { renderBillingCoverageBanner(_cov, data); } catch (_eBC) { console.error('renderBillingCoverageBanner failed', _eBC); }
     // Runtime-scoped empty state: when a specific runtime is selected but has
     // no cost data in any window, surface a clear note rather than showing all zeros.
@@ -31479,6 +31484,8 @@ var GUARD_KIND_LABEL = {
   rate_limited: 'Rate limited by the provider',
   blocked_on_user: 'Waiting on you',
   crashed: 'Crashed and restarted',
+  // Content: does text the agent read try to give it instructions?
+  prompt_injection: 'Prompt injection',
   // Fleet: several unrelated agents doing the same unusual thing. Keys
   // mirror clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Coordinated with unrelated agents',

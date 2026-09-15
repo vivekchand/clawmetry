@@ -575,8 +575,8 @@ def test_routes_are_gated_on_the_price_book_feature():
     assert ent.FEATURE_LABELS["price_book"] == "Price book"
     with open(os.path.join(_REPO, "routes", "pricing.py"), encoding="utf-8") as fh:
         src = fh.read()
-    assert src.count('@gate("price_book")') == 3
-    assert len(re.findall(r"@bp_pricing\.route\(", src)) == 3
+    assert src.count('@gate("price_book")') == 4
+    assert len(re.findall(r"@bp_pricing\.route\(", src)) == 4
 
 
 # ── AC-OBS-CEA-024.11: the customer boundary ───────────────────────────────

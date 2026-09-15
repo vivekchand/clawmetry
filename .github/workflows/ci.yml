@@ -221,7 +221,7 @@ jobs:
         run: python3 -m pytest tests/test_auto_quarantine.py -q
 
       - name: Published provider pricing and cache accounting
-        run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py tests/test_price_book.py -q
+        run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py tests/test_price_book.py tests/test_price_book_usage.py -q
 
       # #5979: a session with tokens but no priced event must render as
       # unknown cost on the Usage tab, never a confident $0.00. Named here
@@ -784,6 +784,7 @@ jobs:
             tests/test_e2e_real_openclaw_pipeline.py \
             tests/test_onboarding_ingest_status.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
+            tests/test_price_book_usage_store.py \
             tests/test_query_events_keys_first.py \
             tests/test_cost_scan_slim_events.py \
             tests/test_moat_cloud_roundtrip_e2e.py \
@@ -902,6 +903,8 @@ jobs:
             tests/test_guard_policies_api_ladder.py \
             tests/test_guard_policy_enforcement.py \
             tests/test_guard_framework_map.py \
+            tests/test_detector_prompt_injection.py \
+            tests/test_untrusted_content_gate.py \
             tests/test_waste_flags_free_default.py \
             tests/test_alert_rule_types_new.py \
             tests/test_regression_replay_optin.py \
@@ -924,8 +927,12 @@ jobs:
             tests/test_daemon_spawn_pid_lock.py \
             tests/test_first_run_report.py \
             tests/test_e2e_invariants.py \
+            tests/test_data_boundary_contract.py \
+            tests/test_egress_suppression.py \
+            tests/test_telemetry.py \
             tests/test_e2e_telegram_brain_ingest.py \
             tests/test_rollup_session_runtime_attribution.py \
+            tests/test_project_attribution_budgets.py \
             tests/test_crons_local_store.py \
             tests/test_pr_provenance.py \
             -q
@@ -1178,6 +1185,7 @@ jobs:
             tests/test_spans_otlp_edge_cases.py \
             tests/test_otlp_session_materialization.py \
             tests/test_litellm_gateway_ingest.py \
+            tests/test_otlp_durable_ack.py \
             -q
           # NOT listed: tests/test_e2e_otlp_ingest.py -- it drives a LIVE
           # dashboard over HTTP (BASE_URL), which this job does not boot. It
