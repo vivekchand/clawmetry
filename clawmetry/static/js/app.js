@@ -27385,7 +27385,7 @@ function loadAutomationAdvisorDataWithTime() {
     if (data.suggestions && data.suggestions.length > 0) {
       html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">💡 Automation Suggestions</h3>';
       data.suggestions.forEach(function(suggestion) {
-        var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '[dev]' : '🔧';
+        var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '🧬' : '🔧';
         html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;">';
         html += '<div style="display:flex;align-items:center;margin-bottom:8px;"><span style="font-size:20px;margin-right:8px;">' + typeIcon + '</span>';
         html += '<span style="font-weight:600;">' + suggestion.title + '</span></div>';

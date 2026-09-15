@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: a sign-in tells the cloud account whether it is cloud or self-hosted (2026-09-15)
+- **Why:** the onboarding choice was recorded only on the anonymous install ping, which cannot be joined to an account for a self-hosted install (it never registers a node). A self-hosted account created 2026-09-09 received three "Your ClawMetry dashboard is still empty" emails telling the person to connect the machine to the cloud they had just declined, and every managed terminal sign-in was sent the self-hosted trial email.
+- **What:** every sign-in's trial call (`/api/license/trial/signup`) now carries `deployment`: `managed` from `clawmetry connect` and the dashboard's cloud sign-in, `selfhost` from the keep-local sign-in in either place. The body is built in `clawmetry/onboarding_state.py`, which omits any other value so a caller that does not know the choice never reclassifies an account. The account stores it, and the cloud emails and admin console follow it (clawmetry-cloud companion change).
+- **Verified:** `tests/test_account_deployment_report.py` and the sign-in tests in `tests/test_cloud_cta_oauth.py`.
+- **Refs:** REQ-OGV-ADC-001 (AC-OGV-ADC-001.1 to 001.4).
+
 ### Release: the Cost Optimizer follows the runtime switcher (2026-09-15)
 - **Carries:** #6016 (a runtime-scoped dashboard, for example `?runtime=codex`, no longer shows another runtime's spend, expensive calls or experiments in the Cost Optimizer; the daemon ships `costOptimizerByRuntime` for the hosted dashboard, served by clawmetry-cloud#2457 after this pin). Any other change merged before this release carries its own entry below.
 
