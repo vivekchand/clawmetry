@@ -100,7 +100,7 @@ below live here so the free UI can render locked rows with an accurate
 | Bucket | Constant | Features |
 |---|---|---|
 | Starter | `STARTER_FEATURES` | `multi_runtime`, `fleet`, `cloud_sync`, `all_channels`, `approval_queue`, `budget_limits`, `per_runtime_health_timeline` |
-| Pro-only | `PRO_ONLY_FEATURES` | `per_run_waste_flags`, `per_run_compare`, `error_triage`, `self_evolve`, `asset_registry`, `eval_suite`, `tool_policy`, `otel_export`, `custom_webhooks`, `custom_runtime_ingest`, `custom_alerts`, `alert_webhooks`, `anomaly_detection`, `cost_optimizer`, `compliance_pack`, `audit_logs`, `rbac` |
+| Pro-only | `PRO_ONLY_FEATURES` | `per_run_waste_flags`, `per_run_compare`, `error_triage`, `self_evolve`, `asset_registry`, `eval_suite`, `tool_policy`, `otel_export`, `custom_webhooks`, `custom_runtime_ingest`, `custom_alerts`, `alert_webhooks`, `anomaly_detection`, `cost_optimizer`, `price_book`, `compliance_pack`, `audit_logs`, `rbac` |
 | Enterprise | `ENTERPRISE_FEATURES` | `siem_export`, `sso`, `air_gapped_license`, `custom_data_residency`, `org_analytics` |
 
 `audit_logs` and `rbac` moved from Enterprise to Pro on 2026-08-25. Pro was

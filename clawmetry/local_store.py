@@ -1935,6 +1935,22 @@ _DDL = [
     "CREATE INDEX IF NOT EXISTS idx_otlp_records_repo_ts  ON otlp_records(repo, ts)",
     "CREATE INDEX IF NOT EXISTS idx_otlp_records_user_ts  ON otlp_records(user_email, ts)",
     "CREATE INDEX IF NOT EXISTS idx_otlp_records_sess_ts  ON otlp_records(session_id, ts)",
+    # REQ-OBS-GWY-001 (#5940): gateway usage records (a LiteLLM proxy's
+    # requests) share this ledger. ``source`` separates them from the agent
+    # rows every existing rollup reads (NULL on every row written before), and
+    # the rest are what the gateway read groups and joins on: the cost label,
+    # the trace a request belongs to (correlation with other sources), the
+    # provider response id (a cache replay repeats it), and the key / team
+    # labels LiteLLM authenticated. ALTER, not a new CREATE, so existing stores
+    # pick them up; rows are never rewritten.
+    "ALTER TABLE otlp_records ADD COLUMN IF NOT EXISTS source      VARCHAR",
+    "ALTER TABLE otlp_records ADD COLUMN IF NOT EXISTS cost_source VARCHAR",
+    "ALTER TABLE otlp_records ADD COLUMN IF NOT EXISTS trace_id    VARCHAR",
+    "ALTER TABLE otlp_records ADD COLUMN IF NOT EXISTS response_id VARCHAR",
+    "ALTER TABLE otlp_records ADD COLUMN IF NOT EXISTS key_alias   VARCHAR",
+    "ALTER TABLE otlp_records ADD COLUMN IF NOT EXISTS team_alias  VARCHAR",
+    "CREATE INDEX IF NOT EXISTS idx_otlp_records_source_ts ON otlp_records(source, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_otlp_records_response  ON otlp_records(response_id)",
     # ── Git outcomes (REQ-OBS-CEA-022) ────────────────────────────────────
     #
     # The output half of "what did this cost". Every cost figure in the
@@ -9871,7 +9887,23 @@ class LocalStore(TrailStoreMixin):
         "agent_type", "service_name", "model", "provider", "cost_usd",
         "tokens_input", "tokens_output", "token_count", "duration_ms",
         "tool_name", "decision", "success", "attributes",
+        # REQ-OBS-GWY-001: NULL on agent rows, set on gateway usage rows.
+        "source", "cost_source", "trace_id", "response_id", "key_alias",
+        "team_alias",
     )
+
+    def query_gateway_usage(self, *, window_days: int = 7) -> dict[str, Any] | None:
+        """Gateway usage (a LiteLLM proxy's requests) by team, user and key,
+        over the last ``window_days``. REQ-OBS-GWY-001. The SQL and the rules
+        (cache replays, unreported cost, trace correlation) live in
+        ``clawmetry/gateway_litellm.py``; this is the allowlisted entry point.
+        ``None`` when the store could not be read, which is not "no usage"."""
+        from clawmetry import gateway_litellm as _gw
+        try:
+            return _gw.gateway_usage(self._fetch, window_days=window_days)
+        except Exception:
+            log.warning("query_gateway_usage failed", exc_info=True)
+            return None
 
     # Event types the daemon's transcript read ALSO produces. For a session
     # the daemon owns, an OTLP copy of one of these is a duplicate and is
@@ -9973,6 +10005,8 @@ class LocalStore(TrailStoreMixin):
                 _s("tool_name"), _s("decision"), success,
                 _to_blob(_scrub_attrs(rec.get("attributes"))
                          if _scrub_attrs is not None else rec.get("attributes")),
+                _s("source"), _s("cost_source"), _s("trace_id"),
+                _s("response_id"), _s("key_alias"), _s("team_alias"),
             ]
 
         written = 0
@@ -10319,7 +10353,10 @@ class LocalStore(TrailStoreMixin):
         dim = str(dimension or "team")
         if dim not in self._OTLP_ROLLUP_DIMENSIONS:
             raise ValueError(f"unsupported rollup dimension: {dimension!r}")
-        clauses = [f"{dim} IS NOT NULL", f"{dim} <> ''"]
+        # Gateway usage rows (REQ-OBS-GWY-001) are a separate subtotal served by
+        # ``query_gateway_usage``. Summed in here they would add a proxy's
+        # figure for a call to the agent's own figure for the same call.
+        clauses = [f"{dim} IS NOT NULL", f"{dim} <> ''", "source IS NULL"]
         params: list[Any] = []
         if since is not None:
             clauses.append("ts >= ?")
@@ -10596,6 +10633,13 @@ class LocalStore(TrailStoreMixin):
         if rt is not None:
             ts_clauses.append("COALESCE(agent_type,'openclaw') = ?")
             ts_params.append(rt)
+        # A LiteLLM proxy is a gateway, not an agent: its spans keep their own
+        # ``agent_type`` and must never be drawn as an agent node or a spawn
+        # edge (REQ-OBS-GWY-001, AC-OBS-GWY-001.7) -- the same exclusion
+        # query_otlp_app_rollup applies.
+        from clawmetry.gateway_litellm import GATEWAY_SOURCE as _GW
+        ts_clauses.append("LOWER(COALESCE(agent_type,'openclaw')) <> ?")
+        ts_params.append(_GW)
         ts_where = ("WHERE " + " AND ".join(ts_clauses)) if ts_clauses else ""
 
         nodes: list[dict] = []
@@ -10626,8 +10670,12 @@ class LocalStore(TrailStoreMixin):
 
         edges: list[dict] = []
         try:
-            spawn_parts = ["cs.name = 'agent.spawn'"]
-            spawn_params: list[Any] = []
+            spawn_parts = [
+                "cs.name = 'agent.spawn'",
+                "LOWER(COALESCE(cs.agent_type,'openclaw')) <> ?",
+                "LOWER(COALESCE(ps.agent_type,'openclaw')) <> ?",
+            ]
+            spawn_params: list[Any] = [_GW, _GW]
             if since is not None:
                 spawn_parts.append("cs.start_ts >= ?")
                 spawn_params.append(float(since))
@@ -10750,6 +10798,11 @@ class LocalStore(TrailStoreMixin):
         """
         try:
             excl = {str(x).lower() for x in (exclude_agent_types or [])}
+            # A LiteLLM proxy is a gateway, not an agent app: its spans keep
+            # their own ``agent_type`` so they never surface as a runtime
+            # (REQ-OBS-GWY-001). Always excluded, whatever the caller passed.
+            from clawmetry.gateway_litellm import GATEWAY_SOURCE as _GW
+            excl.add(_GW)
             clauses: list[str] = []
             params: list[Any] = []
             if since is not None:

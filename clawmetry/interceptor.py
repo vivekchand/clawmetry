@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -182,7 +183,12 @@ def _is_llm_url(url: str) -> bool:
     if not url:
         return False
     url_lower = url.lower()
-    return any(pattern in url_lower for pattern in _LLM_URL_PATTERNS)
+    if any(pattern in url_lower for pattern in _LLM_URL_PATTERNS):
+        return True
+    # Azure OpenAI lives on a customer-named resource host (#5936), so it
+    # cannot be a fixed pattern; the parser also requires the /openai/ path.
+    from clawmetry.providers_pricing import parse_azure_openai_url
+    return parse_azure_openai_url(url) is not None
 
 
 def _is_tts_url(url: str) -> bool:
@@ -237,6 +243,9 @@ def _build_external_event(
 def _detect_provider(url: str) -> str:
     """Detect provider name from URL."""
     url_lower = url.lower()
+    from clawmetry.providers_pricing import parse_azure_openai_url
+    if parse_azure_openai_url(url) is not None:
+        return "azure-openai"
     if "anthropic.com" in url_lower:
         return "anthropic"
     if "openai.com" in url_lower:
@@ -348,7 +357,7 @@ def _extract_tokens_from_response(body_bytes: bytes, provider: str) -> dict[str,
                 or 0
             )
 
-        elif provider in ("openai", "openrouter"):
+        elif provider in ("openai", "openrouter", "azure-openai"):
             usage = body.get("usage", {})
             result["input_tokens"] = usage.get("prompt_tokens", 0)
             result["output_tokens"] = usage.get("completion_tokens", 0)
@@ -394,6 +403,24 @@ def _write_event(event: dict[str, Any]) -> None:
         pass  # Never crash the host application
 
 
+#: A module every LiteLLM proxy process has loaded, and a LiteLLM SDK call made
+#: inside an ordinary app does not.
+_LITELLM_PROXY_MODULE = "litellm.proxy.proxy_server"
+
+#: ``clawmetry.gateway_litellm.GATEWAY_SOURCE``, repeated here so the
+#: interceptor (which runs inside the host application) imports nothing extra.
+_LITELLM_GATEWAY_SOURCE = "gateway:litellm"
+
+
+def _inside_litellm_proxy() -> str:
+    """The gateway source when this process is a LiteLLM proxy, else ``""``.
+    Never raises."""
+    try:
+        return _LITELLM_GATEWAY_SOURCE if _LITELLM_PROXY_MODULE in sys.modules else ""
+    except Exception:
+        return ""
+
+
 def _build_event(
     provider: str,
     url: str,
@@ -406,7 +433,16 @@ def _build_event(
     reasoning_tokens: int = 0,
 ) -> dict[str, Any]:
     """Build the event dict to write to JSONL."""
-    cost = _estimate_cost(model or "", input_tokens, output_tokens)
+    azure = None
+    if provider == "azure-openai":
+        from clawmetry.providers_pricing import parse_azure_openai_url
+        azure = parse_azure_openai_url(url)
+    # An Azure deployment name says nothing about the model behind it, so with
+    # no model reported there is no rate to estimate from (#5936).
+    cost = (
+        None if (azure is not None and not model)
+        else _estimate_cost(model or "", input_tokens, output_tokens)
+    )
     event: dict[str, Any] = {
         "type": "llm_call",
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -421,6 +457,21 @@ def _build_event(
     }
     if model:
         event["model"] = model
+    if azure is not None:
+        event["endpoint_host"] = azure["resource"]
+        if azure.get("deployment"):
+            event["deployment"] = azure["deployment"]
+    via_gateway = _inside_litellm_proxy()
+    if via_gateway:
+        # This process IS a LiteLLM proxy, so this call is the upstream leg of
+        # a request the proxy served (an Azure OpenAI deployment, say). The
+        # proxy's own telemetry is that request's usage record, with the cost
+        # LiteLLM charged (REQ-OBS-GWY-001, clawmetry/gateway_litellm.py), and
+        # the agent that called the proxy already counts it in its own cost.
+        # Pricing it again here would be a third copy, so the call is recorded
+        # without a cost and says which gateway holds the figure.
+        event["via_gateway"] = via_gateway
+        cost = None
     if cost is not None:
         event["cost_usd"] = cost
     if reasoning_tokens:

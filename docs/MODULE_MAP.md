@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-257 modules, 82 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+260 modules, 83 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -70,6 +70,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/paywall_lifecycle.py` | small |  |  | the paywall beacons that reach the funnel. |
 | `routes/plugins.py` | medium | `bp_plugins` | `/api/plugins` | Plugin registry: unified view of installed plugins (#692). |
 | `routes/policy.py` | medium | `bp_policy` | `/api/approvals`, `/api/approvals-audit`, `/api/policy`, `/api/tool-policy` | tool-policy + sandbox + exec-approval audit (PRD P1-1). |
+| `routes/pricing.py` | small | `bp_pricing` | `/api/pricing` | the price book API (REQ-OBS-CEA-024, issue #5936). |
 | `routes/quality.py` | medium | `bp_quality` | `/api/quality` | the Quality tab endpoint. |
 | `routes/readiness.py` | small | `bp_readiness` | `/api/repo-readiness` | ``bp_readiness`` — repo AI-readiness. |
 | `routes/reasoning.py` | medium | `bp_reasoning` | `/api/reasoning` | Reasoning chain viewer endpoint. |
@@ -157,6 +158,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/context_windows.py` | medium | Context-window sizing across every runtime ClawMetry ingests. |
 | `clawmetry/cost_basis.py` | medium | What kind of money a cost figure is. |
 | `clawmetry/cost_optimizer_advice.py` | medium | Cost Optimizer advice: observed provider routes, experiments, and cost basis. |
+| `clawmetry/cost_optimizer_snapshot.py` | small | Cost Optimizer slice for the hosted dashboard (AC-OBS-CEA-023.9). |
 | `clawmetry/cost_windows.py` | medium | One definition of "today", "this week" and "this month" for every cost surface. |
 | `clawmetry/cursor_connector.py` | medium | Opt-in pull of Cursor cloud-agent usage, with the operator's own key. |
 | `clawmetry/daemon_registration.py` | medium | one place that knows how to make the sync daemon survive a reboot/logoff/crash, on every OS. |
@@ -186,8 +188,10 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/event_shape_classify.py` | medium | Event-shape classifier implementation (private to :mod:`clawmetry.event_shape`). |
 | `clawmetry/extensions.py` | medium | ClawMetry extension/plugin system. |
 | `clawmetry/field_report.py` | medium | Field-failure reports from the sync daemon (Requirement: Daemon Field-Failure Reporting, AC-FFR-005). |
+| `clawmetry/fleet_install.py` | medium | register the collector for shared and virtual desktops (multi-session Windows hosts, pooled images, shared Linux hosts). |
 | `clawmetry/flow_trace.py` | medium | Flow trace assembly for the Harness Engineering tab (REQ-HB-006). |
 | `clawmetry/framework_map.py` | medium | which published framework items a Guard finding is relevant to. |
+| `clawmetry/gateway_litellm.py` | medium | LiteLLM proxy telemetry: recognise it, and turn a proxied request into one gateway usage record (REQ-OBS-GWY-001, issue #5940). |
 | `clawmetry/gateway_protocol.py` | small | the single source of the OpenClaw gateway WebSocket protocol range every connect frame must advertise. |
 | `clawmetry/gateway_tap.py` | medium | live OpenClaw gateway WebSocket subscriber. |
 | `clawmetry/git_config_exec.py` | small | Which git config settings make git execute a program. |
@@ -228,6 +232,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/policy_engine.py` | medium | Guard policies — turn a detector incident into an enforcement decision. |
 | `clawmetry/pr_provenance.py` | large | Pull-request provenance: which agent sessions wrote which changed files. |
 | `clawmetry/pr_provenance_cli.py` | medium | ``clawmetry trace report``: agent-session provenance for a change. |
+| `clawmetry/price_book.py` | medium | Price book contract: negotiated rates, Azure OpenAI aliases, effective dates. |
 | `clawmetry/process_control.py` | large | host-side process control for runaway agents. |
 | `clawmetry/provenance.py` | medium | Every number says how it was obtained. |
 | `clawmetry/providers_pricing.py` | medium | ClawMetry provider detection and pricing table. |

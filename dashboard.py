@@ -158,6 +158,7 @@ from routes.spend_flow import bp_spend_flow
 from routes.entitlement import bp_entitlement
 from routes.extensions import bp_extensions
 from routes.otel_export import bp_otel_export
+from routes.pricing import bp_pricing
 from routes.device import bp_device
 from routes.runtime_ingest import bp_runtime_ingest
 from routes.audit import bp_audit
@@ -4603,7 +4604,31 @@ def _otel_to_row(span, resource_attrs):
     tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function",
                       *(_al.get("tool_name") or ()))
     # session/conversation: semconv uses gen_ai.conversation.id.
-    session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
+    #
+    # REQ-OBS-OTR-001 (AC-OBS-OTR-001.3): OpenLLMetry's LangGraph
+    # instrumentation (measured on opentelemetry-instrumentation-langchain
+    # 0.62.3 + langgraph 1.2.11) stamps the run's thread as
+    # ``gen_ai.conversation.id`` on the top ``invoke_agent`` span ONLY. Every
+    # span beneath it (the model calls with the tokens, the execute_tool
+    # spans) carries the same value as
+    # ``traceloop.association.properties.thread_id`` and no conversation id.
+    # Reading only the semconv key split one run into two sessions: the top
+    # span under ``t-1`` with 0 tokens, and everything else under the per-trace
+    # fallback ``<app>:trace:<id>`` below. The thread association is the same
+    # identifier the top span sends, so it is read right after the
+    # conversation id and recorded as sent, which makes the top span and its
+    # children agree.
+    #
+    # AC-OBS-OTR-001.4: the thread outranks ``session.id`` wherever it is
+    # sent, on the span as well as on the resource. ``_pick`` walks KEYS in
+    # order and checks span-then-resource per key, so every key listed here
+    # beats every later key at both levels. That is deliberate: if a
+    # ``session.id`` on a child span beat the thread, an app that stamps
+    # ``session.id`` on every span would split the run again (top span via
+    # the conversation id, children via ``session.id``).
+    session_id = _pick("gen_ai.conversation.id",
+                       "traceloop.association.properties.thread_id",
+                       "session.id", "openclaw.session_id", "session_id")
     agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
     service_name = resource_attrs.get("service.name") or attrs.get("service.name")
     # Runtime identity. An explicit agent.type wins (OpenClaw / clawmetry-pro
@@ -4792,6 +4817,54 @@ def _otel_to_row(span, resource_attrs):
     }
 
 
+def _ingest_litellm_span(span, attrs, resource_attrs, store, gateway_records, received_at):
+    """Persist one span LiteLLM's OpenTelemetry integration exported
+    (REQ-OBS-GWY-001, ``clawmetry/gateway_litellm.py``).
+
+    The span row still lands, so the request is visible in the trace view, but
+    as the gateway: its own ``agent_type``, no session id (a proxied request is
+    not an agent session, and a derived one would be materialised), and no span
+    cost (trace and app rollups sum span cost). The spend goes to the ledger
+    record instead, labelled as the gateway's figure, with the identity LiteLLM
+    authenticated. Never raises: a bad span must not lose the rest of the batch.
+    """
+    try:
+        from clawmetry import gateway_litellm as _gw
+        row = _otel_to_row(span, resource_attrs)
+        row["agent_type"] = _gw.GATEWAY_SOURCE
+        row["session_id"] = None
+        row["cost_usd"] = None
+        status_code = 0
+        try:
+            if span.HasField("status"):
+                status_code = span.status.code
+        except Exception:
+            status_code = 0
+        rec = _gw.ledger_record(
+            attrs=attrs,
+            resource_attrs=resource_attrs,
+            trace_id=row.get("trace_id") or "",
+            span_id=row.get("span_id") or "",
+            parent_span_id=row.get("parent_span_id"),
+            start_ts=row.get("start_ts") or received_at,
+            duration_ms=row.get("duration_ms"),
+            status_code=status_code,
+            received_at=received_at,
+        )
+        if rec is not None:
+            gateway_records.append(rec)
+        if store is not None:
+            # Keyword argument: the daemon proxy forwards **kwargs only.
+            store.put_span(span=row)
+    except Exception as e:
+        try:
+            import logging as _lg
+            _lg.getLogger("clawmetry.dashboard").warning(
+                "LiteLLM span ingest failed: %s", e)
+        except Exception:
+            pass
+
+
 def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     """Decode OTLP traces protobuf and extract relevant span data.
 
@@ -4816,6 +4889,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     # REQ-OBS-OTG-001: tool spans normalised into the tool_call / tool_result
     # events Guard's detectors read (clawmetry/otlp_guard.py).
     _otlp_tool_events = []
+    # REQ-OBS-GWY-001: usage records for requests a LiteLLM proxy served,
+    # written in ONE put_otlp_batch call at the end (FLYWHEEL 1e).
+    from clawmetry import gateway_litellm as _gw_litellm
+    _gateway_records = []
+    _gateway_received_at = time.time()
 
     # Resolve the local store lazily so unit tests that monkeypatch the
     # singleton in advance (or run without DuckDB) don't pay the import
@@ -4834,10 +4912,23 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 resource_attrs[attr.key] = _otel_attr_value(attr.value)
 
         for scope_spans in resource_spans.scope_spans:
+            _is_litellm = _gw_litellm.is_litellm_telemetry(
+                getattr(getattr(scope_spans, "scope", None), "name", ""),
+                resource_attrs,
+            )
             for span in scope_spans.spans:
                 attrs = {}
                 for attr in span.attributes:
                     attrs[attr.key] = _otel_attr_value(attr.value)
+
+                if _is_litellm:
+                    # A gateway, not an agent: no live tiles, no session, no
+                    # span cost to sum into a runtime (REQ-OBS-GWY-001).
+                    _ingest_litellm_span(
+                        span, attrs, resource_attrs, _store,
+                        _gateway_records, _gateway_received_at,
+                    )
+                    continue
 
                 ts = time.time()
                 duration_ns = span.end_time_unix_nano - span.start_time_unix_nano
@@ -5042,6 +5133,17 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 import logging as _lg
                 _lg.getLogger("clawmetry.dashboard").warning(
                     "OTLP span events write failed: %s", e)
+            except Exception:
+                pass
+
+    if _store is not None and _gateway_records:
+        try:
+            _store.put_otlp_batch(records=_gateway_records, events=[])
+        except Exception as e:
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "gateway usage records write failed: %s", e)
             except Exception:
                 pass
 
@@ -6112,6 +6214,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_memory)
     app.register_blueprint(bp_otel)
     app.register_blueprint(bp_otel_export)
+    app.register_blueprint(bp_pricing)
     # Custom-runtime HTTP ingest is a Pro feature; the impl lives in
     # clawmetry-pro. When that package is installed, its blueprint was
     # already registered by ``_ext_load(app)`` above and won the URL

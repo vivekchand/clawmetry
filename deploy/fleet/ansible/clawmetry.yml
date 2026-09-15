@@ -1,0 +1,79 @@
+# Silent ClawMetry install for shared Linux hosts / Linux virtual desktops.
+#
+# One collector per user, running as that user (it reads only that user's
+# agent files and keeps its data in that user's ~/.clawmetry, mode 0700).
+# logind linger keeps each user's collector running after they log out.
+#
+#   ansible-playbook -i inventory deploy/fleet/ansible/clawmetry.yml \
+#     -e '{"clawmetry_users": ["alice", "bob"]}' -e clawmetry_package=clawmetry==0.12.876
+#
+# This playbook does NOT enroll hosts with ClawMetry Cloud and takes no
+# credential. Never template an enrollment key into a shared image or a
+# world-readable file; see deploy/fleet/README.md.
+#
+# Uninstall, per user:  sudo -u <user> XDG_RUNTIME_DIR=/run/user/<uid> \
+#   /opt/clawmetry-fleet/bin/clawmetry service uninstall
+# then: sudo loginctl disable-linger <user>; sudo rm -rf /opt/clawmetry-fleet
+- name: ClawMetry fleet install
+  hosts: all
+  become: true
+  vars:
+    clawmetry_package: clawmetry
+    clawmetry_venv: /opt/clawmetry-fleet
+    clawmetry_python: python3
+    clawmetry_users: []
+    # become_user to an unprivileged account without the acl package needs
+    # pipelining, or Ansible cannot hand its module files to that user.
+    ansible_pipelining: true
+  tasks:
+    # Every user's collector imports code from this one environment, so no
+    # desktop user may write it: a user who could would run code as everyone
+    # else. Create and install under umask 022, then enforce the modes, since
+    # the umask Ansible inherits is not guaranteed (it was 000 on a CI runner).
+    - name: Create the shared environment
+      ansible.builtin.shell: "umask 022 && {{ clawmetry_python | quote }} -m venv {{ clawmetry_venv | quote }}"
+      args:
+        creates: "{{ clawmetry_venv }}/bin/python"
+
+    - name: Install the pinned package
+      ansible.builtin.shell: >-
+        umask 022 && {{ (clawmetry_venv + '/bin/python') | quote }} -m pip install
+        --disable-pip-version-check --no-input --quiet {{ clawmetry_package | quote }}
+      changed_when: false
+
+    - name: Only root may change the shared environment
+      ansible.builtin.file:
+        path: "{{ clawmetry_venv }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "u=rwX,go=rX"
+        recurse: true
+        follow: false
+
+    - name: Look up user ids
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Keep each user's services running after logout (linger)
+      ansible.builtin.command: "loginctl enable-linger {{ item }}"
+      args:
+        creates: "/var/lib/systemd/linger/{{ item }}"
+      loop: "{{ clawmetry_users }}"
+
+    - name: Wait for each user's systemd manager
+      ansible.builtin.wait_for:
+        path: "/run/user/{{ ansible_facts.getent_passwd[item][1] }}/bus"
+        timeout: 60
+      loop: "{{ clawmetry_users }}"
+
+    - name: Register each user's collector
+      become_user: "{{ item }}"
+      ansible.builtin.command: "{{ clawmetry_venv }}/bin/clawmetry service install --json"
+      environment:
+        XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[item][1] }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[item][1] }}/bus"
+        HOME: "{{ ansible_facts.getent_passwd[item][4] }}"
+      loop: "{{ clawmetry_users }}"
+      register: clawmetry_install
+      changed_when: true

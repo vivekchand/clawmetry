@@ -221,7 +221,7 @@ jobs:
         run: python3 -m pytest tests/test_auto_quarantine.py -q
 
       - name: Published provider pricing and cache accounting
-        run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py -q
+        run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py tests/test_price_book.py -q
 
       # #5979: a session with tokens but no priced event must render as
       # unknown cost on the Usage tab, never a confident $0.00. Named here
@@ -428,6 +428,15 @@ jobs:
       # LISTS -- the sibling test_appjs_units.py is the cautionary tale.
       - name: First-run report gate
         run: python3 -m pytest tests/test_first_run_gate_js.py -q
+
+      # Dashboard cold load (#5935). Startup used to send ~100 requests in its
+      # first 10 s -- the whole Overview, a Crons and Memory prefetch and twelve
+      # Flow tool details while the page sat on Sessions -- against the
+      # browser's six connections per origin, so the visible screen's own
+      # requests timed out in the browser queue. Node-based, named explicitly
+      # because this job runs FILE LISTS.
+      - name: Dashboard cold load boot
+        run: python3 -m pytest tests/test_cold_load_boot_js.py -q
 
       # Trail page + session-first landing: the live HTML must include
       # tabs/trail.html (Jinja render, not a template grep), the default
@@ -836,6 +845,7 @@ jobs:
             tests/test_usage_cache_trends_local_store.py \
             tests/test_activity_heatmap_runtime_scope.py \
             tests/test_cost_optimizer_route_honesty.py \
+            tests/test_cost_optimizer_snapshot_slice.py \
             tests/test_cost_basis_labels.py \
             tests/test_provenance.py \
             tests/test_provenance_render_coverage.py \
@@ -847,6 +857,7 @@ jobs:
             tests/test_family_runtime_ingest.py \
             tests/test_phase4_adapter_move.py \
             tests/test_openclaw_detection_real.py \
+            tests/test_openclaw_doctor_cache.py \
             tests/test_repo_scan_daemon_wiring.py \
             tests/test_guard_workspace_kinds.py \
             tests/test_tool_risk.py \
@@ -872,9 +883,11 @@ jobs:
             tests/test_guard_control_transparency.py \
             tests/test_guard_resume_hints.py \
             tests/test_guard_resume_route.py \
+            tests/test_cloud_guard_signals_slices.py \
             tests/test_guard_live_probe.py \
             tests/test_process_control.py \
             tests/test_process_control_windows.py \
+            tests/test_fleet_install.py \
             tests/test_detector_incident_delivery.py \
             tests/test_blocked_agent_always_notifies.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
@@ -1163,10 +1176,73 @@ jobs:
             tests/test_otlp_rollup_cpu_budget.py \
             tests/test_spans_otlp_edge_cases.py \
             tests/test_otlp_session_materialization.py \
+            tests/test_litellm_gateway_ingest.py \
             -q
           # NOT listed: tests/test_e2e_otlp_ingest.py -- it drives a LIVE
           # dashboard over HTTP (BASE_URL), which this job does not boot. It
           # runs in the api-tests job, which does.
+
+  # ── OpenTelemetry framework recipe: LangGraph + OpenLLMetry (#5939) ───────
+  # REQ-OBS-OTR-001. Runs examples/otel/langgraph/agent.py, unchanged, against a
+  # live dashboard and reads the result back through /api/local/*. The recipe's
+  # dependencies go into their OWN virtualenv from a hash-pinned lockfile: they
+  # are what a user installs in the agent's process, not ClawMetry's, and the
+  # check must not pass because the two happened to share a package.
+  # The dashboard binds 0.0.0.0 and the agent exports through the runner's
+  # non-loopback address, so the remote-node Bearer-token path is what is
+  # exercised (loopback is trusted and would prove nothing about auth).
+  otel-recipe-langgraph:
+    name: OTel recipe (LangGraph + OpenLLMetry)
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      CLAWMETRY_HARD_BLOCK: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install the dashboard (with the otel extra)
+        run: |
+          pip install --require-hashes -r .github/requirements/ci-tests.txt
+          pip install --require-hashes -r .github/requirements/ci-otel-extra.txt
+      - name: Install the recipe into its own virtualenv
+        run: |
+          python3 -m venv "$RUNNER_TEMP/recipe-venv"
+          "$RUNNER_TEMP/recipe-venv/bin/pip" install --require-hashes -r .github/requirements/otel-recipe-langgraph.txt
+      - name: Hermetic guard (real OpenLLMetry exports through the receiver)
+        run: python3 -m pytest tests/test_otel_recipe_langgraph.py -q
+      # Readiness is /api/health, as in every other job. NOT /api/local/health:
+      # on a fresh store path the DuckDB file does not exist until the
+      # receiver's first write creates it, so the read-only local API answers
+      # 503 "database does not exist" until the recipe has exported once.
+      - name: Boot the dashboard on every interface
+        run: |
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          OPENCLAW_GATEWAY_TOKEN=ci-recipe-token \
+            CLAWMETRY_LOCAL_STORE_PATH="$RUNNER_TEMP/recipe.duckdb" \
+            python3 -u dashboard.py --port 8900 --host 0.0.0.0 --no-debug > "$RUNNER_TEMP/dashboard.log" 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf -H "Authorization: Bearer ci-recipe-token" http://127.0.0.1:8900/api/health > /dev/null && echo "Ready after ${i}s" && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/dashboard.log"; exit 1
+      - name: Run the recipe and verify it end to end
+        run: |
+          REMOTE_IP=$(hostname -I | awk '{print $1}')
+          test -n "$REMOTE_IP"
+          python3 scripts/verify_otel_recipe_langgraph.py \
+            --url http://127.0.0.1:8900 --token ci-recipe-token \
+            --agent-python "$RUNNER_TEMP/recipe-venv/bin/python" \
+            --remote-url "http://$REMOTE_IP:8900"
+      - name: Dashboard log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/dashboard.log" || true
 
   # Self-hosted server mode (SELF_HOSTED=true). Until #5948 the self-hosted
   # tests ran in no job at all, and the admin/export APIs answered 401 to
