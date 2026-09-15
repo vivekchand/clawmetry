@@ -17858,6 +17858,33 @@ def _build_cost_optimizer_snapshot():
         return {}
 
 
+def _build_cost_optimizer_by_runtime(runtimes):
+    """``{runtime: costOptimizer slice}`` for each runtime on this node.
+
+    Served by the cloud for ``/api/cost-optimizer?runtime=<rt>`` so a
+    runtime-scoped dashboard never shows another runtime's spend or advice.
+    ``{}`` on any failure (the cloud then says the node must update).
+    """
+    try:
+        from clawmetry import local_store as _ls_co
+        from clawmetry.cost_optimizer_snapshot import build_slice
+
+        store = _ls_co.get_store()
+        if store is None:
+            return {}
+        out = {}
+        for rt in runtimes or []:
+            if not isinstance(rt, str) or not rt or rt == "all":
+                continue
+            s = build_slice(store, runtime=rt)
+            if s:
+                out[rt] = s
+        return out
+    except Exception as _e_co:
+        log.debug("snapshot: cost optimizer by-runtime slice failed: %s", _e_co)
+        return {}
+
+
 def _build_usage_snapshot():
     """Usage tab slices (anomalies, cost-comparison, cache-trends, cost-breakdown,
     spend-optimization, forecast). Trial-bug #12: these Usage cards were blank on
@@ -24133,6 +24160,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Cost Optimizer experiments + basis-labelled figures (AC-OBS-CEA-023.9).
         # Read by the cloud cm-cloud-overview interceptor for /api/cost-optimizer.
         "costOptimizer": _build_cost_optimizer_snapshot(),
+        # The same slice per runtime, served for /api/cost-optimizer?runtime=<rt>.
+        # Without it a Codex-scoped dashboard showed Claude Code's spend and
+        # Anthropic experiments under an "all runtimes" header.
+        "costOptimizerByRuntime": _build_cost_optimizer_by_runtime(
+            list(_runtime_summary.keys()) if isinstance(_runtime_summary, dict) else []),
         # Inputs & context per session (Trail triad). Read by the cloud
         # cm-cloud-session-context interceptor for /api/sessions/<id>/context.
         "sessionContext": _build_session_context_snapshot(),
@@ -25888,6 +25920,12 @@ def run_daemon() -> None:
                         )
                 except Exception as _ae:
                     log.warning(f"alerts: evaluator tick errored: {_ae}")
+                # Per-project budgets ride the same throttle. Independent of
+                # cloud rules: a node with no cloud account still alerts.
+                try:
+                    evaluate_project_budget_alerts(config)
+                except Exception as _pbe:
+                    log.warning(f"project budgets: tick errored: {_pbe}")
                 last_alerts_eval = now_alerts
                 # Persist the eval state (last_eval_ts, cooldown memo) so
                 # cooldown survives a daemon restart.
@@ -27917,6 +27955,43 @@ def _evaluate_alerts_local(config: dict, state: dict) -> int:
             delivered += 1
 
     state["alerts_last_eval_ts"] = _iso_now()
+    return delivered
+
+
+def evaluate_project_budget_alerts(config: dict) -> int:
+    """Per-project budget thresholds (REQ-OBS-PRJ-001) on the alert tick.
+
+    The store latches each 50/80/100% crossing once per budget period
+    (``project_budget_alerts``) and returns only the crossings THIS call
+    recorded, so every one is delivered exactly once, including across a
+    restart. Delivery is the same local banner row the other budget alerts
+    use; the message says the alert does not stop spend, because it does not.
+    Budget breach banners are free, matching the per-agent budget alerts.
+    Never raises into the daemon loop."""
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        fired = store.evaluate_project_budgets()
+    except Exception as e:
+        log.warning("project budgets: evaluation failed: %s", e)
+        return 0
+    delivered = 0
+    for a in fired or []:
+        log.info("project budgets: %s", a.get("message"))
+        match = {
+            "rule": {
+                "id": "project_budget:%s:%s:%s" % (
+                    a.get("budget_id"), a.get("period_start"), a.get("threshold_pct")),
+                "name": "Project budget",
+                "condition_json": {"type": "project_budget", "cooldown_sec": 0},
+            },
+            "summary": a.get("message") or "",
+        }
+        try:
+            if _persist_local_alert_banner(match):
+                delivered += 1
+        except Exception as e:
+            log.warning("project budgets: banner delivery failed: %s", e)
     return delivered
 
 

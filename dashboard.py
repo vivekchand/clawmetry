@@ -134,6 +134,7 @@ from routes.selfconfig import bp_selfconfig
 from routes.agents import bp_agents
 from routes.inventory import bp_inventory
 from routes.govern import bp_govern
+from routes.projects import bp_projects
 from routes.assets import bp_assets
 from routes.reasoning import bp_reasoning
 from routes.plugins import bp_plugins
@@ -4175,9 +4176,85 @@ def _profile_metric(prof, name, metric, resource_attrs, rows):
             continue
 
 
+# ── OTLP intake outcome helpers (REQ-OBS-OIA-001) ────────────────────────────
+#
+# Each ``_process_otlp_*`` returns the outcome dict from
+# ``clawmetry/otlp_intake.py``; ``routes/meta.py::_otlp_receive`` answers 200
+# only when that outcome says the store confirmed the write.
+
+# Metrics the chain in ``_process_otlp_metrics`` maps onto the live tiles.
+# Anything else (and not owned by a runtime profile) is read by nothing, and
+# is counted as ``not_read`` rather than acknowledged as kept.
+_OTLP_LIVE_VIEW_METRICS = frozenset({
+    "openclaw.tokens",
+    "openclaw.cost.usd",
+    "openclaw.run.duration_ms",
+    "openclaw.context.tokens",
+    "openclaw.message.processed",
+    "openclaw.message.queued",
+    "openclaw.message.duration_ms",
+    "openclaw.webhook.received",
+    "openclaw.webhook.error",
+    "openclaw.webhook.duration_ms",
+    "gen_ai.client.token.usage",
+    "gen_ai.client.operation.duration",
+})
+
+
+def _otlp_metric_point_seen(name, dp, resource_attrs):
+    """True when this data point already reached the live tiles.
+
+    A retried export used to add every generic metric point to the tiles a
+    second time. A point is only recognisable by its own time, so one that
+    carries none is never treated as seen (it may be a new reading)."""
+    try:
+        ts_ns = int(getattr(dp, "time_unix_nano", 0) or 0)
+    except (TypeError, ValueError):
+        ts_ns = 0
+    if ts_ns <= 0:
+        return False
+    try:
+        attrs = _get_dp_attrs(dp)
+        value = _get_dp_value(dp)
+        start_ns = int(getattr(dp, "start_time_unix_nano", 0) or 0)
+    except Exception:
+        return False
+    parts = [str((resource_attrs or {}).get("service.name") or ""), str(name),
+             str(ts_ns), str(start_ns), repr(value)]
+    for k in sorted(attrs):
+        parts.append("%s=%s" % (k, attrs[k]))
+    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8", "replace"))
+    return _otlp_seen("metric:" + digest.hexdigest()[:32])
+
+
+def _otlp_span_row_storable(row):
+    """The fields ``LocalStore.ingest_spans_batch`` refuses a span without.
+    Checked BEFORE the batch write: one such span inside the batch would fail
+    the whole transaction, and a retry would fail it again forever."""
+    if not isinstance(row, dict):
+        return False
+    return bool(row.get("span_id")) and bool(row.get("trace_id")) \
+        and bool(row.get("name")) and row.get("start_ts") is not None
+
+
+def _otlp_note_refused(path):
+    """Count an OTLP request refused by authentication. Never the token."""
+    try:
+        from clawmetry import otlp_intake as _oi
+        _oi.record_request_failure(path, _oi.FAILURE_UNAUTHORIZED)
+    except Exception:
+        pass
+
+
 def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
-    """Decode OTLP metrics protobuf/JSON and store relevant data."""
+    """Decode OTLP metrics protobuf/JSON and store relevant data.
+
+    Returns the intake outcome (REQ-OBS-OIA-001): runtime-profile points are
+    stored, the generic ``openclaw.*`` / ``gen_ai.*`` points feed the live
+    tiles only and are counted as such, and anything else is ``not_read``."""
+    from clawmetry import otlp_intake as _oi
     req = _otlp_request(pb_data, "metrics", content_encoding, content_type)
+    _result = _oi.new_result("metrics")
     _prof_rows = []  # profile-owned ledger rows, one put_otlp_batch per POST
 
     for resource_metrics in req.resource_metrics:
@@ -4197,11 +4274,27 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                     _prof = _op.for_metric(name)
                 except Exception:
                     _prof = None
+                try:
+                    _n_points = len(list(_get_data_points(metric)))
+                except Exception:
+                    _n_points = 0
+                _result["received"] += _n_points
                 if _prof is not None:
+                    _before = len(_prof_rows)
                     _profile_metric(_prof, name, metric, resource_attrs, _prof_rows)
+                    # _profile_metric skips a point it cannot map; that point
+                    # is refused, not silently acknowledged as stored.
+                    _result["rejected"] += max(
+                        0, _n_points - (len(_prof_rows) - _before))
                     continue
+                if name not in _OTLP_LIVE_VIEW_METRICS:
+                    _result["not_read"] += _n_points
+                    continue
+                _result["live_view_only"] += _n_points
                 if name == "openclaw.tokens":
                     for dp in _get_data_points(metric):
+                        if _otlp_metric_point_seen(name, dp, resource_attrs):
+                            continue
                         attrs = _get_dp_attrs(dp)
                         _add_metric(
                             "tokens",
@@ -4223,6 +4316,8 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                         )
                 elif name == "openclaw.cost.usd":
                     for dp in _get_data_points(metric):
+                        if _otlp_metric_point_seen(name, dp, resource_attrs):
+                            continue
                         attrs = _get_dp_attrs(dp)
                         _add_metric(
                             "cost",
@@ -4242,6 +4337,8 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                         )
                 elif name == "openclaw.run.duration_ms":
                     for dp in _get_data_points(metric):
+                        if _otlp_metric_point_seen(name, dp, resource_attrs):
+                            continue
                         attrs = _get_dp_attrs(dp)
                         _add_metric(
                             "runs",
@@ -4258,6 +4355,8 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                         )
                 elif name == "openclaw.context.tokens":
                     for dp in _get_data_points(metric):
+                        if _otlp_metric_point_seen(name, dp, resource_attrs):
+                            continue
                         attrs = _get_dp_attrs(dp)
                         _add_metric(
                             "tokens",
@@ -4283,6 +4382,8 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                     "openclaw.message.duration_ms",
                 ):
                     for dp in _get_data_points(metric):
+                        if _otlp_metric_point_seen(name, dp, resource_attrs):
+                            continue
                         attrs = _get_dp_attrs(dp)
                         outcome = (
                             "processed"
@@ -4308,6 +4409,8 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                     "openclaw.webhook.duration_ms",
                 ):
                     for dp in _get_data_points(metric):
+                        if _otlp_metric_point_seen(name, dp, resource_attrs):
+                            continue
                         attrs = _get_dp_attrs(dp)
                         wtype = (
                             "received"
@@ -4333,6 +4436,8 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                 # token / runs tiles. Unknown metrics stay silently dropped.
                 elif name == "gen_ai.client.token.usage":
                     for dp in _get_data_points(metric):
+                        if _otlp_metric_point_seen(name, dp, resource_attrs):
+                            continue
                         attrs = _get_dp_attrs(dp)
                         ttype = str(attrs.get("gen_ai.token.type", "")).lower()
                         try:
@@ -4361,6 +4466,8 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                         )
                 elif name == "gen_ai.client.operation.duration":
                     for dp in _get_data_points(metric):
+                        if _otlp_metric_point_seen(name, dp, resource_attrs):
+                            continue
                         attrs = _get_dp_attrs(dp)
                         try:
                             # semconv unit is seconds; the runs tile stores ms.
@@ -4383,20 +4490,25 @@ def _process_otlp_metrics(pb_data, content_encoding=None, content_type=None):
                         )
 
     if _prof_rows:
+        _outcome = None
         try:
             from clawmetry import local_store as _ls
             _st = _ls.get_store()
             if _st is not None:
                 # Keyword args: the dashboard's _ProxyStore forwards **kwargs
                 # only (same foot-gun as put_span / put_otlp_batch below).
-                _st.put_otlp_batch(records=_prof_rows, events=[])
+                _outcome = _st.put_otlp_batch(records=_prof_rows, events=[])
         except Exception as e:
+            _oi.mark_unstored(_result, _oi.FAILURE_STORE_WRITE_FAILED)
             try:
                 import logging as _lg
                 _lg.getLogger("clawmetry.dashboard").warning(
                     "profile metrics ledger write failed: %s", e)
             except Exception:
                 pass
+        if _result["durable"]:
+            _oi.apply_batch_outcome(_result, _outcome)
+    return _result
 
 
 _OTEL_SPAN_KIND_NAMES = {
@@ -4905,6 +5017,14 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
     except Exception:
         _store = None
 
+    # REQ-OBS-OIA-001: spans are written in ONE batch after the loop, and the
+    # export is acknowledged only when that write is confirmed. put_span per
+    # span returned None both on success and when the daemon proxy lost the
+    # write, so a dropped span used to be acknowledged as received.
+    from clawmetry import otlp_intake as _oi
+    _result = _oi.new_result("traces")
+    _span_rows = []
+
     for resource_spans in req.resource_spans:
         resource_attrs = {}
         if resource_spans.resource:
@@ -4931,6 +5051,15 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                     continue
 
                 ts = time.time()
+                _result["received"] += 1
+                # The live tiles count a span once per (trace_id, span_id): a
+                # retried export (and every 503 asks for one) used to add its
+                # cost and tokens a second time. A span with no ids or no name
+                # is refused by the store below, so it lights no tile either.
+                _span_key = str(_hex(span.span_id) or "")
+                _trace_key = str(_hex(span.trace_id) or "")
+                _live = bool(_span_key and _trace_key and span.name) and not _otlp_seen(
+                    "span:%s:%s" % (_trace_key, _span_key))
                 duration_ns = span.end_time_unix_nano - span.start_time_unix_nano
                 duration_ms = duration_ns / 1_000_000
 
@@ -4948,7 +5077,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                     or span_name.endswith(".completion")
                     or span_name in ("openai.chat", "anthropic.chat")
                 )
-                if "run" in span_name or "completion" in span_name or _is_genai_run:
+                if _live and ("run" in span_name or "completion" in span_name or _is_genai_run):
                     _add_metric(
                         "runs",
                         {
@@ -4962,7 +5091,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                             ),
                         },
                     )
-                elif "message" in span_name:
+                elif _live and "message" in span_name:
                     _add_metric(
                         "messages",
                         {
@@ -4984,7 +5113,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 # (#2591).
                 _sc = (attrs.get("cost_usd") or attrs.get("cost.usd")
                        or attrs.get("cost") or attrs.get("gen_ai.usage.cost_usd"))
-                if _sc is not None:
+                if _sc is not None and _live:
                     try:
                         _add_metric("cost", {
                             "timestamp": ts, "usd": float(_sc),
@@ -5000,7 +5129,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 _so = (attrs.get("gen_ai.usage.output_tokens")
                        or attrs.get("output_tokens") or attrs.get("tokens.output")
                        or attrs.get("completion_tokens"))
-                if _si is not None or _so is not None:
+                if (_si is not None or _so is not None) and _live:
                     try:
                         _i, _o = int(_si or 0), int(_so or 0)
                         _add_metric("tokens", {
@@ -5017,18 +5146,17 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 # live tiles read from). Idempotent on span_id — OTLP
                 # retries land as INSERT OR REPLACE without duping.
                 if _store is not None:
+                    _queued = False
                     try:
-                        # Keyword arg is REQUIRED: in the dashboard process
-                        # get_store() returns a _ProxyStore that forwards to the
-                        # daemon writer, and the proxy only forwards **kwargs
-                        # (positional args are dropped). With a positional span
-                        # the write silently no-ops and OTLP spans never persist
-                        # whenever the daemon owns the writer lock (i.e. every
-                        # real install). put_span is allowlisted in
-                        # routes/local_query._DAEMON_METHODS so the daemon
-                        # executes the real write.
+                        # The row is written with the rest of the export in
+                        # ONE ingest_spans_batch call after this loop (keyword
+                        # args only: the daemon proxy forwards **kwargs).
                         _row = _otel_to_row(span, resource_attrs)
-                        _store.put_span(span=_row)
+                        if not _otlp_span_row_storable(_row):
+                            _result["rejected"] += 1
+                            continue
+                        _span_rows.append(_row)
+                        _queued = True
                         # Track for session materialization (WO-55). OpenClaw
                         # sessions come from transcripts; only foreign apps
                         # need a span-derived sessions row.
@@ -5092,13 +5220,58 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                             if _env or str(_sid) not in _otlp_sessions_seen:
                                 _otlp_sessions_seen[str(_sid)] = _env
                     except Exception as e:
+                        if not _queued:
+                            # Could not even be turned into a row: refused.
+                            _result["rejected"] += 1
                         try:
                             import logging as _lg
                             _lg.getLogger("clawmetry.dashboard").warning(
-                                "local_store.put_span failed: %s", e
+                                "OTLP span mapping failed: %s", e
                             )
                         except Exception:
                             pass
+
+    # The accounting write for this export. Everything after it (wait events,
+    # session materialization) is derived from the stored spans and rebuilt on
+    # the next export for that session, so a failure there is logged but does
+    # not ask the sender to retry.
+    if _result["received"] and _store is None:
+        _oi.mark_unstored(_result, _oi.FAILURE_STORE_UNAVAILABLE)
+    elif _span_rows:
+        _written = None
+        try:
+            # with_outcome: a span the store cannot hold (a token count beyond
+            # its column's range) is refused on its own instead of failing the
+            # whole export, which a retry would fail again, forever.
+            _written = _store.ingest_spans_batch(spans=_span_rows, with_outcome=True)
+        except Exception as e:
+            _oi.mark_unstored(_result, _oi.FAILURE_STORE_WRITE_FAILED)
+            try:
+                import logging as _lg
+                _lg.getLogger("clawmetry.dashboard").warning(
+                    "local_store.ingest_spans_batch failed: %s", e)
+            except Exception:
+                pass
+        if _result["durable"]:
+            _n_rows = len(_span_rows)
+            _n_written = _n_refused = None
+            if isinstance(_written, dict) and "written" in _written:
+                try:
+                    _n_written = max(0, int(_written.get("written") or 0))
+                    _n_refused = min(_n_rows, max(0, int(_written.get("rejected") or 0)))
+                except (TypeError, ValueError):
+                    _n_written = None
+            elif isinstance(_written, int) and not isinstance(_written, bool):
+                _n_written, _n_refused = _written, 0
+            if _n_written is None:
+                # None: the daemon proxy could not confirm the write.
+                _oi.mark_unstored(_result, _oi.FAILURE_STORE_UNAVAILABLE)
+            else:
+                _result["rejected"] += _n_refused
+                _result["stored"] += _n_rows - _n_refused
+                # Unchanged re-deliveries (and in-export repeats) are not
+                # rewritten; they are already in the store.
+                _result["already_stored"] += max(0, _n_rows - _n_refused - _n_written)
 
     if _store is not None and (_otlp_wait_events or _otlp_tool_events):
         # A wait span may carry no tool name of its own (measured live); its
@@ -5165,6 +5338,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None):
                 )
             except Exception:
                 pass
+    return _result
 
 
 # ── Daemon-free OTLP intake (WO-7) ───────────────────────────────────────────
@@ -5561,15 +5735,19 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                 otok = _f(attrs, "output_tokens", "tokens.output",
                           "completion_tokens", "gen_ai.usage.output_tokens")
                 tin = tout = None
-                if itok is not None or otok is not None:
-                    try:
-                        tin, tout = int(itok or 0), int(otok or 0)
-                    except (TypeError, ValueError):
-                        tin = tout = None
-                if tin is not None and fresh:
+                try:
+                    tin = int(itok) if itok is not None else None
+                    tout = int(otok) if otok is not None else None
+                except (TypeError, ValueError):
+                    tin = tout = None
+                # REQ-OBS-OIA-001: a side the sender did not report stays
+                # unknown (None). It used to be stored as 0, so a record with
+                # input tokens only read as "produced no output".
+                has_tokens = tin is not None or tout is not None
+                if has_tokens and fresh:
                     _add_metric("tokens", {
-                        "timestamp": ts, "input": tin, "output": tout,
-                        "total": tin + tout,
+                        "timestamp": ts, "input": tin or 0, "output": tout or 0,
+                        "total": (tin or 0) + (tout or 0),
                         "model": model, "channel": channel, "provider": provider,
                     })
 
@@ -5671,7 +5849,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     "tokens_input": tin,
                     "tokens_output": tout,
                     "token_count": (
-                        (tin or 0) + (tout or 0) if tin is not None else None
+                        (tin or 0) + (tout or 0) if has_tokens else None
                     ),
                     "duration_ms": dur_val,
                     "tool_name": tool_name,
@@ -5777,7 +5955,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     if model:
                         ev["model"] = model
                     out_events.append(ev)
-                elif cost_val is not None or tin is not None:
+                elif cost_val is not None or has_tokens:
                     # The money records (api_request). Landing them in events
                     # is what makes the usage + cost surfaces survive a
                     # restart on a daemon-free deployment.
@@ -5786,7 +5964,7 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                     ev["event_type"] = "llm_call"
                     ev["cost_usd"] = cost_val
                     ev["token_count"] = (
-                        (tin or 0) + (tout or 0) if tin is not None else None
+                        (tin or 0) + (tout or 0) if has_tokens else None
                     )
                     ev["model"] = model or None
                     ev["data"] = {
@@ -5804,22 +5982,36 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                             ev["data"][_dk] = _v
                     out_events.append(ev)
 
-    if _store is not None and (out_records or out_events):
-        try:
-            # Keyword args are REQUIRED: the dashboard's _ProxyStore forwards
-            # **kwargs only, so a positional call silently writes nothing
-            # whenever the daemon owns the writer lock — i.e. every real
-            # install. put_otlp_batch is allowlisted in
-            # routes/local_query._DAEMON_METHODS so the daemon runs the write.
-            _store.put_otlp_batch(records=out_records, events=out_events)
-        except Exception as e:
+    # REQ-OBS-OIA-001: the export is acknowledged only when this write is
+    # confirmed. It used to be best effort, so a batch the store never took
+    # was answered 200 and the exporter threw it away.
+    from clawmetry import otlp_intake as _oi
+    _result = _oi.new_result("logs")
+    _result["received"] = len(out_records)
+    if out_records or out_events:
+        if _store is None:
+            _oi.mark_unstored(_result, _oi.FAILURE_STORE_UNAVAILABLE)
+        else:
+            _outcome = None
             try:
-                import logging as _lg
-                _lg.getLogger("clawmetry.dashboard").warning(
-                    "local_store.put_otlp_batch failed: %s", e
-                )
-            except Exception:
-                pass
+                # Keyword args are REQUIRED: the dashboard's _ProxyStore forwards
+                # **kwargs only, so a positional call silently writes nothing
+                # whenever the daemon owns the writer lock — i.e. every real
+                # install. put_otlp_batch is allowlisted in
+                # routes/local_query._DAEMON_METHODS so the daemon runs the write.
+                _outcome = _store.put_otlp_batch(records=out_records, events=out_events)
+            except Exception as e:
+                _oi.mark_unstored(_result, _oi.FAILURE_STORE_WRITE_FAILED)
+                try:
+                    import logging as _lg
+                    _lg.getLogger("clawmetry.dashboard").warning(
+                        "local_store.put_otlp_batch failed: %s", e
+                    )
+                except Exception:
+                    pass
+            if _result["durable"]:
+                _oi.apply_batch_outcome(_result, _outcome)
+    return _result
 
 
 def _get_otel_usage_data():
@@ -6260,6 +6452,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_agents)
     app.register_blueprint(bp_inventory)
     app.register_blueprint(bp_govern)
+    app.register_blueprint(bp_projects)
     if not _pro_loaded:
         app.register_blueprint(bp_assets)
     app.register_blueprint(bp_reasoning)
@@ -6829,6 +7022,7 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/trail.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/compliance.js', v=version) }}" defer></script>
+<script src="{{ url_for('static', filename='js/price-book.js', v=version) }}" defer></script>
 <!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
      transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
      See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly.
@@ -6978,14 +7172,11 @@ DASHBOARD_HTML = r"""
          UNCHANGED; only icons, ordering and section labels moved. The
          Approvals/Alerts/Notifications adjacency (founder request
          2026-07-29) is preserved inside Govern. #}
-      <div class="left-nav-item active" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
-        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-        <span class="left-nav-label" data-i18n="nav.session_replay">Sessions</span>
-      </div>
-
       {# Session-first IA (Trail, 2026-09): the product opens on the decision
          trail. Sessions is the landing item; the KPI board (Home) and the
-         other raw-signal views sit under a "Monitoring" label. data-tab ids
+         other raw-signal views sit under a "Monitoring" label. Sessions
+         lives there too, directly under Agents (founder request
+         2026-09-15), and still carries the default highlight. data-tab ids
          are unchanged; only order, labels and grouping moved. #}
       <div class="left-nav-section-label" data-i18n="nav.section_monitoring">Monitoring</div>
       <div class="left-nav-item" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
@@ -6997,6 +7188,10 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
+      </div>
+      <div class="left-nav-item active" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
+        <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="left-nav-label" data-i18n="nav.session_replay">Sessions</span>
       </div>
       <div class="left-nav-item" data-tab="brain" onclick="switchTab('brain')" data-i18n-title="nav.activity_tooltip" title="What your agents are doing right now, step by step">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
@@ -7169,6 +7364,9 @@ DASHBOARD_HTML = r"""
 
 <!-- USAGE -->
 {% include 'tabs/usage.html' %}
+
+<!-- PRICE BOOK (settings screen for negotiated rates, opened from Cost; #5936) -->
+{% include 'tabs/price-book.html' %}
 
 <!-- DIVES (NL-to-SQL-to-chart over local DuckDB) -->
 
@@ -7883,6 +8081,8 @@ def _check_auth():
     if remote in ("127.0.0.1", "::1", "localhost"):
         return
     if not GATEWAY_TOKEN:
+        if is_otlp:
+            _otlp_note_refused(request.path)
         return jsonify(
             {
                 "error": "Gateway token not configured. Please set up your gateway token first.",
@@ -7894,6 +8094,8 @@ def _check_auth():
         token = request.args.get("token", "").strip()
     if hmac.compare_digest(token, GATEWAY_TOKEN):
         return
+    if is_otlp:
+        _otlp_note_refused(request.path)
     return jsonify({"error": "Unauthorized", "authRequired": True}), 401
 
 
@@ -12588,7 +12790,7 @@ def _persist_identity_with_key(api_key):
     return node_id, enc_key
 
 
-def _activate_trial_for_key(api_key) -> str:
+def _activate_trial_for_key(api_key, deployment="") -> str:
     """Mint-or-reuse the account's 7-day Pro trial for ``api_key``.
 
     Mirrors ``clawmetry.cli._activate_signup_trial`` — same
@@ -12611,9 +12813,13 @@ def _activate_trial_for_key(api_key) -> str:
         import urllib.request as _ur
         from clawmetry import license as _lic
 
+        # ``deployment`` is the choice this sign-in made (REQ-OGV-ADC-001);
+        # it rides on the trial call so the cloud account records it.
+        from clawmetry import onboarding_state as _obs
+
         req = _ur.Request(
             _lic._cloud_base() + "/api/license/trial/signup",
-            data=json.dumps({"api_key": api_key}).encode(),
+            data=json.dumps(_obs.trial_signup_body(api_key, deployment)).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -12651,7 +12857,7 @@ def _full_connect_with_key(api_key):
     # not, so cloud users couldn't experience the full product before
     # the paywall. Runs BEFORE _restart_sync_daemon so the daemon sees
     # the freshly activated license on its first poll.
-    trial = _activate_trial_for_key(api_key)
+    trial = _activate_trial_for_key(api_key, deployment="managed")
 
     # Clear the local-only marker so the daemon actually pushes to cloud. A
     # local-only install writes ~/.clawmetry/nocloud; without this the connect
@@ -12727,7 +12933,7 @@ def _selfhost_signin_with_key(api_key):
     # clawmetry.cli._activate_signup_trial — mint-or-reuse the 7-day
     # Pro trial. Delegated to the shared helper so cloud + self-host
     # never drift on trial semantics again (founder ask 2026-08-12).
-    trial = _activate_trial_for_key(api_key)
+    trial = _activate_trial_for_key(api_key, deployment="selfhost")
 
     # Same as the email-OTP trial path: make sure the local ingest daemon is
     # running (it stays local-only under the marker written above).
