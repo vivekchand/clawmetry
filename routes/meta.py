@@ -1032,7 +1032,12 @@ def api_auth_detected_token():
         return jsonify({"error": "localhost only"}), 403
     token = getattr(_d, "GATEWAY_TOKEN", None)
     if not token:
-        return jsonify({"error": "no token detected"}), 404
+        # No gateway token configured — return 200 so the browser console stays
+        # clean on plain local installs (no OpenClaw gateway).  The JS bootstrap
+        # already checks `d && d.token`, not the HTTP status, so the fallthrough
+        # to checkAuth(null) is identical.  The loopback/proxy security checks
+        # above still fire first; a non-loopback caller never reaches this line.
+        return jsonify({"available": False}), 200
     return jsonify({"token": token, "source": _detected_token_source(token)})
 
 
@@ -1273,20 +1278,32 @@ def index():
 
 
 def _otlp_receive(signal, process):
-    """Shared OTLP/HTTP receive path. ``process`` is the dashboard mapper."""
+    """Shared OTLP/HTTP receive path. ``process`` is the dashboard mapper.
+
+    REQ-OBS-OIA-001. The answer follows what the mapper reports it STORED,
+    not merely that the body decoded: 200 once the local store confirmed the
+    write (with a partial-success count for malformed items), 503 with
+    ``Retry-After`` when it did not, so the exporter keeps the batch. See
+    ``clawmetry/otlp_intake.py`` and the generated ``docs/INGEST.md``.
+
+    A spending-limit pause (``_budget_paused``) no longer refuses intake. It
+    used to answer 429 to every export for the length of the pause, and the
+    agents can keep running through an advisory pause, so the spend that
+    followed a budget incident was never recorded. Those requests are counted
+    instead.
+    """
     import dashboard as _d
-    if _d._budget_paused:
-        return jsonify(
-            {"error": "Budget limit exceeded - intake paused", "paused": True}
-        ), 429
+    from clawmetry import otlp_intake as _oi
+    budget_paused = bool(getattr(_d, "_budget_paused", False))
+    content_type = request.headers.get("Content-Type")
     try:
-        process(
+        result = process(
             request.get_data(),
             content_encoding=request.headers.get("Content-Encoding"),
-            content_type=request.headers.get("Content-Type"),
+            content_type=content_type,
         )
-        return "{}", 200, {"Content-Type": "application/json"}
     except OtlpProtobufUnavailable as e:
+        _oi.record_request_failure(signal, _oi.FAILURE_PROTOBUF_UNAVAILABLE)
         return jsonify(
             {
                 "error": "opentelemetry-proto not installed",
@@ -1296,6 +1313,7 @@ def _otlp_receive(signal, process):
             }
         ), 501
     except Exception as e:
+        _oi.record_request_failure(signal, _oi.FAILURE_MALFORMED)
         try:
             import logging as _lg
             _lg.getLogger("clawmetry.dashboard").warning(
@@ -1304,6 +1322,12 @@ def _otlp_receive(signal, process):
         except Exception:
             pass
         return jsonify({"error": str(e)}), 400
+    if not isinstance(result, dict):
+        # A mapper that reports no outcome cannot be acknowledged as stored.
+        result = _oi.new_result(signal)
+        _oi.mark_unstored(result, _oi.FAILURE_NO_OUTCOME)
+    _oi.record_result(signal, result, budget_paused=budget_paused)
+    return _oi.build_response(signal, result, content_type)
 
 
 @bp_otel.route("/v1/metrics", methods=["POST"])
@@ -1375,8 +1399,21 @@ def api_otel_status():
             # refuses a batch does so silently on the developer side, so
             # "configured but never received" must be visible here.
             "runtimes": _instrumented_runtimes_status(),
+            # REQ-OBS-OIA-001: what the receiver stored, refused, recognised
+            # as re-delivered, held only in the live tiles, and asked senders
+            # to retry, since it started. Counts and categories only: no
+            # record content, attribute values or credentials.
+            "intake": _otlp_intake_snapshot(),
         }
     )
+
+
+def _otlp_intake_snapshot():
+    try:
+        from clawmetry import otlp_intake as _oi
+        return _oi.snapshot()
+    except Exception:
+        return None
 
 
 def _instrumented_runtimes_status():

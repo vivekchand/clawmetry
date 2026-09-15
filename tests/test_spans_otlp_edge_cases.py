@@ -756,16 +756,20 @@ def test_otlp_span_write_forwards_through_daemon_proxy(monkeypatch):
     )
     _d._process_otlp_traces(pb)
 
-    put_calls = [c for c in rec.calls if c[0] == "put_span"]
-    assert put_calls, "put_span was never called by the OTLP receiver"
+    # REQ-OBS-OIA-001: the receiver writes the whole export in ONE
+    # ingest_spans_batch call, because put_span returns None both on success
+    # and when the proxy lost the write, and the receiver must know which.
+    put_calls = [c for c in rec.calls if c[0] == "ingest_spans_batch"]
+    assert put_calls, "ingest_spans_batch was never called by the OTLP receiver"
+    assert len(put_calls) == 1, f"{len(put_calls)} span writes for one export"
     _name, args, kwargs = put_calls[0]
-    # The real proxy drops positional args; the span MUST ride as a keyword.
-    assert not args, f"positional put_span args are dropped by the proxy: {args!r}"
-    assert "span" in kwargs, "put_span must be called as put_span(span=...)"
-    row = kwargs["span"]
+    # The real proxy drops positional args; the spans MUST ride as a keyword.
+    assert not args, f"positional span-write args are dropped by the proxy: {args!r}"
+    assert "spans" in kwargs, "must be called as ingest_spans_batch(spans=[...])"
+    row = kwargs["spans"][0]
     # service.name -> per-app agent_type (the bring-your-own-agent identity).
     assert row.get("agent_type") == "my_langchain_app", row.get("agent_type")
 
     # And the daemon must accept the write, or the proxy 400s -> silent drop.
     import routes.local_query as lq
-    assert "put_span" in lq._DAEMON_METHODS
+    assert "ingest_spans_batch" in lq._DAEMON_METHODS

@@ -43,15 +43,16 @@ def test_tier1_order_and_membership():
     nav = _nav_block()
     tabs = _ordered_tabs(nav)
     tier1 = tabs[:14]
-    # Session-first IA (Trail, 2026-09): Sessions is the landing item and
-    # comes first; Home + the raw-signal views (Agents, Activity, Cost,
-    # Models, Context usage) sit under a "Monitoring" label; Quality +
+    # Session-first IA (Trail, 2026-09): Sessions is the landing item; it
+    # sits under the "Monitoring" label directly after Agents (founder
+    # request 2026-09-15) with Home + the raw-signal views (Activity, Cost,
+    # Models, Context usage); Quality +
     # Harness Engineering under Analyze; Approvals / Guard / Alerts /
     # Notifications under Govern. Notifications still rides directly under
     # its two consumers (Approvals, Alerts) - founder request 2026-07-29.
     assert tier1 == [
-        "transcripts",
-        "overview", "inventory", "brain", "usage", "models", "context-economics",
+        "overview", "inventory", "transcripts", "brain", "usage", "models",
+        "context-economics",
         "evals", "bench",
         "approvals", "guard", "signals", "alerts", "notifications",
     ], f"Tier-1 must be the beginner items in order, got {tier1}"

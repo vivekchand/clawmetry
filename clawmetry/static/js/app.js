@@ -2241,6 +2241,7 @@ function switchTab(name) {
   if (name === 'guard') { if (typeof loadGuardTab === 'function') loadGuardTab(); }
   if (name === 'signals') { if (typeof loadSignalsTab === 'function') loadSignalsTab(); }
   if (name === 'compliance') { if (typeof loadComplianceTab === 'function') loadComplianceTab(); }
+  if (name === 'price-book') { if (typeof loadPriceBookTab === 'function') loadPriceBookTab(); }
   if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
   if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
@@ -10656,6 +10657,8 @@ var LOOP_KIND_LABEL = {
   rate_limited: 'Being rate limited by its provider',
   blocked_on_user: 'Waiting for you to answer',
   crashed: 'Crashed and restarted',
+  // Content: text the agent read tried to give it instructions.
+  prompt_injection: 'Read text that tried to give it orders',
   // Fleet-wide: several unrelated agents doing the same unusual thing.
   // Mirrors clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Acting in step with unrelated agents',
@@ -18584,6 +18587,8 @@ async function loadUsage() {
     setUsageCard('usage-today', data.todayCost, data.today, 'today');
     setUsageCard('usage-week', data.weekCost, data.week, 'week');
     setUsageCard('usage-month', data.monthCost, data.month, 'month');
+    // Contract-rate card (static/js/price-book.js, #5936). Local installs only.
+    try { if (typeof renderUsagePriceBook === 'function') renderUsagePriceBook(data); } catch (_ePb) { console.error('renderUsagePriceBook failed', _ePb); }
     try { renderBillingCoverageBanner(_cov, data); } catch (_eBC) { console.error('renderBillingCoverageBanner failed', _eBC); }
     // Runtime-scoped empty state: when a specific runtime is selected but has
     // no cost data in any window, surface a clear note rather than showing all zeros.
@@ -27031,7 +27036,11 @@ function loadCostOptimizerData(isRefresh) {
   var ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
   var timedOut = false;
   var timer = setTimeout(function() { timedOut = true; if (ctrl) ctrl.abort(); }, _COST_OPT_TIMEOUT_MS);
-  fetch('/api/cost-optimizer', ctrl ? { signal: ctrl.signal } : undefined).then(function(r) {
+  // Scope to the runtime switcher, like every other Cost surface: without it a
+  // Codex dashboard opened an optimizer full of Claude Code spend.
+  var _coRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _coUrl = '/api/cost-optimizer' + (_coRt && _coRt !== 'all' ? '?runtime=' + encodeURIComponent(_coRt) : '');
+  fetch(_coUrl, ctrl ? { signal: ctrl.signal } : undefined).then(function(r) {
     // 402 is the entitlement answer, not data: never parse it as figures.
     if (r.status === 402) return { error: 'upgrade_required' };
     if (!r.ok) throw new Error('unavailable');
@@ -27376,7 +27385,7 @@ function loadAutomationAdvisorDataWithTime() {
     if (data.suggestions && data.suggestions.length > 0) {
       html += '<h3 style="color:var(--text-primary);border-bottom:2px solid var(--border-primary);padding-bottom:8px;margin-bottom:16px;">💡 Automation Suggestions</h3>';
       data.suggestions.forEach(function(suggestion) {
-        var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '[dev]' : '🔧';
+        var typeIcon = suggestion.type === 'cron' ? '⏰' : suggestion.type === 'skill' ? '🧬' : '🔧';
         html += '<div style="background:var(--bg-hover);border-radius:8px;padding:16px;margin-bottom:16px;">';
         html += '<div style="display:flex;align-items:center;margin-bottom:8px;"><span style="font-size:20px;margin-right:8px;">' + typeIcon + '</span>';
         html += '<span style="font-weight:600;">' + suggestion.title + '</span></div>';
@@ -31479,6 +31488,8 @@ var GUARD_KIND_LABEL = {
   rate_limited: 'Rate limited by the provider',
   blocked_on_user: 'Waiting on you',
   crashed: 'Crashed and restarted',
+  // Content: does text the agent read try to give it instructions?
+  prompt_injection: 'Prompt injection',
   // Fleet: several unrelated agents doing the same unusual thing. Keys
   // mirror clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Coordinated with unrelated agents',
@@ -31742,14 +31753,20 @@ async function _loadSelfReportsPanel(sessionId) {
 function loadGuardSessions() {
   var el = document.getElementById('guard-sessions-body');
   if (!el) return;
-  fetch('/api/guard/sessions').then(function (r) { return r.json(); }).then(function (d) {
+  // Scoped to the runtime switcher: with Codex selected, a claude_code
+  // session must not be listed (or counted in the at-risk line).
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var url = '/api/guard/sessions' + (rt && rt !== 'all' ? '?runtime=' + encodeURIComponent(rt) : '');
+  fetch(url).then(function (r) { return r.json(); }).then(function (d) {
     var rows = (d && d.sessions) || [];
     if (!rows.length) {
       // `available: false` is "could not read the list" (the hosted dashboard
       // before the node's snapshot carries it), not "nothing is running".
       var emptyText = (d && d.available === false && d.reason)
         ? d.reason
-        : 'No sessions running right now.';
+        : (rt && rt !== 'all'
+           ? 'No ' + ((typeof _cmRuntimeLabel === 'function') ? _cmRuntimeLabel(rt) : rt) + ' sessions running right now.'
+           : 'No sessions running right now.');
       el.innerHTML = '<div class="empty-state">' + guardEsc(emptyText) + '</div>';
       guardSetBadge(0);
       return;
