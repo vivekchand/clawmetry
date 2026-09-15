@@ -31428,7 +31428,12 @@ function loadGuardSessions() {
   fetch('/api/guard/sessions').then(function (r) { return r.json(); }).then(function (d) {
     var rows = (d && d.sessions) || [];
     if (!rows.length) {
-      el.innerHTML = '<div class="empty-state">No sessions running right now.</div>';
+      // `available: false` is "could not read the list" (the hosted dashboard
+      // before the node's snapshot carries it), not "nothing is running".
+      var emptyText = (d && d.available === false && d.reason)
+        ? d.reason
+        : 'No sessions running right now.';
+      el.innerHTML = '<div class="empty-state">' + guardEsc(emptyText) + '</div>';
       guardSetBadge(0);
       return;
     }
@@ -31754,8 +31759,10 @@ function guardControlRun() {
 }
 
 function guardRenderOutcome(d, verb) {
-  var html = '<p class="' + (d.ok ? 'guard-modal-ok' : 'guard-modal-warn') + '">' +
-    guardEsc(verb) + (d.ok ? ' completed.' : ' did not succeed.') +
+  // `pending`: the hosted dashboard relayed the request and the node has not
+  // reported back yet. That is neither a success nor a failure.
+  var html = '<p class="' + (d.ok ? 'guard-modal-ok' : (d.pending ? 'muted' : 'guard-modal-warn')) + '">' +
+    guardEsc(verb) + (d.ok ? ' completed.' : (d.pending ? ' was sent to your node.' : ' did not succeed.')) +
     (d.detail ? ' <span class="muted">' + guardEsc(d.detail) + '</span>' : '') +
     '</p>';
   // An advisory result is the one an operator most needs spelled out: the
@@ -32251,7 +32258,13 @@ function signalsOpenSessions(name, silent) {
   fetch(url).then(function (r) { return r.json(); }).then(function (d) {
     var rows = (d && d.sessions) || [];
     if (!rows.length) {
-      body.innerHTML = '<div class="sig-empty">' + sigEsc(_sigT('signals.no_sessions', null, 'No sessions matched in this window.')) + '</div>';
+      // `available: false` means the list could not be read (the hosted
+      // dashboard before the node's snapshot carries it), which is not the
+      // same as nothing matching. Say which one it is.
+      var emptyText = (d && d.available === false && d.reason)
+        ? d.reason
+        : _sigT('signals.no_sessions', null, 'No sessions matched in this window.');
+      body.innerHTML = '<div class="sig-empty">' + sigEsc(emptyText) + '</div>';
       return;
     }
     var html = '<table class="sig-table"><thead><tr><th>Session</th><th>Runtime</th><th>Model</th><th>Started</th><th>Cost</th><th>Matches</th><th></th></tr></thead><tbody>';

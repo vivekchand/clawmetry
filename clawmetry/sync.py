@@ -23950,19 +23950,48 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
 
     # Behaviour Signals (WO-58): the same shape /api/signals serves, per
     # window (1d / 7d / 30d) and per runtime, so the hosted dashboard renders
-    # the identical numbers. No per-session lists ride the snapshot. Same
-    # store handle as above; a failure here leaves both slices empty and
-    # never breaks the snapshot.
+    # the identical numbers. `signalSessions` carries the drill-down lists
+    # (sessions and match counts, never the phrases), so a hosted "Sessions"
+    # click lists what the rate counted instead of reading as none. Same
+    # store handle as above; a failure here leaves the slices empty and never
+    # breaks the snapshot.
     _signals_slice: dict = {}
     _signals_by_rt: dict = {}
+    _signal_sessions_slice: dict = {}
     try:
         from clawmetry import behaviour_signals as _bsig_snap
         from clawmetry import local_store as _ls_sig
         _sig_store = _ls_sig.get_store()
         if _sig_store is not None:
             _signals_slice, _signals_by_rt = _bsig_snap.build_snapshot_slices(_sig_store)
+            _signal_sessions_slice = _bsig_snap.build_session_slice(
+                _sig_store, _signals_slice, _signals_by_rt)
     except Exception as _e_sig:
         log.debug("snapshot: signals slice failed: %s", _e_sig)
+
+    # Guard running sessions: the exact /api/guard/sessions body, built on
+    # this machine because only this machine has the store and the process
+    # table. Without it the hosted Guard tab asked a container with neither
+    # and printed "No sessions running right now" beside a node running 39.
+    # The builder is handed THIS store handle (never a read_only re-open --
+    # FLYWHEEL section 1). Rows carry the control verdict computed here; the
+    # cloud relays a click to this daemon, which re-resolves before acting.
+    _guard_sessions_slice: dict = {}
+    try:
+        from clawmetry import local_store as _ls_guard
+        _guard_store = _ls_guard.get_store()
+        if _guard_store is not None:
+            from routes.guard import build_guard_sessions_body as _bgsb
+
+            def _guard_call(method, **kw):
+                fn = getattr(_guard_store, method, None)
+                return fn(**kw) if callable(fn) else None
+
+            _guard_sessions_slice = json.loads(json.dumps(
+                _bgsb(50, call=_guard_call), default=str))
+            _guard_sessions_slice["generated_at"] = int(time.time() * 1000)
+    except Exception as _e_guard:
+        log.debug("snapshot: guardSessions slice failed: %s", _e_guard)
 
     # Signal shifts (WO-62): open issues + the last 20 resolved, each with
     # its plain-words headline, so the hosted Signals tab shows the same
@@ -24025,6 +24054,12 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # for ?runtime= and falls back to the node-wide slice).
         "signals": _signals_slice,
         "signalsByRuntime": _signals_by_rt,
+        # Drill-down lists behind each rate: byRuntime[rt|"all"][window][signal]
+        # -> sessions with match counts (never the phrases).
+        "signalSessions": _signal_sessions_slice,
+        # The /api/guard/sessions body (running sessions, incidents, control
+        # verdicts) plus generated_at, for the hosted Guard tab.
+        "guardSessions": _guard_sessions_slice,
         # WO-62 Signal shifts: issues opened when a rate left its band.
         "signalIssues": _signal_issues_slice,
         # WO-62 Briefs: saved questions with a schedule and a channel, read-only

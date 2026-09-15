@@ -23,6 +23,8 @@ CLAWMETRY_OTEL_EXPORT_INTERVAL=60                    # seconds (default 60)
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:8900 OTEL_EXPORTER_OTLP_PROTOCOL=http/json your-app
 ```
 
+**Framework recipes, tested in CI.** A runnable agent per framework, run against a live ClawMetry on every change, with the versions that were verified recorded on its page. So far: [LangGraph with OpenLLMetry](OTEL_RECIPE_LANGGRAPH.md). Other frameworks are covered in [BRING_YOUR_OWN_AGENT.md](BRING_YOUR_OWN_AGENT.md) without a CI-tested recipe yet.
+
 OTLP/JSON traces, logs **and metrics** work on a plain `pip install clawmetry`, no extras. Protobuf ingest needs `pip install clawmetry[otel]`. An app that sets its own `service.name` shows up as its own agent in the runtime switcher, with its cost and tokens.
 
 **Switch a runtime's own exporter on, one command.** Several runtimes ship an OpenTelemetry exporter of their own (Claude Code, Codex, Gemini CLI, Cursor, Copilot, OpenCode and more), each off by default and each configured differently. `clawmetry instrument <runtime>` writes that runtime's settings so its exporter reports to the local receiver, and `--uninstall` removes exactly what it wrote. The mechanics are shared: it merges into the existing settings, never overwrites a value it did not write, keeps a per-file record of its keys, refuses when managed policy pins the destination, and keeps prompt and tool content OFF unless you pass `--content`. Raw request and response bodies are never enabled.

@@ -133,8 +133,12 @@ GEN_AI_ATTRS_READ: dict[str, tuple[str, list[str]]] = {
         ["tool.name", "code.function"],
     ),
     "gen_ai.conversation.id": (
-        "Session or conversation identifier.",
-        ["session.id", "openclaw.session_id", "session_id"],
+        "Session or conversation identifier. Fallbacks are read in the order "
+        "listed, so a LangGraph thread (``traceloop.association.properties.thread_id``, "
+        "what OpenLLMetry stamps on every span below the run's top span) outranks "
+        "``session.id`` on the span or the resource.",
+        ["traceloop.association.properties.thread_id",
+         "session.id", "openclaw.session_id", "session_id"],
     ),
     "gen_ai.agent.id": (
         "Agent identifier.",

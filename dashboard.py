@@ -4604,7 +4604,31 @@ def _otel_to_row(span, resource_attrs):
     tool_name = _pick("gen_ai.tool.name", "tool.name", "code.function",
                       *(_al.get("tool_name") or ()))
     # session/conversation: semconv uses gen_ai.conversation.id.
-    session_id = _pick("gen_ai.conversation.id", "session.id", "openclaw.session_id", "session_id")
+    #
+    # REQ-OBS-OTR-001 (AC-OBS-OTR-001.3): OpenLLMetry's LangGraph
+    # instrumentation (measured on opentelemetry-instrumentation-langchain
+    # 0.62.3 + langgraph 1.2.11) stamps the run's thread as
+    # ``gen_ai.conversation.id`` on the top ``invoke_agent`` span ONLY. Every
+    # span beneath it (the model calls with the tokens, the execute_tool
+    # spans) carries the same value as
+    # ``traceloop.association.properties.thread_id`` and no conversation id.
+    # Reading only the semconv key split one run into two sessions: the top
+    # span under ``t-1`` with 0 tokens, and everything else under the per-trace
+    # fallback ``<app>:trace:<id>`` below. The thread association is the same
+    # identifier the top span sends, so it is read right after the
+    # conversation id and recorded as sent, which makes the top span and its
+    # children agree.
+    #
+    # AC-OBS-OTR-001.4: the thread outranks ``session.id`` wherever it is
+    # sent, on the span as well as on the resource. ``_pick`` walks KEYS in
+    # order and checks span-then-resource per key, so every key listed here
+    # beats every later key at both levels. That is deliberate: if a
+    # ``session.id`` on a child span beat the thread, an app that stamps
+    # ``session.id`` on every span would split the run again (top span via
+    # the conversation id, children via ``session.id``).
+    session_id = _pick("gen_ai.conversation.id",
+                       "traceloop.association.properties.thread_id",
+                       "session.id", "openclaw.session_id", "session_id")
     agent_id = _pick("gen_ai.agent.id", "agent.id", "openclaw.agent_id", "agent_id") or "main"
     service_name = resource_attrs.get("service.name") or attrs.get("service.name")
     # Runtime identity. An explicit agent.type wins (OpenClaw / clawmetry-pro

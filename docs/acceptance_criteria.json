@@ -1429,6 +1429,54 @@
       "text": "When any read limit truncates the evidence (sessions listed, sessions read, events or Guard findings per session, or commits in the range), the system shall report the evidence as partial with the reason, both in the report and in an exported bundle, so that an enabled gate applies the operator's missing-evidence behaviour rather than passing silently."
     },
     {
+      "id": "AC-OBS-OTR-001.1",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "The project shall ship a runnable minimal LangGraph agent with exactly one tool that exports OpenTelemetry through OpenLLMetry to the ClawMetry receiver and runs with no model provider key."
+    },
+    {
+      "id": "AC-OBS-OTR-001.2",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "On every change, an automated check shall run that recipe, with its framework, instrumentation and exporter versions pinned, against a live ClawMetry instance, and shall fail unless the run is readable back through the local query API as a session under the application's identity, carrying the token totals the model reported and the tool call by name."
+    },
+    {
+      "id": "AC-OBS-OTR-001.3",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "When a LangGraph run carries a thread identifier, the system shall record every span of that run, including the model calls and tool calls beneath the run's top span, under one session identified by that thread, and every later run on the same thread under the same session. The instrumentation reports the thread as the conversation identifier on the run's top span only, and as a thread association on every span beneath it; both shall resolve to the same session, recorded exactly as sent, so a run is never split between a session for its top span and a separate per-trace session holding its tokens and tool calls."
+    },
+    {
+      "id": "AC-OBS-OTR-001.4",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "An explicitly sent conversation identifier shall take precedence over a thread identifier, and a thread identifier shall take precedence over a session identifier sent on the span or on the resource, so that a session identifier stamped on the spans beneath a run's top span can never split that run away from the conversation identifier its top span sends; whichever identifier wins shall be recorded exactly as sent."
+    },
+    {
+      "id": "AC-OBS-OTR-001.5",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "When a run carries neither a conversation identifier nor a thread identifier, the system shall record one session per trace, as REQ-OBS-RSO-033 defines, and the recipe page shall name that fallback and its cardinality."
+    },
+    {
+      "id": "AC-OBS-OTR-001.6",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "When the agent runs in streaming mode, the check shall find the same session, token totals and tool call as for a non-streaming run."
+    },
+    {
+      "id": "AC-OBS-OTR-001.7",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "When the recipe exports to a ClawMetry on another machine, the automated check shall prove that an export without the Bearer token is refused and an export carrying it is accepted, and the recipe page shall show how to set that header."
+    },
+    {
+      "id": "AC-OBS-OTR-001.8",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "The recipe page shall record the framework, instrumentation and exporter versions that were verified, the wire encoding, the semantic-convention revision, the span parent and child structure, how application, run and conversation identity are derived, what each dashboard tab shows for span-only data, and that this path observes an agent but cannot pause, stop or gate it."
+    },
+    {
       "id": "AC-OBS-SHI-001.1",
       "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
       "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
