@@ -1,5 +1,29 @@
 ## Unreleased
 
+### Fixed: a sign-in tells the cloud account whether it is cloud or self-hosted (2026-09-15)
+- **Why:** the onboarding choice was recorded only on the anonymous install ping, which cannot be joined to an account for a self-hosted install (it never registers a node). A self-hosted account created 2026-09-09 received three "Your ClawMetry dashboard is still empty" emails telling the person to connect the machine to the cloud they had just declined, and every managed terminal sign-in was sent the self-hosted trial email.
+- **What:** every sign-in's trial call (`/api/license/trial/signup`) now carries `deployment`: `managed` from `clawmetry connect` and the dashboard's cloud sign-in, `selfhost` from the keep-local sign-in in either place. The body is built in `clawmetry/onboarding_state.py`, which omits any other value so a caller that does not know the choice never reclassifies an account. The account stores it, and the cloud emails and admin console follow it (clawmetry-cloud companion change).
+- **Verified:** `tests/test_account_deployment_report.py` and the sign-in tests in `tests/test_cloud_cta_oauth.py`.
+- **Refs:** REQ-OGV-ADC-001 (AC-OGV-ADC-001.1 to 001.4).
+
+### Release: the Cost Optimizer follows the runtime switcher (2026-09-15)
+- **Carries:** #6016 (a runtime-scoped dashboard, for example `?runtime=codex`, no longer shows another runtime's spend, expensive calls or experiments in the Cost Optimizer; the daemon ships `costOptimizerByRuntime` for the hosted dashboard, served by clawmetry-cloud#2457 after this pin). Any other change merged before this release carries its own entry below.
+
+### Fixed: the Cost Optimizer ignored the runtime switcher (2026-09-15)
+- **Why:** with Codex selected (`?runtime=codex`), the optimizer opened under "all runtimes on <host>" and listed claude-opus-5 calls and a "claude-opus-5 via Anthropic" experiment, so Claude Code spend read as Codex's. The route, its DuckDB helper and the hosted snapshot slice were all node-wide, and a scoped view could fall back to the interceptor ring, which is not attributed to any runtime.
+- **What:** `/api/cost-optimizer?runtime=<id>` reads that runtime's sessions only (`query_aggregates` / `query_events` with `runtime=`), labels the header "Codex only, on this computer", and with no spend for the runtime shows unknown figures instead of borrowing the ring. The dashboard passes the switcher's runtime. The daemon ships `costOptimizerByRuntime` beside `costOptimizer` for the hosted dashboard (served by the matching clawmetry-cloud change).
+- **Verified:** `tests/test_cost_optimizer_runtime_scope.py` (6 tests): Codex and Claude Code sessions in one store, scoped route shows only Codex models and spend, unscoped still shows both, an empty runtime is unknown even with a populated ring, and the per-runtime snapshot slice equals the scoped route.
+- **Refs:** REQ-OBS-CEA-023 (AC-OBS-CEA-023.3, AC-OBS-CEA-023.9).
+
+### Fixed: Guard listed Claude Code sessions with Codex selected (2026-09-15)
+- **Why:** the Guard tab ignored the runtime switcher. With Codex selected it listed every running claude_code session and "$23.72 at risk across 1 flagged session" from one of them, locally and on the hosted dashboard.
+- **What:** the tab passes `?runtime=` from the switcher; `/api/guard/sessions` filters its rows (the live-probe rows included) before counting flagged sessions and spend at risk, so the headline describes only what is listed. An empty scoped list names the runtime ("No Codex sessions running right now."). The daemon's `guardSessions` snapshot slice still carries every runtime; the hosted interceptor already filters it by `?runtime=` and recomputes the totals.
+- **Verified:** `tests/test_cloud_guard_signals_slices.py` (route, builder and loader).
+
+### Changed: Sessions sits next to Agents in the navigation (2026-09-15)
+- **What:** the Sessions item moved from above the Monitoring label to directly under Agents (Home, Agents, Sessions, Activity, Cost, Models, Context usage). It is still the page the dashboard opens on and keeps the default highlight; the tab id and deep links are unchanged.
+- **Verified:** `tests/test_beginner_nav_phase_a.py` and `tests/test_trail_tab_template.py` pin the new order.
+
 ### Release: enterprise readiness, batch 3 (2026-09-15)
 - **Carries:** #5950 (fleet install for shared hosts and virtual desktops, refs #5942), #5965 (LiteLLM gateway spend by team, person and key, refs #5940), #5957 (the dashboard's first load no longer times out its own requests, refs #5935), #5996 (the hosted Cost Optimizer shows evidence-backed experiments, refs #5934; hosted rendering lands with clawmetry-cloud#2450 after this pin) #5967 (SECURITY.md: the DPA is not available and the sub-processor list is published; documentation only) and #6007 (Compliance tab shell, refs clawmetry-pro#250; the evaluation ships in clawmetry-pro 0.7.29). Any other change merged before this release carries its own entry below. Their entries follow.
 

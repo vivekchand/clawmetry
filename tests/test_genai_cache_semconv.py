@@ -73,6 +73,11 @@ def _row_for(extra_attrs):
         def put_span(self, span=None, **_kw):
             captured.append(span)
 
+        # The receiver writes a whole export in one batch (REQ-OBS-OIA-001).
+        def ingest_spans_batch(self, spans=None, **_kw):
+            captured.extend(spans or [])
+            return len(spans or [])
+
         def __getattr__(self, _name):        # tolerate any other call
             return lambda *a, **k: None
 

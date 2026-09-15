@@ -361,6 +361,66 @@
       "text": "Where this path is described to a customer, the description shall state which runtimes it covers and that records arrive unencrypted."
     },
     {
+      "id": "AC-OBS-PRJ-001.1",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "The system shall attribute each session's spend to a project derived from where the session ran or from an operator assignment, and shall report for each project the source it came from and a confidence. A project or tenant name carried inside an agent's own activity shall not determine attribution."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.2",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Sessions that ran in two different repositories shall be reported as two projects even when the repositories share a directory name, and shall be combined only by an explicit operator assignment."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.3",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Spend from sessions whose working directory is unknown shall be reported in a visible unassigned group, with its amount and session count, rather than dropped or attributed to a default project."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.4",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Attribution shall be derived when read rather than stored on activity records, so an assignment applies to history already collected. Each assignment shall carry the period it is effective for, who made it, when and why, and a correction shall be recorded as a new assignment that supersedes the earlier one without erasing it."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.5",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Project figures the system publishes shall identify a project by a label and an opaque identifier, and shall not include the full local path it was derived from."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.6",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "A project budget shall declare its amount, period, timezone, currency and the financial basis of the spend it is measured against. The system shall refuse a budget whose currency or timezone it cannot honour rather than silently substituting another."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.7",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Spend shall count toward the budget period in which it occurred, on the budget's own timezone, so a session running across a period boundary is split between the two periods and a record that arrives late counts in the period it occurred in."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.8",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "When a project's spend in a period reaches 50%, 80% or 100% of its budget, the system shall record an alert once per threshold per period, deliver it to the operator, and state that the alert is a notification that does not stop or reverse any charge."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.9",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "The budget status shall report spend for each day of the current period next to the budget, so burn can be compared against it."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.10",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "The per-project export shall include assigned, unassigned and unpriced amounts and a completeness figure. Usage that carries tokens but no price shall be counted as unpriced, never as zero cost."
+    },
+    {
       "id": "AC-OBS-CEA-001.1",
       "doc": "Cost and Efficiency Analytics",
       "doc_id": "43d6b27c-0e37-45dc-9fdd-df4200844c29",
@@ -581,6 +641,12 @@
       "doc": "Cost Optimizer: honest, fast and provider-aware",
       "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",
       "text": "When the operator opens the Cost Optimizer on the hosted dashboard, the system shall show the same experiments, local-model advice and basis-labelled figures that the local dashboard derives for that computer from its recorded usage, computed on that computer and readable only in the operator's browser; and when the connected computer does not yet send them, the system shall say so rather than show recommendations that cite no observed usage or figures without a basis."
+    },
+    {
+      "id": "AC-OBS-CEA-023.10",
+      "doc": "Cost Optimizer: honest, fast and provider-aware",
+      "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",
+      "text": "When the operator has scoped the dashboard to one runtime, the Cost Optimizer shall show only that runtime's recorded spend, expensive calls and experiments and shall name the runtime its figures cover; and when that runtime has no recorded spend, or the connected computer does not yet send figures per runtime, the system shall show the figures as unavailable rather than another runtime's or the whole computer's."
     },
     {
       "id": "AC-OBS-CEA-025.1",
@@ -1099,6 +1165,30 @@
       "text": "When the hosted cloud dashboard serves onboarding state, the system shall not send a gate_shown ping, because hosted accounts never see the gate."
     },
     {
+      "id": "AC-OGV-ADC-001.1",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in from the terminal and chooses to sync data to ClawMetry Cloud, the install shall report deployment `managed` on the trial sign-in call."
+    },
+    {
+      "id": "AC-OGV-ADC-001.2",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in from the terminal and chooses to keep data on the machine, the install shall report deployment `selfhost` on the trial sign-in call."
+    },
+    {
+      "id": "AC-OGV-ADC-001.3",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in through the local dashboard's cloud sign-in, the install shall report `managed`; through its keep-local sign-in, `selfhost`."
+    },
+    {
+      "id": "AC-OGV-ADC-001.4",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When the report cannot be delivered or the cloud rejects it, sign-in and trial activation shall complete exactly as they would without it."
+    },
+    {
       "id": "AC-RSO-CCT-001.1",
       "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
       "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
@@ -1223,6 +1313,42 @@
       "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
       "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
       "text": "The price book, its rates and its recorded versions shall remain on the machine where they were written, and no path that sends data off the machine shall read them."
+    },
+    {
+      "id": "AC-OBS-CEA-024.12",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "When the price book version in effect at the time usage was observed selects exactly one entry for that usage and a valuation engine is present, the local Usage view shall show that usage valued at the contract rate, labelled as contract rate and naming the recorded book version; a figure whose book version is not recorded shall not be labelled contract, and the published-rate figures shall stay shown beside it."
+    },
+    {
+      "id": "AC-OBS-CEA-024.13",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Each usage record shall be valued against the book version that was in effect when it was observed. A later edit to the book shall not change the figure shown for usage observed before the edit, unless the user explicitly asks for a restatement; a restated figure shall be labelled as a restatement and shown beside the original amount."
+    },
+    {
+      "id": "AC-OBS-CEA-024.14",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Usage for which the applicable entries are ambiguous, or which no rate can price, shall be counted and shown as unknown with its reason, and shall add no amount to a contract figure."
+    },
+    {
+      "id": "AC-OBS-CEA-024.15",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The local dashboard shall provide a price book screen showing the validated entries, the aliases, each rejected entry with its reasons, and the recorded versions with the time each came into effect, and shall let the user add an entry or edit an existing one."
+    },
+    {
+      "id": "AC-OBS-CEA-024.16",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "An entry edit shall be validated before it is saved; each problem shall be shown as a readable sentence beside the field it concerns; nothing shall be written without an explicit save; a save shall be refused when the book changed after it was loaded; and a successful save shall report the new version and the time from which it applies."
+    },
+    {
+      "id": "AC-OBS-CEA-024.17",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Usage facts shall be stored once, as the recorded usage events, and contract valuations shall be derived when read; no valuation shall be written back into stored usage, and no process that sends data off the machine shall compute or carry one."
     },
     {
       "id": "AC-OBS-OTG-001.1",
@@ -1529,6 +1655,54 @@
       "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
       "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
       "text": "The recipe page shall record the framework, instrumentation and exporter versions that were verified, the wire encoding, the semantic-convention revision, the span parent and child structure, how application, run and conversation identity are derived, what each dashboard tab shows for span-only data, and that this path observes an agent but cannot pause, stop or gate it."
+    },
+    {
+      "id": "AC-OBS-OIA-001.1",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "The system shall answer a telemetry export with success only after every accounting record in it has been written to the local store or deliberately refused, and when the store cannot confirm the write it shall answer with a retryable status and a retry delay, and shall not report the export as received."
+    },
+    {
+      "id": "AC-OBS-OIA-001.2",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "Where some items in an export are malformed and the rest are valid, the system shall store the valid items, answer success, and report to the sender how many items it refused; a body that cannot be decoded shall be refused as a whole with a non-retryable status; and a request from another machine without valid credentials shall be refused before its body is read."
+    },
+    {
+      "id": "AC-OBS-OIA-001.3",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "Re-delivery of a record, span or data point already received shall not change any stored total or the live view, and two separately reported model calls that differ in their own time or identifiers shall remain two records."
+    },
+    {
+      "id": "AC-OBS-OIA-001.4",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "The system shall report, per signal and since the receiver started, how many items it received, stored, refused, recognised as already stored, held only in the live view, skipped because another source already reports them, and asked the sender to retry, together with the time and category of the last successful and last failed intake and the number of refused unauthenticated requests; it shall state that it keeps no intake queue; and the report shall contain no record content and no credentials."
+    },
+    {
+      "id": "AC-OBS-OIA-001.5",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "A spending-limit pause on the observed agents shall not stop the system from receiving and storing telemetry, and exports received during such a pause shall be counted."
+    },
+    {
+      "id": "AC-OBS-OIA-001.6",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "Where a sender does not report a usage value, the system shall store it as unknown rather than zero, and a spend rollup shall state how many records in each group carried a cost and shall report no spend figure for a group in which none did."
+    },
+    {
+      "id": "AC-OBS-OIA-001.7",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "The spend rollup shall be computed from received log records alone, so that a sender sampling its traces does not reduce it."
+    },
+    {
+      "id": "AC-OBS-OIA-001.8",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "The generated ingest reference shall state the acknowledgement rule, each response status and whether the sender should retry it, the identity used to recognise a re-delivery for each signal, the session identity used when a sender provides none, and which received data is held only in the live view."
     },
     {
       "id": "AC-OBS-SHI-001.1",

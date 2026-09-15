@@ -325,8 +325,12 @@ def _try_local_store_flow_events(limit=200, since=None):
     return events
 
 
-def _try_local_store_cost_optimizer(call=None):
+def _try_local_store_cost_optimizer(call=None, runtime=None):
     """DuckDB fast path for /api/cost-optimizer's data-derived fields.
+
+    ``runtime`` (``codex``, ``claude_code``, ...) scopes BOTH reads to that
+    runtime's sessions, so a Codex-scoped optimizer never cites Claude Code
+    spend or Anthropic experiments. ``None`` / ``"all"`` = the whole node.
 
     Tier-1 surface #12 in the 2026-05-17 DuckDB coverage audit
     (issue #1565). The legacy handler reads ``todayCost`` and
@@ -360,7 +364,8 @@ def _try_local_store_cost_optimizer(call=None):
     if call is None:
         from routes.sessions import _ls_call as call  # late import to avoid cycle
 
-    agg_rows = call("query_aggregates") or []
+    rt_kw = {"runtime": runtime} if runtime and runtime != "all" else {}
+    agg_rows = call("query_aggregates", **rt_kw) or []
     if not agg_rows:
         # No cost-bearing rows in DuckDB → defer to legacy path so a
         # fresh install still gets the in-memory ring values (which
@@ -394,7 +399,7 @@ def _try_local_store_cost_optimizer(call=None):
     # _get_expensive_operations builds (model + cost + tokens + timeAgo).
     expensive_ops: list[dict] = []
     try:
-        evs = call("query_events", limit=200) or []
+        evs = call("query_events", limit=200, **rt_kw) or []
     except Exception:
         evs = []
     candidates = []
@@ -2218,6 +2223,12 @@ def api_cost_optimizer():
     from clawmetry import cost_optimizer_advice as _adv
     from clawmetry import provenance as _prov
 
+    # ``?runtime=<id>`` scopes every figure and experiment to that runtime.
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime == "all":
+        runtime = ""
+    scope = _adv.scope_label(runtime, "this computer")
+
     try:
         # Cost data from existing helpers
         costs = _d._get_cost_summary()
@@ -2233,7 +2244,7 @@ def api_cost_optimizer():
         ls_slice = None
         if is_local_store_read_enabled():
             try:
-                ls_slice = _try_local_store_cost_optimizer()
+                ls_slice = _try_local_store_cost_optimizer(runtime=runtime or None)
             except Exception:
                 ls_slice = None
 
@@ -2241,6 +2252,14 @@ def api_cost_optimizer():
             source = "local_store"
             usage_rows = ls_slice.get("modelRows") or []
             window = _adv.LOCAL_STORE_WINDOW
+        elif runtime:
+            # The interceptor ring is not attributed to a runtime, so a scoped
+            # view must not borrow it: that is how Codex showed Claude Code spend.
+            source = "runtime_empty"
+            usage_rows = []
+            window = _adv.LOCAL_STORE_WINDOW
+            costs = {}
+            expensive_ops = []
         else:
             ring = []
             try:
@@ -2338,7 +2357,8 @@ def api_cost_optimizer():
                 )
 
         payload = {
-            "scope": "all runtimes on this computer",
+            "scope": scope,
+            "runtime": runtime or "all",
             "system": system_out,
             "localModels": local_models,
             **fields,
@@ -2369,7 +2389,8 @@ def api_cost_optimizer():
         # Never a raw exception string, never a fabricated $0: the figures are
         # labelled unknown and the renderer says the analysis could not finish.
         payload = {
-            "scope": "all runtimes on this computer",
+            "scope": scope,
+            "runtime": runtime or "all",
             "system": {},
             "localModels": [],
             "localAdvice": {"show": False, "reason": "", "routes": []},

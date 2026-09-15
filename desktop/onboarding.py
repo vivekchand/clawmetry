@@ -392,7 +392,7 @@ def detect_runtimes_via_venv(venv_python: Path, *, timeout: float = 6.0) -> list
 
 # ─── Post-auth: hand key to clawmetry connect ───────────────────────────
 
-def _fallback_persist_cm_key(cm_key: str) -> bool:
+def _fallback_persist_cm_key(cm_key: str, mode: str = "") -> bool:
     """Last-resort local pairing when ``clawmetry connect`` fails.
 
     The user just completed OTP / OAuth successfully — the cm_ key is
@@ -457,22 +457,33 @@ def _fallback_persist_cm_key(cm_key: str) -> bool:
     # permissions — that would otherwise re-open the same wound.
     # Best-effort; the pairing already succeeded above, so we always
     # return True even if trial mint fails (it can retry via CLI later).
-    _fallback_mint_trial(cm_key)
+    _fallback_mint_trial(cm_key, mode)
     return True
 
 
-def _fallback_mint_trial(cm_key: str) -> None:
+# The pane's hosting choice, as the cloud account records it
+# (REQ-OGV-ADC-001; mirrors clawmetry/onboarding_state.py DEPLOYMENTS,
+# inlined because this module must not import a possibly broken install).
+_MODE_TO_DEPLOYMENT = {"cloud": "managed", "selfhost": "selfhost"}
+
+
+def _fallback_mint_trial(cm_key: str, mode: str = "") -> None:
     """POST /api/license/trial/signup, activate the returned key locally.
 
     Standalone from ``clawmetry.cli._activate_signup_trial`` because that
     function reads its api_key from ``~/.clawmetry/config.json``, which
     the subprocess didn't get to write. This variant takes the key
-    directly. Never raises."""
+    directly. ``mode`` is the pane's hosting choice; it rides along as
+    ``deployment`` so the account records it even on this path. Never
+    raises."""
     try:
         base = resolve_app_base()
+        payload = {"api_key": cm_key}
+        if mode in _MODE_TO_DEPLOYMENT:
+            payload["deployment"] = _MODE_TO_DEPLOYMENT[mode]
         req = urllib.request.Request(
             base + "/api/license/trial/signup",
-            data=json.dumps({"api_key": cm_key}).encode(),
+            data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -529,7 +540,7 @@ def apply_cm_key(
     partial failure so the user knows to re-check daemon health."""
     bin_ = Path(venv_clawmetry)
     if not bin_.exists():
-        _fallback_persist_cm_key(cm_key)
+        _fallback_persist_cm_key(cm_key, mode)
         return False, "runtime venv is not ready yet"
     if not (cm_key or "").startswith("cm_"):
         return False, "invalid sign-in key"
@@ -561,10 +572,10 @@ def apply_cm_key(
             except Exception:
                 pass  # ensure_sync_daemon() in app.py retries
     except subprocess.TimeoutExpired:
-        _fallback_persist_cm_key(cm_key)
+        _fallback_persist_cm_key(cm_key, mode)
         return False, "sign-in timed out — check your connection and try again"
     except Exception as exc:
-        _fallback_persist_cm_key(cm_key)
+        _fallback_persist_cm_key(cm_key, mode)
         return False, f"sign-in error: {exc}"
     if r.returncode == 0:
         return True, "signed in"
