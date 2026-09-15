@@ -1,6 +1,6 @@
 # Hash-pinned install set for the LiteLLM proxy in .github/workflows/litellm-gateway.yml.
 #
-# Direct requirements: litellm[proxy]==1.83.7 prisma==0.11.0
+# Direct requirements: litellm[proxy]==1.93.0 prisma==0.11.0
 #   opentelemetry-api==1.44.0 opentelemetry-sdk==1.44.0
 #   opentelemetry-exporter-otlp-proto-http==1.44.0
 #   (prisma is LiteLLM's own pin for its proxy database client, and the
@@ -1006,7 +1006,7 @@ jsonschema-specifications==2025.9.1 \
     --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe \
     --hash=sha256:b540987f239e745613c7a9176f3edb72b832a4ac465cf02712288397832b5e8d
     # via jsonschema
-litellm==1.83.7 \
+litellm==1.93.0 \
     --hash=sha256:5784a1d9a9a4a8acd6ca1e347003a5e2e1b3c749b4d41e7da4904577adade111 \
     --hash=sha256:e2f2cb99df2e2b2eab63f1354faa45c88dd7c8d40c18eb648afb1b349c689633
     # via -r ll.in
