@@ -30,6 +30,18 @@ SUITE_DIR = os.path.join(REPO_ROOT, "tests", "replay", "atlas_openclaw")
 DOC_PATH = os.path.join(REPO_ROOT, "docs", "ATLAS_OPENCLAW_SCORECARD.md")
 
 
+def _load_framework_map():
+    spec = importlib.util.spec_from_file_location(
+        "clawmetry.framework_map",
+        os.path.join(REPO_ROOT, "clawmetry", "framework_map.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_fm = _load_framework_map()
+
+
 def load_replay():
     spec = importlib.util.spec_from_file_location(
         "atlas_openclaw_replay", os.path.join(SUITE_DIR, "replay.py"))
@@ -55,7 +67,12 @@ def _cell(text) -> str:
 
 
 def _findings(stage: dict) -> str:
-    items = [f"`{f['kind']}` {f['severity']}" for f in stage.get("findings") or []]
+    items = []
+    for f in stage.get("findings") or []:
+        tags = _fm.framework_tags(f["kind"])
+        refs = tags.get("owasp_llm", []) + tags.get("owasp_asi", []) + tags.get("atlas", [])
+        ref_str = f" ({', '.join(refs)})" if refs else ""
+        items.append(f"`{f['kind']}` {f['severity']}{ref_str}")
     return ", ".join(items) if items else "none"
 
 
@@ -148,6 +165,12 @@ def render(report: dict) -> str:
       "The pre-tool column is the risk ClawMetry's call classifier assigns; it is a classification, "
       "not a hold.")
     w("")
+    w("Framework IDs in parentheses after a finding's severity (e.g. `(LLM02:2026, ASI03, AML.T0055)`) "
+      "are from ClawMetry's framework contract (`clawmetry/framework_map.py`, mapping version "
+      f"`{_fm.MAPPING_VERSION}`), sourced from #5952. They indicate the finding is *relevant to* those "
+      "OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS items - not that the risk is prevented. "
+      "A finding with no IDs has no honest match in any of the three frameworks.")
+    w("")
 
     w("## Summary")
     w("")
@@ -206,7 +229,7 @@ def render(report: dict) -> str:
         w("")
         mits = c.get("mitigations") or []
         w(f"ATLAS mitigations published against this case's step techniques (derived, {len(mits)}): " +
-          ("; ".join(f"`{mt['id']}` {_cell(mt['name'])} ({', '.join(mt['techniques'])})" for mt in mits)
+          ("; ".join(f"`{mt['id']}` {_cell(mt['name'])} ({', '.join(mt['techniques'])}" + ")" for mt in mits)
            if mits else "none") + ". A listed mitigation is MITRE's guidance, not a ClawMetry control.")
         w("")
 

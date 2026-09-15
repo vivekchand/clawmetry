@@ -358,6 +358,16 @@ def _pretooluse_impl(runtime: str):
         return _park_question_set(runtime, session_id, cwd, tool_use_id,
                                   tool_input)
 
+    # Untrusted content earlier in this turn (REQ-GOV-PIJ-002): the hook
+    # process derives it from the transcript it runs beside and sends tool
+    # names and signature ids only. Cleaned here because it is input like any
+    # other; missing or malformed means today's rating, never a block.
+    try:
+        from clawmetry.prompt_injection import coerce_context
+        turn_ctx = coerce_context(body.get("untrusted_context"))
+    except Exception:
+        turn_ctx = None
+
     # ── fresh call: policy match ─────────────────────────────────────────
     try:
         from clawmetry import approvals as ap
@@ -365,7 +375,8 @@ def _pretooluse_impl(runtime: str):
         # this one (mirrors sync_runtime_gates, which installs each gate
         # from the same filtered set).
         policies = ap._policies_for_runtime(ap.load_policies(), runtime)
-        policy = ap.match_policy(policies, tool_name, tool_input) \
+        policy = ap.match_policy(policies, tool_name, tool_input,
+                                 context=turn_ctx) \
             if policies else None
     except Exception as e:
         return _decided("allow", f"policy engine unavailable ({e}) — "
@@ -427,6 +438,9 @@ def _pretooluse_impl(runtime: str):
     try:
         from clawmetry.tool_risk import classify_tool_call
         _risk = classify_tool_call(tool_name, tool_input)
+        if turn_ctx:
+            from clawmetry.prompt_injection import effective_risk
+            _risk = effective_risk(_risk, turn_ctx)
         risk_meta = {"level": _risk["level"], "reasons": _risk["reasons"]}
     except Exception:
         risk_meta = None

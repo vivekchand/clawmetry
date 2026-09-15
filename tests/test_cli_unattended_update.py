@@ -325,5 +325,10 @@ def test_real_parser_wires_unattended_into_cmd_update(monkeypatch):
         cli, "_cmd_update", lambda args=None: captured.setdefault("args", args)
     )
     monkeypatch.setattr(sys, "argv", ["clawmetry", "update", "--unattended"])
+    # cli.main() tags the process CLAWMETRY_ROLE=dashboard in os.environ.
+    # Registering the variable with monkeypatch restores it at teardown;
+    # left set, every later test in the process got a read-only _ProxyStore
+    # from local_store.get_store() and could not write a row.
+    monkeypatch.delenv("CLAWMETRY_ROLE", raising=False)
     cli.main()
     assert getattr(captured["args"], "unattended", False) is True

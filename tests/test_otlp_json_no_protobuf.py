@@ -71,6 +71,15 @@ def app(tmp_path, monkeypatch):
         ls.get_store().stop(flush=True)
     except Exception:
         pass
+    # Drop the stopped singleton too. Left in place, the next test file's
+    # get_store() returns this closed connection: every write then fails with
+    # "Connection already closed". The receiver used to hide that behind a 200,
+    # which is how tests/test_otlp_compat_port.py passed while storing nothing;
+    # it now answers 503 (REQ-OBS-OIA-001), so the leak is visible.
+    try:
+        ls._reset_singleton_for_tests()
+    except Exception:
+        pass
 
 
 @pytest.fixture

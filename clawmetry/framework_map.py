@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Optional
 
 #: Bumped whenever an identifier, an edition or a kind's mapping changes, so a
 #: stored finding says which contract labelled it.
-MAPPING_VERSION = "2026-09-14.1"
+MAPPING_VERSION = "2026-09-14.2"
 
 #: What a finding can establish. The same for every kind today, declared once
 #: so no surface re-derives it.
@@ -60,6 +60,8 @@ FAMILY_SOURCES: Dict[str, str] = {
     "behaviour": "tool-call arguments (and, for credentials, tool output), not syscalls",
     "silent_failure": ("tool results, API error events, pending approvals or questions, and "
                        "session (re)starts"),
+    "content": ("the text of tool results and user-sourced messages, matched against declared "
+                "injection signatures; the matched text is not kept"),
     "workspace": "configuration files in the session's working directory, not tool calls",
     "fleet": "tool-call arguments across several unrelated sessions on the node",
 }
@@ -114,6 +116,8 @@ FRAMEWORKS: Dict[str, Dict[str, Any]] = {
         "catalog": {
             "AML.TA0012": {"type": "tactic", "name": "Privilege Escalation"},
             "AML.T0034.002": {"type": "technique", "name": "Agentic Resource Consumption"},
+            "AML.T0051.000": {"type": "technique", "name": "Direct"},
+            "AML.T0051.001": {"type": "technique", "name": "Indirect"},
             "AML.T0055": {"type": "technique", "name": "Unsecured Credentials"},
             "AML.T0081": {"type": "technique", "name": "Modify AI Agent Configuration"},
             "AML.T0086": {"type": "technique", "name": "Exfiltration via AI Agent Tool Invocation"},
@@ -258,6 +262,26 @@ MAPPINGS: Dict[str, Dict[str, Any]] = {
         "owasp_llm": (), "owasp_asi": (), "atlas": (),
         "status": "none",
         "none_reason": "A crash loop is a reliability signal; no item in these frameworks describes it.",
+    },
+    # Content: does text the agent read try to give it instructions?
+    "prompt_injection": {
+        "family": "content",
+        "owasp_llm": ("LLM01:2026",), "owasp_asi": ("ASI01",),
+        "atlas": ("AML.T0051.000", "AML.T0051.001"),
+        "status": "verified",
+        "rationale": ("LLM01:2026 is Prompt Injection. ASI01 Agent Goal Hijack is an agent's goal "
+                      "redirected by instructions it did not receive from its principal. "
+                      "AML.T0051.001 is a prompt injected through a separate data channel the model "
+                      "ingests, such as a web page: the tool-result ground. AML.T0051.000 is a "
+                      "prompt injected directly as a user of the model: the user-message ground."),
+        "limits": ("Declared signatures over the first 8,000 characters of each text: paraphrased, "
+                   "encoded and non-English attacks are missed, and the measured recall is "
+                   "published. A match is not proof the agent obeyed; critical severity needs a "
+                   "high-risk tool call after the match in the same turn. Text quoted as code or "
+                   "a regular expression is ignored, so an attack written as code is missed too."),
+        "requires": "a runtime whose adapter records tool results or user messages as text",
+        "tests": {"positive": "tests/test_detector_prompt_injection.py::test_fires_on_injected_tool_result",
+                  "benign": "tests/test_detector_prompt_injection.py::test_quiet_on_ordinary_tool_output"},
     },
     # Workspace: a property of the folder the agent was pointed at.
     "repo_config_exec": {
@@ -474,10 +498,12 @@ def render_coverage_markdown(kinds: Optional[List[str]] = None) -> str:
     lines += [
         "* **MITRE ATLAS:** not enumerated. ATLAS catalogs hundreds of adversary techniques; only "
         "the identifiers in the table above are claimed.",
-        "* **Not covered by any finding:** prompt content inspection, model and dataset supply "
-        "chain, generated-code scanning, and memory or retrieval poisoning.",
-        "* **Not yet in this contract:** the pre-tool gates (tool risk classification and hook "
-        "approvals), which can hold an action before it runs.",
+        "* **Not covered by any finding:** model and dataset supply chain, generated-code "
+        "scanning, and memory or retrieval poisoning. Prompt content is inspected only by "
+        "`prompt_injection`, with declared signatures.",
+        "* **Not yet in this contract:** the pre-tool gates (tool risk classification, the "
+        "untrusted-content escalation of that rating, and hook approvals), which can hold an "
+        "action before it runs.",
         "",
         "## Policy decisions",
         "",

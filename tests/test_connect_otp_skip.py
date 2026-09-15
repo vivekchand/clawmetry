@@ -92,13 +92,17 @@ def test_keep_local_skips_otp_and_never_reenables_cloud(
     monkeypatch.setattr(
         config, "enable_cloud", lambda: enable_calls.append(True)
     )
-    monkeypatch.setattr(cli, "_activate_signup_trial", lambda: False)
+    trial_calls = []
+    monkeypatch.setattr(cli, "_activate_signup_trial",
+                        lambda deployment="": trial_calls.append(deployment) or False)
 
     cli._cmd_connect(_connect_args(keep_local=True, defer_sync=True))
 
     assert connect_env == []
     assert marker.exists()
     assert enable_calls == []
+    # AC-OGV-ADC-001.2: the keep-local terminal sign-in reports self-hosted.
+    assert trial_calls == ["selfhost"]
 
 
 def test_plain_key_connect_still_asks_otp(connect_env):

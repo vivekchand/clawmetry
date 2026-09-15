@@ -1,0 +1,41 @@
+<div class="page" id="page-price-book">
+  <!-- Price book screen (REQ-OBS-CEA-024 AC .15/.16, issue #5936). A local
+       install surface: the routes are cloud-disabled, and the screen says so
+       when the hosted dashboard answers 410. Filled by
+       static/js/price-book.js loadPriceBookTab() from /api/pricing/book;
+       edits go through POST /api/pricing/entries (check, then an explicit
+       save). Opened from the Cost tab's "Price book" button. -->
+  <style>
+    #page-price-book .pb-lede { font-size: 13px; color: var(--text-secondary); line-height: 1.55; margin: 0 0 4px; }
+    #page-price-book .pb-muted { color: var(--text-muted); font-size: 12px; }
+    #page-price-book .pb-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    #page-price-book .pb-table th { text-align: left; font-weight: 600; color: var(--text-secondary); padding: 6px 8px; border-bottom: 1px solid var(--border-primary); }
+    #page-price-book .pb-table td { padding: 7px 8px; border-bottom: 1px solid var(--border-secondary, var(--border-primary)); vertical-align: top; }
+    #page-price-book .pb-scroll { overflow-x: auto; }
+    #page-price-book .pb-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+    #page-price-book .pb-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 16px; }
+    #page-price-book .pb-field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
+    #page-price-book .pb-field input, #page-price-book .pb-field select { width: 100%; box-sizing: border-box; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border-primary); background: var(--bg-primary); color: var(--text-primary); font-size: 13px; }
+    #page-price-book .pb-field input[aria-invalid="true"] { border-color: #dc2626; }
+    #page-price-book .pb-err { color: #b91c1c; font-size: 12px; margin-top: 4px; line-height: 1.4; }
+    #page-price-book .pb-err:empty { display: none; }
+    #page-price-book .pb-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; align-items: center; }
+    #page-price-book .pb-btn { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border-primary); background: var(--bg-secondary); color: var(--text-primary); font-size: 13px; cursor: pointer; }
+    #page-price-book .pb-btn-primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
+    #page-price-book .pb-note { padding: 10px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; margin-top: 10px; }
+    #page-price-book .pb-note-ok { background: rgba(22,163,74,0.08); border: 1px solid rgba(22,163,74,0.35); }
+    #page-price-book .pb-note-warn { background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.4); }
+    #page-price-book .pb-note-bad { background: rgba(220,38,38,0.07); border: 1px solid rgba(220,38,38,0.35); }
+    #page-price-book .pb-pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; background: rgba(79,70,229,0.12); color: #4f46e5; }
+  </style>
+  <div class="refresh-bar">
+    <button class="refresh-btn" id="pb-back" type="button">← Cost</button>
+    <button class="refresh-btn" type="button" onclick="loadPriceBookTab()" style="margin-left:8px;">↻ Refresh</button>
+  </div>
+  <div class="section-title">📒 Price book <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:8px;">the rates your organisation actually pays</span></div>
+  <div class="card">
+    <p class="pb-lede">If you pay negotiated rates, for example on AWS Bedrock or Azure OpenAI, record them here. From the moment you save, the Cost tab also shows the usage they cover at your contract rate, next to the published price. Usage from before a change keeps the value it had; you can restate it from the Cost tab when you choose to.</p>
+    <p class="pb-muted">The book is a file on this computer and never leaves it.</p>
+  </div>
+  <div id="pb-root"><div class="card" style="color:var(--text-muted);">Loading...</div></div>
+</div>

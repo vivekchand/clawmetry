@@ -316,6 +316,11 @@ def cost_provenance(source: str, where: str = "this computer") -> Dict[str, Dict
         # The hosted snapshot has no in-process interceptor ring to fall back
         # on, so the reason names only the store it actually read.
         reason = "no spend has been recorded on %s yet: its local store holds no cost rows" % where
+    elif source == "runtime_empty":
+        # A runtime-scoped view never falls back to the interceptor ring: that
+        # ring is not attributed to a runtime, so it would show another
+        # runtime's spend under this one's name.
+        reason = "no spend has been recorded for this runtime on %s yet" % where
     else:
         reason = ("no spend has been recorded yet: the local store holds no cost rows and this "
                   "dashboard has intercepted no model calls since it started")
@@ -326,6 +331,24 @@ def cost_provenance(source: str, where: str = "this computer") -> Dict[str, Dict
 
 
 # ── Shared by the local route and the hosted snapshot slice ─────────────────
+
+def scope_label(runtime: Optional[str], where: str) -> str:
+    """The header naming what the optimizer's figures cover.
+
+    A runtime-scoped view must say so: "all runtimes" above a Codex-only
+    dashboard is what made Claude Code spend look like Codex's.
+    """
+    rt = (runtime or "").strip().lower()
+    if not rt or rt == "all":
+        return "all runtimes on " + where
+    try:
+        from clawmetry.behaviour_signals import runtime_label
+
+        name = runtime_label(rt)
+    except Exception:
+        name = rt
+    return "%s only, on %s" % (name, where)
+
 
 def advice_fields(usage_rows: Iterable[Mapping[str, Any]], window: str) -> Dict[str, Any]:
     """The data-derived advice block, identical for the local route and the

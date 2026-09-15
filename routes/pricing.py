@@ -64,22 +64,67 @@ def _book_for(body):
                            "or its file was changed after it was recorded.",
             }), 404)
         return book, None
+    from clawmetry import price_book_edit as pe
+
     book = pb.load_price_book()
-    if book.get("present") and not book.get("errors"):
-        pb.record_version(book)
+    # Reading the book is when a hand edit is first seen: record its version
+    # and note when it came into effect (never later than now, never earlier
+    # than the file changed).
+    pe.activate(book)
     return book, None
 
 
 @bp_pricing.route("/api/pricing/book", methods=["GET"])
 @gate("price_book")
 def api_pricing_book():
+    from clawmetry import extensions
     from clawmetry import price_book as pb
+    from clawmetry import price_book_edit as pe
 
     book = pb.load_price_book()
+    pe.activate(book)
     out = pb.public_book(book)
     out["versions"] = pb.recorded_versions()
+    out["timeline"] = pe.timeline()
+    out["rejected"] = [dict(r, messages=pe.field_problems(r.get("problems")))
+                       for r in out["rejected"]]
     out["path"] = pb.default_path()
+    out["engine_available"] = pb.VALUE_USAGE_EVENT in extensions.registered_events()
     return _no_store(jsonify(out))
+
+
+@bp_pricing.route("/api/pricing/entries", methods=["POST"])
+@gate("price_book")
+def api_pricing_entries():
+    """Check or save one added or edited entry (REQ-OBS-CEA-024 .15/.16).
+
+    Body: ``{"entry": {...}, "replace_id": <id being edited> | null,
+    "base_version": <version the screen loaded> | null, "dry_run": bool,
+    "confirm": bool}``. ``dry_run`` only validates. A save writes only with
+    ``confirm: true`` and only while the book is still ``base_version``.
+    """
+    from clawmetry import price_book_edit as pe
+    from routes.guard import _same_origin_ok
+
+    if not _same_origin_ok():
+        return _no_store(jsonify({"error": "cross_origin",
+                                  "message": "Nothing was saved. The request did not come from this dashboard."}), 403)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("entry"), dict):
+        return _no_store(jsonify({"error": "bad_request",
+                                  "message": "Send a JSON object with the entry to check or save."}), 400)
+    replace_id = body.get("replace_id")
+    if replace_id is not None and not isinstance(replace_id, str):
+        return _no_store(jsonify({"error": "bad_request", "message": "replace_id must be an entry id."}), 400)
+    if body.get("dry_run"):
+        checked = pe.check_entry(body["entry"], replace_id=replace_id)
+        return _no_store(jsonify({"ok": checked["ok"], "problems": checked["problems"],
+                                  "version": checked["version"], "entry": checked["entry"]}))
+    base = body.get("base_version")
+    status, out = pe.save_entry(body["entry"], replace_id=replace_id,
+                                base_version=base if isinstance(base, str) else None,
+                                confirm=body.get("confirm") is True)
+    return _no_store(jsonify(out), status)
 
 
 @bp_pricing.route("/api/pricing/resolve", methods=["POST"])

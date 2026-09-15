@@ -78,18 +78,153 @@ OTLP_ENCODINGS: list[str] = ["identity", "gzip"]
 OTLP_MAX_DECOMPRESSED_MB: int = 64
 OTLP_MAX_DECOMPRESSED_ENVVAR: str = "CLAWMETRY_OTLP_MAX_DECOMPRESSED_MB"
 
-# HTTP response codes returned by the OTLP receiver.
-# Source: ``routes/meta.py::_otlp_receive``.
+# HTTP response codes returned by the OTLP receiver (REQ-OBS-OIA-001).
+# Source: ``routes/meta.py::_otlp_receive`` and ``clawmetry/otlp_intake.py``.
+#
+# There used to be a 429 here: while a spending-limit pause was active every
+# export was refused. The agents can keep running through an advisory pause,
+# so the spend that followed the incident was never recorded. Intake no
+# longer pauses; see OTLP_ACKNOWLEDGEMENT.
 OTLP_RESPONSE_CODES: dict[int, str] = {
-    200: "Accepted. Response body is ``{}`` (empty JSON object).",
-    400: "Malformed or undecodable body. Response body contains ``{\"error\": \"<reason>\"}``.",
-    429: "Budget limit exceeded; OTLP intake is paused. Response body contains ``{\"paused\": true}``.",
+    200: (
+        "Stored. Sent only after the local store confirmed the write. The body "
+        "is an empty export response (``{}`` for OTLP/JSON, an empty protobuf "
+        "message for protobuf). When some items were malformed (a span with no "
+        "id or name, or an item carrying a value the store cannot hold, such "
+        "as a token count beyond its range) the rest are stored and the body carries "
+        "``partialSuccess`` with the refused count in ``rejectedLogRecords``, "
+        "``rejectedSpans`` or ``rejectedDataPoints``. Do not retry."
+    ),
+    400: (
+        "Malformed or undecodable body. Nothing is stored. Response body "
+        "contains ``{\"error\": \"<reason>\"}``. Do not retry the same body."
+    ),
+    401: (
+        "A request from another machine without a valid token (see "
+        "Authentication). Refused before the body is read. Fix the "
+        "credentials; retrying unchanged will be refused again."
+    ),
     501: (
         "Binary protobuf body received but ``opentelemetry-proto`` is not "
         "installed. Install with ``pip install clawmetry[otel]`` or switch "
         "to OTLP/JSON (``Content-Type: application/json``)."
     ),
+    503: (
+        "Not stored: the local store did not confirm the write (the daemon "
+        "that owns it is restarting, busy or unreachable). Nothing in the "
+        "export is acknowledged. Retry after the ``Retry-After`` delay; items "
+        "that did reach the store are recognised on retry and not counted "
+        "twice."
+    ),
 }
+
+# Seconds sent in ``Retry-After`` with a 503. Read by clawmetry/otlp_intake.py.
+OTLP_RETRY_AFTER_SECONDS: int = 5
+
+# When an export is acknowledged. Source: ``clawmetry/otlp_intake.py``.
+OTLP_ACKNOWLEDGEMENT: str = (
+    "The receiver keeps no intake queue of its own. It answers 200 only after "
+    "the local store confirms the write, and 503 with ``Retry-After`` when it "
+    "cannot, so a batch the store could not take stays in the exporter's own "
+    "retry buffer. How long an exporter retries, and what it drops when that "
+    "buffer is full, is the exporter's configuration (for the OpenTelemetry "
+    "SDKs, the exporter timeout and the batch processor's queue size). A "
+    "spending-limit pause on the observed agents does not pause intake: "
+    "activity after a budget incident is still recorded."
+)
+
+# How a re-delivery is recognised, per endpoint. OTLP delivery is
+# at-least-once, so this is what keeps a retry from becoming a second charge.
+OTLP_REDELIVERY_IDENTITY: dict[str, str] = {
+    "/v1/logs": (
+        "A hash of the sender's ``service.name``, the session, the event name, "
+        "the record's own ``time_unix_nano`` and ``observed_time_unix_nano``, "
+        "its body and every attribute. A retried record replaces itself. Two "
+        "model calls that differ in their own time or in any attribute (a "
+        "request id, for example) are two records and both are counted; two "
+        "that are identical in all of these are one."
+    ),
+    "/v1/traces": (
+        "The span's ``span_id``. A re-delivered span replaces the stored one, "
+        "so a later delivery carrying a corrected end time or status "
+        "overwrites the first. The live tiles count a span once per "
+        "``trace_id`` and ``span_id``."
+    ),
+    "/v1/metrics": (
+        "Runtime-profile metrics are stored keyed by a hash of the sender, the "
+        "session, the metric name, the data point's own time, its attributes "
+        "and its value. Other metrics count once per data point that carries "
+        "its own time; a point with no time cannot be told apart from a new "
+        "one."
+    ),
+}
+
+# The session a received item joins when the sender names none.
+OTLP_SESSION_IDENTITY: dict[str, str] = {
+    "/v1/logs": (
+        "The first of ``session.id``, ``session_id``, "
+        "``gen_ai.conversation.id``, ``conversation.id`` and "
+        "``cursor.conversation.id``, on the record and then on the resource. "
+        "A record with none of them is stored and counted in the team, "
+        "repository and person rollups, but joins no session."
+    ),
+    "/v1/traces": (
+        "The first of ``gen_ai.conversation.id``, ``session.id``, "
+        "``openclaw.session_id`` and ``session_id``. When a span carries none "
+        "(and its runtime is not ``openclaw``), its trace becomes the session "
+        "as ``<runtime>:trace:<trace_id>``, so every trace without an id adds "
+        "one session. A sender that starts sending a conversation id later "
+        "starts new sessions under it; the earlier trace-derived sessions are "
+        "kept as they are and are not merged."
+    ),
+    "/v1/metrics": (
+        "``session.id`` on the data point, then on the resource. With neither, "
+        "the stored row has no session."
+    ),
+}
+
+# Received data that is held in memory only, and what the spend rollup reads.
+OTLP_LIVE_VIEW_ONLY: str = (
+    "The ``openclaw.*`` metrics and the GenAI ``gen_ai.client.token.usage`` "
+    "and ``gen_ai.client.operation.duration`` metrics feed the live token, "
+    "cost and run tiles only. They are held in memory, are not written to the "
+    "local store and are gone after a restart; the intake status counts them "
+    "as ``live_view_only``, and metrics nothing reads as ``not_read``. The "
+    "live tiles remember the most recent 20,000 items when recognising a "
+    "re-delivery. The spend rollup (``/api/otel/rollup``) sums received log "
+    "records only: span cost is not added to it, so a sender that samples its "
+    "traces does not reduce it. A group in which no record reported a cost "
+    "has no spend figure rather than zero, and says how many records carried "
+    "one."
+)
+
+# Authentication on the OTLP endpoints. Source: ``dashboard.py`` before_request.
+OTLP_AUTH: str = (
+    "A request from this machine (loopback) needs no credentials. A request "
+    "from another machine must send the gateway token as ``Authorization: "
+    "Bearer <token>`` (or ``?token=``) and is otherwise refused with 401 "
+    "before its body is read, including when no gateway token is configured. "
+    "``CLAWMETRY_OTLP_ALLOW_UNAUTH=1`` accepts unauthenticated requests from "
+    "the network, for a trusted LAN only."
+)
+
+# The ``intake`` block of ``GET /api/otel-status``.
+OTLP_INTAKE_STATUS: str = (
+    "``GET /api/otel-status`` carries an ``intake`` block. Per signal, "
+    "``items`` counts what arrived (``received``), what is in the store "
+    "(``stored``), what was refused as malformed (``rejected``), what was "
+    "already stored or repeated in the same export (``already_stored``), what "
+    "is held only in the live tiles (``live_view_only``), metrics nothing "
+    "reads (``not_read``), events not recorded because another source already "
+    "reports that session (``skipped_other_source``) and items the sender was "
+    "asked to send again (``retry_requested``). ``requests`` counts "
+    "acknowledged, partially acknowledged, retry-requested, malformed, "
+    "protobuf-unavailable and unauthorized requests, and requests received "
+    "during a spending-limit pause. ``last_success_at``, ``last_failure_at`` "
+    "and ``last_failure`` (a fixed category) close each signal. Counts start "
+    "when the receiver starts. The block holds no record content, attribute "
+    "value or credential."
+)
 
 # ── gen_ai.* attribute mapping ───────────────────────────────────────────────
 

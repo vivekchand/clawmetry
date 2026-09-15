@@ -13,8 +13,9 @@ Security invariants exercised here:
   * 403 ``localhost only`` even on loopback when the request is
     proxied (proxy headers present), since the original peer could be
     anywhere.
-  * 404 ``no token detected`` when ``dashboard.GATEWAY_TOKEN`` is
-    unset, regardless of who asked.
+  * 200 ``{"available": False}`` when ``dashboard.GATEWAY_TOKEN`` is
+    unset — returns 200 (not 404) so the browser console stays clean on
+    plain local installs with no gateway configured.
 
 Tests use Flask's test_client + ``environ_overrides`` to spoof
 ``REMOTE_ADDR`` and the proxy headers — same pattern other route-level
@@ -160,8 +161,14 @@ def test_rejects_loopback_with_x_real_ip(client):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_returns_404_when_gateway_token_unset(monkeypatch):
-    """When dashboard.GATEWAY_TOKEN is None, even loopback gets 404."""
+def test_returns_200_available_false_when_gateway_token_unset(monkeypatch):
+    """When GATEWAY_TOKEN is None, loopback gets 200 {"available": False}.
+
+    Returns 200 (not 404) so the browser console stays clean on a plain
+    local install with no OpenClaw gateway configured.  The JS bootstrap
+    checks ``d && d.token``, not the HTTP status, so the fallthrough to
+    checkAuth(null) is identical to the old 404 path.
+    """
     monkeypatch.setattr(dashboard, "GATEWAY_TOKEN", None, raising=False)
     a = Flask(__name__)
     a.register_blueprint(bp_auth)
@@ -169,11 +176,11 @@ def test_returns_404_when_gateway_token_unset(monkeypatch):
         "/api/auth/detected-token",
         environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
     )
-    assert r.status_code == 404
-    assert r.get_json() == {"error": "no token detected"}
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert r.get_json() == {"available": False}
 
 
-def test_returns_404_when_gateway_token_empty_string(monkeypatch):
+def test_returns_200_available_false_when_gateway_token_empty_string(monkeypatch):
     """Empty-string token is treated as unset (mirrors _detect_gateway_token)."""
     monkeypatch.setattr(dashboard, "GATEWAY_TOKEN", "", raising=False)
     a = Flask(__name__)
@@ -182,7 +189,8 @@ def test_returns_404_when_gateway_token_empty_string(monkeypatch):
         "/api/auth/detected-token",
         environ_overrides={"REMOTE_ADDR": "127.0.0.1"},
     )
-    assert r.status_code == 404
+    assert r.status_code == 200
+    assert r.get_json() == {"available": False}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

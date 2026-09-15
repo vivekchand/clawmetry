@@ -24,21 +24,29 @@ whether Ollama is installed). The hosted interceptor adds hardware from
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # How the hosted panel names the computer the figures came from. "this
 # computer" would read as the viewer's own machine on app.clawmetry.com.
 HOSTED_WHERE = "the connected computer"
 
 
-def build_slice(store: Any) -> Dict[str, Any]:
-    """The ``costOptimizer`` snapshot slice, or ``{}`` with no store. Never raises."""
+def build_slice(store: Any, runtime: Optional[str] = None) -> Dict[str, Any]:
+    """The ``costOptimizer`` snapshot slice, or ``{}`` with no store. Never raises.
+
+    ``runtime`` builds one entry of ``costOptimizerByRuntime``: every figure and
+    experiment is read from that runtime's sessions only.
+    """
     if store is None:
         return {}
     from clawmetry import cost_optimizer_advice as _adv
     from clawmetry import provenance as _prov
 
-    base: Dict[str, Any] = {"scope": "all runtimes on " + HOSTED_WHERE, "_source": "snapshot"}
+    rt = (runtime or "").strip().lower()
+    if rt == "all":
+        rt = ""
+    base: Dict[str, Any] = {"scope": _adv.scope_label(rt, HOSTED_WHERE),
+                            "runtime": rt or "all", "_source": "snapshot"}
 
     def _call(method: str, **kwargs: Any) -> Any:
         return getattr(store, method)(**kwargs)
@@ -46,7 +54,7 @@ def build_slice(store: Any) -> Dict[str, Any]:
     try:
         from routes.infra import _try_local_store_cost_optimizer
 
-        ls_slice = _try_local_store_cost_optimizer(call=_call)
+        ls_slice = _try_local_store_cost_optimizer(call=_call, runtime=rt or None)
     except Exception:
         payload = dict(base, **_adv.advice_fields([], _adv.LOCAL_STORE_WINDOW))
         payload.update({
@@ -63,7 +71,8 @@ def build_slice(store: Any) -> Dict[str, Any]:
         return _prov.stamp(payload, _adv.cost_provenance("error", where=HOSTED_WHERE))
 
     if ls_slice is None:
-        source, rows, today, projected, ops = "store_empty", [], None, None, []
+        source = "runtime_empty" if rt else "store_empty"
+        rows, today, projected, ops = [], None, None, []
     else:
         source = "local_store"
         rows = ls_slice.get("modelRows") or []
