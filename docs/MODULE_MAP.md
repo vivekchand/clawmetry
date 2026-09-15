@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-271 modules, 84 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+275 modules, 84 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -158,6 +158,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/context_coverage.py` | medium | Which context-blowout signals we can actually see, per runtime. |
 | `clawmetry/context_windows.py` | medium | Context-window sizing across every runtime ClawMetry ingests. |
 | `clawmetry/cost_basis.py` | medium | What kind of money a cost figure is. |
+| `clawmetry/cost_basis_surfaces.py` | medium | Financial-basis entries for the cost surfaces #5975 did not reach. |
 | `clawmetry/cost_optimizer_advice.py` | medium | Cost Optimizer advice: observed provider routes, experiments, and cost basis. |
 | `clawmetry/cost_optimizer_snapshot.py` | small | Cost Optimizer slice for the hosted dashboard (AC-OBS-CEA-023.9). |
 | `clawmetry/cost_windows.py` | medium | One definition of "today", "this week" and "this month" for every cost surface. |
@@ -229,9 +230,11 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/otel_exporter.py` | medium | Outbound OTLP trace exporter for ClawMetry. |
 | `clawmetry/otel_profiles.py` | small | OTel runtime profiles — the seam between the generic OTLP receiver and runtime-specific knowledge (WO-57). |
 | `clawmetry/otel_push.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
+| `clawmetry/otlp_content.py` | medium | How much content received telemetry keeps (REQ-OBS-OTG-001, AC-OBS-OTG-001.9). |
 | `clawmetry/otlp_guard.py` | medium | OTLP intake, before it is stored or judged (REQ-OBS-OTG-001). |
 | `clawmetry/otlp_intake.py` | medium | what the OTLP receiver kept, and how it answers. |
 | `clawmetry/otlp_json.py` | medium | stdlib OTLP/JSON decoder (issue #4781). |
+| `clawmetry/otlp_sources.py` | medium | Which source records a tool call reported over OTLP (REQ-OBS-OTG-001). |
 | `clawmetry/outcome_classifier.py` | large | Auto-label every session with an outcome. |
 | `clawmetry/policy_engine.py` | medium | Guard policies — turn a detector incident into an enforcement decision. |
 | `clawmetry/pr_provenance.py` | large | Pull-request provenance: which agent sessions wrote which changed files. |
@@ -273,6 +276,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/siem.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
 | `clawmetry/signal_shifts.py` | medium | Signal shifts (WO-62): notice when a behaviour-signal rate moves, explain what moved it, and open an issue the operator can resolve or ignore. |
 | `clawmetry/span_reconstruct.py` | medium | Runtime-agnostic span reconstruction for family runtimes (Agent Graph WS-A). |
+| `clawmetry/span_rescrub.py` | medium | Operator-run rescrub of stored spans (REQ-OBS-OTG-001, AC-OBS-OTG-001.10). |
 | `clawmetry/spend_flow.py` | medium | node-wide AI spend flow (pure math). |
 | `clawmetry/store_errors.py` | small | Tell a value the store cannot hold from a store that failed (REQ-OBS-OIA-001). |
 | `clawmetry/sync.py` | huge | Cloud sync daemon for clawmetry connect. |
