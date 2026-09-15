@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-273 modules, 84 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+274 modules, 84 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -159,6 +159,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/context_coverage.py` | medium | Which context-blowout signals we can actually see, per runtime. |
 | `clawmetry/context_windows.py` | medium | Context-window sizing across every runtime ClawMetry ingests. |
 | `clawmetry/cost_basis.py` | medium | What kind of money a cost figure is. |
+| `clawmetry/cost_basis_surfaces.py` | medium | Financial-basis entries for the cost surfaces #5975 did not reach. |
 | `clawmetry/cost_optimizer_advice.py` | medium | Cost Optimizer advice: observed provider routes, experiments, and cost basis. |
 | `clawmetry/cost_optimizer_snapshot.py` | small | Cost Optimizer slice for the hosted dashboard (AC-OBS-CEA-023.9). |
 | `clawmetry/cost_windows.py` | medium | One definition of "today", "this week" and "this month" for every cost surface. |

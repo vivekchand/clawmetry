@@ -1425,6 +1425,18 @@ async function loadAnomalyPanel() {
     if (!panel) return;
     var anomalies = data.anomalies || [];
     var baselines = data.baselines || {};
+    // Under a selected runtime keep only that runtime's sessions. Node-wide
+    // aggregate rows (session_key "__error_rate__") and the node-wide
+    // baselines are not about this runtime, so they are left out.
+    var _anRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _anScoped = !!_anRt && _anRt !== 'all';
+    if (_anScoped) {
+      anomalies = anomalies.filter(function(a){
+        var sk = String(a && a.session_key || '');
+        return !!sk && sk.indexOf('__') !== 0 && _cmRuntimeOf({session_id: sk}) === _anRt;
+      });
+      baselines = {};
+    }
     var active = anomalies.filter(function(a){ return !a.acknowledged; });
 
     // Badge
@@ -1451,7 +1463,7 @@ async function loadAnomalyPanel() {
       if (baselines.baseline_cost_7d > 0) blHtml += '<span style="background:var(--bg-hover);padding:3px 8px;border-radius:6px;color:var(--text-secondary);">Avg cost: $' + Number(baselines.baseline_cost_7d).toFixed(4) + '/session</span>';
       if (baselines.baseline_tokens_7d > 0) blHtml += '<span style="background:var(--bg-hover);padding:3px 8px;border-radius:6px;color:var(--text-secondary);">Avg tokens: ' + Math.round(baselines.baseline_tokens_7d).toLocaleString() + '/session</span>';
       if (baselines.baseline_sessions_per_day_7d > 0) blHtml += '<span style="background:var(--bg-hover);padding:3px 8px;border-radius:6px;color:var(--text-secondary);">Sessions/day: ' + Number(baselines.baseline_sessions_per_day_7d).toFixed(1) + '</span>';
-      blEl.innerHTML = blHtml || '<span style="color:var(--text-muted);">Collecting baseline data...</span>';
+      blEl.innerHTML = blHtml || (_anScoped ? '' : '<span style="color:var(--text-muted);">Collecting baseline data...</span>');
     }
 
     // Anomaly list
@@ -2738,6 +2750,14 @@ async function loadReliabilityCard() {
   var detEl = document.getElementById('reliability-detail-lt');
   var iconEl = document.getElementById('reliability-icon-lt');
   if (!dirEl) return;
+  // The trend is built from this machine's daemon heartbeats plus every
+  // runtime's error events; it has no per-runtime form, so it is not shown
+  // under a selected runtime.
+  var _relRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var _relScoped = !!_relRt && _relRt !== 'all';
+  var _relCard = document.getElementById('reliability-card-lt');
+  if (_relCard) _relCard.style.display = _relScoped ? 'none' : '';
+  if (_relScoped) return;
   try {
     var d = await fetchJsonWithTimeout('/api/reliability', 5000);
     d = d || {};
@@ -2793,9 +2813,12 @@ async function loadAutonomy() {
   }
 
   try {
+    // Check-in gaps are per runtime: Codex's cadence is not Claude Code's.
+    var _auRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _auUrl = '/api/autonomy' + ((_auRt && _auRt !== 'all') ? '?runtime=' + encodeURIComponent(_auRt) : '');
     var d = await (typeof fetchJsonWithTimeout === 'function'
-      ? fetchJsonWithTimeout('/api/autonomy', 5000)
-      : fetch('/api/autonomy').then(function(r){return r.json();}));
+      ? fetchJsonWithTimeout(_auUrl, 5000)
+      : fetch(_auUrl).then(function(r){return r.json();}));
 
     if (d.score == null) {
       labelEl.textContent = t("app.just_getting_started", null, "Just getting started");
@@ -3963,13 +3986,23 @@ async function loadHealthTimeline() {
   var card = document.getElementById('health-timeline-card');
   var body = document.getElementById('health-timeline-body');
   if (!card || !body) return;
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var scoped = !!rt && rt !== 'all';
   var data;
   try {
-    var resp = await fetch('/api/health-timeline');
+    var resp = await fetch('/api/health-timeline' + (scoped ? '?runtime=' + encodeURIComponent(rt) : ''));
     if (!resp.ok) { card.style.display = 'none'; return; }
     data = await resp.json();
   } catch (e) { card.style.display = 'none'; return; }
   var runtimes = (data && data.runtimes) || [];
+  // Under a selected runtime only its own row renders: an older server and
+  // the hosted snapshot both answer with every runtime they know. NemoClaw
+  // runs the OpenClaw adapter, so its sessions bucket as openclaw.
+  if (scoped) {
+    runtimes = runtimes.filter(function (r) {
+      return r && (r.runtime === rt || (rt === 'nemoclaw' && r.runtime === 'openclaw'));
+    });
+  }
   if (!runtimes.length || !runtimes.some(function(r){ return (r.dots||[]).length; })) {
     card.style.display = 'none';
     return;
@@ -4751,6 +4784,17 @@ function _cmRtRecentlyActive() {
   var ts = (rt && rt !== 'all') ? (a.map[rt] || 0) : (a.max || 0);
   return ts > 0 && (Date.now() - ts) < _CM_RT_ACTIVE_WINDOW_MS;
 }
+// The hero's cost chip (REQ-OBS-CEA-025.8): the Spending tile's own number
+// and entry, through the shared component, with the basis beside it. The plan
+// note appears only for a real non-zero figure on a detected subscription: a
+// plan includes usage, it does not make it free (REQ-OBS-CEA-025.4).
+function _cmHeroCostChip(value, entry, onPlan) {
+  var included = !!onPlan && Number(value) !== 0;
+  return '<strong style="color:var(--text-primary);">'
+    + window.cmCostFigure(value, entry, { noBadge: true, label: 'Cost today' }) + '</strong>'
+    + (entry ? ' ' + window.cmProv.badge(entry, { label: 'Cost today' }) : '')
+    + (included ? ' <span style="color:#22c55e;">included in your plan, not an extra bill</span>' : '');
+}
 function _renderOverviewHero() {
   var hero = document.getElementById('overview-hero');
   if (!hero) return;
@@ -4834,7 +4878,9 @@ function _renderOverviewHero() {
   // window._cmCostTodayRaw is the number loadMiniWidgets actually rendered.
   var _costRaw = window._cmCostTodayRaw;
   var _costKnown = _scope ? true : (typeof _costRaw === 'number');
-  var cost = _scope ? ('$' + _scope.cost.toFixed(2)) : (_txt('cost-today') || '$0.00');
+  // The number itself, not the tile's text read back off the DOM: the text
+  // is the formatter's output and cannot carry a basis.
+  var _costVal = _scope ? Number(_scope.cost || 0) : _costRaw;
   var model = _scope ? (_txt('model-primary') || _scope.model || '—')
                      : (ov.model || _txt('model-primary') || 'your model');
   // Node-wide, the chip is labelled "today" below, so it must BE today:
@@ -4846,8 +4892,10 @@ function _renderOverviewHero() {
                         : (_todayKnown ? ov.sessionsToday
                            : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null));
   // Never assert 'free' from a number we have not actually read.
-  var free = _costKnown && (cost === '$0.00' || cost === '$0' ||
-             /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || ''));
+  var _onPlan = /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
+  // Never assert 'free' (or 'included') from a number we have not read, and
+  // never from the tile's text: only from the value loadMiniWidgets rendered.
+  var free = _costKnown && (_costVal === 0 || _onPlan);
   var say = window._cmLastAgentSay;
   var sayText = say && say.text ? String(say.text).replace(/\s+/g, ' ').trim() : '';
   if (sayText.length > 90) sayText = sayText.slice(0, 90) + '…';
@@ -4865,8 +4913,7 @@ function _renderOverviewHero() {
   // Show nothing rather than a placeholder: an unlabelled '$0.00' next to
   // live sessions reads as a real reading, not as 'still loading'.
   // A plan includes usage; it does not make it free (REQ-OBS-CEA-025.4).
-  var _heroIncluded = free && !/^\$0(\.00)?$/.test(cost);
-  if (_costKnown) stats.push('💸 <strong style="color:var(--text-primary);">' + escHtml(cost) + '</strong>' + (_heroIncluded ? ' <span style="color:#22c55e;">included in your plan, not an extra bill</span>' : ''));
+  if (_costKnown) stats.push('💸 ' + _cmHeroCostChip(_costVal, window._cmCostTodayEntry || null, free && _onPlan));
   // Efficiency chip (design spec §1a): grade next to cost answers "what did it
   // cost me, and is that reasonable?" in one read. Renders only when the
   // daemon slice is fresh for the CURRENT runtime filter and passes the trust
@@ -5079,6 +5126,8 @@ async function loadMiniWidgets(overview, usage) {
   // the tile: today, week and month all come out of the same rollup by the
   // same rule, so they share a basis.
   var _costEntry = window.cmProv ? window.cmProv.of(usage, 'todayCost') : null;
+  // The hero chip prints this same entry beside this same number.
+  window._cmCostTodayEntry = _costEntry;
   var _costUnknown = window.cmProv ? window.cmProv.isUnknown(_costEntry) : false;
   var _basisEl = document.getElementById('cost-basis-badge');
   if (_basisEl && window.cmProv) {
@@ -5238,34 +5287,45 @@ async function loadMiniWidgets(overview, usage) {
         _set('tokens-today', _fmtT(_scope.tokensToday));
         _set('token-rate', _fmtT(_scope.tokensMonth));
         window._cmCostTodayRaw = Number(_scope.cost || 0);
-        _set('cost-today', fmtCost(_scope.cost));
-        // SPENDING wk/mo sub-figures scope too (were node-wide projections).
-        if (_scope.costWeek != null) _set('cost-week', fmtCost(_scope.costWeek));
-        if (_scope.costMonth != null) _set('cost-month', fmtCost(_scope.costMonth));
         // These three came from the runtime-scoped API, not the payload
         // loadMiniWidgets badged, and the local-mode fallback above is NOT
         // period-split: it repeats the runtime's all-time total in all three
-        // slots. Re-badge from the source actually used, so the tooltip is
-        // about the number on screen rather than the one it replaced.
+        // slots. One entry for the source actually used is shared by the
+        // tile, its badge and the hero chip, so they cannot disagree. This
+        // block used to call an fmtCost that does not exist in this scope:
+        // the ReferenceError was swallowed below, the tile kept node-wide
+        // figures and the hero printed the runtime's.
+        var _split = (_scope.costWeek !== _scope.costMonth);
+        var _scopeEntry = {
+          basis: _split ? 'derived' : 'estimated',
+          label: _split ? 'derived' : 'estimated',
+          hint: _split
+            ? 'Derived: computed from measured inputs by an exact rule.'
+            : 'Estimated: modelled, with an assumption that can be wrong.',
+          formula: _split
+            ? ('measured token counts for runtime ' + (_scope.runtime || '')
+               + ', priced against the provider\'s published rate card')
+            : ('this runtime\'s all-time total, standing in for all three '
+               + 'windows because the scoped source is not split by period'),
+          source: _split ? '/api/v1/usage?runtime=' + (_scope.runtime || '')
+                         : '/api/runtime-summary',
+          cost_basis: 'published_rate',
+          rate_source: 'the runtime\'s own per-call cost when it reported one '
+            + '(computed by the runtime from published rates), otherwise '
+            + 'ClawMetry\'s published price table'
+        };
+        window._cmCostTodayEntry = _scopeEntry;
+        var _setScopedCost = function (id, v, label) {
+          var e = document.getElementById(id);
+          if (e) e.innerHTML = window.cmProv.figure(v, _scopeEntry, { label: label, noBadge: true });
+        };
+        _setScopedCost('cost-today', _scope.cost, 'Cost today');
+        // SPENDING wk/mo sub-figures scope too (were node-wide projections).
+        if (_scope.costWeek != null) _setScopedCost('cost-week', _scope.costWeek, 'Cost this week');
+        if (_scope.costMonth != null) _setScopedCost('cost-month', _scope.costMonth, 'Cost this month');
         try {
           var _sBadge = document.getElementById('cost-basis-badge');
-          if (_sBadge && window.cmProv) {
-            var _split = (_scope.costWeek !== _scope.costMonth);
-            _sBadge.innerHTML = window.cmProv.badge({
-              basis: _split ? 'derived' : 'estimated',
-              label: _split ? 'derived' : 'estimated',
-              hint: _split
-                ? 'Derived: computed from measured inputs by an exact rule.'
-                : 'Estimated: modelled, with an assumption that can be wrong.',
-              formula: _split
-                ? ('measured token counts for runtime ' + (_scope.runtime || '')
-                   + ', priced against the provider\'s published rate card')
-                : ('this runtime\'s all-time total, standing in for all three '
-                   + 'windows because the scoped source is not split by period'),
-              source: _split ? '/api/v1/usage?runtime=' + (_scope.runtime || '')
-                             : '/api/runtime-summary'
-            }, { label: 'Cost' });
-          }
+          if (_sBadge) _sBadge.innerHTML = window.cmProv.badge(_scopeEntry, { label: 'Cost' });
         } catch (_eb) {}
         window._cmTodayTokensRaw = _scope.tokensToday;
       }
@@ -6805,8 +6865,11 @@ async function loadEvalSummary() {
   function setTitleCheck(show) { if (checkEl) checkEl.style.display = show ? '' : 'none'; }
   if (!avgEl) return;
   try {
-    var data = await fetch('/api/evals/summary?window=24h').then(function(r){return r.json();}).catch(function(){return null;});
-    if (!data || typeof data.scored !== 'number') {
+    var _evRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+    var _evQ = (_evRt && _evRt !== 'all') ? '&runtime=' + encodeURIComponent(_evRt) : '';
+    var data = await fetch('/api/evals/summary?window=24h' + _evQ).then(function(r){return r.json();}).catch(function(){return null;});
+    // A server that ignores ?runtime answers for the whole node.
+    if (!data || typeof data.scored !== 'number' || (_evQ && data.runtime !== _evRt)) {
       setTitleCheck(false);
       avgEl.textContent = '--';
       if (covEl) covEl.textContent = '';
@@ -12883,6 +12946,9 @@ function _cmApplyRuntimeSelection(val) {
   // Swap the Flow + Overview diagram to the selected runtime's topology.
   try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(val); } catch (e) {}
   // Reload the current tab so any runtime-aware view re-filters in place.
+  // loadAll coalesces calls 2 s apart; a switch must not be swallowed by that,
+  // or the Overview keeps the previous runtime's cards until the next refresh.
+  try { _loadAllLastFinishedMs = 0; } catch (e) {}
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
   // System Health refreshes on a 30s timer and is not part of loadAll, so
   // re-scope it now or the previous runtime's checks linger.
@@ -17173,7 +17239,13 @@ async function loadSystemHealth() {
       }
     }
     var services = Array.isArray(d.services) ? d.services : [];
-    if (!isOc) services = services.filter(function (s) { return !/openclaw/i.test(String(s && s.name || '')); });
+    // OpenClaw's gateway arrives as "OpenClaw Gateway" locally and as a bare
+    // "Gateway" from the hosted snapshot; both, and anything on its port,
+    // belong to OpenClaw alone.
+    if (!isOc) services = services.filter(function (s) {
+      var name = String(s && s.name || '').trim();
+      return !(/openclaw/i.test(name) || /^gateway$/i.test(name) || Number(s && s.port) === 18789);
+    });
     var channels = (scope.has('CHANNELS') && Array.isArray(d.channels)) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
     var crons = (d.crons && typeof d.crons === 'object') ? d.crons : {enabled: 0, ok24h: 0, failed: []};
@@ -17884,9 +17956,13 @@ async function loadActivityHeatmap() {
   var grid = document.getElementById('activity-heatmap-grid');
   if (!card || !grid) return;
   var data;
-  try { data = await fetchJsonWithTimeout('/api/activity-heatmap', 5000); } catch(e) { return; }
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var q = (rt && rt !== 'all') ? ('?runtime=' + encodeURIComponent(rt)) : '';
+  try { data = await fetchJsonWithTimeout('/api/activity-heatmap' + q, 5000); } catch(e) { card.style.display = 'none'; return; }
   var days = (data && data.days) || [];
-  if (!days.length) return;
+  // A server that ignores ?runtime answers for the whole node; hide the card
+  // rather than draw every runtime's days under this one's name.
+  if (!days.length || (q && data.runtime !== rt)) { card.style.display = 'none'; return; }
   var maxSessions = Math.max.apply(null, days.map(function(d){ return d.sessions || 0; }));
   var shades = ['#12122a','#1a3a2a','#2a6a3a','#4a9a2a','#6adb3a'];
   var html = '';
@@ -18028,7 +18104,12 @@ var _CM_EFF_IDEAS = {
   // of output spend); evidence is the "Where the money goes" chart.
   thinking_trim: { icon: '🧠', stem: 'think', evidenceTab: 'usage' },
 };
-function _cmEffIdeaRowHtml(a) {
+// A translated sentence with a figure inside it. The figure is HTML from the
+// shared component, so it is spliced in after the sentence is escaped.
+function _cmI18nFig(key, fallback, figHtml) {
+  return escHtml(t(key, { amt: '\u0000' }, fallback)).split('\u0000').join(figHtml);
+}
+function _cmEffIdeaRowHtml(a, saveEntry) {
   var m = _CM_EFF_IDEAS[a.id];
   if (!m) return '';
   var d = a.data || {};
@@ -18052,7 +18133,11 @@ function _cmEffIdeaRowHtml(a) {
         + ' <a href="#" onclick="switchTab(\'' + m.evidenceTab + '\');return false;" style="color:#3b82f6;text-decoration:none;">' + escHtml(t('efficiency.evidence', null, 'See the evidence')) + ' →</a></div>'
       + '</details>'
     + '</div>'
-    + '<div style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">' + escHtml(t('efficiency.save_mo', { amt: '$' + save }, 'save about $' + save + '/mo')) + '</div>'
+    // An estimate at published rates (REQ-OBS-CEA-025.9): the card heading
+    // carries the badge, the figure keeps the explanation on hover.
+    + '<div style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">'
+      + _cmI18nFig('efficiency.save_mo', 'save about \u0000/mo',
+          window.cmCostFigure(save, saveEntry, { noBadge: true, label: 'Estimated saving per month' })) + '</div>'
     + '</div>';
 }
 // ── Spend Flow (feat/spend-flow): where the money goes ─────────────────────
@@ -18076,7 +18161,6 @@ var _CM_SF_OUT = {
   builtin_tool_calls: { c: '#0284c7', k: 'usage.sf_builtin',   f: 'Tool calls' },
   mcp_tool_calls:     { c: '#ea580c', k: 'usage.sf_mcp',       f: 'MCP tool calls' }
 };
-function _sfCost(c) { return c >= 10 ? '$' + c.toFixed(0) : c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
 function _sfLabel(meta, id) {
   var m = meta[id];
   return m ? t(m.k, null, m.f) : id;
@@ -18112,6 +18196,12 @@ async function loadSpendFlow() {
   catch (e) { if (title) title.style.display = 'none'; card.style.display = 'none'; }
 }
 function _sfRender(data) {
+  // What kind of money each figure is (REQ-OBS-CEA-025.8). SVG text cannot
+  // hold a badge, so the caption above the chart carries both, and every
+  // label goes through the shared formatter.
+  var whole = window.cmProv.of(data, 'totals.cost_usd');
+  var split = window.cmProv.of(data, 'input_categories[].cost_usd');
+  function _sfMoney(v, e) { return window.cmProv.text(v, e || split); }
   var W = 960, H = 340, PAD = 10, NODE_W = 14, TOP = 26, BOT = 12;
   var LX = 216, MX = 473, RX = 730; // node bar x positions
   var inCats = (data.input_categories || []).filter(function (c) { return c.cost_usd > 0; });
@@ -18173,7 +18263,7 @@ function _sfRender(data) {
       if (!l) return;
       ribbon(nodes[c.id], nodes['runtime:' + r.runtime], 'out', 'in', l.cost_usd,
         (_CM_SF_IN[c.id] || {}).c || '#64748b',
-        _sfLabel(_CM_SF_IN, c.id) + ' → ' + _cmRuntimeLabel(r.runtime) + ': ' + _sfCost(l.cost_usd));
+        _sfLabel(_CM_SF_IN, c.id) + ' → ' + _cmRuntimeLabel(r.runtime) + ': ' + _sfMoney(l.cost_usd));
     });
   });
   rts.forEach(function (r) {
@@ -18182,7 +18272,7 @@ function _sfRender(data) {
       if (!l) return;
       ribbon(nodes['runtime:' + r.runtime], nodes[c.id], 'out', 'in', l.cost_usd,
         (_CM_SF_OUT[c.id] || {}).c || '#64748b',
-        _cmRuntimeLabel(r.runtime) + ' → ' + _sfLabel(_CM_SF_OUT, c.id) + ': ' + _sfCost(l.cost_usd));
+        _cmRuntimeLabel(r.runtime) + ' → ' + _sfLabel(_CM_SF_OUT, c.id) + ': ' + _sfMoney(l.cost_usd));
     });
   });
   // Node bars + direct labels (text wears text tokens, marks carry color).
@@ -18200,42 +18290,48 @@ function _sfRender(data) {
   inCats.forEach(function (c) {
     var n = nodes[c.id];
     var est = c.basis && c.basis !== 'measured';
-    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="' + n.color + '"><title>' + escHtml(_sfLabel(_CM_SF_IN, c.id) + ': ' + _sfCost(c.cost_usd)) + '</title></rect>');
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="' + n.color + '"><title>' + escHtml(_sfLabel(_CM_SF_IN, c.id) + ': ' + _sfMoney(c.cost_usd)) + '</title></rect>');
     var ly = labelY(n, 'left');
     svg.push('<text x="' + (n.x - 10) + '" y="' + ly.toFixed(1) + '" text-anchor="end" font-size="12" fill="var(--text-primary,#1e293b)">' + escHtml(_sfLabel(_CM_SF_IN, c.id)) + '</text>');
-    svg.push('<text x="' + (n.x - 10) + '" y="' + (ly + 13).toFixed(1) + '" text-anchor="end" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml((est ? t('usage.sf_estimated', null, 'about ') : '') + _sfCost(c.cost_usd) + pct(c.cost_usd, data.totals.input_cost_usd)) + '</text>');
+    svg.push('<text x="' + (n.x - 10) + '" y="' + (ly + 13).toFixed(1) + '" text-anchor="end" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml((est ? t('usage.sf_estimated', null, 'about ') : '') + _sfMoney(c.cost_usd) + pct(c.cost_usd, data.totals.input_cost_usd)) + '</text>');
   });
   rts.forEach(function (r) {
     var n = nodes['runtime:' + r.runtime];
-    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="var(--text-secondary,#64748b)"><title>' + escHtml(_cmRuntimeLabel(r.runtime) + ': ' + _sfCost(r.cost_usd)) + '</title></rect>');
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="var(--text-secondary,#64748b)"><title>' + escHtml(_cmRuntimeLabel(r.runtime) + ': ' + _sfMoney(r.cost_usd, whole)) + '</title></rect>');
     svg.push('<text x="' + (n.x + NODE_W / 2) + '" y="' + (n.y - 6).toFixed(1) + '" text-anchor="middle" font-size="12" font-weight="600" fill="var(--text-primary,#1e293b)">' + escHtml(_cmRuntimeLabel(r.runtime)) + '</text>');
-    svg.push('<text x="' + (n.x + NODE_W / 2) + '" y="' + (n.y + n.h + 14).toFixed(1) + '" text-anchor="middle" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml(_sfCost(r.cost_usd)) + '</text>');
+    svg.push('<text x="' + (n.x + NODE_W / 2) + '" y="' + (n.y + n.h + 14).toFixed(1) + '" text-anchor="middle" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml(_sfMoney(r.cost_usd, whole)) + '</text>');
   });
   outCats.forEach(function (c) {
     var n = nodes[c.id];
     var est = c.basis && c.basis !== 'measured';
-    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="' + n.color + '"><title>' + escHtml(_sfLabel(_CM_SF_OUT, c.id) + ': ' + _sfCost(c.cost_usd)) + '</title></rect>');
+    svg.push('<rect x="' + n.x + '" y="' + n.y + '" width="' + NODE_W + '" height="' + n.h.toFixed(1) + '" rx="3" fill="' + n.color + '"><title>' + escHtml(_sfLabel(_CM_SF_OUT, c.id) + ': ' + _sfMoney(c.cost_usd)) + '</title></rect>');
     var ly = labelY(n, 'right');
     svg.push('<text x="' + (n.x + NODE_W + 10) + '" y="' + ly.toFixed(1) + '" font-size="12" fill="var(--text-primary,#1e293b)">' + escHtml(_sfLabel(_CM_SF_OUT, c.id)) + '</text>');
-    svg.push('<text x="' + (n.x + NODE_W + 10) + '" y="' + (ly + 13).toFixed(1) + '" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml((est ? t('usage.sf_estimated', null, 'about ') : '') + _sfCost(c.cost_usd) + pct(c.cost_usd, data.totals.output_cost_usd)) + '</text>');
+    svg.push('<text x="' + (n.x + NODE_W + 10) + '" y="' + (ly + 13).toFixed(1) + '" font-size="11" fill="var(--text-muted,#94a3b8)">' + escHtml((est ? t('usage.sf_estimated', null, 'about ') : '') + _sfMoney(c.cost_usd) + pct(c.cost_usd, data.totals.output_cost_usd)) + '</text>');
   });
   // Column headers.
-  svg.push('<text x="' + (LX + NODE_W) + '" y="14" text-anchor="end" font-size="11" font-weight="600" fill="var(--text-secondary,#64748b)">' + escHtml(t('usage.sf_col_in', null, 'What the agent reads') + ' · ' + _sfCost(inTotal)) + '</text>');
-  svg.push('<text x="' + RX + '" y="14" font-size="11" font-weight="600" fill="var(--text-secondary,#64748b)">' + escHtml(t('usage.sf_col_out', null, 'What the agent writes') + ' · ' + _sfCost(outTotal)) + '</text>');
+  svg.push('<text x="' + (LX + NODE_W) + '" y="14" text-anchor="end" font-size="11" font-weight="600" fill="var(--text-secondary,#64748b)">' + escHtml(t('usage.sf_col_in', null, 'What the agent reads') + ' · ' + _sfMoney(inTotal)) + '</text>');
+  svg.push('<text x="' + RX + '" y="14" font-size="11" font-weight="600" fill="var(--text-secondary,#64748b)">' + escHtml(t('usage.sf_col_out', null, 'What the agent writes') + ' · ' + _sfMoney(outTotal)) + '</text>');
 
   // Accessible table view of the same numbers (details/summary, collapsed).
   var tbl = '<details style="margin-top:8px;"><summary style="cursor:pointer;font-size:12px;color:#3b82f6;">'
     + escHtml(t('usage.sf_table', null, 'View as table')) + '</summary>'
     + '<table class="usage-table" style="margin-top:6px;"><tbody>';
   inCats.forEach(function (c) {
-    tbl += '<tr><td>' + escHtml(_sfLabel(_CM_SF_IN, c.id)) + '</td><td>' + escHtml(_sfCost(c.cost_usd)) + '</td><td>' + escHtml(String(c.tokens.toLocaleString()) + ' tokens') + '</td></tr>';
+    tbl += '<tr><td>' + escHtml(_sfLabel(_CM_SF_IN, c.id)) + '</td><td>' + window.cmCostFigure(c.cost_usd, split, { noBadge: true }) + '</td><td>' + escHtml(String(c.tokens.toLocaleString()) + ' tokens') + '</td></tr>';
   });
   outCats.forEach(function (c) {
-    tbl += '<tr><td>' + escHtml(_sfLabel(_CM_SF_OUT, c.id)) + '</td><td>' + escHtml(_sfCost(c.cost_usd)) + '</td><td>' + escHtml(String(c.tokens.toLocaleString()) + ' tokens') + '</td></tr>';
+    tbl += '<tr><td>' + escHtml(_sfLabel(_CM_SF_OUT, c.id)) + '</td><td>' + window.cmCostFigure(c.cost_usd, split, { noBadge: true }) + '</td><td>' + escHtml(String(c.tokens.toLocaleString()) + ' tokens') + '</td></tr>';
   });
   tbl += '</tbody></table></details>';
 
-  return '<div style="overflow-x:auto;"><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;min-width:640px;display:block;" role="img" aria-label="'
+  var caption = (whole && split)
+    ? '<div style="font-size:11px;color:var(--text-muted);margin:0 0 6px;">Totals and runtimes: '
+      + window.cmProv.badge(whole, { label: 'Spend flow totals' })
+      + ' · categories and ribbons, split by token share (estimates): '
+      + window.cmProv.badge(split, { label: 'Spend flow categories' }) + '</div>'
+    : '';
+  return caption + '<div style="overflow-x:auto;"><svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;min-width:640px;display:block;" role="img" aria-label="'
     + escHtml(t('usage.spend_flow_title', null, 'Where the money goes')) + '">' + svg.join('') + '</svg></div>' + tbl;
 }
 function renderEfficiencyCard() {
@@ -18291,17 +18387,19 @@ function _renderEfficiencyCardInner(card, eff) {
   var sentence = t('efficiency.grade_sentence', { hit: hit, ctx: ctx },
     'Your agent reuses ' + hit + '% of what it reads and carries about ' + ctx + ' tokens of history into each reply.');
   var tip = t('efficiency.tooltip', null, 'A to F score of how much of your spend does useful work: how often your agent reuses what it already read, how much history each reply carries, and whether saved work pays for itself.');
-  var rows = (eff.actions || []).map(_cmEffIdeaRowHtml).filter(Boolean);
+  var saveEntry = window.cmProv.of(eff, 'actions[].savings_monthly_usd');
+  var rows = (eff.actions || []).map(function (a) { return _cmEffIdeaRowHtml(a, saveEntry); }).filter(Boolean);
   var total = Math.round(_cmEffTotalSavings(eff));
   var saved = Math.round(Number(eff.cache_saved_monthly_usd) || 0);
   var right;
   if (rows.length) {
-    right = '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(t('efficiency.savings_ideas', null, 'Savings ideas')) + '</div>'
+    right = '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(t('efficiency.savings_ideas', null, 'Savings ideas'))
+        + (saveEntry ? ' ' + window.cmProv.badge(saveEntry, { label: 'Estimated savings' }) : '') + '</div>'
       + '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 4px;">' + escHtml(t('efficiency.subtitle', null, 'Things you can do to spend less. ClawMetry only suggests; it never changes your agent.')) + '</div>'
       + rows.join('')
       + (rows.length >= 2 && total >= 1
         ? '<div style="border-top:1px solid var(--border-primary,#1f2937);padding-top:8px;font-size:12px;color:var(--text-secondary);">'
-          + escHtml(t('efficiency.footer_total', null, 'Estimated savings: about')) + ' <strong style="color:#22c55e;">$' + total + '/mo</strong></div>'
+          + escHtml(t('efficiency.footer_total', null, 'Estimated savings: about')) + ' <strong style="color:#22c55e;">' + window.cmCostFigure(total, saveEntry, { noBadge: true, label: 'Estimated savings per month' }) + '/mo</strong></div>'
         : '');
   } else {
     right = '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(t('efficiency.savings_ideas', null, 'Savings ideas')) + '</div>'
@@ -18309,7 +18407,8 @@ function _renderEfficiencyCardInner(card, eff) {
   }
   if (saved >= 1) {
     right += '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">✨ '
-      + escHtml(t('efficiency.already_saved', { amt: '$' + saved }, 'Reusing work already saved you about $' + saved + '/mo.')) + '</div>';
+      + _cmI18nFig('efficiency.already_saved', 'Reusing work already saved you about \u0000/mo.',
+          window.cmCostFigure(saved, window.cmProv.of(eff, 'cache_saved_monthly_usd'), { label: 'Saved by reusing cached work, per month' })) + '</div>';
   }
   card.style.display = '';
   card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
@@ -18332,13 +18431,6 @@ function _renderEfficiencyCardInner(card, eff) {
 // they are cloud-safe by construction (cm-cloud-efficiency serves that URL
 // from the snapshot) and add ZERO fetches on tab load. Perf-first per
 // FLYWHEEL §5 "share, don't duplicate."
-function _cmFmtUsd(n) {
-  n = Number(n) || 0;
-  if (n >= 1000) return '$' + Math.round(n).toLocaleString();
-  if (n >= 10) return '$' + Math.round(n);
-  if (n >= 1) return '$' + n.toFixed(1);
-  return '$' + n.toFixed(2);
-}
 var _CM_CACHE_LEFT_ON_TABLE_FRAC = 0.5;
 var _CM_CACHE_READ_MULT = 0.1;
 // Derive the Cache-Hit tile payload from an efficiency scope, mirroring the
@@ -18395,12 +18487,12 @@ function renderCacheHitRateCard() {
       + '<div style="flex:1;min-width:220px;display:flex;gap:24px;flex-wrap:wrap;">'
         + '<div style="min-width:120px;">'
           + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Already saved</div>'
-          + '<div style="font-size:22px;font-weight:700;color:#22c55e;margin:4px 0;">' + _cmFmtUsd(s.saved) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+          + '<div style="font-size:22px;font-weight:700;color:#22c55e;margin:4px 0;">' + window.cmCostFigure(s.saved, window.cmProv.of(eff, 'cache_saved_monthly_usd'), { label: 'Already saved per month' }) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
           + '<div style="font-size:11px;color:var(--text-muted);">measured from cached reads</div>'
         + '</div>'
         + '<div style="min-width:140px;">'
           + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Left on the table</div>'
-          + '<div style="font-size:22px;font-weight:700;color:' + (s.leaked > 0 ? '#f59e0b' : 'var(--text-muted)') + ';margin:4px 0;">' + _cmFmtUsd(s.leaked) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+          + '<div style="font-size:22px;font-weight:700;color:' + (s.leaked > 0 ? '#f59e0b' : 'var(--text-muted)') + ';margin:4px 0;">' + window.cmCostFigure(s.leaked, window.cmProv.of(eff, 'left_on_table_monthly_usd'), { label: 'Left on the table per month (estimate)' }) + '<span style="font-size:12px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
           + '<div style="font-size:11px;color:var(--text-muted);">estimate · assumes ' + frac + '% of misses were cacheable</div>'
         + '</div>'
       + '</div>'
@@ -18436,6 +18528,7 @@ function renderRoutingAdvisorCard() {
     var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
     // Same rationale as renderCacheHitRateCard — _cmLoadEfficiency scopes.
     var suggestions = _cmEffDowngradeSuggestions(eff);
+    var _raEntry = window.cmProv.of(eff, 'actions[].savings_monthly_usd');
     if (!suggestions.length) {
       if (title) title.style.display = 'none';
       card.style.display = 'none';
@@ -18445,7 +18538,7 @@ function renderRoutingAdvisorCard() {
     suggestions.forEach(function (s) { potential += s.potential_savings_monthly_usd; });
     var scopeLine = _cmEffScopeLine(rt);
     var rows = suggestions.slice(0, 5).map(function (s) {
-      var save = _cmFmtUsd(s.potential_savings_monthly_usd);
+      var save = window.cmCostFigure(s.potential_savings_monthly_usd, _raEntry, { noBadge: true, label: 'Estimated saving per month' });
       var calls = s.calls.toLocaleString();
       return '<div style="display:flex;gap:10px;align-items:baseline;padding:10px 0;border-top:1px solid var(--border-primary,#1f2937);">'
         + '<div style="flex:1;min-width:0;">'
@@ -18460,7 +18553,7 @@ function renderRoutingAdvisorCard() {
     card.innerHTML = '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:16px;">'
       + '<div style="flex:0 0 220px;min-width:200px;">'
         + '<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Potential savings</div>'
-        + '<div style="font-size:34px;font-weight:800;color:#f59e0b;line-height:1.05;margin:6px 0 2px;">' + _cmFmtUsd(potential) + '<span style="font-size:13px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
+        + '<div style="font-size:34px;font-weight:800;color:#f59e0b;line-height:1.05;margin:6px 0 2px;">' + window.cmCostFigure(potential, _raEntry, { label: 'Potential savings per month (estimate)' }) + '<span style="font-size:13px;font-weight:500;color:var(--text-muted);">/mo</span></div>'
         + '<div style="font-size:11px;color:var(--text-muted);">from ' + suggestions.length + ' safe swap' + (suggestions.length === 1 ? '' : 's') + '</div>'
         + '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;">' + escHtml(scopeLine) + '</div>'
       + '</div>'
@@ -18527,7 +18620,6 @@ async function loadUsage() {
       return;
     }
     function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
-    function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
     // Subscription-coverage snapshot from /api/usage (dashboard.py
     // _get_billing_coverage). When the user is on a subscription (e.g.
     // Claude Max 20x), the headline API-equivalent cost is misleading —
@@ -18539,7 +18631,7 @@ async function loadUsage() {
     function setUsageCard(valId, cost, tokens, periodKey) {
       var v = document.getElementById(valId);
       var s = document.getElementById(valId + '-cost');
-      var costStr = fmtCost(cost || 0);
+      var costStr = window.cmProv.fmtMoney(cost || 0);
       var tokStr = fmtTokens(tokens || 0);
       var costKey = periodKey ? periodKey + 'Cost' : '';
       var costEntry = (window.cmProv && costKey) ? window.cmProv.of(data, costKey) : null;
@@ -18679,9 +18771,7 @@ async function loadUsage() {
     // version of what that heading was reaching for.
     var costLabel = 'Cost';
     var _cmCell = function (key, name) {
-      return window.cmProv
-        ? window.cmProv.money(data, key, { label: name })
-        : fmtCost(data[key]);
+      return window.cmProv.money(data, key, { label: name });
     };
     var tableHtml = '<thead><tr><th>Period</th><th>Tokens</th><th>' + costLabel + '</th></tr></thead><tbody>';
     tableHtml += '<tr><td>Today</td><td>' + fmtTokens(data.today) + '</td><td>' + _cmCell('todayCost', 'Cost today') + '</td></tr>';
@@ -18715,7 +18805,8 @@ async function loadUsage() {
     } else {
       otelExtra.style.display = 'none';
     }
-    renderPluginPieChart(byPlugin.plugins || [], byPlugin.store_available === false);
+    renderPluginPieChart(byPlugin.plugins || [], byPlugin.store_available === false,
+                         window.cmProv.of(byPlugin, 'plugins[].cost_usd'));
     // Load session cost breakdown
     fetch('/api/sessions/cost-breakdown').then(r => r.json()).then(function(cbd) {
       window._sessionCostData = cbd.top10 || [];
@@ -18904,6 +18995,8 @@ async function loadCacheRisk() {
     var savedUsd = Number(d.total_saved_usd) || 0;
     var affected = Number(d.affected_sessions) || 0;
     var maxGap = Number(d.max_idle_gap_sec) || 0;
+    var _crWrite = window.cmProv.of(d, 'total_write_cost_usd');
+    var _crSaved = window.cmProv.of(d, 'total_saved_usd');
     if (!expiries && !writeCost) return;
     title.style.display = '';
     card.style.display = '';
@@ -18912,7 +19005,7 @@ async function loadCacheRisk() {
     var html = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">'
       + '<div style="min-width:160px;">'
       + '<div style="font-size:28px;font-weight:700;color:' + (netTax > 0.01 ? '#ef4444' : '#f59e0b') + ';">'
-      + (writeCost > 0 ? '$' + writeCost.toFixed(3) : expiries + '') + '</div>'
+      + (writeCost > 0 ? window.cmCostFigure(writeCost, _crWrite, { label: 'Paid to rebuild the cache' }) : expiries + '') + '</div>'
       + '<div style="font-size:12px;color:var(--text-muted);margin-top:2px;">'
       + (writeCost > 0 ? 'paid to rebuild the cache' : 'cache expiries') + '</div>'
       + '</div>'
@@ -18922,8 +19015,8 @@ async function loadCacheRisk() {
       + (affected > 0 ? ' across <strong>' + affected + ' session' + (affected === 1 ? '' : 's') + '</strong>' : '')
       + ' — idle gaps crossed the 5-min cache TTL so context was re-derived from scratch.</div>';
     if (writeCost > 0 && savedUsd > 0) {
-      html += '<div style="margin-bottom:6px;">Paid <strong>$' + writeCost.toFixed(3) + '</strong> to rebuild; only saved <strong>$' + savedUsd.toFixed(3) + '</strong> on reads'
-        + (netTax > 0 ? ' — <strong style="color:#ef4444;">$' + netTax.toFixed(3) + ' net re-read tax</strong>' : '') + '.</div>';
+      html += '<div style="margin-bottom:6px;">Paid <strong>' + window.cmCostFigure(writeCost, _crWrite, { noBadge: true, label: 'Paid to rebuild the cache' }) + '</strong> to rebuild; saved about <strong>' + window.cmCostFigure(savedUsd, _crSaved, { label: 'Saved on cache reads (estimate)' }) + '</strong> on reads'
+        + (netTax > 0 ? ', about <strong style="color:#ef4444;">' + window.cmCostFigure(netTax, _crSaved, { noBadge: true, label: 'Net re-read tax (estimate)' }) + ' net re-read tax</strong>' : '') + '.</div>';
     }
     if (gapMin > 0) {
       html += '<div style="color:var(--text-muted);font-size:12px;">Longest idle gap: ' + (gapMin >= 60 ? Math.round(gapMin/60) + 'h ' + (gapMin % 60) + 'm' : gapMin + ' min') + '</div>';
@@ -18952,13 +19045,12 @@ async function loadCompressionPotential() {
     var byType = d.by_type || {};
 
     function fmtToks(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : String(n||0); }
-    function fmtCost(c) { return c >= 0.01 ? '$'+c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
 
     var html = '<div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start;">'
       + '<div style="min-width:140px;text-align:center;">'
       + '<div style="font-size:28px;font-weight:700;color:#f59e0b;">'+fmtToks(toks)+'</div>'
       + '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">compressible tokens</div>'
-      + (usd > 0 ? '<div style="font-size:12px;color:#22c55e;margin-top:4px;font-weight:600;">'+fmtCost(usd)+' recoverable</div>' : '')
+      + (usd > 0 ? '<div style="font-size:12px;color:#22c55e;margin-top:4px;font-weight:600;">'+window.cmCostFigure(usd, window.cmProv.of(d, 'recoverable_usd'), { label: 'Recoverable (estimate)' })+' recoverable</div>' : '')
       + '</div>'
       + '<div style="flex:1;min-width:200px;font-size:13px;color:var(--text-secondary);">'
       + '<div style="margin-bottom:6px;"><strong>'+sessions+'</strong> of '+total+' sessions ('+pct+'%) have compressible tool output.'
@@ -19000,7 +19092,6 @@ async function loadCacheAnalytics() {
     var cwToks = tot.cache_write_tokens || 0;
 
     function fmtToks(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(0)+'K' : String(n||0); }
-    function fmtCost(c) { return c >= 0.01 ? '$'+c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
 
     var html = '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;">'
       + '<div style="min-width:120px;text-align:center;">'
@@ -19011,16 +19102,17 @@ async function loadCacheAnalytics() {
       + '<div style="flex:1;min-width:180px;">';
 
     if (savings > 0) {
-      html += '<div style="font-size:13px;margin-bottom:8px;">💰 Est. savings: <strong style="color:#22c55e;">'+fmtCost(savings)+'</strong> vs. uncached</div>';
+      html += '<div style="font-size:13px;margin-bottom:8px;">💰 Est. savings: <strong style="color:#22c55e;">'+window.cmCostFigure(savings, window.cmProv.of(d, 'totals.est_savings_usd'), { label: 'Estimated savings vs. uncached' })+'</strong> vs. uncached</div>';
     }
 
+    var _ctSave = window.cmProv.of(d, 'by_model[].est_savings_usd');
     var models = (d.by_model || []).filter(function(m) { return (m.cache_read_tokens||0)+(m.cache_write_tokens||0) > 0; });
     if (models.length > 0) {
       html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
         + '<thead><tr>'
         + '<th style="text-align:left;color:var(--text-muted);padding:2px 8px 4px 0;font-weight:500;">Model</th>'
         + '<th style="text-align:right;color:var(--text-muted);padding:2px 0 4px 8px;font-weight:500;">Hit %</th>'
-        + '<th style="text-align:right;color:var(--text-muted);padding:2px 0 4px 8px;font-weight:500;">Saved</th>'
+        + '<th style="text-align:right;color:var(--text-muted);padding:2px 0 4px 8px;font-weight:500;">Saved' + (_ctSave ? ' ' + window.cmProv.badge(_ctSave, { label: 'Saved per model (estimate)' }) : '') + '</th>'
         + '</tr></thead><tbody>';
       models.forEach(function(m) {
         var mhit = m.cache_hit_ratio_pct || 0;
@@ -19028,7 +19120,7 @@ async function loadCacheAnalytics() {
         html += '<tr>'
           + '<td style="padding:2px 8px 2px 0;color:var(--text-secondary);">'+escHtml(m.model||'—')+'</td>'
           + '<td style="text-align:right;padding:2px 0 2px 8px;color:'+mc+';font-weight:600;">'+mhit.toFixed(1)+'%</td>'
-          + '<td style="text-align:right;padding:2px 0 2px 8px;color:var(--text-muted);">'+fmtCost(m.est_savings_usd||0)+'</td>'
+          + '<td style="text-align:right;padding:2px 0 2px 8px;color:var(--text-muted);">'+window.cmCostFigure(m.est_savings_usd, _ctSave, { noBadge: true, label: 'Saved' })+'</td>'
           + '</tr>';
       });
       html += '</tbody></table>';
@@ -19126,18 +19218,22 @@ function renderCostComparison(data) {
   };
   var tokStr = actualTokens >= 1000000 ? (actualTokens/1000000).toFixed(1)+'M' : actualTokens >= 1000 ? Math.round(actualTokens/1000)+'K' : String(Math.round(actualTokens));
   var html = '<div style="margin-bottom:14px;padding:10px 14px;background:rgba(255,255,255,0.05);border-radius:8px;border:1px solid rgba(255,255,255,0.08)">';
-  html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Your actual spend (30 days)</div>';
+  html += '<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px;">Your usage value at published rates (30 days)</div>';
   html += '<div style="display:flex;align-items:baseline;gap:10px;">';
-  html += '<span style="font-size:22px;font-weight:700;color:var(--text-primary);">$' + (actualCost >= 0.01 ? actualCost.toFixed(2) : actualCost > 0 ? '<0.01' : '0.00') + '</span>';
+  html += '<span style="font-size:22px;font-weight:700;color:var(--text-primary);">' + window.cmCostFigure(actualCost, window.cmProv.of(data, 'actual.cost_usd'), { label: 'Usage value, last 30 days' }) + '</span>';
   html += '<span style="font-size:12px;color:var(--text-muted);">' + escHtml(actualModel) + ' &middot; ' + tokStr + ' tokens</span>';
   html += '</div></div>';
+  var _altCostEntry = window.cmProv.of(data, 'alternatives[].estimated_cost');
+  var _altSaveEntry = window.cmProv.of(data, 'alternatives[].savings_usd');
+  html += '<div style="font-size:11px;color:var(--text-muted);margin:0 0 6px;">Estimates for the same tokens at each model\'s published rates'
+    + (_altCostEntry ? ' ' + window.cmProv.badge(_altCostEntry, { label: 'Alternative model estimates' }) : '') + '</div>';
   html += '<div style="display:flex;flex-direction:column;gap:8px;">';
   alts.forEach(function(alt) {
     var color = providerColors[alt.provider] || '#94a3b8';
     var altCost = alt.estimated_cost || 0;
     var savingsPct = alt.savings_pct || 0;
     var savingsUsd = alt.savings_usd || 0;
-    var costStr = altCost >= 0.01 ? '$' + altCost.toFixed(2) : altCost > 0 ? '<$0.01' : '$0.00';
+    var costStr = window.cmCostFigure(altCost, _altCostEntry, { noBadge: true, label: 'Estimated cost on ' + (alt.display_name || 'this model') });
     var isCurrent = actualCost > 0 && Math.abs(altCost - actualCost) / (actualCost || 1) < 0.15;
     var isCheaper = savingsPct > 5;
     var isMoreExpensive = savingsPct < -5;
@@ -19153,9 +19249,9 @@ function renderCostComparison(data) {
     if (isCurrent) {
       html += '<div style="font-size:11px;color:#94a3b8;">≈ current</div>';
     } else if (isCheaper) {
-      html += '<div style="font-size:11px;color:#22c55e;">save $' + Math.abs(savingsUsd).toFixed(2) + ' (' + Math.abs(savingsPct) + '%)</div>';
+      html += '<div style="font-size:11px;color:#22c55e;">save about ' + window.cmCostFigure(Math.abs(savingsUsd), _altSaveEntry, { noBadge: true, label: 'Estimated saving' }) + ' (' + Math.abs(savingsPct) + '%)</div>';
     } else if (isMoreExpensive) {
-      html += '<div style="font-size:11px;color:#ef4444;">+$' + Math.abs(savingsUsd).toFixed(2) + ' (' + Math.abs(savingsPct) + '% more)</div>';
+      html += '<div style="font-size:11px;color:#ef4444;">about ' + window.cmCostFigure(Math.abs(savingsUsd), _altSaveEntry, { noBadge: true, label: 'Estimated extra cost' }) + ' more (' + Math.abs(savingsPct) + '%)</div>';
     } else {
       html += '<div style="font-size:11px;color:#94a3b8;">similar cost</div>';
     }
@@ -19189,17 +19285,14 @@ function renderSpendOptimization(data) {
     el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_optimization_suggestions_yet_run_more_agents_wi", null, "No optimization suggestions yet — run more agents with span data enabled to see recommendations.") + '</span>';
     return;
   }
-  var totalSave = data.total_projected_savings_usd_30d || 0;
-  var saveFmt = totalSave >= 0.01 ? '$' + totalSave.toFixed(2) : totalSave > 0 ? '<$0.01' : '$0.00';
   // This is the loudest number on the card and it is a counterfactual: what
   // the window WOULD have cost on a cheaper tier, assuming that tier does the
   // same job. Badged as an estimate so it does not read as banked money.
   var saveEntry = window.cmProv
     ? window.cmProv.of(data, 'total_projected_savings_usd_30d') : null;
-  var saveHtml = window.cmProv
-    ? window.cmProv.money(data, 'total_projected_savings_usd_30d',
-                          { label: 'Projected 30-day savings' })
-    : escHtml(saveFmt);
+  var curEntry = window.cmProv.of(data, 'recommendations[].current_cost_usd_30d');
+  var saveHtml = window.cmProv.money(data, 'total_projected_savings_usd_30d',
+                                     { label: 'Projected 30-day savings (estimate)' });
   var html = '<div style="margin-bottom:14px;padding:10px 14px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);border-radius:8px;">';
   html += '<div style="font-size:12px;color:#86efac;margin-bottom:4px;">Projected 30-day savings</div>';
   html += '<div style="font-size:22px;font-weight:700;color:#22c55e;">' + saveHtml + '</div>';
@@ -19207,11 +19300,10 @@ function renderSpendOptimization(data) {
   html += '</div>';
   html += '<div style="display:flex;flex-direction:column;gap:8px;">';
   recs.forEach(function(rec) {
-    var savStr = window.cmProv
-      ? window.cmProv.figure(rec.projected_savings_usd_30d, saveEntry,
-                             { label: 'Projected saving', noBadge: true })
-      : (rec.projected_savings_usd_30d >= 0.01 ? '$' + rec.projected_savings_usd_30d.toFixed(2) : '<$0.01');
-    var curStr = rec.current_cost_usd_30d >= 0.01 ? '$' + rec.current_cost_usd_30d.toFixed(2) : rec.current_cost_usd_30d > 0 ? '<$0.01' : '$0.00';
+    var savStr = window.cmProv.figure(rec.projected_savings_usd_30d, saveEntry,
+                                      { label: 'Projected saving', noBadge: true });
+    var curStr = window.cmCostFigure(rec.current_cost_usd_30d, curEntry,
+                                     { label: 'Usage value now, last 30 days', noBadge: true });
     html += '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;">';
     html += '<div style="flex:1;min-width:0;">';
     html += '<div style="font-size:13px;font-weight:600;color:var(--text-primary);">' + escHtml(rec.tool) + '</div>';
@@ -19256,6 +19348,8 @@ async function loadUsageByTeam() {
     if (!teams.length && !hasGateway) return;
     var html = '';
     if (teams.length) {
+      // Team cost is usage value at published rates (REQ-OBS-CEA-025.8).
+      var _teamEntry = window.cmProv.of(d, 'teams[].cost_usd');
       var totalCost = teams.reduce(function(s, t) { return s + (t.cost_usd || 0); }, 0);
       var rows = teams.map(function(t) {
         var pct = totalCost > 0 ? Math.round((t.cost_usd / totalCost) * 100) : 0;
@@ -19263,7 +19357,7 @@ async function loadUsageByTeam() {
         var _l = costCardText(t.label || '—'), _r = costCardText(rts); // AC-OBS-GWY-001.9
         return '<tr>'
           + '<td style="padding:4px 8px;font-weight:500;">' + _e(t.label || '—') + '</td>'
-          + '<td style="padding:4px 8px;text-align:right;">$' + _e((t.cost_usd || 0).toFixed(4)) + '</td>'
+          + '<td style="padding:4px 8px;text-align:right;">' + window.cmCostFigure(t.cost_usd, _teamEntry, { noBadge: true, label: 'Cost, last 7 days' }) + '</td>'
           + '<td style="padding:4px 8px;text-align:right;color:var(--text-muted);">' + _e(pct) + '%</td>'
           + '<td style="padding:4px 8px;text-align:right;color:var(--text-muted);">' + _e(t.sessions || 0) + ' sessions</td>'
           + '<td style="padding:4px 8px;font-size:11px;color:var(--text-muted);">' + _e(rts) + '</td>'
@@ -19272,7 +19366,7 @@ async function loadUsageByTeam() {
       html += '<table style="width:100%;border-collapse:collapse;">'
         + '<thead><tr style="font-size:11px;color:var(--text-muted);">'
         + '<th style="padding:2px 8px;text-align:left;">Team / Agent</th>'
-        + '<th style="padding:2px 8px;text-align:right;">Cost (7d)</th>'
+        + '<th style="padding:2px 8px;text-align:right;">Cost (7d)' + (_teamEntry ? ' ' + window.cmProv.badge(_teamEntry, { label: 'Team cost' }) : '') + '</th>'
         + '<th style="padding:2px 8px;text-align:right;">Share</th>'
         + '<th style="padding:2px 8px;text-align:right;">Sessions</th>'
         + '<th style="padding:2px 8px;text-align:left;">Runtimes</th>'
@@ -19501,7 +19595,7 @@ function renderSessionCostChart() {
     ctx.font = '9px monospace';
     ctx.textAlign = 'center';
     if ((r.cost_usd || 0) >= 0.0001) {
-      ctx.fillText('$' + (r.cost_usd || 0).toFixed(4), x + 2 + barW/2, y - 3);
+      ctx.fillText(window.cmProv.text(r.cost_usd, window._sessionCostEntry), x + 2 + barW/2, y - 3);
     }
     // Session label below
     ctx.fillStyle = 'rgba(255,255,255,0.4)';
@@ -19520,7 +19614,7 @@ function renderSessionCostChart() {
     ctx.fillStyle = '#f59e0b';
     ctx.font = '9px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText('$' + threshold.toFixed(2) + ' threshold', pad.left + 4, ty - 3);
+    ctx.fillText(window.cmProv.fmtMoney(threshold) + ' alert threshold', pad.left + 4, ty - 3);
   }
   // Table
   if (tableEl) {
@@ -19561,7 +19655,7 @@ function renderSessionCostChart() {
   }
 }
 
-function renderPluginPieChart(rows, storeUnreachable) {
+function renderPluginPieChart(rows, storeUnreachable, costEntry) {
   var canvas = document.getElementById('usage-plugin-pie');
   var legend = document.getElementById('usage-plugin-legend');
   if (!canvas || !legend) return;
@@ -19611,7 +19705,11 @@ function renderPluginPieChart(rows, storeUnreachable) {
   ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-muted') || '#aaa';
   ctx.fillText((total >= 1000 ? (total/1000).toFixed(1) + 'K' : total) + ' tok', cx, cy + 16);
 
-  var lhtml = '';
+  // Costs say what kind of money they are (REQ-OBS-CEA-025.8).
+  var lhtml = costEntry
+    ? '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Costs: '
+      + window.cmProv.badge(costEntry, { label: 'Plugin and tool costs' }) + '</div>'
+    : '';
   data.forEach(function(r, i) {
     lhtml += '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-secondary);">';
     lhtml += '<div style="display:flex;align-items:center;gap:8px;min-width:0;">';
@@ -19620,7 +19718,7 @@ function renderPluginPieChart(rows, storeUnreachable) {
     lhtml += '</div>';
     lhtml += '<div style="text-align:right;">';
     lhtml += '<div style="font-size:12px;">' + (r.pct_of_total || 0).toFixed(1) + '%</div>';
-    lhtml += '<div style="font-size:11px;color:var(--text-muted);">' + (r.total_tokens || 0).toLocaleString() + ' tok • $' + Number(r.cost_usd || 0).toFixed(4) + '</div>';
+    lhtml += '<div style="font-size:11px;color:var(--text-muted);">' + (r.total_tokens || 0).toLocaleString() + ' tok • ' + window.cmCostFigure(r.cost_usd, costEntry, { noBadge: true, label: 'Cost of ' + (r.plugin || 'this plugin') }) + '</div>';
     lhtml += '</div></div>';
   });
   legend.innerHTML = lhtml;
@@ -19791,6 +19889,34 @@ async function loadModelAttribution() {
 }
 
 // ===== Skill Attribution =====
+// Leaderboard rows (REQ-OBS-CEA-025.8). A skill's cost is its sessions' cost
+// split evenly across the skills each one read, so the column badge says it
+// is an estimate at published rates. The local API sends total_cost_usd and
+// avg_cost_usd; the hosted synthesiser sends total_cost and avg_cost. Reading
+// only the second shape printed $0.00 on every local row.
+function _skillCostTableHtml(data, list) {
+  var totalEntry = window.cmProv.of(data, 'skills[].total_cost_usd');
+  var avgEntry = window.cmProv.of(data, 'skills[].avg_cost_usd');
+  function num(row, a, b) {
+    var v = row[a] != null ? row[a] : row[b];
+    return v == null ? null : Number(v);
+  }
+  var html = '<table class="usage-table" style="width:100%;">';
+  html += '<thead><tr><th>Skill</th><th style="text-align:right;">Invocations</th>'
+    + '<th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Total Cost'
+    + (totalEntry ? ' ' + window.cmProv.badge(totalEntry, { label: 'Skill cost (estimate)' }) : '')
+    + '</th><th></th></tr></thead><tbody>';
+  (list || []).forEach(function(row) {
+    html += '<tr>';
+    html += '<td style="padding:6px 8px;font-size:13px;font-weight:600;">' + escHtml(row.name) + '</td>';
+    html += '<td style="padding:6px 8px;font-size:13px;text-align:right;color:var(--text-muted);">' + escHtml(String(row.invocations == null ? '' : row.invocations)) + '</td>';
+    html += '<td style="padding:6px 8px;font-size:13px;text-align:right;">' + window.cmCostFigure(num(row, 'avg_cost_usd', 'avg_cost'), avgEntry, { noBadge: true, label: 'Average cost per invocation' }) + '</td>';
+    html += '<td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;color:var(--text-accent);">' + window.cmCostFigure(num(row, 'total_cost_usd', 'total_cost'), totalEntry, { noBadge: true, label: 'Total cost' }) + '</td>';
+    html += '<td style="padding:6px 8px;font-size:12px;text-align:right;"><a href="' + escHtml(row.clawhub_url) + '" target="_blank" style="color:#4caf50;text-decoration:none;">ClawHub ↗</a></td>';
+    html += '</tr>';
+  });
+  return html + '</tbody></table>';
+}
 async function loadSkillAttribution() {
   var el = document.getElementById('skill-leaderboard-content');
   if (!el) return;
@@ -19799,27 +19925,15 @@ async function loadSkillAttribution() {
     var top5 = data.top5_week || [];
     var allSkills = data.skills || [];
     var totalCost = data.total_cost || 0;
-    function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
     if (top5.length === 0) {
       el.innerHTML = '<span style="color:var(--text-muted);font-size:13px;">' + t("app.no_skill_invocations_detected_yet_skills_are_detec", null, "No skill invocations detected yet. Skills are detected when SKILL.md files are read during sessions.") + '</span>';
       return;
     }
-    var html = '<table class="usage-table" style="width:100%;">';
-    html += '<thead><tr><th>Skill</th><th style="text-align:right;">Invocations</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Total Cost</th><th></th></tr></thead><tbody>';
-    top5.forEach(function(s) {
-      html += '<tr>';
-      html += '<td style="padding:6px 8px;font-size:13px;font-weight:600;">' + escHtml(s.name) + '</td>';
-      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;color:var(--text-muted);">' + s.invocations + '</td>';
-      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;">' + fmtCost(s.avg_cost) + '</td>';
-      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;color:var(--text-accent);">' + fmtCost(s.total_cost) + '</td>';
-      html += '<td style="padding:6px 8px;font-size:12px;text-align:right;"><a href="' + escHtml(s.clawhub_url) + '" target="_blank" style="color:#4caf50;text-decoration:none;">ClawHub ↗</a></td>';
-      html += '</tr>';
-    });
-    html += '</tbody></table>';
+    var html = _skillCostTableHtml(data, top5);
     if (allSkills.length > 5) {
       html += '<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">Showing top 5 of ' + allSkills.length + ' skills this week. <a href="#" onclick="loadAllSkills();return false;" style="color:#4caf50;">View all</a></div>';
     }
-    html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">All-time total: ' + fmtCost(totalCost) + ' · ' + escHtml(data.note || '') + '</div>';
+    html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">All-time total: ' + window.cmCostFigure(totalCost, window.cmProv.of(data, 'total_cost'), { noBadge: true, label: 'All-time skill cost (estimate)' }) + ' · ' + escHtml(data.note || '') + '</div>';
     el.innerHTML = html;
   } catch(e) {
     if (el) el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.skill_attribution_unavailable", null, "Skill attribution unavailable") + '</span>';
@@ -19832,19 +19946,8 @@ function loadAllSkills() {
   if (!el) return;
   fetch('/api/skill-attribution').then(function(r) { return r.json(); }).then(function(data) {
     var allSkills = data.skills || [];
-    function fmtCost(c) { return c >= 0.01 ? '$' + c.toFixed(2) : c > 0 ? '<$0.01' : '$0.00'; }
-    var html = '<table class="usage-table" style="width:100%;">';
-    html += '<thead><tr><th>Skill</th><th style="text-align:right;">Invocations</th><th style="text-align:right;">Avg Cost</th><th style="text-align:right;">Total Cost</th><th></th></tr></thead><tbody>';
-    allSkills.forEach(function(s) {
-      html += '<tr><td style="padding:6px 8px;font-size:13px;font-weight:600;">' + escHtml(s.name) + '</td>';
-      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;color:var(--text-muted);">' + s.invocations + '</td>';
-      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;">' + fmtCost(s.avg_cost) + '</td>';
-      html += '<td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:600;color:var(--text-accent);">' + fmtCost(s.total_cost) + '</td>';
-      html += '<td style="padding:6px 8px;font-size:12px;text-align:right;"><a href="' + escHtml(s.clawhub_url) + '" target="_blank" style="color:#4caf50;text-decoration:none;">ClawHub ↗</a></td>';
-      html += '</tr>';
-    });
-    html += '</tbody></table>';
-    html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">All-time total: ' + fmtCost(data.total_cost || 0) + ' · ' + escHtml(data.note || '') + '</div>';
+    var html = _skillCostTableHtml(data, allSkills);
+    html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);">All-time total: ' + window.cmCostFigure(data.total_cost, window.cmProv.of(data, 'total_cost'), { noBadge: true, label: 'All-time skill cost (estimate)' }) + ' · ' + escHtml(data.note || '') + '</div>';
     el.innerHTML = html;
   }).catch(function() {});
 }
@@ -20589,7 +20692,7 @@ function _renderReplayEvent(ev, highlighted) {
     return '<div class="chat-tool-chip ' + (role === 'user' ? 'tc-user' : 'tc-asst') + '" id="replay-msg-' + ev.originalIndex + '" style="align-self:' + chipSide + ';' + chipRing + '">'
       + '<span class="chat-tool-chip-label">' + chipLabel + '</span>'
       + (ev.tokens ? '<span class="chat-tool-chip-meta">' + ev.tokens + ' tok</span>' : '')
-      + (ev.cost > 0 ? '<span class="chat-tool-chip-meta">' + _taFmtCost(ev.cost) + '</span>' : '')
+      + (ev.cost > 0 ? '<span class="chat-tool-chip-meta">' + window.cmCostFigure(ev.cost, window._replayCostEntry, { noBadge: true, label: 'Tool call cost' }) + '</span>' : '')
       + (chipTs ? '<span class="chat-tool-chip-meta">' + chipTs + '</span>' : '')
       + '</div>';
   }
@@ -20615,7 +20718,7 @@ function _renderReplayEvent(ev, highlighted) {
   } else {
     html += '<div style="white-space:pre-wrap;word-break:break-word;">' + escHtml(content) + '</div>';
   }
-  if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens' + (ev.cost > 0 ? ' &middot; ' + _taFmtCost(ev.cost) : '') + '</div>';
+  if (ev.tokens) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">&#128200; ' + ev.tokens + ' tokens' + (ev.cost > 0 ? ' &middot; ' + window.cmCostFigure(ev.cost, window._replayCostEntry, { noBadge: true, label: 'Message cost' }) : '') + '</div>';
   // Issue #564: decoding-config pill — small inline summary of the sampling
   // params that produced this assistant turn (only present when the backend
   // could extract at least one known key).
@@ -20753,7 +20856,7 @@ function _renderTurnChapter(turn, highlightOriginal) {
   // Turn spend — same per-event token/cost stamps the Turn anatomy page sums,
   // so the two figures agree.
   if (turn.tokens > 0) pieces.push('🪙 ' + (turn.tokens >= 1000 ? (turn.tokens / 1000).toFixed(1) + 'K' : turn.tokens) + ' tok');
-  if (turn.cost > 0) pieces.push('<span style="color:#34d399;">' + _taFmtCost(turn.cost) + '</span>');
+  if (turn.cost > 0) pieces.push('<span style="color:#34d399;">' + window.cmCostFigure(turn.cost, window._replayCostEntry, { noBadge: true, label: 'Turn cost' }) + '</span>');
   var meta = pieces.join(' · ');
   var html = '<section class="turn-chapter" id="turn-chapter-' + turn.turn + '">';
   html += '<header class="turn-chapter-head">';
@@ -21337,6 +21440,7 @@ async function viewTranscript(sessionId) {
   window._replayFilter = 'all';
   window._transcriptAllMessages = [];
   window._transcriptPaging = null;
+  window._replayCostEntry = null;
   _updateLoadEarlierBtn();
   try {
     // Fetch transcript, compaction markers, config-drift, lexical drift, and policy events in parallel
@@ -21437,6 +21541,14 @@ async function viewTranscript(sessionId) {
       + '<button class="refresh-btn" onclick="openSessionDeepDive(\'turns\', ' + _ddSid + ')" title="Per-turn timing breakdown for this session">' + t('transcript.turn_timing', null, 'Turn timing') + '</button>'
       + '<button class="refresh-btn" onclick="openSessionDeepDive(\'compare\', ' + _ddSid + ')" title="Compare this session side by side with others">' + t('transcript.compare', null, 'Compare') + '</button>'
       + '</div>';
+    // The per-turn and per-tool chips print message costs, so the header says
+    // once what kind of money they are (REQ-OBS-CEA-025.8). An older daemon or
+    // the JSONL fallback sends no entry, and then no label is invented.
+    window._replayCostEntry = window.cmProv.of(data, 'messages[].cost_usd');
+    if (window._replayCostEntry) {
+      metaHtml += '<div class="transcript-cost-basis" style="margin-top:8px;font-size:11px;color:var(--text-muted);">Turn and tool costs: '
+        + window.cmProv.badge(window._replayCostEntry, { label: 'Turn and tool costs' }) + '</div>';
+    }
     document.getElementById('transcript-meta').innerHTML = metaHtml;
     _loadInputsPanel(sessionId);
     _loadLifecycleCoverageLine(sessionId);

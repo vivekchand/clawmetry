@@ -16502,6 +16502,7 @@ class LocalStore(ProjectsMixin, TrailStoreMixin):
         self,
         *,
         window_hours: int = 24,
+        runtime: str | None = None,
     ) -> dict[str, Any]:
         """Aggregate scores over the recent window. Drives
         ``/api/evals/summary``.
@@ -16510,24 +16511,40 @@ class LocalStore(ProjectsMixin, TrailStoreMixin):
         ``total`` is sessions touched in the window (scored OR not);
         ``scored`` is the subset with a numeric eval_score. The ratio
         ``scored/total`` surfaces coverage on the overview tile.
+
+        ``runtime`` keeps only that runtime's sessions, bucketed by id prefix
+        like :func:`_runtime_of_session_id` (NemoClaw sessions carry OpenClaw
+        ids). ``None`` / ``"all"`` counts every runtime.
         """
         try:
             from datetime import datetime, timedelta, timezone
             cutoff = (datetime.now(timezone.utc) - timedelta(hours=int(window_hours))).isoformat()
         except Exception:
             cutoff = ""
+        rt_sql = ""
+        rt_params: list[Any] = []
+        rt = str(runtime or "").strip().lower()
+        if rt and rt != "all":
+            placeholders = ", ".join(["?"] * len(_NON_OPENCLAW_RUNTIME_PREFIXES))
+            rt_sql = (
+                f" AND (CASE WHEN split_part(session_id, ':', 1) IN ({placeholders})"
+                f" THEN split_part(session_id, ':', 1) ELSE 'openclaw' END) = ?"
+            )
+            rt_params = list(_NON_OPENCLAW_RUNTIME_PREFIXES) + [
+                "openclaw" if rt == "nemoclaw" else rt
+            ]
         # Two queries — one for totals (scored + un-scored), one for the
         # quantile/avg over the scored subset. Keeps the SQL readable
         # without a CTE that would have to handle NULLs in two places.
         try:
             total_row = self._fetch(
-                """
+                f"""
                 SELECT COUNT(*) AS total,
                        COUNT(eval_score) AS scored
                   FROM sessions
-                 WHERE (? = '' OR COALESCE(last_active_at, started_at, '') >= ?)
+                 WHERE (? = '' OR COALESCE(last_active_at, started_at, '') >= ?){rt_sql}
                 """,
-                [cutoff, cutoff],
+                [cutoff, cutoff] + rt_params,
             )
         except Exception as e:
             log.warning("local store: eval summary totals failed: %s", e)
@@ -16541,15 +16558,15 @@ class LocalStore(ProjectsMixin, TrailStoreMixin):
         if scored > 0:
             try:
                 stats = self._fetch(
-                    """
+                    f"""
                     SELECT AVG(eval_score)                      AS avg_score,
                            quantile_cont(eval_score, 0.5)       AS p50,
                            quantile_cont(eval_score, 0.1)       AS p10
                       FROM sessions
                      WHERE eval_score IS NOT NULL
-                       AND (? = '' OR COALESCE(last_active_at, started_at, '') >= ?)
+                       AND (? = '' OR COALESCE(last_active_at, started_at, '') >= ?){rt_sql}
                     """,
-                    [cutoff, cutoff],
+                    [cutoff, cutoff] + rt_params,
                 )
                 if stats:
                     avg = float(stats[0][0] or 0.0)

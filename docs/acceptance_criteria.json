@@ -691,6 +691,24 @@
       "text": "Hovering or keyboard-focusing a basis label shall show how the figure was computed: the formula, the source of the rate, the window, and the billing route where one applies."
     },
     {
+      "id": "AC-OBS-CEA-025.8",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Each cost figure on the Overview hero chip; on the Usage tab's Where the money goes chart, Cost Forecast, Cache Re-read Tax, cache hit rate and cache performance cards, savings ideas and routing advisor cards, compression potential card, Cost By Plugin / Skill, Cost Comparison, Spend Optimization, Skill Cost Leaderboard and Cost by Team cards; and on the per-turn and per-tool cost chips of a Sessions tab transcript shall carry a financial basis of exactly one of the four in AC-OBS-CEA-025.1, shown as visible text beside the figure or on the heading or caption of the card, chart, list or transcript that holds it. The payloads that serve these figures, including the hosted snapshot slices the hosted dashboard reads them from (efficiency, spend flow, forecast, cost comparison, cache trends, spend optimization and transcripts), shall carry the same basis."
+    },
+    {
+      "id": "AC-OBS-CEA-025.9",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "A counterfactual cost figure (a projected saving, a month-end forecast, or what the same usage would cost on another model) shall be labelled an estimate of usage value at published rates, and no card shall describe usage value at published rates as actual spend."
+    },
+    {
+      "id": "AC-OBS-CEA-025.10",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "The count of dollar figures rendered without a basis on the Overview, Usage and Sessions tabs shall not increase; the check shall find those renders from the tabs' own templates rather than from a hand-kept list."
+    },
+    {
       "id": "AC-OBS-GHA-001.1",
       "doc": "Governance and Human Approval",
       "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",

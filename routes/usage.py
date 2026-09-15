@@ -46,6 +46,7 @@ from flask import Blueprint, jsonify, make_response, request
 from clawmetry._gate import gate
 from clawmetry import provenance as _prov
 from clawmetry import cost_basis as _cost_basis
+from clawmetry import cost_basis_surfaces as _cost_labels
 from clawmetry.config import is_local_store_read_enabled
 from routes._dedupe import build_sibling_bucket_max, is_sibling_dup
 
@@ -895,7 +896,9 @@ def _try_local_store_usage_by_plugin(threshold_pct, runtime=None):
                 "trend": "flat",
             })
     rows.sort(key=lambda r: r["total_tokens"], reverse=True)
-    return {"plugins": rows, "warnings": warnings, "_source": "local_store"}
+    return _cost_labels.stamp(
+        {"plugins": rows, "warnings": warnings, "_source": "local_store"},
+        _cost_labels.by_plugin_entries("DuckDB events on this node"))
 
 
 def _try_local_store_usage_by_plugin_trend(days_back):
@@ -1058,6 +1061,9 @@ def _try_local_store_cost_comparison():
         "alternatives": alternatives,
         "period": "30d",
         "_source": "local_store",
+        "provenance": _cost_labels.cost_comparison_entries(
+            "DuckDB events on this node"),
+        "provenance_version": 1,
     }
 
 
@@ -1175,28 +1181,9 @@ def _try_local_store_usage_forecast():
         "window_days": window_days,
         "daily_window": [round(c, 4) for c in reversed(window)],
         "_source": "local_store",
-    }, {
-        "projected_month_usd": _prov.estimated(
-            "spend so far this month, plus the average of the last 7 days "
-            "times the days left. It assumes the rest of the month looks "
-            "like the last week",
-            "DuckDB daily rollups on this node",
-            window="the calendar month",
-            inputs={"spent_so_far_usd": round(cost_this_month, 4),
-                    "daily_rate_usd": round(daily_rate, 4),
-                    "days_remaining": days_remaining}),
-        "cost_this_month_usd": _prov.derived(
-            "sum of the priced cost of every call this month",
-            "DuckDB daily rollups on this node",
-            window="this month, the local calendar month from the 1st"),
-        "daily_rate_usd": _prov.derived(
-            "the priced cost of the last 7 days divided by 7",
-            "DuckDB daily rollups on this node",
-            window="the last 7 days"),
-        "monthly_budget_usd": _prov.measured(
-            "the monthly limit you set",
-            "clawmetry budget config"),
-    })
+    }, _cost_labels.forecast_entries(
+        spent_so_far=cost_this_month, daily_rate=daily_rate,
+        days_remaining=days_remaining))
 
 
 # Known non-OpenClaw runtime prefixes (session-id prefix = runtime; agent_type
@@ -1513,6 +1500,9 @@ def _try_local_store_skill_attribution():
         "note": "Skills detected from events table in the local DuckDB store.",
         "clawhub": {"enabled": False, "url": None},
         "_source": "local_store",
+        "provenance": _cost_labels.skill_attribution_entries(
+            "DuckDB events on this node"),
+        "provenance_version": 1,
     }
 
 
@@ -2535,7 +2525,9 @@ def api_usage_by_plugin():
                 }
             )
     rows.sort(key=lambda r: r["total_tokens"], reverse=True)
-    return jsonify({"plugins": rows, "warnings": warnings})
+    return jsonify(_cost_labels.stamp(
+        {"plugins": rows, "warnings": warnings},
+        _cost_labels.by_plugin_entries("session transcripts on disk")))
 
 
 @bp_usage.route("/api/usage/by-plugin/trend")
@@ -3114,7 +3106,9 @@ def api_usage_cost_comparison():
             return jsonify(fast)
 
     try:
-        return jsonify(_d._build_cost_comparison())
+        return jsonify(_cost_labels.stamp(
+            _d._build_cost_comparison(),
+            _cost_labels.cost_comparison_entries("session transcripts on disk")))
     except Exception as e:
         return jsonify({"error": str(e), "alternatives": [], "actual": {}}), 500
 
@@ -3693,11 +3687,14 @@ def api_skill_attribution():
 
     sessions_dir = _d._get_sessions_dir()
     if not sessions_dir or not os.path.isdir(sessions_dir):
-        return jsonify({
+        # No skill read was found, so nothing is attributed to any skill: the
+        # total over zero skills is exactly 0 (the card shows "no skill
+        # invocations", not a dollar figure). Same label as the other paths.
+        return jsonify(_cost_labels.stamp({
             "skills": [], "top5_week": [], "total_cost": 0.0,
             "note": "No sessions directory found.",
             "clawhub": {"enabled": False, "url": None},
-        })
+        }, _cost_labels.skill_attribution_entries("session transcripts on disk")))
 
     SKILL_MD_RE = _re.compile(r'[/\\]([^/\\]+)[/\\]SKILL\.md', _re.IGNORECASE)
     # Also match bare "SKILL.md" references with skill name in path context
@@ -3792,13 +3789,13 @@ def api_skill_attribution():
 
     note = 'Skills detected from SKILL.md file reads in session transcripts.'
 
-    return jsonify({
+    return jsonify(_cost_labels.stamp({
         'skills': skills_out,
         'top5_week': top5_week,
         'total_cost': round(total_cost, 6),
         'note': note,
         'clawhub': {'enabled': False, 'url': None},
-    })
+    }, _cost_labels.skill_attribution_entries("session transcripts on disk")))
 
 
 # ── Per-agent / per-team cost attribution (issue #3000) ──────────────────────
@@ -3857,7 +3854,9 @@ def api_usage_by_team():
     gateway = _ls_call_team('query_gateway_usage', window_days=window_days)
     if not isinstance(gateway, dict):
         gateway = {'available': False}
-    return jsonify({'teams': rows, 'window_days': window_days, 'gateway': gateway})
+    return jsonify(_cost_labels.stamp(
+        {'teams': rows, 'window_days': window_days, 'gateway': gateway},
+        _cost_labels.by_team_entries(window_days)))
 
 
 @bp_usage.route('/api/usage/team-mappings', methods=['GET'])
@@ -4218,6 +4217,9 @@ def _try_local_store_cache_trends(days: int):
         "totals": totals_out,
         "recommendations": _cache_recommendations(totals_out, by_model_out),
         "_source": "local_store",
+        "provenance": _cost_labels.cache_trends_entries(
+            "DuckDB events on this node", days),
+        "provenance_version": 1,
     }
 
 
@@ -4438,13 +4440,13 @@ def api_usage_cache_trends():
             totals_bucket[k] += b[k]
     totals_out = _summarise_cache_bucket("totals", totals_bucket, key="label")
 
-    return jsonify({
+    return jsonify(_cost_labels.stamp({
         "days": days,
         "daily": daily_out,
         "by_model": by_model_out,
         "totals": totals_out,
         "recommendations": _cache_recommendations(totals_out, by_model_out),
-    })
+    }, _cost_labels.cache_trends_entries("session transcripts on disk", days)))
 
 
 # ── Cache Risk: per-session idle-gap re-write tax (issue #2839 Part 1) ──
@@ -4499,6 +4501,9 @@ def api_usage_cache_risk():
         "total_saved_usd": round(total_saved, 4),
         "max_idle_gap_sec": round(max_idle_gap, 1),
         "_source": "local_store" if cb.get("_source") else "none",
+        "provenance": _cost_labels.cache_risk_entries(
+            "the per-session cost breakdown (DuckDB sessions)"),
+        "provenance_version": 1,
     })
 
 
@@ -4979,30 +4984,13 @@ def _try_local_store_spend_optimization():
     # table and on the assumption that the cheaper model does the same job.
     # Both can be wrong, and the badge says so rather than letting a green
     # 22px "Projected 30-day savings" read as money already in the bank.
-    saving_entry = _prov.estimated(
-        "the measured cost of these tool calls over the window, times the "
-        "published price gap between the model they ran on and the cheaper "
-        "tier suggested. It assumes the cheaper model would have produced an "
-        "equivalent result, which is the part that can be wrong",
-        "duckdb spans, priced with the static model-tier ratio table",
-        window="the last 30 days",
-        inputs={"tools_analysed": len(recs)})
     return _prov.stamp({
         "recommendations":               recs,
         "total_projected_savings_usd_30d": round(total_save, 4),
         "total_analyzed_cost_usd_30d":   round(total_cost, 4),
         "window_days":                   30,
         "_source":                       "local_store",
-    }, {
-        "total_projected_savings_usd_30d": saving_entry,
-        "recommendations[].projected_savings_usd_30d": saving_entry,
-        "total_analyzed_cost_usd_30d": _prov.derived(
-            "sum of the measured cost of the analysed tool calls",
-            "duckdb spans", window="the last 30 days"),
-        "recommendations[].current_cost_usd_30d": _prov.derived(
-            "sum of the measured cost of this tool's calls",
-            "duckdb spans", window="the last 30 days"),
-    })
+    }, _cost_labels.spend_optimization_entries(len(recs)))
 
 
 @bp_usage.route("/api/usage/optimization-recommendations")
@@ -5025,15 +5013,7 @@ def api_usage_optimization_recommendations():
         "total_analyzed_cost_usd_30d":   0,
         "window_days":                   30,
         "note": "Enable clawmetry connect to see recommendations.",
-    }, {
-        "total_projected_savings_usd_30d": _prov.unknown(
-            "no spans were available to analyse, so there is nothing to "
-            "compare a cheaper tier against",
-            source="/api/usage/optimization-recommendations"),
-        "total_analyzed_cost_usd_30d": _prov.unknown(
-            "no spans were available to analyse",
-            source="/api/usage/optimization-recommendations"),
-    }))
+    }, _cost_labels.spend_optimization_unavailable()))
 
 
 @bp_usage.route("/api/efficiency")
@@ -5331,7 +5311,11 @@ def api_usage_compression():
     """
     try:
         rows = _ls_call("query_sessions_table", limit=2000) or []
-        return jsonify(_agg_compression(rows))
+        agg = _agg_compression(rows)
+        if agg:
+            _cost_labels.stamp(agg, _cost_labels.compression_entries(
+                "DuckDB sessions on this node"))
+        return jsonify(agg)
     except Exception:
         return jsonify({})
 
