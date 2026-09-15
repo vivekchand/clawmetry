@@ -1649,6 +1649,72 @@
       "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
       "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
       "text": "A real LiteLLM proxy at a pinned version, with two teams and two virtual keys backed by its own database, shall be exercised in continuous integration, and the per-team spend the system reports shall agree with LiteLLM's own spend log for the same requests, with any residual printed."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.1",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When a tool result in a session contains text matching an injection signature, the system shall raise a `prompt_injection` finding that names the matched signature identifiers and the tool whose output carried the text, and shall not repeat the matched text."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.2",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When a user-sourced message matches an injection signature, the system shall raise the finding with the source identified as a user message and at a lower severity than a tool-result match, unless a high-risk tool call followed it in the same turn."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.3",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When a tool call rated high or critical risk follows the matched content in the same turn, the system shall raise the finding at critical severity and name that call's tool."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.4",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "The system shall offer `prompt_injection` to Guard policies like every other finding kind, and the finding shall carry its framework references (OWASP LLM01:2026, OWASP ASI01, MITRE ATLAS AML.T0051.000 and AML.T0051.001) under the mapping contract."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.5",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When signature text appears as source code or a regular expression rather than prose, the system shall not raise a finding for it."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.6",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "The system shall publish the detector's recall and precision on pinned public prompt-injection samples and its firing rate on real transcripts, and continuous integration shall fail when the pinned recall falls below the published figure."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.1",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When the Claude Code pre-tool gate rates a high-risk tool call and a tool result from an untrusted source entered the same turn before it, the system shall rate the call critical and shall say why in the risk reasons."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.2",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When content earlier in the same turn matched an injection signature, the system shall rate a tool call of medium risk or above as critical."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.3",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "The system shall leave a low-risk call's tier unchanged, shall leave a medium-risk call's tier unchanged unless content in the turn matched an injection signature, and a new user prompt shall end the turn so earlier content no longer raises the tier."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.4",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When the turn cannot be read, the system shall rate the call exactly as it would without this signal and shall never block a call because the context was unavailable."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.5",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "The context the gate hook sends to the local receiver shall carry tool names, counts and signature identifiers only, never tool output."
     }
   ]
 }

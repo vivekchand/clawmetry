@@ -84,6 +84,8 @@ def _no_daemon_proxy(monkeypatch):
     import routes.local_query as lq
     monkeypatch.setattr(lq, "local_store_via_daemon",
                         lambda *a, **k: None)
+    monkeypatch.setattr(lq, "local_store_call_via_daemon",
+                        lambda *a, **k: lq.PROXY_UNAVAILABLE)
 
 
 # ── 1. GATE_HANDLERS registry + sync_runtime_gates ─────────────────────────

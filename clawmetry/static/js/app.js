@@ -10656,6 +10656,8 @@ var LOOP_KIND_LABEL = {
   rate_limited: 'Being rate limited by its provider',
   blocked_on_user: 'Waiting for you to answer',
   crashed: 'Crashed and restarted',
+  // Content: text the agent read tried to give it instructions.
+  prompt_injection: 'Read text that tried to give it orders',
   // Fleet-wide: several unrelated agents doing the same unusual thing.
   // Mirrors clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Acting in step with unrelated agents',
@@ -31479,6 +31481,8 @@ var GUARD_KIND_LABEL = {
   rate_limited: 'Rate limited by the provider',
   blocked_on_user: 'Waiting on you',
   crashed: 'Crashed and restarted',
+  // Content: does text the agent read try to give it instructions?
+  prompt_injection: 'Prompt injection',
   // Fleet: several unrelated agents doing the same unusual thing. Keys
   // mirror clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Coordinated with unrelated agents',

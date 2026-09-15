@@ -902,6 +902,8 @@ jobs:
             tests/test_guard_policies_api_ladder.py \
             tests/test_guard_policy_enforcement.py \
             tests/test_guard_framework_map.py \
+            tests/test_detector_prompt_injection.py \
+            tests/test_untrusted_content_gate.py \
             tests/test_waste_flags_free_default.py \
             tests/test_alert_rule_types_new.py \
             tests/test_regression_replay_optin.py \
