@@ -229,9 +229,15 @@ def evals_summary():
     except (TypeError, ValueError):
         hours = 24
     hours = max(1, min(24 * 30, hours))
-    payload = _store_via_daemon_or_direct(
-        "query_eval_summary", window_hours=hours,
-    )
+    # ``?runtime=<id>`` scopes the tile to the runtime switcher; the response
+    # echoes it so the page can tell a scoped answer from a node-wide one.
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime == "all":
+        runtime = ""
+    kwargs = {"window_hours": hours}
+    if runtime:
+        kwargs["runtime"] = runtime
+    payload = _store_via_daemon_or_direct("query_eval_summary", **kwargs)
     if not payload:
         payload = {
             "avg_score":    0.0,
@@ -241,7 +247,7 @@ def evals_summary():
             "p10":          0.0,
             "window_hours": hours,
         }
-    return jsonify(payload)
+    return jsonify(dict(payload, runtime=runtime or "all"))
 
 
 @bp_evals.route("/api/evals/rescore/<session_id>", methods=["POST"])

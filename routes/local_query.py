@@ -718,6 +718,10 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    # `clawmetry maintenance rescrub-spans` (REQ-OBS-OTG-001): the operator's
+    # explicit rescrub of spans stored before scrubbing existed. A dry run
+    # unless apply=True; pages by span_id so each call stays bounded.
+    "rescrub_spans",
     # Activity heatmap (day x hour event counts), aggregated in SQL. The
     # route used to pull 50k raw event rows through this proxy and bucket
     # them in Python; on a busy node the cap silently emptied the oldest

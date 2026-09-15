@@ -8891,6 +8891,30 @@ def main() -> None:
         ),
     )
 
+    # maintenance: explicit, operator-run store upkeep (REQ-OBS-OTG-001).
+    p_maint = sub.add_parser(
+        "maintenance",
+        help="Explicit store maintenance (nothing here runs on its own)",
+    )
+    maint_sub = p_maint.add_subparsers(dest="maintenance_cmd")
+    p_rescrub = maint_sub.add_parser(
+        "rescrub-spans",
+        help=("Scrub spans stored before span redaction existed. A dry run "
+              "that only counts, unless --apply is given"),
+    )
+    p_rescrub.add_argument(
+        "--apply", action="store_true",
+        help="Rewrite the spans that would change (content fields only)",
+    )
+    p_rescrub.add_argument(
+        "--batch", type=int, default=200,
+        help="Spans per step (default 200)",
+    )
+    p_rescrub.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="Print the totals as JSON",
+    )
+
     # bundle — cheapest tier admitting a mixed 5-axis constraint bundle.
     # Aggregate CLI sibling of `clawmetry {runtimes,features,channels,
     # nodes,retention}` (each folds ONE axis); this folds a mixed bundle
@@ -9186,6 +9210,7 @@ def main() -> None:
         "channels",
         "nodes",
         "retention",
+        "maintenance",
         "bundle",
         "extensions",
         "diagnose",
@@ -9341,6 +9366,9 @@ def main() -> None:
             _cmd_nodes(args)
         elif args.cmd == "retention":
             _cmd_retention(args)
+        elif args.cmd == "maintenance":
+            from clawmetry.span_rescrub import cmd_maintenance
+            sys.exit(cmd_maintenance(args))
         elif args.cmd == "bundle":
             _cmd_bundle(args)
         elif args.cmd == "extensions":

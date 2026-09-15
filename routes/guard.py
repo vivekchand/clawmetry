@@ -387,6 +387,24 @@ def _incident_rank(inc) -> tuple:
     return (spend, sev, count)
 
 
+def _observe_only_runtime(session_row):
+    """``clawmetry.otlp_guard.observe_only_runtime``, or None when absent."""
+    try:
+        from clawmetry.otlp_guard import observe_only_runtime
+        return observe_only_runtime(session_row)
+    except Exception:  # noqa: BLE001 - a missing module must not blank the tab
+        return None
+
+
+def _observe_only_support(runtime):
+    try:
+        from clawmetry.otlp_guard import observe_only_support
+        return observe_only_support(runtime)
+    except Exception:  # noqa: BLE001
+        return {"controllable": False, "actions": [], "state": "unsupported",
+                "reason": "Seen only in exported telemetry; nothing here can control it."}
+
+
 def _share_verdict(meta):
     """``True``/``False`` when the daemon recorded a public-share verdict for
     this session, ``None`` when it never got one. See
@@ -478,6 +496,10 @@ def build_guard_sessions_body(limit: int = 50, call=None,
             # Framework references (REQ-GOV-FWM-002). A row written before the
             # references existed is labelled from the current contract.
             "frameworks": _frameworks_for(details),
+            # Seen only in received telemetry, after the action ran; never
+            # prevented (REQ-OBS-OTG-001). None for a machine-observed session.
+            "observation": details.get("observation")
+            if isinstance(details.get("observation"), dict) else None,
         }
         # A session can trip several detectors at once. The one that gets the
         # row is the one that costs the most to ignore, falling back to
@@ -510,7 +532,12 @@ def build_guard_sessions_body(limit: int = 50, call=None,
         # ``sync._detector_runtime``). Trusting the column here would hand
         # ``runtime_control_support`` the wrong runtime for every family
         # session and disable controls that work.
-        runtime = _session_runtime(sid, s.get("agent_type") or "")
+        # A session materialised from received spans names its own runtime,
+        # and nothing on this machine can signal it (AC-OBS-OTG-001.7). The
+        # id-prefix guess below reads ``openclaw`` for it on a Free install,
+        # which hid it from a runtime filter and lit OpenClaw's buttons.
+        observed_runtime = _observe_only_runtime(s)
+        runtime = observed_runtime or _session_runtime(sid, s.get("agent_type") or "")
         meta = s.get("metadata")
         meta = meta if isinstance(meta, dict) else {}
         # ``sessions.cwd`` is the COLUMN the rest of the product keys on, and
@@ -532,7 +559,10 @@ def build_guard_sessions_body(limit: int = 50, call=None,
             cost = round(float(s.get("cost_usd") or 0), 4)
         except (TypeError, ValueError):
             cost = 0.0
-        support = _runtime_supports_signals(runtime, sid, cwd)
+        if observed_runtime:
+            support = _observe_only_support(runtime)
+        else:
+            support = _runtime_supports_signals(runtime, sid, cwd)
         out.append({
             "session_id": sid,
             "runtime": runtime,
