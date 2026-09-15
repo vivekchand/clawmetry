@@ -1165,6 +1165,30 @@
       "text": "When the hosted cloud dashboard serves onboarding state, the system shall not send a gate_shown ping, because hosted accounts never see the gate."
     },
     {
+      "id": "AC-OGV-ADC-001.1",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in from the terminal and chooses to sync data to ClawMetry Cloud, the install shall report deployment `managed` on the trial sign-in call."
+    },
+    {
+      "id": "AC-OGV-ADC-001.2",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in from the terminal and chooses to keep data on the machine, the install shall report deployment `selfhost` on the trial sign-in call."
+    },
+    {
+      "id": "AC-OGV-ADC-001.3",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in through the local dashboard's cloud sign-in, the install shall report `managed`; through its keep-local sign-in, `selfhost`."
+    },
+    {
+      "id": "AC-OGV-ADC-001.4",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When the report cannot be delivered or the cloud rejects it, sign-in and trial activation shall complete exactly as they would without it."
+    },
+    {
       "id": "AC-RSO-CCT-001.1",
       "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
       "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",

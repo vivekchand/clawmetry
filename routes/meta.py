@@ -1032,7 +1032,12 @@ def api_auth_detected_token():
         return jsonify({"error": "localhost only"}), 403
     token = getattr(_d, "GATEWAY_TOKEN", None)
     if not token:
-        return jsonify({"error": "no token detected"}), 404
+        # No gateway token configured — return 200 so the browser console stays
+        # clean on plain local installs (no OpenClaw gateway).  The JS bootstrap
+        # already checks `d && d.token`, not the HTTP status, so the fallthrough
+        # to checkAuth(null) is identical.  The loopback/proxy security checks
+        # above still fire first; a non-loopback caller never reaches this line.
+        return jsonify({"available": False}), 200
     return jsonify({"token": token, "source": _detected_token_source(token)})
 
 
