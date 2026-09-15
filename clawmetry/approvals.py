@@ -525,8 +525,15 @@ from clawmetry.tool_risk import (  # noqa: E402,F401  (re-export)
 )
 
 
-def match_policy(policies: list[dict], tool_name: str, args: dict):
+def match_policy(policies: list[dict], tool_name: str, args: dict,
+                 context: Optional[dict] = None):
     """Return the FIRST matching policy or None.
+
+    ``context`` is the pre-tool gate's untrusted-content context for the
+    current turn (``prompt_injection.coerce_context``). When present, a
+    ``min_risk`` rule compares against the call's risk raised for that
+    context (``prompt_injection.effective_risk``, REQ-GOV-PIJ-002). Absent,
+    the rating is exactly the call's own.
 
     Tool-name match is exact (case-insensitive); command/args matches are
     regex .search() so partial matches count.
@@ -563,7 +570,11 @@ def match_policy(policies: list[dict], tool_name: str, args: dict):
             continue
         if p.get("min_risk"):
             if call_risk_rank is None:
-                call_risk_rank = classify_tool_call(tool_name, args)["rank"]
+                verdict = classify_tool_call(tool_name, args)
+                if context:
+                    from clawmetry.prompt_injection import effective_risk
+                    verdict = effective_risk(verdict, context)
+                call_risk_rank = verdict["rank"]
             if call_risk_rank < risk_rank(p["min_risk"]):
                 continue
         return p

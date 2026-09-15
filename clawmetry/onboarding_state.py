@@ -53,6 +53,28 @@ CHOICES = ("managed", "selfhost_license", "selfhost_trial")
 # postable (see module docstring).
 RECORDED_CHOICES = CHOICES + ("selfhost_free",)
 
+# What a sign-in reports to the cloud account (REQ-OGV-ADC-001). Coarser
+# than CHOICES on purpose: the account only needs to know whether its data
+# syncs to ClawMetry Cloud, not which self-host rung was taken. The install
+# ping above carries the fine-grained choice but is anonymous, so it cannot
+# be joined to an account for a self-hosted install, which never registers
+# a node. The trial sign-in call is the one moment both are known.
+DEPLOYMENTS = ("managed", "selfhost")
+
+
+def trial_signup_body(api_key: str, deployment: str = "") -> dict:
+    """Body for ``POST /api/license/trial/signup``.
+
+    ``deployment`` rides along only when it is one the cloud recognises;
+    anything else is omitted, so a caller that does not know the choice
+    leaves the account's classification untouched instead of guessing.
+    """
+    body = {"api_key": api_key}
+    deployment = str(deployment or "").strip().lower()
+    if deployment in DEPLOYMENTS:
+        body["deployment"] = deployment
+    return body
+
 
 def state_path() -> str:
     """Absolute path of the gate's choice file.
