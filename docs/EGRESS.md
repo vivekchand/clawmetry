@@ -23,7 +23,7 @@ python3 scripts/verify_no_external_assets.py
 python3 scripts/verify_vendor.py
 
 # The full-suppression path, exercised in tests
-python3 -m pytest tests/test_egress_suppression.py tests/test_e2e_invariants.py
+python3 -m pytest tests/test_egress_suppression.py tests/test_e2e_invariants.py tests/test_data_boundary_contract.py
 ```
 
 ---
@@ -34,8 +34,11 @@ python3 -m pytest tests/test_egress_suppression.py tests/test_e2e_invariants.py
 |---|---|---|
 | **Self-hosted** (`SELF_HOSTED=true`) | No | No |
 | **Air-gapped** (`CLAWMETRY_OFFLINE=1`) | No | No |
-| **Local only** (no `clawmetry connect`) | One install ping, plus a field-failure report if the daemon stops working | PyPI version check |
+| **Local only / cloud sync off** (no `clawmetry connect`, `clawmetry onboard --local`, or `CLAWMETRY_NO_CLOUD=1`) | One install ping, plus a field-failure report if the daemon stops working | PyPI version check |
 | **Managed cloud** (`clawmetry connect`) | Yes: sealed content plus plaintext metadata (table below) | PyPI version check |
+| **Hosted ingest push** (a ClawMetry Cloud ingest key, OTLP/JSON) | Yes: the pushed telemetry, which is **not sealed** and is readable by ClawMetry, because the sender holds no encryption key | None added |
+
+**Data-boundary contract version: 1** (2026-09-14). Cloud sync off is **not offline**: it stops uploads and nothing else. `DO_NOT_TRACK=1` stops the install ping and the failure report but not the PyPI check; `CLAWMETRY_OFFLINE=1` stops every discretionary request. Public pages that describe these modes must agree with this table; `tests/test_data_boundary_contract.py` pins the behaviour it describes.
 
 No ClawMetry deployment loads a CDN, font, analytics script, error tracker or
 tracking pixel. Web assets are vendored into the package and served from the
@@ -86,7 +89,9 @@ bill. Readable by ClawMetry and by anyone who obtains the server's data.
 
 * Machine hostname, on almost every request, as `node_id` and the `X-Node-Id`
   header
-* The account key, as the `X-Api-Key` header on every request (never in a URL)
+* The account key, as the `X-Api-Key` header on every request (never in a URL).
+  The cloud stores the account key alongside a SHA-256 hash so it can hand the
+  key back at sign-in. It authenticates; it cannot decrypt sealed content
 * Per session: id, runtime and model names, status, start and last-active
   times, token counts, cost in USD, cache read/write split, cache savings,
   tool error rate, tool call count, message count, surface (terminal/editor)
@@ -143,8 +148,8 @@ it) and the PyPI version check described below.
 ### Managed cloud (after `clawmetry connect`)
 
 The daemon pushes to `ingest.clawmetry.com` on the cadence in the table below.
-Content is sealed client-side; **the key never leaves your machine** and is not
-recoverable by ClawMetry. The browser decrypts for display. See
+Content is sealed client-side under a key the server never stores and cannot
+recover. The browser decrypts for display. See
 [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 `CLAWMETRY_NO_CLOUD=1`, or `touch ~/.clawmetry/nocloud`, turns every upload
@@ -254,14 +259,18 @@ These fire only if you configure them, to a destination you choose:
 
 ---
 
-## Data that never leaves the machine
+## Data ClawMetry does not store
 
 Regardless of mode:
 
 * **The encryption key.** Generated locally by `clawmetry connect`, stored in
   `~/.clawmetry/config.json` and the OS keychain, handed to the browser in a
-  URL fragment (which browsers do not send to servers). Cloud blobs are opaque
-  to ClawMetry. The cloud never mints a key for a node.
+  URL fragment (which browsers do not send to servers), and sealed to a paired
+  desk device's own key or typed on the device over your LAN. Cloud blobs are
+  opaque to ClawMetry, and the cloud never mints or stores a key for a node.
+  One path does cross the server: rotating a node's key from the web dashboard
+  sends the new key through the cloud's command queue to reach that node.
+  Rotate with `clawmetry connect --enc-key` on the node to avoid it.
 * **Your source code.** ClawMetry reads agent *transcripts and metadata*, not
   your repository. Transcripts can quote code your agent read or wrote; those
   travel sealed.

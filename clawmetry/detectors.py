@@ -10,7 +10,7 @@ stream — NOT an expensive judge. Each detector is pure (no I/O, no store, no
 clock dependence beyond what the caller passes), operates on the last ``W``
 events, never crashes on malformed events, and returns a structured incident.
 
-Eleven detectors in three families. TRAJECTORY (is it stuck?) reads the shape
+Twelve detectors in four families. TRAJECTORY (is it stuck?) reads the shape
 of the tool stream and lives here. BEHAVIOUR (is it doing something it does
 not normally do?) reads what the calls DID and lives in ``detector_behaviour``:
 ``file_blast_radius``, ``credential_access``, ``network_egress``,
@@ -21,7 +21,9 @@ too, defined and registered in ``_ALL_DETECTORS`` below: ``rate_limited``
 error events), ``blocked_on_user`` (a pending approval for the session, or an
 unanswered question / permission request with the session idle past a
 threshold), ``crashed`` (>= 2 session (re)starts inside a short window,
-matching the outcome classifier's ``crash-loop`` tag). Thresholds are resolved
+matching the outcome classifier's ``crash-loop`` tag). CONTENT reads the text
+of tool results and user-sourced messages for prompt-injection signatures:
+``prompt_injection``, defined in ``detector_injection``. Thresholds are resolved
 in ``detector_calibration``; what a finding costs is computed in
 ``detector_money``.
 
@@ -91,6 +93,10 @@ from clawmetry.detector_money import (  # noqa: F401
 from clawmetry.detector_behaviour import (  # noqa: F401
     credential_access, file_blast_radius, network_egress, privilege_change,
 )
+# CONTENT (does text the agent read try to instruct it?) reads the TEXT of tool
+# results and user-sourced messages, defined in ``detector_injection`` with its
+# signatures in ``prompt_injection`` (REQ-GOV-PIJ-001).
+from clawmetry.detector_injection import prompt_injection  # noqa: F401
 # Which OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS items each kind is
 # relevant to (REQ-GOV-FWM-001). ``run_all`` stamps ``incident["frameworks"]``.
 from clawmetry.framework_map import framework_tags, tag_incident  # noqa: F401
@@ -126,6 +132,8 @@ DETECTOR_KINDS = (
     "rate_limited",
     "blocked_on_user",
     "crashed",
+    # Content: does text the agent read try to give it instructions?
+    "prompt_injection",
 )
 
 # Kinds only the fleet-wide pass can produce (``detector_swarm``): no single
@@ -1284,6 +1292,8 @@ _ALL_DETECTORS = (
     rate_limited,
     blocked_on_user,
     crashed,
+    # Content: does text the agent read try to give it instructions?
+    prompt_injection,
 )
 
 def run_all(events: Iterable[dict], session_id: str,

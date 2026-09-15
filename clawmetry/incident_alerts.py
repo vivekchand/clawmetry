@@ -167,6 +167,7 @@ KIND_HEADLINE = {
     "rate_limited": "is being rate limited",
     "blocked_on_user": "is waiting for you",
     "crashed": "crashed and restarted",
+    "prompt_injection": "read text that tried to give it orders",
     # Fleet-wide: the message already names how many sessions and where.
     "coordinated_action": "is one of several unrelated agents doing the same unusual thing",
 }
