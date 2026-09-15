@@ -6828,6 +6828,7 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/trail.js', v=version) }}" defer></script>
+<script src="{{ url_for('static', filename='js/compliance.js', v=version) }}" defer></script>
 <!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
      transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
      See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly.
@@ -7121,6 +7122,12 @@ DASHBOARD_HTML = r"""
       <div class="left-nav-item left-nav-item-sub" data-tab="policy" onclick="switchTab('policy')" title="Which tools each agent can run, where they run, and what got approved or blocked">
         <span class="left-nav-label" data-i18n="nav.tool_policy">Tool permissions</span>
       </div>
+      {# Compliance Pack (clawmetry-pro#250): an expert, paid view, so it sits
+         under Advanced and the beginner Tier-1 order stays as pinned by
+         tests/test_beginner_nav_phase_a.py. #}
+      <div class="left-nav-item left-nav-item-sub" data-tab="compliance" onclick="switchTab('compliance')" title="Framework controls with the evidence your agents produced, replay results and a printable report">
+        <span class="left-nav-label">Compliance</span>
+      </div>
       <div class="left-nav-item left-nav-item-sub" data-tab="selfevolve" onclick="switchTab('selfevolve')">
         <span class="left-nav-label" data-i18n="nav.self_evolve">Self-Evolve</span>
       </div>
@@ -7151,6 +7158,7 @@ DASHBOARD_HTML = r"""
 <!-- ALERTS (Cloud-Pro feature) -->
 {% include 'tabs/guard.html' %}
 {% include 'tabs/signals.html' %}
+{% include 'tabs/compliance.html' %}
 {% include 'tabs/alerts.html' %}
 
 <!-- EVALS (LLM-as-judge scores + named evaluator library + golden suites) -->

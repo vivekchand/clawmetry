@@ -2240,6 +2240,7 @@ function switchTab(name) {
   if (name === 'alerts') { if (typeof loadAlertsPage === 'function') loadAlertsPage(); }
   if (name === 'guard') { if (typeof loadGuardTab === 'function') loadGuardTab(); }
   if (name === 'signals') { if (typeof loadSignalsTab === 'function') loadSignalsTab(); }
+  if (name === 'compliance') { if (typeof loadComplianceTab === 'function') loadComplianceTab(); }
   if (name === 'evals') { if (typeof loadEvalsTab === 'function') loadEvalsTab(); }
   if (name === 'bench') { if (typeof loadBenchTab === 'function') loadBenchTab(); }
   if (name === 'logs') loadLogs();
@@ -2891,6 +2892,10 @@ async function loadAutonomy() {
 
 // ── Heartbeat: is your agent alive? ──────────────────────────────────────────
 async function loadHeartbeat() {
+  // OpenClaw's 30-minute heartbeat session; other runtimes have none to show.
+  var hbOc = _shRuntimeScope().has('GATEWAY_RPC');
+  _shShow('heartbeat-panel', hbOc);
+  if (!hbOc) return;
   try {
     var d = await (typeof fetchJsonWithTimeout === 'function'
       ? fetchJsonWithTimeout('/api/heartbeat', 5000)
@@ -12387,24 +12392,28 @@ var _CM_RT_CAPS = {
   openclaw:    ['SESSIONS','EVENTS','COST','SUBAGENTS','CRONS','SKILLS','MEMORY','BRAIN','LOGS','GATEWAY_RPC','CHANNELS'],
   nemoclaw:    ['SESSIONS','EVENTS','COST','SUBAGENTS','CRONS','SKILLS','MEMORY','BRAIN','LOGS','GATEWAY_RPC','CHANNELS'], // sandboxed OpenClaw
   claude_code: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
-  codex:       ['SESSIONS','EVENTS','COST'],
+  // SUBAGENTS on every entry below mirrors the adapter's _base_capabilities()
+  // as shipped in clawmetry-pro 0.7.28 (checked 2026-09-15). A local install
+  // overrides this map from /api/agents; the hosted dashboard has only this.
+  codex:       ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   aider:       ['SESSIONS','EVENTS','COST'],
-  goose:       ['SESSIONS','EVENTS','COST'],
-  opencode:    ['SESSIONS','EVENTS','COST'],
-  qwen_code:   ['SESSIONS','EVENTS','COST'],
-  pi:          ['SESSIONS','EVENTS','COST'],
-  deepagents:  ['SESSIONS','EVENTS','COST'],
-  n8n:         ['SESSIONS','EVENTS','COST'],
+  goose:       ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  opencode:    ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  qwen_code:   ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  pi:          ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  deepagents:  ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  n8n:         ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   antigravity: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
-  copilot:     ['SESSIONS','EVENTS','COST'],
-  grok:        ['SESSIONS','EVENTS','COST'],
+  copilot:     ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  grok:        ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   // No COST: Grok Bot persists no tokens, model or spend locally.
   grok_bot:    ['SESSIONS','EVENTS'],
   // No COST: Lovable bills credits in the vendor cloud; the local clone
   // records commits, not tokens or spend.
   lovable:     ['SESSIONS','EVENTS'],
   deepseek_harness: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
-  exo: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  // Exo declares no SUBAGENTS (pro 0.7.28).
+  exo: ['SESSIONS','EVENTS','COST'],
   kimi: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   // Gemini CLI records a per-turn token split AND the model id, plus
   // nested chats/<parentSessionId>/ transcripts for agent-tool children.
@@ -12414,16 +12423,23 @@ var _CM_RT_CAPS = {
   // OpenHands: real token counts + a per-call cost list on disk, and
   // delegated sub-agents persist as nested conversations.
   openhands: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
-  // Devin CLI: tokens + ACUs per message, but no subagent lineage in the
-  // local store, so no SUBAGENTS panel rather than an empty one.
-  devin: ['SESSIONS','EVENTS','COST'],
+  // Devin CLI: tokens + ACUs per message; the adapter now emits sub-agent
+  // children with their lineage (pro 0.7.28).
+  devin: ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   // OpenExecutive: cost is a floor (specialist calls write no usage row);
   // specialists are steps, not child sessions, so no SUBAGENTS panel.
   openexecutive: ['SESSIONS','EVENTS','COST'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
-  cursor:      ['SESSIONS','EVENTS'],   // no COST
-  picoclaw:    ['SESSIONS','EVENTS'],   // no COST
-  nanoclaw:    ['SESSIONS','EVENTS']    // no COST
+  cursor:      ['SESSIONS','EVENTS','SUBAGENTS'],   // no COST
+  picoclaw:    ['SESSIONS','EVENTS','SUBAGENTS'],   // no COST
+  nanoclaw:    ['SESSIONS','EVENTS','SUBAGENTS'],   // COST is computed per install; /api/agents adds it locally
+  // Muse Code, OpenWorker, qm and Replit had no entry, so the sidebar showed
+  // them every tab (OpenClaw's included). Declared caps, pro 0.7.28.
+  muse_code:   ['SESSIONS','EVENTS','COST','SUBAGENTS','BRAIN'],
+  openworker:  ['SESSIONS','EVENTS','COST','SUBAGENTS'],
+  qm:          ['SESSIONS','EVENTS','COST','SUBAGENTS','BRAIN'],
+  // No COST: Replit Agent persists no tokens or spend in the workspace.
+  replit:      ['SESSIONS','EVENTS']
 };
 // Capability -> the sidebar tabs it enables. A tab shows iff the runtime
 // declares (at least) one capability that enables it.
@@ -12463,11 +12479,13 @@ var _CM_CAP_TABS = {
 // no capability map, so selecting any runtime hid it (0.12.806 field hit).
 // signals: the behaviour-signal surface covers every runtime that lands
 // text in the store and states its coverage per runtime, so it is node-level.
-var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','memory','skills','signals'];
+// compliance: framework controls are evaluated over every runtime's findings
+// for the node, so selecting a runtime must not hide the tab.
+var _CM_NODE_TABS = ['alerts','notifications','security','approvals','guard','memory','skills','signals','compliance'];
 // Every togglable sidebar tab (so switching runtimes RE-SHOWS what a prior one
 // hid). overview is never togglable.
 var _CM_RT_ALL_TABS = ['flow','brain','models','tracing','turn-anatomy',
-  'context-economics','approvals','guard','signals','alerts','usage','crons','memory',
+  'context-economics','approvals','guard','signals','compliance','alerts','usage','crons','memory',
   'notifications','security','policy','skills','selfevolve',
   'nemoclaw','logs','version-impact','agents'];
 // Foreign OTLP apps only emit spans/traces (events + maybe cost). They get the
@@ -12697,6 +12715,11 @@ async function _cmLoadDeclaredCaps() {
     });
     if (changed) {
       try { _cmApplyRuntimeTabVisibility(); } catch (e) {}
+      // System Health scopes from the same map; re-render instead of showing
+      // the fallback's answer until the next 30s refresh.
+      try {
+        if (typeof loadSystemHealth === 'function' && (typeof _cmCurrentTab === 'undefined' || !_cmCurrentTab || _cmCurrentTab === 'overview')) loadSystemHealth();
+      } catch (e) {}
     }
   } catch (e) { /* non-fatal: the static fallback map applies */ }
 }
@@ -12858,6 +12881,9 @@ function _cmApplyRuntimeSelection(val) {
   try { if (typeof _applyRuntimeFlowDiagram === 'function') _applyRuntimeFlowDiagram(val); } catch (e) {}
   // Reload the current tab so any runtime-aware view re-filters in place.
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
+  // System Health refreshes on a 30s timer and is not part of loadAll, so
+  // re-scope it now or the previous runtime's checks linger.
+  try { if (typeof loadSystemHealth === 'function') loadSystemHealth(); } catch (e) {}
   try { _cmRefreshHarnessNav(); } catch (e) {}
 }
 
@@ -17094,19 +17120,65 @@ async function _renderVersionRegression() {
   }
 }
 
+// System Health mixes machine-wide checks (disk, sandbox, daemon, handler
+// latency) with checks that exist for one runtime family only: the OpenClaw
+// gateway and its vitals, heartbeat, config diagnostics, inference/security
+// read from openclaw.json, crons and chat channels. Under a specific runtime
+// the panel shows only what that runtime declares in _CM_RT_CAPS, so Claude
+// Code is never shown an "OpenClaw Gateway" it does not have. 'all' shows all.
+function _shRuntimeScope() {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (!rt || rt === 'all') return { rt: 'all', has: function () { return true; } };
+  var caps = (typeof _cmCapsForRuntime === 'function' && _cmCapsForRuntime(rt)) || [];
+  return { rt: rt, has: function (cap) { return caps.indexOf(cap) !== -1; } };
+}
+function _shShow(id, show) {
+  var el = document.getElementById(id);
+  if (el) el.style.display = show ? '' : 'none';
+}
+
 async function loadSystemHealth() {
+  var scope = _shRuntimeScope();
+  // GATEWAY_RPC is declared only by OpenClaw and NemoClaw (sandboxed OpenClaw).
+  var isOc = scope.has('GATEWAY_RPC');
+  // Scope the sections before the fetch, so a slow or failed request never
+  // paints OpenClaw's cards (or their error state) under another runtime.
+  _shShow('sh-crons-wrap', scope.has('CRONS'));
+  _shShow('sh-subagents-wrap', scope.has('SUBAGENTS'));
+  _shShow('sh-heartbeat-wrap', isOc);
+  // The Overview heartbeat cards poll on their own timers; hide them on a
+  // runtime switch now rather than on their next tick.
+  _shShow('heartbeat-panel', isOc);
+  if (!isOc) _shShow('overview-heartbeat-card', false);
   try {
-    var d = await fetchJsonWithTimeout('/api/system-health', 18000);
+    var d = await fetchJsonWithTimeout('/api/system-health' + (scope.rt === 'all' ? '' : '?runtime=' + encodeURIComponent(scope.rt)), 18000);
     _cmMarkLoaded('systemHealth');  // #5935: starters and switchTab reuse it
     // Connector liveness: surface a 'down' inbound channel loudly (incident:
     // a channel went deaf ~37h with no alarm). Driven by the same payload.
     try { _renderConnectorBanner(d.connector_liveness); } catch(e) {}
-    try { _renderVersionRegression(); } catch(e) {}
+    try {
+      if (isOc) _renderVersionRegression();
+      else { var vr = document.getElementById('sh-version-regression'); if (vr) vr.innerHTML = ''; }
+    } catch(e) {}
+    var noteEl = document.getElementById('sh-scope-note');
+    if (noteEl) {
+      if (scope.rt === 'all') {
+        noteEl.style.display = 'none';
+      } else {
+        noteEl.textContent = 'Showing ' + _cmRuntimeLabel(scope.rt) + ' checks and machine-wide health (disk, daemon, latency).';
+        noteEl.style.display = '';
+      }
+    }
     var services = Array.isArray(d.services) ? d.services : [];
-    var channels = Array.isArray(d.channels) ? d.channels : [];
+    if (!isOc) services = services.filter(function (s) { return !/openclaw/i.test(String(s && s.name || '')); });
+    var channels = (scope.has('CHANNELS') && Array.isArray(d.channels)) ? d.channels : [];
     var disks = Array.isArray(d.disks) ? d.disks : [];
     var crons = (d.crons && typeof d.crons === 'object') ? d.crons : {enabled: 0, ok24h: 0, failed: []};
-    var subagents = (d.subagents && typeof d.subagents === 'object') ? d.subagents : {runs: 0, successPct: 0};
+    var subagents = (d.subagents && typeof d.subagents === 'object') ? d.subagents : {runs: null, successPct: null};
+    // Only user-configured services (EXTRA_SERVICES, Mission Control) remain
+    // off-OpenClaw; with none, the section is omitted rather than left empty.
+    _shShow('sh-services-label', isOc || services.length > 0);
+    _shShow('sh-services', isOc || services.length > 0);
 
     // Services
     var shtml = '';
@@ -17161,6 +17233,7 @@ async function loadSystemHealth() {
     document.getElementById('sh-disks').innerHTML = dhtml;
 
     // Crons
+    if (scope.has('CRONS')) {
     var c = crons;
     var cFailed = Array.isArray(c.failed) ? c.failed : [];
     var chtml = '<div style="display:flex;gap:12px;flex-wrap:wrap;">'
@@ -17176,21 +17249,41 @@ async function loadSystemHealth() {
       chtml += '</div>';
     }
     document.getElementById('sh-crons').innerHTML = chtml;
+    }
 
-    // Sub-agents
+    // Sub-agents. Shown when the runtime declares SUBAGENTS, or when it has
+    // runs anyway: the static _CM_RT_CAPS fallback (all the hosted dashboard
+    // has) can lag an adapter, and real children must never be hidden.
+    var showSa = scope.has('SUBAGENTS') || (typeof subagents.runs === 'number' && subagents.runs > 0);
+    _shShow('sh-subagents-wrap', showSa);
+    if (showSa) {
     var sa = subagents;
-    var pctColor = sa.successPct >= 100 ? 'var(--text-success)' : (sa.successPct > 80 ? 'var(--text-warning)' : 'var(--text-error)');
-    var sahtml = '<div style="display:flex;gap:12px;flex-wrap:wrap;">'
-      + '<div style="flex:1;min-width:100px;padding:12px 16px;background:var(--bg-secondary);border-radius:8px;text-align:center;border:1px solid var(--border-secondary);">'
-      + '<div style="font-size:24px;font-weight:700;color:var(--text-primary,#e6edf5);">' + sa.runs + '</div>'
-      + '<div style="font-size:11px;color:var(--text-muted,#7c8a9d);text-transform:uppercase;letter-spacing:0.5px;">Runs</div></div>'
-      + '<div style="flex:1;min-width:100px;padding:12px 16px;background:var(--bg-secondary,#1a1a2e);border-radius:8px;text-align:center;border:1px solid var(--border-secondary,#333);">'
-      + '<div style="font-size:24px;font-weight:700;color:' + pctColor + ';">' + sa.successPct + '%</div>'
-      + '<div style="font-size:11px;color:var(--text-muted,#7c8a9d);text-transform:uppercase;letter-spacing:0.5px;">Success</div></div></div>';
+    var sahtml;
+    if (sa.available === false) {
+      sahtml = '<div style="padding:8px 10px;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;font-size:12px;color:var(--text-muted);">Sub-agent data unavailable: the local store could not be read.</div>';
+    } else {
+      var saRuns = (typeof sa.runs === 'number') ? sa.runs : 0;
+      // Only a payload with completed/failed counts carries a measured rate.
+      // Older payloads send successPct alone, and that value was a default.
+      var saPct = (typeof sa.completed === 'number' && typeof sa.successPct === 'number') ? sa.successPct : null;
+      var pctColor = saPct === null ? 'var(--text-muted)' : (saPct >= 100 ? 'var(--text-success)' : (saPct > 80 ? 'var(--text-warning)' : 'var(--text-error)'));
+      sahtml = '<div style="display:flex;gap:12px;flex-wrap:wrap;">'
+        + '<div style="flex:1;min-width:100px;padding:12px 16px;background:var(--bg-secondary);border-radius:8px;text-align:center;border:1px solid var(--border-secondary);">'
+        + '<div style="font-size:24px;font-weight:700;color:var(--text-primary,#e6edf5);">' + saRuns + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted,#7c8a9d);text-transform:uppercase;letter-spacing:0.5px;">Runs</div></div>'
+        + '<div style="flex:1;min-width:100px;padding:12px 16px;background:var(--bg-secondary,#1a1a2e);border-radius:8px;text-align:center;border:1px solid var(--border-secondary,#333);">'
+        + '<div style="font-size:24px;font-weight:700;color:' + pctColor + ';">' + (saPct === null ? 'N/A' : saPct + '%') + '</div>'
+        + '<div style="font-size:11px;color:var(--text-muted,#7c8a9d);text-transform:uppercase;letter-spacing:0.5px;">' + (saPct === null ? 'No finished runs' : 'Success') + '</div></div></div>';
+    }
     document.getElementById('sh-subagents').innerHTML = sahtml;
+    }
 
-    // Delegation chain panel (AgentWeave-inspired provenance view)
-    try {
+    // Delegation chain panel (AgentWeave-inspired provenance view). Chains are
+    // keyed by OpenClaw's parent channel (telegram, whatsapp, ...).
+    if (!isOc) {
+      var dcp = document.getElementById('delegation-chains-panel');
+      if (dcp) dcp.innerHTML = '';
+    } else try {
       var chainData = await fetchJsonWithTimeout('/api/delegation-tree', 4000).catch(function(){return {chains:[]};});
       var chains = (chainData && chainData.chains) || [];
       var chainsEl = document.getElementById('delegation-chains-panel');
@@ -17239,8 +17332,8 @@ async function loadSystemHealth() {
       }
     } catch(e) { /* delegation tree is optional */ }
 
-    // Heartbeat status in system health
-    try {
+    // Heartbeat status in system health (OpenClaw's HEARTBEAT.md cadence).
+    if (isOc) try {
       var hbData = await fetchJsonWithTimeout('/api/heartbeat-status', 3000);
       var hbEl = document.getElementById('sh-heartbeat');
       if (hbEl) {
@@ -17272,7 +17365,9 @@ async function loadSystemHealth() {
       var ingest = (d && Array.isArray(d.channel_ingest)) ? d.channel_ingest : [];
       var ciWrap = document.getElementById('sh-channel-ingest-wrap');
       var ciEl = document.getElementById('sh-channel-ingest');
-      if (ciEl && ciWrap) {
+      if (ciWrap && !scope.has('CHANNELS')) {
+        ciWrap.style.display = 'none';
+      } else if (ciEl && ciWrap) {
         // Always show the wrap — even empty state is diagnostic (#1321).
         ciWrap.style.display = '';
         var emoji = function(p) {
@@ -17439,7 +17534,7 @@ async function loadSystemHealth() {
     // was invisible from the dashboard until this card landed.
     var gwWrap = document.getElementById('sh-gateway-wrap');
     var gwEl = document.getElementById('sh-gateway');
-    if (d.gateway && gwEl) {
+    if (d.gateway && gwEl && isOc) {
       var gw = d.gateway;
       var gwStatus = gw.status || 'not_running';
       var gwDot, gwLabel, gwColor;
@@ -17516,7 +17611,7 @@ async function loadSystemHealth() {
     // Inference Provider (conditional)
     var infWrap = document.getElementById('sh-inference-wrap');
     var infEl = document.getElementById('sh-inference');
-    if (d.inference && infEl) {
+    if (d.inference && infEl && _shRuntimeScope().has('GATEWAY_RPC')) {
       var inf = d.inference;
       infEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:13px;">'
         + '🤖 <span style="font-weight:600;color:var(--text-primary);">' + (inf.provider || 'Unknown') + '</span>'
@@ -17528,7 +17623,7 @@ async function loadSystemHealth() {
     // Security Posture (conditional)
     var secWrap = document.getElementById('sh-security-wrap');
     var secEl = document.getElementById('sh-security');
-    if (d.security && secEl) {
+    if (d.security && secEl && _shRuntimeScope().has('GATEWAY_RPC')) {
       var sec = d.security;
       var badges = '';
       if (sec.sandbox_enabled) badges += '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:rgba(34,197,94,0.15);color:#22c55e;margin-right:4px;">🔒 Sandboxed</span>';
@@ -17573,6 +17668,8 @@ async function _loadReliabilityWidget() {
   var wrap = document.getElementById('sh-reliability-wrap');
   var el = document.getElementById('sh-reliability');
   if (!wrap || !el) return;
+  // A node-wide trend over every runtime's errors: not shown under one runtime.
+  if (_shRuntimeScope().rt !== 'all') { wrap.style.display = 'none'; return; }
   try {
     var r = await fetchJsonWithTimeout('/api/reliability', 4000);
     if (r.direction === 'insufficient_data' || r.error) {
@@ -17633,6 +17730,10 @@ function startSystemHealthRefresh() {
 async function loadDiagnostics() {
   var el = document.getElementById('sh-diagnostics');
   if (!el) return false;
+  // Gateway URL, workspace, auth token and flags all describe OpenClaw.
+  var diagOc = _shRuntimeScope().has('GATEWAY_RPC');
+  _shShow('sh-diagnostics-wrap', diagOc);
+  if (!diagOc) return true;
   // Diagnostics inspect local processes and on-disk OpenClaw config — neither
   // exists in the cloud iframe. The cloud server returns 410 / 404 for both
   // URLs, which the browser logs as console errors on every System Health
@@ -17733,7 +17834,7 @@ async function loadSandboxStatus() {
     // --- Inference card ---
     var infWrap = document.getElementById('sh-inference-wrap');
     var infEl   = document.getElementById('sh-inference');
-    if (d.inference && infEl) {
+    if (d.inference && infEl && _shRuntimeScope().has('GATEWAY_RPC')) {
       var inf = d.inference;
       infEl.innerHTML = '<div style="display:flex;align-items:center;gap:8px;padding:8px 14px;'
         + 'background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);font-size:13px;">'
@@ -17749,7 +17850,7 @@ async function loadSandboxStatus() {
     // --- Security badge (Sandboxed) ---
     var secWrap = document.getElementById('sh-security-wrap');
     var secEl   = document.getElementById('sh-security');
-    if (d.security && secEl) {
+    if (d.security && secEl && _shRuntimeScope().has('GATEWAY_RPC')) {
       var sec = d.security;
       var badges = '';
       if (sec.sandbox_enabled) {
