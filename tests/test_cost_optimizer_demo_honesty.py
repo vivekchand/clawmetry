@@ -266,6 +266,15 @@ def _bedrock_payload():
     }
 
 
+def test_no_debug_label_text_in_app_js():
+    # Guard against bracket-style debug labels slipping in (e.g. [dev], [prod]).
+    # APP_JS is read at module load, so this catches every function, not just the
+    # rendered cost-optimizer body.
+    import re
+    matches = re.findall(r'\[(?:dev|prod|debug|test)\]', APP_JS)
+    assert not matches, "Found debug label(s) in app.js: %s" % matches
+
+
 def test_modal_renders_basis_and_no_debug_label(tmp_path):
     body = _render(tmp_path, "ok", payload=_bedrock_payload())["body"]
     assert "[prod]" not in body

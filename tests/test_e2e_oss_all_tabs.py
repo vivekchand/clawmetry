@@ -143,6 +143,7 @@ CANONICAL_TABS = [
     "bench",             # bench.html: Harness Engineering (cross-runtime bench)
     "trail",             # trail.html: one session as Inputs / Decisions / Outcome
     "compliance",        # compliance.html: framework controls, evidence report, ATLAS traceability
+    "price-book",        # price-book.html: negotiated rates, opened from Cost
 ]
 
 # Overlay element IDs that signal the auth overlay is blocking the UI.

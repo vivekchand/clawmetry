@@ -48,6 +48,54 @@ def test_guard_builder_uses_the_call_it_is_given(monkeypatch):
     json.dumps(body)  # the slice must serialise
 
 
+def test_guard_list_follows_the_runtime_switcher(monkeypatch):
+    """Field report 2026-09-15: with Codex selected, Guard listed every
+    claude_code session and their at-risk total. ?runtime= scopes the rows,
+    the live-probe rows and the totals; no runtime keeps every row (the
+    daemon's snapshot slice, which the hosted interceptor filters)."""
+    import flask
+
+    monkeypatch.setattr(guard, "_session_runtime",
+                        lambda sid, a: sid.split(":", 1)[0])
+    monkeypatch.setattr(guard, "_runtime_supports_signals",
+                        lambda rt, sid, cwd: {"controllable": True})
+    monkeypatch.setattr(guard, "_live_only_rows", lambda rows: [
+        {"session_id": "claude_code:live", "runtime": "claude_code",
+         "incident": None, "pending_ingest": True}])
+
+    def _call(method, **kw):
+        if method == "query_sessions_table":
+            return [{"session_id": "claude_code:a", "status": "running", "metadata": {}},
+                    {"session_id": "codex:b", "status": "running", "metadata": {}}]
+        if method == "query_recent_loop_signals":
+            return [{"session_id": "claude_code:a", "severity": "warning",
+                     "details": {"kind": "file_blast_radius", "spend_at_risk_usd": 23.72}}]
+        return []
+
+    monkeypatch.setattr(guard, "_ls_call", _call)
+
+    codex = guard.build_guard_sessions_body(50, call=_call, runtime_filter="codex")
+    assert [r["session_id"] for r in codex["sessions"]] == ["codex:b"]
+    assert codex["count"] == 1 and codex["flagged"] == 0
+    assert codex["spend_at_risk_usd"] == 0
+
+    every = guard.build_guard_sessions_body(50, call=_call)
+    assert every["count"] == 3 and every["flagged"] == 1
+    assert guard.build_guard_sessions_body(50, call=_call, runtime_filter="all")["count"] == 3
+
+    app = flask.Flask(__name__)
+    app.register_blueprint(guard.bp_guard)
+    body = app.test_client().get("/api/guard/sessions?runtime=Codex").get_json()
+    assert [r["runtime"] for r in body["sessions"]] == ["codex"]
+
+
+def test_guard_tab_asks_for_the_selected_runtime():
+    js = (ROOT / "clawmetry" / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    fn = js[js.index("function loadGuardSessions()"):]
+    fn = fn[:fn.index("fetch(")]
+    assert "_cmRuntimeFilter()" in fn and "?runtime=" in fn
+
+
 class _Store:
     def __init__(self):
         self.calls = []

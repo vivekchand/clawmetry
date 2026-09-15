@@ -311,6 +311,11 @@ def test_fallback_mints_trial_after_subprocess_failure(fake_home, monkeypatch):
         def _node_id():
             return "test-node"
     monkeypatch.setitem(sys.modules, "clawmetry.license", _FakeLic)
+    # `from clawmetry import license` reads the package ATTRIBUTE once any
+    # earlier test has imported the real submodule, so the sys.modules entry
+    # alone made this test pass or fail depending on collection order.
+    import clawmetry as _clawmetry_pkg
+    monkeypatch.setattr(_clawmetry_pkg, "license", _FakeLic, raising=False)
 
     ok = desk_onb._fallback_persist_cm_key("cm_founder_trial")
 
@@ -326,6 +331,27 @@ def test_fallback_mints_trial_after_subprocess_failure(fake_home, monkeypatch):
         "clawmetry.license.activate — otherwise the license file is "
         "never written and `clawmetry status` still says Free"
     )
+
+
+@pytest.mark.parametrize("mode, expected", [
+    ("cloud", "managed"), ("selfhost", "selfhost"), ("", None), ("other", None),
+])
+def test_fallback_trial_reports_the_panes_hosting_choice(fake_home, monkeypatch, mode, expected):
+    """AC-OGV-ADC-001.3 (desktop rail): when the connect subprocess fails,
+    the fallback trial call still tells the cloud account which deployment
+    the pane chose. An unknown mode sends no deployment (AC-OGV-ADC-001.4)."""
+    posted = {}
+
+    def _fake_urlopen(req, timeout=15, context=None):
+        posted["body"] = json.loads(req.data.decode())
+        raise OSError("stop after capturing the request")
+
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr(desk_onb, "_ssl_context", lambda: None)
+
+    assert desk_onb._fallback_persist_cm_key("cm_pane_choice", mode) is True
+    assert posted["body"].get("deployment") == expected
+    assert posted["body"]["api_key"] == "cm_pane_choice"
 
 
 def test_fallback_trial_mint_never_raises_on_network_error(fake_home, monkeypatch):
