@@ -14,6 +14,9 @@ One primitive unblocks all three, so it lands before any of them.
   GET  /api/govern/principals/<principal_id>    — one principal
   POST /api/govern/principals/<principal_id>/owner
                                                 — claim it for a person or team
+  POST /api/govern/scopes/<node|runtime>/<value>/owner
+                                                — claim a whole machine or
+                                                  runtime; agents inherit it
 
 Identity is **derived, not minted**: ``principal_id`` is a stable hash of
 (node_id, runtime, agent_id), all of which ``sessions`` already carries. There
@@ -134,8 +137,11 @@ def api_govern_set_owner(principal_id: str):
     ``agent_meta`` and would let an owner be attached to an agent that does
     not exist -- an inventory nobody can trust is worse than none.
 
-    ``owner``/``notes`` follow set_agent_meta's partial-update contract:
-    ``None`` means "leave this field alone", an empty string clears it.
+    ``owner``/``notes``/``team`` follow set_agent_meta's partial-update
+    contract: ``None`` means "leave this field alone", an empty string clears
+    it. ``team`` is separate from ``owner`` on purpose (REQ-OBS-004): who owns
+    an agent and which team pays for it are different questions, and sharing
+    one free-text field made naming a person cost you the team rollup.
     """
     if not is_local_store_read_enabled():
         return jsonify({"ok": False, "error": "local store disabled"}), 200
@@ -150,15 +156,72 @@ def api_govern_set_owner(principal_id: str):
     body = request.get_json(silent=True) or {}
     owner = body.get("owner")
     notes = body.get("notes")
+    team = body.get("team")
     if owner is not None:
         owner = str(owner).strip()
     if notes is not None:
         notes = str(notes)
-    if owner is None and notes is None:
+    if team is not None:
+        team = str(team).strip()
+    if owner is None and notes is None and team is None:
         return jsonify({"ok": False, "error": "nothing to set"}), 400
 
     try:
-        _store_call("set_agent_meta", agent_key=pid, owner=owner, notes=notes)
+        _store_call("set_agent_meta", agent_key=pid, owner=owner,
+                    notes=notes, team=team)
     except Exception:
         return jsonify({"ok": False, "error": "write failed"}), 200
-    return jsonify({"ok": True, "principalId": pid, "owner": owner})
+    return jsonify({"ok": True, "principalId": pid, "owner": owner, "team": team})
+
+
+@bp_govern.route("/api/govern/scopes/<scope_type>/<path:scope_value>/owner",
+                 methods=["POST"])
+def api_govern_set_scope_owner(scope_type: str, scope_value: str):
+    """Claim a whole MACHINE or RUNTIME, which every agent inside it inherits.
+
+    Labelling one agent at a time does not survive a fleet, and the labelling
+    that does not get done is why ownership renders empty. This is the rung
+    above: "everything on this build box belongs to Platform" in one action
+    (REQ-OBS-004, AC-OBS-004.2).
+
+    The scope must be one we have actually OBSERVED, for the same reason the
+    principal write checks its id: an inventory that accepts labels for
+    machines and runtimes that do not exist is worse than none.
+
+    Inherited values are reported with the rung they came from, so an agent
+    covered by this never looks like one somebody named individually.
+    """
+    if not is_local_store_read_enabled():
+        return jsonify({"ok": False, "error": "local store disabled"}), 200
+
+    st = (scope_type or "").strip().lower()
+    sv = (scope_value or "").strip()
+    if st not in ("node", "runtime"):
+        return jsonify({"ok": False,
+                        "error": "scope_type must be 'node' or 'runtime'"}), 400
+    if not sv:
+        return jsonify({"ok": False, "error": "missing scope_value"}), 400
+
+    known = _store_call("query_agent_principals", limit=2000) or []
+    field = "node_id" if st == "node" else "runtime"
+    if not any(str(r.get(field) or "") == sv for r in known):
+        return jsonify({"ok": False, "error": f"unknown {st}"}), 404
+
+    body = request.get_json(silent=True) or {}
+    owner = body.get("owner")
+    team = body.get("team")
+    if owner is not None:
+        owner = str(owner).strip()
+    if team is not None:
+        team = str(team).strip()
+    if owner is None and team is None:
+        return jsonify({"ok": False, "error": "nothing to set"}), 400
+
+    try:
+        from clawmetry.local_store import LocalStore
+        key = LocalStore.node_scope_key(sv) if st == "node" else sv.lower()
+        _store_call("set_agent_meta", agent_key=key, owner=owner, team=team)
+    except Exception:
+        return jsonify({"ok": False, "error": "write failed"}), 200
+    return jsonify({"ok": True, "scopeType": st, "scopeValue": sv,
+                    "owner": owner, "team": team})
