@@ -121,6 +121,54 @@ def _ls_call(method_name, **kwargs):
         return None
 
 
+def subagent_health_block(stats_by_runtime, runtime=None):
+    """System Health "Sub-Agents (24h)" card from per-runtime sub-agent stats.
+
+    ``stats_by_runtime`` is ``LocalStore.query_subagent_stats_by_runtime``
+    output (``{runtime: {spawned, completed, failed, running, ...}}``), or
+    ``None`` when the store could not be read. ``runtime`` scopes the card to
+    one runtime; empty or ``"all"`` sums every runtime. NemoClaw runs the
+    OpenClaw adapter, so its children may sit in the ``openclaw`` bucket.
+
+    ``successPct`` is ``None`` until at least one run finished: a run with no
+    recorded outcome is not a success, and an idle node is not "100%".
+    """
+    empty = {
+        "available": False, "runs": None, "completed": None,
+        "failed": None, "running": None, "successPct": None,
+    }
+    if not isinstance(stats_by_runtime, dict):
+        return empty
+    rt = str(runtime or "").strip().lower()
+    if not rt or rt == "all":
+        buckets = list(stats_by_runtime.values())
+    else:
+        keys = {rt, "openclaw"} if rt == "nemoclaw" else {rt}
+        buckets = [v for k, v in stats_by_runtime.items() if k in keys]
+
+    def _sum(field):
+        total = 0
+        for b in buckets:
+            if isinstance(b, dict):
+                try:
+                    total += int(b.get(field) or 0)
+                except (TypeError, ValueError):
+                    pass
+        return total
+
+    runs, completed = _sum("spawned"), _sum("completed")
+    failed, running = _sum("failed"), _sum("running")
+    finished = completed + failed
+    return {
+        "available": True,
+        "runs": runs,
+        "completed": completed,
+        "failed": failed,
+        "running": running,
+        "successPct": round(completed / finished * 100) if finished else None,
+    }
+
+
 def _parse_iso_to_epoch(ts):
     """Best-effort ISO-8601 / numeric → epoch seconds. Returns 0 on any failure."""
     if not ts:
@@ -1236,37 +1284,20 @@ def api_system_health():
                     cron_failed.append(j.get("name", j.get("id", "unknown")))
 
     # --- SUB-AGENTS (24H) ---
-    # Same daemon-proxy first / gateway-fallback ordering as crons above so
-    # we don't pay a 5-10s _gw_ws_rpc("sessions.list") penalty per request
-    # when the gateway is unreachable. Empty response from the daemon is
-    # authoritative (no sessions in the last 24h is a valid answer).
-    sessions_source = None
-    sa_runs = 0
-    sa_success = 0
-    since_24h_iso = datetime.fromtimestamp(
-        now_ts - 86400, tz=timezone.utc
-    ).isoformat()
-    sess_rows = _ls_call("query_sessions", since=since_24h_iso, limit=500)
-    if sess_rows is not None:
-        sessions_source = "daemon_proxy"
-        for s in sess_rows:
-            sid = s.get("session_id") or ""
-            if "subagent" in sid:
-                sa_runs += 1
-                sa_success += 1  # We don't track failure in session files currently
-    else:
-        sessions_source = "gateway"
-        for s in _d._get_sessions():
-            mtime = s.get("updatedAt", 0)
-            if isinstance(mtime, (int, float)) and mtime > 1e12:
-                mtime = mtime / 1000
-            if mtime and (now_ts - mtime) < 86400:
-                sid = s.get("sessionId", "")
-                if "subagent" in sid:
-                    sa_runs += 1
-                    sa_success += 1  # We don't track failure in session files currently
-
-    sa_pct = round((sa_success / sa_runs * 100) if sa_runs > 0 else 100, 0)
+    # Read from the ``subagents`` table, which OpenClaw spawns and every family
+    # runtime's Task/agent children share, bucketed per runtime so the card
+    # follows the runtime switcher (``?runtime=``). This used to count session
+    # ids containing "subagent" across every runtime and stamp each one a
+    # success ("we don't track failure"), so an idle node read "0 runs, 100%".
+    sessions_source = "daemon_proxy"
+    sa_by_rt = _ls_call("query_subagent_stats_by_runtime", days=1)
+    if not isinstance(sa_by_rt, dict):
+        sa_by_rt = None
+        sessions_source = "unavailable"
+    subagents_block = subagent_health_block(
+        sa_by_rt, request.args.get("runtime")
+    )
+    subagents_block["_source"] = sessions_source
 
     # Build compact service_status dict (fleet node card format)
     gw_up = any(s["name"] == "OpenClaw Gateway" and s["up"] for s in services)
@@ -1364,11 +1395,7 @@ def api_system_health():
                 "failed": cron_failed,
                 "_source": cron_source or "gateway",
             },
-            "subagents": {
-                "runs": sa_runs,
-                "successPct": sa_pct,
-                "_source": sessions_source or "gateway",
-            },
+            "subagents": subagents_block,
             "heartbeat": _d._get_heartbeat_status(),
             "sandbox": _d._detect_sandbox_metadata(),
             "inference": _d._detect_inference_metadata(),
