@@ -290,8 +290,11 @@
         box-shadow:var(--card-shadow);
         ">
         <div style="font-size:14px;font-weight:700;color:var(--text-primary);margin-bottom:12px;">🏥 <span data-i18n="overview.system_health">System Health</span></div>
+        <!-- Runtime scope (loadSystemHealth): under a specific runtime the panel
+             shows only that runtime's checks plus machine-wide ones, and says so. -->
+        <div id="sh-scope-note" style="display:none;font-size:11px;color:var(--text-muted);margin:-6px 0 12px;"></div>
         <div id="sh-version-regression" style="margin-bottom:10px;"></div>
-        <div style="
+        <div id="sh-services-label" style="
           font-size:11px;
           text-transform:uppercase;
           letter-spacing:1.5px;
@@ -319,6 +322,7 @@
           margin-bottom:6px;
           " data-i18n="overview.disk_usage">Disk Usage</div>
         <div id="sh-disks" style="margin-bottom:14px;"></div>
+        <div id="sh-crons-wrap">
         <div style="
           font-size:11px;
           text-transform:uppercase;
@@ -327,7 +331,8 @@
           font-weight:600;
           margin-bottom:6px;
           " data-i18n="overview.cron_jobs">Cron Jobs</div>
-        <div id="sh-crons" style="margin-bottom:14px;"></div>
+        <div id="sh-crons" style="margin-bottom:14px;"></div></div>
+        <div id="sh-subagents-wrap">
         <div style="
           font-size:11px;
           text-transform:uppercase;
@@ -337,7 +342,8 @@
           margin-bottom:6px;
           " data-i18n="overview.subagents_24h">Sub-Agents (24h)</div>
         <div id="sh-subagents" style="margin-bottom:14px;"></div>
-        <div id="delegation-chains-panel" style="margin-bottom:14px;"></div>
+        <div id="delegation-chains-panel" style="margin-bottom:14px;"></div></div>
+        <div id="sh-heartbeat-wrap">
         <div style="
           font-size:11px;
           text-transform:uppercase;
@@ -346,7 +352,7 @@
           font-weight:600;
           margin-bottom:6px;
           " data-i18n="overview.heartbeat">Heartbeat</div>
-        <div id="sh-heartbeat" style="margin-bottom:14px;"></div>
+        <div id="sh-heartbeat" style="margin-bottom:14px;"></div></div>
         <!-- 📨 Channel ingest (#1310 follow-up) — per-provider message
              counts so operators see whether the gateway WS tap is actually
              writing channel messages to DuckDB. Hidden until first sample. -->
@@ -636,6 +642,11 @@
       window.renderOverviewHeartbeat = function(hb){
         var card = document.getElementById('overview-heartbeat-card');
         if(!card || !hb) return;
+        // OpenClaw's 30-minute heartbeat session: other runtimes have none.
+        if(typeof _shRuntimeScope === 'function' && !_shRuntimeScope().has('GATEWAY_RPC')){
+          card.style.display = 'none';
+          return;
+        }
         card.style.display = 'flex';
         var dot = document.getElementById('overview-hb-dot');
         if(dot){
