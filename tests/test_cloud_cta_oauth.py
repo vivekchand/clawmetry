@@ -156,7 +156,7 @@ def test_full_connect_writes_config_and_clears_nocloud(tmp_path, monkeypatch):
     monkeypatch.setattr(_d, "_start_daemon_background", lambda: None)
     # Neutralize trial activation — its own semantics are covered by
     # test_full_connect_activates_trial below.
-    monkeypatch.setattr(_d, "_activate_trial_for_key", lambda tok: "unavailable")
+    monkeypatch.setattr(_d, "_activate_trial_for_key", lambda tok, deployment="": "unavailable")
 
     node_id, enc_key, trial = _d._full_connect_with_key("cm_testkey123")
     assert node_id == "node-xyz"
@@ -557,12 +557,16 @@ def test_full_connect_activates_trial(monkeypatch, tmp_path):
     monkeypatch.setattr(_d, "_start_daemon_background", lambda: None)
 
     seen = {}
-    def _fake_trial(tok):
+    def _fake_trial(tok, deployment=""):
         seen["key"] = tok
+        seen["deployment"] = deployment
         return "active"
     monkeypatch.setattr(_d, "_activate_trial_for_key", _fake_trial)
 
     node_id, enc_key, trial = _d._full_connect_with_key("cm_founder_signup")
+
+    # AC-OGV-ADC-001.3: the dashboard's cloud sign-in reports managed.
+    assert seen.get("deployment") == "managed"
 
     assert seen.get("key") == "cm_founder_signup", (
         "_full_connect_with_key must forward the exact cm_ key to "
@@ -654,12 +658,14 @@ def test_selfhost_and_cloud_use_same_trial_helper(monkeypatch, tmp_path):
 
     calls = []
     monkeypatch.setattr(_d, "_activate_trial_for_key",
-                        lambda tok: calls.append(tok) or "active")
+                        lambda tok, deployment="": calls.append((tok, deployment)) or "active")
 
     _d._full_connect_with_key("cm_cloud")
     _d._selfhost_signin_with_key("cm_selfhost")
 
-    assert calls == ["cm_cloud", "cm_selfhost"], (
+    # AC-OGV-ADC-001.3: each dashboard sign-in reports its own deployment on
+    # that shared call, so the cloud account learns which rail was taken.
+    assert calls == [("cm_cloud", "managed"), ("cm_selfhost", "selfhost")], (
         "both cloud and self-host sign-in helpers must call the SAME "
         "trial helper — the founder ask 2026-08-12 was exactly that "
         "parity between the two rails"

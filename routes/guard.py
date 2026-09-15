@@ -409,10 +409,15 @@ def api_guard_sessions():
         limit = max(1, min(int(request.args.get("limit", 50)), 200))
     except (TypeError, ValueError):
         limit = 50
-    return jsonify(build_guard_sessions_body(limit))
+    rt = str(request.args.get("runtime") or "").strip().lower()[:64]
+    return jsonify(build_guard_sessions_body(limit, runtime_filter=rt))
 
 
-def build_guard_sessions_body(limit: int = 50, call=None) -> dict:
+# ``runtime_filter``, not ``runtime``: the row loop below binds a local
+# ``runtime`` per session, which silently replaced the argument with the LAST
+# session's runtime and scoped an unfiltered list to one runtime.
+def build_guard_sessions_body(limit: int = 50, call=None,
+                              runtime_filter: str = "") -> dict:
     """The ``/api/guard/sessions`` body, shared by the route and the daemon.
 
     The hosted dashboard has no store, so the daemon builds this same body for
@@ -573,6 +578,16 @@ def build_guard_sessions_body(limit: int = 50, call=None) -> dict:
     # the tab is only as fresh as a full sync cycle (60-80s on a busy node,
     # minutes behind a backfill), which is not a kill switch.
     out.extend(_live_only_rows(out))
+
+    # The runtime switcher scopes this list like every other view. Filtered
+    # after the live rows are merged, so a just-started session of another
+    # runtime cannot slip in, and before the totals below, so "at risk across
+    # N flagged sessions" counts only what is on screen. The daemon's snapshot
+    # slice passes no runtime and keeps every row; the hosted interceptor
+    # filters it the same way.
+    if runtime_filter and runtime_filter != "all":
+        out = [r for r in out
+               if str(r.get("runtime") or "").lower() == runtime_filter]
 
     # Flagged sessions first, most expensive to ignore at the top; unflagged
     # sessions ordered newest-active first below. Sorting by severity alone put
