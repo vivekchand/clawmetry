@@ -429,6 +429,7 @@ FEATURE_LABELS = {
     "alert_webhooks": "Alert webhooks",
     "anomaly_detection": "Anomaly detection",
     "cost_optimizer": "Cost optimizer",
+    "price_book": "Price book",
     "siem_export": "SIEM export",
     "sso": "SSO",
     "audit_logs": "Audit logs",
@@ -509,6 +510,11 @@ PRO_ONLY_FEATURES = frozenset(
         "alert_webhooks",
         "anomaly_detection",
         "cost_optimizer",
+        # Negotiated rates, Azure OpenAI deployment aliases and effective-dated
+        # rate selection (#5936). The contract, validation and selection are in
+        # clawmetry/price_book.py; contract valuation is the paid engine
+        # behind the ``pricing.value_usage`` extension call.
+        "price_book",
         "compliance_pack",
         # ── Governance, moved down from Enterprise 2026-08-25 ────────────
         # Pro was sold as "the governance layer" while every governance

@@ -1,0 +1,1848 @@
+{
+ "resourceSpans": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "telemetry.sdk.language",
+      "value": {
+       "stringValue": "python"
+      }
+     },
+     {
+      "key": "telemetry.sdk.name",
+      "value": {
+       "stringValue": "opentelemetry"
+      }
+     },
+     {
+      "key": "telemetry.sdk.version",
+      "value": {
+       "stringValue": "1.44.0"
+      }
+     },
+     {
+      "key": "service.instance.id",
+      "value": {
+       "stringValue": "4b424564-6e36-4e03-be70-85634c9ec762"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "litellm-gateway"
+      }
+     },
+     {
+      "key": "deployment.environment",
+      "value": {
+       "stringValue": "production"
+      }
+     },
+     {
+      "key": "model_id",
+      "value": {
+       "stringValue": "litellm-gateway"
+      }
+     }
+    ]
+   },
+   "scopeSpans": [
+    {
+     "scope": {
+      "name": "litellm"
+     },
+     "spans": [
+      {
+       "traceId": "89ab2448301bd4bff6c98a45a6092e08",
+       "spanId": "28a4275e2a873134",
+       "parentSpanId": "68497c396c6f0915",
+       "name": "router",
+       "kind": 1,
+       "startTimeUnixNano": "1789346181884076032",
+       "endTimeUnixNano": "1789346181884239872",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "call_type",
+         "value": {
+          "stringValue": "async_get_available_deployment"
+         }
+        },
+        {
+         "key": "service",
+         "value": {
+          "stringValue": "router"
+         }
+        }
+       ]
+      },
+      {
+       "traceId": "89ab2448301bd4bff6c98a45a6092e08",
+       "spanId": "22fab2086ed2fa9b",
+       "parentSpanId": "68497c396c6f0915",
+       "name": "raw_gen_ai_request",
+       "kind": 1,
+       "startTimeUnixNano": "1789346181884368896",
+       "endTimeUnixNano": "1789346181907923968",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "llm.openai.stringified_raw_response",
+         "value": {
+          "stringValue": "my-original-response"
+         }
+        }
+       ]
+      },
+      {
+       "traceId": "89ab2448301bd4bff6c98a45a6092e08",
+       "spanId": "68497c396c6f0915",
+       "parentSpanId": "",
+       "name": "Received Proxy Server Request",
+       "kind": 2,
+       "startTimeUnixNano": "1789346181807574016",
+       "endTimeUnixNano": "1789346181907923968",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "metadata.user_api_key_hash",
+         "value": {
+          "stringValue": "e68b04742087cc8b008f46a950e0b2b6826299c6fa2db13b00b2b693ba215fa9"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_alias",
+         "value": {
+          "stringValue": "alpha-ci"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_spend",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "metadata.user_api_key_max_budget",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_budget_reset_at",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_id",
+         "value": {
+          "stringValue": "team-alpha"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_id",
+         "value": {
+          "stringValue": "alice"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_alias",
+         "value": {
+          "stringValue": "Alpha"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_email",
+         "value": {
+          "stringValue": "alice@example.test"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_end_user_id",
+         "value": {
+          "stringValue": "end-user-7"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_request_route",
+         "value": {
+          "stringValue": "/v1/chat/completions"
+         }
+        },
+        {
+         "key": "metadata.spend_logs_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.requester_ip_address",
+         "value": {
+          "stringValue": "127.0.0.1"
+         }
+        },
+        {
+         "key": "metadata.user_agent",
+         "value": {
+          "stringValue": "curl/8.7.1"
+         }
+        },
+        {
+         "key": "metadata.requester_metadata",
+         "value": {
+          "stringValue": "{'user_api_key_user_id': 'alice', 'user_api_key_team_id': 'team-alpha', 'headers': {'host': '127.0.0.1:59841', 'user-agent': 'curl/8.7.1', 'accept': '*/*', 'content-type': 'application/json', 'content-length': '93'}}"
+         }
+        },
+        {
+         "key": "metadata.prompt_management_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.applied_guardrails",
+         "value": {
+          "stringValue": "[]"
+         }
+        },
+        {
+         "key": "metadata.mcp_tool_call_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.vector_store_request_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.usage_object",
+         "value": {
+          "stringValue": "{'completion_tokens': 20, 'prompt_tokens': 10, 'total_tokens': 30, 'completion_tokens_details': None, 'prompt_tokens_details': None}"
+         }
+        },
+        {
+         "key": "metadata.requester_custom_headers",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.cold_storage_object_key",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_auth_metadata",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.team_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.team_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "hidden_params",
+         "value": {
+          "stringValue": "{\"model_id\": \"b24c45b37b021f0dddfe715ef667c4ff3b16847a07f64d991eaef537270eea72\", \"cache_key\": null, \"api_base\": \"https://api.openai.com\", \"response_cost\": 1.35e-05, \"additional_headers\": {}, \"litellm_overhead_time_ms\": null, \"batch_models\": null, \"litellm_model_name\": \"openai/gpt-4o-mini\", \"usage_object\": null}"
+         }
+        },
+        {
+         "key": "gen_ai.cost.input_cost",
+         "value": {
+          "doubleValue": 1.5e-06
+         }
+        },
+        {
+         "key": "gen_ai.cost.output_cost",
+         "value": {
+          "doubleValue": 1.2e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.total_cost",
+         "value": {
+          "doubleValue": 1.35e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.tool_usage_cost",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.original_cost",
+         "value": {
+          "doubleValue": 1.35e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.discount_percent",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.discount_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_percent",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_fixed_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_total_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.request.model",
+         "value": {
+          "stringValue": "gpt-4o-mini"
+         }
+        },
+        {
+         "key": "llm.request.type",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.system",
+         "value": {
+          "stringValue": "openai"
+         }
+        },
+        {
+         "key": "llm.is_streaming",
+         "value": {
+          "stringValue": "False"
+         }
+        },
+        {
+         "key": "llm.user",
+         "value": {
+          "stringValue": "end-user-7"
+         }
+        },
+        {
+         "key": "gen_ai.response.id",
+         "value": {
+          "stringValue": "chatcmpl-602b6e58-68d4-4752-839b-f58a1c87a119"
+         }
+        },
+        {
+         "key": "gen_ai.response.model",
+         "value": {
+          "stringValue": "fast-alias"
+         }
+        },
+        {
+         "key": "gen_ai.usage.total_tokens",
+         "value": {
+          "intValue": "30"
+         }
+        },
+        {
+         "key": "gen_ai.usage.output_tokens",
+         "value": {
+          "intValue": "20"
+         }
+        },
+        {
+         "key": "gen_ai.usage.input_tokens",
+         "value": {
+          "intValue": "10"
+         }
+        },
+        {
+         "key": "gen_ai.input.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"alpha one\"}]}]"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.output.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"hello from the mock\"}], \"finish_reason\": \"stop\"}]"
+         }
+        },
+        {
+         "key": "gen_ai.response.finish_reasons",
+         "value": {
+          "stringValue": "[\"stop\"]"
+         }
+        }
+       ]
+      },
+      {
+       "traceId": "f21ba97bbe70d7f367afe4ded841d93d",
+       "spanId": "aac544796a39d17f",
+       "parentSpanId": "5f42f4f16065b699",
+       "name": "raw_gen_ai_request",
+       "kind": 1,
+       "startTimeUnixNano": "1789346181973522944",
+       "endTimeUnixNano": "1789346181973847040",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "llm.openai.stringified_raw_response",
+         "value": {
+          "stringValue": "{'id': 'chatcmpl-602b6e58-68d4-4752-839b-f58a1c87a119', 'created': 1789346181, 'model': 'gpt-4o-mini', 'object': 'chat.completion', 'system_fingerprint': None, 'choices': [{'finish_reason': 'stop', 'index': 0, 'message': {'content': 'hello from the mock', 'role': 'assistant', 'tool_calls': None, 'function_call': None, 'provider_specific_fields': None}}], 'usage': {'completion_tokens': 20, 'prompt_tokens': 10, 'total_tokens': 30, 'completion_tokens_details': None, 'prompt_tokens_details': None}}"
+         }
+        }
+       ]
+      },
+      {
+       "traceId": "f21ba97bbe70d7f367afe4ded841d93d",
+       "spanId": "5f42f4f16065b699",
+       "parentSpanId": "",
+       "name": "Received Proxy Server Request",
+       "kind": 2,
+       "startTimeUnixNano": "1789346181964742912",
+       "endTimeUnixNano": "1789346181973847040",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "metadata.user_api_key_hash",
+         "value": {
+          "stringValue": "e68b04742087cc8b008f46a950e0b2b6826299c6fa2db13b00b2b693ba215fa9"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_alias",
+         "value": {
+          "stringValue": "alpha-ci"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_spend",
+         "value": {
+          "doubleValue": 1.35e-05
+         }
+        },
+        {
+         "key": "metadata.user_api_key_max_budget",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_budget_reset_at",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_id",
+         "value": {
+          "stringValue": "team-alpha"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_id",
+         "value": {
+          "stringValue": "alice"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_alias",
+         "value": {
+          "stringValue": "Alpha"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_email",
+         "value": {
+          "stringValue": "alice@example.test"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_end_user_id",
+         "value": {
+          "stringValue": "end-user-7"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_request_route",
+         "value": {
+          "stringValue": "/v1/chat/completions"
+         }
+        },
+        {
+         "key": "metadata.spend_logs_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.requester_ip_address",
+         "value": {
+          "stringValue": "127.0.0.1"
+         }
+        },
+        {
+         "key": "metadata.user_agent",
+         "value": {
+          "stringValue": "curl/8.7.1"
+         }
+        },
+        {
+         "key": "metadata.requester_metadata",
+         "value": {
+          "stringValue": "{'user_api_key_user_id': 'alice', 'user_api_key_team_id': 'team-alpha', 'headers': {'host': '127.0.0.1:59841', 'user-agent': 'curl/8.7.1', 'accept': '*/*', 'content-type': 'application/json', 'content-length': '93'}}"
+         }
+        },
+        {
+         "key": "metadata.prompt_management_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.applied_guardrails",
+         "value": {
+          "stringValue": "[]"
+         }
+        },
+        {
+         "key": "metadata.mcp_tool_call_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.vector_store_request_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.usage_object",
+         "value": {
+          "stringValue": "{'completion_tokens': 20, 'prompt_tokens': 10, 'total_tokens': 30, 'completion_tokens_details': None, 'prompt_tokens_details': None}"
+         }
+        },
+        {
+         "key": "metadata.requester_custom_headers",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.cold_storage_object_key",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_auth_metadata",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.team_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.team_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "hidden_params",
+         "value": {
+          "stringValue": "{\"model_id\": \"b24c45b37b021f0dddfe715ef667c4ff3b16847a07f64d991eaef537270eea72\", \"cache_key\": \"f4d2a80232faaea5db8ac6ff8e8a3b4ed5c84ea168d08a0747511a4f3b729d53\", \"api_base\": \"https://api.openai.com\", \"response_cost\": 1.35e-05, \"additional_headers\": {}, \"litellm_overhead_time_ms\": 0.7291673229634763, \"batch_models\": null, \"litellm_model_name\": \"gpt-4o-mini\", \"usage_object\": null}"
+         }
+        },
+        {
+         "key": "gen_ai.cost.input_cost",
+         "value": {
+          "doubleValue": 1.5e-06
+         }
+        },
+        {
+         "key": "gen_ai.cost.output_cost",
+         "value": {
+          "doubleValue": 1.2e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.total_cost",
+         "value": {
+          "doubleValue": 1.35e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.tool_usage_cost",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.original_cost",
+         "value": {
+          "doubleValue": 1.35e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.discount_percent",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.discount_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_percent",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_fixed_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_total_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.request.model",
+         "value": {
+          "stringValue": "gpt-4o-mini"
+         }
+        },
+        {
+         "key": "llm.request.type",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.system",
+         "value": {
+          "stringValue": "openai"
+         }
+        },
+        {
+         "key": "llm.is_streaming",
+         "value": {
+          "stringValue": "False"
+         }
+        },
+        {
+         "key": "gen_ai.response.id",
+         "value": {
+          "stringValue": "chatcmpl-602b6e58-68d4-4752-839b-f58a1c87a119"
+         }
+        },
+        {
+         "key": "gen_ai.response.model",
+         "value": {
+          "stringValue": "fast-alias"
+         }
+        },
+        {
+         "key": "gen_ai.usage.total_tokens",
+         "value": {
+          "intValue": "30"
+         }
+        },
+        {
+         "key": "gen_ai.usage.output_tokens",
+         "value": {
+          "intValue": "20"
+         }
+        },
+        {
+         "key": "gen_ai.usage.input_tokens",
+         "value": {
+          "intValue": "10"
+         }
+        },
+        {
+         "key": "gen_ai.input.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"alpha one\"}]}]"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.output.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"hello from the mock\"}], \"finish_reason\": \"stop\"}]"
+         }
+        },
+        {
+         "key": "gen_ai.response.finish_reasons",
+         "value": {
+          "stringValue": "[\"stop\"]"
+         }
+        }
+       ]
+      },
+      {
+       "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+       "spanId": "0626cc4a9ca951ce",
+       "parentSpanId": "05fa3e4e70863399",
+       "name": "raw_gen_ai_request",
+       "kind": 1,
+       "startTimeUnixNano": "1789346182026797056",
+       "endTimeUnixNano": "1789346182051476992",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": []
+      },
+      {
+       "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+       "spanId": "05fa3e4e70863399",
+       "parentSpanId": "00f067aa0ba902b7",
+       "name": "Received Proxy Server Request",
+       "kind": 2,
+       "startTimeUnixNano": "1789346182009076992",
+       "endTimeUnixNano": "1789346182051476992",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "metadata.user_api_key_hash",
+         "value": {
+          "stringValue": "bf7f46e1d63e01df73f245a9557fc2adf4a26adcaf92f53ff50bd77bea5b4200"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_alias",
+         "value": {
+          "stringValue": "beta-ci"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_spend",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "metadata.user_api_key_max_budget",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_budget_reset_at",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_id",
+         "value": {
+          "stringValue": "team-beta"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_id",
+         "value": {
+          "stringValue": "bob"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_alias",
+         "value": {
+          "stringValue": "Beta"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_email",
+         "value": {
+          "stringValue": "bob@example.test"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_end_user_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_request_route",
+         "value": {
+          "stringValue": "/v1/chat/completions"
+         }
+        },
+        {
+         "key": "metadata.spend_logs_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.requester_ip_address",
+         "value": {
+          "stringValue": "127.0.0.1"
+         }
+        },
+        {
+         "key": "metadata.user_agent",
+         "value": {
+          "stringValue": "curl/8.7.1"
+         }
+        },
+        {
+         "key": "metadata.requester_metadata",
+         "value": {
+          "stringValue": "{'user_api_key_user_id': 'bob', 'user_api_key_team_id': 'team-beta', 'headers': {'host': '127.0.0.1:59841', 'user-agent': 'curl/8.7.1', 'accept': '*/*', 'content-type': 'application/json', 'traceparent': '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01', 'content-length': '89'}}"
+         }
+        },
+        {
+         "key": "metadata.prompt_management_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.applied_guardrails",
+         "value": {
+          "stringValue": "[]"
+         }
+        },
+        {
+         "key": "metadata.mcp_tool_call_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.vector_store_request_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.usage_object",
+         "value": {
+          "stringValue": "{'completion_tokens': 4, 'prompt_tokens': 9, 'total_tokens': 13, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_prediction_tokens': None, 'text_tokens': None, 'image_tokens': None, 'video_tokens': None}, 'prompt_tokens_details': None}"
+         }
+        },
+        {
+         "key": "metadata.requester_custom_headers",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.cold_storage_object_key",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_auth_metadata",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.team_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.team_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "hidden_params",
+         "value": {
+          "stringValue": "{\"model_id\": \"b24c45b37b021f0dddfe715ef667c4ff3b16847a07f64d991eaef537270eea72\", \"cache_key\": null, \"api_base\": \"https://api.openai.com\", \"response_cost\": null, \"additional_headers\": {}, \"litellm_overhead_time_ms\": null, \"batch_models\": null, \"litellm_model_name\": \"openai/gpt-4o-mini\", \"usage_object\": null}"
+         }
+        },
+        {
+         "key": "gen_ai.cost.input_cost",
+         "value": {
+          "doubleValue": 1.35e-06
+         }
+        },
+        {
+         "key": "gen_ai.cost.output_cost",
+         "value": {
+          "doubleValue": 2.4e-06
+         }
+        },
+        {
+         "key": "gen_ai.cost.total_cost",
+         "value": {
+          "doubleValue": 3.7499999999999997e-06
+         }
+        },
+        {
+         "key": "gen_ai.cost.tool_usage_cost",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.original_cost",
+         "value": {
+          "doubleValue": 3.7499999999999997e-06
+         }
+        },
+        {
+         "key": "gen_ai.cost.discount_percent",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.discount_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_percent",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_fixed_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_total_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.request.model",
+         "value": {
+          "stringValue": "gpt-4o-mini"
+         }
+        },
+        {
+         "key": "llm.request.type",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.system",
+         "value": {
+          "stringValue": "openai"
+         }
+        },
+        {
+         "key": "llm.is_streaming",
+         "value": {
+          "stringValue": "True"
+         }
+        },
+        {
+         "key": "gen_ai.response.id",
+         "value": {
+          "stringValue": "chatcmpl-c48f6ccc-0351-418a-acc7-7f624cbf4f7e"
+         }
+        },
+        {
+         "key": "gen_ai.response.model",
+         "value": {
+          "stringValue": "fast-alias"
+         }
+        },
+        {
+         "key": "gen_ai.usage.total_tokens",
+         "value": {
+          "intValue": "13"
+         }
+        },
+        {
+         "key": "gen_ai.usage.output_tokens",
+         "value": {
+          "intValue": "4"
+         }
+        },
+        {
+         "key": "gen_ai.usage.input_tokens",
+         "value": {
+          "intValue": "9"
+         }
+        },
+        {
+         "key": "gen_ai.input.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"beta stream\"}]}]"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.output.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"hello from the mock\"}], \"finish_reason\": \"stop\"}]"
+         }
+        },
+        {
+         "key": "gen_ai.response.finish_reasons",
+         "value": {
+          "stringValue": "[\"stop\"]"
+         }
+        }
+       ]
+      },
+      {
+       "traceId": "6ad62d0902cc0c87b7abf0cd8719dfeb",
+       "spanId": "89226925de6fdfff",
+       "parentSpanId": "",
+       "name": "Received Proxy Server Request",
+       "kind": 2,
+       "startTimeUnixNano": "1789346182073270016",
+       "endTimeUnixNano": "1789346182084425984",
+       "status": {
+        "code": 2,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "metadata.user_api_key_hash",
+         "value": {
+          "stringValue": "bf7f46e1d63e01df73f245a9557fc2adf4a26adcaf92f53ff50bd77bea5b4200"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_alias",
+         "value": {
+          "stringValue": "beta-ci"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_spend",
+         "value": {
+          "doubleValue": 3.7499999999999997e-06
+         }
+        },
+        {
+         "key": "metadata.user_api_key_max_budget",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_budget_reset_at",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_id",
+         "value": {
+          "stringValue": "team-beta"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_id",
+         "value": {
+          "stringValue": "bob"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_alias",
+         "value": {
+          "stringValue": "Beta"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_email",
+         "value": {
+          "stringValue": "bob@example.test"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_end_user_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_request_route",
+         "value": {
+          "stringValue": "/v1/chat/completions"
+         }
+        },
+        {
+         "key": "metadata.spend_logs_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.requester_ip_address",
+         "value": {
+          "stringValue": "127.0.0.1"
+         }
+        },
+        {
+         "key": "metadata.user_agent",
+         "value": {
+          "stringValue": "curl/8.7.1"
+         }
+        },
+        {
+         "key": "metadata.requester_metadata",
+         "value": {
+          "stringValue": "{'user_api_key_user_id': 'bob', 'user_api_key_team_id': 'team-beta', 'headers': {'host': '127.0.0.1:59841', 'user-agent': 'curl/8.7.1', 'accept': '*/*', 'content-type': 'application/json', 'content-length': '75'}}"
+         }
+        },
+        {
+         "key": "metadata.prompt_management_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.applied_guardrails",
+         "value": {
+          "stringValue": "[]"
+         }
+        },
+        {
+         "key": "metadata.mcp_tool_call_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.vector_store_request_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.usage_object",
+         "value": {
+          "stringValue": "{'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}"
+         }
+        },
+        {
+         "key": "metadata.requester_custom_headers",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.cold_storage_object_key",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_auth_metadata",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.team_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.team_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "hidden_params",
+         "value": {
+          "stringValue": "{\"model_id\": null, \"cache_key\": null, \"api_base\": null, \"response_cost\": null, \"additional_headers\": null, \"litellm_overhead_time_ms\": null, \"batch_models\": null, \"litellm_model_name\": null, \"usage_object\": null}"
+         }
+        },
+        {
+         "key": "gen_ai.request.model",
+         "value": {
+          "stringValue": "gpt-4o-mini"
+         }
+        },
+        {
+         "key": "llm.request.type",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.system",
+         "value": {
+          "stringValue": "openai"
+         }
+        },
+        {
+         "key": "llm.is_streaming",
+         "value": {
+          "stringValue": "False"
+         }
+        },
+        {
+         "key": "gen_ai.response.id",
+         "value": {
+          "stringValue": "fd76f69d-d373-4c77-aaf3-d08cf7e2cda7"
+         }
+        },
+        {
+         "key": "gen_ai.input.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"beta fail\"}]}]"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "error.code",
+         "value": {
+          "stringValue": "500"
+         }
+        },
+        {
+         "key": "error.type",
+         "value": {
+          "stringValue": "InternalServerError"
+         }
+        },
+        {
+         "key": "error.message",
+         "value": {
+          "stringValue": "litellm.InternalServerError: this is a mock internal server error"
+         }
+        },
+        {
+         "key": "error.llm_provider",
+         "value": {
+          "stringValue": "openai"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "telemetry.sdk.language",
+      "value": {
+       "stringValue": "python"
+      }
+     },
+     {
+      "key": "telemetry.sdk.name",
+      "value": {
+       "stringValue": "opentelemetry"
+      }
+     },
+     {
+      "key": "telemetry.sdk.version",
+      "value": {
+       "stringValue": "1.44.0"
+      }
+     },
+     {
+      "key": "service.instance.id",
+      "value": {
+       "stringValue": "4b424564-6e36-4e03-be70-85634c9ec762"
+      }
+     },
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "litellm-gateway"
+      }
+     },
+     {
+      "key": "deployment.environment",
+      "value": {
+       "stringValue": "production"
+      }
+     },
+     {
+      "key": "model_id",
+      "value": {
+       "stringValue": "litellm-gateway"
+      }
+     }
+    ]
+   },
+   "scopeSpans": [
+    {
+     "scope": {
+      "name": "litellm"
+     },
+     "spans": [
+      {
+       "traceId": "1ea6a0cd14f9c885da247ff9ea9768ba",
+       "spanId": "f9b9446a8459774d",
+       "parentSpanId": "99d8cdb2e6099159",
+       "name": "router",
+       "kind": 1,
+       "startTimeUnixNano": "1789346186954647040",
+       "endTimeUnixNano": "1789346186954729984",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "call_type",
+         "value": {
+          "stringValue": "async_get_available_deployment"
+         }
+        },
+        {
+         "key": "service",
+         "value": {
+          "stringValue": "router"
+         }
+        }
+       ]
+      },
+      {
+       "traceId": "1ea6a0cd14f9c885da247ff9ea9768ba",
+       "spanId": "32869343526c9857",
+       "parentSpanId": "99d8cdb2e6099159",
+       "name": "raw_gen_ai_request",
+       "kind": 1,
+       "startTimeUnixNano": "1789346186954801152",
+       "endTimeUnixNano": "1789346186956721920",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "llm.openai.stringified_raw_response",
+         "value": {
+          "stringValue": "my-original-response"
+         }
+        }
+       ]
+      },
+      {
+       "traceId": "1ea6a0cd14f9c885da247ff9ea9768ba",
+       "spanId": "99d8cdb2e6099159",
+       "parentSpanId": "",
+       "name": "Received Proxy Server Request",
+       "kind": 2,
+       "startTimeUnixNano": "1789346186947508224",
+       "endTimeUnixNano": "1789346186956721920",
+       "status": {
+        "code": 1,
+        "message": ""
+       },
+       "attributes": [
+        {
+         "key": "metadata.user_api_key_hash",
+         "value": {
+          "stringValue": "bf7f46e1d63e01df73f245a9557fc2adf4a26adcaf92f53ff50bd77bea5b4200"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_alias",
+         "value": {
+          "stringValue": "beta-ci"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_spend",
+         "value": {
+          "doubleValue": 3.7499999999999997e-06
+         }
+        },
+        {
+         "key": "metadata.user_api_key_max_budget",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_budget_reset_at",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_id",
+         "value": {
+          "stringValue": "team-beta"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_org_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_project_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_id",
+         "value": {
+          "stringValue": "bob"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_team_alias",
+         "value": {
+          "stringValue": "Beta"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_user_email",
+         "value": {
+          "stringValue": "bob@example.test"
+         }
+        },
+        {
+         "key": "metadata.user_api_key_end_user_id",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_request_route",
+         "value": {
+          "stringValue": "/v1/chat/completions"
+         }
+        },
+        {
+         "key": "metadata.spend_logs_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.requester_ip_address",
+         "value": {
+          "stringValue": "127.0.0.1"
+         }
+        },
+        {
+         "key": "metadata.user_agent",
+         "value": {
+          "stringValue": "curl/8.7.1"
+         }
+        },
+        {
+         "key": "metadata.requester_metadata",
+         "value": {
+          "stringValue": "{'user_api_key_team_id': 'team-beta', 'team_id': 'team-alpha', 'user_api_key_user_id': 'bob', 'headers': {'host': '127.0.0.1:59841', 'user-agent': 'curl/8.7.1', 'accept': '*/*', 'content-type': 'application/json', 'content-length': '141'}}"
+         }
+        },
+        {
+         "key": "metadata.prompt_management_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.applied_guardrails",
+         "value": {
+          "stringValue": "[]"
+         }
+        },
+        {
+         "key": "metadata.mcp_tool_call_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.vector_store_request_metadata",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.usage_object",
+         "value": {
+          "stringValue": "{'completion_tokens': 20, 'prompt_tokens': 10, 'total_tokens': 30, 'completion_tokens_details': None, 'prompt_tokens_details': None}"
+         }
+        },
+        {
+         "key": "metadata.requester_custom_headers",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.cold_storage_object_key",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.user_api_key_auth_metadata",
+         "value": {
+          "stringValue": "{}"
+         }
+        },
+        {
+         "key": "metadata.team_alias",
+         "value": {
+          "stringValue": ""
+         }
+        },
+        {
+         "key": "metadata.team_id",
+         "value": {
+          "stringValue": "team-alpha"
+         }
+        },
+        {
+         "key": "hidden_params",
+         "value": {
+          "stringValue": "{\"model_id\": \"b24c45b37b021f0dddfe715ef667c4ff3b16847a07f64d991eaef537270eea72\", \"cache_key\": null, \"api_base\": \"https://api.openai.com\", \"response_cost\": 1.35e-05, \"additional_headers\": {}, \"litellm_overhead_time_ms\": null, \"batch_models\": null, \"litellm_model_name\": \"openai/gpt-4o-mini\", \"usage_object\": null}"
+         }
+        },
+        {
+         "key": "gen_ai.cost.input_cost",
+         "value": {
+          "doubleValue": 1.5e-06
+         }
+        },
+        {
+         "key": "gen_ai.cost.output_cost",
+         "value": {
+          "doubleValue": 1.2e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.total_cost",
+         "value": {
+          "doubleValue": 1.35e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.tool_usage_cost",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.original_cost",
+         "value": {
+          "doubleValue": 1.35e-05
+         }
+        },
+        {
+         "key": "gen_ai.cost.discount_percent",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.discount_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_percent",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_fixed_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.cost.margin_total_amount",
+         "value": {
+          "doubleValue": 0.0
+         }
+        },
+        {
+         "key": "gen_ai.request.model",
+         "value": {
+          "stringValue": "gpt-4o-mini"
+         }
+        },
+        {
+         "key": "llm.request.type",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.system",
+         "value": {
+          "stringValue": "openai"
+         }
+        },
+        {
+         "key": "llm.is_streaming",
+         "value": {
+          "stringValue": "False"
+         }
+        },
+        {
+         "key": "gen_ai.response.id",
+         "value": {
+          "stringValue": "chatcmpl-b95234b9-3bfc-4f01-b6a0-3a8d89917631"
+         }
+        },
+        {
+         "key": "gen_ai.response.model",
+         "value": {
+          "stringValue": "fast-alias"
+         }
+        },
+        {
+         "key": "gen_ai.usage.total_tokens",
+         "value": {
+          "intValue": "30"
+         }
+        },
+        {
+         "key": "gen_ai.usage.output_tokens",
+         "value": {
+          "intValue": "20"
+         }
+        },
+        {
+         "key": "gen_ai.usage.input_tokens",
+         "value": {
+          "intValue": "10"
+         }
+        },
+        {
+         "key": "gen_ai.input.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"user\", \"parts\": [{\"type\": \"text\", \"content\": \"spoof\"}]}]"
+         }
+        },
+        {
+         "key": "gen_ai.operation.name",
+         "value": {
+          "stringValue": "acompletion"
+         }
+        },
+        {
+         "key": "gen_ai.output.messages",
+         "value": {
+          "stringValue": "[{\"role\": \"assistant\", \"parts\": [{\"type\": \"text\", \"content\": \"hello from the mock\"}], \"finish_reason\": \"stop\"}]"
+         }
+        },
+        {
+         "key": "gen_ai.response.finish_reasons",
+         "value": {
+          "stringValue": "[\"stop\"]"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

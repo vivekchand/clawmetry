@@ -1,0 +1,8 @@
+# The versions this recipe is verified against in CI (ci.yml job
+# otel-recipe-langgraph, hash-pinned in .github/requirements/otel-recipe-langgraph.txt).
+# Newer versions will usually work; these are the ones that were proven.
+langgraph==1.2.11
+langchain-core==1.6.3
+opentelemetry-instrumentation-langchain==0.62.3
+opentelemetry-sdk==1.44.0
+opentelemetry-exporter-otlp-proto-http==1.44.0
