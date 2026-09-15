@@ -1,0 +1,45 @@
+<!--
+  Compliance tab: framework controls, evidence states, printable report and
+  MITRE ATLAS scenario traceability (REQ-COMP-FWM-004, Factory requirement
+  2b319261-73a2-4f64-b497-3dd80b99a72e, clawmetry-pro#250).
+
+  This is a shell. The evaluation lives in clawmetry-pro and answers
+  /api/compliance/*; without it the OSS stub answers 402 and
+  static/js/compliance.js renders an upgrade prompt. On the hosted dashboard
+  (window.CLOUD_MODE) the tab says evaluation runs on the agent machine and
+  fetches nothing, because compliance evidence is not in the snapshot.
+
+  Rendered for every tier on purpose: entitlement is decided by the pro
+  route's own gate, which `is_pro` does not model, so a server-side paywall
+  here would lock out an entitled self-hosted licence.
+-->
+<div class="page" id="page-compliance">
+  <div style="padding:12px 0 8px 0;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+      <div style="min-width:240px;">
+        <h2 style="margin:0 0 4px 0;font-size:18px;font-weight:700;color:var(--text-primary);">Compliance</h2>
+        <div style="font-size:12px;color:var(--text-secondary);max-width:680px;line-height:1.5;">
+          Framework controls and the evidence ClawMetry stored for them in a period. Coverage, not compliance: this is supporting evidence for a review, not a certification.
+        </div>
+      </div>
+    </div>
+
+    <div id="cm-comp-controls" style="display:none;gap:8px;align-items:flex-end;flex-wrap:wrap;margin:8px 0 12px 0;">
+      <label style="display:flex;flex-direction:column;font-size:11px;color:var(--text-muted);gap:3px;">Framework
+        <select id="cm-comp-framework" style="min-width:220px;padding:6px 8px;border-radius:6px;border:1px solid var(--border-primary);background:var(--bg-secondary);color:var(--text-primary);"></select>
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:11px;color:var(--text-muted);gap:3px;">From
+        <input type="date" id="cm-comp-from" style="padding:5px 8px;border-radius:6px;border:1px solid var(--border-primary);background:var(--bg-secondary);color:var(--text-primary);">
+      </label>
+      <label style="display:flex;flex-direction:column;font-size:11px;color:var(--text-muted);gap:3px;">To
+        <input type="date" id="cm-comp-to" style="padding:5px 8px;border-radius:6px;border:1px solid var(--border-primary);background:var(--bg-secondary);color:var(--text-primary);">
+      </label>
+      <button type="button" id="cm-comp-evaluate" onclick="complianceEvaluate()" style="padding:7px 14px;border-radius:6px;border:0;background:var(--bg-accent);color:#fff;font-weight:600;cursor:pointer;">Show controls</button>
+      <button type="button" id="cm-comp-report" onclick="complianceOpenReport()" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border-primary);background:transparent;color:var(--text-primary);cursor:pointer;">Printable report</button>
+      <button type="button" id="cm-comp-bundle" onclick="complianceDownloadBundle()" style="padding:7px 14px;border-radius:6px;border:1px solid var(--border-primary);background:transparent;color:var(--text-primary);cursor:pointer;">Evidence bundle (.zip)</button>
+    </div>
+
+    <div id="cm-comp-status" role="status" style="font-size:12px;color:var(--text-muted);min-height:16px;margin-bottom:6px;"></div>
+    <div id="cm-comp-body"><div style="font-size:13px;color:var(--text-muted);padding:24px 0;">Loading compliance frameworks…</div></div>
+  </div>
+</div>
