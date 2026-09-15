@@ -864,6 +864,7 @@ jobs:
             tests/test_cost_basis_labels.py \
             tests/test_provenance.py \
             tests/test_provenance_render_coverage.py \
+            tests/test_cost_basis_remaining_surfaces.py \
             tests/test_transcript_local_store.py \
             tests/test_interceptor_daemon_tail.py \
             tests/test_snapshot_transcripts_runtime_fair.py \
@@ -1187,6 +1188,7 @@ jobs:
           python3 -m pytest \
             tests/test_otlp_daemon_free_intake.py \
             tests/test_otlp_trace_guard_redaction.py \
+            tests/test_otlp_span_parity_sources_content.py \
             tests/test_otlp_logs.py \
             tests/test_genai_cache_semconv.py \
             tests/test_otlp_metrics_edge_cases.py \

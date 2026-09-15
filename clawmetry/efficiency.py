@@ -27,6 +27,7 @@ import logging
 import math
 from typing import Any
 
+from clawmetry import cost_basis_surfaces as _cost_labels
 from clawmetry.providers_pricing import (
     _CACHE_READ_MULT,
     _CACHE_WRITE_MULT,
@@ -170,6 +171,10 @@ def _empty_scope(days: int) -> dict[str, Any]:
         "cache_saved_monthly_usd": 0.0,
         "projected_monthly_cost_usd": 0.0,
         "actions": [],
+        # What kind of money each figure is (REQ-OBS-CEA-025.8). Stamped in
+        # the engine so /api/efficiency and the hosted snapshot slice agree.
+        "provenance": _cost_labels.efficiency_entries(days),
+        "provenance_version": 1,
     }
 
 
@@ -346,6 +351,8 @@ def _build_scope(rows: list[dict[str, Any]], days: int) -> dict[str, Any]:
         "cache_saved_monthly_usd": round(cache_saved_window_usd * factor, 6),
         "projected_monthly_cost_usd": round(projected_monthly_cost_usd, 6),
         "actions": actions,
+        "provenance": _cost_labels.efficiency_entries(days),
+        "provenance_version": 1,
     }
 
 

@@ -17817,23 +17817,52 @@ def _build_transcripts(limit_sessions=8, msg_cap=80, extra_sids=None):
         return {}
 
 
-def _build_autonomy_snapshot():
+def _build_autonomy_snapshot(runtime=None):
     """Autonomy block for the cloud snapshot (same shape as /api/autonomy).
 
     Trial-bug fix: the Overview "How independent is your agent?" card fetches
     /api/autonomy, which is empty on the hosted dashboard (no DuckDB) because no
     snapshot slice carried it -> the card was stuck on "Just getting started".
     Reuses the store-backed compute from routes.autonomy (best-effort -> empty).
+    ``runtime`` computes one runtime's cadence for ``autonomyByRuntime``.
     """
     try:
         from routes.autonomy import _try_local_store_autonomy, _empty_response
         try:
-            r = _try_local_store_autonomy()
+            r = _try_local_store_autonomy(runtime=runtime) if runtime else _try_local_store_autonomy()
         except Exception:
             r = None
         return r if r is not None else _empty_response()
     except Exception:
         return {}
+
+
+_AUTONOMY_BY_RT_TTL_S = 300.0
+_autonomy_by_rt_memo: dict = {"ts": 0.0, "keys": None, "value": {}}
+
+
+def _build_autonomy_by_runtime(runtime_keys):
+    """``{runtime: autonomy}`` for the hosted Overview card under the switcher.
+
+    Three event scans per runtime is too much to repeat every sync cycle, and a
+    7-day check-in cadence does not move in seconds, so the result is reused
+    for five minutes unless the set of runtimes changes.
+    """
+    keys = tuple(sorted(str(k) for k in (runtime_keys or []) if k))
+    now = time.time()
+    memo = _autonomy_by_rt_memo
+    if memo["keys"] == keys and (now - memo["ts"]) < _AUTONOMY_BY_RT_TTL_S:
+        return memo["value"]
+    out: dict = {}
+    for rt in keys:
+        try:
+            block = _build_autonomy_snapshot(runtime=rt)
+        except Exception:
+            continue
+        if block:
+            out[rt] = block
+    memo.update(ts=now, keys=keys, value=out)
+    return out
 
 
 def _build_activity_heatmap_snapshot():
@@ -18407,8 +18436,12 @@ def _build_waste_flags(session_limit: int = 60, events_per_session: int = 500):
     return out
 
 
+_HEALTH_TIMELINE_TTL_S = 120.0
+_health_timeline_memo: dict = {"ts": 0.0, "key": None, "value": None}
+
+
 def _build_health_timeline(session_limit: int = 60, events_per_session: int = 500,
-                           dots_per_runtime: int = 30):
+                           dots_per_runtime: int = 30, per_runtime_floor: int = 8):
     """Per-runtime sparkline of recent runs (#2196 item #4).
 
     Returns ``{"runtimes": [{"runtime": str, "dots": [...]}, …]}`` where each
@@ -18420,6 +18453,13 @@ def _build_health_timeline(session_limit: int = 60, events_per_session: int = 50
 
     Daemon-only (uses the writer-owned store handle). Best-effort + bounded
     so a busy store can't bloat the encrypted snapshot.
+
+    The newest ``session_limit`` sessions node-wide can all belong to one loud
+    runtime: a node with 1,700 Claude Code sessions shipped only
+    ``claude_code``, so hosted Run Health had no row for Codex. Each runtime's
+    own ``per_runtime_floor`` most recent sessions are added from the fair
+    per-runtime query. The result is reused for ``_HEALTH_TIMELINE_TTL_S``
+    because every added session costs one events read.
     """
     try:
         from clawmetry import local_store as _ls
@@ -18430,9 +18470,24 @@ def _build_health_timeline(session_limit: int = 60, events_per_session: int = 50
         store = _ls.get_store()
         if store is None:
             return {"runtimes": []}
-        sessions = store.query_sessions(limit=int(session_limit))
+        memo_key = (id(store), session_limit, events_per_session, dots_per_runtime, per_runtime_floor)
+        memo = _health_timeline_memo
+        if memo["key"] == memo_key and (time.time() - memo["ts"]) < _HEALTH_TIMELINE_TTL_S:
+            return memo["value"]
+        sessions = list(store.query_sessions(limit=int(session_limit)) or [])
     except Exception:
         return {"runtimes": []}
+
+    seen = {str(s.get("session_id")) for s in sessions if s.get("session_id")}
+    try:
+        fair = store.query_recent_sessions_by_runtime(per_runtime=int(per_runtime_floor)) or []
+    except Exception:
+        fair = []
+    for row in fair:
+        fsid = str((row or {}).get("session_id") or "")
+        if fsid and fsid not in seen:
+            seen.add(fsid)
+            sessions.append({"session_id": fsid})
 
     buckets: dict[str, list] = {}
     for s in sessions:
@@ -18443,6 +18498,17 @@ def _build_health_timeline(session_limit: int = 60, events_per_session: int = 50
             events = store.query_events(session_id=sid, limit=int(events_per_session))
         except Exception:
             continue
+        # A session added by the per-runtime query has no rollup row: take its
+        # start, end and spend from the events just read.
+        if s.get("started_at") is None and events:
+            stamps = sorted(str(e.get("ts")) for e in events if e.get("ts"))
+            if stamps:
+                s = dict(s, started_at=stamps[0], updated_at=stamps[-1])
+        if s.get("cost_usd") is None and events:
+            try:
+                s = dict(s, cost_usd=sum(float(e.get("cost_usd") or 0.0) for e in events))
+            except (TypeError, ValueError):
+                pass
         try:
             signals = _wf.compute_signals_from_events(events)
             flags = _wf.compute_flags(signals)
@@ -18480,7 +18546,9 @@ def _build_health_timeline(session_limit: int = 60, events_per_session: int = 50
         ),
         reverse=True,
     )
-    return {"runtimes": runtimes_out}
+    result = {"runtimes": runtimes_out}
+    _health_timeline_memo.update(ts=time.time(), key=memo_key, value=result)
+    return result
 
 
 def _build_resolved_errors(limit: int = 5000):
@@ -22338,7 +22406,16 @@ def _emit_detector_incidents(store, state: dict) -> int:
         # Derived from the session id, not from agent_type: see
         # _detector_runtime. Getting this wrong silently merges every runtime
         # into one cohort.
-        runtime = _detector_runtime(sid, s.get("agent_type") or "") or None
+        runtime = None
+        try:
+            # A session materialised from received spans names its own
+            # runtime; the id-prefix guess reads ``openclaw`` for it on a Free
+            # install and would file its incident there (AC-OBS-OTG-001.7).
+            from clawmetry.otlp_guard import observe_only_runtime as _oor
+            runtime = _oor(s)
+        except Exception:  # noqa: BLE001
+            runtime = None
+        runtime = runtime or _detector_runtime(sid, s.get("agent_type") or "") or None
         baseline = _guard_baseline_for(store, baseline_cache, runtime or "",
                                        facts.get("agent_id") or "")
         try:
@@ -23892,6 +23969,13 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 continue
     except Exception as _e_rtb:
         log.debug("snapshot: per-runtime breakdown failed: %s", _e_rtb)
+    try:
+        _autonomy_by_rt = _build_autonomy_by_runtime(
+            list(_runtime_summary.keys()) if isinstance(_runtime_summary, dict) else []
+        )
+    except Exception as _e_aut:
+        _autonomy_by_rt = {}
+        log.debug("snapshot: per-runtime autonomy failed: %s", _e_aut)
 
     # Agent Inventory roster (single-pane control-tower view). Built ENTIRELY
     # from rollups already computed above (runtime_summary / outcomes / activity
@@ -24148,6 +24232,9 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # surface as sp.cohortSuggested (WO-60).
         "cohortSuggested": cohort_slice,
         "autonomy": _build_autonomy_snapshot(),
+        # Per runtime, so the hosted "How independent is your agent?" card
+        # follows the switcher (cm-cloud autonomy interceptor reads ?runtime=).
+        "autonomyByRuntime": _autonomy_by_rt,
         "flowRuns": _build_flow_runs_snapshot(),
         "flowLanes": _build_flow_lanes_snapshot(),
         "evals": evals_slice,
