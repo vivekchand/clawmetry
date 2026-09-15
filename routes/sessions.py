@@ -5656,6 +5656,15 @@ def _try_local_store_transcript(session_id: str, _events=None, _msg_cap: int = 5
         "intent_source": _intent.get("intent_source") or "",
         "_source": "local_store",
     }
+    # Per-message cost is what the Sessions tab's per-turn and per-tool chips
+    # sum and print (REQ-OBS-CEA-025.8). The hosted snapshot's transcripts
+    # slice reuses this dict, so the basis reaches the hosted replay too.
+    try:
+        from clawmetry import cost_basis_surfaces as _cost_labels
+        _cost_labels.stamp(ret, _cost_labels.transcript_entries(
+            "DuckDB events on this node"))
+    except Exception:
+        pass
     if truncated:
         ret["_truncated"] = True
         ret["_oldest_contiguous_ts"] = oldest_contiguous_ts
@@ -5690,12 +5699,19 @@ def api_transcript_page(session_id):
     if rows:
         t = _try_local_store_transcript(session_id, _events=rows, _msg_cap=2000)
         msgs = (t or {}).get("messages") or []
-    return jsonify({
+    out = {
         "messages": msgs,
         "count": len(msgs),
         "has_more": bool(page.get("has_more")),
         "next_before_ts": page.get("next_before_ts"),
-    })
+    }
+    try:
+        from clawmetry import cost_basis_surfaces as _cost_labels
+        _cost_labels.stamp(out, _cost_labels.transcript_entries(
+            "DuckDB events on this node"))
+    except Exception:
+        pass
+    return jsonify(out)
 
 
 @bp_sessions.route("/api/transcript/<session_id>")

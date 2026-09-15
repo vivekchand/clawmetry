@@ -18,13 +18,15 @@ import statistics
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from clawmetry.config import is_local_store_read_enabled
 
 bp_autonomy = Blueprint("autonomy", __name__)
 
 _AUTONOMY_CACHE = {"ts": 0.0, "data": None}
 _AUTONOMY_CACHE_TTL_SECONDS = 60
+# runtime -> (computed_at, payload) for /api/autonomy?runtime=<id>.
+_AUTONOMY_RT_CACHE: dict = {}
 
 
 # ---------------------------------------------------------------------------
@@ -275,8 +277,11 @@ def _empty_response() -> dict:
     }
 
 
-def _try_local_store_autonomy() -> dict | None:
+def _try_local_store_autonomy(runtime: str | None = None) -> dict | None:
     """Tier-1 DuckDB fast path for /api/autonomy.
+
+    ``runtime`` reads only that runtime's user turns (the store's session-id
+    prefix filter), so each runtime's check-in cadence stands on its own.
 
     Reads ``message`` events from the local store, filters to user-role
     messages within the last 7 days, and runs the same per-session gap
@@ -310,16 +315,18 @@ def _try_local_store_autonomy() -> dict | None:
     # Overview "How independent is your agent?" widget rendered blank ``—``.
     try:
         from routes.local_query import local_store_via_daemon
+        # NemoClaw runs the OpenClaw adapter, so its turns carry OpenClaw ids.
+        rt_kw = {"runtime": "openclaw" if runtime == "nemoclaw" else runtime} if runtime else {}
         rows = []
         for et in ("message", "user", "prompt.submitted"):
-            sub = local_store_via_daemon("query_events", event_type=et, limit=5000)
+            sub = local_store_via_daemon("query_events", event_type=et, limit=5000, **rt_kw)
             if sub:
                 rows.extend(sub)
         if not rows:
             # Daemon unreachable → single-process fallback (tests/dev mode).
             store = local_store.get_store(read_only=True)
             for et in ("message", "user", "prompt.submitted"):
-                sub = store.query_events(event_type=et, limit=5000) or []
+                sub = store.query_events(event_type=et, limit=5000, **rt_kw) or []
                 rows.extend(sub)
     except Exception:
         return None
@@ -472,10 +479,32 @@ def _try_local_store_autonomy() -> dict | None:
 # Route
 # ---------------------------------------------------------------------------
 
+def _autonomy_for_runtime(runtime: str, now: float) -> dict:
+    """``/api/autonomy?runtime=<id>``: that runtime's user turns only.
+
+    No node-wide fallback: with no turns in the store for the runtime the
+    answer is the empty response, never another runtime's cadence (the legacy
+    JSONL scan reads OpenClaw's session files alone).
+    """
+    slot = _AUTONOMY_RT_CACHE.get(runtime)
+    if slot is not None and (now - slot[0]) < _AUTONOMY_CACHE_TTL_SECONDS:
+        return slot[1]
+    try:
+        result = _try_local_store_autonomy(runtime=runtime)
+    except Exception:
+        result = None
+    result = dict(result if result is not None else _empty_response(), runtime=runtime)
+    _AUTONOMY_RT_CACHE[runtime] = (now, result)
+    return result
+
+
 @bp_autonomy.route("/api/autonomy")
 def api_autonomy():
     import dashboard as _d
     now = datetime.now(tz=timezone.utc).timestamp()
+    runtime = (request.args.get("runtime") or "").strip().lower()
+    if runtime and runtime != "all":
+        return jsonify(_autonomy_for_runtime(runtime, now))
     cached = _AUTONOMY_CACHE.get("data")
     if cached is not None and (now - float(_AUTONOMY_CACHE.get("ts") or 0)) < _AUTONOMY_CACHE_TTL_SECONDS:
         return jsonify(cached)
