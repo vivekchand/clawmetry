@@ -427,18 +427,20 @@ def _pii_core(text: str, cats: "dict[str, bool]") -> str:
     return out
 
 
-def redact_text(text: str) -> str:
+def redact_text(text: str, pii: bool = True) -> str:
     """Redact secret-shaped substrings in free text. Idempotent-ish: a value
-    already replaced by a fingerprint won't re-match."""
+    already replaced by a fingerprint won't re-match. ``pii=False`` skips the
+    personal-data tier (received telemetry under the ``full`` content profile,
+    clawmetry/otlp_content.py); the secret tier always runs."""
     if _disabled() or not text or len(text) > _MAX_SCAN:
         return text
     try:
-        return _scrub_text(text)
+        return _scrub_text(text) if pii else _scrub_text(text, pii=False)
     except Exception:
         return text  # never lose data on a redaction bug
 
 
-def _scrub_text(text: str) -> str:
+def _scrub_text(text: str, pii: bool = True) -> str:
     """Secret tier, then personal-data tier. No size cap and no error
     handling: :func:`redact_text` returns the input when this fails (the event
     path's "never lose data" rule) and :func:`scrub_payload` withholds it."""
@@ -451,7 +453,7 @@ def _scrub_text(text: str) -> str:
         out = pat.sub(lambda m: _fingerprint(m.group(0)), out)
     # Personal-data tier, after secrets so a token that happens to look
     # like an identifier is fingerprinted rather than typed.
-    if not _pii_tier_disabled():
+    if pii and not _pii_tier_disabled():
         out = _pii_core(out, pii_status()["categories"])
     return out
 
@@ -469,18 +471,31 @@ def _is_otel_id(key: str, value: str) -> bool:
     return key in _OTEL_ID_KEYS and bool(_OTEL_HEX_ID.fullmatch(value))
 
 
-def _redact_value(value: Any, key: str = "") -> Any:
+def _redact_value(value: Any, key: str = "", pii: bool = True) -> Any:
     if isinstance(value, str):
         if _is_otel_id(key, value):
             return value
         if key and key.lower() not in _COUNT_KEYS and _SENSITIVE_KEY.match(key) and len(value) >= 6:
             return _fingerprint(value)
-        return redact_text(value)
+        return redact_text(value) if pii else redact_text(value, pii=False)
     if isinstance(value, dict):
-        return {k: _redact_value(v, k if isinstance(k, str) else "") for k, v in value.items()}
+        return {k: _redact_value(v, k if isinstance(k, str) else "", pii) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [_redact_value(v) for v in value]
+        return [_redact_value(v, "", pii) for v in value]
     return value
+
+
+def _content_profile_allows_pii(kind: str, obj: Any) -> bool:
+    """Whether the personal-data tier applies, per the OTLP content profile
+    (clawmetry/otlp_content.py). True unless received telemetry is under
+    ``full``; the secret tier is never affected."""
+    try:
+        from clawmetry import otlp_content as _oc
+        if kind == "span":
+            return _oc.personal_data_applies_to_span(obj)
+        return _oc.personal_data_applies_to_event(obj)
+    except Exception:
+        return True
 
 
 def redact_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -490,8 +505,9 @@ def redact_event(event: dict[str, Any]) -> dict[str, Any]:
     if _disabled() or not isinstance(event, dict):
         return event
     try:
+        pii = _content_profile_allows_pii("event", event)
         return {
-            k: (v if k in _STRUCTURAL_KEYS else _redact_value(v, k if isinstance(k, str) else ""))
+            k: (v if k in _STRUCTURAL_KEYS else _redact_value(v, k if isinstance(k, str) else "", pii))
             for k, v in event.items()
         }
     except Exception:
@@ -533,7 +549,7 @@ def _leaf_key(key: Any) -> str:
     return key.rsplit(".", 1)[-1]
 
 
-def _scrub_strict(value: Any, key: str, withheld: list) -> Any:
+def _scrub_strict(value: Any, key: str, withheld: list, pii: bool = True) -> Any:
     if isinstance(value, (bytes, bytearray, memoryview)):
         try:
             value = bytes(value).decode("utf-8")
@@ -551,30 +567,31 @@ def _scrub_strict(value: Any, key: str, withheld: list) -> Any:
             if (leaf and leaf.lower() not in _COUNT_KEYS
                     and _SENSITIVE_KEY.match(leaf) and len(value) >= 6):
                 return _fingerprint(value)
-            return _scrub_text(value)
+            return _scrub_text(value) if pii else _scrub_text(value, pii=False)
         except Exception:
             withheld.append("error")
             return WITHHELD_ERROR
     if isinstance(value, dict):
-        return {k: _scrub_strict(v, k if isinstance(k, str) else "", withheld)
+        return {k: _scrub_strict(v, k if isinstance(k, str) else "", withheld, pii)
                 for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         # An attribute array inherits its name: semconv sends
         # ``http.request.header.authorization`` as a list of strings.
-        return [_scrub_strict(v, key, withheld) for v in value]
+        return [_scrub_strict(v, key, withheld, pii) for v in value]
     return value
 
 
-def scrub_payload(value: Any, key: str = "") -> "tuple[Any, list[str]]":
+def scrub_payload(value: Any, key: str = "", pii: bool = True) -> "tuple[Any, list[str]]":
     """Scrub one received payload (a span's attributes, a ledger row's
     attributes, ...). Returns ``(scrubbed, withheld_reasons)``: an empty list
     means every string in it was scanned. With ``CLAWMETRY_REDACT=0`` the
-    value comes back untouched, matching the event path. Never raises."""
+    value comes back untouched, matching the event path. ``pii=False`` skips
+    only the personal-data tier. Never raises."""
     if _disabled():
         return value, []
     withheld: list = []
     try:
-        return _scrub_strict(value, key, withheld), sorted(set(withheld))
+        return _scrub_strict(value, key, withheld, pii), sorted(set(withheld))
     except Exception:
         return WITHHELD_ERROR, ["error"]
 
@@ -603,13 +620,16 @@ def redact_span(span: dict[str, Any]) -> dict[str, Any]:
     if _disabled() or not isinstance(span, dict):
         return span
     reasons: set = set()
+    # A received span stored under the ``full`` content profile skips the
+    # personal-data tier; secrets are scrubbed either way.
+    pii = _content_profile_allows_pii("span", span)
     try:
         out: dict[str, Any] = {}
         for k, v in span.items():
             if k in _SPAN_STRUCTURAL_KEYS:
                 out[k] = v
                 continue
-            scrubbed, why = scrub_payload(v)
+            scrubbed, why = scrub_payload(v, "", pii)
             out[k] = scrubbed
             reasons.update(why)
     except Exception:

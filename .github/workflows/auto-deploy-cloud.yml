@@ -25,7 +25,20 @@ on:
   # The path that ACTUALLY works is the explicit `gh workflow run` dispatch at
   # the end of release-on-merge.yml, after the upload — the only moment when
   # PyPI's "latest" is the release that just published.
-  workflow_run:
+  #
+  # zizmor dangerous-triggers, analysed and accepted. The rule fires on any
+  # `workflow_run`, because the trigger runs in the BASE repo with that repo's
+  # secrets and scopes even when the run that woke it came from a fork PR —
+  # dangerous precisely when the handler then consumes something from that
+  # upstream run. This one consumes nothing from it. Both checkouts below take
+  # no `ref:`, so each resolves to the default branch rather than any event-
+  # supplied sha, and the version pinned comes from PyPI (or the dispatch
+  # input), never from the triggering run. Upstream is release-on-merge.yml,
+  # whose own job is gated on `merged == true`, a `[RELEASE]` title and a
+  # single actor; a fork PR closing can at most produce a completed run whose
+  # job was skipped. Removing the trigger is not the alternative — the header
+  # above records that it does not fire at all and is kept as belt-and-braces.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: ["Auto-release on [RELEASE] merge"]
     types: [completed]
   workflow_dispatch:

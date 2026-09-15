@@ -4897,7 +4897,9 @@ def _otel_to_row(span, resource_attrs):
     if output_val is None:
         output_val = _assemble_indexed("gen_ai.completion")
 
-    return {
+    # AC-OBS-OTG-001.9: the operator's content profile, applied before the
+    # row reaches the store (clawmetry/otlp_content.py).
+    return _otlp_minimise_span_row({
         "span_id": _hex(span.span_id),
         "trace_id": _hex(span.trace_id),
         "parent_span_id": _hex(span.parent_span_id) or None,
@@ -4926,7 +4928,7 @@ def _otel_to_row(span, resource_attrs):
         "attributes": attrs,
         "events": events,
         "links": links,
-    }
+    })
 
 
 def _ingest_litellm_span(span, attrs, resource_attrs, store, gateway_records, received_at):
@@ -5372,6 +5374,31 @@ _OTLP_TOOL_RESULT_EVENTS = frozenset(
 # an ``events`` row of the same suffix, fields copied by name, never
 # invented. Free text (``prompt`` / ``response``) is capped and tagged.
 _OTLP_TEXT_CAP = 4000
+
+
+def _otlp_minimise_span_row(row):
+    """Apply ``CLAWMETRY_OTLP_CONTENT`` to one received span row (REQ-OBS-OTG-001)."""
+    try:
+        from clawmetry import otlp_content as _oc
+        return _oc.minimise_span_row(row)
+    except Exception:
+        return row
+
+
+def _otlp_log_tool_event_id(session_id, record_id, attrs, phase):
+    """The event id for a tool record received as a log, and its call id.
+
+    A record carrying a call id takes the id a trace span of the same call
+    takes too (clawmetry/otlp_sources.py), so the two cannot both be stored.
+    """
+    try:
+        from clawmetry import otlp_sources as _src
+        cid = _src.call_id_from(attrs)
+        if cid:
+            return _src.call_event_id(session_id, cid, phase), cid
+    except Exception:
+        pass
+    return "otlp:" + record_id, None
 
 
 def _otlp_typed_event_data(prof, suffix, attrs, pick):
@@ -5921,7 +5948,8 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         # branch (tool NAMES only) still works untouched.
                         args = {"_otlp_args_unknown": record_id}
                     ev = dict(ev_common)
-                    ev["id"] = "otlp:" + record_id
+                    ev["id"], _call_id = _otlp_log_tool_event_id(
+                        session_id, record_id, attrs, "call")
                     ev["event_type"] = "tool_call"
                     ev["data"] = {
                         "tool": str(tool_name),
@@ -5929,13 +5957,16 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         "args": args,
                         "decision": decision,
                         "source": _f(attrs, "source", "tool.source"),
+                        "call_id": _call_id,
                         "_otlp": True,
+                        "_otlp_signal": "log",
                     }
                     out_events.append(ev)
                 elif suffix in _OTLP_TOOL_RESULT_EVENTS and tool_name:
                     err_text = _f(attrs, "error", "error.message") or ""
                     ev = dict(ev_common)
-                    ev["id"] = "otlp:" + record_id
+                    ev["id"], _call_id = _otlp_log_tool_event_id(
+                        session_id, record_id, attrs, "result")
                     ev["event_type"] = "tool_result"
                     ev["data"] = {
                         "tool": str(tool_name),
@@ -5943,7 +5974,9 @@ def _process_otlp_logs(pb_data, content_encoding=None, content_type=None):
                         "is_error": (success is False) or bool(err_text),
                         "error": err_text,
                         "duration_ms": dur_val,
+                        "call_id": _call_id,
                         "_otlp": True,
+                        "_otlp_signal": "log",
                     }
                     out_events.append(ev)
                 elif _prof is not None and suffix in (_prof.typed_events or {}):
