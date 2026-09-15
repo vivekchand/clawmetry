@@ -21,7 +21,23 @@ name: Release Canary
 # release. This gets a human the evidence and the exact link in minutes.
 
 on:
-  workflow_run:
+  # zizmor dangerous-triggers, analysed and accepted. The rule fires on any
+  # `workflow_run`, because the trigger runs in the BASE repo with that repo's
+  # secrets and scopes even when the run that woke it came from a fork PR —
+  # dangerous precisely when the handler then consumes something from that
+  # upstream run. This one consumes exactly one field, `conclusion`, to decide
+  # whether to chase the release at all. Every checkout below takes no `ref:`
+  # and sets `persist-credentials: false`, so nothing event-supplied is checked
+  # out and no credential is left in the working copy; what the canary then
+  # exercises is installed from PyPI by version, not built from the tree.
+  # Upstream is release-on-merge.yml, whose own job is gated on
+  # `merged == true`, a `[RELEASE]` title and a single actor, so a fork PR
+  # closing can at most produce a completed run whose job never did anything.
+  # The worst case if such a run does clear the `conclusion == 'success'` gate
+  # below is a redundant canary against whatever PyPI already calls latest:
+  # wasted minutes, no attacker input, and no write beyond the P0 issue the
+  # `alarm` job opens when the published artifact is genuinely broken.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: ["Auto-release on [RELEASE] merge"]
     types: [completed]
   workflow_dispatch:

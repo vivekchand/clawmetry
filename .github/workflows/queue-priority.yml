@@ -21,7 +21,20 @@ name: Queue priority (main first)
 on:
   push:
     branches: [main]
-  workflow_run:
+  # zizmor dangerous-triggers, analysed and accepted. The rule fires on any
+  # `workflow_run`, because the trigger runs in the BASE repo with that repo's
+  # secrets and scopes even when the run that woke it came from a fork PR —
+  # dangerous precisely when the handler then checks out or executes something
+  # from that upstream run. This workflow has no checkout at all: as the header
+  # above records, every step is `gh api` against GITHUB_TOKEN, so there is no
+  # attacker-controlled code path to reach. The only thing it reads from the
+  # event is `github.event_name`, to decide which of the two jobs runs.
+  #
+  # The `requeue` job does re-run parked runs for open PRs, forks included, but
+  # a re-run replays that run in its ORIGINAL pull_request context — the same
+  # restricted token it had the first time. It cannot borrow this workflow's
+  # scopes, which is why re-running is safe to automate here.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: ["Auto-deploy Cloud on OSS update"]
     types: [completed]
   schedule:
