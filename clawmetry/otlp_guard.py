@@ -26,10 +26,16 @@ Where each piece is wired (the call sites live deep in large files):
   every received span that is not a wait span, and writes the resulting
   ``tool_call`` / ``tool_result`` events in one ``LocalStore.put_otlp_batch``
   hop together with the ``waiting_on_user`` events (AC-OBS-OTG-001.1, .2).
-* ``LocalStore.put_otlp_batch`` applies the daemon-ownership rule and uses
-  :data:`TRACE_EVENT_ID_PREFIX` so the first OTLP signal (logs or traces) to
-  report a session owns its tool stream (AC-OBS-OTG-001.3), and passes the
-  log-record ledger's attributes through :func:`scrub_ledger_attributes`.
+* ``LocalStore.put_otlp_batch`` passes the log-record ledger's attributes
+  through :func:`scrub_ledger_attributes` and hands its events to
+  ``clawmetry/otlp_sources.py``, which records each tool call from one source:
+  machine observation, then the trace span, then the log record
+  (AC-OBS-OTG-001.3, .8).
+* ``routes/guard.py`` (the Guard sessions body, shared by the local tab and the
+  hosted snapshot slice) and ``sync._emit_detector_incidents`` call
+  :func:`observe_only_runtime` so a session materialised from spans keeps the
+  runtime its telemetry names, and :func:`observe_only_support` so Guard says
+  it cannot be controlled from here (AC-OBS-OTG-001.7).
 * ``LocalStore.ingest_spans_batch``, the single span write path, scrubs every
   span with ``redaction.redact_span`` and withholds a value it cannot scan
   (AC-OBS-OTG-001.4, .5).
@@ -53,10 +59,13 @@ Normalisation rules, each one a guard against a false reading:
 * Arguments the span did not carry are UNKNOWN, not empty. Hashing "no args"
   to one constant would make ten different reads look like a loop, so each
   unknown gets a distinct placeholder (the rule the log path already uses).
-* Event ids are ``otlp:span:<span_id>:call`` / ``:result``. The ``otlp:``
-  head keeps the daemon-ownership rule in ``put_otlp_batch`` working, and the
-  ``span:`` segment lets it tell a trace-derived tool stream from a
-  log-derived one, so a runtime exporting both is not counted twice.
+* Event ids: a span carrying a call id (``gen_ai.tool.call.id`` and the
+  spellings in ``otlp_sources.CALL_ID_KEYS``) uses the id both signals derive
+  from session and call id, ``otlp:call:<digest>:call`` / ``:result``, so a
+  log record of the same call names the same row. Without one it is
+  ``otlp:span:<span_id>:call`` / ``:result``. The ``otlp:`` head keeps the
+  daemon-ownership rule working; ``data._otlp_signal`` says which signal
+  wrote the row.
 """
 from __future__ import annotations
 
@@ -195,17 +204,25 @@ def tool_events_from_span(row: dict, attrs: dict, *, profiled: bool = False,
             "session_id": str(session_id),
             "runtime_kind": agent_type,
         }
+        from clawmetry import otlp_sources as _src
+        call_id = _src.call_id_from(attrs)
         provenance = {
             "_otlp": True,
             "_otlp_signal": "trace",
             "trace_id": row.get("trace_id"),
             "span_id": span_id,
-            "call_id": attrs.get("gen_ai.tool.call.id"),
+            "call_id": call_id,
             "capture": CAPTURE_AFTER_THE_FACT,
         }
+        if call_id:
+            call_event_id = _src.call_event_id(session_id, call_id, "call")
+            result_event_id = _src.call_event_id(session_id, call_id, "result")
+        else:
+            call_event_id = TRACE_EVENT_ID_PREFIX + span_id + ":call"
+            result_event_id = TRACE_EVENT_ID_PREFIX + span_id + ":result"
         call = dict(common)
         call.update({
-            "id": TRACE_EVENT_ID_PREFIX + span_id + ":call",
+            "id": call_event_id,
             "ts": _iso(start),
             "event_type": "tool_call",
             "data": dict(provenance, tool=tool, tool_name=tool, args=args),
@@ -225,7 +242,7 @@ def tool_events_from_span(row: dict, attrs: dict, *, profiled: bool = False,
                 result = str(result)
         res = dict(common)
         res.update({
-            "id": TRACE_EVENT_ID_PREFIX + span_id + ":result",
+            "id": result_event_id,
             "ts": _iso(end),
             "event_type": "tool_result",
             "data": dict(
@@ -264,8 +281,11 @@ def observation_label(events: Iterable[dict]) -> Optional[dict]:
                 data = {}
         if not isinstance(data, dict) or not data.get("_otlp"):
             return None
-        signals.add("trace" if str(ev.get("id") or "").startswith(TRACE_EVENT_ID_PREFIX)
-                    else "log")
+        sig = str(data.get("_otlp_signal") or "")
+        if sig not in ("trace", "log"):
+            sig = ("trace" if str(ev.get("id") or "").startswith(TRACE_EVENT_ID_PREFIX)
+                   else "log")
+        signals.add(sig)
         seen += 1
     if not seen:
         return None
@@ -298,11 +318,16 @@ def scrub_ledger_attributes(attributes: Any) -> Any:
     """
     try:
         from clawmetry import redaction as _r
+        from clawmetry import otlp_content as _oc
     except Exception:
         return attributes
     try:
+        prof = _oc.profile()
+        pii = prof != "full"  # AC-OBS-OTG-001.9: secrets are scrubbed under every profile
         if not isinstance(attributes, dict):
-            scrubbed, why = _r.scrub_payload(attributes)
+            if prof == "metadata" and attributes not in (None, ""):
+                return {_oc.MARKER_KEY: "metadata", "_value": _oc.WITHHELD}
+            scrubbed, why = _r.scrub_payload(attributes, "", pii)
             return _r.mark_withheld(scrubbed, why)
         reasons: set = set()
         out: dict = {}
@@ -316,14 +341,59 @@ def scrub_ledger_attributes(attributes: Any) -> Any:
                     if ik in LEDGER_IDENTITY_KEYS:
                         inner[ik] = iv
                         continue
-                    s, why = _r.scrub_payload(iv, ik if isinstance(ik, str) else "")
+                    iv = _oc.minimise_ledger_value(ik, iv)
+                    s, why = _r.scrub_payload(iv, ik if isinstance(ik, str) else "", pii)
                     inner[ik] = s
                     reasons.update(why)
                 out[key] = inner
             else:
-                s, why = _r.scrub_payload(value, key if isinstance(key, str) else "")
+                value = _oc.minimise_ledger_value(key, value)
+                s, why = _r.scrub_payload(value, key if isinstance(key, str) else "", pii)
                 out[key] = s
                 reasons.update(why)
+        if prof != "redacted":
+            out[_oc.MARKER_KEY] = prof
         return _r.mark_withheld(out, sorted(reasons))
     except Exception:
         return {"clawmetry.redaction": "withheld:error"}
+
+
+# ── Sessions seen only through received telemetry (AC-OBS-OTG-001.7) ───────
+
+OBSERVE_ONLY_SOURCE = "otlp_spans"
+OBSERVE_ONLY_REASON = (
+    "Seen only in telemetry this agent exports. Nothing runs on this machine "
+    "that ClawMetry could pause or stop, so there are no controls for it here."
+)
+
+
+def observe_only_runtime(session_row: Any) -> Optional[str]:
+    """The runtime a span-materialised session's telemetry names, else None.
+
+    ``LocalStore.materialize_otlp_sessions`` stamps ``metadata.source:
+    "otlp_spans"`` and ``metadata.runtime`` (the app's own identity). The
+    session-id prefix reader returns ``openclaw`` for any id on a Free
+    install, which filed such a session under the wrong runtime, hid it from
+    a runtime filter, and offered OpenClaw's controls for a remote agent.
+    """
+    try:
+        if not isinstance(session_row, dict):
+            return None
+        meta = session_row.get("metadata")
+        if isinstance(meta, (bytes, bytearray)):
+            meta = bytes(meta).decode("utf-8", "replace")
+        if isinstance(meta, str):
+            meta = json.loads(meta) if meta.strip() else {}
+        if not isinstance(meta, dict) or meta.get("source") != OBSERVE_ONLY_SOURCE:
+            return None
+        rt = str(meta.get("runtime") or session_row.get("agent_type") or "").strip().lower()
+        return rt or None
+    except Exception:
+        return None
+
+
+def observe_only_support(runtime: str) -> dict:
+    """The Guard control verdict for a session seen only through telemetry."""
+    return {"controllable": False, "actions": [], "runtime": runtime,
+            "state": "unsupported", "reason": OBSERVE_ONLY_REASON,
+            "observe_only": True}
