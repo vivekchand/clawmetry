@@ -249,17 +249,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p audit
-          # Workflow definitions only, which is the scope the SecurityAuditScanner
-          # component describes.
+          # Workflow definitions AND the composite actions under .github/actions.
           #
-          # The composite action under .github/actions/ is a real gap and is NOT
-          # covered here: its steps run inline in the calling job, with that job's
-          # token and secrets, so it carries the same rule families a workflow
-          # does, and nothing scans it today. Widening this input set to include
-          # it is a one-line change, but it is a scope the blueprint does not
-          # describe, so it needs the product record first rather than arriving
-          # as a side effect of turning the scanner on. Tracked as follow-up.
+          # A composite action's steps run inline in the calling job, with that
+          # job's token and secrets, so it carries the same rule families a
+          # workflow does — and until now nothing scanned it. This was recorded
+          # here as a known gap and deferred; clawmetry-cloud closed the same
+          # gap on its own mirror of this scan (cloud #2299), which left this
+          # repo the only one of the three whose actions nothing audited.
+          #
+          # Composite actions are named individually rather than by directory:
+          # pointing zizmor at a directory hands it every YAML file inside, and
+          # a non-action YAML landing there later would abort the audit
+          # (recorded as a scanner outage below) rather than be skipped.
           inputs=".github/workflows"
+          if [ -d .github/actions ]; then
+            while IFS= read -r a; do
+              inputs="$inputs $a"
+            done < <(find .github/actions -type f \
+              \( -name 'action.yml' -o -name 'action.yaml' \) | sort)
+          fi
           # Record the file set the scanner was handed. A finding list is
           # identical whether it audited thirty-seven files or none, so
           # coverage is the one thing the JSON cannot tell you afterwards.
