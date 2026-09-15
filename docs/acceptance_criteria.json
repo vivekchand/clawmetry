@@ -691,6 +691,24 @@
       "text": "Hovering or keyboard-focusing a basis label shall show how the figure was computed: the formula, the source of the rate, the window, and the billing route where one applies."
     },
     {
+      "id": "AC-OBS-CEA-025.8",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "Each cost figure on the Overview hero chip; on the Usage tab's Where the money goes chart, Cost Forecast, Cache Re-read Tax, cache hit rate and cache performance cards, savings ideas and routing advisor cards, compression potential card, Cost By Plugin / Skill, Cost Comparison, Spend Optimization, Skill Cost Leaderboard and Cost by Team cards; and on the per-turn and per-tool cost chips of a Sessions tab transcript shall carry a financial basis of exactly one of the four in AC-OBS-CEA-025.1, shown as visible text beside the figure or on the heading or caption of the card, chart, list or transcript that holds it. The payloads that serve these figures, including the hosted snapshot slices the hosted dashboard reads them from (efficiency, spend flow, forecast, cost comparison, cache trends, spend optimization and transcripts), shall carry the same basis."
+    },
+    {
+      "id": "AC-OBS-CEA-025.9",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "A counterfactual cost figure (a projected saving, a month-end forecast, or what the same usage would cost on another model) shall be labelled an estimate of usage value at published rates, and no card shall describe usage value at published rates as actual spend."
+    },
+    {
+      "id": "AC-OBS-CEA-025.10",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "The count of dollar figures rendered without a basis on the Overview, Usage and Sessions tabs shall not increase; the check shall find those renders from the tabs' own templates rather than from a hand-kept list."
+    },
+    {
       "id": "AC-OBS-GHA-001.1",
       "doc": "Governance and Human Approval",
       "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
@@ -1385,6 +1403,30 @@
       "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
       "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
       "text": "An incident raised only from received telemetry shall state that the action was observed after it ran and shall not state or imply that the action was prevented."
+    },
+    {
+      "id": "AC-OBS-OTG-001.7",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "When an incident is raised on a node from received telemetry and the node is connected to the hosted dashboard, the hosted Guard tab shall list that session with the incident, under the runtime its telemetry names (so a runtime filter finds it), with the observed-after-the-fact label, and shall show the session as not controllable from any machine with a sentence saying why, rather than offering Pause, Stop or Kill."
+    },
+    {
+      "id": "AC-OBS-OTG-001.8",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Where the same tool call, identified by the same call id, arrives both as a log record and as a trace span, the system shall record exactly one tool call and one tool result for it, taken from the trace span, whichever signal arrives first. A tool call that only one signal reports shall still be recorded. Where a call carries no call id, the system shall keep the first signal to report that session's tool calls and count the other signal's copies as skipped."
+    },
+    {
+      "id": "AC-OBS-OTG-001.9",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "The operator shall be able to choose how much content received telemetry keeps: `full` (content kept, secrets still masked, personal data not filtered), `redacted` (the default: content kept, secrets masked, personal data filtered per its own switches) or `metadata` (no prompt, response, argument, result or free-text attribute stored; each withheld field is labelled on the stored row). Secret masking shall follow only its own switch under every profile, personal-data filtering shall remain separately switchable, and the security posture shall state the active profile, what it keeps, and which personal data is not detected."
+    },
+    {
+      "id": "AC-OBS-OTG-001.10",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Spans stored before scrubbing existed shall not be rewritten unless the operator runs an explicit rescrub. The rescrub shall report how many stored spans would change without changing anything unless the operator confirms, shall rewrite only content fields, and shall report how many it rewrote and that copies already sent off the machine are unaffected."
     },
     {
       "id": "AC-OBS-FLEET-001.1",

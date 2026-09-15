@@ -43,6 +43,7 @@ import json
 import logging
 from typing import Any
 
+from clawmetry import cost_basis_surfaces as _cost_labels
 from clawmetry.providers_pricing import estimate_event_cost_usd
 
 log = logging.getLogger("clawmetry.spend_flow")
@@ -330,6 +331,11 @@ def _scope_payload(agg: dict[str, Any], days: int,
         "input_categories": _categories_out(agg["input"], agg["input_cost_usd"], _BASIS_INPUT),
         "output_categories": _categories_out(
             agg["output"], agg["output_cost_usd"], basis_output or _BASIS_OUTPUT),
+        # What kind of money each figure is (REQ-OBS-CEA-025.8). Every scope,
+        # node-wide and per runtime, carries it, so the hosted interceptor's
+        # per-runtime copy keeps the basis too.
+        "provenance": _cost_labels.spend_flow_entries(days),
+        "provenance_version": 1,
     }
 
 

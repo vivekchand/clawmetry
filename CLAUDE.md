@@ -285,6 +285,9 @@ CLAWMETRY_DUCKDB_MEMORY_LIMIT=...      # Ceiling; derived from store size when u
 CLAWMETRY_AGG_CACHE_TTL=20             # Seconds a hot rollup is reused instead of re-scanned
 CLAWMETRY_AUTO_COMPACT=0               # Kill switch for startup compaction
 
+# Received telemetry (OTLP)
+CLAWMETRY_OTLP_CONTENT=redacted        # full | redacted (default) | metadata: how much span/log content the OTLP receivers store. Secret masking (CLAWMETRY_REDACT) and personal-data filtering (CLAWMETRY_REDACT_PII) stay separate switches. clawmetry/otlp_content.py
+
 # Egress
 CLAWMETRY_OFFLINE=1                    # Air-gapped: no install ping, no version check. See docs/EGRESS.md
 DEBUG=1                                # Enable debug logging
