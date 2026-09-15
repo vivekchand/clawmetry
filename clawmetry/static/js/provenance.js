@@ -224,6 +224,20 @@
       + (opts.noBadge ? '' : badge(e, opts));
   }
 
+  // A cost figure whose basis may not have arrived (REQ-OBS-CEA-025.8). With
+  // an entry this is figure(). Without one (a daemon older than the label,
+  // or a hosted answer the browser synthesised) the number still goes
+  // through the shared formatter and hover text, and no badge is invented.
+  function costFigure(value, entry, opts) {
+    var o = {};
+    var src = opts || {};
+    for (var k in src) {
+      if (Object.prototype.hasOwnProperty.call(src, k)) o[k] = src[k];
+    }
+    if (!entry) o.noBadge = true;
+    return figure(value, entry, o);
+  }
+
   // Shorthands for the two shapes that appear most: a money figure looked up
   // from a payload by key, and a score.
   function money(payload, key, opts) {
@@ -306,8 +320,10 @@
     LABEL: LABEL, HINT: HINT, COST_LABEL: COST_LABEL, COST_HINT: COST_HINT,
     of: of, isUnknown: isUnknown, tip: tip, badge: badge,
     figure: figure, money: money, score: score, text: text,
+    costFigure: costFigure,
     fmtMoney: fmtMoney, fmtScore: fmtScore
   };
+  window.cmCostFigure = costFigure;
   // Terse aliases: these get called from inside string-concatenated table
   // rows, where `window.cmProv.figure(...)` would be most of the line.
   window.cmMoney = money;

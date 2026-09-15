@@ -84,8 +84,17 @@ def test_every_ruff_invocation_is_accepted_by_ruff():
 # NB: a workflow name may itself contain "]" (this repo has
 # "Auto-release on [RELEASE] merge"), so capture the whole line and pull the
 # QUOTED items out rather than matching up to the first closing bracket.
+# NB: `workflow_run:` may carry a trailing YAML comment -- the analysed
+# `# zizmor: ignore[dangerous-triggers]` declarations sit exactly there,
+# because zizmor wants its suppression on the line the finding points at.
+# The first version of this pattern required a newline straight after the
+# colon, so adding one of those comments matched NOTHING and this guard went
+# quietly blind: every name below stopped being checked while the test still
+# reported green. `checked > 0` at the end is what caught it, and is why it
+# is asserted at all -- keep both, and keep the comment tolerance here.
 _WF_RUN_RE = re.compile(
-    r"workflow_run:\s*\n\s*workflows:\s*(?P<names>.+)$", re.MULTILINE
+    r"workflow_run:[^\S\n]*(?:#[^\n]*)?\n\s*workflows:\s*(?P<names>.+)$",
+    re.MULTILINE,
 )
 _QUOTED_RE = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 _NAME_RE = re.compile(r'^name:\s*(?P<name>.+?)\s*$', re.MULTILINE)

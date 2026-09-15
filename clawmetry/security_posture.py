@@ -86,22 +86,32 @@ def _with_node_checks(env: dict) -> dict:
     """
     if not isinstance(env, dict):
         return env
+    node_checks = []
     try:
         from clawmetry.redaction import pii_posture_check
-        check = pii_posture_check()
+        node_checks.append(pii_posture_check())
     except Exception:
+        pass
+    try:
+        # How much content received telemetry keeps (AC-OBS-OTG-001.9).
+        from clawmetry.otlp_content import posture_check as _otlp_content_check
+        node_checks.append(_otlp_content_check())
+    except Exception:
+        pass
+    if not node_checks:
         return env
     checks = env.get("checks")
     if not isinstance(checks, list):
         checks = []
         env["checks"] = checks
-    if any(isinstance(c, dict) and c.get("id") == check["id"] for c in checks):
-        return env
-    checks.append(check)
-    for key, status in (("passed", "pass"), ("warnings", "warn"), ("failed", "fail")):
-        if check["status"] == status:
-            env[key] = int(env.get(key) or 0) + 1
-    env["total"] = int(env.get("total") or 0) + 1
+    for check in node_checks:
+        if any(isinstance(c, dict) and c.get("id") == check["id"] for c in checks):
+            continue
+        checks.append(check)
+        for key, status in (("passed", "pass"), ("warnings", "warn"), ("failed", "fail")):
+            if check["status"] == status:
+                env[key] = int(env.get(key) or 0) + 1
+        env["total"] = int(env.get("total") or 0) + 1
     return env
 
 
