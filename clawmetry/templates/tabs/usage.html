@@ -42,6 +42,13 @@
       <div class="card-sub" id="trend-prediction"></div>
     </div>
   </div>
+  <!-- Price book (REQ-OBS-CEA-024 .12-.14, #5936): the usage your price book
+       covers, valued at your contract rate beside the published-rate figure.
+       Local installs only: filled by static/js/price-book.js
+       renderUsagePriceBook() from /api/usage .priceBook, which the hosted
+       dashboard never serves, so this stays hidden there. -->
+  <div class="section-title" id="usage-price-book-title" style="display:none;">📒 At your contract rates</div>
+  <div class="card" id="usage-price-book-card" style="display:none;margin-bottom:16px;"></div>
   <!-- Efficiency grade + Savings ideas (design spec: .claude/ux_audit/DESIGN_SPEC.md §1b/§5).
        Filled by app.js renderEfficiencyCard() from /api/efficiency (the daemon-computed
        `efficiency` snapshot slice on cloud). Hidden until the slice answers; honest

@@ -23,7 +23,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 # routes/dives.py imports Flask at module level; mock it so this test runs
 # even when Flask is not installed (pure data validation, no HTTP needed).
-if "flask" not in sys.modules:
+# Only when it is genuinely missing: the old ``"flask" not in sys.modules``
+# test also fired when Flask was installed but not yet imported, and the mock
+# then leaked into every later test module in the same process (a later
+# ``from flask import Flask`` got a MagicMock app whose test client answers
+# nothing).
+try:
+    import flask  # noqa: F401
+except ImportError:
     _flask_mock = MagicMock()
     sys.modules["flask"] = _flask_mock
     sys.modules["flask"].Blueprint = MagicMock(return_value=MagicMock())

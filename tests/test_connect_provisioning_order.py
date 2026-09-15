@@ -58,9 +58,11 @@ def test_trial_activates_before_pro_is_probed(connect_env, monkeypatch, capsys):
     """The freshly-minted trial must be visible to `auto_provision_pro` -- i.e.
     `_activate_signup_trial` must run to completion first."""
     order = []
+    deployments = []
 
-    def _fake_activate_trial():
+    def _fake_activate_trial(deployment=""):
         order.append("trial")
+        deployments.append(deployment)
         return True
 
     def _fake_auto_provision(api_key, node_id):
@@ -79,13 +81,16 @@ def test_trial_activates_before_pro_is_probed(connect_env, monkeypatch, capsys):
     cli._cmd_connect(_connect_args())
 
     assert order == ["trial", "provision"]
+    # AC-OGV-ADC-001.1: a terminal sign-in that syncs to the cloud reports
+    # managed on the same trial call.
+    assert deployments == ["managed"]
 
 
 def test_pro_still_empty_after_trial_prints_activating_hint(connect_env, monkeypatch, capsys):
     """If provisioning still comes back empty-handed right after a successful
     trial activation, the terminal must say SOMETHING instead of nothing --
     this is what made Straive's onboarding look like it silently failed."""
-    monkeypatch.setattr(cli, "_activate_signup_trial", lambda: True)
+    monkeypatch.setattr(cli, "_activate_signup_trial", lambda deployment="": True)
     import clawmetry.license as license_mod
     monkeypatch.setattr(license_mod, "auto_provision_pro", lambda *a, **k: (False, ""))
 
@@ -98,7 +103,7 @@ def test_pro_still_empty_after_trial_prints_activating_hint(connect_env, monkeyp
 def test_pro_provision_error_message_still_surfaces(connect_env, monkeypatch, capsys):
     """An explicit provisioning message (e.g. a real install failure) must
     still win over the generic "activating" hint."""
-    monkeypatch.setattr(cli, "_activate_signup_trial", lambda: True)
+    monkeypatch.setattr(cli, "_activate_signup_trial", lambda deployment="": True)
     import clawmetry.license as license_mod
     monkeypatch.setattr(
         license_mod, "auto_provision_pro",

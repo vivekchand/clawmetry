@@ -49,7 +49,7 @@ def login_env(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_keychain_get", lambda node_id: "")
     monkeypatch.setattr(cli, "_keychain_set", lambda node_id, key: None)
     monkeypatch.setattr(cli, "_reset_family_sync_marks", lambda: 0)
-    monkeypatch.setattr(cli, "_activate_signup_trial", lambda: None)
+    monkeypatch.setattr(cli, "_activate_signup_trial", lambda deployment="": None)
     monkeypatch.setattr(cli, "_stop_existing_daemon", lambda: None)
     monkeypatch.setattr(cli, "_start_daemon", lambda config, args: None)
     monkeypatch.setattr(cli, "_ensure_local_dashboard", lambda: False)

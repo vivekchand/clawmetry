@@ -114,18 +114,23 @@ def test_default_landing_is_sessions_first():
     nav_start = html.index('<aside id="left-nav"')
     nav = html[nav_start:html.index("</aside>", nav_start)]
     tabs = re.findall(r'data-tab="([a-z-]+)"', nav)
-    assert tabs[0] == "transcripts", f"Sessions must be the first nav item, got {tabs[:3]}"
+    # Sessions sits directly under Agents (founder request 2026-09-15); it is
+    # still the landing page, so it keeps the default highlight.
+    assert tabs.index("transcripts") == tabs.index("inventory") + 1, (
+        f"Sessions must sit directly after Agents, got {tabs[:4]}"
+    )
     first_item = re.search(r'<div class="left-nav-item[^"]*" data-tab="transcripts"[^>]*>', nav)
     assert first_item and "active" in first_item.group(0), "Sessions must carry the default nav highlight"
     assert not re.search(r'<div class="left-nav-item active" data-tab="overview"', nav), (
         "Overview must not also carry the default highlight"
     )
     assert 'data-i18n="nav.section_monitoring"' in nav, "Overview must sit under a Monitoring label"
-    # Monitoring holds Home + the raw-signal views; order is stable.
+    # Monitoring holds Home, Agents, Sessions + the raw-signal views; order is stable.
     mon = nav.index('data-i18n="nav.section_monitoring"')
     ana = nav.index('data-i18n="nav.section_analyze"')
     assert re.findall(r'data-tab="([a-z-]+)"', nav[mon:ana]) == [
-        "overview", "inventory", "brain", "usage", "models", "context-economics",
+        "overview", "inventory", "transcripts", "brain", "usage", "models",
+        "context-economics",
     ]
     # Nothing lost.
     for tab in ("overview", "inventory", "brain", "usage", "models", "context-economics",

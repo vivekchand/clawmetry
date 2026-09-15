@@ -789,6 +789,18 @@ def hook_main(argv: "list | None" = None) -> int:
         "permission_mode": event.get("permission_mode") or "",
         "tool_use_id": event.get("tool_use_id") or "",
     }
+    if not mirror:
+        # Untrusted content earlier in this turn (REQ-GOV-PIJ-002). Read here,
+        # beside the transcript, because the store lags the live turn; only
+        # tool names, counts and signature ids leave this process. Any failure
+        # sends nothing, which is today's rating.
+        try:
+            from clawmetry.prompt_injection import context_from_claude_transcript
+            ctx = context_from_claude_transcript(event.get("transcript_path"))
+            if ctx:
+                payload["untrusted_context"] = ctx
+        except Exception:
+            pass
 
     # First POST gets a short connect budget: a dashboard that isn't
     # running must cost ~nothing per tool call.
