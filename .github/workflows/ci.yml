@@ -655,6 +655,12 @@ jobs:
       - name: Email sign-in preserves the linked account and opens the dashboard
         run: python3 -m pytest tests/test_signin_owner_not_rebound.py tests/test_verify_otp_opens_dashboard.py tests/test_verify_otp_rail_selection.py tests/test_auth_detected_token.py tests/test_login_overlay_fetches_real_routes.py -q
 
+      # REQ-OGV-ADC-001: every sign-in reports managed vs self-hosted on the
+      # trial call, so the cloud account records the choice the anonymous
+      # install ping cannot link to it.
+      - name: Every sign-in tells the account whether it is cloud or self-hosted
+        run: python3 -m pytest tests/test_account_deployment_report.py tests/test_connect_provisioning_order.py tests/test_connect_otp_skip.py tests/test_cloud_cta_oauth.py -q
+
       - name: The sync cycle isolates every ingest call
         run: python3 -m pytest tests/test_sync_cycle_fault_isolation.py -q
 

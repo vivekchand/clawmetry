@@ -12790,7 +12790,7 @@ def _persist_identity_with_key(api_key):
     return node_id, enc_key
 
 
-def _activate_trial_for_key(api_key) -> str:
+def _activate_trial_for_key(api_key, deployment="") -> str:
     """Mint-or-reuse the account's 7-day Pro trial for ``api_key``.
 
     Mirrors ``clawmetry.cli._activate_signup_trial`` — same
@@ -12813,9 +12813,13 @@ def _activate_trial_for_key(api_key) -> str:
         import urllib.request as _ur
         from clawmetry import license as _lic
 
+        # ``deployment`` is the choice this sign-in made (REQ-OGV-ADC-001);
+        # it rides on the trial call so the cloud account records it.
+        from clawmetry import onboarding_state as _obs
+
         req = _ur.Request(
             _lic._cloud_base() + "/api/license/trial/signup",
-            data=json.dumps({"api_key": api_key}).encode(),
+            data=json.dumps(_obs.trial_signup_body(api_key, deployment)).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -12853,7 +12857,7 @@ def _full_connect_with_key(api_key):
     # not, so cloud users couldn't experience the full product before
     # the paywall. Runs BEFORE _restart_sync_daemon so the daemon sees
     # the freshly activated license on its first poll.
-    trial = _activate_trial_for_key(api_key)
+    trial = _activate_trial_for_key(api_key, deployment="managed")
 
     # Clear the local-only marker so the daemon actually pushes to cloud. A
     # local-only install writes ~/.clawmetry/nocloud; without this the connect
@@ -12929,7 +12933,7 @@ def _selfhost_signin_with_key(api_key):
     # clawmetry.cli._activate_signup_trial — mint-or-reuse the 7-day
     # Pro trial. Delegated to the shared helper so cloud + self-host
     # never drift on trial semantics again (founder ask 2026-08-12).
-    trial = _activate_trial_for_key(api_key)
+    trial = _activate_trial_for_key(api_key, deployment="selfhost")
 
     # Same as the email-OTP trial path: make sure the local ingest daemon is
     # running (it stays local-only under the marker written above).

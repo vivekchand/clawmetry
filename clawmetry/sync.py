@@ -17858,6 +17858,33 @@ def _build_cost_optimizer_snapshot():
         return {}
 
 
+def _build_cost_optimizer_by_runtime(runtimes):
+    """``{runtime: costOptimizer slice}`` for each runtime on this node.
+
+    Served by the cloud for ``/api/cost-optimizer?runtime=<rt>`` so a
+    runtime-scoped dashboard never shows another runtime's spend or advice.
+    ``{}`` on any failure (the cloud then says the node must update).
+    """
+    try:
+        from clawmetry import local_store as _ls_co
+        from clawmetry.cost_optimizer_snapshot import build_slice
+
+        store = _ls_co.get_store()
+        if store is None:
+            return {}
+        out = {}
+        for rt in runtimes or []:
+            if not isinstance(rt, str) or not rt or rt == "all":
+                continue
+            s = build_slice(store, runtime=rt)
+            if s:
+                out[rt] = s
+        return out
+    except Exception as _e_co:
+        log.debug("snapshot: cost optimizer by-runtime slice failed: %s", _e_co)
+        return {}
+
+
 def _build_usage_snapshot():
     """Usage tab slices (anomalies, cost-comparison, cache-trends, cost-breakdown,
     spend-optimization, forecast). Trial-bug #12: these Usage cards were blank on
@@ -24133,6 +24160,11 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # Cost Optimizer experiments + basis-labelled figures (AC-OBS-CEA-023.9).
         # Read by the cloud cm-cloud-overview interceptor for /api/cost-optimizer.
         "costOptimizer": _build_cost_optimizer_snapshot(),
+        # The same slice per runtime, served for /api/cost-optimizer?runtime=<rt>.
+        # Without it a Codex-scoped dashboard showed Claude Code's spend and
+        # Anthropic experiments under an "all runtimes" header.
+        "costOptimizerByRuntime": _build_cost_optimizer_by_runtime(
+            list(_runtime_summary.keys()) if isinstance(_runtime_summary, dict) else []),
         # Inputs & context per session (Trail triad). Read by the cloud
         # cm-cloud-session-context interceptor for /api/sessions/<id>/context.
         "sessionContext": _build_session_context_snapshot(),

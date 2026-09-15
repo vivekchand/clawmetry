@@ -1321,7 +1321,10 @@ def _cmd_connect(args) -> None:
     # stayed "NOT syncing" because the wheel was probed-for before it existed
     # to be entitled to, and only the 30-min pro-entitlement watcher in
     # sync.py ever caught up.)
-    _trial_activated = _activate_signup_trial()
+    # The trial call also records this sign-in's deployment on the account
+    # (REQ-OGV-ADC-001): keep-local is self-hosted, anything else syncs.
+    _trial_activated = _activate_signup_trial(
+        "selfhost" if _keep_local_signin else "managed")
 
     # Auto-provision clawmetry-pro for entitled cloud accounts (Starter/Pro/
     # Trial/Enterprise). The cloud is the single source of truth: license.py
@@ -1651,9 +1654,13 @@ def _ensure_local_dashboard(port: int = 8900, wait_secs: float = 12.0) -> bool:
     return _alive()
 
 
-def _activate_signup_trial() -> bool:
+def _activate_signup_trial(deployment: str = "") -> bool:
     """Mint-or-reuse the signed-in account's 7-day trial license and
     activate it locally, unlocking every runtime on the license rail.
+
+    ``deployment`` (``managed`` | ``selfhost``) is the choice this sign-in
+    made. It rides on the same call so the cloud account records it
+    (REQ-OGV-ADC-001; see ``onboarding_state.trial_signup_body``).
 
     Called at the end of every successful connect (founder spec 2026-07-30:
     identity is what unlocks runtimes — including when the user keeps their
@@ -1678,10 +1685,11 @@ def _activate_signup_trial() -> bool:
             return False
 
         from clawmetry import license as _lic
+        from clawmetry import onboarding_state as _obs
 
         req = _ur.Request(
             _lic._cloud_base() + "/api/license/trial/signup",
-            data=_jk.dumps({"api_key": api_key}).encode(),
+            data=_jk.dumps(_obs.trial_signup_body(api_key, deployment)).encode(),
             headers={"Content-Type": "application/json"},
             method="POST",
         )

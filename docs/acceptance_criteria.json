@@ -643,6 +643,12 @@
       "text": "When the operator opens the Cost Optimizer on the hosted dashboard, the system shall show the same experiments, local-model advice and basis-labelled figures that the local dashboard derives for that computer from its recorded usage, computed on that computer and readable only in the operator's browser; and when the connected computer does not yet send them, the system shall say so rather than show recommendations that cite no observed usage or figures without a basis."
     },
     {
+      "id": "AC-OBS-CEA-023.10",
+      "doc": "Cost Optimizer: honest, fast and provider-aware",
+      "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",
+      "text": "When the operator has scoped the dashboard to one runtime, the Cost Optimizer shall show only that runtime's recorded spend, expensive calls and experiments and shall name the runtime its figures cover; and when that runtime has no recorded spend, or the connected computer does not yet send figures per runtime, the system shall show the figures as unavailable rather than another runtime's or the whole computer's."
+    },
+    {
       "id": "AC-OBS-CEA-025.1",
       "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
       "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
@@ -1157,6 +1163,30 @@
       "doc": "Onboarding Gate Funnel Visibility",
       "doc_id": "59a34a71-b779-478b-bf6f-9b4657f988bc",
       "text": "When the hosted cloud dashboard serves onboarding state, the system shall not send a gate_shown ping, because hosted accounts never see the gate."
+    },
+    {
+      "id": "AC-OGV-ADC-001.1",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in from the terminal and chooses to sync data to ClawMetry Cloud, the install shall report deployment `managed` on the trial sign-in call."
+    },
+    {
+      "id": "AC-OGV-ADC-001.2",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in from the terminal and chooses to keep data on the machine, the install shall report deployment `selfhost` on the trial sign-in call."
+    },
+    {
+      "id": "AC-OGV-ADC-001.3",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a person signs in through the local dashboard's cloud sign-in, the install shall report `managed`; through its keep-local sign-in, `selfhost`."
+    },
+    {
+      "id": "AC-OGV-ADC-001.4",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When the report cannot be delivered or the cloud rejects it, sign-in and trial activation shall complete exactly as they would without it."
     },
     {
       "id": "AC-RSO-CCT-001.1",
