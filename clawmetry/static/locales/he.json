@@ -1540,5 +1540,17 @@
   "trail.commits": "קומיטים",
   "trail.prs": "בקשות משיכה",
   "evals.locked": "ניקוד סשנים הוא תכונת Pro.",
-  "trail.cov_unknown": "טרם הוצהר"
+  "trail.cov_unknown": "טרם הוצהר",
+  "security.apikeys_title": "בנו תצוגה משלכם",
+  "security.apikeys_sub": "הענקת גישת קריאה לדף, לסקריפט או לסוכן קוד לנתוני הסוכנים של מכונה זו, בהיקף מדויק לפי הצורך. שום דבר כאן לא יכול להפעיל, להשהות או לעצור סוכן.",
+  "security.apikeys_new": "מפתח חדש",
+  "security.apikeys_name_label": "למה זה מיועד?",
+  "security.apikeys_origin_label": "איזה אתר ישתמש בו?",
+  "security.apikeys_no_browser": "המפתח הזה מיועד לסקריפט או לשרת, לא לדף אינטרנט",
+  "security.apikeys_scope_label": "מה מותר לו לקרוא?",
+  "security.apikeys_create": "יצירת מפתח",
+  "security.apikeys_cancel": "ביטול",
+  "security.apikeys_reveal_title": "העתיקו זאת עכשיו. הוא לא יוצג שוב.",
+  "security.apikeys_copy": "העתקה",
+  "security.apikeys_done": "סיום"
 }

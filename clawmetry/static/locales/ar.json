@@ -1540,5 +1540,17 @@
   "trail.commits": "الالتزامات",
   "trail.prs": "طلبات السحب",
   "evals.locked": "تقييم الجلسات ميزة من Pro.",
-  "trail.cov_unknown": "لم يُعلَن بعد"
+  "trail.cov_unknown": "لم يُعلَن بعد",
+  "security.apikeys_title": "أنشئ واجهة العرض الخاصة بك",
+  "security.apikeys_sub": "امنح صفحة أو سكريبت أو وكيل برمجي صلاحية قراءة بيانات الوكلاء على هذا الجهاز، بنطاق محصور بما يحتاجه فقط. لا شيء هنا يمكنه تشغيل وكيل أو إيقافه مؤقتًا أو إيقافه.",
+  "security.apikeys_new": "مفتاح جديد",
+  "security.apikeys_name_label": "ما الغرض منه؟",
+  "security.apikeys_origin_label": "ما الموقع الذي سيستخدمه؟",
+  "security.apikeys_no_browser": "هذا المفتاح مخصص لسكريبت أو خادم، وليس لصفحة ويب",
+  "security.apikeys_scope_label": "ما الذي يمكنه قراءته؟",
+  "security.apikeys_create": "إنشاء مفتاح",
+  "security.apikeys_cancel": "إلغاء",
+  "security.apikeys_reveal_title": "انسخ هذا الآن. لن يظهر مرة أخرى.",
+  "security.apikeys_copy": "نسخ",
+  "security.apikeys_done": "تم"
 }

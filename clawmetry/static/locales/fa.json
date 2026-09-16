@@ -1540,5 +1540,17 @@
   "trail.commits": "کامیت‌ها",
   "trail.prs": "درخواست‌های ادغام",
   "evals.locked": "امتیازدهی نشست یک ویژگی Pro است.",
-  "trail.cov_unknown": "هنوز اعلام نشده"
+  "trail.cov_unknown": "هنوز اعلام نشده",
+  "security.apikeys_title": "ساخت نمای اختصاصی خودتان",
+  "security.apikeys_sub": "به یک صفحه، اسکریپت یا ایجنت کدنویسی، دسترسی خواندن به داده‌های ایجنت این دستگاه بدهید، دقیقاً محدود به همان چیزی که نیاز دارد. هیچ‌کدام از این موارد نمی‌توانند ایجنتی را شروع، متوقف یا مکث کنند.",
+  "security.apikeys_new": "کلید جدید",
+  "security.apikeys_name_label": "برای چه کاری است؟",
+  "security.apikeys_origin_label": "کدام سایت از آن استفاده خواهد کرد؟",
+  "security.apikeys_no_browser": "این کلید برای یک اسکریپت یا سرور است، نه یک صفحه وب",
+  "security.apikeys_scope_label": "چه چیزی مجاز به خواندن است؟",
+  "security.apikeys_create": "ایجاد کلید",
+  "security.apikeys_cancel": "لغو",
+  "security.apikeys_reveal_title": "همین حالا این را کپی کنید. دیگر نمایش داده نمی‌شود.",
+  "security.apikeys_copy": "کپی",
+  "security.apikeys_done": "پایان"
 }

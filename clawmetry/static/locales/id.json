@@ -1540,5 +1540,17 @@
   "trail.commits": "Commit",
   "trail.prs": "Pull request",
   "evals.locked": "Penilaian sesi adalah fitur Pro.",
-  "trail.cov_unknown": "belum dideklarasikan"
+  "trail.cov_unknown": "belum dideklarasikan",
+  "security.apikeys_title": "Bangun tampilan Anda sendiri",
+  "security.apikeys_sub": "Beri halaman, skrip, atau agen coding akses baca ke data agen mesin ini, dibatasi hanya untuk yang dibutuhkan. Tidak ada yang di sini bisa memulai, menjeda, atau menghentikan agen.",
+  "security.apikeys_new": "Kunci baru",
+  "security.apikeys_name_label": "Untuk apa ini?",
+  "security.apikeys_origin_label": "Situs mana yang akan menggunakannya?",
+  "security.apikeys_no_browser": "Kunci ini untuk skrip atau server, bukan halaman web",
+  "security.apikeys_scope_label": "Apa yang boleh dibaca?",
+  "security.apikeys_create": "Buat kunci",
+  "security.apikeys_cancel": "Batal",
+  "security.apikeys_reveal_title": "Salin ini sekarang. Tidak akan ditampilkan lagi.",
+  "security.apikeys_copy": "Salin",
+  "security.apikeys_done": "Selesai"
 }

@@ -1540,5 +1540,17 @@
   "trail.commits": "ಕಮಿಟ್‌ಗಳು",
   "trail.prs": "ಪುಲ್ ರಿಕ್ವೆಸ್ಟ್‌ಗಳು",
   "evals.locked": "ಸೆಷನ್ ಸ್ಕೋರಿಂಗ್ ಒಂದು Pro ವೈಶಿಷ್ಟ್ಯ.",
-  "trail.cov_unknown": "ಇನ್ನೂ ಘೋಷಿಸಿಲ್ಲ"
+  "trail.cov_unknown": "ಇನ್ನೂ ಘೋಷಿಸಿಲ್ಲ",
+  "security.apikeys_title": "ನಿಮ್ಮದೇ ಆದ ವೀಕ್ಷಣೆಯನ್ನು ನಿರ್ಮಿಸಿ",
+  "security.apikeys_sub": "ಈ ಯಂತ್ರದ ಏಜೆಂಟ್ ಡೇಟಾಗೆ ಒಂದು ಪುಟ, ಸ್ಕ್ರಿಪ್ಟ್ ಅಥವಾ ಕೋಡಿಂಗ್ ಏಜೆಂಟ್‌ಗೆ ಓದುವ ಪ್ರವೇಶವನ್ನು ನೀಡಿ, ಅದಕ್ಕೆ ಬೇಕಾದಷ್ಟೇ ವ್ಯಾಪ್ತಿಯಲ್ಲಿ. ಇಲ್ಲಿ ಯಾವುದೂ ಒಂದು ಏಜೆಂಟ್ ಅನ್ನು ಪ್ರಾರಂಭಿಸಲು, ವಿರಾಮಗೊಳಿಸಲು ಅಥವಾ ನಿಲ್ಲಿಸಲು ಸಾಧ್ಯವಿಲ್ಲ.",
+  "security.apikeys_new": "ಹೊಸ ಕೀ",
+  "security.apikeys_name_label": "ಇದು ಯಾವುದಕ್ಕಾಗಿ?",
+  "security.apikeys_origin_label": "ಇದನ್ನು ಯಾವ ಸೈಟ್ ಬಳಸುತ್ತದೆ?",
+  "security.apikeys_no_browser": "ಈ ಕೀ ಒಂದು ಸ್ಕ್ರಿಪ್ಟ್ ಅಥವಾ ಸರ್ವರ್‌ಗಾಗಿ, ವೆಬ್ ಪುಟಕ್ಕಾಗಿ ಅಲ್ಲ",
+  "security.apikeys_scope_label": "ಇದು ಏನನ್ನು ಓದಬಹುದು?",
+  "security.apikeys_create": "ಕೀ ರಚಿಸಿ",
+  "security.apikeys_cancel": "ರದ್ದುಮಾಡಿ",
+  "security.apikeys_reveal_title": "ಇದನ್ನು ಈಗಲೇ ನಕಲಿಸಿ. ಇದನ್ನು ಮತ್ತೆ ತೋರಿಸಲಾಗುವುದಿಲ್ಲ.",
+  "security.apikeys_copy": "ನಕಲಿಸಿ",
+  "security.apikeys_done": "ಮುಗಿದಿದೆ"
 }

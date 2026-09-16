@@ -1540,5 +1540,17 @@
   "trail.commits": "کمٹس",
   "trail.prs": "پل ریکوئسٹس",
   "evals.locked": "سیشن سکورنگ ایک Pro فیچر ہے۔",
-  "trail.cov_unknown": "ابھی اعلان نہیں کیا گیا"
+  "trail.cov_unknown": "ابھی اعلان نہیں کیا گیا",
+  "security.apikeys_title": "اپنا خود کا ویو بنائیں",
+  "security.apikeys_sub": "کسی صفحے، اسکرپٹ یا کوڈنگ ایجنٹ کو اس مشین کے ایجنٹ ڈیٹا تک ریڈ رسائی دیں، بالکل اسی حد تک جتنی اسے ضرورت ہے۔ یہاں کوئی بھی چیز کسی ایجنٹ کو شروع، موقوف یا بند نہیں کر سکتی۔",
+  "security.apikeys_new": "نئی کلید",
+  "security.apikeys_name_label": "یہ کس مقصد کے لیے ہے؟",
+  "security.apikeys_origin_label": "اسے کون سی سائٹ استعمال کرے گی؟",
+  "security.apikeys_no_browser": "یہ کلید کسی اسکرپٹ یا سرور کے لیے ہے، ویب صفحے کے لیے نہیں",
+  "security.apikeys_scope_label": "یہ کیا پڑھ سکتی ہے؟",
+  "security.apikeys_create": "کلید بنائیں",
+  "security.apikeys_cancel": "منسوخ کریں",
+  "security.apikeys_reveal_title": "اسے ابھی کاپی کر لیں۔ یہ دوبارہ نہیں دکھائی جائے گی۔",
+  "security.apikeys_copy": "کاپی کریں",
+  "security.apikeys_done": "مکمل"
 }
