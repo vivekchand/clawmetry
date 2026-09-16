@@ -1540,5 +1540,17 @@
   "trail.commits": "คอมมิต",
   "trail.prs": "พูลรีเควสต์",
   "evals.locked": "การให้คะแนนเซสชันเป็นฟีเจอร์ของ Pro",
-  "trail.cov_unknown": "ยังไม่ได้ระบุ"
+  "trail.cov_unknown": "ยังไม่ได้ระบุ",
+  "security.apikeys_title": "สร้างมุมมองของคุณเอง",
+  "security.apikeys_sub": "ให้สิทธิ์อ่านข้อมูลของเอเจนต์บนเครื่องนี้แก่หน้าเว็บ สคริปต์ หรือ coding agent ได้ตามขอบเขตที่ต้องการเท่านั้น สิ่งนี้ไม่สามารถเริ่ม หยุดชั่วคราว หรือหยุดเอเจนต์ได้",
+  "security.apikeys_new": "คีย์ใหม่",
+  "security.apikeys_name_label": "ใช้เพื่ออะไร?",
+  "security.apikeys_origin_label": "ไซต์ไหนจะใช้คีย์นี้?",
+  "security.apikeys_no_browser": "คีย์นี้สำหรับสคริปต์หรือเซิร์ฟเวอร์ ไม่ใช่หน้าเว็บ",
+  "security.apikeys_scope_label": "อนุญาตให้อ่านอะไรได้บ้าง?",
+  "security.apikeys_create": "สร้างคีย์",
+  "security.apikeys_cancel": "ยกเลิก",
+  "security.apikeys_reveal_title": "คัดลอกตอนนี้เลย จะไม่แสดงอีก",
+  "security.apikeys_copy": "คัดลอก",
+  "security.apikeys_done": "เสร็จสิ้น"
 }

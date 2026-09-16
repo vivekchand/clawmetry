@@ -2,7 +2,7 @@
 
 The contract:
   * Tier-1 = the plain-words beginner items (Home, Agents, Activity, Cost,
-    Sessions, Approvals, Alerts, Notifications, Evals), in that order, at
+    Sessions, Guard, Notifications, Evals), in that order, at
     the top level.
   * Every expert view lives inside the Developer drawer, which is COLLAPSED
     by default (hidden attribute + JS opens only on stored cm_live_open=1).
@@ -42,19 +42,19 @@ def _ordered_tabs(html: str) -> list:
 def test_tier1_order_and_membership():
     nav = _nav_block()
     tabs = _ordered_tabs(nav)
-    tier1 = tabs[:14]
+    tier1 = tabs[:12]
     # Session-first IA (Trail, 2026-09): Sessions is the landing item; it
     # sits under the "Monitoring" label directly after Agents (founder
     # request 2026-09-15) with Home + the raw-signal views (Activity, Cost,
     # Models, Context usage); Quality +
-    # Harness Engineering under Analyze; Approvals / Guard / Alerts /
-    # Notifications under Govern. Notifications still rides directly under
-    # its two consumers (Approvals, Alerts) - founder request 2026-07-29.
+    # Harness Engineering under Analyze; Guard / Signals / Notifications
+    # under Govern. Guard owns the Approvals and Alerts entry points
+    # (REQ-GUX-003); existing tab ids remain usable for deep links.
     assert tier1 == [
         "overview", "inventory", "transcripts", "brain", "usage", "models",
         "context-economics",
         "evals", "bench",
-        "approvals", "guard", "signals", "alerts", "notifications",
+        "guard", "signals", "notifications",
     ], f"Tier-1 must be the beginner items in order, got {tier1}"
 
 
@@ -76,9 +76,18 @@ def test_developer_drawer_collapsed_by_default():
 
 
 def test_no_tab_lost_in_restructure():
-    """Every pre-restructure destination still exists somewhere in the nav."""
+    """Every destination remains in the sidebar or its owning Guard home."""
     nav = _nav_block()
     tabs = set(_ordered_tabs(nav))
+    from pathlib import Path
+    templates = Path(_HERE).parent / 'clawmetry/templates/tabs'
+    guard = (templates / 'guard.html').read_text()
+    app = Path(_APP_JS).read_text()
+    for child in ('approvals', 'alerts'):
+        assert "switchTab('%s')" % child in guard
+        assert 'id="page-%s"' % child in (templates / (child + '.html')).read_text()
+        assert "name === '%s'" % child in app
+        tabs.add(child)
     expected = {
         # Tier-1 (notifications promoted from Advanced, founder 2026-07-29;
         # evals added top-level in #4295)

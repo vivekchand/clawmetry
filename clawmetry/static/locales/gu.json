@@ -1540,5 +1540,17 @@
   "trail.commits": "કમિટ્સ",
   "trail.prs": "પુલ રિક્વેસ્ટ",
   "evals.locked": "સેશન સ્કોરિંગ એ Pro ફીચર છે.",
-  "trail.cov_unknown": "હજુ જાહેર કરાયું નથી"
+  "trail.cov_unknown": "હજુ જાહેર કરાયું નથી",
+  "security.apikeys_title": "તમારું પોતાનું વ્યૂ બનાવો",
+  "security.apikeys_sub": "કોઈ પેજ, સ્ક્રિપ્ટ કે કોડિંગ એજન્ટને આ મશીનના એજન્ટ ડેટા પર વાંચન ઍક્સેસ આપો, જે તેને જરૂરી હોય તેટલા પૂરતું જ મર્યાદિત હોય. અહીંથી કોઈ પણ એજન્ટને શરૂ, થોભાવી અથવા બંધ કરી શકાતું નથી.",
+  "security.apikeys_new": "નવી કી",
+  "security.apikeys_name_label": "તે શા માટે છે?",
+  "security.apikeys_origin_label": "કયી સાઇટ તેનો ઉપયોગ કરશે?",
+  "security.apikeys_no_browser": "આ કી સ્ક્રિપ્ટ અથવા સર્વર માટે છે, વેબ પેજ માટે નહીં",
+  "security.apikeys_scope_label": "તે શું વાંચી શકે?",
+  "security.apikeys_create": "કી બનાવો",
+  "security.apikeys_cancel": "રદ કરો",
+  "security.apikeys_reveal_title": "આ હમણાં જ કૉપી કરો. તે ફરી બતાવવામાં આવશે નહીં.",
+  "security.apikeys_copy": "કૉપી કરો",
+  "security.apikeys_done": "થઈ ગયું"
 }

@@ -1540,5 +1540,17 @@
   "trail.commits": "ਕਮਿਟਸ",
   "trail.prs": "ਪੁੱਲ ਰਿਕੁਐਸਟਾਂ",
   "evals.locked": "ਸੈਸ਼ਨ ਸਕੋਰਿੰਗ ਇੱਕ Pro ਫੀਚਰ ਹੈ।",
-  "trail.cov_unknown": "ਅਜੇ ਐਲਾਨਿਆ ਨਹੀਂ ਗਿਆ"
+  "trail.cov_unknown": "ਅਜੇ ਐਲਾਨਿਆ ਨਹੀਂ ਗਿਆ",
+  "security.apikeys_title": "ਆਪਣਾ ਖੁਦ ਦਾ ਵਿਊ ਬਣਾਓ",
+  "security.apikeys_sub": "ਕਿਸੇ ਪੇਜ, ਸਕ੍ਰਿਪਟ ਜਾਂ ਕੋਡਿੰਗ ਏਜੰਟ ਨੂੰ ਇਸ ਮਸ਼ੀਨ ਦੇ ਏਜੰਟ ਡੇਟਾ ਤੱਕ ਰੀਡ ਐਕਸੈਸ ਦਿਓ, ਬਿਲਕੁਲ ਓਨਾ ਜਿੰਨੀ ਲੋੜ ਹੋਵੇ। ਇੱਥੋਂ ਕੋਈ ਵੀ ਚੀਜ਼ ਕਿਸੇ ਏਜੰਟ ਨੂੰ ਸ਼ੁਰੂ, ਰੋਕ ਜਾਂ ਬੰਦ ਨਹੀਂ ਕਰ ਸਕਦੀ।",
+  "security.apikeys_new": "ਨਵੀਂ ਕੁੰਜੀ",
+  "security.apikeys_name_label": "ਇਹ ਕਿਸ ਲਈ ਹੈ?",
+  "security.apikeys_origin_label": "ਇਸਨੂੰ ਕਿਹੜੀ ਸਾਈਟ ਵਰਤੇਗੀ?",
+  "security.apikeys_no_browser": "ਇਹ ਕੁੰਜੀ ਕਿਸੇ ਸਕ੍ਰਿਪਟ ਜਾਂ ਸਰਵਰ ਲਈ ਹੈ, ਕਿਸੇ ਵੈੱਬ ਪੇਜ ਲਈ ਨਹੀਂ",
+  "security.apikeys_scope_label": "ਇਹ ਕੀ ਪੜ੍ਹ ਸਕਦੀ ਹੈ?",
+  "security.apikeys_create": "ਕੁੰਜੀ ਬਣਾਓ",
+  "security.apikeys_cancel": "ਰੱਦ ਕਰੋ",
+  "security.apikeys_reveal_title": "ਇਸਨੂੰ ਹੁਣੇ ਕਾਪੀ ਕਰੋ। ਇਹ ਦੁਬਾਰਾ ਨਹੀਂ ਦਿਖਾਈ ਜਾਂਦੀ।",
+  "security.apikeys_copy": "ਕਾਪੀ ਕਰੋ",
+  "security.apikeys_done": "ਹੋ ਗਿਆ"
 }

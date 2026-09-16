@@ -1540,5 +1540,17 @@
   "trail.commits": "Commits",
   "trail.prs": "Pull Requests",
   "evals.locked": "Die Bewertung von Sitzungen ist eine Pro-Funktion.",
-  "trail.cov_unknown": "noch nicht angegeben"
+  "trail.cov_unknown": "noch nicht angegeben",
+  "security.apikeys_title": "Eigene Ansicht erstellen",
+  "security.apikeys_sub": "Gib einer Seite, einem Skript oder einem Coding-Agenten Lesezugriff auf die Agentendaten dieses Rechners, beschränkt auf genau das Nötige. Nichts hier kann einen Agenten starten, pausieren oder stoppen.",
+  "security.apikeys_new": "Neuer Schlüssel",
+  "security.apikeys_name_label": "Wofür ist er gedacht?",
+  "security.apikeys_origin_label": "Welche Seite wird ihn verwenden?",
+  "security.apikeys_no_browser": "Dieser Schlüssel ist für ein Skript oder einen Server, nicht für eine Webseite",
+  "security.apikeys_scope_label": "Was darf er lesen?",
+  "security.apikeys_create": "Schlüssel erstellen",
+  "security.apikeys_cancel": "Abbrechen",
+  "security.apikeys_reveal_title": "Jetzt kopieren. Er wird nicht erneut angezeigt.",
+  "security.apikeys_copy": "Kopieren",
+  "security.apikeys_done": "Fertig"
 }

@@ -130,11 +130,13 @@ jobs:
       # Tracking: vivekchand/clawmetry#3970 (C4)
       - name: Write C4 fidelity summary
         if: always()
+        env:
+          ACCESS_AVAILABLE: ${{ steps.access.outputs.available }}
         run: |
           {
             echo "## C4 Cross-Repo Handoff: Fidelity Report"
             echo ""
-            if [ "${{ steps.access.outputs.available }}" = "true" ]; then
+            if [ "$ACCESS_AVAILABLE" = "true" ]; then
               echo "**Mode: REAL APPS** -- CLOUD_REPO_PAT configured"
               echo ""
               echo "| Tier | What was tested |"

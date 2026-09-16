@@ -446,6 +446,30 @@ def api_onboarding_state():
                         "source": "error"})
 
 
+@bp_onboarding.route("/api/onboarding/readiness")
+def api_onboarding_readiness():
+    """First-install progress from DuckDB through its owning daemon."""
+    try:
+        from routes.local_query import local_store_call_via_daemon, PROXY_UNAVAILABLE
+
+        status = local_store_call_via_daemon("query_startup_status")
+        if status is PROXY_UNAVAILABLE:
+            # During an upgrade the dashboard can briefly be newer than the
+            # daemon. Its established sessions are enough to bypass setup.
+            sessions = local_store_call_via_daemon("query_sessions_table", limit=1)
+            if isinstance(sessions, list) and sessions:
+                return jsonify({"available": True, "initialized": True, "has_data": True})
+            from clawmetry import local_store
+
+            status = local_store.get_store(read_only=True).query_startup_status()
+        if not isinstance(status, dict) or status.get("available") is not True:
+            raise ValueError("readiness unavailable")
+        return jsonify(status)
+    except Exception as exc:
+        log.warning("Dashboard readiness unavailable: %s", exc)
+        return jsonify({"available": False}), 503
+
+
 #: The ingest-status answer, memoised. Polled while the setup step is open.
 _INGEST_STATUS_CACHE: dict = {"at": 0.0, "body": None}
 _INGEST_STATUS_TTL = 2.0

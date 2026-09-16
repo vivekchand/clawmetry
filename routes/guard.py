@@ -77,6 +77,41 @@ def _safe_trace(steps) -> list:
 
 bp_guard = Blueprint("guard", __name__)
 
+
+@bp_guard.get("/api/guard/checks")
+def api_guard_checks():
+    """Catalogue and confirmed preferences from the node that runs checks."""
+    from clawmetry.guard_checks import catalogue
+    body = _ls_call("query_guard_checks")
+    return jsonify(body if isinstance(body, dict) else catalogue())
+
+
+@bp_guard.post("/api/guard/checks/<kind>")
+def api_guard_check_update(kind):
+    from clawmetry.guard_checks import PREFIX, validate
+    if not _same_origin_ok():
+        return jsonify(ok=False, message="Open Guard on this node to change its checks."), 403
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(ok=False, message="Choose on or off for this check."), 400
+    try:
+        validate(kind, body.get("enabled"))
+    except ValueError:
+        return jsonify(ok=False, message="Choose a known check and turn it on or off."), 400
+    value = "true" if body["enabled"] else "false"
+    _ls_write("set_guard_check", kind=kind, enabled=body["enabled"])
+    saved = _ls_call("get_node_setting", key=PREFIX + kind)
+    if saved != value:
+        return jsonify(ok=False, message="Could not save this check. Make sure the node is running, then try again."), 503
+    try:
+        from clawmetry.audit import audit_event
+        audit_event("guard.check.changed", actor="dashboard", target=kind,
+                    result="saved", metadata={"enabled": body["enabled"]})
+    except Exception:
+        log.warning("Could not record Guard check settings audit")
+    return jsonify(ok=True, kind=kind, enabled=body["enabled"], applied=True,
+                   checks=_ls_call("query_guard_checks"))
+
 # Actions a caller may ask for. `resume` is control-only (there is no policy
 # that resumes; a human decides that). Anything not in here is refused rather
 # than passed through to a signal helper.

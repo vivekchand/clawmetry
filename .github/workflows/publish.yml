@@ -134,12 +134,13 @@ jobs:
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
+          ATTEST_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           gh release upload "$TAG" dist/*.whl dist/*.tar.gz \
             --clobber || echo "⚠ dist upload failed (non-blocking)"
 
-          BUNDLE="${{ steps.attest.outputs.bundle-path }}"
+          BUNDLE="$ATTEST_BUNDLE_PATH"
           if [ -n "$BUNDLE" ] && [ -f "$BUNDLE" ]; then
             PROV="dist/clawmetry-${TAG#v}.intoto.jsonl"
             cp "$BUNDLE" "$PROV"
