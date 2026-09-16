@@ -1540,5 +1540,17 @@
   "trail.commits": "Commit'ler",
   "trail.prs": "Pull request'ler",
   "evals.locked": "Oturum puanlaması bir Pro özelliğidir.",
-  "trail.cov_unknown": "henüz belirtilmedi"
+  "trail.cov_unknown": "henüz belirtilmedi",
+  "security.apikeys_title": "Kendi görünümünüzü oluşturun",
+  "security.apikeys_sub": "Bir sayfaya, bir betiğe veya bir kodlama aracısına, tam olarak ihtiyacı olanla sınırlı şekilde bu makinenin aracı verilerine okuma erişimi verin. Buradaki hiçbir şey bir aracıyı başlatamaz, duraklatamaz veya durduramaz.",
+  "security.apikeys_new": "Yeni anahtar",
+  "security.apikeys_name_label": "Ne için kullanılacak?",
+  "security.apikeys_origin_label": "Hangi site kullanacak?",
+  "security.apikeys_no_browser": "Bu anahtar bir web sayfası için değil, bir betik veya sunucu içindir",
+  "security.apikeys_scope_label": "Neyi okuyabilir?",
+  "security.apikeys_create": "Anahtar oluştur",
+  "security.apikeys_cancel": "İptal",
+  "security.apikeys_reveal_title": "Bunu şimdi kopyalayın. Bir daha gösterilmeyecek.",
+  "security.apikeys_copy": "Kopyala",
+  "security.apikeys_done": "Tamam"
 }

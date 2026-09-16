@@ -1540,5 +1540,17 @@
   "trail.commits": "提交次數",
   "trail.prs": "合併請求",
   "evals.locked": "工作階段評分是 Pro 功能。",
-  "trail.cov_unknown": "尚未宣告"
+  "trail.cov_unknown": "尚未宣告",
+  "security.apikeys_title": "打造專屬檢視畫面",
+  "security.apikeys_sub": "讓網頁、指令碼或程式碼代理讀取這台機器的代理資料，並僅限於它實際需要的範圍。這裡的任何內容都無法啟動、暫停或停止代理。",
+  "security.apikeys_new": "新增金鑰",
+  "security.apikeys_name_label": "用途為何？",
+  "security.apikeys_origin_label": "哪個網站會使用它？",
+  "security.apikeys_no_browser": "此金鑰供指令碼或伺服器使用，非供網頁使用",
+  "security.apikeys_scope_label": "它可以讀取什麼？",
+  "security.apikeys_create": "建立金鑰",
+  "security.apikeys_cancel": "取消",
+  "security.apikeys_reveal_title": "請立即複製，之後不會再顯示。",
+  "security.apikeys_copy": "複製",
+  "security.apikeys_done": "完成"
 }
