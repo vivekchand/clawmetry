@@ -1540,5 +1540,17 @@
   "trail.commits": "コミット",
   "trail.prs": "プルリクエスト",
   "evals.locked": "セッションスコアリングはProの機能です。",
-  "trail.cov_unknown": "未申告"
+  "trail.cov_unknown": "未申告",
+  "security.apikeys_title": "自分専用のビューを作る",
+  "security.apikeys_sub": "ページ、スクリプト、コーディングエージェントに、このマシンのエージェントデータへの読み取りアクセスを、必要な範囲に限定して付与します。ここからエージェントの開始、一時停止、停止はできません。",
+  "security.apikeys_new": "新しいキー",
+  "security.apikeys_name_label": "用途は?",
+  "security.apikeys_origin_label": "どのサイトで使用しますか?",
+  "security.apikeys_no_browser": "このキーはスクリプトやサーバー用で、Webページ用ではありません",
+  "security.apikeys_scope_label": "読み取り可能な範囲は?",
+  "security.apikeys_create": "キーを作成",
+  "security.apikeys_cancel": "キャンセル",
+  "security.apikeys_reveal_title": "今すぐコピーしてください。再表示されません。",
+  "security.apikeys_copy": "コピー",
+  "security.apikeys_done": "完了"
 }

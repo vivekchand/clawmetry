@@ -1540,5 +1540,17 @@
   "trail.commits": "Incheckningar",
   "trail.prs": "Pull requests",
   "evals.locked": "Sessionspoängsättning är en Pro-funktion.",
-  "trail.cov_unknown": "inte deklarerad ännu"
+  "trail.cov_unknown": "inte deklarerad ännu",
+  "security.apikeys_title": "Skapa din egen vy",
+  "security.apikeys_sub": "Ge en sida, ett skript eller en kodningsagent läsåtkomst till den här maskinens agentdata, avgränsad till exakt det som behövs. Inget här kan starta, pausa eller stoppa en agent.",
+  "security.apikeys_new": "Ny nyckel",
+  "security.apikeys_name_label": "Vad ska den användas till?",
+  "security.apikeys_origin_label": "Vilken webbplats ska använda den?",
+  "security.apikeys_no_browser": "Den här nyckeln är för ett skript eller en server, inte en webbsida",
+  "security.apikeys_scope_label": "Vad får den läsa?",
+  "security.apikeys_create": "Skapa nyckel",
+  "security.apikeys_cancel": "Avbryt",
+  "security.apikeys_reveal_title": "Kopiera detta nu. Det visas inte igen.",
+  "security.apikeys_copy": "Kopiera",
+  "security.apikeys_done": "Klar"
 }

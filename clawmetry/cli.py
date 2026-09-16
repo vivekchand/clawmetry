@@ -2437,6 +2437,28 @@ def _cmd_service(args) -> None:
     sys.exit(0 if result.get("ok") else 1)
 
 
+def _report_uninstall() -> None:
+    """Tell the anonymous install registry that this install is going away.
+
+    REQ-OGV-AIH-004. The registry counted arrivals and never departures:
+    `uninstall` has been an accepted event on the cloud side all along and
+    nothing ever sent it, so a purged machine left an account looking like
+    it had never installed. Same opt-out rules as every other lifecycle
+    ping (``ping_event`` refuses before any request), and every failure is
+    swallowed: the uninstall is the product, this is bookkeeping.
+    """
+    try:
+        from clawmetry import telemetry as _tel
+
+        try:
+            from dashboard import __version__ as _ver
+        except Exception:
+            _ver = "unknown"
+        _tel.ping_event("uninstall", _ver)
+    except Exception:
+        pass
+
+
 def _cmd_uninstall(args=None) -> None:
     """clawmetry uninstall — fully remove clawmetry, stop daemons, delete all files.
 
@@ -2720,6 +2742,8 @@ def _cmd_uninstall(args=None) -> None:
                 print("  ⏳  Purging server-side registration (background)...")
     except Exception:
         pass
+
+    _report_uninstall()
 
     # 1. Stop daemons. Boot the launchd jobs out BEFORE deleting any files:
     # the dashboard agent has KeepAlive, so a plist left registered restarts

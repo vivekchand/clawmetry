@@ -438,6 +438,9 @@ jobs:
       - name: Dashboard cold load boot
         run: python3 -m pytest tests/test_cold_load_boot_js.py -q
 
+      - name: First-install preparation UI
+        run: python3 -m pytest tests/test_startup_readiness.py -q
+
       # Trail page + session-first landing: the live HTML must include
       # tabs/trail.html (Jinja render, not a template grep), the default
       # active page must be the Sessions list, and every Trail string must
@@ -661,6 +664,12 @@ jobs:
       - name: Every sign-in tells the account whether it is cloud or self-hosted
         run: python3 -m pytest tests/test_account_deployment_report.py tests/test_connect_provisioning_order.py tests/test_connect_otp_skip.py tests/test_cloud_cta_oauth.py -q
 
+      # REQ-OGV-AIH-004: the install registry counted arrivals and never
+      # departures, so a purged machine left an account reading "never
+      # installed" and it was emailed install instructions.
+      - name: An uninstall reports itself
+        run: python3 -m pytest tests/test_uninstall_reports_itself.py -q
+
       - name: The sync cycle isolates every ingest call
         run: python3 -m pytest tests/test_sync_cycle_fault_isolation.py -q
 
@@ -789,6 +798,7 @@ jobs:
             tests/test_moat_regression_1129.py \
             tests/test_e2e_real_openclaw_pipeline.py \
             tests/test_onboarding_ingest_status.py \
+            tests/test_startup_readiness.py \
             tests/test_duckdb_fastpath_v3_invariants.py \
             tests/test_price_book_usage_store.py \
             tests/test_query_events_keys_first.py \
@@ -874,6 +884,7 @@ jobs:
             tests/test_openclaw_doctor_cache.py \
             tests/test_repo_scan_daemon_wiring.py \
             tests/test_guard_workspace_kinds.py \
+            tests/test_guard_checks.py \
             tests/test_tool_risk.py \
             tests/test_no_shadowed_module_functions.py \
             tests/test_hooks_claude_code.py \
@@ -1682,8 +1693,10 @@ jobs:
           pip install -e . pyyaml httpx
       - name: Check kill-switch
         id: gate
+        env:
+          EVALS_GATE: ${{ vars.CLAWMETRY_EVALS_GATE }}
         run: |
-          if [ "${{ vars.CLAWMETRY_EVALS_GATE }}" = "off" ]; then
+          if [ "$EVALS_GATE" = "off" ]; then
             echo "::warning::eval gate SKIPPED -- CLAWMETRY_EVALS_GATE repo var set to 'off'"
             echo "skip=1" >> "$GITHUB_OUTPUT"
           else

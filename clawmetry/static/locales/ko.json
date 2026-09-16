@@ -1540,5 +1540,17 @@
   "trail.commits": "커밋",
   "trail.prs": "풀 리퀘스트",
   "evals.locked": "세션 점수 매기기는 Pro 기능입니다.",
-  "trail.cov_unknown": "아직 선언되지 않음"
+  "trail.cov_unknown": "아직 선언되지 않음",
+  "security.apikeys_title": "나만의 뷰 구축",
+  "security.apikeys_sub": "페이지, 스크립트 또는 코딩 에이전트에게 이 머신의 에이전트 데이터에 대한 읽기 접근 권한을 필요한 범위만큼만 부여하세요. 여기서는 에이전트를 시작, 일시중지, 중지할 수 없습니다.",
+  "security.apikeys_new": "새 키",
+  "security.apikeys_name_label": "용도가 무엇인가요?",
+  "security.apikeys_origin_label": "어떤 사이트에서 사용하나요?",
+  "security.apikeys_no_browser": "이 키는 웹페이지가 아닌 스크립트나 서버용입니다",
+  "security.apikeys_scope_label": "무엇을 읽을 수 있나요?",
+  "security.apikeys_create": "키 생성",
+  "security.apikeys_cancel": "취소",
+  "security.apikeys_reveal_title": "지금 복사하세요. 다시 표시되지 않습니다.",
+  "security.apikeys_copy": "복사",
+  "security.apikeys_done": "완료"
 }

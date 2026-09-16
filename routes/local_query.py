@@ -718,6 +718,7 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    "query_startup_status",
     # `clawmetry maintenance rescrub-spans` (REQ-OBS-OTG-001): the operator's
     # explicit rescrub of spans stored before scrubbing existed. A dry run
     # unless apply=True; pages by span_id so each call stays bounded.
@@ -1099,6 +1100,8 @@ _DAEMON_METHODS = frozenset({
     "get_node_setting",
     "set_node_setting",
     "list_node_settings",
+    "query_guard_checks",
+    "set_guard_check",
     # Agent identity: one principal per AGENT (node + runtime + agent_id),
     # derived from sessions and overlaid with the agent_meta labels above.
     # Read-only; the daemon owns the writer, and ownership writes reuse
