@@ -239,11 +239,39 @@ def _render_run_api() -> list[str]:
     return lines
 
 
+def _render_non_goals() -> list[str]:
+    lines = ["## What ClawMetry does not accept", ""]
+    lines.append(
+        "ClawMetry does not accept generic log formats that lack agent-turn "
+        "structure. Specifically it does not accept:"
+    )
+    lines.append("")
+    lines.append(
+        "- **syslog** (RFC 3164 / RFC 5424) — flat line-oriented system logs "
+        "carry no concept of a session, turn, tool call or token count. "
+        "Pre-process them with an adapter that extracts these fields before pushing."
+    )
+    lines.append(
+        "- **CEF** (Common Event Format) — CEF is designed for security event "
+        "correlation, not agent observability. It maps poorly to the session/run "
+        "model and has no token or cost fields."
+    )
+    lines.append("")
+    lines.append(
+        "If you need to ingest data from a system that emits one of these "
+        "formats, write a thin shim that translates them into the structured "
+        "run/event API above, or open a discussion on GitHub."
+    )
+    lines.append("")
+    return lines
+
+
 def render() -> str:
     lines: list[str] = [_HEADER]
     lines.extend(_render_otlp())
     lines.extend(_render_gen_ai())
     lines.extend(_render_run_api())
+    lines.extend(_render_non_goals())
     return "\n".join(lines)
 
 

@@ -230,9 +230,15 @@ def test_activate_signup_trial_mints_and_activates(monkeypatch, tmp_path, capsys
         "expires_at": int(_t.time()) + 7 * 86400,
         "reused": False, "expired": False,
     })
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.delenv("CLAWMETRY_LAUNCHER", raising=False)
+    monkeypatch.delenv("CLAWMETRY_DESKTOP_VERSION", raising=False)
     assert cli._activate_signup_trial() is True
     assert posted["url"].endswith("/api/license/trial/signup")
-    assert posted["body"] == {"api_key": "cm_fresh_signup"}
+    # No deployment (this caller does not know it), but the machine facts
+    # ride along on every sign-in (REQ-OGV-ADC-004).
+    assert posted["body"] == {"api_key": "cm_fresh_signup",
+                              "os": "Linux", "client": "cli"}
     assert activated.get("key") == "CLAW1.trial.key"
     assert "Pro trial active" in capsys.readouterr().out
 

@@ -38,9 +38,19 @@ jobs:
       actions: read
     timeout-minutes: 10
     steps:
+      # persist-credentials is `true` on purpose, and is stated rather than
+      # inherited: "Open quarantine PR" below runs `git push -u origin`, and the
+      # only thing authenticating that push is the GITHUB_TOKEN this checkout
+      # writes into .git/config. The GITHUB_TOKEN env on the neighbouring steps
+      # authenticates `gh`, not `git`, so it would not cover the push if the
+      # credential stopped persisting. Leaving the key off left that dependency
+      # resting on an action default that is not ours to pin. Nothing in this job
+      # uploads an artifact or caches the workspace, so the persisted credential
+      # never leaves the runner.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
