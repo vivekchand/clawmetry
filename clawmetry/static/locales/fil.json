@@ -1540,5 +1540,17 @@
   "trail.commits": "Mga Commit",
   "trail.prs": "Mga Pull Request",
   "evals.locked": "Ang session scoring ay isang Pro feature.",
-  "trail.cov_unknown": "hindi pa idineklara"
+  "trail.cov_unknown": "hindi pa idineklara",
+  "security.apikeys_title": "Buuin ang sarili mong view",
+  "security.apikeys_sub": "Bigyan ng read access ang isang page, script, o coding agent sa agent data ng makinang ito, nakalimita lang sa kung ano ang kailangan nito. Wala rito ang makapagsisimula, magpapahinto, o magpapatigil sa isang agent.",
+  "security.apikeys_new": "Bagong key",
+  "security.apikeys_name_label": "Para saan ito?",
+  "security.apikeys_origin_label": "Aling site ang gagamit nito?",
+  "security.apikeys_no_browser": "Ang key na ito ay para sa isang script o server, hindi sa isang web page",
+  "security.apikeys_scope_label": "Ano ang puwede nitong basahin?",
+  "security.apikeys_create": "Gumawa ng key",
+  "security.apikeys_cancel": "Kanselahin",
+  "security.apikeys_reveal_title": "Kopyahin ito ngayon. Hindi na ito muling ipapakita.",
+  "security.apikeys_copy": "Kopyahin",
+  "security.apikeys_done": "Tapos na"
 }

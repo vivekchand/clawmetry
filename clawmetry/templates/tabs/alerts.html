@@ -10,13 +10,14 @@
   the soft paywall fires (per project_free_plan_upsell memory).
 -->
 <div class="page" id="page-alerts">
+  <button class="guard-back-link" onclick="switchTab('guard');guardShowView('attention')">Guard / Needs attention</button>
   <div class="alerts-head">
     <div>
       <h2 class="alerts-title">
         <span data-i18n="alerts.title">Alerts</span>
         <span class="pro-chip" data-i18n-title="alerts.pro_feature" title="Pro feature" data-i18n="alerts.pro">Pro</span>
       </h2>
-      <div class="alerts-sub" data-i18n="alerts.subtitle">Get notified when something goes wrong with your agents.</div>
+      <div class="alerts-sub">Alerts tell you what happened. Guard checks find evidence; approval requests ask you to decide.</div>
     </div>
     <button class="alerts-btn-primary" onclick="alertsHandleNewRule()" data-i18n="alerts.new_rule">+ New alert rule</button>
   </div>
@@ -26,6 +27,7 @@
        openPaywall() modal when they try to enable a second rule or click
        + New alert rule (see alerts.js alertsCreateRule / alertsToggleRule). -->
 
+  <details class="guard-section-details" id="alerts-settings-panel"><summary>Notification rules and monitors</summary>
   <div id="alerts-rules-list" class="alerts-list">
     <div class="alerts-loading" data-i18n="alerts.loading_alerts">Loading alerts…</div>
   </div>
@@ -39,7 +41,13 @@
     <div class="alerts-loading" data-i18n="alerts.loading_builtins">Loading monitors…</div>
   </div>
 
+  </details>
   <h4 class="alerts-section-h" data-i18n="alerts.recent_history">Recent alert history</h4>
+  <div class="guard-history-tools">
+    <label>Find an alert <input id="guard-alert-search" type="search" placeholder="Search recent notifications" oninput="alertsFilterHistory()"></label>
+    <label>Show <select id="guard-alert-state" onchange="alertsFilterHistory()"><option value="all">All notifications</option><option value="open">Not marked resolved</option><option value="resolved">Resolved</option></select></label>
+  </div>
+  <p class="guard-scope-note">Recent notifications on this node. Matching repeats are grouped; detection settings live in Guard.</p>
   <div id="alerts-history-list" class="alerts-history">
     <div class="alerts-loading" data-i18n="alerts.loading_history">Loading history…</div>
   </div>

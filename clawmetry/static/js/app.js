@@ -1277,6 +1277,7 @@ async function ackAllAlerts() {
 function visibilitySetInterval(fn, ms) {
   return setInterval(function() {
     if (typeof document !== 'undefined' && document.hidden) return;
+    if (window.cmFirstRun && window.cmFirstRun.active) return;
     try { fn(); } catch (e) {}
   }, ms);
 }
@@ -2168,7 +2169,8 @@ function switchTab(name) {
   try { _cmApplyRuntimeScopeNote(name); } catch (e) {}
   var tabs = document.querySelectorAll('.nav-tab');
   tabs.forEach(function(t) { if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) t.classList.add('active'); });
-  var leftItems = document.querySelectorAll('.left-nav-item[data-tab="' + name + '"]');
+  var navName = (name === "approvals" || name === "alerts") ? "guard" : name;
+  var leftItems = document.querySelectorAll('.left-nav-item[data-tab="' + navName + '"]');
   leftItems.forEach(function(t) { t.classList.add('active'); });
   // Phase A beginner IA: if the selected tab lives inside a collapsed drawer
   // (Developer / Advanced), reveal that drawer so the active item is visible.
@@ -20396,7 +20398,10 @@ async function loadTranscripts() {
     try { _rtFilter = (_cmRuntimeFilter && _cmRuntimeFilter()) || ''; } catch (_e) {}
     var _tUrl = '/api/transcripts' +
       (_rtFilter && _rtFilter !== 'all' ? '?runtime=' + encodeURIComponent(_rtFilter) : '');
-    var data = await fetch(_tUrl).then(r => r.json());
+    var data = await fetch(_tUrl).then(function (r) {
+      if (!r.ok) throw new Error('transcripts unavailable');
+      return r.json();
+    });
     var html = '';
     // ChatGPT-style row: derived title on top (first user prompt, when the
     // daemon shipped one in the snapshot), with the full session id demoted
@@ -20554,8 +20559,10 @@ async function loadTranscripts() {
         history.replaceState(null, '', window.location.pathname + window.location.search);
       }
     } catch (e) {}
+    return data.store_available !== false;
   } catch(e) {
     document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">' + t("app.failed_to_load_transcripts", null, "Failed to load transcripts") + '</div>';
+    return false;
   }
 }
 
@@ -22512,6 +22519,9 @@ async function _cmSyncTick() {
 async function cmSyncInit() {
   // Cloud mode keeps its existing cm-sync-bar (Phase 2 promotes this component).
   if (window.CLOUD_MODE) return;
+  // First-install preparation owns progress now; do not start a second
+  // progress poller behind its screen.
+  if (window.cmFirstRun) return;
   // #1937: the banner describes CLOUD-side sync work. Don't show it when
   //   * the user opted out (CLAWMETRY_NO_CLOUD=1 or ~/.clawmetry/nocloud), or
   //   * the user never connected (no config.json -> nothing to sync).
@@ -29219,6 +29229,10 @@ var BOOT_HARD_TIMEOUT_MS = 8000;
 var _bootFinished = false;
 function _safeFinishBoot() {
   if (_bootFinished) return;
+  if (window.cmFirstRun && window.cmFirstRun.checking) {
+    window.cmFirstRun.checked.then(_safeFinishBoot);
+    return;
+  }
   _bootFinished = true;
   finishBootOverlay();
 }
@@ -31919,6 +31933,7 @@ function guardAgo(ts) {
 }
 
 function loadGuardTab() {
+  if (typeof guardLoadWorkspace === "function") { guardLoadWorkspace(); return; }
   loadGuardSessions();
   loadGuardPolicies();
   loadGuardActions();
@@ -32130,6 +32145,7 @@ function loadGuardSessions() {
       return;
     }
     var flagged = 0;
+    var findingCards = [];
     var atRisk = document.getElementById('guard-at-risk');
     if (atRisk) {
       var total = Number(d && d.spend_at_risk_usd) || 0;
@@ -32251,6 +32267,18 @@ function loadGuardSessions() {
         }
       }
 
+      if ((inc || ws) && !exited) {
+        var findings = [inc, ws].filter(Boolean);
+        findingCards.push('<article class="guard-finding"><header><strong>' + guardEsc((s.title || s.session_id || '').slice(0, 80)) +
+          '</strong><span>' + guardEsc(s.runtime) + '</span></header>' + findings.map(function (finding) {
+            return '<div class="guard-finding-evidence"><h4>' + guardEsc(finding.title || GUARD_KIND_LABEL[finding.kind] || finding.kind) +
+              '</h4><p>' + guardEsc(finding.detail || 'Open this session to review the matching activity.') + '</p>' +
+              (finding.since ? '<small>First seen ' + guardEsc(guardAgo(finding.since)) + '</small>' : '') + '</div>';
+          }).join('') + '<footer><span>' + (inc && Number(inc.spend_at_risk_usd) > 0 ? guardMoney(inc.spend_at_risk_usd) + ' estimated at risk' : 'Detected activity, not a blocked action') +
+          '</span><div><button class="btn btn-xs" data-sid="' + guardEsc(s.session_id) +
+          '" onclick="openTrail(this.dataset.sid)">View session</button> ' + control + '</div></footer></article>');
+      }
+
       html += '<tr><td title="' + guardEsc(s.session_id) + '">' +
         guardEsc((s.title || s.session_id || '').slice(0, 48)) + '</td>' +
         '<td>' + guardEsc(s.runtime) + '</td>' +
@@ -32263,7 +32291,9 @@ function loadGuardSessions() {
         '<td>' + control + '</td></tr>';
     });
     html += '</tbody></table>';
-    el.innerHTML = html;
+    el.innerHTML = (findingCards.length ? findingCards.join('') :
+      '<div class="empty-state">No findings on the listed running sessions.</div>') +
+      '<details class="guard-section-details"><summary>All ' + rows.length + ' listed sessions and controls</summary><div style="overflow-x:auto">' + html + '</div></details>';
     guardSetBadge(flagged);
   }).catch(function () {
     el.innerHTML = '<div class="empty-state">Could not load sessions.</div>';

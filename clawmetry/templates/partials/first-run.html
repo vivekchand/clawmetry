@@ -1,0 +1,18 @@
+<section id="first-run" class="first-run" hidden role="dialog" aria-modal="true" aria-labelledby="first-run-title" aria-describedby="first-run-description">
+  <div class="first-run-content">
+    <div class="first-run-mark" aria-hidden="true"><img src="/static/img/logo.svg" alt="" width="48" height="48"></div>
+    <h1 id="first-run-title" tabindex="-1">Getting your dashboard ready</h1>
+    <p id="first-run-description">ClawMetry is gathering your agent activity and preparing your history. Your first setup may take a few minutes.</p>
+    <ol class="first-run-steps" aria-label="Setup progress">
+      <li id="first-run-discover" data-state="active"><span class="first-run-check" aria-hidden="true">1</span><span>Find your agent activity</span><small>In progress</small></li>
+      <li id="first-run-history"><span class="first-run-check" aria-hidden="true">2</span><span>Prepare your recent history</span><small>Waiting</small></li>
+      <li id="first-run-dashboard"><span class="first-run-check" aria-hidden="true">3</span><span>Open your dashboard</span><small>Waiting</small></li>
+    </ol>
+    <p id="first-run-status" class="first-run-status" role="status" aria-live="polite">Looking for activity on this machine…</p>
+    <p id="first-run-help" class="first-run-help">This page will open automatically when it is ready.</p>
+    <div class="first-run-actions">
+      <button id="first-run-retry" type="button" hidden>Check again</button>
+      <button id="first-run-continue" type="button">Open dashboard now</button>
+    </div>
+  </div>
+</section>
