@@ -134,11 +134,15 @@ def test_default_landing_is_sessions_first():
     ]
     # Nothing lost.
     for tab in ("overview", "inventory", "brain", "usage", "models", "context-economics",
-                "evals", "bench", "approvals", "guard", "alerts", "notifications",
+                    "evals", "bench", "guard", "notifications",
                 "flow", "tracing", "agents", "tool-catalog", "harness",
                 "crons", "memory", "skills", "logs", "security", "policy",
                 "selfevolve", "version-impact", "nemoclaw"):
         assert tab in tabs, f"tab {tab} lost from the nav"
+    # Guard owns the review destinations, whose page ids and deep links stay.
+    for tab in ("approvals", "alerts"):
+        assert 'id="page-%s"' % tab in html
+        assert "switchTab('%s')" % tab in html
 
 
 def test_appjs_routes_trail():

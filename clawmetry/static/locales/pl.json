@@ -1540,5 +1540,17 @@
   "trail.commits": "Commity",
   "trail.prs": "Pull requesty",
   "evals.locked": "Ocenianie sesji to funkcja Pro.",
-  "trail.cov_unknown": "jeszcze nie zadeklarowano"
+  "trail.cov_unknown": "jeszcze nie zadeklarowano",
+  "security.apikeys_title": "Zbuduj własny widok",
+  "security.apikeys_sub": "Nadaj stronie, skryptowi lub agentowi kodującemu dostęp do odczytu danych agenta z tej maszyny, ograniczony dokładnie do tego, czego potrzebuje. Nic tutaj nie może uruchomić, wstrzymać ani zatrzymać agenta.",
+  "security.apikeys_new": "Nowy klucz",
+  "security.apikeys_name_label": "Do czego to jest?",
+  "security.apikeys_origin_label": "Która strona będzie go używać?",
+  "security.apikeys_no_browser": "Ten klucz jest przeznaczony dla skryptu lub serwera, nie dla strony internetowej",
+  "security.apikeys_scope_label": "Co może odczytywać?",
+  "security.apikeys_create": "Utwórz klucz",
+  "security.apikeys_cancel": "Anuluj",
+  "security.apikeys_reveal_title": "Skopiuj to teraz. Nie zostanie to ponownie wyświetlone.",
+  "security.apikeys_copy": "Kopiuj",
+  "security.apikeys_done": "Gotowe"
 }

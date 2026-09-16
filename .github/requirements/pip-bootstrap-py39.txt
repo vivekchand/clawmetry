@@ -1,0 +1,42 @@
+# Hash-pinned install set for the pip bootstrap step, Python 3.9 edition.
+#
+# Direct requirements: pip
+#
+# This is the Python 3.9 counterpart of pip-bootstrap.txt, and exists for one
+# reason: that file pins pip==26.2.1, which declares Requires-Python >=3.10.
+# A matrix cell running 3.9 cannot install it at all, so before this file the
+# only options at such a call site were an unpinned `pip install --upgrade
+# pip` or a job that fails outright. Both are worse than a slightly older
+# pinned pip.
+#
+# pip 26.0.1 is the LAST pip release that still supports Python 3.9. 26.1
+# moved Requires-Python to >=3.10 and every release after it has kept it
+# there, so this pin does not move again until the repo drops 3.9. (The note
+# in pip-bootstrap.txt rounds this to "pip 26.x requires Python >= 3.10";
+# the precise boundary is 26.1, not 26.0.)
+#
+# Installed with `pip install --require-hashes`, which refuses to install
+# anything not listed here with a matching hash -- so the job gets the exact
+# artifacts this file names, or it fails. pip has no dependencies of its own,
+# so the whole closure is the one name.
+#
+# Each version lists the sha256 of EVERY distribution PyPI publishes for it
+# (the pure-Python wheel, plus the sdist). pip accepts a download that matches
+# any one of them, so the pin does not quietly depend on the runner resolving
+# to the same artifact this file was generated against -- which is what lets
+# one file serve an ubuntu/macos/windows matrix.
+#
+# Updating: Dependabot owns the routine bumps (see the /.github/requirements
+# pip entry in .github/dependabot.yml) and rewrites the hashes with them.
+# Expect it to propose 26.1+ here; that bump must be REFUSED while any 3.9
+# cell still installs this file, because it reintroduces exactly the
+# Requires-Python failure this file exists to avoid.
+#
+# Regenerating by hand:
+#   pip install --dry-run --ignore-installed --report r.json 'pip==26.0.1'
+# then, for each resolved name==version, take every sha256 under `urls` in
+# https://pypi.org/pypi/<name>/<version>/json.
+
+pip==26.2 \
+    --hash=sha256:bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b \
+    --hash=sha256:c4037d8a277c89b320abe636d59f91e6d0922d08a05b60e85e53b296613346d8

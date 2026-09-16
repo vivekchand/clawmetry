@@ -1540,5 +1540,17 @@
   "trail.commits": "提交",
   "trail.prs": "拉取请求",
   "evals.locked": "会话评分是 Pro 功能。",
-  "trail.cov_unknown": "尚未声明"
+  "trail.cov_unknown": "尚未声明",
+  "security.apikeys_title": "构建你自己的视图",
+  "security.apikeys_sub": "让页面、脚本或编码代理读取这台机器上的代理数据,权限严格限定在其所需范围内。此处的任何操作都无法启动、暂停或停止代理。",
+  "security.apikeys_new": "新建密钥",
+  "security.apikeys_name_label": "用途是什么?",
+  "security.apikeys_origin_label": "哪个站点会使用它?",
+  "security.apikeys_no_browser": "此密钥用于脚本或服务器,而非网页",
+  "security.apikeys_scope_label": "它可以读取什么?",
+  "security.apikeys_create": "创建密钥",
+  "security.apikeys_cancel": "取消",
+  "security.apikeys_reveal_title": "请立即复制,之后将不再显示。",
+  "security.apikeys_copy": "复制",
+  "security.apikeys_done": "完成"
 }

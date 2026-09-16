@@ -12579,6 +12579,32 @@ class LocalStore(ProjectsMixin, TrailStoreMixin):
 
     # ── node settings (operator-set knobs both processes read) ──────────
 
+    def query_guard_checks(self) -> dict:
+        """Resolve check status in the daemon, whose environment runs them."""
+        from clawmetry.guard_checks import catalogue
+        try:
+            rows = self._fetch("SELECT key, value FROM node_settings", [])
+            return catalogue({str(r[0]): r[1] for r in rows})
+        except Exception:
+            logging.getLogger(__name__).warning("Guard check settings could not be read")
+            return catalogue()
+
+    def set_guard_check(self, kind: str, enabled: bool,
+                        requested_at_ms: int | None = None) -> None:
+        """Newest explicit choice wins, including duplicate relay deliveries."""
+        from clawmetry.guard_checks import PREFIX, validate
+        validate(kind, enabled)
+        stamp = int(time.time() * 1000) if requested_at_ms is None else int(requested_at_ms)
+        if stamp < 0 or stamp > int(time.time() * 1000) + 120000:
+            raise ValueError("Invalid Guard setting timestamp")
+        with self._write_lock:
+            self._conn.execute(
+                "INSERT INTO node_settings (key, value, updated_at) VALUES (?, ?, ?)"
+                " ON CONFLICT (key) DO UPDATE SET value=excluded.value,"
+                " updated_at=excluded.updated_at"
+                " WHERE excluded.updated_at >= node_settings.updated_at",
+                [PREFIX + kind, "true" if enabled else "false", stamp])
+
     def get_node_setting(self, key: str) -> str | None:
         """One setting's raw string value, or None when unset."""
         try:
@@ -18958,6 +18984,29 @@ class LocalStore(ProjectsMixin, TrailStoreMixin):
                     _READ_CACHE.pop(min(_READ_CACHE, key=lambda k: _READ_CACHE[k][0]), None)
             _READ_CACHE[key] = (now, rows)
         return rows
+
+    def query_startup_status(self) -> dict[str, Any]:
+        """Cheap readiness probe, without scanning or counting event history.
+
+        Daemon diagnostic events are not evidence of useful agent activity.
+        A session row also counts: some runtimes import metadata before events.
+        Exceptions propagate so an unreadable store never looks empty.
+        """
+        from clawmetry.startup import read_progress
+
+        progress = read_progress(self)
+        rows = self._fetch(
+            "SELECT EXISTS(SELECT 1 FROM sessions WHERE agent_type != 'daemon' LIMIT 1) OR "
+            "EXISTS(SELECT 1 FROM events WHERE agent_type != 'daemon' LIMIT 1)",
+            [],
+        )
+        has_data = bool(rows and rows[0][0])
+        return {
+            **progress,
+            "available": True,
+            "has_data": has_data,
+            "initialized": bool(progress.get("initialized")) or (not progress and has_data),
+        }
 
     def health(self) -> dict[str, Any]:
         """Snapshot of store state — for the /local/health endpoint and the
