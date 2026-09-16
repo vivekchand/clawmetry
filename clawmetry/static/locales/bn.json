@@ -1540,5 +1540,17 @@
   "trail.commits": "কমিট",
   "trail.prs": "পুল রিকোয়েস্ট",
   "evals.locked": "সেশন স্কোরিং একটি Pro ফিচার।",
-  "trail.cov_unknown": "এখনও ঘোষণা করা হয়নি"
+  "trail.cov_unknown": "এখনও ঘোষণা করা হয়নি",
+  "security.apikeys_title": "নিজের ভিউ তৈরি করুন",
+  "security.apikeys_sub": "কোনো পেজ, স্ক্রিপ্ট বা কোডিং এজেন্টকে এই মেশিনের এজেন্ট ডেটায় রিড অ্যাক্সেস দিন, ঠিক যতটুকু প্রয়োজন তার মধ্যে সীমিত। এখান থেকে কোনো এজেন্ট চালু, পজ বা বন্ধ করা সম্ভব নয়।",
+  "security.apikeys_new": "নতুন কী",
+  "security.apikeys_name_label": "এটি কী কাজে লাগবে?",
+  "security.apikeys_origin_label": "কোন সাইট এটি ব্যবহার করবে?",
+  "security.apikeys_no_browser": "এই কী একটি স্ক্রিপ্ট বা সার্ভারের জন্য, কোনো ওয়েব পেজের জন্য নয়",
+  "security.apikeys_scope_label": "এটি কী পড়তে পারবে?",
+  "security.apikeys_create": "কী তৈরি করুন",
+  "security.apikeys_cancel": "বাতিল",
+  "security.apikeys_reveal_title": "এখনই এটি কপি করুন। এটি আর দেখানো হবে না।",
+  "security.apikeys_copy": "কপি",
+  "security.apikeys_done": "সম্পন্ন"
 }

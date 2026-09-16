@@ -127,6 +127,54 @@
       "text": "The system shall not apply a remediation action without explicit operator initiation."
     },
     {
+      "id": "AC-GOV-ATR-001.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall pin, for every replayed case study, the ATLAS edition and source revision, the case identifier and name, each procedure step with the technique identifier published for it in that edition, and the ATLAS mitigations published against those techniques (ATLAS links mitigations to techniques, not to case studies, so the case to mitigation mapping is derived and labelled as such). A source report whose revision cannot be retrieved shall be named in the scorecard as not pinned."
+    },
+    {
+      "id": "AC-GOV-ATR-001.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "For each scenario the system shall record the runtime, the evaluation tier, the policy set in force and the expected outcome of every stage."
+    },
+    {
+      "id": "AC-GOV-ATR-002.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall score every stage of every scenario as unobservable, observed, partial, detected or held before action, naming the finding kinds that fired and the timestamp of the first flagged event, and shall roll each case up to caught, partial or missed."
+    },
+    {
+      "id": "AC-GOV-ATR-002.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "A fixture replay shall never score a stage as held before action, and its results shall be labelled fixture replay, distinct from isolated execution evidence."
+    },
+    {
+      "id": "AC-GOV-ATR-002.3",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The suite shall include benign controls, an intentional allow and at least one failure mode of a pre-action control, and shall report any finding on a benign control as a false positive."
+    },
+    {
+      "id": "AC-GOV-ATR-003.1",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall generate the scorecard from the replay, and continuous integration shall fail when the committed scorecard and the replay disagree, or when a stage outcome changes without its pinned expectation changing."
+    },
+    {
+      "id": "AC-GOV-ATR-003.2",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The scorecard shall state that fixture replay does not establish protection against CVE-2026-25253 or against prompt injection in general, and shall list the residual gaps."
+    },
+    {
+      "id": "AC-GOV-ATR-003.3",
+      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
+      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
+      "text": "The system shall produce a redacted evidence bundle that contains pins and sha256 of every fixture and stage outcomes, but no raw commands or file paths, and the bundle shall be deterministic given the same generated_at timestamp."
+    },
+    {
       "id": "AC-GOV-CE-001.1",
       "doc": "Compliance Evidence",
       "doc_id": "0a90cd6c-f758-4495-8b4e-20d23cb4fbc4",
@@ -175,6 +223,54 @@
       "text": "When the extension is absent or not entitled, the system shall communicate the availability boundary."
     },
     {
+      "id": "AC-GOV-FWM-001.1",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "When a detector, workspace or fleet finding kind exists in the product, the system shall declare for it either at least one framework reference or an explicit \"none\" with the reason no identifier applies."
+    },
+    {
+      "id": "AC-GOV-FWM-001.2",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "The system shall state one mapping version for the whole contract and, for each framework, the edition and source revision its identifiers were verified against."
+    },
+    {
+      "id": "AC-GOV-FWM-001.3",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "When a kind is mapped, the system shall carry a rationale, a stated limit of what the finding can and cannot establish, and references to a test that fires on the behaviour and a test that stays quiet on benign work."
+    },
+    {
+      "id": "AC-GOV-FWM-001.4",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "The system shall reference only identifiers present in the pinned edition of their framework, and shall keep MITRE ATLAS techniques, mitigations and case studies distinguishable."
+    },
+    {
+      "id": "AC-GOV-FWM-002.1",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "When the system reports a Guard finding, the finding shall carry the framework references for its kind, the mapping version and its capability mode."
+    },
+    {
+      "id": "AC-GOV-FWM-002.2",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "When the system lists a Guard policy decision, the decision shall carry the framework references of the finding kind it acted on and an evidence level of configured, exercised or failed; the system shall not report a decision as effective unless an independent outcome check exists."
+    },
+    {
+      "id": "AC-GOV-FWM-003.1",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "The system shall generate the public framework coverage document from the mapping contract, and continuous integration shall fail when the document and the contract disagree."
+    },
+    {
+      "id": "AC-GOV-FWM-003.2",
+      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
+      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
+      "text": "The coverage document shall describe coverage and not compliance, and shall list the framework items Guard does not cover as gaps."
+    },
+    {
       "id": "AC-GOV-GHA-006.1",
       "doc": "Governance and Human Approval",
       "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
@@ -209,6 +305,138 @@
       "doc": "Governance and Human Approval",
       "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
       "text": "A runtime hosting sessions in more than one execution model is classified per session, never wholly available: it is named explicitly as split-support, so the safe default for a session that cannot be placed is refusal."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.1",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When a tool result in a session contains text matching an injection signature, the system shall raise a `prompt_injection` finding that names the matched signature identifiers and the tool whose output carried the text, and shall not repeat the matched text."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.2",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When a user-sourced message matches an injection signature, the system shall raise the finding with the source identified as a user message and at a lower severity than a tool-result match, unless a high-risk tool call followed it in the same turn."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.3",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When a tool call rated high or critical risk follows the matched content in the same turn, the system shall raise the finding at critical severity and name that call's tool."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.4",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "The system shall offer `prompt_injection` to Guard policies like every other finding kind, and the finding shall carry its framework references (OWASP LLM01:2026, OWASP ASI01, MITRE ATLAS AML.T0051.000 and AML.T0051.001) under the mapping contract."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.5",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When signature text appears as source code or a regular expression rather than prose, the system shall not raise a finding for it."
+    },
+    {
+      "id": "AC-GOV-PIJ-001.6",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "The system shall publish the detector's recall and precision on pinned public prompt-injection samples and its firing rate on real transcripts, and continuous integration shall fail when the pinned recall falls below the published figure."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.1",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When the Claude Code pre-tool gate rates a high-risk tool call and a tool result from an untrusted source entered the same turn before it, the system shall rate the call critical and shall say why in the risk reasons."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.2",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When content earlier in the same turn matched an injection signature, the system shall rate a tool call of medium risk or above as critical."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.3",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "The system shall leave a low-risk call's tier unchanged, shall leave a medium-risk call's tier unchanged unless content in the turn matched an injection signature, and a new user prompt shall end the turn so earlier content no longer raises the tier."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.4",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "When the turn cannot be read, the system shall rate the call exactly as it would without this signal and shall never block a call because the context was unavailable."
+    },
+    {
+      "id": "AC-GOV-PIJ-002.5",
+      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
+      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
+      "text": "The context the gate hook sends to the local receiver shall carry tool names, counts and signature identifiers only, never tool output."
+    },
+    {
+      "id": "AC-GUX-001.1",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When Guard opens, the system shall present a check catalogue grouped by Run progress, Access and changes, Silent failures, Prompt injection, Workspace risks and Across sessions, with totals derived from the shipped registry."
+    },
+    {
+      "id": "AC-GUX-001.2",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When viewing a check, the system shall explain the behavior it detects, its scope, and the distinction between enabled, disabled, unavailable and awaiting confirmation."
+    },
+    {
+      "id": "AC-GUX-001.3",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When node state is unavailable or stale, the system shall state that limitation rather than claim protection is active."
+    },
+    {
+      "id": "AC-GUX-002.1",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When a check is disabled and the node confirms the change, the system shall skip that check on subsequent detection passes, including session, workspace and cross-session checks."
+    },
+    {
+      "id": "AC-GUX-002.2",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When settings change, the system shall persist them across restart, retain prior findings and approvals, and explain that automatic responses depending on that check will no longer receive new findings."
+    },
+    {
+      "id": "AC-GUX-002.3",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When a setting cannot be saved, the system shall retain the confirmed state and show an actionable error; a queued cloud request shall remain visibly pending until acknowledged."
+    },
+    {
+      "id": "AC-GUX-002.4",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When an administrator disables the detection engine on the node, the system shall disclose that override and shall not imply a per-check toggle overrides it."
+    },
+    {
+      "id": "AC-GUX-003.1",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When reviewing Guard, the system shall separate pending approvals, current findings and completed activity, with settings progressively disclosed."
+    },
+    {
+      "id": "AC-GUX-003.2",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When reviewing an item, the system shall show the affected agent or session, the plain-language reason and supported next action; existing decision and process-control confirmation rules shall remain effective."
+    },
+    {
+      "id": "AC-GUX-003.3",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When following existing Guard, Alerts or Approvals links, the system shall preserve access to those functions and explain their relationship in a shared navigation context."
+    },
+    {
+      "id": "AC-GUX-003.4",
+      "doc": "Guard coverage and review UX",
+      "doc_id": "327e83bf-8714-4b52-8c40-788d1520c828",
+      "text": "When changing runtime filters, the system shall scope activity to the selected runtime or explicitly identify node-wide settings. Hidden views shall not add background polling."
     },
     {
       "id": "AC-OBS-001.1",
@@ -361,64 +589,52 @@
       "text": "Where this path is described to a customer, the description shall state which runtimes it covers and that records arrive unencrypted."
     },
     {
-      "id": "AC-OBS-PRJ-001.1",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "The system shall attribute each session's spend to a project derived from where the session ran or from an operator assignment, and shall report for each project the source it came from and a confidence. A project or tenant name carried inside an agent's own activity shall not determine attribution."
+      "id": "AC-OBS-007.1",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report, for a repository named by the operator or discovered from session history, a grade for how legible that repository is to an agent, covering instruction file, test command, build command, lint or format gate, CI configuration and repository-scoped agent skills."
     },
     {
-      "id": "AC-OBS-PRJ-001.2",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "Sessions that ran in two different repositories shall be reported as two projects even when the repositories share a directory name, and shall be combined only by an explicit operator assignment."
+      "id": "AC-OBS-007.2",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report, beside that grade and for the same repository, how many sessions ran there in a stated window and how many of them the detectors recorded as stuck."
     },
     {
-      "id": "AC-OBS-PRJ-001.3",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "Spend from sessions whose working directory is unknown shall be reported in a visible unassigned group, with its amount and session count, rather than dropped or attributed to a default project."
+      "id": "AC-OBS-007.3",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report every passing check with the specific path that was read to reach that verdict, and every failing check with the paths that were looked for plus a remediation the operator can act on."
     },
     {
-      "id": "AC-OBS-PRJ-001.4",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "Attribution shall be derived when read rather than stored on activity records, so an assignment applies to history already collected. Each assignment shall carry the period it is effective for, who made it, when and why, and a correction shall be recorded as a new assignment that supersedes the earlier one without erasing it."
+      "id": "AC-OBS-007.4",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report a check whose input could not be read as an explicit unknown that does not affect the grade in either direction, rather than as a failure or a pass."
     },
     {
-      "id": "AC-OBS-PRJ-001.5",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "Project figures the system publishes shall identify a project by a label and an opaque identifier, and shall not include the full local path it was derived from."
+      "id": "AC-OBS-007.5",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report a repository with no recorded session history as having no history, distinctly from a repository where sessions ran and none got stuck."
     },
     {
-      "id": "AC-OBS-PRJ-001.6",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "A project budget shall declare its amount, period, timezone, currency and the financial basis of the spend it is measured against. The system shall refuse a budget whose currency or timezone it cannot honour rather than silently substituting another."
+      "id": "AC-OBS-007.6",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Report, per runtime, which runtimes would find their instructions in the repository, and scope the graded result to the runtime the operator has selected."
     },
     {
-      "id": "AC-OBS-PRJ-001.7",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "Spend shall count toward the budget period in which it occurred, on the budget's own timezone, so a session running across a period boundary is split between the two periods and a record that arrives late counts in the period it occurred in."
+      "id": "AC-OBS-007.7",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Complete without making any network request and without executing any command from the repository under examination."
     },
     {
-      "id": "AC-OBS-PRJ-001.8",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "When a project's spend in a period reaches 50%, 80% or 100% of its budget, the system shall record an alert once per threshold per period, deliver it to the operator, and state that the alert is a notification that does not stop or reverse any charge."
-    },
-    {
-      "id": "AC-OBS-PRJ-001.9",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "The budget status shall report spend for each day of the current period next to the budget, so burn can be compared against it."
-    },
-    {
-      "id": "AC-OBS-PRJ-001.10",
-      "doc": "Project attribution and per-project budgets: burn against budget",
-      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
-      "text": "The per-project export shall include assigned, unassigned and unpriced amounts and a completeness figure. Usage that carries tokens but no price shall be counted as unpriced, never as zero cost."
+      "id": "AC-OBS-007.8",
+      "doc": "Local Agent Observability",
+      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
+      "text": "Remain available on every plan, including free, with no entitlement gate."
     },
     {
       "id": "AC-OBS-CEA-001.1",
@@ -595,6 +811,12 @@
       "text": "When the operator opens the Cost Optimizer, the system shall show a loading state, and if no answer arrives within a bounded time the system shall replace it with a plain-language sentence and a way to retry, never a raw error code and never an unending spinner."
     },
     {
+      "id": "AC-OBS-CEA-023.10",
+      "doc": "Cost Optimizer: honest, fast and provider-aware",
+      "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",
+      "text": "When the operator has scoped the dashboard to one runtime, the Cost Optimizer shall show only that runtime's recorded spend, expensive calls and experiments and shall name the runtime its figures cover; and when that runtime has no recorded spend, or the connected computer does not yet send figures per runtime, the system shall show the figures as unavailable rather than another runtime's or the whole computer's."
+    },
+    {
       "id": "AC-OBS-CEA-023.2",
       "doc": "Cost Optimizer: honest, fast and provider-aware",
       "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",
@@ -643,16 +865,118 @@
       "text": "When the operator opens the Cost Optimizer on the hosted dashboard, the system shall show the same experiments, local-model advice and basis-labelled figures that the local dashboard derives for that computer from its recorded usage, computed on that computer and readable only in the operator's browser; and when the connected computer does not yet send them, the system shall say so rather than show recommendations that cite no observed usage or figures without a basis."
     },
     {
-      "id": "AC-OBS-CEA-023.10",
-      "doc": "Cost Optimizer: honest, fast and provider-aware",
-      "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",
-      "text": "When the operator has scoped the dashboard to one runtime, the Cost Optimizer shall show only that runtime's recorded spend, expensive calls and experiments and shall name the runtime its figures cover; and when that runtime has no recorded spend, or the connected computer does not yet send figures per runtime, the system shall show the figures as unavailable rather than another runtime's or the whole computer's."
+      "id": "AC-OBS-CEA-024.1",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The system shall accept a local price book whose entries identify a model exactly, by prefix, or by a validated pattern, carry an effective start date, and state either explicit per-token rates or a percentage discount off the published rate."
+    },
+    {
+      "id": "AC-OBS-CEA-024.10",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "For each usage record, the system shall state whether that source counts cached input tokens inside its input token total, so that a valuation neither adds nor subtracts them twice."
+    },
+    {
+      "id": "AC-OBS-CEA-024.11",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The price book, its rates and its recorded versions shall remain on the machine where they were written, and no path that sends data off the machine shall read them."
+    },
+    {
+      "id": "AC-OBS-CEA-024.12",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "When the price book version in effect at the time usage was observed selects exactly one entry for that usage and a valuation engine is present, the local Usage view shall show that usage valued at the contract rate, labelled as contract rate and naming the recorded book version; a figure whose book version is not recorded shall not be labelled contract, and the published-rate figures shall stay shown beside it."
+    },
+    {
+      "id": "AC-OBS-CEA-024.13",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Each usage record shall be valued against the book version that was in effect when it was observed. A later edit to the book shall not change the figure shown for usage observed before the edit, unless the user explicitly asks for a restatement; a restated figure shall be labelled as a restatement and shown beside the original amount."
+    },
+    {
+      "id": "AC-OBS-CEA-024.14",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Usage for which the applicable entries are ambiguous, or which no rate can price, shall be counted and shown as unknown with its reason, and shall add no amount to a contract figure."
+    },
+    {
+      "id": "AC-OBS-CEA-024.15",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The local dashboard shall provide a price book screen showing the validated entries, the aliases, each rejected entry with its reasons, and the recorded versions with the time each came into effect, and shall let the user add an entry or edit an existing one."
+    },
+    {
+      "id": "AC-OBS-CEA-024.16",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "An entry edit shall be validated before it is saved; each problem shall be shown as a readable sentence beside the field it concerns; nothing shall be written without an explicit save; a save shall be refused when the book changed after it was loaded; and a successful save shall report the new version and the time from which it applies."
+    },
+    {
+      "id": "AC-OBS-CEA-024.17",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Usage facts shall be stored once, as the recorded usage events, and contract valuations shall be derived when read; no valuation shall be written back into stored usage, and no process that sends data off the machine shall compute or carry one."
+    },
+    {
+      "id": "AC-OBS-CEA-024.2",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The system shall reject each malformed entry, and each pair of entries that would claim the same usage over overlapping dates, with a stated reason per entry, and shall continue to accept the valid remainder of the book rather than failing it whole."
+    },
+    {
+      "id": "AC-OBS-CEA-024.3",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "When more than one valid entry could apply to a usage record and the documented precedence does not separate them, the system shall report the record as ambiguous and shall not choose a rate."
+    },
+    {
+      "id": "AC-OBS-CEA-024.4",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "An entry shall apply to usage observed at or after its effective start and strictly before its effective end; usage with no observed time shall not be matched to a dated rate."
+    },
+    {
+      "id": "AC-OBS-CEA-024.5",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The system shall resolve an Azure OpenAI deployment name to a model through an explicit alias, scoped to its resource where the alias names one, and shall prefer that alias over a model name reported by the response."
+    },
+    {
+      "id": "AC-OBS-CEA-024.6",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "The system shall resolve AWS Bedrock model identifiers, including region prefixes, vendor prefixes and version suffixes, to the same model a price book entry names."
+    },
+    {
+      "id": "AC-OBS-CEA-024.7",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Every edit to the price book shall produce a new version identifier; a version once recorded shall never be altered; and resolving usage against an earlier version shall return the rate that version held."
+    },
+    {
+      "id": "AC-OBS-CEA-024.8",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "When no published rate exists for a model and no price book entry applies, the system shall report the price as unknown rather than substitute a generic default rate."
+    },
+    {
+      "id": "AC-OBS-CEA-024.9",
+      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
+      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
+      "text": "Every valuation the system returns shall state its basis (vendor reported, contract, list, default or unknown), the rate version and effective interval it used, and whether it restates an earlier valuation; a valuation lacking these shall not be returned."
     },
     {
       "id": "AC-OBS-CEA-025.1",
       "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
       "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
       "text": "Each cost figure on the Overview spend tile; on the Usage tab's period cost cards, Cost Breakdown table, subscription coverage banner, both Top Sessions by Cost tables and the session cost chart; on the Flow brain panel's cost card and per-call cost list; and in the hosted snapshot's cost slice shall carry a financial basis of exactly one of: usage value at published rates, expected contract spend, allocated actual spend, or unavailable, shown as visible text beside the figure or on the heading or caption of the column, list or chart that holds it."
+    },
+    {
+      "id": "AC-OBS-CEA-025.10",
+      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
+      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
+      "text": "The count of dollar figures rendered without a basis on the Overview, Usage and Sessions tabs shall not increase; the check shall find those renders from the tabs' own templates rather than from a hand-kept list."
     },
     {
       "id": "AC-OBS-CEA-025.2",
@@ -703,10 +1027,88 @@
       "text": "A counterfactual cost figure (a projected saving, a month-end forecast, or what the same usage would cost on another model) shall be labelled an estimate of usage value at published rates, and no card shall describe usage value at published rates as actual spend."
     },
     {
-      "id": "AC-OBS-CEA-025.10",
-      "doc": "Cost basis labels: usage value at published rates, contract spend and actual spend are never confused",
-      "doc_id": "950d4687-45cc-45a8-9d58-0c0d82fd5d9b",
-      "text": "The count of dollar figures rendered without a basis on the Overview, Usage and Sessions tabs shall not increase; the check shall find those renders from the tabs' own templates rather than from a hand-kept list."
+      "id": "AC-OBS-FLEET-001.1",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When a Linux user registers the collector for fleet use, the system shall request that the user's services persist after logout and report whether persistence is enabled, and if it could not be enabled, the exact administrator command that enables it."
+    },
+    {
+      "id": "AC-OBS-FLEET-001.2",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When an administrator registers the collector for all users on Windows, the system shall register a single logon registration that starts a separate collector as each signed-in user, and shall not run the collector under a privileged account."
+    },
+    {
+      "id": "AC-OBS-FLEET-001.3",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When fleet registration is removed, the system shall remove every registration it created and report what was removed."
+    },
+    {
+      "id": "AC-OBS-FLEET-001.4",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When the collector runs from an isolated environment that the running user cannot write (an administrator-owned fleet install), the system shall not attempt an unattended self-update or restart for one, and fleet status shall report automatic updates as off with that reason and how the install is updated instead."
+    },
+    {
+      "id": "AC-OBS-FLEET-002.1",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When an operator requests fleet status, the system shall report, per operating system, whether collection continues after the user logs off, and when it does not, the reason."
+    },
+    {
+      "id": "AC-OBS-FLEET-002.2",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "When the local data directory is readable by other local users, the system shall report it as not private, and fleet registration shall restrict it to the owning user."
+    },
+    {
+      "id": "AC-OBS-FLEET-003.1",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "The system shall provide a silent install example for Windows management tooling and one for Linux configuration management, each exercised in automated verification on that operating system."
+    },
+    {
+      "id": "AC-OBS-FLEET-003.2",
+      "doc": "Fleet Install on Shared and Virtual Desktops",
+      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
+      "text": "The install examples shall not embed an enrollment credential and shall not print one to their output."
+    },
+    {
+      "id": "AC-OBS-FRP-001.1",
+      "doc": "First installation prepares useful data before showing the dashboard",
+      "doc_id": "c11e8f26-d19d-4a5d-ac10-7e1e99188a18",
+      "text": "When a first installation is collecting its initial activity, the system shall show preparation instead of empty dashboard panels, and shall open automatically after collection is ready."
+    },
+    {
+      "id": "AC-OBS-FRP-001.2",
+      "doc": "First installation prepares useful data before showing the dashboard",
+      "doc_id": "c11e8f26-d19d-4a5d-ac10-7e1e99188a18",
+      "text": "When an established installation is reopened or its collector restarts, the system shall not impose a first-install wait."
+    },
+    {
+      "id": "AC-OBS-FRP-001.3",
+      "doc": "First installation prepares useful data before showing the dashboard",
+      "doc_id": "c11e8f26-d19d-4a5d-ac10-7e1e99188a18",
+      "text": "When collection finishes without agent activity, the system shall explain that a first task is needed and allow the user to open the dashboard."
+    },
+    {
+      "id": "AC-OBS-FRP-001.4",
+      "doc": "First installation prepares useful data before showing the dashboard",
+      "doc_id": "c11e8f26-d19d-4a5d-ac10-7e1e99188a18",
+      "text": "When readiness cannot be confirmed within three minutes, the system shall stop the loading animation and offer working retry and open-dashboard actions without exposing raw errors."
+    },
+    {
+      "id": "AC-OBS-FRP-001.5",
+      "doc": "First installation prepares useful data before showing the dashboard",
+      "doc_id": "c11e8f26-d19d-4a5d-ac10-7e1e99188a18",
+      "text": "When the page is hidden or preparation has finished, the system shall stop preparation polling; concurrent checks shall share a single in-flight request."
+    },
+    {
+      "id": "AC-OBS-FRP-001.6",
+      "doc": "First installation prepares useful data before showing the dashboard",
+      "doc_id": "c11e8f26-d19d-4a5d-ac10-7e1e99188a18",
+      "text": "When opened on the hosted dashboard, the system shall derive readiness from the selected machine's decrypted snapshot, and shall not read the cloud host's local store."
     },
     {
       "id": "AC-OBS-GHA-001.1",
@@ -743,6 +1145,66 @@
       "doc": "Governance and Human Approval",
       "doc_id": "68619c5c-6a92-4bd2-a155-228e53aa1c59",
       "text": "If a request is expired, already decided, or unavailable, then the system shall not accept a new decision."
+    },
+    {
+      "id": "AC-OBS-GWY-001.1",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "When a LiteLLM proxy exports request telemetry to the receiver, the system shall record one usage record per proxied request, attributed to the team, user and virtual key that LiteLLM authenticated for that request."
+    },
+    {
+      "id": "AC-OBS-GWY-001.10",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "A real LiteLLM proxy at a pinned version, with two teams and two virtual keys backed by its own database, shall be exercised in continuous integration, and the per-team spend the system reports shall agree with LiteLLM's own spend log for the same requests, with any residual printed."
+    },
+    {
+      "id": "AC-OBS-GWY-001.2",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Team, user and organisation attribution shall come only from the identity LiteLLM derived from the authenticated key. Labels a caller supplies in the request body shall not change which team or user a request is attributed to."
+    },
+    {
+      "id": "AC-OBS-GWY-001.3",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Each record shall retain the actual provider and model alongside the alias the caller requested, input and output token counts, whether the call streamed, whether it succeeded, its timestamps, and its trace, parent-span and provider response identifiers."
+    },
+    {
+      "id": "AC-OBS-GWY-001.4",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Gateway spend shall be labelled as reported by the gateway, in the gateway's currency, and shall not be re-priced by ClawMetry or presented as a vendor invoice. When the gateway reports no cost for a request, that request shall be counted as having no reported cost, never as costing zero."
+    },
+    {
+      "id": "AC-OBS-GWY-001.5",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Receiving the same exported request again shall not change any total. A request the gateway recorded as a separate request shall be counted separately."
+    },
+    {
+      "id": "AC-OBS-GWY-001.6",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "A response the gateway served from its own response cache, identified by carrying the same provider response identifier as an earlier request, shall be counted as a request but not charged a second time, whichever of the two arrives first."
+    },
+    {
+      "id": "AC-OBS-GWY-001.7",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Gateway spend shall be presented as its own subtotal, shall not be added to agent runtime totals, and gateway requests shall not create agent sessions. The surface shall state how many gateway requests share a trace with telemetry from another source and how many could not be correlated."
+    },
+    {
+      "id": "AC-OBS-GWY-001.8",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Failed gateway requests shall be counted per team and shown separately from successful ones."
+    },
+    {
+      "id": "AC-OBS-GWY-001.9",
+      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
+      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
+      "text": "Team, user and key labels shall be displayed as text and never interpreted as markup."
     },
     {
       "id": "AC-OBS-LADC-001.1",
@@ -851,6 +1313,300 @@
       "doc": "Local Audit and Data Control",
       "doc_id": "1e232fe6-5b9b-48dd-8873-70e52684067a",
       "text": "Before shortening the retention period, the system shall state what will be deleted and that the deletion is permanent, and shall require confirmation. Raising the period, or returning to the plan's period, destroys nothing and shall not require confirmation."
+    },
+    {
+      "id": "AC-OBS-OIA-001.1",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "The system shall answer a telemetry export with success only after every accounting record in it has been written to the local store or deliberately refused, and when the store cannot confirm the write it shall answer with a retryable status and a retry delay, and shall not report the export as received."
+    },
+    {
+      "id": "AC-OBS-OIA-001.2",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "Where some items in an export are malformed and the rest are valid, the system shall store the valid items, answer success, and report to the sender how many items it refused; a body that cannot be decoded shall be refused as a whole with a non-retryable status; and a request from another machine without valid credentials shall be refused before its body is read."
+    },
+    {
+      "id": "AC-OBS-OIA-001.3",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "Re-delivery of a record, span or data point already received shall not change any stored total or the live view, and two separately reported model calls that differ in their own time or identifiers shall remain two records."
+    },
+    {
+      "id": "AC-OBS-OIA-001.4",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "The system shall report, per signal and since the receiver started, how many items it received, stored, refused, recognised as already stored, held only in the live view, skipped because another source already reports them, and asked the sender to retry, together with the time and category of the last successful and last failed intake and the number of refused unauthenticated requests; it shall state that it keeps no intake queue; and the report shall contain no record content and no credentials."
+    },
+    {
+      "id": "AC-OBS-OIA-001.5",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "A spending-limit pause on the observed agents shall not stop the system from receiving and storing telemetry, and exports received during such a pause shall be counted."
+    },
+    {
+      "id": "AC-OBS-OIA-001.6",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "Where a sender does not report a usage value, the system shall store it as unknown rather than zero, and a spend rollup shall state how many records in each group carried a cost and shall report no spend figure for a group in which none did."
+    },
+    {
+      "id": "AC-OBS-OIA-001.7",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "The spend rollup shall be computed from received log records alone, so that a sender sampling its traces does not reduce it."
+    },
+    {
+      "id": "AC-OBS-OIA-001.8",
+      "doc": "An OpenTelemetry sender knows what was kept",
+      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
+      "text": "The generated ingest reference shall state the acknowledgement rule, each response status and whether the sender should retry it, the identity used to recognise a re-delivery for each signal, the session identity used when a sender provides none, and which received data is held only in the live view."
+    },
+    {
+      "id": "AC-OBS-OTG-001.1",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "When a received trace contains a span describing a tool call in a known session, the system shall record it as a tool call, and a tool result, that the detectors evaluate exactly as they evaluate a machine-observed tool call, and each recorded event shall retain the trace, span and session it came from."
+    },
+    {
+      "id": "AC-OBS-OTG-001.10",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Spans stored before scrubbing existed shall not be rewritten unless the operator runs an explicit rescrub. The rescrub shall report how many stored spans would change without changing anything unless the operator confirms, shall rewrite only content fields, and shall report how many it rewrote and that copies already sent off the machine are unaffected."
+    },
+    {
+      "id": "AC-OBS-OTG-001.2",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "The system shall not record a tool call for a span that does not identify itself as a tool execution or that belongs to no session, and where a tool span does not carry its arguments, the system shall not treat that call as identical to any other call."
+    },
+    {
+      "id": "AC-OBS-OTG-001.3",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Where the tool calls of one session arrive both as log records and as trace spans, or are also observed on the machine, the system shall record them from one source only, so that no tool call is counted twice."
+    },
+    {
+      "id": "AC-OBS-OTG-001.4",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Before a received span is stored, the system shall apply the secret and personal-data redaction it applies to observed events to the span's prompts, responses, tool arguments, attributes (including URLs and paths), span events (including exception events), links, name and status message, and the same redaction shall apply to the attributes kept in the received log-record ledger."
+    },
+    {
+      "id": "AC-OBS-OTG-001.5",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Where a span value cannot be scanned, because it is too large or the scanner fails, the system shall withhold that value and mark the span as withheld rather than store it unscanned. Where the operator has turned redaction off, spans shall be stored as received, as events are."
+    },
+    {
+      "id": "AC-OBS-OTG-001.6",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "An incident raised only from received telemetry shall state that the action was observed after it ran and shall not state or imply that the action was prevented."
+    },
+    {
+      "id": "AC-OBS-OTG-001.7",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "When an incident is raised on a node from received telemetry and the node is connected to the hosted dashboard, the hosted Guard tab shall list that session with the incident, under the runtime its telemetry names (so a runtime filter finds it), with the observed-after-the-fact label, and shall show the session as not controllable from any machine with a sentence saying why, rather than offering Pause, Stop or Kill."
+    },
+    {
+      "id": "AC-OBS-OTG-001.8",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "Where the same tool call, identified by the same call id, arrives both as a log record and as a trace span, the system shall record exactly one tool call and one tool result for it, taken from the trace span, whichever signal arrives first. A tool call that only one signal reports shall still be recorded. Where a call carries no call id, the system shall keep the first signal to report that session's tool calls and count the other signal's copies as skipped."
+    },
+    {
+      "id": "AC-OBS-OTG-001.9",
+      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
+      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
+      "text": "The operator shall be able to choose how much content received telemetry keeps: `full` (content kept, secrets still masked, personal data not filtered), `redacted` (the default: content kept, secrets masked, personal data filtered per its own switches) or `metadata` (no prompt, response, argument, result or free-text attribute stored; each withheld field is labelled on the stored row). Secret masking shall follow only its own switch under every profile, personal-data filtering shall remain separately switchable, and the security posture shall state the active profile, what it keeps, and which personal data is not detected."
+    },
+    {
+      "id": "AC-OBS-OTR-001.1",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "The project shall ship a runnable minimal LangGraph agent with exactly one tool that exports OpenTelemetry through OpenLLMetry to the ClawMetry receiver and runs with no model provider key."
+    },
+    {
+      "id": "AC-OBS-OTR-001.2",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "On every change, an automated check shall run that recipe, with its framework, instrumentation and exporter versions pinned, against a live ClawMetry instance, and shall fail unless the run is readable back through the local query API as a session under the application's identity, carrying the token totals the model reported and the tool call by name."
+    },
+    {
+      "id": "AC-OBS-OTR-001.3",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "When a LangGraph run carries a thread identifier, the system shall record every span of that run, including the model calls and tool calls beneath the run's top span, under one session identified by that thread, and every later run on the same thread under the same session. The instrumentation reports the thread as the conversation identifier on the run's top span only, and as a thread association on every span beneath it; both shall resolve to the same session, recorded exactly as sent, so a run is never split between a session for its top span and a separate per-trace session holding its tokens and tool calls."
+    },
+    {
+      "id": "AC-OBS-OTR-001.4",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "An explicitly sent conversation identifier shall take precedence over a thread identifier, and a thread identifier shall take precedence over a session identifier sent on the span or on the resource, so that a session identifier stamped on the spans beneath a run's top span can never split that run away from the conversation identifier its top span sends; whichever identifier wins shall be recorded exactly as sent."
+    },
+    {
+      "id": "AC-OBS-OTR-001.5",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "When a run carries neither a conversation identifier nor a thread identifier, the system shall record one session per trace, as REQ-OBS-RSO-033 defines, and the recipe page shall name that fallback and its cardinality."
+    },
+    {
+      "id": "AC-OBS-OTR-001.6",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "When the agent runs in streaming mode, the check shall find the same session, token totals and tool call as for a non-streaming run."
+    },
+    {
+      "id": "AC-OBS-OTR-001.7",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "When the recipe exports to a ClawMetry on another machine, the automated check shall prove that an export without the Bearer token is refused and an export carrying it is accepted, and the recipe page shall show how to set that header."
+    },
+    {
+      "id": "AC-OBS-OTR-001.8",
+      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
+      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
+      "text": "The recipe page shall record the framework, instrumentation and exporter versions that were verified, the wire encoding, the semantic-convention revision, the span parent and child structure, how application, run and conversation identity are derived, what each dashboard tab shows for span-only data, and that this path observes an agent but cannot pause, stop or gate it."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.1",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "The system shall attribute each session's spend to a project derived from where the session ran or from an operator assignment, and shall report for each project the source it came from and a confidence. A project or tenant name carried inside an agent's own activity shall not determine attribution."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.10",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "The per-project export shall include assigned, unassigned and unpriced amounts and a completeness figure. Usage that carries tokens but no price shall be counted as unpriced, never as zero cost."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.2",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Sessions that ran in two different repositories shall be reported as two projects even when the repositories share a directory name, and shall be combined only by an explicit operator assignment."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.3",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Spend from sessions whose working directory is unknown shall be reported in a visible unassigned group, with its amount and session count, rather than dropped or attributed to a default project."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.4",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Attribution shall be derived when read rather than stored on activity records, so an assignment applies to history already collected. Each assignment shall carry the period it is effective for, who made it, when and why, and a correction shall be recorded as a new assignment that supersedes the earlier one without erasing it."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.5",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Project figures the system publishes shall identify a project by a label and an opaque identifier, and shall not include the full local path it was derived from."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.6",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "A project budget shall declare its amount, period, timezone, currency and the financial basis of the spend it is measured against. The system shall refuse a budget whose currency or timezone it cannot honour rather than silently substituting another."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.7",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "Spend shall count toward the budget period in which it occurred, on the budget's own timezone, so a session running across a period boundary is split between the two periods and a record that arrives late counts in the period it occurred in."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.8",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "When a project's spend in a period reaches 50%, 80% or 100% of its budget, the system shall record an alert once per threshold per period, deliver it to the operator, and state that the alert is a notification that does not stop or reverse any charge."
+    },
+    {
+      "id": "AC-OBS-PRJ-001.9",
+      "doc": "Project attribution and per-project budgets: burn against budget",
+      "doc_id": "e4d8425a-c610-42bd-b63d-e4d600c9e58e",
+      "text": "The budget status shall report spend for each day of the current period next to the budget, so burn can be compared against it."
+    },
+    {
+      "id": "AC-OBS-PRP-001.1",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When a report is requested for a commit range, the system shall link each changed file to the sessions that wrote it, recording for each link its basis (a commit trailer naming the session, or a write tool call on that path recorded by the session), and shall list changed files with no link as unattributed rather than omitting them."
+    },
+    {
+      "id": "AC-OBS-PRP-001.10",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "Every gate evaluation shall record its outcome, rule version, threshold, evidence behaviour, actor, time, evaluated head commit and the exceptions it applied."
+    },
+    {
+      "id": "AC-OBS-PRP-001.11",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When the report is posted to a pull request, the system shall maintain a single comment identified by a marker, updating it on later runs rather than adding another."
+    },
+    {
+      "id": "AC-OBS-PRP-001.12",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When reading the local store, the system shall resolve a session's relative write paths only against that session's recorded working directory, and shall not link a session working in another directory or repository to the change through a relative path; a session with no recorded working directory shall be linked through a relative path only when a commit trailer in the change names it, and relative writes it cannot place that match a changed file shall be reported as missing evidence without naming the session."
+    },
+    {
+      "id": "AC-OBS-PRP-001.13",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When any read limit truncates the evidence (sessions listed, sessions read, events or Guard findings per session, or commits in the range), the system shall report the evidence as partial with the reason, both in the report and in an exported bundle, so that an enabled gate applies the operator's missing-evidence behaviour rather than passing silently."
+    },
+    {
+      "id": "AC-OBS-PRP-001.2",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall present a file-to-session link as association and not as proof that the session caused a finding on that file; every link and every annotated finding shall carry its basis."
+    },
+    {
+      "id": "AC-OBS-PRP-001.3",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall emit the report as SARIF 2.1.0 in which each Guard finding raised by a linked session is a result on each file that session is linked to, with its level mapped from the finding's severity (critical to error, warning to warning, anything else to note)."
+    },
+    {
+      "id": "AC-OBS-PRP-001.4",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When scanner SARIF is supplied, the system shall reproduce its findings and annotate each finding located on a linked file with the session identifier, runtime, model and link basis, and shall leave findings on unlinked files unannotated. The system shall produce no finding of its own about code content."
+    },
+    {
+      "id": "AC-OBS-PRP-001.5",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The SARIF, the markdown summary and the console output shall contain no prompt text, no tool output and no credential-shaped value; text copied from supplied scanner findings shall pass through secret redaction."
+    },
+    {
+      "id": "AC-OBS-PRP-001.6",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The system shall produce the report from an exported provenance bundle with no local store and no network access, as well as from the local store."
+    },
+    {
+      "id": "AC-OBS-PRP-001.7",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "An exported bundle shall record the commits it covers and a content digest. When the digest does not match the content, or the bundle covers no commit in the evaluated range, the system shall treat the bundle as invalid evidence; when commits in the range are not covered, the system shall report them as missing evidence. The system shall state that the digest is an integrity check and not proof of authenticity."
+    },
+    {
+      "id": "AC-OBS-PRP-001.8",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "The gate shall be off unless explicitly enabled, and while off the report shall exit successfully whatever it finds. Enabling the gate shall require a threshold and an explicit choice of behaviour for missing, stale or invalid evidence; the system shall refuse to evaluate a gate enabled without that choice."
+    },
+    {
+      "id": "AC-OBS-PRP-001.9",
+      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
+      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
+      "text": "When the gate is enabled, a finding at or above the threshold on a linked file shall fail the run unless an unexpired exception names it; an expired exception shall not apply and shall be reported as expired."
     },
     {
       "id": "AC-OBS-RSO-001.1",
@@ -1087,70 +1843,64 @@
       "text": "The finding shall state that it is derived from tool arguments."
     },
     {
-      "id": "AC-RSO-CWD-001.1",
-      "doc": "Runtime and Session Observability",
-      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
-      "text": "Session records persist the working directory and git branch when the runtime records them (first-class fields on the session row); an unavailable directory stays empty, never fabricated."
+      "id": "AC-OBS-SHI-001.1",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "When an open-source release is published, the system shall publish a self-hosted server image for linux/amd64 and linux/arm64 to a public registry, built from the exact wheel published for that release after verifying that wheel's build provenance."
     },
     {
-      "id": "AC-RSO-CWD-001.2",
-      "doc": "Runtime and Session Observability",
-      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
-      "text": "The first-class cwd field is the contract consumers act on; an adapter's mirror of the same value in extra metadata is compatibility-and-diagnostic only for older wheels."
+      "id": "AC-OBS-SHI-001.2",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The published image shall carry a keyless signature, an SBOM attestation bound to its digest, and a build provenance attestation, each verifiable by anyone without ClawMetry credentials."
     },
     {
-      "id": "AC-RSO-CWD-001.3",
-      "doc": "Runtime and Session Observability",
-      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
-      "text": "Family-runtime event rows carry the session's working directory as their workspace attribution so approval deny-kills can resolve cwd-based runtimes."
+      "id": "AC-OBS-SHI-001.3",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The image shall contain only the open-source package and its public dependencies, and shall not contain the proprietary Pro plugin."
     },
     {
-      "id": "AC-OBS-007.1",
-      "doc": "Local Agent Observability",
-      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
-      "text": "Report, for a repository named by the operator or discovered from session history, a grade for how legible that repository is to an agent, covering instruction file, test command, build command, lint or format gate, CI configuration and repository-scoped agent skills."
+      "id": "AC-OBS-SHI-002.1",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "After publishing, the release pipeline shall pull the image by digest with no registry credentials on each published architecture, verify its signature and SBOM attestation, and fail naming the reason when the image cannot be pulled anonymously."
     },
     {
-      "id": "AC-OBS-007.2",
-      "doc": "Local Agent Observability",
-      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
-      "text": "Report, beside that grade and for the same repository, how many sessions ran there in a stated window and how many of them the detectors recorded as stuck."
+      "id": "AC-OBS-SHI-002.2",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The verification shall start the pulled image with persistent storage, send a non-sensitive event through the node ingest API from outside the container, restart the container, and confirm the event is still returned by the audit export and the node still appears on the fleet page."
     },
     {
-      "id": "AC-OBS-007.3",
-      "doc": "Local Agent Observability",
-      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
-      "text": "Report every passing check with the specific path that was read to reach that verdict, and every failing check with the paths that were looked for plus a remediation the operator can act on."
+      "id": "AC-OBS-SHI-002.3",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The same image build and persistence check shall run on every pull request that changes the image definition or its verification, against an image built from that branch, so a broken image is caught before a release."
     },
     {
-      "id": "AC-OBS-007.4",
-      "doc": "Local Agent Observability",
-      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
-      "text": "Report a check whose input could not be read as an explicit unknown that does not affect the grade in either direction, rather than as a failure or a pass."
+      "id": "AC-OBS-SHI-003.1",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "Only after verification passes, the system shall propose a change pinning the Compose deployment to the verified image by version and digest in place of the source build, and the Compose file shall never reference the published image by a tag alone."
     },
     {
-      "id": "AC-OBS-007.5",
-      "doc": "Local Agent Observability",
-      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
-      "text": "Report a repository with no recorded session history as having no history, distinctly from a repository where sessions ran and none got stuck."
+      "id": "AC-OBS-SHI-003.2",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "The self-hosting documentation shall state how to verify the signature and SBOM, how to update and roll back by digest, how to back up and restore, and the actual authentication and transport defaults, and shall mark deployment targets and identity integrations that have not been verified as not available."
     },
     {
-      "id": "AC-OBS-007.6",
-      "doc": "Local Agent Observability",
-      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
-      "text": "Report, per runtime, which runtimes would find their instructions in the repository, and scope the graded result to the runtime the operator has selected."
+      "id": "AC-OBS-SHI-004.1",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "When the server runs in self-hosted mode, requests to the self-hosted server's own API routes shall be authorised by that server's node token or admin credentials regardless of the caller's network address, and shall not be refused for lacking a local gateway token."
     },
     {
-      "id": "AC-OBS-007.7",
-      "doc": "Local Agent Observability",
-      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
-      "text": "Complete without making any network request and without executing any command from the repository under examination."
-    },
-    {
-      "id": "AC-OBS-007.8",
-      "doc": "Local Agent Observability",
-      "doc_id": "d518c6c3-eb50-4b0f-9ed0-59440380b7bf",
-      "text": "Remain available on every plan, including free, with no entitlement gate."
+      "id": "AC-OBS-SHI-004.2",
+      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
+      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
+      "text": "Every other API route shall keep the existing rule for non-loopback callers, and a self-hosted route called without its own credentials shall still be refused."
     },
     {
       "id": "AC-OGV-001.1",
@@ -1225,10 +1975,28 @@
       "text": "When either value is missing or unrecognised, the system shall leave that stored value unchanged and serve the trial response unchanged, exactly as for the deployment."
     },
     {
+      "id": "AC-OGV-AIH-004.1",
+      "doc": "An Account Remembers That It Installed, and That It Uninstalled",
+      "doc_id": "d30b15cc-50e3-4858-bd6b-05b772341332",
+      "text": "When a person uninstalls, the install shall send one install-lifecycle ping with the uninstall event, under the same opt-out rules as every other lifecycle ping."
+    },
+    {
+      "id": "AC-OGV-AIH-004.2",
+      "doc": "An Account Remembers That It Installed, and That It Uninstalled",
+      "doc_id": "d30b15cc-50e3-4858-bd6b-05b772341332",
+      "text": "When the ping cannot be sent, the uninstall shall complete exactly as it does today."
+    },
+    {
       "id": "AC-RSO-CCT-001.1",
       "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
       "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
       "text": "`clawmetry instrument claude` writes the Claude Code telemetry block into the env object of the settings file (user or --project), merging without clobbering keys it did not write, idempotently, with protocol http/json and the endpoint of whichever local receiver is listening; --uninstall removes only keys it wrote; it states that running sessions keep their old configuration until restarted."
+    },
+    {
+      "id": "AC-RSO-CCT-001.10",
+      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
+      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
+      "text": "Claude Code is a paid runtime: the instrument command and every Claude Code specific mapping (session join, typed events, cache token tiles, waiting-on-you, span materialization) follow the claude_code runtime entitlement; without it the receiver still accepts batches and keeps only the generic ledger and span rows, and the command reports the plan requirement instead of writing."
     },
     {
       "id": "AC-RSO-CCT-001.2",
@@ -1279,676 +2047,22 @@
       "text": "docs/enterprise.md and docs/OPENTELEMETRY.md name CLAUDE_CODE_ENABLE_TELEMETRY, state that Claude Code has no default protocol, and show the block the command writes."
     },
     {
-      "id": "AC-RSO-CCT-001.10",
-      "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
-      "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",
-      "text": "Claude Code is a paid runtime: the instrument command and every Claude Code specific mapping (session join, typed events, cache token tiles, waiting-on-you, span materialization) follow the claude_code runtime entitlement; without it the receiver still accepts batches and keeps only the generic ledger and span rows, and the command reports the plan requirement instead of writing."
+      "id": "AC-RSO-CWD-001.1",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Session records persist the working directory and git branch when the runtime records them (first-class fields on the session row); an unavailable directory stays empty, never fabricated."
     },
     {
-      "id": "AC-OBS-CEA-024.1",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "The system shall accept a local price book whose entries identify a model exactly, by prefix, or by a validated pattern, carry an effective start date, and state either explicit per-token rates or a percentage discount off the published rate."
+      "id": "AC-RSO-CWD-001.2",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "The first-class cwd field is the contract consumers act on; an adapter's mirror of the same value in extra metadata is compatibility-and-diagnostic only for older wheels."
     },
     {
-      "id": "AC-OBS-CEA-024.2",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "The system shall reject each malformed entry, and each pair of entries that would claim the same usage over overlapping dates, with a stated reason per entry, and shall continue to accept the valid remainder of the book rather than failing it whole."
-    },
-    {
-      "id": "AC-OBS-CEA-024.3",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "When more than one valid entry could apply to a usage record and the documented precedence does not separate them, the system shall report the record as ambiguous and shall not choose a rate."
-    },
-    {
-      "id": "AC-OBS-CEA-024.4",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "An entry shall apply to usage observed at or after its effective start and strictly before its effective end; usage with no observed time shall not be matched to a dated rate."
-    },
-    {
-      "id": "AC-OBS-CEA-024.5",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "The system shall resolve an Azure OpenAI deployment name to a model through an explicit alias, scoped to its resource where the alias names one, and shall prefer that alias over a model name reported by the response."
-    },
-    {
-      "id": "AC-OBS-CEA-024.6",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "The system shall resolve AWS Bedrock model identifiers, including region prefixes, vendor prefixes and version suffixes, to the same model a price book entry names."
-    },
-    {
-      "id": "AC-OBS-CEA-024.7",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "Every edit to the price book shall produce a new version identifier; a version once recorded shall never be altered; and resolving usage against an earlier version shall return the rate that version held."
-    },
-    {
-      "id": "AC-OBS-CEA-024.8",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "When no published rate exists for a model and no price book entry applies, the system shall report the price as unknown rather than substitute a generic default rate."
-    },
-    {
-      "id": "AC-OBS-CEA-024.9",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "Every valuation the system returns shall state its basis (vendor reported, contract, list, default or unknown), the rate version and effective interval it used, and whether it restates an earlier valuation; a valuation lacking these shall not be returned."
-    },
-    {
-      "id": "AC-OBS-CEA-024.10",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "For each usage record, the system shall state whether that source counts cached input tokens inside its input token total, so that a valuation neither adds nor subtracts them twice."
-    },
-    {
-      "id": "AC-OBS-CEA-024.11",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "The price book, its rates and its recorded versions shall remain on the machine where they were written, and no path that sends data off the machine shall read them."
-    },
-    {
-      "id": "AC-OBS-CEA-024.12",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "When the price book version in effect at the time usage was observed selects exactly one entry for that usage and a valuation engine is present, the local Usage view shall show that usage valued at the contract rate, labelled as contract rate and naming the recorded book version; a figure whose book version is not recorded shall not be labelled contract, and the published-rate figures shall stay shown beside it."
-    },
-    {
-      "id": "AC-OBS-CEA-024.13",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "Each usage record shall be valued against the book version that was in effect when it was observed. A later edit to the book shall not change the figure shown for usage observed before the edit, unless the user explicitly asks for a restatement; a restated figure shall be labelled as a restatement and shown beside the original amount."
-    },
-    {
-      "id": "AC-OBS-CEA-024.14",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "Usage for which the applicable entries are ambiguous, or which no rate can price, shall be counted and shown as unknown with its reason, and shall add no amount to a contract figure."
-    },
-    {
-      "id": "AC-OBS-CEA-024.15",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "The local dashboard shall provide a price book screen showing the validated entries, the aliases, each rejected entry with its reasons, and the recorded versions with the time each came into effect, and shall let the user add an entry or edit an existing one."
-    },
-    {
-      "id": "AC-OBS-CEA-024.16",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "An entry edit shall be validated before it is saved; each problem shall be shown as a readable sentence beside the field it concerns; nothing shall be written without an explicit save; a save shall be refused when the book changed after it was loaded; and a successful save shall report the new version and the time from which it applies."
-    },
-    {
-      "id": "AC-OBS-CEA-024.17",
-      "doc": "Price Book: negotiated rates, deployment aliases and effective dates",
-      "doc_id": "76e32850-c505-44a3-8ead-48a1bf350808",
-      "text": "Usage facts shall be stored once, as the recorded usage events, and contract valuations shall be derived when read; no valuation shall be written back into stored usage, and no process that sends data off the machine shall compute or carry one."
-    },
-    {
-      "id": "AC-OBS-OTG-001.1",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "When a received trace contains a span describing a tool call in a known session, the system shall record it as a tool call, and a tool result, that the detectors evaluate exactly as they evaluate a machine-observed tool call, and each recorded event shall retain the trace, span and session it came from."
-    },
-    {
-      "id": "AC-OBS-OTG-001.2",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "The system shall not record a tool call for a span that does not identify itself as a tool execution or that belongs to no session, and where a tool span does not carry its arguments, the system shall not treat that call as identical to any other call."
-    },
-    {
-      "id": "AC-OBS-OTG-001.3",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "Where the tool calls of one session arrive both as log records and as trace spans, or are also observed on the machine, the system shall record them from one source only, so that no tool call is counted twice."
-    },
-    {
-      "id": "AC-OBS-OTG-001.4",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "Before a received span is stored, the system shall apply the secret and personal-data redaction it applies to observed events to the span's prompts, responses, tool arguments, attributes (including URLs and paths), span events (including exception events), links, name and status message, and the same redaction shall apply to the attributes kept in the received log-record ledger."
-    },
-    {
-      "id": "AC-OBS-OTG-001.5",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "Where a span value cannot be scanned, because it is too large or the scanner fails, the system shall withhold that value and mark the span as withheld rather than store it unscanned. Where the operator has turned redaction off, spans shall be stored as received, as events are."
-    },
-    {
-      "id": "AC-OBS-OTG-001.6",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "An incident raised only from received telemetry shall state that the action was observed after it ran and shall not state or imply that the action was prevented."
-    },
-    {
-      "id": "AC-OBS-OTG-001.7",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "When an incident is raised on a node from received telemetry and the node is connected to the hosted dashboard, the hosted Guard tab shall list that session with the incident, under the runtime its telemetry names (so a runtime filter finds it), with the observed-after-the-fact label, and shall show the session as not controllable from any machine with a sentence saying why, rather than offering Pause, Stop or Kill."
-    },
-    {
-      "id": "AC-OBS-OTG-001.8",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "Where the same tool call, identified by the same call id, arrives both as a log record and as a trace span, the system shall record exactly one tool call and one tool result for it, taken from the trace span, whichever signal arrives first. A tool call that only one signal reports shall still be recorded. Where a call carries no call id, the system shall keep the first signal to report that session's tool calls and count the other signal's copies as skipped."
-    },
-    {
-      "id": "AC-OBS-OTG-001.9",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "The operator shall be able to choose how much content received telemetry keeps: `full` (content kept, secrets still masked, personal data not filtered), `redacted` (the default: content kept, secrets masked, personal data filtered per its own switches) or `metadata` (no prompt, response, argument, result or free-text attribute stored; each withheld field is labelled on the stored row). Secret masking shall follow only its own switch under every profile, personal-data filtering shall remain separately switchable, and the security posture shall state the active profile, what it keeps, and which personal data is not detected."
-    },
-    {
-      "id": "AC-OBS-OTG-001.10",
-      "doc": "Exported traces reach Guard, and are scrubbed before they are stored",
-      "doc_id": "ff78b7cc-7a85-4f0f-a155-3fc78c6cd8b6",
-      "text": "Spans stored before scrubbing existed shall not be rewritten unless the operator runs an explicit rescrub. The rescrub shall report how many stored spans would change without changing anything unless the operator confirms, shall rewrite only content fields, and shall report how many it rewrote and that copies already sent off the machine are unaffected."
-    },
-    {
-      "id": "AC-OBS-FLEET-001.1",
-      "doc": "Fleet Install on Shared and Virtual Desktops",
-      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
-      "text": "When a Linux user registers the collector for fleet use, the system shall request that the user's services persist after logout and report whether persistence is enabled, and if it could not be enabled, the exact administrator command that enables it."
-    },
-    {
-      "id": "AC-OBS-FLEET-001.2",
-      "doc": "Fleet Install on Shared and Virtual Desktops",
-      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
-      "text": "When an administrator registers the collector for all users on Windows, the system shall register a single logon registration that starts a separate collector as each signed-in user, and shall not run the collector under a privileged account."
-    },
-    {
-      "id": "AC-OBS-FLEET-001.3",
-      "doc": "Fleet Install on Shared and Virtual Desktops",
-      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
-      "text": "When fleet registration is removed, the system shall remove every registration it created and report what was removed."
-    },
-    {
-      "id": "AC-OBS-FLEET-001.4",
-      "doc": "Fleet Install on Shared and Virtual Desktops",
-      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
-      "text": "When the collector runs from an isolated environment that the running user cannot write (an administrator-owned fleet install), the system shall not attempt an unattended self-update or restart for one, and fleet status shall report automatic updates as off with that reason and how the install is updated instead."
-    },
-    {
-      "id": "AC-OBS-FLEET-002.1",
-      "doc": "Fleet Install on Shared and Virtual Desktops",
-      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
-      "text": "When an operator requests fleet status, the system shall report, per operating system, whether collection continues after the user logs off, and when it does not, the reason."
-    },
-    {
-      "id": "AC-OBS-FLEET-002.2",
-      "doc": "Fleet Install on Shared and Virtual Desktops",
-      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
-      "text": "When the local data directory is readable by other local users, the system shall report it as not private, and fleet registration shall restrict it to the owning user."
-    },
-    {
-      "id": "AC-OBS-FLEET-003.1",
-      "doc": "Fleet Install on Shared and Virtual Desktops",
-      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
-      "text": "The system shall provide a silent install example for Windows management tooling and one for Linux configuration management, each exercised in automated verification on that operating system."
-    },
-    {
-      "id": "AC-OBS-FLEET-003.2",
-      "doc": "Fleet Install on Shared and Virtual Desktops",
-      "doc_id": "d673cdaa-3bdb-4b10-8a2d-d40ccb5ae630",
-      "text": "The install examples shall not embed an enrollment credential and shall not print one to their output."
-    },
-    {
-      "id": "AC-GOV-ATR-001.1",
-      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
-      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The system shall pin, for every replayed case study, the ATLAS edition and source revision, the case identifier and name, each procedure step with the technique identifier published for it in that edition, and the ATLAS mitigations published against those techniques (ATLAS links mitigations to techniques, not to case studies, so the case to mitigation mapping is derived and labelled as such). A source report whose revision cannot be retrieved shall be named in the scorecard as not pinned."
-    },
-    {
-      "id": "AC-GOV-ATR-001.2",
-      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
-      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "For each scenario the system shall record the runtime, the evaluation tier, the policy set in force and the expected outcome of every stage."
-    },
-    {
-      "id": "AC-GOV-ATR-002.1",
-      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
-      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The system shall score every stage of every scenario as unobservable, observed, partial, detected or held before action, naming the finding kinds that fired and the timestamp of the first flagged event, and shall roll each case up to caught, partial or missed."
-    },
-    {
-      "id": "AC-GOV-ATR-002.2",
-      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
-      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "A fixture replay shall never score a stage as held before action, and its results shall be labelled fixture replay, distinct from isolated execution evidence."
-    },
-    {
-      "id": "AC-GOV-ATR-002.3",
-      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
-      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The suite shall include benign controls, an intentional allow and at least one failure mode of a pre-action control, and shall report any finding on a benign control as a false positive."
-    },
-    {
-      "id": "AC-GOV-ATR-003.1",
-      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
-      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The system shall generate the scorecard from the replay, and continuous integration shall fail when the committed scorecard and the replay disagree, or when a stage outcome changes without its pinned expectation changing."
-    },
-    {
-      "id": "AC-GOV-ATR-003.2",
-      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
-      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The scorecard shall state that fixture replay does not establish protection against CVE-2026-25253 or against prompt injection in general, and shall list the residual gaps."
-    },
-    {
-      "id": "AC-GOV-ATR-003.3",
-      "doc": "Guard ATLAS OpenClaw replay: case studies AML.CS0048 to AML.CS0051 scored against Guard",
-      "doc_id": "7616fb6b-63d6-49ec-a295-39ec7add4725",
-      "text": "The system shall produce a redacted evidence bundle that contains pins and sha256 of every fixture and stage outcomes, but no raw commands or file paths, and the bundle shall be deterministic given the same generated_at timestamp."
-    },
-    {
-      "id": "AC-GOV-FWM-001.1",
-      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
-      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
-      "text": "When a detector, workspace or fleet finding kind exists in the product, the system shall declare for it either at least one framework reference or an explicit \"none\" with the reason no identifier applies."
-    },
-    {
-      "id": "AC-GOV-FWM-001.2",
-      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
-      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
-      "text": "The system shall state one mapping version for the whole contract and, for each framework, the edition and source revision its identifiers were verified against."
-    },
-    {
-      "id": "AC-GOV-FWM-001.3",
-      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
-      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
-      "text": "When a kind is mapped, the system shall carry a rationale, a stated limit of what the finding can and cannot establish, and references to a test that fires on the behaviour and a test that stays quiet on benign work."
-    },
-    {
-      "id": "AC-GOV-FWM-001.4",
-      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
-      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
-      "text": "The system shall reference only identifiers present in the pinned edition of their framework, and shall keep MITRE ATLAS techniques, mitigations and case studies distinguishable."
-    },
-    {
-      "id": "AC-GOV-FWM-002.1",
-      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
-      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
-      "text": "When the system reports a Guard finding, the finding shall carry the framework references for its kind, the mapping version and its capability mode."
-    },
-    {
-      "id": "AC-GOV-FWM-002.2",
-      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
-      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
-      "text": "When the system lists a Guard policy decision, the decision shall carry the framework references of the finding kind it acted on and an evidence level of configured, exercised or failed; the system shall not report a decision as effective unless an independent outcome check exists."
-    },
-    {
-      "id": "AC-GOV-FWM-003.1",
-      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
-      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
-      "text": "The system shall generate the public framework coverage document from the mapping contract, and continuous integration shall fail when the document and the contract disagree."
-    },
-    {
-      "id": "AC-GOV-FWM-003.2",
-      "doc": "Guard Framework References: OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS IDs on findings",
-      "doc_id": "15504aea-9ca0-4a1a-a23d-8e825e4f78f9",
-      "text": "The coverage document shall describe coverage and not compliance, and shall list the framework items Guard does not cover as gaps."
-    },
-    {
-      "id": "AC-OBS-PRP-001.1",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "When a report is requested for a commit range, the system shall link each changed file to the sessions that wrote it, recording for each link its basis (a commit trailer naming the session, or a write tool call on that path recorded by the session), and shall list changed files with no link as unattributed rather than omitting them."
-    },
-    {
-      "id": "AC-OBS-PRP-001.2",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "The system shall present a file-to-session link as association and not as proof that the session caused a finding on that file; every link and every annotated finding shall carry its basis."
-    },
-    {
-      "id": "AC-OBS-PRP-001.3",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "The system shall emit the report as SARIF 2.1.0 in which each Guard finding raised by a linked session is a result on each file that session is linked to, with its level mapped from the finding's severity (critical to error, warning to warning, anything else to note)."
-    },
-    {
-      "id": "AC-OBS-PRP-001.4",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "When scanner SARIF is supplied, the system shall reproduce its findings and annotate each finding located on a linked file with the session identifier, runtime, model and link basis, and shall leave findings on unlinked files unannotated. The system shall produce no finding of its own about code content."
-    },
-    {
-      "id": "AC-OBS-PRP-001.5",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "The SARIF, the markdown summary and the console output shall contain no prompt text, no tool output and no credential-shaped value; text copied from supplied scanner findings shall pass through secret redaction."
-    },
-    {
-      "id": "AC-OBS-PRP-001.6",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "The system shall produce the report from an exported provenance bundle with no local store and no network access, as well as from the local store."
-    },
-    {
-      "id": "AC-OBS-PRP-001.7",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "An exported bundle shall record the commits it covers and a content digest. When the digest does not match the content, or the bundle covers no commit in the evaluated range, the system shall treat the bundle as invalid evidence; when commits in the range are not covered, the system shall report them as missing evidence. The system shall state that the digest is an integrity check and not proof of authenticity."
-    },
-    {
-      "id": "AC-OBS-PRP-001.8",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "The gate shall be off unless explicitly enabled, and while off the report shall exit successfully whatever it finds. Enabling the gate shall require a threshold and an explicit choice of behaviour for missing, stale or invalid evidence; the system shall refuse to evaluate a gate enabled without that choice."
-    },
-    {
-      "id": "AC-OBS-PRP-001.9",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "When the gate is enabled, a finding at or above the threshold on a linked file shall fail the run unless an unexpired exception names it; an expired exception shall not apply and shall be reported as expired."
-    },
-    {
-      "id": "AC-OBS-PRP-001.10",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "Every gate evaluation shall record its outcome, rule version, threshold, evidence behaviour, actor, time, evaluated head commit and the exceptions it applied."
-    },
-    {
-      "id": "AC-OBS-PRP-001.11",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "When the report is posted to a pull request, the system shall maintain a single comment identified by a marker, updating it on later runs rather than adding another."
-    },
-    {
-      "id": "AC-OBS-PRP-001.12",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "When reading the local store, the system shall resolve a session's relative write paths only against that session's recorded working directory, and shall not link a session working in another directory or repository to the change through a relative path; a session with no recorded working directory shall be linked through a relative path only when a commit trailer in the change names it, and relative writes it cannot place that match a changed file shall be reported as missing evidence without naming the session."
-    },
-    {
-      "id": "AC-OBS-PRP-001.13",
-      "doc": "PR provenance report: agent sessions on changed files, as SARIF and an opt-in CI gate",
-      "doc_id": "4e224b46-71a6-4d32-933d-7fb6bfde30d0",
-      "text": "When any read limit truncates the evidence (sessions listed, sessions read, events or Guard findings per session, or commits in the range), the system shall report the evidence as partial with the reason, both in the report and in an exported bundle, so that an enabled gate applies the operator's missing-evidence behaviour rather than passing silently."
-    },
-    {
-      "id": "AC-OBS-OTR-001.1",
-      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
-      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
-      "text": "The project shall ship a runnable minimal LangGraph agent with exactly one tool that exports OpenTelemetry through OpenLLMetry to the ClawMetry receiver and runs with no model provider key."
-    },
-    {
-      "id": "AC-OBS-OTR-001.2",
-      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
-      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
-      "text": "On every change, an automated check shall run that recipe, with its framework, instrumentation and exporter versions pinned, against a live ClawMetry instance, and shall fail unless the run is readable back through the local query API as a session under the application's identity, carrying the token totals the model reported and the tool call by name."
-    },
-    {
-      "id": "AC-OBS-OTR-001.3",
-      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
-      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
-      "text": "When a LangGraph run carries a thread identifier, the system shall record every span of that run, including the model calls and tool calls beneath the run's top span, under one session identified by that thread, and every later run on the same thread under the same session. The instrumentation reports the thread as the conversation identifier on the run's top span only, and as a thread association on every span beneath it; both shall resolve to the same session, recorded exactly as sent, so a run is never split between a session for its top span and a separate per-trace session holding its tokens and tool calls."
-    },
-    {
-      "id": "AC-OBS-OTR-001.4",
-      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
-      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
-      "text": "An explicitly sent conversation identifier shall take precedence over a thread identifier, and a thread identifier shall take precedence over a session identifier sent on the span or on the resource, so that a session identifier stamped on the spans beneath a run's top span can never split that run away from the conversation identifier its top span sends; whichever identifier wins shall be recorded exactly as sent."
-    },
-    {
-      "id": "AC-OBS-OTR-001.5",
-      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
-      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
-      "text": "When a run carries neither a conversation identifier nor a thread identifier, the system shall record one session per trace, as REQ-OBS-RSO-033 defines, and the recipe page shall name that fallback and its cardinality."
-    },
-    {
-      "id": "AC-OBS-OTR-001.6",
-      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
-      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
-      "text": "When the agent runs in streaming mode, the check shall find the same session, token totals and tool call as for a non-streaming run."
-    },
-    {
-      "id": "AC-OBS-OTR-001.7",
-      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
-      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
-      "text": "When the recipe exports to a ClawMetry on another machine, the automated check shall prove that an export without the Bearer token is refused and an export carrying it is accepted, and the recipe page shall show how to set that header."
-    },
-    {
-      "id": "AC-OBS-OTR-001.8",
-      "doc": "Framework recipe: a LangGraph agent instrumented with OpenLLMetry, verified end to end",
-      "doc_id": "0130f6a6-3f5b-448f-bd59-d8820a4d5c88",
-      "text": "The recipe page shall record the framework, instrumentation and exporter versions that were verified, the wire encoding, the semantic-convention revision, the span parent and child structure, how application, run and conversation identity are derived, what each dashboard tab shows for span-only data, and that this path observes an agent but cannot pause, stop or gate it."
-    },
-    {
-      "id": "AC-OBS-OIA-001.1",
-      "doc": "An OpenTelemetry sender knows what was kept",
-      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
-      "text": "The system shall answer a telemetry export with success only after every accounting record in it has been written to the local store or deliberately refused, and when the store cannot confirm the write it shall answer with a retryable status and a retry delay, and shall not report the export as received."
-    },
-    {
-      "id": "AC-OBS-OIA-001.2",
-      "doc": "An OpenTelemetry sender knows what was kept",
-      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
-      "text": "Where some items in an export are malformed and the rest are valid, the system shall store the valid items, answer success, and report to the sender how many items it refused; a body that cannot be decoded shall be refused as a whole with a non-retryable status; and a request from another machine without valid credentials shall be refused before its body is read."
-    },
-    {
-      "id": "AC-OBS-OIA-001.3",
-      "doc": "An OpenTelemetry sender knows what was kept",
-      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
-      "text": "Re-delivery of a record, span or data point already received shall not change any stored total or the live view, and two separately reported model calls that differ in their own time or identifiers shall remain two records."
-    },
-    {
-      "id": "AC-OBS-OIA-001.4",
-      "doc": "An OpenTelemetry sender knows what was kept",
-      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
-      "text": "The system shall report, per signal and since the receiver started, how many items it received, stored, refused, recognised as already stored, held only in the live view, skipped because another source already reports them, and asked the sender to retry, together with the time and category of the last successful and last failed intake and the number of refused unauthenticated requests; it shall state that it keeps no intake queue; and the report shall contain no record content and no credentials."
-    },
-    {
-      "id": "AC-OBS-OIA-001.5",
-      "doc": "An OpenTelemetry sender knows what was kept",
-      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
-      "text": "A spending-limit pause on the observed agents shall not stop the system from receiving and storing telemetry, and exports received during such a pause shall be counted."
-    },
-    {
-      "id": "AC-OBS-OIA-001.6",
-      "doc": "An OpenTelemetry sender knows what was kept",
-      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
-      "text": "Where a sender does not report a usage value, the system shall store it as unknown rather than zero, and a spend rollup shall state how many records in each group carried a cost and shall report no spend figure for a group in which none did."
-    },
-    {
-      "id": "AC-OBS-OIA-001.7",
-      "doc": "An OpenTelemetry sender knows what was kept",
-      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
-      "text": "The spend rollup shall be computed from received log records alone, so that a sender sampling its traces does not reduce it."
-    },
-    {
-      "id": "AC-OBS-OIA-001.8",
-      "doc": "An OpenTelemetry sender knows what was kept",
-      "doc_id": "3caa08b2-4e39-4044-91f7-113fb2668ae0",
-      "text": "The generated ingest reference shall state the acknowledgement rule, each response status and whether the sender should retry it, the identity used to recognise a re-delivery for each signal, the session identity used when a sender provides none, and which received data is held only in the live view."
-    },
-    {
-      "id": "AC-OBS-SHI-001.1",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "When an open-source release is published, the system shall publish a self-hosted server image for linux/amd64 and linux/arm64 to a public registry, built from the exact wheel published for that release after verifying that wheel's build provenance."
-    },
-    {
-      "id": "AC-OBS-SHI-001.2",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "The published image shall carry a keyless signature, an SBOM attestation bound to its digest, and a build provenance attestation, each verifiable by anyone without ClawMetry credentials."
-    },
-    {
-      "id": "AC-OBS-SHI-001.3",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "The image shall contain only the open-source package and its public dependencies, and shall not contain the proprietary Pro plugin."
-    },
-    {
-      "id": "AC-OBS-SHI-002.1",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "After publishing, the release pipeline shall pull the image by digest with no registry credentials on each published architecture, verify its signature and SBOM attestation, and fail naming the reason when the image cannot be pulled anonymously."
-    },
-    {
-      "id": "AC-OBS-SHI-002.2",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "The verification shall start the pulled image with persistent storage, send a non-sensitive event through the node ingest API from outside the container, restart the container, and confirm the event is still returned by the audit export and the node still appears on the fleet page."
-    },
-    {
-      "id": "AC-OBS-SHI-002.3",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "The same image build and persistence check shall run on every pull request that changes the image definition or its verification, against an image built from that branch, so a broken image is caught before a release."
-    },
-    {
-      "id": "AC-OBS-SHI-003.1",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "Only after verification passes, the system shall propose a change pinning the Compose deployment to the verified image by version and digest in place of the source build, and the Compose file shall never reference the published image by a tag alone."
-    },
-    {
-      "id": "AC-OBS-SHI-003.2",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "The self-hosting documentation shall state how to verify the signature and SBOM, how to update and roll back by digest, how to back up and restore, and the actual authentication and transport defaults, and shall mark deployment targets and identity integrations that have not been verified as not available."
-    },
-    {
-      "id": "AC-OBS-SHI-004.1",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "When the server runs in self-hosted mode, requests to the self-hosted server's own API routes shall be authorised by that server's node token or admin credentials regardless of the caller's network address, and shall not be refused for lacking a local gateway token."
-    },
-    {
-      "id": "AC-OBS-SHI-004.2",
-      "doc": "Self-Hosted Server Image: Signed, Pullable, Verified After Release",
-      "doc_id": "49529742-f381-4957-9abf-c92efe7b7d65",
-      "text": "Every other API route shall keep the existing rule for non-loopback callers, and a self-hosted route called without its own credentials shall still be refused."
-    },
-    {
-      "id": "AC-OBS-GWY-001.1",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "When a LiteLLM proxy exports request telemetry to the receiver, the system shall record one usage record per proxied request, attributed to the team, user and virtual key that LiteLLM authenticated for that request."
-    },
-    {
-      "id": "AC-OBS-GWY-001.2",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "Team, user and organisation attribution shall come only from the identity LiteLLM derived from the authenticated key. Labels a caller supplies in the request body shall not change which team or user a request is attributed to."
-    },
-    {
-      "id": "AC-OBS-GWY-001.3",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "Each record shall retain the actual provider and model alongside the alias the caller requested, input and output token counts, whether the call streamed, whether it succeeded, its timestamps, and its trace, parent-span and provider response identifiers."
-    },
-    {
-      "id": "AC-OBS-GWY-001.4",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "Gateway spend shall be labelled as reported by the gateway, in the gateway's currency, and shall not be re-priced by ClawMetry or presented as a vendor invoice. When the gateway reports no cost for a request, that request shall be counted as having no reported cost, never as costing zero."
-    },
-    {
-      "id": "AC-OBS-GWY-001.5",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "Receiving the same exported request again shall not change any total. A request the gateway recorded as a separate request shall be counted separately."
-    },
-    {
-      "id": "AC-OBS-GWY-001.6",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "A response the gateway served from its own response cache, identified by carrying the same provider response identifier as an earlier request, shall be counted as a request but not charged a second time, whichever of the two arrives first."
-    },
-    {
-      "id": "AC-OBS-GWY-001.7",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "Gateway spend shall be presented as its own subtotal, shall not be added to agent runtime totals, and gateway requests shall not create agent sessions. The surface shall state how many gateway requests share a trace with telemetry from another source and how many could not be correlated."
-    },
-    {
-      "id": "AC-OBS-GWY-001.8",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "Failed gateway requests shall be counted per team and shown separately from successful ones."
-    },
-    {
-      "id": "AC-OBS-GWY-001.9",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "Team, user and key labels shall be displayed as text and never interpreted as markup."
-    },
-    {
-      "id": "AC-OBS-GWY-001.10",
-      "doc": "LiteLLM gateway usage: spend by team and user, labelled and never double counted",
-      "doc_id": "9511c826-af04-4dcf-978b-90803f27fb04",
-      "text": "A real LiteLLM proxy at a pinned version, with two teams and two virtual keys backed by its own database, shall be exercised in continuous integration, and the per-team spend the system reports shall agree with LiteLLM's own spend log for the same requests, with any residual printed."
-    },
-    {
-      "id": "AC-GOV-PIJ-001.1",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "When a tool result in a session contains text matching an injection signature, the system shall raise a `prompt_injection` finding that names the matched signature identifiers and the tool whose output carried the text, and shall not repeat the matched text."
-    },
-    {
-      "id": "AC-GOV-PIJ-001.2",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "When a user-sourced message matches an injection signature, the system shall raise the finding with the source identified as a user message and at a lower severity than a tool-result match, unless a high-risk tool call followed it in the same turn."
-    },
-    {
-      "id": "AC-GOV-PIJ-001.3",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "When a tool call rated high or critical risk follows the matched content in the same turn, the system shall raise the finding at critical severity and name that call's tool."
-    },
-    {
-      "id": "AC-GOV-PIJ-001.4",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "The system shall offer `prompt_injection` to Guard policies like every other finding kind, and the finding shall carry its framework references (OWASP LLM01:2026, OWASP ASI01, MITRE ATLAS AML.T0051.000 and AML.T0051.001) under the mapping contract."
-    },
-    {
-      "id": "AC-GOV-PIJ-001.5",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "When signature text appears as source code or a regular expression rather than prose, the system shall not raise a finding for it."
-    },
-    {
-      "id": "AC-GOV-PIJ-001.6",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "The system shall publish the detector's recall and precision on pinned public prompt-injection samples and its firing rate on real transcripts, and continuous integration shall fail when the pinned recall falls below the published figure."
-    },
-    {
-      "id": "AC-GOV-PIJ-002.1",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "When the Claude Code pre-tool gate rates a high-risk tool call and a tool result from an untrusted source entered the same turn before it, the system shall rate the call critical and shall say why in the risk reasons."
-    },
-    {
-      "id": "AC-GOV-PIJ-002.2",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "When content earlier in the same turn matched an injection signature, the system shall rate a tool call of medium risk or above as critical."
-    },
-    {
-      "id": "AC-GOV-PIJ-002.3",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "The system shall leave a low-risk call's tier unchanged, shall leave a medium-risk call's tier unchanged unless content in the turn matched an injection signature, and a new user prompt shall end the turn so earlier content no longer raises the tier."
-    },
-    {
-      "id": "AC-GOV-PIJ-002.4",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "When the turn cannot be read, the system shall rate the call exactly as it would without this signal and shall never block a call because the context was unavailable."
-    },
-    {
-      "id": "AC-GOV-PIJ-002.5",
-      "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
-      "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
-      "text": "The context the gate hook sends to the local receiver shall carry tool names, counts and signature identifiers only, never tool output."
+      "id": "AC-RSO-CWD-001.3",
+      "doc": "Runtime and Session Observability",
+      "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
+      "text": "Family-runtime event rows carry the session's working directory as their workspace attribution so approval deny-kills can resolve cwd-based runtimes."
     }
   ]
 }

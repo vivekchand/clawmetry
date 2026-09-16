@@ -36,6 +36,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
@@ -108,6 +109,30 @@ def _api(path: str, *, token: str) -> dict | list:
         raise RuntimeError(f"GitHub GET {path} => {exc.code}: {body}") from exc
 
 
+def _https_redirect_target(location: str, artifact_id: int) -> str:
+    """Return ``location`` only if it is an https URL, else raise.
+
+    The value is a Location header, so the responding server chooses it, not
+    us -- and ``urlopen`` speaks ``file://`` and ``ftp://`` as readily as it
+    speaks https. Without this check a redirect to ``file:///...`` would be
+    opened and its bytes returned to the caller, which hands them straight to
+    ``zipfile`` and the JUnit parser: a local-file read driven by a response
+    header. Nothing downstream re-checks where the bytes came from, so this
+    is the point where the scheme has to be pinned.
+
+    GitHub's artifact endpoint always redirects to an https presigned S3 URL,
+    so a real download is unaffected. A scheme-relative ``//host/path`` parses
+    with an empty scheme and is refused too, rather than being guessed at.
+    """
+    scheme = urllib.parse.urlparse(location).scheme.lower()
+    if scheme != "https":
+        raise RuntimeError(
+            f"Redirect from artifacts/{artifact_id}/zip pointed at a "
+            f"non-https URL (scheme {scheme!r}); refusing to follow it"
+        )
+    return location
+
+
 def _download_zip(artifact_id: int, *, token: str) -> bytes:
     """Download a GitHub artifact ZIP file, following the S3 redirect."""
     url = (
@@ -131,8 +156,10 @@ def _download_zip(artifact_id: int, *, token: str) -> bytes:
                 raise RuntimeError(
                     f"Redirect from artifacts/{artifact_id}/zip had no Location header"
                 ) from exc
-            # S3 presigned URL -- no Authorization header needed or wanted
-            with urllib.request.urlopen(location) as s3_resp:  # noqa: S310
+            # S3 presigned URL -- no Authorization header needed or wanted.
+            # Scheme pinned to https first; see _https_redirect_target.
+            target = _https_redirect_target(location, artifact_id)
+            with urllib.request.urlopen(target) as s3_resp:  # noqa: S310
                 return s3_resp.read()
         body = exc.read().decode(errors="replace")
         raise RuntimeError(

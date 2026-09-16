@@ -1540,5 +1540,17 @@
   "trail.commits": "Коммиты",
   "trail.prs": "Пул-реквесты",
   "evals.locked": "Оценка сессий доступна только в тарифе Pro.",
-  "trail.cov_unknown": "пока не объявлено"
+  "trail.cov_unknown": "пока не объявлено",
+  "security.apikeys_title": "Создайте собственное представление",
+  "security.apikeys_sub": "Дайте странице, скрипту или агенту с кодогенерацией доступ на чтение к данным агентов этого устройства, ограниченный ровно тем, что нужно. Ничто здесь не может запускать, приостанавливать или останавливать агента.",
+  "security.apikeys_new": "Новый ключ",
+  "security.apikeys_name_label": "Для чего он нужен?",
+  "security.apikeys_origin_label": "Какой сайт будет его использовать?",
+  "security.apikeys_no_browser": "Этот ключ предназначен для скрипта или сервера, а не для веб-страницы",
+  "security.apikeys_scope_label": "Что ему разрешено читать?",
+  "security.apikeys_create": "Создать ключ",
+  "security.apikeys_cancel": "Отмена",
+  "security.apikeys_reveal_title": "Скопируйте сейчас. Повторно он не отображается.",
+  "security.apikeys_copy": "Копировать",
+  "security.apikeys_done": "Готово"
 }

@@ -1540,5 +1540,17 @@
   "trail.commits": "Commits",
   "trail.prs": "Pull requests",
   "evals.locked": "A avaliação de sessões é uma funcionalidade Pro.",
-  "trail.cov_unknown": "ainda não declarado"
+  "trail.cov_unknown": "ainda não declarado",
+  "security.apikeys_title": "Crie a sua própria vista",
+  "security.apikeys_sub": "Conceda a uma página, um script ou um agente de codificação acesso de leitura aos dados de agentes desta máquina, limitado exatamente ao que precisa. Nada aqui pode iniciar, pausar ou parar um agente.",
+  "security.apikeys_new": "Nova chave",
+  "security.apikeys_name_label": "Para que é?",
+  "security.apikeys_origin_label": "Qual site vai usá-la?",
+  "security.apikeys_no_browser": "Esta chave é para um script ou servidor, não para uma página web",
+  "security.apikeys_scope_label": "O que pode ler?",
+  "security.apikeys_create": "Criar chave",
+  "security.apikeys_cancel": "Cancelar",
+  "security.apikeys_reveal_title": "Copie agora. Não voltará a ser mostrada.",
+  "security.apikeys_copy": "Copiar",
+  "security.apikeys_done": "Concluído"
 }

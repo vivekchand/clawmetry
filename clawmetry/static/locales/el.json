@@ -1540,5 +1540,17 @@
   "trail.commits": "Commits",
   "trail.prs": "Pull requests",
   "evals.locked": "Η βαθμολόγηση συνεδριών είναι λειτουργία Pro.",
-  "trail.cov_unknown": "δεν έχει δηλωθεί ακόμη"
+  "trail.cov_unknown": "δεν έχει δηλωθεί ακόμη",
+  "security.apikeys_title": "Δημιουργήστε τη δική σας προβολή",
+  "security.apikeys_sub": "Δώστε σε μια σελίδα, ένα script ή έναν agent κωδικοποίησης πρόσβαση ανάγνωσης στα δεδομένα agent αυτού του μηχανήματος, περιορισμένη ακριβώς σε ό,τι χρειάζεται. Τίποτα εδώ δεν μπορεί να ξεκινήσει, να θέσει σε παύση ή να διακόψει έναν agent.",
+  "security.apikeys_new": "Νέο κλειδί",
+  "security.apikeys_name_label": "Για ποιο σκοπό είναι;",
+  "security.apikeys_origin_label": "Ποιος ιστότοπος θα το χρησιμοποιήσει;",
+  "security.apikeys_no_browser": "Αυτό το κλειδί είναι για ένα script ή έναν server, όχι για μια ιστοσελίδα",
+  "security.apikeys_scope_label": "Τι μπορεί να διαβάσει;",
+  "security.apikeys_create": "Δημιουργία κλειδιού",
+  "security.apikeys_cancel": "Ακύρωση",
+  "security.apikeys_reveal_title": "Αντιγράψτε το τώρα. Δεν εμφανίζεται ξανά.",
+  "security.apikeys_copy": "Αντιγραφή",
+  "security.apikeys_done": "Ολοκληρώθηκε"
 }

@@ -1540,5 +1540,17 @@
   "trail.commits": "கமிட்கள்",
   "trail.prs": "புல் ரிக்குவெஸ்ட்கள்",
   "evals.locked": "அமர்வு மதிப்பீடு ஒரு Pro அம்சமாகும்.",
-  "trail.cov_unknown": "இன்னும் அறிவிக்கப்படவில்லை"
+  "trail.cov_unknown": "இன்னும் அறிவிக்கப்படவில்லை",
+  "security.apikeys_title": "உங்கள் சொந்த காட்சியை உருவாக்குங்கள்",
+  "security.apikeys_sub": "ஒரு பக்கம், ஸ்கிரிப்ட் அல்லது கோடிங் ஏஜெண்ட்டுக்கு இந்த மெஷினின் ஏஜெண்ட் தரவை, தேவையான அளவுக்கு மட்டும் வரம்பிடப்பட்ட வாசிப்பு அணுகலை வழங்குங்கள். இங்கு எதுவும் ஒரு ஏஜெண்டைத் தொடங்கவோ, இடைநிறுத்தவோ, நிறுத்தவோ முடியாது.",
+  "security.apikeys_new": "புதிய கீ",
+  "security.apikeys_name_label": "இது எதற்காக?",
+  "security.apikeys_origin_label": "இதை எந்த தளம் பயன்படுத்தும்?",
+  "security.apikeys_no_browser": "இந்த கீ ஒரு ஸ்கிரிப்ட் அல்லது சர்வருக்கானது, வலைப் பக்கத்திற்கு அல்ல",
+  "security.apikeys_scope_label": "இது எதை வாசிக்க முடியும்?",
+  "security.apikeys_create": "கீ உருவாக்கு",
+  "security.apikeys_cancel": "ரத்து செய்",
+  "security.apikeys_reveal_title": "இதை இப்போதே காப்பி செய்யுங்கள். இது மீண்டும் காட்டப்படாது.",
+  "security.apikeys_copy": "காப்பி செய்",
+  "security.apikeys_done": "முடிந்தது"
 }

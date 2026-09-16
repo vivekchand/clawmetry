@@ -1540,5 +1540,17 @@
   "trail.commits": "Commits",
   "trail.prs": "Pull requests",
   "evals.locked": "A pontuação de sessões é um recurso Pro.",
-  "trail.cov_unknown": "ainda não declarado"
+  "trail.cov_unknown": "ainda não declarado",
+  "security.apikeys_title": "Crie sua própria visualização",
+  "security.apikeys_sub": "Dê a uma página, script ou agente de codificação acesso de leitura aos dados de agente desta máquina, restrito exatamente ao que for necessário. Nada aqui pode iniciar, pausar ou interromper um agente.",
+  "security.apikeys_new": "Nova chave",
+  "security.apikeys_name_label": "Para que serve?",
+  "security.apikeys_origin_label": "Qual site vai usá-la?",
+  "security.apikeys_no_browser": "Esta chave é para um script ou servidor, não para uma página web",
+  "security.apikeys_scope_label": "O que ela pode ler?",
+  "security.apikeys_create": "Criar chave",
+  "security.apikeys_cancel": "Cancelar",
+  "security.apikeys_reveal_title": "Copie agora. Ela não será exibida novamente.",
+  "security.apikeys_copy": "Copiar",
+  "security.apikeys_done": "Concluído"
 }

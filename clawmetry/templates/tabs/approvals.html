@@ -1,6 +1,8 @@
 <!-- APPROVALS TAB — visual policy builder + approval queue
      Designed for non-technical users: zero YAML, one-click everything. -->
 <div class="page" id="page-approvals">
+<button class="guard-back-link" onclick="switchTab('guard');guardShowView('attention')">Guard / Needs attention</button>
+<p class="guard-scope-note">Approvals ask for a decision. Review the requested action and its reason before choosing a response.</p>
 <div style="padding:12px 0 8px 0;">
 
   <!-- Header -->
@@ -18,7 +20,7 @@
   <!-- 2-column layout (#1343): LEFT = review (queue + history),
        RIGHT = configure (rules + notifications). Collapses to single
        column below 900px so narrow viewports keep working. -->
-  <div class="approvals-2col" style="display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:16px;align-items:start;">
+  <div class="approvals-2col" style="display:grid;grid-template-columns:1fr;gap:16px;align-items:start;">
   <style>@media (max-width: 900px) { .approvals-2col { grid-template-columns: 1fr !important; } }</style>
 
   <!-- ═══ LEFT COLUMN — Review (queue + history) ═══ -->
@@ -45,17 +47,17 @@
   </div>
 
   <!-- ═══ SECTION 4: Recent Decisions (bottom of LEFT col) ═══ -->
-  <div>
+  <details class="guard-section-details" id="approvals-history-panel"><summary>Decision history</summary>
     <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:6px;" data-i18n="approvals.recent_decisions">Recent Decisions</div>
     <div id="approvals-history-list">
       <div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;" data-i18n="approvals.no_history">No history yet.</div>
     </div>
-  </div>
+  </details>
 
   </div><!-- end LEFT column -->
 
   <!-- ═══ RIGHT COLUMN — Configure (rules + notifications) ═══ -->
-  <div>
+  <details class="guard-section-details" id="approvals-settings-panel"><summary>Approval rules and delivery settings</summary>
 
   <!-- ═══ SECTION 2: Protection Rules (visual policy builder) ═══ -->
   <div style="margin-bottom:16px;">
@@ -150,7 +152,7 @@
     </div>
   </div>
 
-  </div><!-- end RIGHT column -->
+  </details><!-- end settings -->
   </div><!-- end .approvals-2col grid -->
 
   <!-- ═══ Upgrade Modal ═══ -->
@@ -654,6 +656,23 @@
     return m;
   }
 
+  window.guardLoadApprovalSummary = async function () {
+    var el = document.getElementById('guard-approval-summary');
+    if (!el) return;
+    el.textContent = 'Checking for pending requests...';
+    try {
+      var d = await fetchJsonWithTimeout(_isOssMode() ? '/api/approvals?status=pending&limit=50' : '/api/cloud/approvals?status=pending&limit=50' + _q(), 6000);
+      if (!d || d.error || d.available === false || !Array.isArray(d.approvals)) throw new Error('unavailable');
+      var rows = d.approvals || [];
+      var rt = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : 'all';
+      if (rt && rt !== 'all' && typeof _cmRuntimeOf === 'function') {
+        rows = rows.filter(function (r) { return _cmRuntimeOf({session_id:r.session_id || r.requestor_session_id}) === rt; });
+      }
+      rows = rows.filter(function (r) { return (r.status || 'pending') === 'pending'; });
+      el.textContent = rows.length ? rows.length + (rows.length === 50 ? '+' : '') + ' requests waiting for your decision' : 'No pending requests among the latest 50';
+    } catch (e) { el.textContent = 'Open approvals to check pending requests'; }
+  };
+
   /* ── Main loader ── */
   window.loadApprovalsTab = async function() {
     try {
@@ -665,7 +684,7 @@
         fetchJsonWithTimeout(
           ossMode ? '/api/approvals?status=pending&limit=50'
                   : '/api/cloud/approvals?status=pending&limit=50' + _q(),
-          6000).catch(function(){return {approvals:[]};}),
+          6000),
         ossMode ? fetchJsonWithTimeout('/api/approvals-audit?limit=50', 6000).catch(function(){return {decisions:[]};})
                 : fetchJsonWithTimeout('/api/cloud/approvals?limit=50' + _q(), 6000).catch(function(){return {approvals:[]};}),
         fetchJsonWithTimeout(
@@ -675,6 +694,9 @@
         ossMode ? Promise.resolve({integrations:[]})
                 : fetchJsonWithTimeout('/api/cloud/integrations?' + _q().replace(/^&/,''), 6000).catch(function(){return {integrations:[]};})
       ]);
+      if (!pending || pending.error || pending.available === false || !Array.isArray(pending.approvals)) {
+        throw new Error('approval requests unavailable');
+      }
       var p, h;
       if (ossMode) {
         p = (pending.approvals || []).filter(function(r){return (r.status||'pending')==='pending';}).map(_mapLocalPending);
@@ -709,8 +731,8 @@
                         || (_rtLbl ? 'are caught as they happen' : '');
         var _emptyTitle = _rtLbl ? 'No pending approvals for ' + escHtml(_rtLbl) + '.' : 'No pending approvals.';
         var _emptyHint = _rtLbl
-          ? ('Turn on a protection rule on the right and risky ' + escHtml(_rtLbl) + ' calls ' + _gateHint + ', then land here for a decision.')
-          : 'Turn on a protection rule on the right and risky calls from your agents land here for a decision.';
+          ? ('Turn on a protection rule in Approval rules and delivery settings and risky ' + escHtml(_rtLbl) + ' calls ' + _gateHint + ', then land here for a decision.')
+          : 'Turn on a protection rule in Approval rules and delivery settings and risky calls from your agents land here for a decision.';
         pe.innerHTML = ossMode
           ? '<div style="padding:14px 16px;color:var(--text-muted);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;line-height:1.5;">'
             + '<div style="font-weight:700;color:var(--text-secondary);margin-bottom:2px;">' + _emptyTitle + '</div>'
@@ -753,7 +775,7 @@
       var he = document.getElementById('approvals-history-list');
       he.innerHTML = h.length ? h.map(function(r){return _renderRow(r, false);}).join('')
         : '<div style="padding:14px;text-align:center;color:var(--text-faint);font-size:12px;">'
-          + (_rtLbl ? 'No ' + escHtml(_rtLbl) + ' decisions yet.' : 'No decisions yet. Enable a protection rule above to get started.')
+          + (_rtLbl ? 'No ' + escHtml(_rtLbl) + ' decisions yet.' : 'No decisions yet. Open Approval rules and delivery settings to get started.')
           + '</div>';
 
       // Counts + badge
@@ -765,7 +787,7 @@
         else { nav.style.display = 'none'; }
       }
     } catch(e) {
-      document.getElementById('approvals-pending-list').innerHTML = '<div style="padding:14px;color:var(--text-error);font-size:12px;" data-i18n="app.failed_to_load_eschtml_string_e">Failed to load: ' + escHtml(String(e)) + '</div>';
+      document.getElementById('approvals-pending-list').innerHTML = '<div style="padding:14px;color:var(--text-error);font-size:12px;">Could not load approval requests. Check your connection and refresh.</div>';
     }
   };
 

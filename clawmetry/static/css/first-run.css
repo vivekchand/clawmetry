@@ -1,0 +1,39 @@
+/* Quiet setup surface: existing Manrope, charcoal and the ClawMetry red. */
+.first-run[hidden] { display: none; }
+.first-run {
+  position: fixed; inset: 0; z-index: 1800; overflow-y: auto;
+  display: grid; place-items: center; padding: 48px 24px;
+  background: var(--bg-primary, #0a0a0b); color: var(--text-primary, #f2f2f3);
+}
+.first-run-content { width: min(100%, 480px); text-align: center; }
+.first-run-mark {
+  width: 88px; height: 88px; margin: 0 auto 30px; display: grid; place-items: center;
+  border: 1px solid var(--border-primary, #232329); border-radius: 24px; position: relative;
+  background: var(--bg-secondary, #0f0f11);
+}
+.first-run-mark::after {
+  content: ''; position: absolute; inset: -7px; border: 2px solid transparent;
+  border-top-color: #e94644; border-radius: 30px; animation: first-run-orbit 2.8s linear infinite;
+}
+.first-run[data-settled] .first-run-mark::after { animation: none; border-color: var(--border-primary); }
+.first-run h1 { font-size: clamp(24px, 4vw, 30px); letter-spacing: -.7px; line-height: 1.25; margin: 0 0 16px; font-weight: 700; }
+.first-run h1:focus { outline: none; }
+#first-run-description { color: var(--text-tertiary, #9b9ba3); font-size: 14px; line-height: 1.8; margin: 0 auto; max-width: 420px; }
+.first-run-steps { padding: 0; margin: 32px 0 24px; list-style: none; text-align: left; }
+.first-run-steps li { display: flex; align-items: center; gap: 12px; min-height: 54px; border-bottom: 1px solid var(--border-secondary); color: var(--text-tertiary); font-size: 13px; }
+.first-run-steps small { margin-left: auto; font-size: 11px; color: var(--text-tertiary); }
+.first-run-check { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border: 1px solid var(--border-primary); border-radius: 50%; font-size: 11px; }
+.first-run-steps [data-state="active"] { color: var(--text-primary); }
+.first-run-steps [data-state="active"] .first-run-check { color: #ff7775; border-color: #e94644; }
+.first-run-steps [data-state="done"] .first-run-check { color: var(--text-success, #4ade80); border-color: currentColor; }
+.first-run-status { font-size: 13px; color: var(--text-secondary); min-height: 20px; margin: 0 0 8px; }
+.first-run-help { font-size: 12px; line-height: 1.7; color: var(--text-tertiary); margin: 0 auto; max-width: 420px; }
+.first-run-actions { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+.first-run-actions button { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 10px 16px; font: inherit; font-size: 12px; cursor: pointer; }
+.first-run-actions button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.first-run-actions button:focus-visible { outline: 2px solid #ff7775; outline-offset: 4px; }
+body.first-run-active { overflow: hidden; }
+body.first-run-active #sync-status-banner, body.first-run-active #cm-firstrun-banner { display: none !important; }
+@keyframes first-run-orbit { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .first-run-mark::after { animation: none; } }
+@media (max-width: 420px) { .first-run { padding: 28px 20px; } .first-run-steps li { gap: 9px; font-size: 12px; } .first-run-steps small { font-size: 10px; } }
