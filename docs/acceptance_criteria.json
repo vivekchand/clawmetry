@@ -1207,6 +1207,24 @@
       "text": "When the report cannot be delivered or the cloud rejects it, sign-in and trial activation shall complete exactly as they would without it."
     },
     {
+      "id": "AC-OGV-ADC-004.1",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a sign-in reports an operating system the system recognises, the system shall store it on that account with the time it was recorded, replacing any earlier value."
+    },
+    {
+      "id": "AC-OGV-ADC-004.2",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When a sign-in is made from the desktop app, the system shall record the client as the desktop app; from a terminal or the local dashboard outside the app, as the command line."
+    },
+    {
+      "id": "AC-OGV-ADC-004.3",
+      "doc": "Every Account Knows Whether It Is Cloud or Self-Hosted",
+      "doc_id": "f4461470-5e14-425e-9356-69312a5b9e54",
+      "text": "When either value is missing or unrecognised, the system shall leave that stored value unchanged and serve the trial response unchanged, exactly as for the deployment."
+    },
+    {
       "id": "AC-RSO-CCT-001.1",
       "doc": "Claude Code Native Telemetry: One-Command OTel Wiring + Full Signal Mapping",
       "doc_id": "a4bd3c7e-8bb9-4b80-92c7-d74dbe0fd504",

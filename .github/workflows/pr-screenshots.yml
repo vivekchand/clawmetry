@@ -106,7 +106,13 @@ jobs:
       # still boots because dashboard.py only needs flask+waitress+duckdb.
       - name: Install Python deps
         run: |
-          python -m pip install --upgrade pip
+          # Bootstrap pip from the hash-pinned set rather than resolving the
+          # latest release at job start. The two installs below stay unpinned
+          # on purpose -- `head/requirements.txt` is the PR's own checkout,
+          # which is the thing under test.
+          # `head/` prefix: this job checks the repo out into head/ and base/,
+          # never at the workspace root, so the set lives under head/ too.
+          python -m pip install --require-hashes -r head/.github/requirements/pip-bootstrap.txt
           pip install -r head/requirements.txt
           pip install duckdb requests
 

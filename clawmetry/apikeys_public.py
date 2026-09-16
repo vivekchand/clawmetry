@@ -39,10 +39,10 @@ def granted_shapes(record: dict) -> set:
 
 
 def scope_catalogue() -> list:
-    """``[{scope, doc, methods, sensitive}]`` for the UI and the CLI help.
+    """``[{scope, kind, doc, methods, sensitive}]`` for the UI and the CLI help.
 
-    Derived from the query contract, so a method added there shows up
-    here with no second list to update.
+    Read scopes are derived from the query contract; write:ingest is loaded
+    lazily from apikeys so the ingest scope doc stays in one place.
     """
     from clawmetry.query_contract import (
         SCOPE_CONTENT,
@@ -50,16 +50,26 @@ def scope_catalogue() -> list:
         SCOPES,
         live_methods_by_scope,
     )
+    from clawmetry.apikeys import SCOPE_INGEST, SCOPE_DOC as _AK_SCOPE_DOC
 
-    return [
+    rows = [
         {
             "scope": s,
+            "kind": "read",
             "doc": SCOPE_DOC[s],
             "methods": live_methods_by_scope(s),
             "sensitive": s == SCOPE_CONTENT,
         }
         for s in SCOPES
     ]
+    rows.append({
+        "scope": SCOPE_INGEST,
+        "kind": "write",
+        "doc": _AK_SCOPE_DOC.get(SCOPE_INGEST, ""),
+        "methods": [],
+        "sensitive": False,
+    })
+    return rows
 
 
 def store_summary() -> dict[str, Any]:

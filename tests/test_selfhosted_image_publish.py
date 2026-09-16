@@ -284,10 +284,15 @@ def test_pin_replaces_the_source_build_with_version_and_digest() -> None:
 def test_check_rejects_a_tag_only_or_build_shadowed_image() -> None:
     current = _read("deploy", "self-hosted", "docker-compose.yml")
     assert pin_mod.check(current) == [], "the shipped Compose file must pass its own check"
-    tag_only = current.replace(
-        "image: clawmetry-selfhosted:latest", "image: ghcr.io/vivekchand/clawmetry:latest"
+    # Strip the digest to produce a tag-only reference, then add a build: block.
+    # The old compose used a local image name; now it uses the registry image.
+    # Both mutations are exercised at once so both checks fire.
+    tag_only = re.sub(r"@sha256:[0-9a-f]{64}", "", current)
+    tag_with_build = tag_only.replace(
+        "    image: ghcr.io/",
+        "    build:\n      context: ../..\n    image: ghcr.io/",
     )
-    problems = pin_mod.check(tag_only)
+    problems = pin_mod.check(tag_with_build)
     assert any("digest" in p for p in problems)
     assert any("build" in p for p in problems), (
         "a published image next to a build: block would silently fall back to "
