@@ -311,6 +311,66 @@ GEN_AI_ATTRS_NOT_READ: list[str] = [
     "gen_ai.agent.name",
 ]
 
+# ── Ingest key authentication ────────────────────────────────────────────────
+#
+# Header names the remote-push gate (``clawmetry/ingest_auth.py``) reads.
+# Re-exported from that module so the server enforces exactly what the doc
+# and setup prompts teach.
+
+HEADER_KEY: str = "x-clawmetry-key"
+HEADER_RUNTIME: str = "x-clawmetry-runtime"
+HEADER_ENV: str = "x-clawmetry-env"
+
+#: Hard cap on the request body for remote-push ingest (decompressed).
+MAX_BODY_BYTES: int = 8 * 1024 * 1024  # 8 MB
+
+# All headers the ingest gate reads, in declaration order.
+# The setup-prompt generator (``clawmetry/setup_prompt.py``) reads this list
+# so the rendered prompt names exactly the headers the server accepts.
+HEADERS: list = [
+    {
+        "name": HEADER_KEY,
+        "description": "Ingest key (``write:ingest`` scope). Required on non-loopback requests.",
+    },
+    {
+        "name": HEADER_RUNTIME,
+        "description": "Runtime name override (optional). Lower-case, ≤40 chars.",
+    },
+    {
+        "name": HEADER_ENV,
+        "description": "Environment grouping axis (optional). Lower-case, ≤64 chars.",
+    },
+]
+
+# All ingest surfaces, for the setup-prompt generator and reference doc.
+SURFACES: list = [
+    {"path": path, **meta}
+    for path, meta in OTLP_ENDPOINTS.items()
+]
+
+# All HTTP response codes any ingest surface returns.
+# ``test_ingest_contract_drift.py`` checks 200, 400, 401, 403, 413 are present.
+RESPONSES: list = [
+    (200, "Stored successfully."),
+    (400, "Malformed or undecodable body."),
+    (401, "Missing or invalid ingest key."),
+    (403, "Key is valid but lacks the ``write:ingest`` scope."),
+    (413, f"Request body exceeds the {MAX_BODY_BYTES // (1024 * 1024)} MB cap."),
+    (501, "Binary protobuf requested but ``opentelemetry-proto`` is not installed."),
+    (503, "Store write failed; retry after the ``Retry-After`` delay."),
+]
+
+# Convenience aliases iterated as ``for attr, _ in GENAI_READ``.
+GENAI_READ: list = [
+    (attr, desc)
+    for attr, (desc, _fallbacks) in GEN_AI_ATTRS_READ.items()
+]
+
+GENAI_NOT_READ: list = [
+    (attr, "")
+    for attr in GEN_AI_ATTRS_NOT_READ
+]
+
 # ── Run / event ingest API ───────────────────────────────────────────────────
 
 # Endpoints served by ``routes/runtime_ingest.py`` (bp_runtime_ingest).
