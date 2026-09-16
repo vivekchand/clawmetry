@@ -260,6 +260,11 @@ jobs:
       # tag is created — the next [RELEASE] PR can re-run cleanly.
       - name: Pre-publish smoke (install wheel, verify CLI + imports)
         id: smoke
+        env:
+          # Bound to env rather than expanded into the script below. See the
+          # note on the release-create step: a step output reaches `run:` as
+          # raw text, so the shell parses whatever it contains.
+          NEW_VERSION: ${{ steps.bump.outputs.new }}
         run: |
           set -e
           python3 -m venv /tmp/smoke-venv
@@ -270,7 +275,7 @@ jobs:
           /tmp/smoke-venv/bin/pip install --quiet dist/*.whl
           echo "▸ CLI version reports the bumped value"
           ACTUAL=$(/tmp/smoke-venv/bin/clawmetry --version | tr -d '[:space:]')
-          EXPECTED='${{ steps.bump.outputs.new }}'
+          EXPECTED="$NEW_VERSION"
           echo "  actual=$ACTUAL  expected=$EXPECTED"
           echo "$ACTUAL" | grep -qF "$EXPECTED" || {
             echo "❌ clawmetry --version did not report $EXPECTED"
@@ -393,9 +398,11 @@ jobs:
       # web UI — yanking is intentionally manual so a human signs off.
       - name: Post-publish verification (install from PyPI)
         id: postpub
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new }}
         run: |
           set -e
-          NEW='${{ steps.bump.outputs.new }}'
+          NEW="$NEW_VERSION"
           python3 -m venv /tmp/postpub-venv
           # PyPI's CDN is fast but not instantaneous, and the JSON metadata
           # endpoint and the simple index (which pip uses) propagate
@@ -454,8 +461,14 @@ jobs:
           # env var and use "$PR_TITLE" so the shell never parses it as code.
           # Never interpolate ${{ github.event.* }} directly into `run:`.
           PR_TITLE: ${{ github.event.pull_request.title }}
+          # Same treatment for the step outputs this script reads. Neither is
+          # attacker-controlled today, but both reach `run:` as raw text that
+          # the shell parses, so the safe form is the one that does not depend
+          # on that staying true.
+          NEW_VERSION: ${{ steps.bump.outputs.new }}
+          ATTEST_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
         run: |
-          NEW_TAG="v${{ steps.bump.outputs.new }}"
+          NEW_TAG="v$NEW_VERSION"
           git tag "$NEW_TAG" || echo "Tag already exists locally"
           git push origin "refs/tags/$NEW_TAG" || echo "Tag already on origin, skipping"
           gh release create "$NEW_TAG" \
@@ -484,9 +497,9 @@ jobs:
           # Uploaded separately so a missing attestation cannot also strand
           # the wheel and sdist, which is what a single combined upload with
           # a non-existent path would do.
-          BUNDLE="${{ steps.attest.outputs.bundle-path }}"
+          BUNDLE="$ATTEST_BUNDLE"
           if [ -n "$BUNDLE" ] && [ -f "$BUNDLE" ]; then
-            PROV="dist/clawmetry-${{ steps.bump.outputs.new }}.intoto.jsonl"
+            PROV="dist/clawmetry-$NEW_VERSION.intoto.jsonl"
             cp "$BUNDLE" "$PROV"
             gh release upload "$NEW_TAG" "$PROV" \
               --clobber || echo "⚠ provenance upload failed (non-blocking)"
@@ -506,8 +519,13 @@ jobs:
       - name: Kick tag-triggered workflows the token can't cascade
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Bound, not expanded — see the release-create step above. This
+          # script dispatches four workflows and passes the version on to
+          # each, so it is the densest cluster of expansions in the file.
+          NEW_VERSION: ${{ steps.bump.outputs.new }}
+          REPO: ${{ github.repository }}
         run: |
-          NEW_TAG="v${{ steps.bump.outputs.new }}"
+          NEW_TAG="v$NEW_VERSION"
 
           # ── Pin the cloud to the version we JUST published ──────────────
           # auto-deploy-cloud.yml also triggers on push-to-main, but on a
@@ -534,7 +552,7 @@ jobs:
           # Non-blocking, like the others: the wheel is already published, and
           # a failed dispatch must not fail the release. auto-deploy's own
           # no-downgrade guard makes a duplicate or out-of-order run a no-op.
-          echo "▸ Dispatching auto-deploy-cloud.yml so the cloud pins ${{ steps.bump.outputs.new }}"
+          echo "▸ Dispatching auto-deploy-cloud.yml so the cloud pins $NEW_VERSION"
           # -f version=... is load-bearing, not a convenience. Dispatching
           # after the upload is NOT late enough on its own: PyPI's
           # `info.version` metadata endpoint lags the upload by minutes, so
@@ -545,14 +563,14 @@ jobs:
           # minutes after this job started. We know the version we published;
           # passing it removes the re-derivation and the race with it.
           gh workflow run auto-deploy-cloud.yml \
-            --repo ${{ github.repository }} \
+            --repo "$REPO" \
             --ref main \
-            -f version="${{ steps.bump.outputs.new }}" \
+            -f version="$NEW_VERSION" \
             || echo "⚠ auto-deploy-cloud dispatch failed (non-blocking; cloud will lag until the next OSS push)"
 
           echo "▸ Dispatching desktop-artifacts.yml against $NEW_TAG"
           gh workflow run desktop-artifacts.yml \
-            --repo ${{ github.repository }} \
+            --repo "$REPO" \
             --ref "$NEW_TAG" \
             || echo "⚠ desktop-artifacts dispatch failed (non-blocking)"
 
@@ -568,11 +586,11 @@ jobs:
           # 403 looks like success, which is exactly how the desktop-artifacts
           # dispatch broke on v0.12.658, so tests/test_release_canary_reachable.py
           # asserts this dispatch still exists.
-          echo "▸ Dispatching release-canary.yml for ${{ steps.bump.outputs.new }}"
+          echo "▸ Dispatching release-canary.yml for $NEW_VERSION"
           gh workflow run release-canary.yml \
-            --repo ${{ github.repository }} \
+            --repo "$REPO" \
             --ref main \
-            -f version="${{ steps.bump.outputs.new }}" \
+            -f version="$NEW_VERSION" \
             || echo "⚠ release-canary dispatch failed (non-blocking)"
 
           # The self-hosted server image is built from the wheel just uploaded
@@ -583,11 +601,11 @@ jobs:
           # Compose file unpinned, and is visible in its own run.
           # tests/test_selfhosted_image_publish.py asserts this dispatch stays
           # after the PyPI upload.
-          echo "▸ Dispatching container-image.yml for ${{ steps.bump.outputs.new }}"
+          echo "▸ Dispatching container-image.yml for $NEW_VERSION"
           gh workflow run container-image.yml \
-            --repo ${{ github.repository }} \
+            --repo "$REPO" \
             --ref main \
-            -f version="${{ steps.bump.outputs.new }}" \
+            -f version="$NEW_VERSION" \
             || echo "⚠ container-image dispatch failed (non-blocking)"
 
       - name: Open PR for version bump
