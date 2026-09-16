@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agent spend</title>
+<!--
+  A starter custom UI for ClawMetry, in one file with no build step.
+
+  It reads the q/1 API with a read:metrics key, which is the scope that
+  cannot return a prompt or a reply. That matters here: this page has no
+  backend, so whatever key it holds is in the browser.
+
+  Run it:
+      cd examples/custom-ui && python3 -m http.server 3000
+      clawmetry key create --name starter \
+          --scope read:metrics --origin http://localhost:3000
+      open http://localhost:3000
+
+  Then edit it, or hand it to a coding agent along with the output of
+  GET /api/q/1/llms.txt and ask for the view you actually want.
+  docs/BUILD_YOUR_OWN_UI.md has the walkthrough.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --panel: #fff; --line: #e6e4e0;
+    --ink: #1c1b19; --muted: #6f6b66; --accent: #b4530a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141414; --panel:#1c1c1c; --line:#2e2c2a; --ink:#ecebe9; --muted:#9b9691; --accent:#e08b4a; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+    padding: 28px 20px 60px;
+  }
+  main { max-width: 940px; margin: 0 auto; }
+  h1 { font-size: 19px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 22px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+  }
+  .headline { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; }
+  .headline-sub { color: var(--muted); font-size: 12px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .row > .panel { flex: 1; min-width: 260px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11px;
+       text-transform: uppercase; letter-spacing: 0.04em; padding-bottom: 6px; }
+  td { padding: 5px 0; border-top: 1px solid var(--line); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  h2 { font-size: 13px; margin: 0 0 10px; font-weight: 600; }
+  .setup label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+  .setup input {
+    width: 100%; padding: 8px 10px; font: inherit; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  button {
+    font: inherit; padding: 8px 15px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .problem {
+    border-color: #d97706; background: color-mix(in srgb, #d97706 8%, var(--panel));
+  }
+  .problem h2 { color: #d97706; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  a { color: var(--accent); }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 22px; }
+  svg text { fill: var(--muted); font-size: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent spend</h1>
+  <div class="sub">Reading ClawMetry directly. Nothing leaves this machine.</div>
+
+  <section id="setup" class="panel setup" hidden>
+    <h2>Connect this page to ClawMetry</h2>
+    <p style="color:var(--muted);font-size:13px;margin-top:0;">
+      Create a read key on the machine your agents run on, then paste it here.
+      It is kept in this browser only.
+    </p>
+    <p><code>clawmetry key create --name starter --scope read:metrics --origin <span id="thisOrigin"></span></code></p>
+    <label for="base">ClawMetry address</label>
+    <input id="base" type="text" value="http://localhost:8900" spellcheck="false" />
+    <label for="key" style="margin-top:12px;">Key</label>
+    <input id="key" type="password" placeholder="cmk_..." spellcheck="false" />
+    <p><button class="primary" id="connect">Connect</button></p>
+  </section>
+
+  <section id="problem" class="panel problem" hidden>
+    <h2 id="problemTitle"></h2>
+    <div id="problemBody"></div>
+    <p><button id="reconnect">Change key or address</button></p>
+  </section>
+
+  <div id="dash" hidden>
+    <section class="panel">
+      <div class="headline" id="total">&nbsp;</div>
+      <div class="headline-sub" id="totalSub"></div>
+      <svg id="chart" viewBox="0 0 900 150" width="100%" height="150" role="img"
+           aria-label="Daily agent cost"></svg>
+    </section>
+
+    <div class="row">
+      <section class="panel">
+        <h2>By runtime</h2>
+        <table><thead><tr>
+          <th>Runtime</th><th class="num">Tokens</th><th class="num">Cost</th>
+        </tr></thead><tbody id="runtimes"></tbody></table>
+      </section>
+      <section class="panel">
+        <h2>By model</h2>
+        <table><thead><tr>
+          <th>Model</th><th class="num">Tokens</th><th class="num">Cost</th>
+        </tr></thead><tbody id="models"></tbody></table>
+      </section>
+    </div>
+
+    <div class="foot">
+      Updated <span id="updated">never</span>.
+      <a id="openCm" href="#" target="_blank" rel="noopener">Open ClawMetry</a>
+      to see why a number moved.
+      <button id="forget" style="padding:3px 9px;font-size:12px;">Forget key</button>
+    </div>
+  </div>
+</main>
+
+<script>
+// ── config, kept in this browser ────────────────────────────────────────
+var STORE = 'clawmetry-starter';
+var cfg = {};
+try { cfg = JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (e) { cfg = {}; }
+
+var $ = function (id) { return document.getElementById(id); };
+$('thisOrigin').textContent = location.origin;
+
+function save() {
+  cfg.base = $('base').value.trim().replace(/\/+$/, '');
+  cfg.key = $('key').value.trim();
+  try { localStorage.setItem(STORE, JSON.stringify(cfg)); } catch (e) {}
+}
+
+function showSetup() {
+  $('dash').hidden = true; $('problem').hidden = true; $('setup').hidden = false;
+  if (cfg.base) $('base').value = cfg.base;
+}
+
+// A failure here is somebody mid-build wondering what they got wrong, so
+// each one says what happened and what to try, never a bare status code.
+//
+// `parts` is a list of strings and {code: "..."} objects, built into real
+// text nodes. Deliberately not innerHTML: some of what lands here is an
+// exception message from a failed fetch, i.e. text this page did not write,
+// and assembling markup out of that is how a diagnostic panel becomes an
+// injection point.
+function showProblem(title, parts) {
+  var body = $('problemBody');
+  $('problemTitle').textContent = title;
+  body.textContent = '';
+  (parts || []).forEach(function (part) {
+    if (part && part.code !== undefined) {
+      var c = document.createElement('code');
+      c.textContent = String(part.code);
+      body.appendChild(c);
+    } else if (part === '\n') {
+      body.appendChild(document.createElement('br'));
+    } else {
+      body.appendChild(document.createTextNode(String(part)));
+    }
+  });
+  $('problem').hidden = false;
+  $('setup').hidden = true;
+}
+
+// ── the API ─────────────────────────────────────────────────────────────
+async function q(shape, params) {
+  var url = new URL(cfg.base + '/api/q/1/' + shape);
+  Object.keys(params || {}).forEach(function (k) {
+    if (params[k] != null) url.searchParams.set(k, params[k]);
+  });
+  var res;
+  try {
+    res = await fetch(url, { headers: { Authorization: 'Bearer ' + cfg.key } });
+  } catch (e) {
+    // fetch() rejects for both "host is down" and "CORS said no", and the
+    // browser deliberately will not tell the page which. Say both.
+    throw {
+      title: 'Could not reach ClawMetry',
+      parts: [
+        'Either nothing is listening at ', {code: cfg.base}, ', or this ',
+        'page’s origin (', {code: location.origin}, ') is not on the ',
+        'key’s allowlist. Create a key naming this exact origin:', '\n',
+        {code: 'clawmetry key create --name starter --scope read:metrics '
+               + '--origin ' + location.origin}
+      ]
+    };
+  }
+  var body = await res.json().catch(function () { return {}; });
+  if (!res.ok) {
+    throw {
+      title: res.status === 401 ? 'That key was not accepted'
+           : res.status === 403 ? 'That key cannot read this'
+           : 'ClawMetry returned an error',
+      parts: [String(body.error || 'No detail was given.')]
+    };
+  }
+  return body;
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+var money = function (n) {
+  n = Number(n || 0);
+  return '$' + (n >= 100 ? Math.round(n).toLocaleString() : n.toFixed(2));
+};
+var count = function (n) { return Number(n || 0).toLocaleString(); };
+
+// ── render ──────────────────────────────────────────────────────────────
+function daysAgo(n) {
+  return new Date(Date.now() - n * 86400000).toISOString().slice(0, 19) + 'Z';
+}
+
+function drawChart(rows) {
+  // Deliberately hand-drawn SVG rather than a charting library: this file
+  // is meant to be read and edited, and one <path> is less to understand
+  // than a dependency.
+  var byDay = {};
+  rows.forEach(function (r) { byDay[r.day] = (byDay[r.day] || 0) + Number(r.cost_usd || 0); });
+  var days = Object.keys(byDay).sort();
+  var svg = $('chart');
+  if (days.length < 2) { svg.innerHTML = ''; return; }
+  var max = Math.max.apply(null, days.map(function (d) { return byDay[d]; })) || 1;
+  var W = 900, H = 150, pad = 18;
+  var x = function (i) { return pad + (i / (days.length - 1)) * (W - pad * 2); };
+  var y = function (v) { return H - pad - (v / max) * (H - pad * 2); };
+  var line = days.map(function (d, i) { return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(byDay[d]).toFixed(1); }).join(' ');
+  var area = line + ' L' + x(days.length - 1).toFixed(1) + ' ' + (H - pad) + ' L' + x(0).toFixed(1) + ' ' + (H - pad) + ' Z';
+  svg.innerHTML =
+      '<path d="' + area + '" fill="var(--accent)" opacity="0.13"/>'
+    + '<path d="' + line + '" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>'
+    + '<text x="' + pad + '" y="' + (H - 4) + '">' + esc(days[0]) + '</text>'
+    + '<text x="' + (W - pad) + '" y="' + (H - 4) + '" text-anchor="end">' + esc(days[days.length - 1]) + '</text>'
+    + '<text x="' + pad + '" y="12">' + esc(money(max)) + ' peak day</text>';
+}
+
+function fillTable(el, rows, cells) {
+  if (!rows.length) {
+    el.innerHTML = '<tr><td colspan="3" style="color:var(--muted);">Nothing in this window yet.</td></tr>';
+    return;
+  }
+  el.innerHTML = rows.map(function (r) {
+    return '<tr>' + cells(r).map(function (c, i) {
+      return '<td' + (i ? ' class="num"' : '') + '>' + c + '</td>';
+    }).join('') + '</tr>';
+  }).join('');
+}
+
+// Both `runtimes` and `models` come back one row per day, so roll them up.
+// `other` is whatever second column that table shows; the caller supplies
+// the field names because they differ per shape (see /api/q/1 for each).
+function sumBy(rows, keyField, otherFields) {
+  var acc = {};
+  rows.forEach(function (r) {
+    var k = r[keyField] || 'unknown';
+    acc[k] = acc[k] || { key: k, cost: 0, other: 0 };
+    acc[k].cost += Number(r.cost_usd || 0);
+    otherFields.forEach(function (f) { acc[k].other += Number(r[f] || 0); });
+  });
+  return Object.keys(acc).map(function (k) { return acc[k]; })
+    .sort(function (a, b) { return b.cost - a.cost; }).slice(0, 10);
+}
+
+async function refresh() {
+  var since = daysAgo(30);
+  try {
+    var agg = await q('aggregates', { since: since });
+    var rt = await q('runtimes', { since: since });
+    var md = await q('models', { since: since });
+
+    var rows = agg.rows || [];
+    var total = rows.reduce(function (s, r) { return s + Number(r.cost_usd || 0); }, 0);
+    $('total').textContent = money(total);
+    $('totalSub').textContent = 'across the last 30 days, all runtimes on this machine';
+    drawChart(rows);
+
+    fillTable($('runtimes'), sumBy(rt.rows || [], 'runtime', ['tokens']),
+      function (r) { return [esc(r.key), count(r.other), money(r.cost)]; });
+    fillTable($('models'), sumBy(md.rows || [], 'model', ['tokens_in', 'tokens_out']),
+      function (r) { return [esc(r.key), count(r.other), money(r.cost)]; });
+
+    $('updated').textContent = new Date().toLocaleTimeString();
+    $('openCm').href = cfg.base;
+    $('problem').hidden = true;
+    $('setup').hidden = true;
+    $('dash').hidden = false;
+  } catch (err) {
+    if (err && err.title) showProblem(err.title, err.parts);
+    else showProblem('Something went wrong', [String(err)]);
+  }
+}
+
+// ── wiring ──────────────────────────────────────────────────────────────
+$('connect').addEventListener('click', function () { save(); refresh(); });
+$('reconnect').addEventListener('click', showSetup);
+$('forget').addEventListener('click', function () {
+  try { localStorage.removeItem(STORE); } catch (e) {}
+  cfg = {}; $('key').value = ''; showSetup();
+});
+
+if (cfg.key && cfg.base) { refresh(); setInterval(refresh, 60000); }
+else { showSetup(); }
+</script>
+</body>
+</html>

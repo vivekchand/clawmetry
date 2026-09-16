@@ -60,6 +60,78 @@
       </div>
       <div id="posture-checks-list" style="display:grid;gap:6px;"></div>
     </div>
+    <!-- API keys: build your own UI on top of this machine's data.
+         Lives here and not on a tab of its own because the question it
+         answers is a security one ("who, other than this dashboard, can
+         read my agents?"), and because a surface has to earn its place in
+         the nav. Local only: the keys live in ~/.clawmetry on the machine
+         the agent runs on, so _cmSecurityCloudTrim hides it on cloud. -->
+    <div id="apikeys-panel" style="
+      background:var(--bg-secondary);
+      border:1px solid var(--border);
+      border-radius:8px;
+      padding:14px 16px;
+      margin-bottom:14px;
+      ">
+      <div style="display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;">
+        <div style="font-size:22px;flex-shrink:0;">🔑</div>
+        <div style="flex:1;min-width:220px;">
+          <div style="font-size:13px;font-weight:700;color:var(--text-primary);" data-i18n="security.apikeys_title">Build your own view</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.5;" data-i18n="security.apikeys_sub">Give a page, a script or a coding agent read access to this machine's agent data, scoped to exactly what it needs. Nothing here can start, pause or stop an agent.</div>
+        </div>
+        <button class="refresh-btn" id="apikeys-new-btn" onclick="toggleApiKeyForm();" data-i18n="security.apikeys_new">New key</button>
+      </div>
+
+      <!-- Create form. Hidden until the button is pressed so the panel
+           reads as a list first and a form second. -->
+      <div id="apikeys-form" hidden style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+          <div style="flex:1;min-width:180px;">
+            <label for="apikey-name" style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;" data-i18n="security.apikeys_name_label">What is it for?</label>
+            <input id="apikey-name" type="text" maxlength="64" placeholder="latency-workbench" style="
+              width:100%;padding:6px 8px;font-size:12px;border-radius:6px;
+              border:1px solid var(--border);background:var(--bg-primary);
+              color:var(--text-primary);box-sizing:border-box;" />
+          </div>
+          <div style="flex:2;min-width:220px;">
+            <label for="apikey-origins" style="display:block;font-size:11px;color:var(--text-muted);margin-bottom:4px;" data-i18n="security.apikeys_origin_label">Which site will use it?</label>
+            <input id="apikey-origins" type="text" placeholder="http://localhost:3000" style="
+              width:100%;padding:6px 8px;font-size:12px;border-radius:6px;
+              border:1px solid var(--border);background:var(--bg-primary);
+              color:var(--text-primary);box-sizing:border-box;" />
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-size:11px;color:var(--text-muted);">
+          <input id="apikey-nobrowser" type="checkbox" onchange="onApiKeyBrowserToggle();" />
+          <span data-i18n="security.apikeys_no_browser">This key is for a script or a server, not a web page</span>
+        </label>
+        <div style="margin-top:12px;">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;" data-i18n="security.apikeys_scope_label">What may it read?</div>
+          <div id="apikey-scopes" style="display:grid;gap:6px;"></div>
+        </div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button class="refresh-btn" onclick="createApiKey();" data-i18n="security.apikeys_create">Create key</button>
+          <button class="refresh-btn" onclick="toggleApiKeyForm(false);" data-i18n="security.apikeys_cancel">Cancel</button>
+          <span id="apikey-form-error" style="font-size:11px;color:#f87171;"></span>
+        </div>
+      </div>
+
+      <!-- The one and only time the secret is shown. -->
+      <div id="apikey-reveal" hidden style="margin-top:14px;padding:12px 14px;border-radius:8px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.25);">
+        <div style="font-size:12px;font-weight:700;color:#86efac;" data-i18n="security.apikeys_reveal_title">Copy this now. It is not shown again.</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
+          <code id="apikey-reveal-value" style="
+            flex:1;min-width:240px;padding:7px 9px;border-radius:6px;
+            background:var(--bg-primary);border:1px solid var(--border);
+            font-size:12px;color:var(--text-primary);word-break:break-all;"></code>
+          <button class="refresh-btn" onclick="copyApiKey();" data-i18n="security.apikeys_copy">Copy</button>
+          <button class="refresh-btn" onclick="dismissApiKeyReveal();" data-i18n="security.apikeys_done">Done</button>
+        </div>
+        <div id="apikey-reveal-next" style="font-size:11px;color:var(--text-muted);margin-top:9px;line-height:1.6;"></div>
+      </div>
+
+      <div id="apikeys-list" style="margin-top:14px;display:grid;gap:8px;"></div>
+    </div>
     <!-- Tamper-evident integrity (hash chain) -->
     <div id="security-integrity-panel" style="
       background:var(--bg-secondary);
