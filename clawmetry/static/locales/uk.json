@@ -1540,5 +1540,17 @@
   "trail.commits": "Коміти",
   "trail.prs": "Пул-реквести",
   "evals.locked": "Оцінювання сесій доступне лише у Pro.",
-  "trail.cov_unknown": "ще не оголошено"
+  "trail.cov_unknown": "ще не оголошено",
+  "security.apikeys_title": "Створіть власний перегляд",
+  "security.apikeys_sub": "Надайте сторінці, скрипту або кодовому агенту доступ на читання даних агентів цієї машини, обмежений точно тим, що йому потрібно. Ніщо тут не може запустити, призупинити чи зупинити агента.",
+  "security.apikeys_new": "Новий ключ",
+  "security.apikeys_name_label": "Для чого він потрібен?",
+  "security.apikeys_origin_label": "Який сайт буде його використовувати?",
+  "security.apikeys_no_browser": "Цей ключ призначений для скрипту чи сервера, а не для веб-сторінки",
+  "security.apikeys_scope_label": "Що йому дозволено читати?",
+  "security.apikeys_create": "Створити ключ",
+  "security.apikeys_cancel": "Скасувати",
+  "security.apikeys_reveal_title": "Скопіюйте це зараз. Більше він не буде показаний.",
+  "security.apikeys_copy": "Копіювати",
+  "security.apikeys_done": "Готово"
 }

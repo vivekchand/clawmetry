@@ -1540,5 +1540,17 @@
   "trail.commits": "కమిట్‌లు",
   "trail.prs": "పుల్ రిక్వెస్ట్‌లు",
   "evals.locked": "సెషన్ స్కోరింగ్ ఒక Pro ఫీచర్.",
-  "trail.cov_unknown": "ఇంకా ప్రకటించలేదు"
+  "trail.cov_unknown": "ఇంకా ప్రకటించలేదు",
+  "security.apikeys_title": "మీ స్వంత వ్యూ నిర్మించండి",
+  "security.apikeys_sub": "ఒక పేజీకి, స్క్రిప్ట్‌కి లేదా కోడింగ్ ఏజెంట్‌కి ఈ మెషిన్ యొక్క ఏజెంట్ డేటాకు రీడ్ యాక్సెస్ ఇవ్వండి, అవసరమైనంత వరకే పరిమితం చేసి. దీనితో ఏజెంట్‌ను ప్రారంభించడం, పాజ్ చేయడం లేదా ఆపడం సాధ్యం కాదు.",
+  "security.apikeys_new": "కొత్త కీ",
+  "security.apikeys_name_label": "ఇది దేని కోసం?",
+  "security.apikeys_origin_label": "దీన్ని ఏ సైట్ ఉపయోగిస్తుంది?",
+  "security.apikeys_no_browser": "ఈ కీ ఒక స్క్రిప్ట్ లేదా సర్వర్ కోసం, వెబ్ పేజీ కోసం కాదు",
+  "security.apikeys_scope_label": "ఇది దేన్ని చదవగలదు?",
+  "security.apikeys_create": "కీ సృష్టించండి",
+  "security.apikeys_cancel": "రద్దు చేయండి",
+  "security.apikeys_reveal_title": "దీన్ని ఇప్పుడే కాపీ చేసుకోండి. ఇది మళ్లీ చూపబడదు.",
+  "security.apikeys_copy": "కాపీ చేయండి",
+  "security.apikeys_done": "పూర్తయింది"
 }

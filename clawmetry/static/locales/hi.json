@@ -1540,5 +1540,17 @@
   "trail.commits": "कमिट",
   "trail.prs": "पुल रिक्वेस्ट",
   "evals.locked": "सेशन स्कोरिंग एक Pro फीचर है।",
-  "trail.cov_unknown": "अभी घोषित नहीं किया गया"
+  "trail.cov_unknown": "अभी घोषित नहीं किया गया",
+  "security.apikeys_title": "अपना खुद का व्यू बनाएं",
+  "security.apikeys_sub": "किसी पेज, स्क्रिप्ट या कोडिंग एजेंट को इस मशीन के एजेंट डेटा तक रीड एक्सेस दें, ठीक उतना ही जितना उसे चाहिए। यहां से कोई भी चीज़ किसी एजेंट को शुरू, पॉज़ या बंद नहीं कर सकती।",
+  "security.apikeys_new": "नई कुंजी",
+  "security.apikeys_name_label": "यह किसके लिए है?",
+  "security.apikeys_origin_label": "इसका उपयोग कौन सी साइट करेगी?",
+  "security.apikeys_no_browser": "यह कुंजी किसी स्क्रिप्ट या सर्वर के लिए है, वेब पेज के लिए नहीं",
+  "security.apikeys_scope_label": "यह क्या पढ़ सकती है?",
+  "security.apikeys_create": "कुंजी बनाएं",
+  "security.apikeys_cancel": "रद्द करें",
+  "security.apikeys_reveal_title": "इसे अभी कॉपी कर लें। यह दोबारा नहीं दिखाई जाएगी।",
+  "security.apikeys_copy": "कॉपी करें",
+  "security.apikeys_done": "पूर्ण"
 }

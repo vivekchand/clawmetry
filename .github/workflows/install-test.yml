@@ -127,19 +127,33 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
+      # zizmor misfeature, analysed and accepted on all three steps below.
+      # The audit fires on `shell: cmd` because CMD is a shell zizmor cannot
+      # parse, so its other audits — template-injection above all — go blind
+      # inside these run blocks. That is a real blind spot, and the reason it
+      # is safe here is checkable rather than argued: this job contains no
+      # `${{ }}` expansion at all. Every value it reads arrives either through
+      # `env:` or from a runner-provided variable (`%RUNNER_TEMP%`), so there
+      # is no expansion for the audit to have missed.
+      #
+      # Switching to `pwsh` would clear the finding by deleting the coverage:
+      # the PowerShell installer is already exercised by test-windows above,
+      # and this job exists precisely to prove `install.cmd` works for a user
+      # on cmd.exe. A reader adding a step here should keep expansions out of
+      # it and bind values through `env:`, which is what keeps this accepted.
       - name: Run CMD install
-        shell: cmd
+        shell: cmd # zizmor: ignore[misfeature]
         env:
           CLAWMETRY_SKIP_ONBOARD: '1'
         run: install.cmd
       - name: Verify clawmetry binary
-        shell: cmd
+        shell: cmd # zizmor: ignore[misfeature]
         run: clawmetry --version
       # Same gate as the PowerShell path: an already-connected node is reported
       # and left alone. CLAWMETRY_REONBOARD=0 answers the question up front so
       # the step never waits on input.
       - name: Gate — connected node keeps its setup
-        shell: cmd
+        shell: cmd # zizmor: ignore[misfeature]
         env:
           CLAWMETRY_REONBOARD: '0'
         run: |

@@ -224,18 +224,21 @@
     // history -> badge "20" with page saying "no alerts fired". Fall back to
     // the same local /api/alerts/history the nav badge uses when cloud has
     // nothing (or errors), so the two stay consistent.
+    alertsState.historyAvailable = false;
     try {
       const hist = await fetch(alertsState.localMode
         ? '/api/alerts/history?limit=20'
         : '/api/cloud-proxy/api/alerts/history?limit=20')
-        .then(r => r.json());
+        .then(r => { if (!r.ok) throw new Error('unavailable'); return r.json(); });
       alertsState.history = hist.history || [];
+      alertsState.historyAvailable = Array.isArray(hist.history);
     } catch {
       alertsState.history = [];
     }
     if (!alertsState.history.length) {
       try {
-        const local = await fetch('/api/alerts/history?limit=20').then(r => r.json());
+        const local = await fetch('/api/alerts/history?limit=20').then(r => { if (!r.ok) throw new Error('unavailable'); return r.json(); });
+        alertsState.historyAvailable = alertsState.historyAvailable || Array.isArray(local.alerts);
         const localFires = (local.alerts || []).map(a => ({
           id: a.id,
           fired_at: a.fired_at,
@@ -515,31 +518,38 @@
   // Hide alerts older than this from the history view. Stops the list from
   // accumulating forever; the user only cares about recent activity.
   const ALERTS_HISTORY_MAX_AGE_MS = 3 * 86400 * 1000;
+  window.alertsFilterHistory = function () { renderHistory(); };
 
   function renderHistory() {
     const wrap = document.getElementById('alerts-history-list');
-    // #1954: filter ancient entries (>3d) so the list stays useful, then
-    // collapse runs of consecutive identical alerts (same type + same message)
-    // into a single row with a "× N" counter — kills the "5 identical
-    // token_velocity rows" fatigue without losing the signal that it fired.
+    if (alertsState.historyAvailable === false) return renderHistoryEmpty('Could not load alert history. Refresh to try again.');
+    // Collapse matching repeats, preserving session and resolution boundaries.
     const now = Date.now();
+    const query = (document.getElementById('guard-alert-search')?.value || '').trim().toLowerCase();
+    const filter = document.getElementById('guard-alert-state')?.value || 'all';
     const fresh = (alertsState.history || []).filter(h => {
       const ms = new Date(_alertsTsMs(h.fired_at)).getTime();
-      return !isFinite(ms) || (now - ms) <= ALERTS_HISTORY_MAX_AGE_MS;
+      const p = h.payload || {};
+      const text = [p.name, h.alert_id, p.message, p.actual_value, p.session_id, p.node_id].join(' ').replace(/_/g, ' ').toLowerCase();
+      return (!isFinite(ms) || (now - ms) <= ALERTS_HISTORY_MAX_AGE_MS) &&
+        (!query || text.includes(query)) && (filter === 'all' || (filter === 'resolved' ? !!h.resolved_at : !h.resolved_at));
     });
     if (!fresh.length) {
-      return renderHistoryEmpty('No alerts in the last 3 days.');
+      return renderHistoryEmpty(query || filter !== 'all' ? 'No recent alerts match these filters.' : 'No alerts in the last 3 days.');
     }
     const grouped = [];
+    const byKey = new Map();
     for (const h of fresh) {
       const p = h.payload || {};
-      const key = (p.name || h.alert_id || '') + '|' + String(p.actual_value ?? '');
-      const last = grouped[grouped.length - 1];
-      if (last && last._key === key) {
+      const key = JSON.stringify([h.alert_id, p.name, p.message, p.actual_value, p.threshold_unit,
+        p.session_id || h.session_id, p.node_id || h.node_id, !!h.resolved_at]);
+      const last = byKey.get(key);
+      if (last) {
         last._count += 1;
-        last._latestFiredAt = h.fired_at;
+        if (_alertsTsMs(h.fired_at) > _alertsTsMs(last._latestFiredAt)) last._latestFiredAt = h.fired_at;
       } else {
-        grouped.push({ ...h, _key: key, _count: 1, _latestFiredAt: h.fired_at });
+        const group = { ...h, _key: key, _count: 1, _latestFiredAt: h.fired_at };
+        grouped.push(group); byKey.set(key, group);
       }
     }
     wrap.innerHTML = grouped.map(h => {
@@ -547,17 +557,22 @@
       const dot = '●';
       const payload = h.payload || {};
       const typeName = payload.name || h.alert_id || '';
+      const title = String(typeName).replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
       const hint = ALERT_TYPE_HINTS[typeName] || '';
       const countBadge = h._count > 1
-        ? ` <span class="alerts-hist-count" title="Fired ${h._count} times in a row">× ${h._count}</span>`
+        ? ` <span class="alerts-hist-count" title="${h._count} matching notifications">× ${h._count}</span>`
         : '';
       const rowTitle = hint ? ` title="${escape(hint)}"` : '';
+      const reason = payload.message || (typeof payload.actual_value === 'string' ? payload.actual_value : hint);
+      const observed = payload.actual_value != null && typeof payload.actual_value !== 'string'
+        ? `<span>Observed: ${escape(String(payload.actual_value))} ${escape(payload.threshold_unit || '')}</span>` : '';
       return `
         <div class="alerts-hist-row"${rowTitle}>
           <span class="${sev}">${dot}</span>
           <span class="alerts-hist-time">${formatTimeAgo(h._latestFiredAt)}</span>
-          <span class="alerts-hist-text"><b>${escape(typeName)}</b>${countBadge}
-            → ${escape(String(payload.actual_value ?? ''))} ${escape(payload.threshold_unit || '')}</span>
+          <span class="alerts-hist-text"><b>${escape(title)}</b>${countBadge}
+            <span>${escape(reason || hint)}</span>${observed}
+            <small>${escape(payload.session_id || h.session_id || payload.node_id || h.node_id || 'This node')}${h.resolved_at ? ' · Resolved' : ''}</small></span>
         </div>
       `;
     }).join('');

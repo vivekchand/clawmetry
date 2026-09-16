@@ -1540,5 +1540,17 @@
   "trail.commits": "Commits",
   "trail.prs": "Pull requests",
   "evals.locked": "La notation des sessions est une fonctionnalité Pro.",
-  "trail.cov_unknown": "non déclaré pour le moment"
+  "trail.cov_unknown": "non déclaré pour le moment",
+  "security.apikeys_title": "Créez votre propre vue",
+  "security.apikeys_sub": "Donnez à une page, un script ou un agent de codage un accès en lecture aux données d'agent de cette machine, limité à exactement ce dont il a besoin. Rien ici ne peut démarrer, mettre en pause ou arrêter un agent.",
+  "security.apikeys_new": "Nouvelle clé",
+  "security.apikeys_name_label": "À quoi sert-elle ?",
+  "security.apikeys_origin_label": "Quel site l'utilisera ?",
+  "security.apikeys_no_browser": "Cette clé est destinée à un script ou un serveur, pas à une page web",
+  "security.apikeys_scope_label": "Que peut-elle lire ?",
+  "security.apikeys_create": "Créer la clé",
+  "security.apikeys_cancel": "Annuler",
+  "security.apikeys_reveal_title": "Copiez-la maintenant. Elle ne sera plus affichée.",
+  "security.apikeys_copy": "Copier",
+  "security.apikeys_done": "Terminé"
 }

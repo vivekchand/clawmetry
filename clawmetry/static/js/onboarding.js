@@ -587,6 +587,7 @@
     fetch('/api/onboarding/state')
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        if (window.cmFirstRun) window.cmFirstRun.start(d);
         if (!d || !d.required) return;
         var m = $('obg-managed-btn');
         if (m) m.addEventListener('click', _startManaged);

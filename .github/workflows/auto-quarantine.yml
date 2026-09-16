@@ -134,8 +134,10 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          DETECT_EXIT_CODE: ${{ steps.detect.outputs.exit_code }}
         run: |
-          code="${{ steps.detect.outputs.exit_code }}"
+          code="$DETECT_EXIT_CODE"
           case "$code" in
             0) echo "No new flaky tests detected." ;;
             2) echo "New flaky tests quarantined -- PR opened." ;;
