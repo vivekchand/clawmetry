@@ -61,6 +61,37 @@ RECORDED_CHOICES = CHOICES + ("selfhost_free",)
 # a node. The trial sign-in call is the one moment both are known.
 DEPLOYMENTS = ("managed", "selfhost")
 
+# The operating systems the cloud stores (REQ-OGV-ADC-004). Same spellings
+# the install ping already uses, so one vocabulary covers both channels.
+OPERATING_SYSTEMS = ("Darwin", "Linux", "Windows", "FreeBSD", "OpenBSD")
+
+# How this machine runs ClawMetry: the desktop app, or the command line
+# (terminal CLI and the local dashboard outside the app). The desktop shell
+# exports CLAWMETRY_LAUNCHER before it starts anything, and a child process
+# inherits it, so a `clawmetry connect` it spawns answers "desktop" too.
+CLIENTS = ("desktop", "cli")
+
+
+def client_kind() -> str:
+    """Which client this process belongs to: ``desktop`` or ``cli``."""
+    import os as _os
+
+    launcher = str(_os.environ.get("CLAWMETRY_LAUNCHER", "")).strip().lower()
+    if launcher == "desktop" or _os.environ.get("CLAWMETRY_DESKTOP_VERSION", "").strip():
+        return "desktop"
+    return "cli"
+
+
+def _operating_system() -> str:
+    """``platform.system()`` when the cloud knows that name, else ``''``."""
+    import platform as _platform
+
+    try:
+        name = (_platform.system() or "").strip()
+    except Exception:
+        return ""
+    return name if name in OPERATING_SYSTEMS else ""
+
 
 def trial_signup_body(api_key: str, deployment: str = "") -> dict:
     """Body for ``POST /api/license/trial/signup``.
@@ -68,11 +99,20 @@ def trial_signup_body(api_key: str, deployment: str = "") -> dict:
     ``deployment`` rides along only when it is one the cloud recognises;
     anything else is omitted, so a caller that does not know the choice
     leaves the account's classification untouched instead of guessing.
+
+    ``os`` and ``client`` (REQ-OGV-ADC-004) are read from this machine
+    rather than passed in, so every sign-in path reports them without
+    having to remember to. An unrecognised operating system is omitted on
+    the same principle: an account keeps what it had.
     """
     body = {"api_key": api_key}
     deployment = str(deployment or "").strip().lower()
     if deployment in DEPLOYMENTS:
         body["deployment"] = deployment
+    operating_system = _operating_system()
+    if operating_system:
+        body["os"] = operating_system
+    body["client"] = client_kind()
     return body
 
 

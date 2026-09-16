@@ -163,3 +163,12 @@ curl -s http://localhost:8900/api/v1/runs/run_a1b2c3d4/events \
 curl -s http://localhost:8900/api/v1/runs/run_a1b2c3d4/end \
   -H 'content-type: application/json' -d '{}'
 ```
+
+## What ClawMetry does not accept
+
+ClawMetry does not accept generic log formats that lack agent-turn structure. Specifically it does not accept:
+
+- **syslog** (RFC 3164 / RFC 5424) — flat line-oriented system logs carry no concept of a session, turn, tool call or token count. Pre-process them with an adapter that extracts these fields before pushing.
+- **CEF** (Common Event Format) — CEF is designed for security event correlation, not agent observability. It maps poorly to the session/run model and has no token or cost fields.
+
+If you need to ingest data from a system that emits one of these formats, write a thin shim that translates them into the structured run/event API above, or open a discussion on GitHub.

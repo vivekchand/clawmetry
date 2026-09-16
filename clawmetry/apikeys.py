@@ -34,6 +34,14 @@ holder named. Concretely:
   is created with ``--origin none`` and simply never gets a CORS header.
 * Scopes are least-revealing-first and ``read:content`` is never
   granted implicitly -- it has to be asked for by name.
+* Read scopes are read-only. ``routes/public_api.py`` dispatches only
+  ``q/1`` read shapes, so a browser-resident key adds nothing to
+  ClawMetry's control plane.
+* There is exactly one write scope, ``write:ingest``, and it can only
+  push telemetry IN. It cannot read a single byte back, and nothing in
+  this module can pause, stop or kill an agent. An ingest key is
+  server-to-server: it is never granted a CORS header, so a page cannot
+  hold one usefully (see ``ingest_auth``).
 * Keys are read-only. Nothing in this module can pause, stop or kill an
   agent, and ``routes/public_api.py`` dispatches only ``q/1`` read
   shapes, so this adds nothing to ClawMetry's control plane.
@@ -57,6 +65,11 @@ import secrets
 import time
 from typing import Optional
 
+from clawmetry.query_contract import (
+    SCOPE_CONTENT,
+    SCOPE_DOC as _READ_SCOPE_DOC,
+    SCOPES as READ_SCOPES,
+)
 from clawmetry.query_contract import SCOPES
 
 # Re-export the read-side public helpers from their own short module so
@@ -91,6 +104,23 @@ _DIR_MODE = 0o700
 #: A machine is not a key management product. The cap exists so a runaway
 #: script cannot grow the file without bound; it is not a paywall.
 MAX_KEYS = 50
+
+#: The one write scope. It lives here rather than in ``query_contract``
+#: on purpose: that module declares what can be READ, shape by shape,
+#: and a scope with no shape behind it would be a lie in that table.
+#: Ingest is the opposite direction and has no q/1 method at all.
+SCOPE_INGEST = "write:ingest"
+
+#: Every scope a key may carry. Read scopes stay in their declared
+#: least-revealing-first order; the write scope sorts last because it is
+#: the one a reader should notice.
+SCOPES: tuple = tuple(READ_SCOPES) + (SCOPE_INGEST,)
+
+SCOPE_DOC: dict = dict(_READ_SCOPE_DOC)
+SCOPE_DOC[SCOPE_INGEST] = (
+    "Push telemetry in: OTLP logs, metrics and traces, and run events. "
+    "Grants no read access of any kind."
+)
 
 #: Sentinel origin meaning "this key is not used from a browser". Stored
 #: as an empty origin list; kept as a word so the CLI can say it back.
@@ -306,6 +336,25 @@ def create(name: str, scopes, origins, *, note: str = "") -> tuple:
                           "name_too_long")
     scope_list = normalise_scopes(scopes)
     origin_list = normalise_origins(origins)
+
+    # An ingest key is server-to-server and is never granted a CORS
+    # header, so browser origins on one would be dead configuration that
+    # reads like a permission. Refusing the mix also keeps a single key
+    # from being both "pasted into a web page" and "allowed to write",
+    # which is the combination worth not having.
+    if SCOPE_INGEST in scope_list:
+        if len(scope_list) > 1:
+            raise ApiKeyError(
+                "An ingest key does one job. Create it with write:ingest "
+                "alone, and mint a separate read key for anything that "
+                "needs to read data back."
+            )
+        if origin_list:
+            raise ApiKeyError(
+                "An ingest key is used by a server, a container or a CI "
+                "job, never by a browser, so it takes no origin. Create "
+                "it with --origin none."
+            )
 
     doc = _read_store()
     live = [k for k in doc["keys"] if not k.get("revoked_at")]
@@ -558,6 +607,12 @@ def any_canonical_allowed_origin(origin: str) -> "str | None":
             if str(stored).lower() == o:
                 return str(stored)
     return None
+
+
+def allows_ingest(record: dict) -> bool:
+    """True when this key may push telemetry in."""
+    return SCOPE_INGEST in (record.get("scopes") or [])
+
 
 
 def redact(presented: str) -> str:
