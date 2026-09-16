@@ -149,12 +149,22 @@ jobs:
           done
           echo "::warning::clawmetry==$V not on PyPI after wait; continuing (cloud CI will gate the merge)"
 
+      # persist-credentials is `true` on purpose, and is stated rather than
+      # inherited: "Commit and open PR" below runs `git push -f origin` from
+      # inside clawmetry-cloud/, and the only thing authenticating that push is
+      # the CLOUD_REPO_PAT this checkout writes into clawmetry-cloud/.git/config.
+      # The GH_TOKEN env on the neighbouring steps authenticates `gh`, not `git`,
+      # so it would not cover the push if the credential stopped persisting.
+      # Leaving the key off left that dependency resting on an action default
+      # that is not ours to pin. Nothing in this job uploads an artifact or
+      # caches the workspace, so the persisted credential never leaves the runner.
       - name: Checkout cloud repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: vivekchand/clawmetry-cloud
           token: ${{ secrets.CLOUD_REPO_PAT }}
           path: clawmetry-cloud
+          persist-credentials: true
 
       # NEVER pin downwards. This job's target can be BEHIND what is already
       # deployed, and the pin PR it opens can auto-merge MINUTES AFTER a newer

@@ -37,9 +37,21 @@ jobs:
       attestations: write
 
     steps:
+      # persist-credentials is `true` on purpose, and is stated rather than
+      # inherited: this job runs `git push origin refs/tags/$NEW_TAG` (which is
+      # what fires publish.yml) and `git push origin $BRANCH` for the version
+      # write-back, and the only thing authenticating either is the GITHUB_TOKEN
+      # this checkout writes into .git/config. The GH_TOKEN env on those steps
+      # authenticates `gh`, not `git`, so it would not cover the pushes if the
+      # credential stopped persisting — the release tag would simply never leave
+      # the runner. Leaving the key off left that dependency resting on an action
+      # default that is not ours to pin. Nothing in this job uploads an artifact
+      # or caches the workspace, so the persisted credential never leaves the
+      # runner.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: true
           # The MERGE COMMIT, not the branch ref: on pull_request-closed the
           # `main` ref can lag the merge (replication race) — building it
           # published GHOST wheels twice (0.12.636 + 0.12.640: version stamped,
@@ -251,7 +263,10 @@ jobs:
         run: |
           set -e
           python3 -m venv /tmp/smoke-venv
-          /tmp/smoke-venv/bin/pip install --quiet --upgrade pip
+          # Bootstrap pip from the hash-pinned set rather than resolving the
+          # latest release mid-release. The wheel install below stays unpinned:
+          # `dist/*.whl` is the artifact this step exists to smoke.
+          /tmp/smoke-venv/bin/pip install --quiet --require-hashes -r .github/requirements/pip-bootstrap.txt
           /tmp/smoke-venv/bin/pip install --quiet dist/*.whl
           echo "▸ CLI version reports the bumped value"
           ACTUAL=$(/tmp/smoke-venv/bin/clawmetry --version | tr -d '[:space:]')

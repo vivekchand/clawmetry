@@ -47,7 +47,12 @@ jobs:
 
       - name: Report only (gate off)
         id: report_only
-        uses: ./integrations/github-action
+        # `$/<path>` is GitHub's self-repository syntax: it resolves against this
+        # repository at the commit the workflow is already running, and counts as a
+        # pinned reference for policy purposes, which the older `./<path>` does not.
+        # On a pull_request that commit is the merge commit, so this still runs the
+        # action as changed by the PR -- which is the whole point of this workflow.
+        uses: $/integrations/github-action
         with:
           install-from: ${{ github.workspace }}
           working-directory: ${{ steps.demo.outputs.repo }}
@@ -66,7 +71,8 @@ jobs:
 
       - name: Gate on, with approved exceptions
         id: gated
-        uses: ./integrations/github-action
+        # Self-repository syntax, as above.
+        uses: $/integrations/github-action
         with:
           install-from: ${{ github.workspace }}
           working-directory: ${{ steps.demo.outputs.repo }}
