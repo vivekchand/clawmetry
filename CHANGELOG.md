@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Added: a sign-in also tells the account its operating system and client (2026-09-16)
+- **Why:** the founder console could not tell a Mac desktop-app user from a Linux command-line user. The operating system was only knowable through a machine that reported to ClawMetry Cloud, which a self-hosted account never has, and nothing recorded whether someone runs the desktop app or the terminal.
+- **What:** the trial sign-in call that already carries `deployment` now also carries `os` (the same names the install ping uses) and `client` (`desktop` when the desktop app launched the process, else `cli`). Both are read from the machine inside `clawmetry/onboarding_state.py`, so every sign-in path reports them; an unrecognised value is omitted and the account keeps what it had. The desktop app's fallback path reports `desktop` directly.
+- **Verified:** `tests/test_account_deployment_report.py` (body carries both, desktop launcher detected, unknown values omitted) and `tests/test_apply_cm_key_fallback_persist.py` (the desktop fallback payload).
+- **Refs:** REQ-OGV-ADC-004 (AC-OGV-ADC-004.1 to 004.3).
+
 ### Fixed: a sign-in tells the cloud account whether it is cloud or self-hosted (2026-09-15)
 - **Why:** the onboarding choice was recorded only on the anonymous install ping, which cannot be joined to an account for a self-hosted install (it never registers a node). A self-hosted account created 2026-09-09 received three "Your ClawMetry dashboard is still empty" emails telling the person to connect the machine to the cloud they had just declined, and every managed terminal sign-in was sent the self-hosted trial email.
 - **What:** every sign-in's trial call (`/api/license/trial/signup`) now carries `deployment`: `managed` from `clawmetry connect` and the dashboard's cloud sign-in, `selfhost` from the keep-local sign-in in either place. The body is built in `clawmetry/onboarding_state.py`, which omits any other value so a caller that does not know the choice never reclassifies an account. The account stores it, and the cloud emails and admin console follow it (clawmetry-cloud companion change).

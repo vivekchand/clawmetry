@@ -15,6 +15,12 @@ Criterion -> tests:
   tests/test_cloud_cta_oauth.py (each dashboard sign-in names its rail)
 * AC-OGV-ADC-001.4 -- test_unknown_deployment_is_never_sent,
   test_a_rejected_report_changes_nothing_about_the_signin
+* AC-OGV-ADC-004.1 -- test_the_body_names_the_operating_system_and_client,
+  test_signup_trial_posts_the_deployment
+* AC-OGV-ADC-004.2 -- test_the_body_names_the_operating_system_and_client
+  (CLAWMETRY_LAUNCHER=desktop, inherited by a spawned `clawmetry connect`)
+* AC-OGV-ADC-004.3 -- test_an_unrecognised_operating_system_is_omitted,
+  test_unknown_deployment_is_never_sent
 """
 
 import io
@@ -66,33 +72,72 @@ _ACTIVE = {"ok": True, "key": "CLAW1.trial.key", "expires_at": 9999999999,
            "reused": False, "expired": False}
 
 
-def test_unknown_deployment_is_never_sent():
+def test_unknown_deployment_is_never_sent(monkeypatch):
     """AC-OGV-ADC-001.4: only a recognised value rides along. A caller that
     does not know the choice must leave the account untouched, not guess."""
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.delenv("CLAWMETRY_LAUNCHER", raising=False)
+    monkeypatch.delenv("CLAWMETRY_DESKTOP_VERSION", raising=False)
     body = onboarding_state.trial_signup_body
-    assert body("cm_k", "managed") == {"api_key": "cm_k", "deployment": "managed"}
-    assert body("cm_k", " SelfHost ") == {"api_key": "cm_k", "deployment": "selfhost"}
+    base = {"api_key": "cm_k", "os": "Linux", "client": "cli"}
+    assert body("cm_k", "managed") == {**base, "deployment": "managed"}
+    assert body("cm_k", " SelfHost ") == {**base, "deployment": "selfhost"}
     for unknown in ("", None, "cloud", "selfhost_trial", "local"):
-        assert body("cm_k", unknown) == {"api_key": "cm_k"}, unknown
+        assert body("cm_k", unknown) == base, unknown
+
+
+def test_the_body_names_the_operating_system_and_client(monkeypatch):
+    """AC-OGV-ADC-004.1 and AC-OGV-ADC-004.2: every sign-in reports what it runs on. The
+    desktop shell exports CLAWMETRY_LAUNCHER, which a `clawmetry connect` it
+    spawns inherits, so both are read from the machine rather than passed in."""
+    monkeypatch.delenv("CLAWMETRY_LAUNCHER", raising=False)
+    monkeypatch.delenv("CLAWMETRY_DESKTOP_VERSION", raising=False)
+    for reported, expected in (("Darwin", "Darwin"), ("Windows", "Windows"),
+                               ("Linux", "Linux")):
+        monkeypatch.setattr("platform.system", lambda r=reported: r)
+        assert onboarding_state.trial_signup_body("cm_k")["os"] == expected
+        assert onboarding_state.trial_signup_body("cm_k")["client"] == "cli"
+
+    monkeypatch.setenv("CLAWMETRY_LAUNCHER", "desktop")
+    assert onboarding_state.trial_signup_body("cm_k")["client"] == "desktop"
+    monkeypatch.delenv("CLAWMETRY_LAUNCHER")
+    monkeypatch.setenv("CLAWMETRY_DESKTOP_VERSION", "1.2.3")
+    assert onboarding_state.trial_signup_body("cm_k")["client"] == "desktop"
+
+
+@pytest.mark.parametrize("reported", ["Haiku", "", "linux-gnu"])
+def test_an_unrecognised_operating_system_is_omitted(monkeypatch, reported):
+    """AC-OGV-ADC-004.3: an account keeps the operating system it had rather
+    than being handed a name the cloud does not know."""
+    monkeypatch.setattr("platform.system", lambda: reported)
+    assert "os" not in onboarding_state.trial_signup_body("cm_k")
 
 
 @pytest.mark.parametrize("deployment", ["managed", "selfhost"])
 def test_signup_trial_posts_the_deployment(monkeypatch, tmp_path, deployment):
-    """AC-OGV-ADC-001.1 / 001.2: the terminal trial call carries the choice."""
+    """AC-OGV-ADC-001.1 / 001.2: the terminal trial call carries the choice,
+    beside what the machine runs (pinned here; CI runs three real OSes)."""
     _signed_in_home(monkeypatch, tmp_path)
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.delenv("CLAWMETRY_LAUNCHER", raising=False)
+    monkeypatch.delenv("CLAWMETRY_DESKTOP_VERSION", raising=False)
     posted = _fake_trial_server(monkeypatch, response=_ACTIVE)
 
     assert cli._activate_signup_trial(deployment) is True
-    assert posted == [{"api_key": "cm_signed_in", "deployment": deployment}]
+    assert posted == [{"api_key": "cm_signed_in", "deployment": deployment,
+                       "os": "Linux", "client": "cli"}]
 
 
 def test_dashboard_trial_call_posts_the_deployment(monkeypatch):
     """AC-OGV-ADC-001.3: the dashboard's shared trial helper carries it too."""
     import dashboard as _d
 
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
+    monkeypatch.setenv("CLAWMETRY_LAUNCHER", "desktop")
     posted = _fake_trial_server(monkeypatch, response=_ACTIVE)
     assert _d._activate_trial_for_key("cm_dash", deployment="selfhost") == "active"
-    assert posted == [{"api_key": "cm_dash", "deployment": "selfhost"}]
+    assert posted == [{"api_key": "cm_dash", "deployment": "selfhost",
+                       "os": "Darwin", "client": "desktop"}]
 
 
 def test_a_rejected_report_changes_nothing_about_the_signin(monkeypatch, tmp_path):
