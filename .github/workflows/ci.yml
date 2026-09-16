@@ -187,6 +187,15 @@ jobs:
       - name: Workflow integrity (dead steps, unreachable triggers, input injection)
         run: python3 -m pytest tests/test_ci_workflow_invocations_are_real.py -q
 
+      # The 3.9 pip bootstrap pin cannot follow Dependabot past 26.0.1: 26.1
+      # moved pip's Requires-Python to >=3.10, which the release canary's 3.9
+      # cell cannot install. That refusal was a comment in the pin file and
+      # nothing else, and the proposed bump went green on every PR check --
+      # release-canary.yml does not run on pull requests, so the break lands
+      # after the merge, on the release path. Checked here, where PRs look.
+      - name: py3.9 pip bootstrap pin still installs on 3.9
+        run: python3 -m pytest tests/test_pip_bootstrap_py39_pin.py -q
+
       # #5739: the field-failure filer could open and refresh an issue but
       # never close one, so a signature that stopped occurring left its issue
       # open forever under a "Still occurring" comment. Runs the reconcile
