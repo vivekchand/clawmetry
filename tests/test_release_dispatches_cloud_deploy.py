@@ -38,6 +38,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 REPO = Path(__file__).resolve().parent.parent
 RELEASE_WF = REPO / ".github" / "workflows" / "release-on-merge.yml"
 DEPLOY_WF = REPO / ".github" / "workflows" / "auto-deploy-cloud.yml"
@@ -84,15 +86,41 @@ def test_the_dispatch_passes_the_published_version():
     Ordering fixed *which run* pins; only passing the version fixes *what it
     pins*. The publisher knows the version it produced, so it passes it and
     nothing re-derives it.
+
+    The version reaches the script through the step's ``env:`` rather than
+    being expanded into it, so this follows the binding instead of looking for
+    ``steps.bump.outputs.new`` near the dispatch line. That is the stronger
+    check of the two: it proves the variable the dispatch passes is the one the
+    bump produced, where a substring match only proved the text was nearby.
     """
     tail = RELEASE_SRC[RELEASE_SRC.index("gh workflow run auto-deploy-cloud.yml"):][:700]
-    assert "-f version=" in tail, (
+    passed = re.search(r'-f version="\$\{?([A-Z_][A-Z0-9_]*)\}?"', tail)
+    assert passed, (
         "the dispatch must pass the published version explicitly; without it "
         "auto-deploy re-reads PyPI, whose metadata lags the upload, and pins "
         "the previous release"
     )
-    assert "steps.bump.outputs.new" in tail, (
-        "the version passed must be the one this job published, not a re-read"
+    var = passed.group(1)
+
+    # Resolve the binding on the DISPATCHING step specifically. An identical
+    # binding on a different step must not satisfy this: the guarantee is about
+    # what this dispatch sends, not what the file mentions somewhere.
+    step = next(
+        (s for j in yaml.safe_load(RELEASE_SRC)["jobs"].values()
+         for s in (j.get("steps") or [])
+         if isinstance(s.get("run"), str)
+         and "gh workflow run auto-deploy-cloud.yml" in s["run"]),
+        None,
+    )
+    assert step is not None, "could not locate the step that dispatches auto-deploy-cloud.yml"
+    bound = (step.get("env") or {}).get(var)
+    assert bound is not None, (
+        f"the dispatch passes ${var}, but that step's env: does not define it — "
+        f"the dispatch would send an empty version"
+    )
+    assert re.fullmatch(r"\$\{\{\s*steps\.bump\.outputs\.new\s*\}\}", str(bound).strip()), (
+        f"the version passed must be the one this job published, not a re-read: "
+        f"${var} is bound to {bound!r}, not steps.bump.outputs.new"
     )
 
 
