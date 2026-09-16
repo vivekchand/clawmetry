@@ -38,6 +38,7 @@ Module-level helpers (``_history_db``, ``AgentReliabilityScorer``,
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -986,7 +987,7 @@ def _try_local_store_heatmap(n_days: int, runtime: str | None = None):
         "days": days_out,
         "max": int(grid.get("max") or 0),
         "n_days": n_days,
-        "runtime": runtime or "all",
+        "runtime": html.escape(runtime or "all"),
         "_source": "local_store",
     }
 
@@ -1039,7 +1040,7 @@ def api_heatmap():
                 for i in range(n_days - 1, -1, -1)
             ],
             "max": 0, "n_days": n_days,
-            "runtime": runtime, "_source": "unavailable",
+            "runtime": html.escape(runtime), "_source": "unavailable",
         })
 
     now = datetime.now()

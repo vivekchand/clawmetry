@@ -36,6 +36,11 @@ MODELS         = ("claude-opus-4-7", "claude-sonnet-4-5", "claude-haiku-4-5")
 NODE_ID        = "agent+moat-perf"
 WORKSPACE_ID   = "ws-moat-perf"
 
+# Refreshed in seed_store() so events land in the query window whenever
+# the test actually runs, not when pytest collected the module (which can
+# be 5+ minutes earlier and push all events outside the 5-min fast-path
+# window for _try_local_store_token_velocity — the bug that made
+# test_every_endpoint_hit_fast_path fail for token_velocity).
 _NOW = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
 
 
@@ -243,6 +248,13 @@ def seed_store(tmp_path, monkeypatch):
     ``tests/test_duckdb_fastpath_v3_invariants.py::store`` so the daemon
     discovery shim doesn't leak through to ``~/.clawmetry/local_query.json``.
     """
+    # Re-anchor _NOW to the actual seed time so event timestamps land in the
+    # fast-path query window (now-300s) when the test runs. Without this,
+    # a long collection phase (5+ min between import and execution) pushes
+    # every event outside the window and token_velocity returns None.
+    global _NOW
+    _NOW = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
+
     monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_SECS", "0.05")
     monkeypatch.setenv("CLAWMETRY_LOCAL_FLUSH_BATCH", "1000")

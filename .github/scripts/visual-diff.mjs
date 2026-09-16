@@ -132,9 +132,20 @@ async function shoot(browser, baseUrl, view, tab, file) {
   await page.addInitScript(() => {
     const css =
       "*,*::before,*::after{animation-duration:0s !important;animation-delay:0s !important;transition-duration:0s !important;transition-delay:0s !important;caret-color:transparent !important;}";
-    const style = document.createElement("style");
-    style.appendChild(document.createTextNode(css));
-    document.documentElement.appendChild(style);
+    // addInitScript runs before the HTML is parsed, so document.documentElement
+    // may be null at injection time (TypeError on appendChild).  Defer to
+    // DOMContentLoaded so the style is guaranteed to land before any rendering
+    // occurs -- still far ahead of the 400ms settle window used by shoot().
+    function _injectAnimFreeze() {
+      const style = document.createElement("style");
+      style.appendChild(document.createTextNode(css));
+      (document.head || document.documentElement || document.body).appendChild(style);
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", _injectAnimFreeze);
+    } else {
+      _injectAnimFreeze();
+    }
   });
   // Seed the gateway token into localStorage BEFORE any dashboard script
   // runs. The bootstrap path in dashboard.py calls
