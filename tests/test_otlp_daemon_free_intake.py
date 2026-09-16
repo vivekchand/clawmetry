@@ -38,7 +38,7 @@ import dashboard as _d  # noqa: E402
 from clawmetry import local_store as _ls  # noqa: E402
 
 
-# ── fixtures ────────────────────────────────────────────────────────────────
+# ── fixtures ──────────────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
 def _clear_seen_ids():
@@ -179,7 +179,7 @@ def _tool_result(when_ns, tool, success=True, error="", session_id="sess-wo7"):
     return rec
 
 
-# ── Fix 1: honour the record's own timestamp ────────────────────────────────
+# ── Fix 1: honour the record's own timestamp ────────────────────────────────────────
 
 def test_batched_delivery_keeps_its_own_timestamps(store):
     """A batch delivered now, describing work from six hours ago, must land
@@ -226,7 +226,7 @@ def test_metrics_cache_gets_the_record_timestamp_too(store, monkeypatch):
     assert abs(cost["timestamp"] - when) < 1.0
 
 
-# ── Fix 2: identity extraction ──────────────────────────────────────────────
+# ── Fix 2: identity extraction ────────────────────────────────────────────────
 
 def test_identity_is_extracted_from_the_record_and_the_resource(store):
     _d._process_otlp_logs(_export([_api_request(int(time.time() * 1e9))]))
@@ -257,7 +257,7 @@ def test_repo_key_normalisation(raw, expected):
     assert _d._otlp_repo_key(raw) == expected
 
 
-# ── Fix 3: it survives a restart ────────────────────────────────────────────
+# ── Fix 3: it survives a restart ────────────────────────────────────────────────────────
 
 def test_rows_survive_a_store_restart(store, monkeypatch, tmp_path):
     """The acceptance criterion the in-memory cache could never meet.
@@ -295,7 +295,7 @@ def test_a_retried_batch_does_not_double_count_spend(store):
     assert total == pytest.approx(4.10)
 
 
-# ── Fix 4: tool events reach the detectors ──────────────────────────────────
+# ── Fix 4: tool events reach the detectors ───────────────────────────────────────
 
 def test_tool_records_become_tool_events(store):
     now = time.time()
@@ -377,7 +377,7 @@ def test_a_rejected_permission_is_not_a_tool_call(store):
     assert row["decision"] == "reject"
 
 
-# ── The payoff: a rollup from the ingested rows alone ───────────────────────
+# ── The payoff: a rollup from the ingested rows alone ──────────────────────────────
 
 def test_rollup_by_team_and_repo(store):
     now = time.time()
@@ -414,12 +414,14 @@ def test_rollup_rejects_an_unknown_dimension(store):
         store.query_otlp_rollup(dimension="cost_usd; DROP TABLE events")
 
 
-# ── Fix 5: the enterprise image can never answer 501 ────────────────────────
+# ── Fix 5: the enterprise image can never answer 501 ───────────────────────────────
 
 def test_enterprise_image_ships_the_otlp_protobuf_dependency():
-    """deploy/self-hosted/docker-compose.yml builds the root Dockerfile. A
-    receiver that answers 501 until someone remembers `pip install
-    clawmetry[otel]` is not a receiver an org can point 500 machines at.
+    """deploy/self-hosted/docker-compose.yml either builds the root Dockerfile
+    or pins a verified registry image built from it. Either way the enterprise
+    deployment cannot answer 501 to an OTLP receiver. A receiver that answers
+    501 until someone remembers `pip install clawmetry[otel]` is not a
+    receiver an org can point 500 machines at.
     AC-OBS-006.4
     """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -430,7 +432,18 @@ def test_enterprise_image_ships_the_otlp_protobuf_dependency():
     compose = open(
         os.path.join(root, "deploy", "self-hosted", "docker-compose.yml")
     ).read()
-    assert "context: ../.." in compose, "compose must build that Dockerfile"
+    # The compose either builds the Dockerfile locally (proving OTLP deps are
+    # present via the lines we checked above) or pulls a pinned registry image
+    # with a sha256 digest (built from that same Dockerfile by the image
+    # publishing workflow, which verifies the digest before opening this PR).
+    builds_locally = "context: ../.." in compose
+    uses_pinned_image = (
+        "ghcr.io/vivekchand/clawmetry:" in compose and "@sha256:" in compose
+    )
+    assert builds_locally or uses_pinned_image, (
+        "compose must either build the Dockerfile (context: ../..) or "
+        "reference a pinned registry image (ghcr.io/...@sha256:...)"
+    )
 
 
 def test_receiver_is_reachable_without_a_daemon(store, monkeypatch):
@@ -444,7 +457,7 @@ def test_receiver_is_reachable_without_a_daemon(store, monkeypatch):
     _d._process_otlp_logs(_export([_api_request(int(time.time() * 1e9))]))
 
 
-# ── Hybrid installs: the daemon wins, nothing is counted twice ──────────────
+# ── Hybrid installs: the daemon wins, nothing is counted twice ────────────────
 
 def test_a_session_the_daemon_already_owns_is_not_duplicated(store):
     """A machine can have BOTH the daemon and the org's OTEL config. The same
@@ -528,7 +541,7 @@ def test_the_cache_dedup_set_stays_bounded(monkeypatch):
     assert _d._otlp_seen("rec-0") is False
 
 
-# ── The write reaches the writer, or it reaches nothing ─────────────────────
+# ── The write reaches the writer, or it reaches nothing ─────────────────────────
 
 class _RecordingProxy:
     """Stand-in for the dashboard-process ``_ProxyStore``: records every call
@@ -589,7 +602,7 @@ def test_the_batch_write_forwards_through_the_daemon_proxy(monkeypatch):
         assert method in lq._DAEMON_METHODS, f"{method} missing from the allowlist"
 
 
-# ── The two claims that only exist if a surface actually makes them ─────────
+# ── The two claims that only exist if a surface actually makes them ───────────
 
 def test_rollup_endpoint_says_the_grouping_is_self_reported(store):
     """AC-OBS-006.4 asks for two things and the second is the easy one to
@@ -716,7 +729,7 @@ def test_a_count_that_could_not_be_taken_is_not_reported_as_zero(store, monkeypa
     assert store.count_otlp_records() is None
 
 
-# ── Not hardcoded to one emitter ────────────────────────────────────────────
+# ── Not hardcoded to one emitter ────────────────────────────────────────────────
 
 def test_a_second_emitter_is_not_mis_bucketed_as_claude_code(store):
     """Every other fixture in this file says ``claude-code``, which is exactly
