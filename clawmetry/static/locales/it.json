@@ -1540,5 +1540,17 @@
   "trail.commits": "Commit",
   "trail.prs": "Pull request",
   "evals.locked": "La valutazione delle sessioni è una funzione Pro.",
-  "trail.cov_unknown": "non ancora dichiarato"
+  "trail.cov_unknown": "non ancora dichiarato",
+  "security.apikeys_title": "Crea la tua vista personalizzata",
+  "security.apikeys_sub": "Concedi a una pagina, uno script o un agente di coding l'accesso in lettura ai dati agent di questa macchina, limitato esattamente a ciò che serve. Nulla qui può avviare, mettere in pausa o fermare un agente.",
+  "security.apikeys_new": "Nuova chiave",
+  "security.apikeys_name_label": "A cosa serve?",
+  "security.apikeys_origin_label": "Quale sito la userà?",
+  "security.apikeys_no_browser": "Questa chiave è per uno script o un server, non per una pagina web",
+  "security.apikeys_scope_label": "Cosa può leggere?",
+  "security.apikeys_create": "Crea chiave",
+  "security.apikeys_cancel": "Annulla",
+  "security.apikeys_reveal_title": "Copiala ora. Non verrà mostrata di nuovo.",
+  "security.apikeys_copy": "Copia",
+  "security.apikeys_done": "Fatto"
 }

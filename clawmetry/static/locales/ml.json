@@ -1540,5 +1540,17 @@
   "trail.commits": "കമ്മിറ്റുകൾ",
   "trail.prs": "പുൾ റിക്വസ്റ്റുകൾ",
   "evals.locked": "സെഷൻ സ്കോറിംഗ് ഒരു Pro ഫീച്ചറാണ്.",
-  "trail.cov_unknown": "ഇതുവരെ പ്രഖ്യാപിച്ചിട്ടില്ല"
+  "trail.cov_unknown": "ഇതുവരെ പ്രഖ്യാപിച്ചിട്ടില്ല",
+  "security.apikeys_title": "സ്വന്തം കാഴ്ച സൃഷ്ടിക്കുക",
+  "security.apikeys_sub": "ഒരു പേജിനോ, സ്ക്രിപ്റ്റിനോ, കോഡിംഗ് ഏജന്റിനോ ഈ മെഷീനിലെ ഏജന്റ് ഡാറ്റയിലേക്ക് ആവശ്യമുള്ളത് മാത്രം പരിധിപ്പെടുത്തി റീഡ് ആക്സസ് നൽകുക. ഇവിടെ ഒന്നും ഒരു ഏജന്റിനെ ആരംഭിക്കുകയോ, താൽക്കാലികമായി നിർത്തുകയോ, നിർത്തുകയോ ചെയ്യില്ല.",
+  "security.apikeys_new": "പുതിയ കീ",
+  "security.apikeys_name_label": "ഇത് എന്തിനുവേണ്ടിയാണ്?",
+  "security.apikeys_origin_label": "ഏത് സൈറ്റാണ് ഇത് ഉപയോഗിക്കുക?",
+  "security.apikeys_no_browser": "ഈ കീ ഒരു സ്ക്രിപ്റ്റിനോ സെർവറിനോ വേണ്ടിയാണ്, വെബ് പേജിന് വേണ്ടിയല്ല",
+  "security.apikeys_scope_label": "ഇതിന് എന്ത് വായിക്കാൻ കഴിയും?",
+  "security.apikeys_create": "കീ സൃഷ്ടിക്കുക",
+  "security.apikeys_cancel": "റദ്ദാക്കുക",
+  "security.apikeys_reveal_title": "ഇത് ഇപ്പോൾ പകർത്തുക. ഇനി ഇത് വീണ്ടും കാണിക്കില്ല.",
+  "security.apikeys_copy": "പകർത്തുക",
+  "security.apikeys_done": "പൂർത്തിയായി"
 }

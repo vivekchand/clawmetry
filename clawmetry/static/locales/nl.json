@@ -1540,5 +1540,17 @@
   "trail.commits": "Commits",
   "trail.prs": "Pull requests",
   "evals.locked": "Sessiebeoordeling is een Pro-functie.",
-  "trail.cov_unknown": "nog niet opgegeven"
+  "trail.cov_unknown": "nog niet opgegeven",
+  "security.apikeys_title": "Bouw je eigen weergave",
+  "security.apikeys_sub": "Geef een pagina, script of coding agent leestoegang tot de agentgegevens van deze machine, beperkt tot precies wat nodig is. Niets hier kan een agent starten, pauzeren of stoppen.",
+  "security.apikeys_new": "Nieuwe sleutel",
+  "security.apikeys_name_label": "Waarvoor is dit?",
+  "security.apikeys_origin_label": "Welke site gaat deze gebruiken?",
+  "security.apikeys_no_browser": "Deze sleutel is voor een script of server, niet voor een webpagina",
+  "security.apikeys_scope_label": "Wat mag er gelezen worden?",
+  "security.apikeys_create": "Sleutel aanmaken",
+  "security.apikeys_cancel": "Annuleren",
+  "security.apikeys_reveal_title": "Kopieer dit nu. Dit wordt niet nogmaals getoond.",
+  "security.apikeys_copy": "Kopiëren",
+  "security.apikeys_done": "Klaar"
 }
