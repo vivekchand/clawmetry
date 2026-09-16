@@ -1301,7 +1301,8 @@ def run_all(events: Iterable[dict], session_id: str,
             facts: Optional[dict] = None,
             baseline: Optional[dict] = None,
             thresholds: Optional[dict] = None,
-            steps: Optional[list] = None) -> list[dict]:
+            steps: Optional[list] = None,
+            disabled: Optional[set] = None) -> list[dict]:
     """Run every detector over a session's recent events and return the
     incidents found, most expensive to ignore first.
 
@@ -1332,6 +1333,8 @@ def run_all(events: Iterable[dict], session_id: str,
 
     out: list[dict] = []
     for det in _ALL_DETECTORS:
+        if disabled and det.__name__ in disabled:
+            continue
         try:
             inc = det(evlist, session_id, rt, thresholds=th, steps=steps, facts=f)
         except Exception:

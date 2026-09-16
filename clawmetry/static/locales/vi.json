@@ -1540,5 +1540,17 @@
   "trail.commits": "Commit",
   "trail.prs": "Pull request",
   "evals.locked": "Chấm điểm phiên là tính năng Pro.",
-  "trail.cov_unknown": "chưa khai báo"
+  "trail.cov_unknown": "chưa khai báo",
+  "security.apikeys_title": "Xây dựng giao diện của riêng bạn",
+  "security.apikeys_sub": "Cấp cho một trang, một tập lệnh hoặc một agent viết mã quyền đọc dữ liệu agent của máy này, giới hạn đúng những gì nó cần. Không có gì ở đây có thể khởi động, tạm dừng hay dừng một agent.",
+  "security.apikeys_new": "Khóa mới",
+  "security.apikeys_name_label": "Dùng để làm gì?",
+  "security.apikeys_origin_label": "Trang nào sẽ sử dụng khóa này?",
+  "security.apikeys_no_browser": "Khóa này dành cho một tập lệnh hoặc máy chủ, không phải trang web",
+  "security.apikeys_scope_label": "Khóa được phép đọc gì?",
+  "security.apikeys_create": "Tạo khóa",
+  "security.apikeys_cancel": "Hủy",
+  "security.apikeys_reveal_title": "Sao chép ngay bây giờ. Khóa này sẽ không hiển thị lại.",
+  "security.apikeys_copy": "Sao chép",
+  "security.apikeys_done": "Xong"
 }

@@ -368,7 +368,15 @@ async function testNormalUser() {
   for (const { label: tab, key } of TABS) {
     tabIdx++;
     const errBefore = errors.length;
-    const t = tabLocator(page, tab, key);
+    let t = tabLocator(page, tab, key);
+    // Guard owns review destinations now. Exercise the user's actual path
+    // while retaining compatibility with the older cloud wheel.
+    if ((key === 'approvals' || key === 'alerts') && (await t.count()) === 0 &&
+        (await page.locator('[data-guard-view="attention"]').count())) {
+      await page.locator('.left-nav-item[data-tab="guard"]').click();
+      await page.locator('[data-guard-view="attention"]').click();
+      t = page.locator(`[data-guard-destination="${key}"]`);
+    }
     if ((await t.count()) === 0) {
       check(`${tab}: tab visible`, false, `no [data-tab="${key}"] or .nav-tab "${tab}" found`);
       continue;

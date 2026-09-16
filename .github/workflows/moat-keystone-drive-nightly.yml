@@ -144,6 +144,7 @@ jobs:
         if: failure() && env.KEYSTONE_PRESENT == '1'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIVE_EXIT_CODE: ${{ steps.drive.outputs.EXIT_CODE }}
         run: |
           set -e
           TODAY=$(date -u +%Y-%m-%d)
@@ -156,7 +157,7 @@ jobs:
 
           - Date (UTC): ${TODAY}
           - Workflow run: ${RUN_URL}
-          - Exit code: ${{ steps.drive.outputs.EXIT_CODE }}
+          - Exit code: ${DRIVE_EXIT_CODE}
 
           ### What this means
 

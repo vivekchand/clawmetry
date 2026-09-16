@@ -1540,5 +1540,17 @@
   "trail.commits": "कमिट्स",
   "trail.prs": "पुल रिक्वेस्ट्स",
   "evals.locked": "सेशन स्कोअरिंग हे Pro फीचर आहे.",
-  "trail.cov_unknown": "अजून जाहीर केलेले नाही"
+  "trail.cov_unknown": "अजून जाहीर केलेले नाही",
+  "security.apikeys_title": "स्वतःचा व्ह्यू तयार करा",
+  "security.apikeys_sub": "एखाद्या पेजला, स्क्रिप्टला किंवा कोडिंग एजंटला या मशीनवरील एजंट डेटावर वाचन प्रवेश द्या, फक्त गरजेपुरता मर्यादित. यातील कोणतीही गोष्ट एजंट सुरू, थांबवू किंवा बंद करू शकत नाही.",
+  "security.apikeys_new": "नवीन की",
+  "security.apikeys_name_label": "ही कशासाठी आहे?",
+  "security.apikeys_origin_label": "कोणती साईट ही वापरेल?",
+  "security.apikeys_no_browser": "ही की स्क्रिप्ट किंवा सर्व्हरसाठी आहे, वेब पेजसाठी नाही",
+  "security.apikeys_scope_label": "ही काय वाचू शकते?",
+  "security.apikeys_create": "की तयार करा",
+  "security.apikeys_cancel": "रद्द करा",
+  "security.apikeys_reveal_title": "ही आत्ताच कॉपी करा. ही पुन्हा दाखवली जाणार नाही.",
+  "security.apikeys_copy": "कॉपी करा",
+  "security.apikeys_done": "पूर्ण झाले"
 }
