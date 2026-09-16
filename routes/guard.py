@@ -362,7 +362,8 @@ _SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
 try:  # pragma: no cover - trivial fallback
     from clawmetry.repo_scan import WORKSPACE_KINDS as _WORKSPACE_KINDS
 except Exception:  # noqa: BLE001
-    _WORKSPACE_KINDS = ("repo_config_exec", "agent_config_tamper")
+    _WORKSPACE_KINDS = ("repo_config_exec", "agent_config_tamper",
+                        "package_manifest_exec", "agent_component_change")
 
 
 def _incident_rank(inc) -> tuple:
@@ -1079,3 +1080,56 @@ def _with_decision_evidence(row: dict) -> dict:
         out.setdefault("frameworks", {})
         out.setdefault("evidence_level", "configured")
     return out
+
+
+@bp_guard.route("/api/guard/inventory")
+def api_guard_inventory():
+    """What the agent runtimes on this machine load, and what changed recently.
+
+    MCP servers, skills, plugins, instruction files and hook and settings files,
+    each with its source, readers, version, content hash and first/last seen
+    (REQ-GOV-SCI-001, clawmetry/agent_inventory.py). Read-only over the local
+    store, which the daemon fills. ``scanned`` is False until the daemon has
+    inventoried anything, and ``store_available`` is False when the store could
+    not be read, so the tab can say which of the two it is rather than draw an
+    empty table for both.
+    """
+    try:
+        limit = max(1, min(int(request.args.get("limit", 500)), 2000))
+    except (TypeError, ValueError):
+        limit = 500
+    try:
+        from clawmetry import agent_inventory as _inv
+        window = _inv.window_secs()
+    except Exception:  # noqa: BLE001
+        window = 3600
+    data = _ls_call("query_agent_inventory", limit=limit)
+    now = int(time.time())
+    if not isinstance(data, dict) or "components" not in data:
+        return jsonify({"components": [], "count": 0, "recent": 0,
+                        "scanned": False, "store_available": False,
+                        "last_scan": 0, "window_secs": window,
+                        "server_time": now})
+    horizon = (now - window) * 1000
+    comps = []
+    for c in data.get("components") or []:
+        if not isinstance(c, dict):
+            continue
+        row = dict(c)
+        try:
+            changed_at = int(row.get("changed_at") or 0)
+        except (TypeError, ValueError):
+            changed_at = 0
+        row["recent"] = (str(row.get("last_change") or "") in ("new", "changed", "removed")
+                         and changed_at >= horizon)
+        comps.append(row)
+    return jsonify({
+        "components": comps,
+        "count": len(comps),
+        "recent": sum(1 for c in comps if c["recent"]),
+        "scanned": int(data.get("scopes") or 0) > 0,
+        "store_available": True,
+        "last_scan": int(data.get("last_scan") or 0),
+        "window_secs": window,
+        "server_time": now,
+    })

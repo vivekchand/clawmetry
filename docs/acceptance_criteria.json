@@ -1931,6 +1931,66 @@
       "doc": "Guard Prompt Injection: a detector, and untrusted content raises the pre-tool risk tier",
       "doc_id": "e87935d1-27e0-415f-a5f8-24bdf70accbc",
       "text": "The context the gate hook sends to the local receiver shall carry tool names, counts and signature identifiers only, never tool output."
+    },
+    {
+      "id": "AC-GOV-SCI-001.1",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "The system shall record, per component, its kind, name, scope, source file, the runtimes that read it, the version when the component declares one, a content hash, and when it was first seen and last seen."
+    },
+    {
+      "id": "AC-GOV-SCI-001.2",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "The system shall read MCP servers from each runtime's documented configuration file, skills from folders that contain a `SKILL.md`, and plugins from the runtime's installed-plugin manifest. It shall read these files only and never start, connect to or execute a component."
+    },
+    {
+      "id": "AC-GOV-SCI-001.3",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "The system shall not store or display an MCP server's environment values, header values or command arguments, which can hold credentials."
+    },
+    {
+      "id": "AC-GOV-SCI-001.4",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "The Guard tab shall list the inventory with each component's kind, name, scope, readers, version, first-seen time and whether it was added, changed or removed recently. When nothing has been inventoried, it shall say so instead of showing an empty table."
+    },
+    {
+      "id": "AC-GOV-SCI-002.1",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "When a component appears in a scope that has already been inventoried, or its content hash changes, the system shall raise an `agent_component_change` finding on each running session whose runtime reads it and whose scope matches (every session of that runtime for a global component; sessions in that working directory for a project component)."
+    },
+    {
+      "id": "AC-GOV-SCI-002.2",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "The system shall not raise a finding for the first inventory of a scope, for an unchanged component, or for a component that was removed."
+    },
+    {
+      "id": "AC-GOV-SCI-002.3",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "The finding shall use the Guard incident shape, carry its framework references, and be matched only by a policy that names its kind, as workspace kinds already are."
+    },
+    {
+      "id": "AC-GOV-SCI-003.1",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "When an inventoried instruction, hook or settings file changes after its scope's baseline, the system shall raise `agent_config_tamper` on the matching running sessions. It shall name the file and, for hook and settings files, whether the hook entries changed."
+    },
+    {
+      "id": "AC-GOV-SCI-003.2",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "The finding shall be `critical` only when hook entries changed in a file that is gitignored by convention (`settings.local.json`), `warning` when hook entries changed elsewhere, and `info` when only instructions or non-hook settings changed. The text shall say that an edit the operator or their agent made is expected."
+    },
+    {
+      "id": "AC-GOV-SCI-003.3",
+      "doc": "Agent supply chain: an inventory of what agents load, and a finding when it changes",
+      "doc_id": "7fcf8127-0ba0-48b0-9926-855b1f137da4",
+      "text": "This finding shall not overwrite the existing workspace hook-command finding of the same kind on the same session."
     }
   ]
 }

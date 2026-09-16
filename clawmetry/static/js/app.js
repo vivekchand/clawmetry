@@ -10728,8 +10728,9 @@ var LOOP_KIND_LABEL = {
   // Not the agent's behaviour: what was in the folder it was pointed at.
   // Mirrors clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'This folder is set up to run a program',
-  agent_config_tamper: 'An agent hook config in this folder was changed',
-  package_manifest_exec: 'Installing this folder\'s dependencies runs its own code'
+  agent_config_tamper: 'An agent hook, settings or instruction file was changed',
+  package_manifest_exec: 'Installing this folder\'s dependencies runs its own code',
+  agent_component_change: 'An MCP server, skill or plugin this agent loads was added or changed'
 };
 
 // What ignoring this is estimated to cost. Blank when we do not know, because
@@ -31610,14 +31611,15 @@ var GUARD_KIND_LABEL = {
   // policy form makes you name them rather than folding them into "any
   // signal". Keys mirror clawmetry/repo_scan.py WORKSPACE_KINDS.
   repo_config_exec: 'Repo config runs a program',
-  agent_config_tamper: 'Agent hook config changed',
-  package_manifest_exec: 'Installing deps runs its code'
+  agent_config_tamper: 'Agent config or instructions changed',
+  package_manifest_exec: 'Installing deps runs its code',
+  agent_component_change: 'MCP server, skill or plugin changed'
 };
 
 // The workspace half of GUARD_KIND_LABEL, so a renderer can tell the two
 // questions apart without hard-coding kind strings a second time.
 var GUARD_WORKSPACE_KINDS = ['repo_config_exec', 'agent_config_tamper',
-                             'package_manifest_exec'];
+                             'package_manifest_exec', 'agent_component_change'];
 
 // The policy form's condition list, built from GUARD_KIND_LABEL rather than
 // re-typed. A hand-kept second copy is how a new kind ends up renderable but
@@ -31677,7 +31679,107 @@ function loadGuardTab() {
   loadGuardPolicies();
   loadGuardActions();
   loadGuardNondeterminism();
+  loadGuardInventory();
   loadGuardSelfReports();
+}
+
+// ── What your agents load (#5947) ─────────────────────────────────────────
+// The supply-chain inventory: MCP servers, skills, plugins, instruction files
+// and hook files, from /api/guard/inventory (the daemon fills it). Loaded with
+// the tab and on Refresh only; it changes on a five-minute cadence, so it
+// never polls. Three different empty states, because "not scanned yet",
+// "could not read the store" and "found nothing" are different answers.
+var GUARD_COMPONENT_KIND_LABEL = {
+  mcp_server: 'MCP server',
+  skill: 'Skill',
+  plugin: 'Plugin',
+  instructions: 'Instructions',
+  hooks: 'Hooks and settings'
+};
+var GUARD_RUNTIME_LABEL = {
+  claude_code: 'Claude Code', codex: 'Codex', cursor: 'Cursor',
+  gemini_cli: 'Gemini CLI', opencode: 'opencode', openclaw: 'OpenClaw'
+};
+
+function guardInventoryStatus(c) {
+  var ago = c.changed_at ? guardAgo(new Date(Number(c.changed_at)).toISOString()) : '';
+  var hash = String(c.content_hash || '').slice(0, 12);
+  var was = String(c.previous_hash || '').slice(0, 12);
+  var title = 'Content hash ' + hash + (was ? ', was ' + was : '');
+  if (c.details && c.details.hash_complete === false) {
+    title += '. The hash covers the first 400 files only.';
+  }
+  if (c.recent && c.last_change === 'new') {
+    return '<span class="pill pill-warn" title="' + guardEsc(title) + '">Added ' + guardEsc(ago) + '</span>';
+  }
+  if (c.recent && c.last_change === 'changed') {
+    return '<span class="pill pill-warn" title="' + guardEsc(title) + '">Changed ' + guardEsc(ago) + '</span>';
+  }
+  if (c.recent && c.last_change === 'removed') {
+    return '<span class="pill" title="' + guardEsc(title) + '">Removed ' + guardEsc(ago) + '</span>';
+  }
+  return '<span class="muted" title="' + guardEsc(title) + '">Unchanged</span>';
+}
+
+function loadGuardInventory() {
+  var el = document.getElementById('guard-inventory-body');
+  if (!el) return;
+  var sum = document.getElementById('guard-inventory-summary');
+  if (sum) sum.textContent = '';
+  fetch('/api/guard/inventory').then(function (r) {
+    // The hosted dashboard disables this route with HTTP 410: the inventory
+    // lives in the store on the agent's machine and is not in the snapshot.
+    // Say that, rather than "nothing inventoried" for a node that has one.
+    if (r.status === 410) return { _cloud_disabled: true };
+    return r.ok ? r.json() : null;
+  }).then(function (d) {
+    if (d && d._cloud_disabled) {
+      el.innerHTML = '<div class="empty-state">The inventory is read from the store on the machine your agents run on, so it is shown on the dashboard running on that machine (http://localhost:8900).</div>';
+      return;
+    }
+    if (!d || d.store_available === false) {
+      el.innerHTML = '<div class="empty-state">Could not read the inventory from the local store right now. Try Refresh in a moment.</div>';
+      return;
+    }
+    if (!d.scanned) {
+      el.innerHTML = '<div class="empty-state">Nothing inventoried yet. The ClawMetry daemon on the machine your agents run on records this within a few minutes of starting.</div>';
+      return;
+    }
+    var rows = (d.components || []).filter(function (c) {
+      return c.status !== 'removed' || c.recent;
+    });
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty-state">No MCP servers, skills, plugins, instruction files or hook files were found for the runtimes ClawMetry reads.</div>';
+      return;
+    }
+    if (sum) {
+      var present = rows.filter(function (c) { return c.status !== 'removed'; }).length;
+      var hours = Math.max(1, Math.round((Number(d.window_secs) || 3600) / 3600));
+      sum.textContent = present + ' component' + (present === 1 ? '' : 's') +
+        (d.recent ? ', ' + d.recent + ' added, changed or removed in the last ' + (hours === 1 ? 'hour' : hours + ' hours') : '');
+    }
+    var html = '<table class="data-table"><thead><tr>' +
+      '<th>Component</th><th>Kind</th><th>Read by</th><th>Where</th><th>Version</th><th>First seen</th><th>Status</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (c) {
+      var readers = (c.readers || []).map(function (r) { return GUARD_RUNTIME_LABEL[r] || r; }).join(', ');
+      var where = c.scope === 'global'
+        ? 'This machine'
+        : String(c.workspace || '').split(/[\\/]/).filter(Boolean).pop() || 'Project';
+      var first = c.first_seen ? new Date(Number(c.first_seen)).toLocaleDateString() : '';
+      html += '<tr><td title="' + guardEsc(c.source || '') + '">' + guardEsc(c.name) + '</td>' +
+        '<td>' + guardEsc(GUARD_COMPONENT_KIND_LABEL[c.kind] || c.kind) + '</td>' +
+        '<td>' + guardEsc(readers) + '</td>' +
+        '<td title="' + guardEsc(c.source || '') + '">' + guardEsc(where) + '</td>' +
+        '<td>' + (c.version ? guardEsc(c.version) : '<span class="muted">not declared</span>') + '</td>' +
+        '<td>' + guardEsc(first) + '</td>' +
+        '<td>' + guardInventoryStatus(c) + '</td></tr>';
+    });
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }).catch(function () {
+    el.innerHTML = '<div class="empty-state">Could not load the inventory.</div>';
+  });
 }
 
 // Honest status line for the second "rogue agent" failure mode (same input,

@@ -302,3 +302,51 @@ def test_coverage_doc_says_coverage_not_compliance_and_lists_gaps():
             assert ident not in gaps, f"{ident} is mapped but listed as a gap"
     for kind in fm.MAPPINGS:
         assert f"`{kind}`" in doc
+
+
+# ── no silently overwritten entries ──────────────────────────────────────────
+def _duplicate_literal_keys(source: str):
+    """Every dict literal in ``source`` keyed twice by the same constant.
+
+    Python keeps the last value of a repeated literal key without a word, so
+    two PRs that each edit one family's line can merge into a dict where one
+    description silently replaces the other (the FAMILY_SOURCES "workspace"
+    entry did exactly this). Returns ``{dict_name: [dup_key, ...]}``.
+    """
+    import ast
+
+    found = {}
+    tree = ast.parse(source)
+    names = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(node.value, ast.Dict):
+            target = node.targets[0] if isinstance(node, ast.Assign) else node.target
+            if isinstance(target, ast.Name):
+                names[id(node.value)] = target.id
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        seen, dups = set(), []
+        for key in node.keys:
+            if isinstance(key, ast.Constant):
+                if key.value in seen:
+                    dups.append(key.value)
+                seen.add(key.value)
+        if dups:
+            found.setdefault(names.get(id(node), "<nested dict>"), []).extend(dups)
+    return found
+
+
+def test_framework_map_dict_literals_have_no_duplicate_keys():
+    with open(fm.__file__, encoding="utf-8") as fh:
+        source = fh.read()
+    assert "FAMILY_SOURCES" in source
+    assert _duplicate_literal_keys(source) == {}
+    # The guard itself must catch the shape that shipped once.
+    bad = 'FAMILY_SOURCES = {"workspace": "a", "fleet": "b", "workspace": "c"}\n'
+    assert _duplicate_literal_keys(bad) == {"FAMILY_SOURCES": ["workspace"]}
+    # And every family a kind names has exactly one description.
+    for kind, entry in fm.MAPPINGS.items():
+        fam = entry.get("family")
+        if fam:
+            assert fam in fm.FAMILY_SOURCES, f"{kind} names unknown family {fam}"

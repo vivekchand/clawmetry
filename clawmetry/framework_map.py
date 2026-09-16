@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Optional
 
 #: Bumped whenever an identifier, an edition or a kind's mapping changes, so a
 #: stored finding says which contract labelled it.
-MAPPING_VERSION = "2026-09-14.2"
+MAPPING_VERSION = "2026-09-15.1"
 
 #: What a finding can establish. The same for every kind today, declared once
 #: so no surface re-derives it.
@@ -62,7 +62,8 @@ FAMILY_SOURCES: Dict[str, str] = {
                        "session (re)starts"),
     "content": ("the text of tool results and user-sourced messages, matched against declared "
                 "injection signatures; the matched text is not kept"),
-    "workspace": "configuration files in the session's working directory, not tool calls",
+    "workspace": ("configuration files in the session's working directory and the agent's "
+                  "own configuration directories, not tool calls"),
     "fleet": "tool-call arguments across several unrelated sessions on the node",
 }
 
@@ -119,6 +120,8 @@ FRAMEWORKS: Dict[str, Dict[str, Any]] = {
             "AML.T0051.000": {"type": "technique", "name": "Direct"},
             "AML.T0051.001": {"type": "technique", "name": "Indirect"},
             "AML.T0055": {"type": "technique", "name": "Unsecured Credentials"},
+            "AML.T0010.005": {"type": "technique",
+                              "name": "AI Supply Chain Compromise: AI Agent Tool"},
             "AML.T0081": {"type": "technique", "name": "Modify AI Agent Configuration"},
             "AML.T0086": {"type": "technique", "name": "Exfiltration via AI Agent Tool Invocation"},
             "AML.T0101": {"type": "technique", "name": "Data Destruction via AI Agent Tool Invocation"},
@@ -302,13 +305,35 @@ MAPPINGS: Dict[str, Dict[str, Any]] = {
         "owasp_llm": (), "owasp_asi": ("ASI04",), "atlas": ("AML.T0081",),
         "status": "verified",
         "rationale": ("AML.T0081 is modifying an agent's configuration so a change persists and "
-                      "affects every agent that reads it. ASI04 covers tampered artefacts an agent "
-                      "loads, with pinning configs as a mitigation."),
-        "limits": ("Flags hook commands ClawMetry did not install; the project author may have "
-                   "added them on purpose. It does not show who wrote them."),
+                      "affects every agent that reads it, including its system prompt. ASI04 covers "
+                      "tampered artefacts an agent loads, with pinning configs as a mitigation."),
+        "limits": ("Flags hook commands ClawMetry did not install, and changes to an agent's "
+                   "instruction, hook and settings files after they were first inventoried. The "
+                   "project author, the operator or the agent itself may have made either on "
+                   "purpose. It does not show who wrote them, and a file edited before its first "
+                   "inventory is part of the baseline."),
         "requires": "the session's working directory is known",
         "tests": {"positive": "tests/test_guard_workspace_kinds.py::test_claude_hook_file_on_a_cursor_session_names_cursor",
                   "benign": "tests/test_guard_workspace_kinds.py::test_all_clawmetry_hooks_emit_no_finding"},
+    },
+    "agent_component_change": {
+        "family": "workspace",
+        "owasp_llm": (), "owasp_asi": ("ASI04",), "atlas": ("AML.T0010.005", "AML.T0081"),
+        "status": "verified",
+        "rationale": ("ASI04 covers third-party tools and components an agent loads at runtime. "
+                      "AML.T0010.005 is compromising an agent tool to reach a victim, and names a "
+                      "poisoned MCP server; AML.T0081 is modifying the configuration that tells the "
+                      "agent which tools to load."),
+        "limits": ("Reports that an MCP server, skill or plugin appeared or its content hash changed "
+                   "after the baseline, not that it is hostile. It reads configuration only and "
+                   "never starts a component, so an MCP server's tool descriptions and anything a "
+                   "server downloads at run time are not covered. The first inventory of a scope "
+                   "is a silent baseline, so a component already present when ClawMetry first "
+                   "reads a configuration (a freshly cloned repository's .mcp.json, say) is "
+                   "never reported."),
+        "requires": "the agent's configuration files are readable on the node",
+        "tests": {"positive": "tests/test_agent_supply_chain_inventory.py::test_a_new_mcp_server_after_the_baseline_raises_a_component_change",
+                  "benign": "tests/test_agent_supply_chain_inventory.py::test_the_first_inventory_is_a_silent_baseline"},
     },
     "package_manifest_exec": {
         "family": "workspace",

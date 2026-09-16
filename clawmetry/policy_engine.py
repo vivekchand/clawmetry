@@ -117,7 +117,8 @@ from typing import Any, Dict, Iterable, List, Optional
 try:  # pragma: no cover - trivial fallback
     from clawmetry.repo_scan import WORKSPACE_KINDS
 except Exception:  # noqa: BLE001
-    WORKSPACE_KINDS = ("repo_config_exec", "agent_config_tamper")
+    WORKSPACE_KINDS = ("repo_config_exec", "agent_config_tamper",
+                       "package_manifest_exec", "agent_component_change")
 # Fleet-wide findings (clawmetry/detector_swarm.py) must also be named: one
 # coordinated_action lands on every participating session, so a catch-all rule
 # written about single agents would act on dozens of sessions at once.

@@ -21759,6 +21759,119 @@ def _workspace_incidents(state: dict, cwd: str, session_id: str,
     return out
 
 
+# ── Agent supply chain inventory (#5947, REQ-GOV-SCI-001..003) ─────────────
+#
+# What every runtime on this machine loads at session start: MCP servers,
+# skills, plugins, instruction files, hook and settings files. A component can
+# be swapped without the agent calling a tool, so the tool stream never shows
+# it. clawmetry/agent_inventory.py reads and hashes; the store keeps first/last
+# seen and the last change; this pass decides when to look and which running
+# sessions hear about a change.
+#
+# Cost: the home scope and each active working directory are collected at most
+# once per CLAWMETRY_AGENT_INVENTORY_SECS (default 300s). File hashes are cached
+# on (mtime, size), so a steady state costs stat calls.
+_AGENT_INVENTORY_ON = "CLAWMETRY_AGENT_INVENTORY"      # "0" disables the pass
+_AGENT_INVENTORY_SECS = "CLAWMETRY_AGENT_INVENTORY_SECS"
+_AGENT_INVENTORY_MAX_WORKSPACES = 50
+
+
+def _agent_inventory_pass(store, state: dict, facts_by_session: dict,
+                          now: float) -> list:
+    """Inventory the home scope and every active working directory when due,
+    and return the stored rows that changed inside the change window.
+
+    Never raises; ``[]`` when disabled or on any error.
+    """
+    if os.environ.get(_AGENT_INVENTORY_ON, "1").strip().lower() in ("0", "false", "no"):
+        return []
+    try:
+        from clawmetry import agent_inventory as _inv
+    except Exception as e:  # noqa: BLE001
+        log.debug("agent-inventory: import failed: %s", e)
+        return []
+    try:
+        cadence = max(30, int(os.environ.get(_AGENT_INVENTORY_SECS) or 300))
+    except (TypeError, ValueError):
+        cadence = 300
+    inv = state.get("agent_inventory")
+    if not isinstance(inv, dict):
+        inv = {}
+        state["agent_inventory"] = inv
+    scanned = inv.get("scanned")
+    if not isinstance(scanned, dict):
+        scanned = {}
+        inv["scanned"] = scanned
+
+    targets = [("global", "global", "")]
+    seen: set = set()
+    for f in (facts_by_session or {}).values():
+        cwd = str((f or {}).get("cwd") or "")
+        if not cwd or not _inv.workspace_is_scannable(cwd):
+            continue
+        ws = os.path.realpath(cwd)
+        if ws in seen:
+            continue
+        seen.add(ws)
+        targets.append(("ws:" + ws, "project", ws))
+        if len(targets) > _AGENT_INVENTORY_MAX_WORKSPACES:
+            break
+
+    changed = False
+    for key, scope, ws in targets:
+        last = scanned.get(key)
+        if isinstance(last, (int, float)) and (now - last) < cadence:
+            continue
+        try:
+            comps = _inv.collect_global() if scope == "global" else _inv.collect_workspace(ws)
+            # A torn read of a config file must not read as "removed" and
+            # then "new": pass what the collection could not see.
+            res = store.record_agent_inventory(
+                scope_key=key, scope=scope, workspace=ws, components=list(comps),
+                now_ms=int(now * 1000),
+                unreadable_sources=sorted(getattr(comps, "unreadable", ()) or ()),
+                complete=bool(getattr(comps, "complete", True))) or {}
+        except Exception as e:  # noqa: BLE001
+            log.debug("agent-inventory: %s failed: %s", key, e)
+            continue
+        scanned[key] = now
+        if res.get("changes"):
+            changed = True
+            log.info("agent-inventory: %d change(s) in %s", len(res["changes"]),
+                     "the home configuration" if scope == "global" else ws)
+    if len(scanned) > 500:
+        for stale in sorted(scanned, key=lambda k: scanned[k])[:len(scanned) - 500]:
+            scanned.pop(stale, None)
+
+    if changed or "recent" not in inv or (now - float(inv.get("recent_at") or 0)) >= cadence:
+        try:
+            data = store.query_agent_inventory(
+                limit=500, changed_since_ms=int((now - _inv.window_secs()) * 1000))
+            rows = data.get("components") if isinstance(data, dict) else None
+            inv["recent"] = [r for r in (rows or []) if isinstance(r, dict)
+                             and r.get("last_change") in ("new", "changed")][:200]
+        except Exception as e:  # noqa: BLE001
+            log.debug("agent-inventory: recent read failed: %s", e)
+            inv["recent"] = []
+        inv["recent_at"] = now
+    return list(inv.get("recent") or [])
+
+
+def _agent_inventory_incidents(recent: list, session_id: str, runtime: str,
+                               cwd: str, now: float) -> list:
+    """Supply-chain findings for one running session. Never raises."""
+    if not recent:
+        return []
+    try:
+        from clawmetry import agent_inventory as _inv
+        return _inv.incidents_for_session(
+            recent, session_id, runtime, cwd, now_ms=int(now * 1000),
+            window_secs=_inv.window_secs()) or []
+    except Exception as e:  # noqa: BLE001
+        log.debug("agent-inventory: incidents failed for %s: %s", session_id, e)
+        return []
+
+
 def _detector_session_facts(sessions: list, state: dict, now: float,
                             store=None) -> dict:
     """``session_id -> {cost_usd, bad_for_seconds, session_seconds, cwd,
@@ -22361,6 +22474,9 @@ def _emit_detector_incidents(store, state: dict) -> int:
     # the loop so a detector can price an incident and judge a path escape on
     # the same tick it finds it.
     facts_by_session = _detector_session_facts(candidates, state, now, store=store)
+    # What each runtime loads, and what changed recently (#5947). Once per
+    # tick, not per session: the scopes are shared.
+    inventory_recent = _agent_inventory_pass(store, state, facts_by_session, now)
     first_seen_memo = state.setdefault("detector_first_seen", {})
     if not isinstance(first_seen_memo, dict):
         first_seen_memo = {}
@@ -22458,7 +22574,14 @@ def _emit_detector_incidents(store, state: dict) -> int:
             state, facts.get("cwd") or "", sid, runtime or "unknown", now)
         if workspace:
             all_incidents.extend(workspace)
-        incidents = list(incidents) + workspace
+        # An MCP server, skill, plugin, instruction or hook file this session's
+        # runtime loads was added or changed recently. Same shape, same row,
+        # same rule: a policy acts on it only when it names the kind.
+        supply = _agent_inventory_incidents(
+            inventory_recent, sid, runtime or "unknown", facts.get("cwd") or "", now)
+        if supply:
+            all_incidents.extend(supply)
+        incidents = list(incidents) + workspace + supply
         if not incidents:
             continue
 
@@ -22466,7 +22589,12 @@ def _emit_detector_incidents(store, state: dict) -> int:
         # spend at risk first and severity second, so on a session with a known
         # cost this is the most expensive finding, not merely the most severe.
         top = incidents[0]
-        heartbeat_items.append({
+        # An edited CLAUDE.md is worth a row in Guard, not a line on the desk
+        # device: an info-level inventory finding never rides the heartbeat.
+        if (top in supply and str(top.get("severity") or "") == "info"):
+            top = None
+        if top is not None:
+            heartbeat_items.append({
             "runtime": str(top.get("runtime") or "openclaw"),
             "kind": top.get("kind"),
             "tool_calls": int((top.get("evidence") or {}).get("total_tool_calls")
@@ -22480,11 +22608,16 @@ def _emit_detector_incidents(store, state: dict) -> int:
             # The money lives in the loop_signals row, which every non-device
             # consumer reads.
             "message": str(top.get("title") or "")[:_STUCK_HEARTBEAT_MAX_MSG],
-        })
+            })
 
         for inc in incidents:
             kind = inc.get("kind")
-            memo_key = f"{sid}::{kind}"
+            # One loop_signals row per (session, signature). A finding that
+            # shares a kind with another source on the same session carries
+            # its own signature (agent_inventory.CONFIG_CHANGE_SIGNATURE) so
+            # the two do not overwrite each other every tick.
+            signature = str(inc.get("signal_signature") or f"daemon_detect_{kind}")
+            memo_key = f"{sid}::{signature}"
             last = memo.get(memo_key)
             if isinstance(last, (int, float)) and (now - last) < reemit:
                 continue
@@ -22506,7 +22639,7 @@ def _emit_detector_incidents(store, state: dict) -> int:
                     # Stable per-kind signature so a re-emit UPSERTs the same row
                     # (matches the (session_id, signature) PK) instead of piling
                     # up; distinct from the stuck detector's "daemon_stuck".
-                    signature=f"daemon_detect_{kind}",
+                    signature=signature,
                     repeat_count=count,
                     severity=sev if sev in _DETECT_SEVERITY_COUNT else "info",
                     agent_type=str(inc.get("runtime") or "openclaw"),
