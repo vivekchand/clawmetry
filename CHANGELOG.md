@@ -6,6 +6,12 @@
 - **Verified:** `tests/test_account_deployment_report.py` (body carries both, desktop launcher detected, unknown values omitted) and `tests/test_apply_cm_key_fallback_persist.py` (the desktop fallback payload).
 - **Refs:** REQ-OGV-ADC-004 (AC-OGV-ADC-004.1 to 004.3).
 
+### Fixed: an uninstall now tells the cloud it happened (2026-09-16)
+- **Why:** `clawmetry uninstall` purged the machine's server-side registration and sent no lifecycle ping, so the install registry held zero `uninstall` events (the cloud has accepted that event all along). With the machine row gone, the account read "never installed" and was emailed install instructions, which is how an account that installed and ran 174 sessions the same day came back as never installed.
+- **What:** the uninstall sends one anonymous install-lifecycle ping with the `uninstall` event, under the same opt-out rules as every other ping (`CLAWMETRY_NO_TELEMETRY`, `DO_NOT_TRACK`, `~/.clawmetry/notelemetry`), and a failure never affects the uninstall. The cloud side records the uninstall on the account and stops the wrong email (clawmetry-cloud companion change).
+- **Verified:** `tests/test_uninstall_reports_itself.py` (the ping fires once with the right event, opt-out sends nothing, a ping failure still completes the uninstall).
+- **Refs:** REQ-OGV-AIH-004 (AC-OGV-AIH-004.1, AC-OGV-AIH-004.2).
+
 ### Fixed: a sign-in tells the cloud account whether it is cloud or self-hosted (2026-09-15)
 - **Why:** the onboarding choice was recorded only on the anonymous install ping, which cannot be joined to an account for a self-hosted install (it never registers a node). A self-hosted account created 2026-09-09 received three "Your ClawMetry dashboard is still empty" emails telling the person to connect the machine to the cloud they had just declined, and every managed terminal sign-in was sent the self-hosted trial email.
 - **What:** every sign-in's trial call (`/api/license/trial/signup`) now carries `deployment`: `managed` from `clawmetry connect` and the dashboard's cloud sign-in, `selfhost` from the keep-local sign-in in either place. The body is built in `clawmetry/onboarding_state.py`, which omits any other value so a caller that does not know the choice never reclassifies an account. The account stores it, and the cloud emails and admin console follow it (clawmetry-cloud companion change).

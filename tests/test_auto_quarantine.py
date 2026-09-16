@@ -348,3 +348,48 @@ class TestQuarantineFile:
         # test_already appears once (from existing), test_new appears once (appended)
         assert content.count("test_already") == 1
         assert content.count("test_new") == 1
+
+
+# ---------------------------------------------------------------------------
+# _https_redirect_target -- redirect scheme pinning
+# ---------------------------------------------------------------------------
+
+
+class TestHttpsRedirectTarget:
+    """The artifact download follows a Location header chosen by the server.
+
+    urlopen() speaks file:// and ftp://, and the bytes it returns go straight
+    into zipfile and the JUnit parser with nothing downstream re-checking
+    their origin, so the scheme has to be pinned at the point of the fetch.
+    """
+
+    def test_https_target_is_returned_unchanged(self):
+        url = "https://pipelines-actions.s3.amazonaws.com/artifact.zip?X-Amz-Sig=abc"
+        assert aq._https_redirect_target(url, 123) == url
+
+    @pytest.mark.parametrize(
+        "location",
+        [
+            "file:///etc/passwd",
+            "FILE:///etc/passwd",
+            "ftp://example.invalid/artifact.zip",
+            "http://example.invalid/artifact.zip",
+            "data:application/zip;base64,UEsDBAo=",
+            "//example.invalid/artifact.zip",  # scheme-relative, not guessed at
+            "/actions/artifacts/1/zip",        # path-only, no scheme
+        ],
+    )
+    def test_non_https_target_is_refused(self, location):
+        with pytest.raises(RuntimeError, match="non-https"):
+            aq._https_redirect_target(location, 123)
+
+    def test_refusal_names_the_artifact_and_the_scheme(self):
+        with pytest.raises(RuntimeError) as exc:
+            aq._https_redirect_target("file:///etc/passwd", 4242)
+        msg = str(exc.value)
+        assert "4242" in msg
+        assert "file" in msg
+
+    def test_scheme_comparison_is_case_insensitive(self):
+        url = "HTTPS://example.com/artifact.zip"
+        assert aq._https_redirect_target(url, 1) == url

@@ -28,20 +28,37 @@
     </div>
   </dialog>
 
-  <div class="section-header">
-    <h2 data-i18n="guard.title">Guard</h2>
-    <p class="section-sub" data-i18n="guard.sub">
-      What is running right now, whether it has gone off track, and the button to stop it.
-    </p>
-  </div>
-
+  <header class="guard-home-head">
+    <div><h2>Guard</h2><p>See what is being checked. Decide what happens next.</p></div>
+    <button class="btn btn-sm" onclick="loadGuardTab()">Refresh</button>
+  </header>
+  <nav class="guard-view-nav" aria-label="Guard views">
+    <button data-guard-view="checks" onclick="guardShowView('checks')" aria-current="page">Checks</button>
+    <button data-guard-view="attention" onclick="guardShowView('attention')">Needs attention</button>
+    <button data-guard-view="activity" onclick="guardShowView('activity')">Activity</button>
+    <button data-guard-view="settings" onclick="guardShowView('settings')">Response settings</button>
+  </nav>
+  <section data-guard-panel="checks">
+    <div id="guard-check-summary" class="guard-coverage" aria-live="polite">Reading check settings from your node...</div>
+    <p class="guard-scope-note">These settings apply to all runtimes on this node. Checks find evidence; they do not block an action on their own.</p>
+    <div id="guard-check-families" class="guard-family-grid" role="group" aria-label="Check families"></div>
+    <h3 id="guard-check-question" class="guard-family-question"></h3>
+    <div id="guard-check-list" class="guard-check-list"></div>
+    <div id="guard-check-message" class="guard-message" role="status"></div>
+  </section>
+  <section data-guard-panel="attention" hidden>
+    <div class="guard-review-intro"><h3>What needs your attention?</h3><p>Approvals ask for a decision. Findings explain what a check noticed.</p></div>
+    <div class="guard-review-links">
+      <button data-guard-destination="approvals" onclick="switchTab('approvals')"><strong>Review approvals</strong><span id="guard-approval-summary">Requests waiting for your permission or answer</span></button>
+      <button data-guard-destination="alerts" onclick="switchTab('alerts')"><strong>Review alerts</strong><span>Notifications from your alert rules</span></button>
+    </div>
   <div id="guard-enforce-banner" class="banner banner-info" style="display:none;">
     <span id="guard-enforce-text"></span>
   </div>
 
   <div class="card">
     <div class="card-head">
-      <h3 data-i18n="guard.running">Running sessions</h3>
+      <h3>Findings on running sessions</h3>
       <span id="guard-at-risk" class="section-sub" style="margin:0;font-variant-numeric:tabular-nums;"></span>
       <button class="btn btn-sm" onclick="loadGuardTab()" data-i18n="guard.refresh">Refresh</button>
     </div>
@@ -50,6 +67,14 @@
     </div>
   </div>
 
+  </section>
+  <section data-guard-panel="settings" hidden>
+    <div class="guard-review-intro"><h3>Choose how to respond</h3><p>Keep watching, notify someone, ask for approval, or take an automatic action.</p></div>
+    <div class="guard-review-links">
+      <button onclick="guardOpenRelated('alerts','alerts-settings-panel')"><strong>Notification rules</strong><span>Choose what should send an alert</span></button>
+      <button onclick="guardOpenRelated('approvals','approvals-settings-panel')"><strong>Approval rules</strong><span>Choose which actions need a decision</span></button>
+      <button onclick="switchTab('notifications')"><strong>Delivery channels</strong><span>Choose where alerts and approvals reach you</span></button>
+    </div>
   <div class="card">
     <div class="card-head">
       <h3 data-i18n="guard.policies">Policies</h3>
@@ -79,6 +104,13 @@
     <div id="guard-nondeterminism-body" class="section-sub" style="margin:0"></div>
   </div>
 
+  </section>
+  <section data-guard-panel="activity" hidden>
+    <div class="guard-review-intro"><h3>What happened</h3><p>Review automatic responses and agent reports. For permission decisions and delivered notifications, open their history.</p></div>
+    <div class="guard-review-links">
+      <button onclick="guardOpenRelated('approvals','approvals-history-panel')"><strong>Approval history</strong><span>Decisions made by you or your team</span></button>
+      <button onclick="switchTab('alerts')"><strong>Alert history</strong><span>Notifications that were sent</span></button>
+    </div>
   <div class="card">
     <div class="card-head">
       <h3 data-i18n="guard.decisions">Recent decisions</h3>
@@ -104,4 +136,5 @@
       <div class="empty-state" data-i18n="guard.loading">Loading...</div>
     </div>
   </div>
+  </section>
 </div>

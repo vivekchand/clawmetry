@@ -134,8 +134,24 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.wait-for-propagation.outputs.version }}
+          PY_VERSION: ${{ matrix.python-version }}
         run: |
-          python -m pip install --upgrade pip
+          # Bootstrap pip from the hash-pinned set rather than resolving the
+          # latest release at job start: a hash-checked install is only worth
+          # as much as the installer doing the checking. The clawmetry install
+          # below stays unpinned on purpose -- the published PyPI release is
+          # the artifact this job exists to test.
+          #
+          # Two sets, because pip-bootstrap.txt pins pip==26.2.1, which
+          # declares Requires-Python >=3.10 and cannot be installed on the 3.9
+          # matrix cell. pip-bootstrap-py39.txt pins 26.0.1, the last pip that
+          # supports 3.9. Selecting on the version keeps the 3.11 cells on the
+          # same pip every other job here uses.
+          if [ "${PY_VERSION}" = "3.9" ]; then
+            python -m pip install --require-hashes -r .github/requirements/pip-bootstrap-py39.txt
+          else
+            python -m pip install --require-hashes -r .github/requirements/pip-bootstrap.txt
+          fi
           # wait-for-propagation verifies from one runner; parallel canary
           # matrix jobs run on different instances that may be in different
           # CDN regions and may not have received PyPI propagation yet.
