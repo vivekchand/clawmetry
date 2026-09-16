@@ -4964,7 +4964,8 @@ def _cmd_key(args) -> None:
     import time as _time
 
     from clawmetry import apikeys as _ak
-    from clawmetry.query_contract import SCOPE_CONTENT, SCOPE_DOC, SCOPE_METRICS
+    from clawmetry.apikeys import SCOPE_DOC, SCOPE_INGEST
+    from clawmetry.query_contract import SCOPE_CONTENT, SCOPE_METRICS
 
     action = getattr(args, "key_cmd", None) or "list"
     as_json = bool(getattr(args, "as_json", False))
@@ -4991,7 +4992,10 @@ def _cmd_key(args) -> None:
             flag = "   (sensitive)" if row["sensitive"] else ""
             print(f"  {row['scope']}{flag}")
             print(f"      {row['doc']}")
-            print(f"      queries: {', '.join(row['methods'])}")
+            if row["kind"] == "write":
+                print("      queries: none. This scope only pushes data in.")
+            else:
+                print(f"      queries: {', '.join(row['methods'])}")
             print("")
         print("Pick the narrowest scope that makes your UI work. A key that")
         print("only needs a cost chart should be read:metrics, so it cannot")
@@ -5046,6 +5050,11 @@ def _cmd_key(args) -> None:
         wants_no_origin = any(
             str(o).strip().lower() == _ak.ORIGIN_NONE for o in raw_origins
         )
+        if SCOPE_INGEST in scopes and not raw_origins:
+            # An ingest key is server-to-server by definition, so asking
+            # which website may use it is a question with no answer.
+            wants_no_origin = True
+            raw_origins = [_ak.ORIGIN_NONE]
         if not raw_origins:
             print("A key needs to know which site may use it from a browser.")
             print("")
@@ -5096,6 +5105,27 @@ def _cmd_key(args) -> None:
         print(f"    {key_output}")
         print("")
         print(f"Name:    {record['name']}  (id {record['id']})")
+        if SCOPE_INGEST in record["scopes"]:
+            print(f"Grants:  {', '.join(record['scopes'])}")
+            print(f"           {SCOPE_INGEST}: {SCOPE_DOC[SCOPE_INGEST]}")
+            print("Origins: none. Ingest is server-to-server; this key is never")
+            print("         given a CORS header, so a web page cannot use it.")
+            print("")
+            print("Push a span from anywhere that can reach this machine:")
+            print("")
+            print("    curl -X POST http://localhost:8900/v1/traces \\")
+            print(f"        -H 'x-clawmetry-key: {plaintext}' \\")
+            print("        -H 'x-clawmetry-runtime: my-engine' \\")
+            print("        -H 'x-clawmetry-env: production' \\")
+            print("        -H 'Content-Type: application/json' \\")
+            print("        --data-binary @spans.json")
+            print("")
+            print("OTLP protobuf and OTLP/JSON are both accepted, gzip too.")
+            print("The runtime and env headers are optional; without them the")
+            print("runtime is taken from the resource's service.name.")
+            print("")
+            print("Reference: docs/CUSTOM_RUNTIME_INGEST.md")
+            return
         print(f"Reads:   {', '.join(record['scopes'])}")
         for s in record["scopes"]:
             print(f"           {s}: {SCOPE_DOC[s]}")
@@ -5126,6 +5156,44 @@ def _cmd_key(args) -> None:
     print("Usage: clawmetry key [create|list|revoke|scopes]")
     print("Start with:  clawmetry key scopes")
     raise SystemExit(1)
+
+
+def _cmd_setup_prompt(args) -> None:
+    """`clawmetry setup-prompt [runtime]` -- the prompt you hand your agent.
+
+    ClawMetry detects agents on this machine with no configuration. This
+    is for the other case: an agent in CI, a container, a serverless
+    function or on someone else's laptop, which has to push instead.
+
+    The text is generated from the ingest contract, so it cannot tell an
+    agent to send a header the server does not read -- which is the
+    failure worth designing against, because an agent writes a wrong
+    header confidently and the request fails where nobody is looking.
+    """
+    from clawmetry import setup_prompt as _sp
+
+    runtime = (getattr(args, "runtime", "") or "").strip().lower()
+    if runtime and not _sp.VALID_RUNTIME.match(runtime):
+        print(
+            f"{runtime!r} is not a runtime name. Use a short name like "
+            "claude_code or my-engine: lower-case letters, digits, "
+            "underscore and dash, 40 characters at most."
+        )
+        raise SystemExit(1)
+
+    port = getattr(args, "port", None) or 8900
+    endpoint = (getattr(args, "endpoint", "") or f"http://localhost:{port}").rstrip("/")
+    print(_sp.render(runtime, endpoint=endpoint))
+    print("")
+    print("-" * 68)
+    print("Copy everything above into your coding agent.")
+    print("")
+    print("It needs a key. Create one, and paste it in place of the")
+    print("placeholder:")
+    print("")
+    print("    clawmetry key create --name ci --scope write:ingest")
+    print("")
+    print("Reference: docs/INGEST.md")
 
 
 def _cmd_reports(args) -> None:
@@ -8659,6 +8727,20 @@ def main() -> None:
     )
 
     # reports — open the reports browser (refs #1005)
+    p_setup_prompt = sub.add_parser(
+        "setup-prompt",
+        help="Print the prompt that points an off-box agent at this ClawMetry",
+    )
+    p_setup_prompt.add_argument(
+        "runtime", nargs="?", default="",
+        help="Runtime being pointed here (claude_code, my-engine, ...)",
+    )
+    p_setup_prompt.add_argument(
+        "--endpoint", default="",
+        help="Where the agent should send data (default http://localhost:<port>)",
+    )
+    p_setup_prompt.add_argument("--port", type=int, default=8900)
+
     p_reports = sub.add_parser(
         "reports",
         help="Open the reports browser (renders ~/.clawmetry/reports/*.md + DuckDB SQL)",
@@ -9457,6 +9539,7 @@ def main() -> None:
         "reports",
         "eval",
         "key",
+        "setup-prompt",
         "mcp",
         "update",
         "uninstall",
@@ -9605,6 +9688,8 @@ def main() -> None:
             _cmd_mcp(args)
         elif args.cmd == "key":
             _cmd_key(args)
+        elif args.cmd == "setup-prompt":
+            _cmd_setup_prompt(args)
         elif args.cmd == "update":
             _cmd_update(args)
         elif args.cmd == "uninstall":

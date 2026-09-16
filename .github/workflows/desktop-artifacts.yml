@@ -59,7 +59,7 @@ jobs:
 
       - name: Install build deps
         run: |
-          pip install --upgrade pip wheel
+          python -m pip install --require-hashes -r .github/requirements/pip-wheel-bootstrap.txt
           # Thin shell: no clawmetry install needed here. Bundle only
           # ships pywebview + PIL. Runtime pip-installs clawmetry on
           # user's machine on first launch.
@@ -311,7 +311,7 @@ jobs:
 
       - name: Install build deps
         run: |
-          python -m pip install --upgrade pip wheel
+          python -m pip install --require-hashes -r .github/requirements/pip-wheel-bootstrap.txt
           pip install -r desktop/requirements-dev.txt
 
       # Stamp the bundle version into desktop/assets/version.txt — see
@@ -595,7 +595,7 @@ jobs:
 
       - name: Install build deps
         run: |
-          pip install --upgrade pip wheel
+          python -m pip install --require-hashes -r .github/requirements/pip-wheel-bootstrap.txt
           # --ignore-installed: if the runner image ever ships an apt
           # python3-gi, pip's "already satisfied" check would otherwise
           # skip building the pinned PyGObject wheel THIS interpreter

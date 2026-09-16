@@ -478,9 +478,15 @@ def _fallback_mint_trial(cm_key: str, mode: str = "") -> None:
     raises."""
     try:
         base = resolve_app_base()
-        payload = {"api_key": cm_key}
+        payload = {"api_key": cm_key, "client": "desktop"}
         if mode in _MODE_TO_DEPLOYMENT:
             payload["deployment"] = _MODE_TO_DEPLOYMENT[mode]
+        # REQ-OGV-ADC-004: this path runs inside the desktop app, so the
+        # client is known without reading the environment. The operating
+        # system uses the same names the install ping sends.
+        _os_name = (platform.system() or "").strip()
+        if _os_name in ("Darwin", "Linux", "Windows", "FreeBSD", "OpenBSD"):
+            payload["os"] = _os_name
         req = urllib.request.Request(
             base + "/api/license/trial/signup",
             data=json.dumps(payload).encode(),
