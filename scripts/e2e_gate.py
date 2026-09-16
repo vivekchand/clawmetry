@@ -19,7 +19,7 @@ Two matching modes:
 
 * an exact name (``"Syntax & Lint"``) for a single job;
 * an fnmatch pattern plus ``min_count`` for a matrix job, where the pattern
-  expands to one check per leg (``"pip install (*)"``) -> four legs). ``min_count``
+  expands to one check per leg (``"pip install (*)"``  -> four legs). ``min_count``
   is what stops a *shrinking* matrix from quietly passing: drop macOS from the
   matrix and the pattern still matches, but the count no longer does.
 
@@ -128,6 +128,35 @@ REQUIRED_SPECS = [
     # it. Only the "never posted" case is treated as skipped.
     Spec("Drift Bot", "drift-bot", skip_if_unreported=True),
 ]
+
+# ---------------------------------------------------------------------------
+# Specs whose CI workflow has a paths filter that excludes frontend/deps-only
+# changes. On a dependabot PR these checks never run, so the gate hangs for
+# the full 60-min timeout and then fails -- blocking every automated security
+# update. When PR_ACTOR=dependabot[bot], resolve_specs() flips these to
+# skip_if_unreported=True so the gate does not hang on them. A spec that does
+# post (if the workflow somehow triggered) is still enforced.
+# ---------------------------------------------------------------------------
+_DEPENDABOT_SKIP = frozenset([
+    "MOAT Keystone",
+    "E2E Browser Tests",
+    "MOAT Verifier",
+    "Entitlement API tests",
+    "Wheel install & assets",
+    "Store invariants",
+])
+
+
+def resolve_specs(pr_actor: str) -> list:
+    """Return the effective spec list for the given PR actor."""
+    if pr_actor != "dependabot[bot]":
+        return REQUIRED_SPECS
+    return [
+        Spec(s.label, s.pattern, s.min_count, skip_if_unreported=True)
+        if s.label in _DEPENDABOT_SKIP
+        else s
+        for s in REQUIRED_SPECS
+    ]
 
 
 @dataclass
@@ -348,10 +377,15 @@ def main():
         return 2
 
     sha = args.sha.strip()
-    print(f"E2E Gate: {len(REQUIRED_SPECS)} required checks on {sha[:12]}")
-    for spec in REQUIRED_SPECS:
+    pr_actor = os.environ.get("PR_ACTOR", "")
+    specs = resolve_specs(pr_actor)
+
+    actor_note = f" (dependabot mode: {len(_DEPENDABOT_SKIP)} heavy checks waived if unreported)" if pr_actor == "dependabot[bot]" else ""
+    print(f"E2E Gate: {len(specs)} required checks on {sha[:12]}{actor_note}")
+    for spec in specs:
         legs = f" (x{spec.min_count})" if spec.min_count > 1 else ""
-        print(f"  - {spec.label}{legs}")
+        skip = " [skip_if_unreported]" if spec.skip_if_unreported else ""
+        print(f"  - {spec.label}{legs}{skip}")
     print()
 
     start = time.monotonic()
@@ -370,7 +404,7 @@ def main():
             time.sleep(POLL_INTERVAL)
             continue
 
-        results = evaluate(REQUIRED_SPECS, runs)
+        results = evaluate(specs, runs)
 
         for res in results:
             line = f"{res.state}: {res.detail}"
