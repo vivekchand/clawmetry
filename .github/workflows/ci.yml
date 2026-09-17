@@ -450,6 +450,16 @@ jobs:
       - name: First-install preparation UI
         run: python3 -m pytest tests/test_startup_readiness.py -q
 
+      # Hosted cards must not REQUEST local-only data (#6060). A route that
+      # cloud_route_policy disables answers 410 Gone by design, and the browser
+      # logs that failure before any JS sees the Response, so handling the
+      # status in .then() still leaves a console error the cloud-contract
+      # deploy gate counts. One such request (the Guard inventory card) failed
+      # three assertions in that gate and blocked every deploy after 0.12.883.
+      # Node-based, named explicitly because this job runs FILE LISTS.
+      - name: Hosted local-only cards issue no request
+        run: python3 -m pytest tests/test_guard_inventory_hosted_js.py -q
+
       # Trail page + session-first landing: the live HTML must include
       # tabs/trail.html (Jinja render, not a template grep), the default
       # active page must be the Sessions list, and every Trail string must

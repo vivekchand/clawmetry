@@ -30515,9 +30515,19 @@ function loadAgentGraph() {
   var statsEl  = document.getElementById('agent-graph-stats');
   if (!statusEl) return;
   statusEl.style.display = 'block';
-  statusEl.textContent = 'Loading…';
   if (svgEl) svgEl.style.display = 'none';
   if (statsEl) statsEl.style.display = 'none';
+  // Same posture as the Guard inventory card above: /api/local/* is
+  // cloud-disabled and answers 410 Gone, and the browser logs that failure to
+  // the console before the .then() below ever sees it. On the hosted
+  // dashboard, say where the graph lives instead of asking a question this
+  // deployment cannot answer.
+  if (window.CLOUD_MODE) {
+    statusEl.textContent = t('app.agent_graph_local_only', null,
+      'The agent graph is built from your local data store, so it is only available on the dashboard running on your machine (http://localhost:8900).');
+    return;
+  }
+  statusEl.textContent = 'Loading…';
 
   var win   = parseInt((document.getElementById('agent-graph-window') || {}).value || '86400', 10);
   var now   = Math.floor(Date.now() / 1000);
@@ -32083,20 +32093,44 @@ function guardInventoryStatus(c) {
   return '<span class="muted" title="' + guardEsc(title) + '">Unchanged</span>';
 }
 
+// The inventory is collected by the daemon on the machine the agents run on
+// and lives in that machine's DuckDB. The hosted dashboard has no copy, so
+// cloud_route_policy classifies /api/guard/inventory as cloud-disabled and
+// answers 410 Gone deliberately: a passthrough would report "nothing
+// inventoried" for a node that has an inventory.
+//
+// Asking anyway is not free. The BROWSER logs a failed request as
+// "Failed to load resource: the server responded with a status of 410"
+// before any JS sees the Response, so handling the status in .then() renders
+// the right words and still leaves a console error behind. Measured in
+// Chromium: one console error per hosted Guard visit, which is exactly what
+// the cloud-contract deploy gate counts, and which held production on
+// 0.12.883 while 0.12.884 and 0.12.885 failed to promote.
+//
+// So on the hosted dashboard the card answers from what we already know,
+// without asking. The 410 branch below stays for any other deployment that
+// disables the route without setting CLOUD_MODE.
+var GUARD_INVENTORY_LOCAL_ONLY =
+  'The inventory is read from the store on the machine your agents run on, so it is shown on the dashboard running on that machine (http://localhost:8900).';
+
 function loadGuardInventory() {
   var el = document.getElementById('guard-inventory-body');
   if (!el) return;
   var sum = document.getElementById('guard-inventory-summary');
   if (sum) sum.textContent = '';
+  if (window.CLOUD_MODE) {
+    el.innerHTML = '<div class="empty-state">' + GUARD_INVENTORY_LOCAL_ONLY + '</div>';
+    return;
+  }
   fetch('/api/guard/inventory').then(function (r) {
-    // The hosted dashboard disables this route with HTTP 410: the inventory
-    // lives in the store on the agent's machine and is not in the snapshot.
-    // Say that, rather than "nothing inventoried" for a node that has one.
     if (r.status === 410) return { _cloud_disabled: true };
-    return r.ok ? r.json() : null;
+    // Anything else that is not OK is a real failure, not an expected state:
+    // let it reach the catch below so it is both shown and logged.
+    if (!r.ok) throw new Error('/api/guard/inventory answered ' + r.status);
+    return r.json();
   }).then(function (d) {
     if (d && d._cloud_disabled) {
-      el.innerHTML = '<div class="empty-state">The inventory is read from the store on the machine your agents run on, so it is shown on the dashboard running on that machine (http://localhost:8900).</div>';
+      el.innerHTML = '<div class="empty-state">' + GUARD_INVENTORY_LOCAL_ONLY + '</div>';
       return;
     }
     if (!d || d.store_available === false) {
@@ -32139,7 +32173,12 @@ function loadGuardInventory() {
     });
     html += '</tbody></table>';
     el.innerHTML = html;
-  }).catch(function () {
+  }).catch(function (err) {
+    // A genuine failure (a 500, a dropped connection, a body that is not
+    // JSON) is not an expected state. Say so in the card and leave it in the
+    // console for whoever is looking: only the deliberate "disabled on this
+    // deployment" answer above is quiet.
+    console.error('Guard inventory load failed', err);
     el.innerHTML = '<div class="empty-state">Could not load the inventory.</div>';
   });
 }
