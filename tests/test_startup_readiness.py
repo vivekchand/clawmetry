@@ -131,6 +131,9 @@ def test_daemon_progress_is_in_the_encrypted_snapshot(store, tmp_path, monkeypat
 def test_snapshot_omits_invalid_readiness(readiness, tmp_path, monkeypatch, caplog):
     from clawmetry import sync
     from types import SimpleNamespace
+    # The minimal CI job imports sync before DuckDB/dashboard and keeps its
+    # standalone stdout logger. Capture that logger regardless of import order.
+    monkeypatch.setattr(sync.log, "propagate", True)
     monkeypatch.setattr(sync, "_startup_store", SimpleNamespace(query_startup_status=lambda: readiness))
     monkeypatch.setattr(sync, "SYNC_PROGRESS_FILE", tmp_path / "progress.json")
     monkeypatch.setattr(sync, "_sync_progress_done", True)
