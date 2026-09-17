@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Release: open dashboards that already have history (2026-09-17)
+- **Carries:** #6069. A malformed setup status could cover a populated hosted dashboard with a preparation screen. Available hosted history and completed collection now bypass that wait; invalid readiness responses cannot activate the overlay and are omitted by the collector.
+- **Appearance:** remove the rotating partial border around the setup logo. Actual collection stages and counts continue to show progress on a first installation.
+- **Verified:** 30 readiness and startup tests, regression cases that fail on the original code, and desktop/mobile browser checks for immediate entry, working navigation and keyboard dismissal.
+
+
 ### Release: the hosted dashboard stops erroring on a route cloud disables (2026-09-17)
 - **Carries:** #6062 (the Guard inventory card no longer requests /api/guard/inventory on the hosted dashboard, where cloud answers 410 Gone by design, and renders the local-only message instead; refs #5947). Its entry is already below.
 
