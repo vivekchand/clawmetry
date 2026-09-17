@@ -32,6 +32,10 @@ Acceptance criteria and the tests that hold them:
                     -> test_modal_time_travel_is_not_a_placeholder
   AC-OBS-CEA-023.8  unrecorded tokens are "not recorded", not "unknown tokens"
                     -> test_modal_renders_basis_and_no_debug_label
+  AC-OBS-CEA-023.11 a snapshot-sourced panel gives no instruction to install
+                    software on a computer the reader is not sitting at
+                    -> test_hosted_optimizer_offers_no_local_only_install_instruction,
+                       test_local_optimizer_still_offers_the_install_instruction
 
 The route-over-a-store tests need duckdb and live in
 tests/test_cost_optimizer_route_honesty.py (MOAT Verifier job); this file
@@ -301,3 +305,63 @@ def test_modal_time_travel_is_not_a_placeholder(tmp_path):
     assert "coming soon" not in out["body"].lower()
     assert "Back to live" in out["body"] and "switchTab('usage')" in out["body"]
     assert "analyses current spend" in out["body"]
+
+
+# ── hosted: no install instruction for a machine the reader is not at ───────
+#
+# AC-OBS-CEA-023.9. The daemon's snapshot slice
+# (clawmetry/cost_optimizer_snapshot.py) deliberately ships no host state:
+# llmfit model fit and whether Ollama is installed exist only on the computer.
+# The renderer read that absence as "llmfit is missing" and told a reader on
+# app.clawmetry.com to `pip install llmfit` on a machine they are not sitting
+# at (vivekchand/clawmetry#5934, re-audit 2026-09-15).
+
+def _local_traffic_payload(source):
+    """What the optimizer returns when local traffic WAS recorded, with no
+    model fit attached — the hosted snapshot's shape exactly."""
+    usage = adv.observed_usage(_rows("qwen3:4b", 4, cost=0.0) + _rows("claude-opus-4-7", 3))
+    return {
+        "_source": source,
+        "scope": "all runtimes on the connected computer",
+        "todayCost": 1.25,
+        "projectedMonthlyCost": None,
+        "expensiveOps": [],
+        "modelUsage": usage,
+        "taskRecommendations": adv.experiments(usage, adv.LOCAL_STORE_WINDOW),
+        "localAdvice": adv.local_advice(usage),
+        # No localModels, no ollamaInstalled, no llmfitAvailable: the snapshot
+        # does not carry them, and the hosted interceptor adds only hardware.
+        "system": {"cpu": "Apple M3 Pro", "ram_gb": 36, "cores": 12, "backend": "metal"},
+        "provenance": adv.cost_provenance("local_store"),
+    }
+
+
+def test_local_advice_is_shown_for_this_payload():
+    """Guard the fixture itself: if local traffic stopped opening the section,
+    the two tests below would pass for the wrong reason."""
+    assert _local_traffic_payload("snapshot")["localAdvice"]["show"] is True
+
+
+@pytest.mark.parametrize("source", ["snapshot", "snapshot.costOptimizer"])
+def test_hosted_optimizer_offers_no_local_only_install_instruction(tmp_path, source):
+    out = _render(tmp_path, "ok", payload=_local_traffic_payload(source))
+    body, footer = out["body"], out["footer"]
+    lowered = body.lower()
+    assert "pip install llmfit" not in lowered, "hosted panel tells the reader to install llmfit"
+    assert "brew install" not in lowered and "ollama.com/install" not in lowered, (
+        "hosted panel prints a local install command"
+    )
+    assert "ollama is not installed on this machine" not in lowered, (
+        "hosted panel reports on a machine the reader is not at"
+    )
+    assert "no llmfit" not in footer.lower(), "hosted footer reports llmfit as missing"
+    # It says where that advice lives, in one sentence, instead.
+    assert "on the computer itself" in lowered
+    assert lowered.count("on the computer itself") == 1
+
+
+def test_local_optimizer_still_offers_the_install_instruction(tmp_path):
+    """The local dashboard runs ON the computer, so there the instruction is
+    actionable and must stay."""
+    body = _render(tmp_path, "ok", payload=_local_traffic_payload("local_store"))["body"]
+    assert "pip install llmfit" in body.lower()

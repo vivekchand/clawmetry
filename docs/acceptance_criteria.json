@@ -877,6 +877,12 @@
       "text": "When the operator has scoped the dashboard to one runtime, the Cost Optimizer shall show only that runtime's recorded spend, expensive calls and experiments and shall name the runtime its figures cover; and when that runtime has no recorded spend, or the connected computer does not yet send figures per runtime, the system shall show the figures as unavailable rather than another runtime's or the whole computer's."
     },
     {
+      "id": "AC-OBS-CEA-023.11",
+      "doc": "Cost Optimizer: honest, fast and provider-aware",
+      "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",
+      "text": "When the optimizer's figures were computed on a connected computer rather than on the computer the dashboard is running on, the system shall not give an instruction to install software on that computer (a local model runner, or the model-fit tool), and shall say in one sentence that local model-fit advice is only available in the dashboard running on the computer itself."
+    },
+    {
       "id": "AC-OBS-CEA-023.2",
       "doc": "Cost Optimizer: honest, fast and provider-aware",
       "doc_id": "cb48b819-fa4a-4e7a-8a96-10ecdf86007e",

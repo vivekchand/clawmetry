@@ -2203,6 +2203,10 @@ function switchTab(name) {
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'inventory') { if (typeof renderInventory === 'function') renderInventory(); }
   if (name === 'overview') loadAll();
+  // #5935: boot no longer opens the log and health streams on a screen that
+  // does not show them, so the screens that DO show them open them on entry.
+  // Both starters guard on their own handle, so this is idempotent.
+  if (_cmScreenWantsStreams(name)) _cmStartScreenStreams();
   // #5935: startup no longer preloads Overview's system health and tasks when
   // the page lands on another screen, so the first visit loads them here at
   // once instead of waiting for the next 10-30 s refresh tick. A load that
@@ -2658,7 +2662,22 @@ async function loadActivityToday() {
   var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   var _q = (_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '';
   var d = {};
-  try { d = await fetchJsonWithTimeout('/api/activity-today' + _q, 4000) || {}; } catch (e) { return; }
+  try {
+    d = await _cmTileFetch('/api/activity-today' + _q) || {};
+  } catch (e) {
+    // #5935: the strip used to hide itself here, which looks exactly like
+    // "nothing happened today". A failed read is not a quiet day: say so, and
+    // offer the retry, rather than leaving the zeros in the template markup
+    // to be mistaken for measurements.
+    strip.innerHTML = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--text-secondary);">'
+      + '<span>' + escapeHtml(t('app.activity_today_unreadable', null,
+          "Today's activity could not be read right now.")) + '</span>'
+      + '<button onclick="loadActivityToday()" style="background:transparent;border:1px solid var(--border-primary);'
+      + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">'
+      + escapeHtml(t('common.retry', null, 'Retry')) + '</button></div>';
+    strip.style.display = '';
+    return;
+  }
   var tool = d.tool_calls_today || 0, exec = d.exec_calls_today || 0,
       brow = d.browser_actions_today || 0, msgs = d.messages_today || 0,
       uniq = d.unique_tools_today || 0;
@@ -2675,7 +2694,7 @@ async function loadOutcomeTile() {
   var _ocRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   var _ocQ = (_ocRt && _ocRt !== 'all') ? ('&runtime=' + encodeURIComponent(_ocRt)) : '';
   try {
-    var d = await fetchJsonWithTimeout('/api/outcomes?window=1d' + _ocQ, 3000);
+    var d = await _cmTileFetch('/api/outcomes?window=1d' + _ocQ);
     if (!d || d.total === 0) {
       summaryEl.textContent = t("app.no_completed_tasks_yet_today_outcomes_will_appear_", null, "No completed tasks yet today. Outcomes will appear once sessions finish.");
       return;
@@ -2695,7 +2714,14 @@ async function loadOutcomeTile() {
       return '<span style="' + color + '">' + p + '</span>';
     }).join('  ·  ');
   } catch (e) {
-    summaryEl.textContent = t("app.task_outcomes_unavailable_right_now", null, "Task outcomes unavailable right now.");
+    // #5935: never leave the template's "Loading task outcomes..." on screen
+    // for a read that has already failed — an unending spinner reads as a
+    // broken product. A sentence, and a way to ask again.
+    summaryEl.innerHTML = escapeHtml(t("app.task_outcomes_unavailable_right_now", null,
+        "Task outcomes could not be read right now."))
+      + ' <button onclick="loadOutcomeTile()" style="background:transparent;border:1px solid var(--border-primary);'
+      + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">'
+      + escapeHtml(t('common.retry', null, 'Retry')) + '</button>';
   }
 }
 
@@ -3803,6 +3829,51 @@ async function fetchJsonWithTimeout(url, timeoutMs) {
 var _CM_OVERVIEW_BUDGET_MS = 15000;
 function _cmFetchOverviewShared() {
   return fetchJsonWithTimeout('/api/overview', _CM_OVERVIEW_BUDGET_MS);
+}
+
+// #5935 (busy daemon): one small Overview tile, fetched so that a server which
+// is slow right now does not turn into a wrong answer on the screen.
+//
+// Measured on a scratch install whose daemon was writing while 12 readers
+// queried the store (240k events): opening Overview sent ~40 requests against
+// the browser's six connections per origin, and the store answered
+// /api/outcomes in 28.5 s and /api/activity-today in 9.3 s. The tiles asked
+// with 3 s and 4 s budgets, so both aborted on the client (3002 ms, 4003 ms)
+// while the answer was still on its way.
+//
+// Two budgets rather than one long one: the first is the normal case, and a
+// caller that loses it retries ONCE with the patience a busy store needs. The
+// shared in-flight dedup in fetchJsonWithTimeout means the retry cannot become
+// a second simultaneous request for the same URL.
+var _CM_TILE_BUDGET_MS = 8000;
+var _CM_TILE_RETRY_BUDGET_MS = 20000;
+async function _cmTileFetch(url) {
+  try {
+    return await fetchJsonWithTimeout(url, _CM_TILE_BUDGET_MS);
+  } catch (e) {
+    // Retry only a timeout/abort — a 404 or a 500 is an answer, and asking
+    // twice for it just burns another connection.
+    var slow = (e === 'timeout') || !!(e && (e.name === 'AbortError' || e.name === 'TimeoutError'));
+    if (!slow) throw e;
+    return await fetchJsonWithTimeout(url, _CM_TILE_RETRY_BUDGET_MS);
+  }
+}
+
+// #5935: the live log and health streams are EventSources that hold a
+// connection for as long as they are open — 2 of the browser's 6 per origin.
+// They used to open during boot on every screen, including the Sessions list
+// the dashboard lands on, which shows neither of them. Open them only for a
+// screen that renders them (Overview draws the health dots and the log
+// preview; the Logs tab draws the full stream), and let switchTab open them
+// when the user actually goes there.
+function _cmScreenWantsStreams(tab) {
+  return !tab || tab === 'overview' || tab === 'logs';
+}
+function _cmStartScreenStreams() {
+  if (!_cmScreenWantsStreams(_cmCurrentTab)) return false;
+  try { startLogStream(); } catch (e) {}
+  try { startHealthStream(); } catch (e) {}
+  return true;
 }
 
 // Same root cause as above — when the browser tab is hidden the 5 SSE are
@@ -5002,6 +5073,14 @@ async function loadAll() {
   try {
     // Runtime scope banner on first paint (showTab only fires on tab switch).
     try { _cmApplyRuntimeScopeNote('overview'); } catch (e) {}
+    // #5935: the two "Today" tiles ask for their own small endpoints, so they
+    // start HERE rather than after the shared /api/overview answer. They used
+    // to be queued behind it: with the daemon busy, /api/overview hit its own
+    // 15 s budget, loadAll fell into the catch below, and these two never ran
+    // at all — the outcome tile sat on the template's "Loading task
+    // outcomes..." for as long as the page stayed open.
+    if (typeof loadOutcomeTile === 'function') loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)});
+    if (typeof loadActivityToday === 'function') loadActivityToday().catch(function(e){console.warn('activity today failed',e)});
     // Render overview quickly; do not block on heavy usage aggregation.
     // #5935: 15 s, not 3 s. On a tab switch this is the first /api/overview
     // caller, so its timer aborts the shared request. Measured with the daemon
@@ -5030,10 +5109,8 @@ async function loadAll() {
     if (typeof loadAutonomy === 'function') setTimeout(function(){ loadAutonomy().catch(function(e){console.warn('autonomy failed',e)}); }, 2600);
     if (typeof loadAnomalyPanel === 'function') setTimeout(function(){ loadAnomalyPanel().catch(function(e){console.warn('anomaly panel failed',e)}); }, 3600);
     if (typeof loadActivityHeatmap === 'function') setTimeout(function(){ loadActivityHeatmap().catch(function(e){console.warn('activity heatmap failed',e)}); }, 4500);
-    // Issue #1614 — outcome tile (Today: N tasks, X% success).
-    if (typeof loadOutcomeTile === 'function') setTimeout(function(){ loadOutcomeTile().catch(function(e){console.warn('outcome tile failed',e)}); }, 800);
-    // UI-coverage audit — today's activity counters strip.
-    if (typeof loadActivityToday === 'function') setTimeout(function(){ loadActivityToday().catch(function(e){console.warn('activity today failed',e)}); }, 900);
+    // (Issue #1614's outcome tile and the activity strip now start at the top
+    // of this function, before the shared /api/overview await — see #5935.)
     // Needs-you strip. First on the page, so it loads first — this is the
     // question people open the dashboard with.
     if (typeof loadNeedsYou === 'function') loadNeedsYou().catch(function(e){console.warn('needs-you failed',e)});
@@ -27502,6 +27579,14 @@ function loadCostOptimizerData(isRefresh) {
     html += '</div>';
 
     // ══ SECTION 3: Local models, only for local traffic ══════════
+    // #5934: on the hosted dashboard this payload is the daemon's snapshot
+    // slice (`_source` "snapshot" / "snapshot.costOptimizer"), which by design
+    // carries no host state — llmfit model fit and whether Ollama is installed
+    // exist only on the computer itself. Printing "pip install llmfit" or a
+    // brew command to a reader on app.clawmetry.com asks them to install
+    // something on a machine they are not sitting at, so the hosted panel says
+    // where that advice lives instead of offering an install instruction.
+    var _coHosted = /^snapshot(\.|$)/.test(String(data._source || ''));
     var la = data.localAdvice || null;
     var _accelLabel = '';
     if (la && la.show) {
@@ -27524,7 +27609,7 @@ function loadCostOptimizerData(isRefresh) {
       if (sys.backend) html += '<span class="hw-card-chip green">' + escapeHtml(sys.backend) + '</span>';
       html += '</div>';
 
-      if (!data.ollamaInstalled) {
+      if (!_coHosted && !data.ollamaInstalled) {
         html += '<div class="co-ollama-prompt">';
         html += '<div style="font-size:13px;color:#a78bfa;font-weight:600;">Ollama is not installed on this machine</div>';
         html += '<div class="co-ollama-cmd">' + escapeHtml(_ollamaInstall) + '</div>';
@@ -27555,6 +27640,11 @@ function loadCostOptimizerData(isRefresh) {
           html += '</div>';
           html += '</div>';
         });
+      } else if (_coHosted) {
+        html += '<div class="cost-opt-local-fit-hosted" style="color:var(--text-muted);font-size:13px;padding:10px 0;">'
+          + escapeHtml(t('app.cost_opt_local_fit_on_device', null,
+              'Which local models fit this hardware is worked out on the computer itself, so that advice is only available in the dashboard running there.'))
+          + '</div>';
       } else {
         html += '<div style="color:var(--text-muted);font-size:13px;padding:10px 0;">llmfit is not available, so no model fit could be computed. Install it with: <code>pip install llmfit</code></div>';
       }
@@ -27568,7 +27658,12 @@ function loadCostOptimizerData(isRefresh) {
 
     body.innerHTML = html;
     document.getElementById('comp-modal-footer').textContent = t("app.auto_refreshing_last_updated", null, "Auto-refreshing - Last updated: ") + new Date().toLocaleTimeString()
-      + (_accelLabel ? ' - ' + (data.llmfitAvailable ? 'llmfit ✓' : 'no llmfit') + ' - ' + _accelLabel + ' backend' : '');
+      + (_accelLabel
+          // Hosted: llmfit never runs off the computer, so "no llmfit" would
+          // report a missing tool rather than a slice that is not shipped.
+          ? (_coHosted ? ' - ' + _accelLabel + ' backend'
+                       : ' - ' + (data.llmfitAvailable ? 'llmfit ✓' : 'no llmfit') + ' - ' + _accelLabel + ' backend')
+          : '');
   }).catch(function(e) {
     clearTimeout(timer);
     if (!isCompModalActive(expectedNodeId)) return;
@@ -29398,11 +29493,17 @@ async function bootDashboard() {
   try { loadSandboxStatus(); } catch (e) {}
 
   // Connect live streams last so they don't eat the waitress thread pool
-  // while the initial fetches are still in flight.
+  // while the initial fetches are still in flight — and only for a screen that
+  // shows them (#5935). Each is an EventSource holding one of the browser's
+  // six connections per origin for as long as it is open; opened on the
+  // Sessions landing screen, which renders neither, they took 2 of the 6 away
+  // from the requests the visible screen was waiting on. switchTab opens them
+  // when the user goes to Overview or Logs.
   setBootStep('streams', 'loading', 'Connecting live streams');
-  try { startLogStream(); } catch (e) {}
-  try { startHealthStream(); } catch (e) {}
-  setBootStep('streams', 'done', 'Live streams connected');
+  var _streamsOpened = _cmStartScreenStreams();
+  setBootStep('streams', 'done', _streamsOpened
+    ? 'Live streams connected'
+    : 'Live streams connect when you open a screen that shows them');
 
   // (#5935) No background prefetch of the Crons and Memory screens here any
   // more. Nothing outside those screens reads what they load, switchTab()

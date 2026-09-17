@@ -53,6 +53,11 @@ const HELPERS = [
   'var _cmWidgetLoadedAt = {};',
   extractOr('_cmMarkLoaded', 'function _cmMarkLoaded(k) { _cmWidgetLoadedAt[k] = Date.now(); }'),
   extractOr('_cmLoadedWithin', 'function _cmLoadedWithin() { return false; }'),
+  // #5935 (busy daemon): the streams are opened per screen, not per boot.
+  // Fallbacks keep the suite reporting BEHAVIOUR on a build that predates them.
+  extractOr('_cmScreenWantsStreams', 'function _cmScreenWantsStreams() { return true; }'),
+  extractOr('_cmStartScreenStreams',
+    'function _cmStartScreenStreams() { startLogStream(); startHealthStream(); return true; }'),
 ].join('\n');
 
 function counters() {
@@ -92,8 +97,8 @@ async function bootWith(currentTab) {
     loadCrons: bump('loadCrons'),
     loadMemory: bump('loadMemory'),
     loadSandboxStatus: () => {},
-    startLogStream: () => {},
-    startHealthStream: () => {},
+    startLogStream: bump('startLogStream'),
+    startHealthStream: bump('startHealthStream'),
     startSystemHealthRefresh: () => {},
     startOverviewRefresh: () => {},
     startOverviewTasksRefresh: () => {},
@@ -221,6 +226,35 @@ function stillLoadingWith(scope) {
   return { els, win: sandbox.window };
 }
 
+// ── 6. a tile fetch survives a busy server, and retries only a timeout ────
+// #5935 busy daemon: /api/outcomes answered in 28.5 s and /api/activity-today
+// in 9.3 s on a scratch install whose daemon was writing under 12 concurrent
+// readers. The tiles asked with 3 s and 4 s budgets and aborted on the client.
+async function tileFetch(failures) {
+  const calls = [];
+  const sandbox = { console, Promise, Date };
+  sandbox.fetchJsonWithTimeout = function (url, ms) {
+    calls.push(ms);
+    const next = failures.shift();
+    if (next) return Promise.reject(next);
+    return Promise.resolve({ url: url, ok: true });
+  };
+  vm.createContext(sandbox);
+  let helper;
+  try { helper = extract('_cmTileFetch', true); } catch (e) { return { missing: true }; }
+  const budget = src.match(/^var _CM_TILE_BUDGET_MS = \d+;/m);
+  const retry = src.match(/^var _CM_TILE_RETRY_BUDGET_MS = \d+;/m);
+  vm.runInContext(
+    (budget ? budget[0] : '') + '\n' + (retry ? retry[0] : '') + '\n'
+    + helper + '\nthis._tile = _cmTileFetch;',
+    sandbox,
+  );
+  let answer = null;
+  let threw = null;
+  try { answer = await sandbox._tile('/api/outcomes?window=1d'); } catch (e) { threw = e; }
+  return { missing: false, calls, answer, threw };
+}
+
 (async function main() {
   console.log('bootDashboard: startup loads only the screen the page lands on');
   const onSessions = await bootWith('transcripts');
@@ -260,6 +294,32 @@ function stillLoadingWith(scope) {
     eq(so.duringFlight, 1, 'five concurrent consumers send exactly one /api/overview request');
     eq(so.same, true, 'every consumer receives the same answer');
     eq(so.afterSettle, 2, 'a refresh after the request settled fetches fresh data');
+  }
+
+  console.log('live streams: opened for a screen that shows them, not for every boot');
+  eq(onSessions.startLogStream || 0, 0, 'landing on Sessions does not open the log stream');
+  eq(onSessions.startHealthStream || 0, 0, 'landing on Sessions does not open the health stream');
+  eq(onOverview.startLogStream || 0, 1, 'landing on Overview still opens the log stream');
+  eq(onOverview.startHealthStream || 0, 1, 'landing on Overview still opens the health stream');
+
+  console.log('tile fetch: one retry for a slow server, none for a real answer');
+  const tf = await tileFetch([]);
+  eq(tf.missing, false, 'app.js defines the tile fetch helper');
+  if (!tf.missing) {
+    eq(tf.calls.length, 1, 'a server that answers is asked once');
+    eq(tf.calls[0] >= 8000, true, 'the first tile budget outlasts a busy store (>= 8 s)');
+
+    const slow = await tileFetch([{ name: 'AbortError' }]);
+    eq(slow.calls.length, 2, 'a timed-out tile request is retried once');
+    eq(slow.calls[1] > slow.calls[0], true, 'the retry waits longer than the first try');
+    eq(slow.threw, null, 'the retry answer reaches the tile');
+
+    const twice = await tileFetch([{ name: 'AbortError' }, { name: 'AbortError' }]);
+    eq(twice.calls.length, 2, 'a tile gives up after one retry rather than hammering');
+    eq(twice.threw !== null, true, 'the second timeout surfaces, so the tile can say so');
+
+    const broken = await tileFetch([new Error('HTTP 500')]);
+    eq(broken.calls.length, 1, 'a real error answer is not retried');
   }
 
   console.log('slow usage: placeholders only where nothing was measured');

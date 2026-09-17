@@ -191,6 +191,82 @@ def test_slow_usage_never_draws_measured_looking_zeros() -> None:
     )
 
 
+def test_overview_tiles_do_not_queue_behind_the_shared_overview_request() -> None:
+    """Busy daemon (#5935, re-audit 2026-09-15). The outcome tile and the
+    activity strip used to start 800/900 ms AFTER ``await
+    _cmFetchOverviewShared()``. Measured on a scratch install with the daemon
+    writing under 12 concurrent readers, ``/api/overview`` hit its own 15 s
+    budget, ``loadAll`` fell into its catch, and neither tile ever ran: the
+    outcome tile sat on the template's "Loading task outcomes..." for as long
+    as the page was open. They must start before that await."""
+    body = _function("loadAll", is_async=True)
+    await_at = body.index("await _cmFetchOverviewShared()")
+    for name in ("loadOutcomeTile", "loadActivityToday"):
+        assert name in body, f"{name} is no longer started by loadAll"
+        assert body.index(name) < await_at, (
+            f"{name} still waits for the shared /api/overview answer"
+        )
+
+
+def test_tile_requests_outlast_a_busy_store() -> None:
+    """The two tiles aborted their own requests at 3 s and 4 s while the busy
+    store answered them in 28.5 s and 9.3 s. Both now go through the shared
+    tile fetch, which retries a timeout once."""
+    src = _src()
+    m = re.search(r"^var _CM_TILE_BUDGET_MS = (\d+);", src, re.M)
+    assert m and int(m.group(1)) >= 8000, "no tile budget that outlasts a busy store"
+    r = re.search(r"^var _CM_TILE_RETRY_BUDGET_MS = (\d+);", src, re.M)
+    assert r and int(r.group(1)) > int(m.group(1)), "the retry must wait longer than the first try"
+    for name, url in (("loadOutcomeTile", "/api/outcomes"), ("loadActivityToday", "/api/activity-today")):
+        body = _function(name, is_async=True)
+        assert "_cmTileFetch(" in body, f"{name} does not use the shared tile fetch"
+        assert not re.search(r"fetchJsonWithTimeout\('" + re.escape(url) + r"[^']*',\s*\d+\)", body), (
+            f"{name} still sets its own short budget"
+        )
+
+
+def test_failed_tiles_say_so_instead_of_showing_zeros() -> None:
+    """AC 5, the tile half: the activity strip hid itself when its read failed,
+    which is indistinguishable from a quiet day, and the outcome tile left the
+    template's loading line on screen forever."""
+    strip = _function("loadActivityToday", is_async=True)
+    catch = strip[strip.index("catch (e)"):strip.index("var tool =")]
+    assert "display = 'none'" not in catch, (
+        "a failed activity read still hides the strip, which reads as 'nothing happened today'"
+    )
+    assert "loadActivityToday()" in catch and "could not be read" in catch, (
+        "no sentence and no retry beside a failed activity read"
+    )
+    outcome = _function("loadOutcomeTile", is_async=True)
+    tail = outcome[outcome.rindex("catch"):]
+    assert "loadOutcomeTile()" in tail, "no way to retry a failed outcome read"
+    # Code only: the comment above the handler quotes the old loading line.
+    code = "\n".join(ln for ln in tail.splitlines() if not ln.lstrip().startswith("//"))
+    assert "Loading" not in code, "a failed outcome read must not leave a loading line on screen"
+    assert "could not be read" in code, "a failed outcome read must say so in words"
+
+
+def test_boot_opens_live_streams_only_for_a_screen_that_shows_them() -> None:
+    """The log and health EventSources hold 2 of the browser's 6 connections
+    per origin for as long as they are open. Boot opened both on the Sessions
+    landing screen, which renders neither."""
+    boot = _function("bootDashboard", is_async=True)
+    assert "_cmStartScreenStreams()" in boot, "boot does not go through the per-screen starter"
+    assert not re.search(r"try \{ startLogStream\(\); \}", boot), (
+        "boot still opens the log stream unconditionally"
+    )
+    assert not re.search(r"try \{ startHealthStream\(\); \}", boot), (
+        "boot still opens the health stream unconditionally"
+    )
+    switch = _function("switchTab")
+    assert "_cmScreenWantsStreams(name)" in switch, (
+        "no screen opens the streams boot no longer opens"
+    )
+    wants = _function("_cmScreenWantsStreams")
+    for tab in ("overview", "logs"):
+        assert f"'{tab}'" in wants, f"the {tab} screen shows a live stream and must get one"
+
+
 def test_failures_read_as_sentences_not_raw_error_codes() -> None:
     """AC 5: a busy server is not 'Failed to load: timeout'."""
     for name in ("loadSystemHealth", "loadCrons"):
