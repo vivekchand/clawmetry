@@ -1026,7 +1026,8 @@ jsonschema-specifications==2025.9.1 \
     # via jsonschema
 litellm==1.93.0 \
     --hash=sha256:5784a1d9a9a4a8acd6ca1e347003a5e2e1b3c749b4d41e7da4904577adade111 \
-    --hash=sha256:e2f2cb99df2e2b2eab63f1354faa45c88dd7c8d40c18eb648afb1b349c689633
+    --hash=sha256:e2f2cb99df2e2b2eab63f1354faa45c88dd7c8d40c18eb648afb1b349c689633 \
+    --hash=sha256:460001b7c88c5b6675ad482ae3cecba96e21f890604b4febb1a67807ace1c750
     # via -r ll.in
 litellm-enterprise==0.1.37 \
     --hash=sha256:c1c231d21df6ab0fe77e2c1e10c14764a726a8eea9c328803ca872e5256afc10 \
