@@ -3,7 +3,9 @@
 (function () {
   'use strict';
   var timer = null, deadline = null, busy = false, stopped = false, started = false;
-  var shown = false, failures = 0, priorFocus = null;
+  var shown = false, failures = 0, priorFocus = null, confirmed = false;
+  // read() returns this when nothing has ever reported to this account.
+  var NOT_APPLICABLE = {};
   var resolveCheck;
   var api = window.cmFirstRun = {
     active: false, checking: true,
@@ -21,6 +23,13 @@
 
   function show() {
     if (!el('') || shown) return;
+    // Cloud earns this screen only from a daemon that positively reported an
+    // unfinished first sync. No snapshot, a snapshot that reports nothing, or
+    // a probe that failed are all UNKNOWN. An unknown must never cover the
+    // hosted dashboard: this screen is fixed over the whole page and marks
+    // the dashboard inert, so an account with nothing to wait for was left
+    // unable to click its own nav.
+    if (window.CLOUD_MODE && !confirmed) return;
     shown = true;
     api.active = true;
     priorFocus = document.activeElement;
@@ -104,15 +113,19 @@
       return await Promise.race([
         (async function () {
           if (window.CLOUD_MODE) {
-            if (typeof window.__cmSnap !== 'function') throw new Error('snapshot unavailable');
-            var snapshot = await window.__cmSnap();
-            if (!snapshot) throw new Error('snapshot pending');
-            var fr = snapshot.firstRun;
-            if (fr && fr.readiness) return fr.readiness;
+            var snapshot = (typeof window.__cmSnap === 'function') ? await window.__cmSnap() : null;
+            var fr = snapshot && snapshot.firstRun;
+            // The daemon's own readiness record is the only thing that can
+            // claim a first sync is running.
+            if (fr && fr.readiness) { confirmed = true; return fr.readiness; }
             // Compatibility with already-installed daemons. A populated
             // snapshot is enough to avoid gating an established install.
-            var hasData = Number(snapshot.sessionCount) > 0 || (Array.isArray(snapshot.transcripts) && snapshot.transcripts.length > 0);
-            return { available: true, initialized: hasData || !!(fr && fr.done), has_data: hasData, phase: fr && fr.phase };
+            var hasData = !!snapshot && (Number(snapshot.sessionCount) > 0 || (Array.isArray(snapshot.transcripts) && snapshot.transcripts.length > 0));
+            if (hasData || (fr && fr.done)) return { available: true, initialized: true, has_data: hasData, phase: fr && fr.phase };
+            // Otherwise no machine has told this account anything. That is an
+            // account with nothing installed yet, not a sync in progress, and
+            // the hosted dashboard already tells that story itself.
+            return NOT_APPLICABLE;
           }
           var response = await fetch('/api/onboarding/readiness', { signal: controller.signal });
           if (!response.ok) throw new Error('readiness unavailable');
@@ -130,6 +143,7 @@
     try {
       var status = await read();
       if (stopped) return;
+      if (status === NOT_APPLICABLE) { close(false); return; }
       if (!status || status.available !== true || typeof status.initialized !== 'boolean' || typeof status.has_data !== 'boolean') throw new Error('invalid readiness');
       // Scope dismissal to this installation's durable startup record. A
       // reinstall on the same localhost origin must get its own preparation.
@@ -189,6 +203,11 @@
     el('continue').addEventListener('click', function () { close(true); });
     el('retry').addEventListener('click', run);
     el('').addEventListener('keydown', function (event) {
+      // A dialog that covers the dashboard and swallows every click must
+      // answer Escape (WAI-ARIA authoring practices for modal dialogs).
+      // Without it, the single button on the screen is the only way out of a
+      // setup that cannot finish.
+      if (event.key === 'Escape') { event.preventDefault(); close(true); return; }
       if (event.key !== 'Tab') return;
       var first = el('retry').hidden ? el('continue') : el('retry');
       var last = el('continue');

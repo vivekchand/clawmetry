@@ -146,5 +146,46 @@ function harness(responses, cloud = false) {
     assert.equal(h.window.cmFirstRun.active, false, 'never cover the secret-key prompt or support view');
     assert.equal(h.window.cmFirstRun.checking, false);
   }
+  // ── Cloud: an account that has never synced is not "preparing" ───────
+  // The hosted dashboard shipped this screen for any account whose snapshot
+  // is absent or reports nothing, which is every freshly registered account.
+  // It is position:fixed over the whole page and marks #zoom-wrapper inert,
+  // so the left nav stopped taking clicks, and the bounded wait settles by
+  // SHOWING the screen rather than by leaving -- there was no state it could
+  // reach on its own that gave the dashboard back. Only the daemon's own
+  // readiness record can claim a first sync is running. Absence of one is
+  // unknown, and an unknown must never cover the dashboard.
+  h = harness([null], true); await h.start();
+  assert.equal(h.element('first-run').hidden, true, 'no snapshot yet must not cover the hosted dashboard');
+  assert.equal(h.window.cmFirstRun.active, false);
+  assert.equal(h.element('zoom-wrapper').inert, false, 'the left nav must stay clickable');
+  assert.equal(h.window.cmFirstRun.checking, false, 'boot must not wait on a screen that will not open');
+
+  h = harness([{ sessionCount: 0, transcripts: [] }], true); await h.start();
+  assert.equal(h.element('first-run').hidden, true, 'an empty snapshot is not a first sync in progress');
+  assert.equal(h.element('zoom-wrapper').inert, false);
+
+  h = harness([new Error('offline')], true); await h.start(); await h.fire(8000);
+  assert.equal(h.element('first-run').hidden, true, 'a failed cloud probe says nothing, so it covers nothing');
+  await h.fire(180000);
+  assert.equal(h.element('first-run').hidden, true, 'the bounded wait must not settle by covering the dashboard');
+  assert.equal(h.element('zoom-wrapper').inert, false);
+
+  // A daemon that positively reports an unfinished first sync still earns it.
+  h = harness([{ firstRun: { readiness: { ...pending } } }], true); await h.start();
+  assert.equal(h.element('first-run').hidden, false, 'a reported first sync still shows on cloud');
+  assert.equal(h.element('zoom-wrapper').inert, true);
+
+  // ── Escape always leaves ─────────────────────────────────────────────
+  // A dialog that covers the dashboard and swallows every click must answer
+  // Escape (WAI-ARIA authoring practices for modal dialogs). Without it the
+  // only way out of a screen that cannot finish is the one button on it.
+  h = harness([{ ...pending }]); await h.start();
+  assert.equal(h.window.cmFirstRun.active, true);
+  h.element('first-run').keydown({ key: 'Escape', preventDefault() {} });
+  assert.equal(h.window.cmFirstRun.active, false, 'Escape closes the preparation screen');
+  assert.equal(h.element('first-run').hidden, true);
+  assert.equal(h.element('zoom-wrapper').inert, false, 'Escape gives the dashboard back');
+
   console.log('PASS: first-run readiness, polling, recovery, cloud and empty states');
 })().catch(error => { console.error(error); process.exitCode = 1; });
