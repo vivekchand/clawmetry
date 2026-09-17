@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-283 modules, 86 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+284 modules, 86 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -141,6 +141,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/_gate.py` | medium | Shared 402 ``upgrade_required`` decorator for entitlement-gated routes. |
 | `clawmetry/_paywall.py` | medium | Shared 402 ``upgrade_required`` body builder for OSS stub blueprints. |
 | `clawmetry/_paywall_events.py` | large | In-process rolling store for ``POST /api/paywall/event`` client beacons. |
+| `clawmetry/agent_inventory.py` | medium | Agent supply chain: what each agent runtime loads from disk, and what changed. |
 | `clawmetry/agentops_metrics.py` | medium | AgentOps window metrics: latency, handoffs, guardrails, review, ground truth. |
 | `clawmetry/alert_evaluator.py` | large | Local alert-rule evaluator — pure logic, no I/O (PRD #779 PR-D part 2). |
 | `clawmetry/apikeys.py` | medium | scoped, revocable read keys for custom UIs. |

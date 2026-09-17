@@ -69,6 +69,10 @@ WORKSPACE_KINDS = (
     "repo_config_exec",      # the checkout's own config names a program
     "agent_config_tamper",   # an agent hook config was changed under us
     "package_manifest_exec", # the checkout runs its own code on `npm install`
+    # Raised from clawmetry/agent_inventory.py, which reads the same kind of
+    # surface (configuration an agent loads) and emits in this module's shape.
+    # Declared here so there is still ONE list of workspace kinds.
+    "agent_component_change",  # an MCP server, skill or plugin was added or changed
 )
 
 # Git config keys whose VALUE is a program git will execute. Section+key, lowered.

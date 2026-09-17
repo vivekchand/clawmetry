@@ -39,7 +39,7 @@ Each stage is one or more consecutive ATLAS procedure steps, scored on its own:
 
 A case is **caught** when its decisive stage is detected, **partial** when any stage is partial or better, and **missed** otherwise. Every chain is replayed twice: **cold start** (no history, as on a fresh install) and **learned baseline** (40 earlier sessions whose hosts Guard has learned). Findings are produced after the call they describe, on the daemon's next pass, so no finding here stopped anything. Policy decisions are **configured**: a policy matched, and no actuator ran. The pre-tool column is the risk ClawMetry's call classifier assigns; it is a classification, not a hold.
 
-Framework IDs in parentheses after a finding's severity (e.g. `(LLM02:2026, ASI03, AML.T0055)`) are from ClawMetry's framework contract (`clawmetry/framework_map.py`, mapping version `2026-09-14.2`), sourced from #5952. They indicate the finding is *relevant to* those OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS items - not that the risk is prevented. A finding with no IDs has no honest match in any of the three frameworks.
+Framework IDs in parentheses after a finding's severity (e.g. `(LLM02:2026, ASI03, AML.T0055)`) are from ClawMetry's framework contract (`clawmetry/framework_map.py`, mapping version `2026-09-15.1`), sourced from #5952. They indicate the finding is *relevant to* those OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS items - not that the risk is prevented. A finding with no IDs has no honest match in any of the three frameworks.
 
 ## Summary
 

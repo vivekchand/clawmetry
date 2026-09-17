@@ -120,6 +120,23 @@
     </div>
   </div>
 
+  <div class="card" id="guard-inventory-card">
+    <div class="card-head">
+      <h3 data-i18n="guard.inventory">What your agents load</h3>
+      <span id="guard-inventory-summary" class="section-sub" style="margin:0;font-variant-numeric:tabular-nums;"></span>
+      <button class="btn btn-sm" onclick="loadGuardInventory()" data-i18n="guard.refresh">Refresh</button>
+    </div>
+    <p class="section-sub" data-i18n="guard.inventory_sub">
+      MCP servers, skills, plugins, instruction files and hook files that Claude Code, Codex, Cursor,
+      Gemini CLI, opencode and OpenClaw read on this machine, for all runtimes together. When one is
+      added or changed, the running sessions that load it are flagged. ClawMetry only reads these files
+      and never starts a component, so an MCP server's tool descriptions are not checked.
+    </p>
+    <div id="guard-inventory-body">
+      <div class="empty-state" data-i18n="guard.loading">Loading...</div>
+    </div>
+  </div>
+
   <div class="card" id="guard-selfreports-card">
     <div class="card-head">
       <h3 data-i18n="guard.agent_reported">Agent reported</h3>

@@ -32,11 +32,32 @@
 # cell still installs this file, because it reintroduces exactly the
 # Requires-Python failure this file exists to avoid.
 #
+# That refusal is enforced, not remembered: tests/test_pip_bootstrap_py39_pin.py
+# fails any pin at 26.1 or above, and runs in ci.yml's Syntax & Lint job on
+# every PR. It has to be checked there, because the only job that installs this
+# file -- release-canary.yml -- does not run on pull requests, so a bump to a
+# pip that cannot install on 3.9 is green on every PR check and breaks the
+# release path after it merges. Dependabot has proposed exactly that (#6047).
+# The guard's boundary is "below 26.1", not "exactly 26.0.1", so a 26.0.x
+# release is still free to land here.
+#
+# What staying on 26.0.1 accepts: pip 26.0.1 is named by four published
+# advisories -- GHSA-58qw-9mgm-455v, GHSA-jp4c-xjxw-mgf9, GHSA-qwm4-qh6w-59xr
+# and GHSA-wf93-45jw-7689 -- all fixed in releases that require 3.10+, so no
+# fix is reachable from here. This is a deliberate acceptance, and the exposure
+# it carries is narrow: every one of those advisories concerns what pip does
+# while RESOLVING and fetching from an index, and the two installs this pip
+# performs are this file itself (--require-hashes, one name, exact artifact
+# already verified) and a `clawmetry==<version>` from PyPI in the canary job.
+# It is CI-only -- no released wheel, no user machine, and one call site. The
+# acceptance ends when the repository drops Python 3.9: at that point delete
+# this file, point the canary's matrix at pip-bootstrap.txt, and drop the guard.
+#
 # Regenerating by hand:
 #   pip install --dry-run --ignore-installed --report r.json 'pip==26.0.1'
 # then, for each resolved name==version, take every sha256 under `urls` in
 # https://pypi.org/pypi/<name>/<version>/json.
 
-pip==26.2 \
+pip==26.0.1 \
     --hash=sha256:bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b \
     --hash=sha256:c4037d8a277c89b320abe636d59f91e6d0922d08a05b60e85e53b296613346d8

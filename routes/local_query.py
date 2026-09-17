@@ -1258,6 +1258,8 @@ _DAEMON_METHODS = frozenset({
     "query_self_report_counts",
     "query_self_report_honesty",
     "query_guard_incidents",
+    # Agent supply chain inventory (#5947), read by /api/guard/inventory.
+    "query_agent_inventory",
     "query_session_denials",
     "find_session_by_cwd",
     # Issue #5680 — onboarding ingest-status strip. Polled every 2 s by
