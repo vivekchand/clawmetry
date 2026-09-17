@@ -16,6 +16,10 @@
   var key = keyPrefix + 'pending';
   function el(id) { return document.getElementById('first-run' + (id ? '-' + id : '')); }
   function text(id, value) { var node = el(id); if (node) node.textContent = value; }
+  function validReadiness(status) {
+    return !!status && !Array.isArray(status) && status.available === true &&
+      typeof status.initialized === 'boolean' && typeof status.has_data === 'boolean';
+  }
   function checked() { api.checking = false; resolveCheck(); }
   // The onboarding state request itself can fail or hang. Keep ordinary
   // dashboard boot usable even when this optional feature cannot start.
@@ -113,15 +117,18 @@
       return await Promise.race([
         (async function () {
           if (window.CLOUD_MODE) {
+            confirmed = false;
             var snapshot = (typeof window.__cmSnap === 'function') ? await window.__cmSnap() : null;
             var fr = snapshot && snapshot.firstRun;
-            // The daemon's own readiness record is the only thing that can
-            // claim a first sync is running.
-            if (fr && fr.readiness) { confirmed = true; return fr.readiness; }
-            // Compatibility with already-installed daemons. A populated
-            // snapshot is enough to avoid gating an established install.
+            // The hosted history is already usable, even if the optional
+            // readiness record is stale or malformed (a no-op store can
+            // return []). Never cover real data with a setup status check.
             var hasData = !!snapshot && (Number(snapshot.sessionCount) > 0 || (Array.isArray(snapshot.transcripts) && snapshot.transcripts.length > 0));
-            if (hasData || (fr && fr.done)) return { available: true, initialized: true, has_data: hasData, phase: fr && fr.phase };
+            if (hasData) return { available: true, initialized: true, has_data: true };
+            if (fr && fr.done === true) return NOT_APPLICABLE;
+            // Only a complete, typed readiness envelope can claim a first
+            // sync is running. Truthiness is not confirmation.
+            if (fr && validReadiness(fr.readiness)) { confirmed = true; return fr.readiness; }
             // Otherwise no machine has told this account anything. That is an
             // account with nothing installed yet, not a sync in progress, and
             // the hosted dashboard already tells that story itself.
@@ -144,7 +151,7 @@
       var status = await read();
       if (stopped) return;
       if (status === NOT_APPLICABLE) { close(false); return; }
-      if (!status || status.available !== true || typeof status.initialized !== 'boolean' || typeof status.has_data !== 'boolean') throw new Error('invalid readiness');
+      if (!validReadiness(status)) throw new Error('invalid readiness');
       // Scope dismissal to this installation's durable startup record. A
       // reinstall on the same localhost origin must get its own preparation.
       key = keyPrefix + (status.started_at || 'pending');
@@ -169,6 +176,9 @@
       }
     } catch (e) {
       if (stopped) return;
+      // A failed hosted probe cannot establish that setup is still running.
+      // Leave connection recovery to the dashboard's existing sync UI.
+      if (window.CLOUD_MODE) { close(false); return; }
       failures++;
       // Unknown is not empty, and a failed probe must not silently reveal
       // an apparently broken dashboard to a first-time user.

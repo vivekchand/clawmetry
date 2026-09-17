@@ -11,11 +11,6 @@
   border: 1px solid var(--border-primary, #232329); border-radius: 24px; position: relative;
   background: var(--bg-secondary, #0f0f11);
 }
-.first-run-mark::after {
-  content: ''; position: absolute; inset: -7px; border: 2px solid transparent;
-  border-top-color: #e94644; border-radius: 30px; animation: first-run-orbit 2.8s linear infinite;
-}
-.first-run[data-settled] .first-run-mark::after { animation: none; border-color: var(--border-primary); }
 .first-run h1 { font-size: clamp(24px, 4vw, 30px); letter-spacing: -.7px; line-height: 1.25; margin: 0 0 16px; font-weight: 700; }
 .first-run h1:focus { outline: none; }
 #first-run-description { color: var(--text-tertiary, #9b9ba3); font-size: 14px; line-height: 1.8; margin: 0 auto; max-width: 420px; }
@@ -34,6 +29,4 @@
 .first-run-actions button:focus-visible { outline: 2px solid #ff7775; outline-offset: 4px; }
 body.first-run-active { overflow: hidden; }
 body.first-run-active #sync-status-banner, body.first-run-active #cm-firstrun-banner { display: none !important; }
-@keyframes first-run-orbit { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .first-run-mark::after { animation: none; } }
 @media (max-width: 420px) { .first-run { padding: 28px 20px; } .first-run-steps li { gap: 9px; font-size: 12px; } .first-run-steps small { font-size: 10px; } }

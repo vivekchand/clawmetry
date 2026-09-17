@@ -139,6 +139,28 @@ function harness(responses, cloud = false) {
   assert.equal(h.window.cmFirstRun.active, false);
   h = harness([{ sessionCount: 2 }], true); await h.start();
   assert.equal(h.element('first-run').hidden, true, 'older populated snapshots bypass preparation');
+  // Production: completion + 33 transcript entries, but a no-op store put
+  // [] in readiness. A truthy value is not a valid readiness envelope.
+  for (const readiness of [[], {}, 'pending', { available: false },
+    { ...pending, initialized: 'false' }, { ...pending, has_data: null }]) {
+    for (const snapshot of [
+      { firstRun: { readiness } },
+      { firstRun: { done: true, readiness }, sessionCount: 0, transcripts: [{ sessionId: 'existing' }] }
+    ]) {
+      h = harness([snapshot], true); await h.start();
+      assert.equal(h.element('first-run').hidden, true, 'malformed readiness must never cover cloud');
+      assert.equal(h.element('zoom-wrapper').inert, false);
+      assert.equal(h.window.cmFirstRun.checking, false);
+      assert.equal([...h.timers.values()].some(t => t.ms === 8000 || t.ms === 180000), false,
+        'an inapplicable cloud gate must stop polling and its deadline');
+    }
+  }
+  for (const data of [{ sessionCount: 2 }, { transcripts: [{ sessionId: 'existing' }] }]) {
+    h = harness([{ ...data, firstRun: { readiness: { ...pending } } }], true); await h.start();
+    assert.equal(h.element('first-run').hidden, true, 'usable hosted data wins over stale setup progress');
+  }
+  h = harness([{ firstRun: { done: true, readiness: { ...pending } } }], true); await h.start();
+  assert.equal(h.element('first-run').hidden, true, 'completed cloud collection cannot restart setup');
   for (const gate of ['_cmKeyNeeded', 'CM_SUPPORT_VIEW']) {
     h = harness([null], true); h.window[gate] = true;
     h.listeners.DOMContentLoaded(); await drain();
@@ -165,11 +187,20 @@ function harness(responses, cloud = false) {
   assert.equal(h.element('first-run').hidden, true, 'an empty snapshot is not a first sync in progress');
   assert.equal(h.element('zoom-wrapper').inert, false);
 
-  h = harness([new Error('offline')], true); await h.start(); await h.fire(8000);
+  h = harness([new Error('offline')], true); await h.start();
   assert.equal(h.element('first-run').hidden, true, 'a failed cloud probe says nothing, so it covers nothing');
-  await h.fire(180000);
-  assert.equal(h.element('first-run').hidden, true, 'the bounded wait must not settle by covering the dashboard');
+  assert.equal([...h.timers.values()].some(t => t.ms === 8000 || t.ms === 180000), false);
   assert.equal(h.element('zoom-wrapper').inert, false);
+
+  for (const next of [new Error('offline'), { firstRun: { readiness: [] } },
+    { transcripts: [{ sessionId: 'arrived' }], firstRun: { readiness: { ...pending } } }]) {
+    h = harness([{ firstRun: { readiness: { ...pending } } }, next], true);
+    await h.start();
+    assert.equal(h.window.cmFirstRun.active, true);
+    await h.fire(8000);
+    assert.equal(h.window.cmFirstRun.active, false, 'no stale confirmation may keep cloud covered');
+    assert.equal(h.element('zoom-wrapper').inert, false);
+  }
 
   // A daemon that positively reports an unfinished first sync still earns it.
   h = harness([{ firstRun: { readiness: { ...pending } } }], true); await h.start();

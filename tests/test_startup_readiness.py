@@ -126,6 +126,20 @@ def test_daemon_progress_is_in_the_encrypted_snapshot(store, tmp_path, monkeypat
     assert sync._build_first_run()["readiness"]["phase"] == "complete"
 
 
+@pytest.mark.parametrize("readiness", [[], {}, "pending", {"available": False},
+    {"available": True, "initialized": "false", "has_data": False}])
+def test_snapshot_omits_invalid_readiness(readiness, tmp_path, monkeypatch, caplog):
+    from clawmetry import sync
+    from types import SimpleNamespace
+    monkeypatch.setattr(sync, "_startup_store", SimpleNamespace(query_startup_status=lambda: readiness))
+    monkeypatch.setattr(sync, "SYNC_PROGRESS_FILE", tmp_path / "progress.json")
+    monkeypatch.setattr(sync, "_sync_progress_done", True)
+    snapshot = sync._build_first_run()
+    assert snapshot["done"] is True
+    assert "readiness" not in snapshot
+    assert "readiness" in caplog.text
+
+
 def test_live_template_renders_preparation_and_ships_assets():
     tree = ast.parse((ROOT / "dashboard.py").read_text())
     html = next(ast.literal_eval(n.value) for n in tree.body

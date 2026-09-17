@@ -1594,7 +1594,14 @@ def _build_first_run() -> dict:
     }
     if _startup_store is not None:
         try:
-            out["readiness"] = _startup_store.query_startup_status()
+            readiness = _startup_store.query_startup_status()
+            if (isinstance(readiness, dict)
+                    and readiness.get("available") is True
+                    and isinstance(readiness.get("initialized"), bool)
+                    and isinstance(readiness.get("has_data"), bool)):
+                out["readiness"] = readiness
+            else:
+                log.warning("Could not snapshot dashboard readiness: invalid store response")
         except Exception as exc:
             log.warning("Could not snapshot dashboard readiness: %s", exc)
     try:
