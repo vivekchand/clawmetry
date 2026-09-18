@@ -5138,7 +5138,7 @@ def _cmd_key(args) -> None:
             print("Push a span from anywhere that can reach this machine:")
             print("")
             print("    curl -X POST http://localhost:8900/v1/traces \\")
-            print(f"        -H 'x-clawmetry-key: {plaintext}' \\")
+            print(f"        -H 'x-clawmetry-key: {key_output}' \\")
             print("        -H 'x-clawmetry-runtime: my-engine' \\")
             print("        -H 'x-clawmetry-env: production' \\")
             print("        -H 'Content-Type: application/json' \\")
@@ -7701,6 +7701,7 @@ def _cmd_scan_repo(args) -> None:
     findings = repo_scan.scan_workspace(path)
 
     if getattr(args, "as_json", False):
+        import json
         print(json.dumps({"path": path, "findings": findings}, indent=2))
         raise SystemExit(1 if findings else 0)
 
