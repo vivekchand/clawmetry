@@ -68,3 +68,13 @@ desktop/assets/version.txt
 # clean checkout would ship an incomplete SPA.
 !clawmetry/static/v2/dist/
 !clawmetry/static/v2/dist/**
+
+# Auto-added by github-engineer
+*.pyc
+*.pyd
+*.obj
+*.so
+*.whl
+nem_stats.c
+*.exp
+*.lib

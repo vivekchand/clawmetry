@@ -132,7 +132,7 @@ jobs:
             python -m pip install --require-hashes -r _pins/.github/requirements/pip-bootstrap.txt
           fi
           python -m pip install --no-cache-dir clawmetry
-          python -m pip show clawmetry | head -3
+          python -m pip show clawmetry
 
       # A resolvable install is not a working one. 0.12.753 installed
       # perfectly and then died at import, so import the console script's
