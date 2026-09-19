@@ -1638,7 +1638,13 @@ jobs:
         run: |
           python -m venv /tmp/vwheel
           /tmp/vwheel/bin/pip install --require-hashes -r .github/requirements/pip-bootstrap.txt
-          /tmp/vwheel/bin/pip install dist/clawmetry-*.whl flask waitress cryptography pytest requests
+          # The dependency environment is hash-pinned, and the wheel is then
+          # installed against it with --no-deps. Pinning only the five names
+          # this step used to list would still have left the wheel's own
+          # Requires-Dist to resolve unpinned -- which is most of the closure,
+          # and the half that actually runs the dashboard two steps below.
+          /tmp/vwheel/bin/pip install --require-hashes -r .github/requirements/ci-wheel-install.txt
+          /tmp/vwheel/bin/pip install --no-deps dist/clawmetry-*.whl
       - name: Verify runtime assets shipped in wheel
         run: |
           /tmp/vwheel/bin/python -c "
