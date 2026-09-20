@@ -22,14 +22,15 @@ import pytest
 # taken 2026-08-19; update both places + this list in lockstep when
 # adding a runtime or moving one between tiers).
 #
-# goose moved free 2026-08-19 — see entitlements.FREE_RUNTIMES for why.
+# goose moved free 2026-08-19, qwen_code 2026-09-20 — see
+# entitlements.FREE_RUNTIMES for why.
 # Moving a runtime between these two sets is a PUBLIC PRICING CHANGE: the
 # /pricing bullets and the homepage hero must ship in the same batch, or
 # this guard is lying rather than pinning.
-EXPECTED_FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
+EXPECTED_FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose", "qwen_code"})
 EXPECTED_PAID_RUNTIMES = frozenset({
     "claude_code", "codex", "cursor", "aider",
-    "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
+    "opencode", "hermes", "picoclaw", "nanoclaw",
     "pi", "deepagents", "n8n", "antigravity", "copilot", "grok", "qm",
     "deepseek_harness",
     "exo",
@@ -60,7 +61,7 @@ def fresh_entitlements(monkeypatch, tmp_path):
 
 
 def test_free_runtimes_matches_marketing():
-    """The 2 Free runtimes advertised on /pricing must match FREE_RUNTIMES."""
+    """The Free runtimes advertised on /pricing must match FREE_RUNTIMES."""
     from clawmetry.entitlements import FREE_RUNTIMES
     assert FREE_RUNTIMES == EXPECTED_FREE_RUNTIMES, (
         f"FREE_RUNTIMES drift: catalogue={set(FREE_RUNTIMES)} "
@@ -86,24 +87,34 @@ def test_runtime_labels_cover_every_advertised_runtime():
         assert RUNTIME_LABELS[r], f"RUNTIME_LABELS[{r!r}] is empty"
 
 
-def test_api_runtimes_fallback_lists_both_free_runtimes():
+def test_api_runtimes_fallback_lists_every_free_runtime():
     """The /api/runtimes hardcoded never-raise fallback in
-    routes/entitlement.py must include BOTH free runtimes so a busted
-    catalogue read still shows OpenClaw + NemoClaw."""
+    routes/entitlement/ must include EVERY free runtime so a busted
+    catalogue read still shows the whole free tier.
+
+    ``routes.entitlement`` is a package whose ``__init__`` is a re-export
+    shim, so the fallback literal lives in one of the ``_endpoints_*``
+    modules. Scanning only the shim (as this did before 2026-09-20) found
+    no runtime at all and failed on whichever id the frozenset yielded
+    first, which is why it reported goose as missing while goose was in
+    the fallback all along.
+    """
+    import pathlib
+
     import routes.entitlement as _ep
-    # Source-scan: the fallback dict literal is the only Python that
-    # encodes the runtimes when ``get_entitlement`` raises.
-    src = _ep.__file__
-    body = open(src).read()
+
+    pkg = pathlib.Path(_ep.__file__).parent
+    body = "\n".join(f.read_text() for f in sorted(pkg.glob("*.py")))
     for r in EXPECTED_FREE_RUNTIMES:
         assert f'"id": "{r}"' in body, (
-            f"/api/runtimes fallback in {src} missing free runtime {r!r}"
+            f"/api/runtimes fallback in {pkg} missing free runtime {r!r}"
         )
 
 
 def test_oss_only_ships_free_runtime_adapters():
     """OSS clawmetry/adapters/ must contain adapter files for the Free
-    runtimes (openclaw, nemoclaw via the NemoClaw facade in nemo.py)."""
+    runtimes (openclaw, nemoclaw via the NemoClaw facade in nemo.py,
+    goose and qwen_code in files named after the runtime)."""
     import importlib
     # OpenClaw: dedicated file.
     oc = importlib.import_module("clawmetry.adapters.openclaw")
@@ -111,6 +122,11 @@ def test_oss_only_ships_free_runtime_adapters():
     # NemoClaw: facade lives in nemo.py (push-mode receiver shares the file).
     nm = importlib.import_module("clawmetry.adapters.nemo")
     assert hasattr(nm, "NemoClawAdapter"), "NemoClawAdapter missing from clawmetry.adapters.nemo"
+    # The OSS runtimes that moved free: their reader must ship here, or the
+    # "free" claim means "ungated but unusable without the paid wheel".
+    for mod_name, cls in (("goose", "GooseAdapter"), ("qwen_code", "QwenCodeAdapter")):
+        mod = importlib.import_module(f"clawmetry.adapters.{mod_name}")
+        assert hasattr(mod, cls), f"{cls} missing from clawmetry.adapters.{mod_name}"
 
 
 def test_no_orphan_runtime_in_paid_set():

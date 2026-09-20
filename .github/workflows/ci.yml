@@ -930,6 +930,8 @@ jobs:
             tests/test_redaction_pii.py \
             tests/test_goose_adapter.py \
             tests/test_goose_platform_paths.py \
+            tests/test_qwen_code_adapter.py \
+            tests/test_adapter_inputs_helper.py \
             tests/test_license_sync_pro_from_config.py \
             tests/test_install_script_pro_upgrade.py \
             tests/test_wake_poll.py \

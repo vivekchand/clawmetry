@@ -1,13 +1,14 @@
 """Tests for the OSS-side adapter split.
 
 Phase 4 moved the paid runtime adapters to clawmetry-pro. Goose came back
-the other way 2026-08-19 (see ``entitlements.FREE_RUNTIMES``): an
-open-source runtime gets a free, open-source adapter, so `pip install
-clawmetry` observes it with no account and no wheel download.
+the other way 2026-08-19 and Qwen Code 2026-09-20 (see
+``entitlements.FREE_RUNTIMES``): an open-source runtime gets a free,
+open-source adapter, so `pip install clawmetry` observes it with no account
+and no wheel download.
 
 Verifies that:
 * OSS clawmetry/adapters/ ships the mechanism + exactly the Free runtime
-  adapters (openclaw, nemo, goose) and none of the paid ones.
+  adapters (openclaw, nemo, goose, qwen_code) and none of the paid ones.
 * ``clawmetry/sync.py:_FAMILY_ADAPTER_SPECS`` points at
   ``clawmetry_pro.adapters.*`` for every PAID runtime, and at
   ``clawmetry.adapters.*`` for every FREE one.
@@ -25,13 +26,13 @@ def test_oss_only_keeps_mechanism_and_free_adapters():
     """The OSS adapters package must ship the Free adapters, and only those."""
     # The Free runtimes + the mechanism are importable from OSS.
     from clawmetry.adapters import (  # noqa: F401
-        base, registry, openclaw, nemo, goose, cost,
+        base, registry, openclaw, nemo, goose, qwen_code, cost, inputs,
     )
 
     # The paid adapter modules MUST NOT exist in OSS.
     for name in (
         "claude_code", "codex", "cursor", "aider",
-        "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
+        "opencode", "hermes", "picoclaw", "nanoclaw",
         "pi", "deepagents", "n8n", "antigravity",
         "copilot", "grok", "qm", "deepseek_harness", "exo", "kimi",
     ):
@@ -93,15 +94,15 @@ def test_family_adapter_classes_keeps_free_when_pro_absent(monkeypatch):
     """Without clawmetry-pro, _family_adapter_classes() still yields the
     bundled FREE adapters; every paid import fails defensively.
 
-    This is the whole point of bundling Goose: a plain `pip install
-    clawmetry` — no account, no licence, no wheel download — must still be
-    able to read a Goose install.
+    This is the whole point of bundling Goose and Qwen Code: a plain `pip
+    install clawmetry` — no account, no licence, no wheel download — must
+    still be able to read either install.
     """
     monkeypatch.setitem(sys.modules, "clawmetry_pro", None)
     monkeypatch.setitem(sys.modules, "clawmetry_pro.adapters", None)
     for name in (
         "claude_code", "codex", "cursor", "aider",
-        "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
+        "opencode", "hermes", "picoclaw", "nanoclaw",
         "pi", "deepagents", "n8n", "antigravity",
         "copilot", "grok", "qm", "deepseek_harness", "exo", "kimi",
     ):
@@ -111,4 +112,4 @@ def test_family_adapter_classes_keeps_free_when_pro_absent(monkeypatch):
     classes = _s._family_adapter_classes()
     names = sorted(getattr(c, "name", "") for c in classes)
     # Exactly the bundled free family adapters — nothing paid leaked through.
-    assert names == ["goose"], names
+    assert names == ["goose", "qwen_code"], names

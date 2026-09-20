@@ -87,7 +87,8 @@ def test_paid_runtime_sessions_returns_402_when_enforced(enforce, runtime):
         assert "tier" in body
 
 
-@pytest.mark.parametrize("runtime", ["openclaw", "nemoclaw"])
+@pytest.mark.parametrize("runtime", ["openclaw", "nemoclaw", "goose",
+                                    "qwen_code", "qwen-code"])
 def test_free_runtime_sessions_passes_through_when_enforced(enforce, runtime):
     """FREE_RUNTIMES must never 402 — even in enforce mode. The gate has to
     stay transparent for the OSS runtimes, otherwise every install would
@@ -118,7 +119,9 @@ def test_sessions_transparent_in_grace_mode(grace, runtime):
 @pytest.mark.parametrize("alias,canonical", [
     ("claude-code", "claude_code"),
     ("claudecode", "claude_code"),
-    ("qwen-code", "qwen_code"),
+    # ("qwen-code", "qwen_code") lived here until qwen_code moved free
+    # 2026-09-20 — a free runtime must NOT 402, which is asserted below.
+    ("gemini-cli", "gemini_cli"),
     ("deep-agents", "deepagents"),
 ])
 def test_paid_runtime_alias_still_402s(enforce, alias, canonical):

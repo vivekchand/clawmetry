@@ -81,7 +81,7 @@ def _free_runtime_ids() -> list:
 
 # Free-only mode marker. Written by ``POST /api/trial/continue-free`` when an
 # expired-trial user chooses to keep only the FREE_RUNTIMES (openclaw,
-# nemoclaw, goose) working rather than upgrade. Presence of this file flips the gate
+# nemoclaw, goose, qwen_code) working rather than upgrade. Presence of this file flips the gate
 # from "block everything" to "block only paid-runtime scoped requests" so
 # ``openclaw`` observability keeps working; ``claude_code`` etc. still 402.
 # Documented in the TrialHardBlockPaywall component of the Local Agent

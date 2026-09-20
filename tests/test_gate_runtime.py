@@ -265,8 +265,11 @@ def test_require_runtime_402_body_required_tier_none_for_unknown(enforce):
 
 
 @pytest.mark.parametrize(
+    # qwen-code/qwencode moved from the paid list above to here when
+    # qwen_code moved free 2026-09-20.
     "alias",
-    ["open-claw", "open_claw", "nemo-claw", "nemo_claw"],
+    ["open-claw", "open_claw", "nemo-claw", "nemo_claw",
+     "qwen-code", "qwencode"],
 )
 def test_require_runtime_canonicalises_free_runtime_aliases(enforce, alias):
     """Aliases for the FREE runtimes (``open-claw`` → ``openclaw``) must
@@ -279,8 +282,11 @@ def test_require_runtime_canonicalises_free_runtime_aliases(enforce, alias):
 
 
 @pytest.mark.parametrize(
+    # qwen-code/qwencode were here until qwen_code moved free 2026-09-20;
+    # gemini-cli/geminicli keep the "hyphen + squashed alias of one paid
+    # runtime" shape this covers. The free side is covered below.
     "alias",
-    ["claude-code", "claudecode", "qwen-code", "qwencode"],
+    ["claude-code", "claudecode", "gemini-cli", "geminicli"],
 )
 def test_require_runtime_canonicalises_paid_runtime_aliases(enforce, alias):
     """Aliases for paid runtimes still get gated, and the 402 body reports

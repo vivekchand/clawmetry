@@ -98,7 +98,7 @@ title C1: ClawMetry (open source) system context
 Person(dev, "Developer / Operator", "Runs AI agents; wants to see what they do, what they cost, and to stop one that has gone wrong")
 System(clawmetry, "ClawMetry", "Local-first observability and governance for 32 agent runtimes. Reads what your agents already write; acts on them only through the five gated surfaces above.")
 
-System_Ext(runtimes, "AI Agent Runtimes", "OpenClaw, NVIDIA NemoClaw and Goose are free in OSS; the other 27 (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Hermes, Aider, opencode, ...) come with the optional Pro plugin")
+System_Ext(runtimes, "AI Agent Runtimes", "OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code are free in OSS; the other 28 (Claude Code, Codex, Cursor, Copilot, Gemini CLI, Hermes, Aider, opencode, ...) come with the optional Pro plugin")
 System_Ext(gateway, "OpenClaw Gateway", "WebSocket control plane (JSON-RPC, :18789) for live data + cron RPC")
 System_Ext(llm, "LLM Provider APIs", "Anthropic / OpenAI / Google / OpenRouter ... (the spend ClawMetry meters)")
 System_Ext(cloud, "ClawMetry Cloud (optional)", "Receives an E2E-encrypted snapshot for remote viewing; decrypted in your browser")

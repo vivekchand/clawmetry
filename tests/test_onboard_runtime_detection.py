@@ -1,8 +1,8 @@
 """Tests for onboarding runtime detection (#3917, founder request).
 
 A machine full of Cursor/Claude Code sessions used to onboard with no hint
-that ClawMetry could watch them, no mention that the free tier covers only
-OpenClaw + NVIDIA NemoClaw, and no pointer to the license key or Cloud
+that ClawMetry could watch them, no mention of which runtimes the free tier
+covers (see entitlements.FREE_RUNTIMES), and no pointer to the license key or Cloud
 signup. runtime_probe supplies presence-only probes (no parsing, no gated
 behaviour) and pure rendering; the onboard wizard prints them.
 """
@@ -54,7 +54,10 @@ def test_probe_found_via_planted_path(monkeypatch, tmp_path):
     results = {p["id"]: p for p in probe_runtimes()}
     assert results["qwen_code"]["found"] is True
     assert results["goose"]["found"] is False
-    assert results["qwen_code"]["free"] is False
+    # qwen_code is a FREE runtime as of 2026-09-20, so the probe must say so
+    # or onboarding shows an upgrade CTA for something already included.
+    assert results["qwen_code"]["free"] is True
+    assert results["claude_code"]["free"] is False
 
 
 def test_probe_env_override(monkeypatch, tmp_path):

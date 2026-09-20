@@ -32,6 +32,8 @@ The FREE layer needs no key, no network call, and no account.
 - `openclaw` — OpenClaw agents
 - `nemoclaw` — NVIDIA NemoClaw agents
 - `goose` — [Goose](https://github.com/block/goose) agents (Block, Apache-2.0)
+- `qwen_code` — [Qwen Code](https://github.com/QwenLM/qwen-code) sessions
+  (Alibaba, Apache-2.0)
 
 Free here means genuinely free: each of these adapters ships **in this
 package** (`clawmetry/adapters/`), so `pip install clawmetry` observes them
@@ -57,6 +59,21 @@ the rule, for three reasons worth recording:
 3. Free alternatives in this category already publish integration pages for
    these runtimes. Being the paid option loses the comparison before anyone
    installs us.
+
+**Qwen Code moved free on 2026-09-20**, the second application of the rule
+and the same mechanism as Goose. Its maintainers closed our README Ecosystem
+listing ([QwenLM/qwen-code#9294](https://github.com/QwenLM/qwen-code/issues/9294),
+with [#9338](https://github.com/QwenLM/qwen-code/pull/9338)) on the entitlement
+split alone — the triage had already verified the integration and cleared the
+traction bar:
+
+> "the Qwen Code reader is closed-source and paid even though the repo is MIT,
+> and we don't want the official README routing users to a capability behind a
+> paywall. [...] Happy to reopen if the Qwen Code adapter moves into the free,
+> open-source package."
+
+Qwen Code is Apache-2.0, so the rule above had already decided it; the listing
+is the occasion, not the reason. Reader now at `clawmetry/adapters/qwen_code.py`.
 
 `nemo_governance` (policy enforcement layered on top of any runtime) is a
 separate **free feature**, not a runtime — see the feature list below.
@@ -91,7 +108,7 @@ below live here so the free UI can render locked rows with an accurate
 **Additional runtimes** (`entitlements.PAID_RUNTIMES`):
 
 `claude_code`, `codex`, `cursor`, `aider`, `opencode`,
-`qwen_code`, `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`,
+`hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`,
 `n8n`, `antigravity`, `copilot`, `grok`, `grok_bot`, `qm`, `deepseek_harness`, `exo`,
 `kimi`, `devin`, `gemini_cli`, `cline`, `openhands`, `openworker`, `lovable`, `openexecutive`.
 

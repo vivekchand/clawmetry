@@ -71,7 +71,7 @@ _PAID_TIERS = frozenset(
 )
 
 # ── Runtime catalogue ───────────────────────────────────────────────────────
-# FREE: the OpenClaw, NVIDIA NemoClaw and Goose runtimes. NeMo *governance*
+# FREE: the OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code runtimes. NeMo *governance*
 # (policy enforcement) is a separate free feature; ``nemoclaw`` here is the
 # agent runtime itself, which is part of the free tier alongside ``openclaw``.
 # Every runtime listed here has its adapter bundled in this package (see
@@ -88,7 +88,16 @@ _PAID_TIERS = frozenset(
 # paid, so the revenue exposure is nil; (3) the free alternatives in this
 # category already publish integration pages, so being the paid option loses
 # the comparison before anyone installs us.
-FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
+#
+# ``qwen_code`` (QwenLM/qwen-code, Alibaba's Apache-2.0 coding CLI) joined
+# 2026-09-20 as the second application of the same rule, prompted by the same
+# mechanism as Goose: its maintainers closed our README Ecosystem listing
+# (QwenLM/qwen-code#9294 + #9338, 2026-09-18) solely because the reader was
+# paid -- "we don't want the official README routing users to a capability
+# behind a paywall [...] happy to reopen if the Qwen Code adapter moves into
+# the free, open-source package". It is an OSS runtime, so the rule already
+# decided it; the listing is the occasion, not the reason.
+FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose", "qwen_code"})
 
 # PAID: every other agent runtime ClawMetry can observe. These ship in the
 # closed-source ``clawmetry-pro`` package, not here — listed so the UI can
@@ -100,7 +109,6 @@ PAID_RUNTIMES = frozenset(
         "cursor",
         "aider",
         "opencode",
-        "qwen_code",
         "hermes",
         "picoclaw",
         "nanoclaw",

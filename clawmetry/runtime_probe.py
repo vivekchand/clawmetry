@@ -34,7 +34,7 @@ from dataclasses import dataclass
 try:  # pragma: no cover - trivial import shim
     from clawmetry.entitlements import FREE_RUNTIMES
 except Exception:  # pragma: no cover - defensive; keep onboarding alive
-    FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose"})
+    FREE_RUNTIMES = frozenset({"openclaw", "nemoclaw", "goose", "qwen_code"})
 
 
 def _tilde(path: str) -> str:

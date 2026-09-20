@@ -171,8 +171,8 @@ def test_min_tier_grace_and_enforce_match(ent, monkeypatch):
 
 
 def test_min_tier_free_runtime_is_oss(ent):
-    for rt in ("openclaw", "nemoclaw"):
-        assert ent.min_tier_for_runtime(rt) == ent.TIER_OSS
+    for rt in ("openclaw", "nemoclaw", "goose", "qwen_code"):
+        assert ent.min_tier_for_runtime(rt) == ent.TIER_OSS, rt
 
 
 def test_min_tier_paid_runtime_is_cloud_starter(ent):
@@ -182,7 +182,6 @@ def test_min_tier_paid_runtime_is_cloud_starter(ent):
         "cursor",
         "aider",
         "opencode",
-        "qwen_code",
         "hermes",
         "picoclaw",
         "nanoclaw",

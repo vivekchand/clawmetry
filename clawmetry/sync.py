@@ -14907,10 +14907,11 @@ def _build_machine_info():
 #
 # FREE adapters are bundled right here in OSS and carry a ``clawmetry.adapters.*``
 # import path, so `pip install clawmetry` alone observes them -- no account, no
-# licence, no wheel download. Goose (block/goose) is the first: its maintainers
-# will only take a ClawMetry tutorial into their docs if it works without a paid
-# plan, and it is an OSS runtime with no enterprise willingness-to-pay, so the
-# adapter belongs in the open package. See docs/ENTITLEMENTS.md for the rule
+# licence, no wheel download. Goose (block/goose) was the first and Qwen Code
+# (QwenLM/qwen-code) the second: in both cases the runtime's maintainers would
+# only list ClawMetry in their own docs if it worked without a paid plan, and
+# both are OSS runtimes with no enterprise willingness-to-pay, so the adapters
+# belong in the open package. See docs/ENTITLEMENTS.md for the rule
 # (open-source runtime -> free adapter; commercial vendor product -> paid).
 _FAMILY_ADAPTER_SPECS = (
     ("clawmetry_pro.adapters.picoclaw", "PicoClawAdapter"),
@@ -14926,7 +14927,10 @@ _FAMILY_ADAPTER_SPECS = (
     # sessions.db, so there is no double-ingest either way.
     ("clawmetry.adapters.goose", "GooseAdapter"),
     ("clawmetry_pro.adapters.opencode", "OpencodeAdapter"),
-    ("clawmetry_pro.adapters.qwen_code", "QwenCodeAdapter"),
+    # FREE + bundled in OSS: Qwen Code is Apache-2.0, so the ENTITLEMENTS
+    # rule puts its reader in the open package (QwenLM/qwen-code#9294).
+    # Same override seam as Goose above if clawmetry-pro also carries one.
+    ("clawmetry.adapters.qwen_code", "QwenCodeAdapter"),
     ("clawmetry_pro.adapters.pi", "PiAdapter"),
     ("clawmetry_pro.adapters.deepagents", "DeepAgentsAdapter"),
     ("clawmetry_pro.adapters.n8n", "N8nAdapter"),

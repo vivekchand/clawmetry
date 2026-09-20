@@ -24,13 +24,14 @@
 # is relative to https://clawmetry.com.
 
 COUNT = 32
-FREE_COUNT = 3
-PAID_COUNT = 29
+FREE_COUNT = 4
+PAID_COUNT = 28
 BLURB = See your agent think. Zero-config observability & governance for 32 AI agent runtimes: Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 more. Live token costs, sessions, tool calls, crons.
 
 goose	Goose	free	/runtimes/goose
 nemoclaw	NemoClaw	free	/nemoclaw
 openclaw	OpenClaw	free	/runtimes/openclaw
+qwen_code	Qwen Code	free	/runtimes/qwen-code
 aider	Aider	paid	/runtimes/aider
 antigravity	Antigravity	paid	/runtimes/antigravity
 claude_code	Claude Code	paid	/runtimes/claude-code
@@ -58,5 +59,4 @@ openworker	OpenWorker	paid	/runtimes/openworker
 pi	Pi	paid	/runtimes/pi
 picoclaw	PicoClaw	paid	/runtimes/picoclaw
 qm	QM	paid	/runtimes/qm
-qwen_code	Qwen Code	paid	/runtimes/qwen-code
 replit	Replit Agent	paid	/runtimes/replit

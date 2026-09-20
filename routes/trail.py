@@ -46,6 +46,7 @@ _BUNDLED_MODULES = {
     "openclaw": "clawmetry.adapters.openclaw",
     "nemoclaw": "clawmetry.adapters.nemo",
     "goose": "clawmetry.adapters.goose",
+    "qwen_code": "clawmetry.adapters.qwen_code",
 }
 
 # Fallback instances (not from the registry) cached per runtime: constructing

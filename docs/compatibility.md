@@ -28,7 +28,7 @@ See [`NUMBAT.md`](NUMBAT.md).
 | Aider       | Beta adapter   | Markdown `.aider.chat.history.md` per project dir (+ `.aider.input.history`) | Transcripts, model, token counts. Per-project history (set `AIDER_HISTORY_DIRS`). |
 | Goose       | Beta adapter (**free**) | SQLite `<goose data dir>/sessions/sessions.db` — `${XDG_DATA_HOME:-~/.local/share}/goose` on macOS **and** Linux, `%APPDATA%\Block\goose\data` on Windows, or `$GOOSE_PATH_ROOT/data` when that is set (`sessions` + `messages` tables) | Transcripts, model, tool calls, real token totals. Adapter ships in the OSS package (`clawmetry/adapters/goose.py`) — no plan required. |
 | opencode    | Beta adapter   | SQLite `~/.local/share/opencode/opencode.db` (`session`/`message`/`part`) | Transcripts, model, tool calls, real tokens + cost. |
-| Qwen Code   | Beta adapter   | JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl` (Gemini-CLI lineage) | Transcripts, model, tool calls + thinking, real token usage. |
+| Qwen Code   | Beta adapter (**free**) | JSONL `~/.qwen/projects/<hash>/chats/<id>.jsonl` (Gemini-CLI lineage) | Transcripts, model, tool calls + thinking, real token usage. Adapter ships in the OSS package (`clawmetry/adapters/qwen_code.py`) — no plan required. |
 | Pi          | Beta adapter   | JSONL `~/.pi/agent/sessions/` | Transcripts, model, tool calls, real tokens + cost. |
 | Deep Agents | Beta adapter   | SQLite `~/.deepagents/.state/sessions.db` | Transcripts, model, tool calls, real tokens + cost. |
 | n8n         | Beta adapter   | SQLite `~/.n8n/database.sqlite` (`execution_entity`/`execution_data`, WAL) | Workflow executions as sessions, node runs as tool calls, AI Agent prompts + model attribution; tokens + cost where the model sub-node records usage. Postgres and n8n Cloud installs are not covered by this adapter. |
@@ -51,8 +51,8 @@ See [`NUMBAT.md`](NUMBAT.md).
 | OpenExecutive | Beta adapter | One SQLite store, `episodic_memory.db` (`$EPISODIC_DB_PATH`; `packages/core/` in a clone under `make dev`, `/data/` in Docker). Found automatically in a clone under `~`, `~/projects`, `~/src`, `~/code`, `~/dev`, `~/repos` or `~/workspace`; a Docker named volume is not visible to the host, so bind-mount `/data` or set `CLAWMETRY_OPENEXECUTIVE_DB` | Sessions, events and cost. Every conversation, including ones that started in Slack or email; each specialist consult as a step with its question and answer; tool calls with failures flagged; every outbound send the scheduler queued, with its status (pending, delivered, failed). Usage rows cover the Executive's own model calls, not the specialist agents', so a session's cost is a floor: the real OpenRouter charge where routed through OpenRouter, otherwise derived from the pricing table. Pause and stop are not offered: one API server process serves every conversation and the scheduler. |
 | ZeroClaw / TrustClaw / Nanobot | Not yet | unverified | Open an issue with a real session capture. |
 
-OpenClaw, NVIDIA NemoClaw and Goose are free in the OSS package — their
-adapters ship in `pip install clawmetry`, so observing them needs no
+OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code are free in the OSS package —
+their adapters ship in `pip install clawmetry`, so observing them needs no
 account, no licence key and no network call. The rule: an **open-source
 runtime** gets a free, open-source adapter; a **commercial vendor product**
 (Claude Code, Codex, GitHub Copilot, Cursor, Antigravity, Grok) needs a

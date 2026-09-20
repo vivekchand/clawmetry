@@ -89,15 +89,19 @@ def test_is_enforced_env_parsing(ent, monkeypatch):
 # ── catalogue invariants ────────────────────────────────────────────────────────
 
 
-def test_free_runtimes_is_openclaw_nemoclaw_and_goose(ent):
+def test_free_runtimes_is_openclaw_nemoclaw_goose_and_qwen_code(ent):
     # NVIDIA NemoClaw is a free-tier agent runtime alongside OpenClaw
     # (issue #2289). NeMo *governance* is a separate free feature.
-    # Goose (block/goose) joined 2026-08-19 under the open-source-runtime
-    # rule; the commercial vendor products stay paid.
-    assert ent.FREE_RUNTIMES == frozenset({"openclaw", "nemoclaw", "goose"})
+    # Goose (block/goose) joined 2026-08-19 and Qwen Code (QwenLM/qwen-code)
+    # 2026-09-20 under the open-source-runtime rule; the commercial vendor
+    # products stay paid.
+    assert ent.FREE_RUNTIMES == frozenset(
+        {"openclaw", "nemoclaw", "goose", "qwen_code"}
+    )
     assert "claude_code" in ent.PAID_RUNTIMES
     assert "nemoclaw" not in ent.PAID_RUNTIMES
     assert "goose" not in ent.PAID_RUNTIMES
+    assert "qwen_code" not in ent.PAID_RUNTIMES
     assert ent.FREE_RUNTIMES.isdisjoint(ent.PAID_RUNTIMES)
 
 
@@ -318,7 +322,6 @@ def test_paid_runtimes_exact_membership(ent):
             "cursor",
             "aider",
             "opencode",
-            "qwen_code",
             "hermes",
             "picoclaw",
             "nanoclaw",
@@ -345,7 +348,7 @@ def test_paid_runtimes_exact_membership(ent):
         }
     )
     assert ent.PAID_RUNTIMES == expected
-    assert len(ent.PAID_RUNTIMES) == 29
+    assert len(ent.PAID_RUNTIMES) == 28
     assert len(ent.ALL_RUNTIMES) == 32
 
 

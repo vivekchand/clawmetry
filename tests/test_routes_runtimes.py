@@ -42,12 +42,13 @@ def test_runtimes_grace_locks_nothing(client):
     assert data["grace"] is True
     assert data["enforced"] is False
     runtimes = {r["id"]: r for r in data["runtimes"]}
-    # OpenClaw is always free.
-    assert runtimes["openclaw"]["free"] is True
-    assert runtimes["openclaw"]["locked"] is False
+    # OpenClaw is always free; so is every other FREE_RUNTIMES entry.
+    for rt in ("openclaw", "nemoclaw", "goose", "qwen_code"):
+        assert runtimes[rt]["free"] is True, rt
+        assert runtimes[rt]["locked"] is False, rt
     # Every paid runtime is present and not locked in grace mode.
     for rt in ("claude_code", "codex", "cursor", "aider",
-               "opencode", "qwen_code", "hermes", "picoclaw", "nanoclaw",
+               "opencode", "hermes", "picoclaw", "nanoclaw",
                "pi", "deepagents"):
         assert rt in runtimes, rt
         assert runtimes[rt]["free"] is False, rt

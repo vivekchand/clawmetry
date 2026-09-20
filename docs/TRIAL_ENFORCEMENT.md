@@ -235,7 +235,7 @@ asserts the forwarder still covers every `hard_block_*` beacon `app.js` posts.
 ## The gate's free-runtimes escape
 
 `POST /api/onboarding/free-only` records `selfhost_free`: the user keeps
-OpenClaw, NVIDIA NemoClaw and Goose (the `FREE_RUNTIMES`, free forever) and
+OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code (the `FREE_RUNTIMES`, free forever) and
 takes no account, no cloud and no trial. It flips free-only mode on
 (`trial_enforcement.set_free_only_mode`, the same marker the expired-trial
 paywall writes) and writes the nocloud marker **before** recording the
