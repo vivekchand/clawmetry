@@ -57,7 +57,7 @@ jobs:
           access-key: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
 
       - name: Start BrowserStack Local Tunnel
-        uses: browserstack/github-actions/setup-local@1ab56d9521ce20f4651bb5d9f3ef39c5ba54805a # master @ 2026-08-28
+        uses: browserstack/github-actions/setup-local@1092dd1bd7e4f19f66f907a3e2d83a6bcee0dd2b # master @ 2026-08-28
         with:
           local-testing: start
           local-identifier: clawmetry-${{ github.run_id }}
@@ -74,7 +74,7 @@ jobs:
 
       - name: Stop BrowserStack Local Tunnel
         if: always()
-        uses: browserstack/github-actions/setup-local@1ab56d9521ce20f4651bb5d9f3ef39c5ba54805a # master @ 2026-08-28
+        uses: browserstack/github-actions/setup-local@1092dd1bd7e4f19f66f907a3e2d83a6bcee0dd2b # master @ 2026-08-28
         with:
           local-testing: stop
           local-identifier: clawmetry-${{ github.run_id }}
