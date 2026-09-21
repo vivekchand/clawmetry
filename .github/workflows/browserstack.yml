@@ -51,7 +51,7 @@ jobs:
           done
 
       - name: Set up BrowserStack env
-        uses: browserstack/github-actions/setup-env@1ab56d9521ce20f4651bb5d9f3ef39c5ba54805a # master @ 2026-08-28
+        uses: browserstack/github-actions/setup-env@1092dd1bd7e4f19f66f907a3e2d83a6bcee0dd2b # master @ 2026-08-28
         with:
           username: ${{ secrets.BROWSERSTACK_USERNAME }}
           access-key: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
