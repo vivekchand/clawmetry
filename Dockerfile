@@ -6,7 +6,7 @@
 # kept in the reference so the line stays readable, and Dependabot's docker
 # ecosystem (.github/dependabot.yml) advances the digest -- without that, a
 # digest pin would freeze this image at today's CVEs forever.
-FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
+FROM python:3.14-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2
 
 LABEL maintainer="ClawMetry Contributors"
 LABEL description="Real-time observability dashboard for OpenClaw AI agents"
