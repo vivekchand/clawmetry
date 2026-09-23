@@ -18,17 +18,17 @@
     "i18next": "^26.4.2",
     "i18next-browser-languagedetector": "^8.0.0",
     "i18next-http-backend": "^4.0.2",
-    "react": "^18.3.1",
+    "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-i18next": "^17.0.13",
-    "react-router-dom": "^7.18.0",
+    "react-router-dom": "^7.18.4",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@types/react": "^18.3.12",
+    "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.0",
-    "typescript": "^5.6.3",
+    "typescript": "^7.0.2",
     "vite": "^8.3.0"
   }
 }

@@ -182,16 +182,36 @@ updates:
   # E2E and screenshot job would sit on one OpenClaw release indefinitely, which
   # is a worse place to be than the moving dist-tag it replaced.
   #
-  # READ BEFORE MERGING A BUMP HERE. This is not a routine dependency. OpenClaw
-  # stopped writing per-session `<sid>.jsonl` transcripts somewhere after
-  # 2026.5.12: on 2026.9.2 there is no `agents/<id>/sessions/` directory at all,
-  # and the transcript lives in `agents/<id>/agent/openclaw-agent.sqlite`
-  # (tables `transcript_events`, `session_transcript_active_events`). The OSS
-  # daemon only globs `agents/main/sessions/*.jsonl`
-  # (clawmetry/sync.py), so a bump past that boundary takes the live E2E suites
-  # red and does not go green again by editing the tests. It needs a real
-  # OpenClaw SQLite reader in the daemon first. Expect the bump PR to fail; that
-  # failure is the signal, not a flake.
+  # READ BEFORE MERGING A BUMP HERE. This is not a routine dependency, and TWO
+  # independent things break on a bump. The directory's package.json carries the
+  # long form under its `//overrides` key; the short version:
+  #
+  #   1. The `overrides` block in that package.json stops applying. It is the
+  #      nearer blocker. 2026.5.12 hoists its dependency tree to the root, where
+  #      the range-scoped keys (tar@7, undici@8, ws@8, markdown-it@14) match;
+  #      newer releases nest the same packages under node_modules/openclaw/,
+  #      where they do not, and add vulnerable transitives the 5.12 tree lacks.
+  #      Measured 2026-09-22 by regenerating the lockfile with only the version
+  #      changed: `npm audit` goes from 4 vulnerable packages / 26 advisories to
+  #      16 / 67 at 2026.5.27, gaining a critical the tar@7 override currently
+  #      clears. The bump is a net REGRESSION until that block is re-derived.
+  #
+  #   2. OpenClaw stopped writing per-session `<sid>.jsonl` transcripts, moving
+  #      them to `agents/<id>/agent/openclaw-agent.sqlite` (tables
+  #      `transcript_events`, `session_transcript_active_events`). The OSS daemon
+  #      only globs `agents/main/sessions/*.jsonl` (clawmetry/sync.py), so a bump
+  #      past that boundary takes the live E2E suites red and does not go green
+  #      again by editing the tests. It needs a real OpenClaw SQLite reader in
+  #      the daemon first.
+  #
+  #      That boundary is NOT at 2026.5.12, which was only the last version
+  #      known-green. Measured against the published tarballs: 2026.5.27 still
+  #      has the JSONL layout and no agent SQLite module; 2026.6.34 ships
+  #      dist/openclaw-agent-db.paths-*.js and a sqlite-*.js bundle. So it falls
+  #      in 2026.5.28..2026.6.34. Grep a candidate tarball for
+  #      `openclaw-agent.sqlite|transcript_events` to place it exactly.
+  #
+  # Expect the bump PR to fail; that failure is the signal, not a flake.
   - package-ecosystem: "npm"
     directory: "/.github/actions/setup-openclaw"
     schedule:
