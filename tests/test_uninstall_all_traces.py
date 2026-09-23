@@ -45,7 +45,7 @@ def test_nsi_is_pure_ascii() -> None:
 
 def test_uninstall_removes_entire_appdata_tree() -> None:
     body = _read()
-    assert 'RMDir /r "$LOCALAPPDATA\\ClawMetry"' in body, (
+    assert '!insertmacro ClawMetryRemoveTree "$LOCALAPPDATA\\ClawMetry"' in body, (
         "uninstall must remove the whole %LOCALAPPDATA%\\ClawMetry tree "
         "(runtime venv, onboarding stamp, bin shim, webview profile, legacy "
         "stray venv layouts), not just runtime/ and bin/"
@@ -60,7 +60,7 @@ def test_uninstall_strips_cloud_token_surgically() -> None:
         "cloudToken cleanup must surgically remove the 'clawmetry' key"
     )
     # ...and never delete OpenClaw's own home or config wholesale.
-    assert 'RMDir /r "$PROFILE\\.openclaw"' not in body, (
+    assert '!insertmacro ClawMetryRemoveTree "$PROFILE\\.openclaw"' not in body, (
         "must never delete the whole ~/.openclaw dir - it belongs to OpenClaw"
     )
     assert 'Delete "$PROFILE\\.openclaw\\openclaw.json"' not in body, (
@@ -84,7 +84,7 @@ def test_uninstall_prefers_cli_cleanup_with_native_fallback() -> None:
     # failure class that motivated this uninstaller.
     body = _read()
     cli_call = body.index('uninstall --yes')
-    native = body.index('RMDir /r "$PROFILE\\.clawmetry"')
+    native = body.index('!insertmacro ClawMetryRemoveTree "$PROFILE\\.clawmetry"')
     assert cli_call < native, (
         "the CLI cleanup (`clawmetry uninstall --yes`) must run before the "
         "native fallback deletions"
@@ -100,7 +100,7 @@ def test_uninstall_deletes_keychain_entry_before_venv_removal() -> None:
     # data section that runs it must execute before UnSecMain deletes the
     # venv - i.e. be declared first (NSIS runs sections in declaration order).
     data_pos = body.index("keyring.delete_password")
-    main_pos = body.index('RMDir /r "$LOCALAPPDATA\\ClawMetry"')
+    main_pos = body.index('!insertmacro ClawMetryRemoveTree "$LOCALAPPDATA\\ClawMetry"')
     assert data_pos < main_pos, (
         "UnSecData (keychain cleanup, needs venv python) must be declared "
         "before UnSecMain (which deletes the venv)"
@@ -122,7 +122,7 @@ def test_uninstall_kills_processes_before_sections_run() -> None:
 
 def test_uninstall_removes_legacy_webview_profile() -> None:
     body = _read()
-    assert 'RMDir /r "$APPDATA\\pywebview"' in body, (
+    assert '!insertmacro ClawMetryRemoveTree "$APPDATA\\pywebview"' in body, (
         "uninstall must remove the legacy shared pywebview profile "
         "(pre-storage_path builds kept ClawMetry cookies/localStorage there)"
     )

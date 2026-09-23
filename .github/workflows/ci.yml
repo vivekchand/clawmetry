@@ -17,6 +17,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The v2 React bundle is built from source into the published wheel, but
+  # until this job existed that build ran ONLY in publish.yml and
+  # release-on-merge.yml -- after merge. So a frontend dependency bump merged
+  # green and detonated at release time, with no PR ever having run it.
+  # 2026-09-23 it cost a P0 desktop fix its release: dependabot's react
+  # 18->19 bump left `@visx/shape@3` (peer react <=18) unsatisfiable, so
+  # `npm ci` died with ERESOLVE, and the typescript 5->7 bump turned the
+  # untyped `import "./styles.css"` side-effect imports into TS2882. Both are
+  # caught by running exactly what the publish path runs, on every PR.
+  frontend-bundle:
+    name: Frontend bundle (npm ci + vite build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          # Matches the publish path deliberately: a cache hit here would
+          # prove something the shipping build never does.
+          package-manager-cache: false
+      # `npm ci`, not `npm install`: the lockfile is what publish.yml
+      # installs, so an ERESOLVE that only the lockfile can fix must fail
+      # here rather than be papered over by a fresh resolution.
+      - name: Build the v2 bundle exactly as the publish path does
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+  windows-uninstall:
+    name: Windows uninstall cleanup
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+      - name: Exercise native uninstall and prove the regression guard
+        run: python desktop/smoke_windows_cleanup.py --verify-regression
+
   # ── Fast syntax check (runs in ~10s, blocks everything else) ─────────────────────
   lint:
     name: Syntax & Lint
@@ -492,6 +541,9 @@ jobs:
       # the JS-unit files above).
       - name: Desktop bootstrap resilience
         run: python3 -m pytest tests/test_desktop_bootstrap_resilience.py -q
+
+      - name: Windows uninstall contracts
+        run: python3 -m pytest tests/test_windows_installer_uninstall_cleanup.py tests/test_uninstall_all_traces.py -q
 
       # Auto-update plan sync (#5955): an entitled-plan heartbeat must never
       # overwrite a human's explicit auto_update=false opt-out. Scoped to the

@@ -507,6 +507,9 @@ jobs:
           # Fixed-name copy — same stable-URL convention as the zip above.
           Copy-Item "dist\ClawMetry-Setup-${version}.exe" "dist\ClawMetry-windows-setup.exe" -Force
 
+      - name: Verify native uninstall cleanup
+        run: python desktop/smoke_windows_cleanup.py
+
       # Verify the artifact, not the build log (FLYWHEEL §0b.5): a chained
       # Authenticode signature must actually be on the setup exe and the
       # app exe, or the SAC uninstall fix silently didn't ship. Also

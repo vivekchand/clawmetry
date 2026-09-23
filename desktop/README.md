@@ -80,6 +80,13 @@ permanently unreadable. The only deliberate leftover is the per-user
 Python runtime the installer may have auto-installed (a shared
 dependency, disclosed in the section description).
 
+Recursive removal reports cleanup stages rather than logging every file.
+This keeps the Windows progress page responsive even when abandoned pip
+upgrades have left a large runtime tree. Locked files produce a warning
+and a nonzero exit code. `smoke_windows_cleanup.py` exercises the shipping
+cleanup macro in a disposable native uninstaller on Windows CI, including
+a regression proof with per-file logging restored.
+
 **Fresh installs always ask to sign in.** The installer purges a stale
 onboarding stamp / instance file when Windows has no ClawMetry
 registered (debris from a broken or manual uninstall — e.g. a

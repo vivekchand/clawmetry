@@ -16,6 +16,7 @@
 
 !include "MUI2.nsh"
 !include "WinMessages.nsh"
+!include "cleanup.nsh"
 
 !ifndef VERSION
   !define VERSION "0.0.0-dev"
@@ -242,20 +243,20 @@ Section "un.Account data + E2E encryption keys" UnSecData
 
   ; ClawMetry-owned files inside the OpenClaw home (local DuckDB store +
   ; scratch dir). Never touch anything else under ~\.openclaw.
-  RMDir /r "$PROFILE\.openclaw\.clawmetry"
+  !insertmacro ClawMetryRemoveTree "$PROFILE\.openclaw\.clawmetry" "ClawMetry runtime data"
   Delete "$PROFILE\.openclaw\clawmetry.db"
   Delete "$PROFILE\.openclaw\clawmetry.db-shm"
   Delete "$PROFILE\.openclaw\clawmetry.db-wal"
 
   ; Node identity, api key, E2E encryption key, license, telemetry ids,
   ; sync state, local history DB.
-  RMDir /r "$PROFILE\.clawmetry"
+  !insertmacro ClawMetryRemoveTree "$PROFILE\.clawmetry" "account data"
 SectionEnd
 
 Section "un.ClawMetry program + runtime" UnSecMain
   SectionIn RO  ; always removed - this IS the uninstall
 
-  RMDir /r "$INSTDIR"
+  !insertmacro ClawMetryRemoveTree "$INSTDIR" "program files"
 
   ; User-PATH entry for the global CLI shim. Tolerant match (case-
   ; insensitive by PS default, trailing-backslash agnostic), and broadcast
@@ -274,13 +275,13 @@ Section "un.ClawMetry program + runtime" UnSecMain
   ; CLI shim (bin\), the private WebView profile (webview\), and any legacy
   ; stray venv layout older builds left at the top level. Removing the
   ; stamp is what makes a reinstall re-onboard.
-  RMDir /r "$LOCALAPPDATA\ClawMetry"
+  !insertmacro ClawMetryRemoveTree "$LOCALAPPDATA\ClawMetry" "runtime and browser data (large installations may take a few minutes)"
 
   ; Legacy shared pywebview profile (%APPDATA%\pywebview) - builds before
   ; the private storage_path fix kept ClawMetry's cookies/localStorage
   ; here. ClawMetry is the only pywebview app we ship; per the 2026-08-10
   ; founder directive every file ClawMetry created goes.
-  RMDir /r "$APPDATA\pywebview"
+  !insertmacro ClawMetryRemoveTree "$APPDATA\pywebview" "legacy browser data"
 SectionEnd
 
 !insertmacro MUI_UNFUNCTION_DESCRIPTION_BEGIN

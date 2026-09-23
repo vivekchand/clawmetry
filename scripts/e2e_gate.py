@@ -127,6 +127,16 @@ REQUIRED_SPECS = [
     # post (on any PR touching Python or product files), the gate still enforces
     # it. Only the "never posted" case is treated as skipped.
     Spec("Drift Bot", "drift-bot", skip_if_unreported=True),
+
+    # The v2 React bundle is rebuilt from source into the published wheel, and
+    # until 2026-09-23 that build ran only AFTER merge (publish.yml,
+    # release-on-merge.yml). Two dependabot frontend bumps merged green that
+    # morning and broke `npm ci` and `tsc -b` respectively; the breakage
+    # surfaced as a failed [RELEASE], holding a P0 Windows uninstall fix off
+    # PyPI. It gates from here because ci.yml has no paths filter, so this job
+    # reports on every pull request -- including the dependabot bumps that are
+    # the whole reason it exists.
+    Spec("Frontend bundle", "Frontend bundle (npm ci + vite build)"),
 ]
 
 # ---------------------------------------------------------------------------

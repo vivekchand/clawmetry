@@ -25,6 +25,19 @@ def _nsi_text() -> str:
     return NSI.read_text(encoding="utf-8")
 
 
+def test_all_recursive_removal_uses_bounded_ui_logging():
+    text = _nsi_text()
+    assert '!include "cleanup.nsh"' in text
+    assert not re.search(r"^\s*RMDir\s+/r\b", text, re.M), (
+        "recursive removal must use ClawMetryRemoveTree to avoid per-file UI work"
+    )
+    helper = NSI.with_name("cleanup.nsh").read_text(encoding="utf-8")
+    assert helper.index("SetDetailsPrint none") < helper.index("RMDir /r")
+    assert helper.index("RMDir /r") < helper.index("SetDetailsPrint lastused")
+    assert "${If} ${Errors}" in helper
+    assert "SetErrorLevel 1" in helper
+
+
 def _uninstall_sections(text: str) -> dict:
     """Map uninstaller section header line -> section body."""
     sections = {}
@@ -45,8 +58,8 @@ def test_uninstaller_removes_runtime_dir_in_mandatory_section():
     # tree (runtime + bin + webview + legacy stray layouts), which
     # subsumes the original runtime-dir requirement from 2026-08-08.
     assert any(
-        r'RMDir /r "$LOCALAPPDATA\ClawMetry"' in body
-        or r'RMDir /r "$LOCALAPPDATA\ClawMetry\runtime"' in body
+        r'!insertmacro ClawMetryRemoveTree "$LOCALAPPDATA\ClawMetry"' in body
+        or r'!insertmacro ClawMetryRemoveTree "$LOCALAPPDATA\ClawMetry\runtime"' in body
         for body in mandatory
     ), (
         "the mandatory uninstall section must remove "
