@@ -893,13 +893,6 @@
       "text": "A remote script piped into bash raises no finding on its own. The call classifier rates it high, but no detector reads that rating. ClawMetry has no pre-tool hook of its own for OpenClaw: the only control that acts before the command runs is OpenClaw's exec approval, which ClawMetry turns on only when a require-approval policy covers exec (see FM-1 to FM-3)."
     },
     {
-      "id": "G3",
-      "stages": [
-        "AML.CS0051 S16"
-      ],
-      "text": "A secret file read and sent out in one command is a warning, not critical: credential_access escalates only when egress happens in a later call. The call classifier rates that command medium."
-    },
-    {
       "id": "G4",
       "stages": [
         "AML.CS0049 S07-S08",

