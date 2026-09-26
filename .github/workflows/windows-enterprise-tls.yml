@@ -44,8 +44,16 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --quiet .
-          # requests: not a package dep, but tests/conftest.py imports it
-          python -m pip install --quiet pytest mitmproxy requests
+          # From the hash-pinned set, not a bare resolve. mitmproxy is about
+          # to become a TRUSTED root CA in this runner's certificate store
+          # (see below), so it is the last install in this repo that should
+          # take whatever the index serves. requests is in there because it
+          # is not a package dep but tests/conftest.py imports it.
+          # That file is resolved for Windows/3.13 and cannot be regenerated
+          # with a plain `pip --platform win_amd64`; see its header.
+          # One line on purpose: this step is pwsh, where `\` is not a line
+          # continuation.
+          python -m pip install --quiet --require-hashes -r .github/requirements/windows-enterprise-tls.txt
           python -c "import truststore; print('truststore OK')"
 
       - name: Unit tests (py3.13, VERIFY_X509_STRICT default-on)
