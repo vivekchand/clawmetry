@@ -63,7 +63,13 @@ jobs:
           # Thin shell: no clawmetry install needed here. Bundle only
           # ships pywebview + PIL. Runtime pip-installs clawmetry on
           # user's machine on first launch.
-          pip install -r desktop/requirements-dev.txt
+          #
+          # From the hash-pinned set rather than desktop/requirements-dev.txt,
+          # whose every line is a floor. What resolves here is frozen into a
+          # SIGNED bundle, so this is the one install in the repo where an
+          # index substitution reaches a user's machine. See that file's
+          # header; it stays in the tree for local `python -m desktop.tray`.
+          pip install --require-hashes -r .github/requirements/desktop-bundle.txt
 
       # PyInstaller (not py2app). py2app 0.28.x has a broken macOS
       # version check on Tahoe / macOS 26 and refuses to build; the
@@ -312,7 +318,11 @@ jobs:
       - name: Install build deps
         run: |
           python -m pip install --require-hashes -r .github/requirements/pip-wheel-bootstrap.txt
-          pip install -r desktop/requirements-dev.txt
+          # Hash-pinned set, not desktop/requirements-dev.txt's floors — see
+          # the macOS job for why a SIGNED bundle cannot take an unpinned
+          # resolve. One file serves all three OS jobs; the Windows half of
+          # it is pythonnet / clr-loader / cffi / pefile / pywin32-ctypes.
+          pip install --require-hashes -r .github/requirements/desktop-bundle.txt
 
       # Stamp the bundle version into desktop/assets/version.txt — see
       # the macOS job for why. -NoNewline so the shell reads a clean
@@ -604,7 +614,14 @@ jobs:
           # skip building the pinned PyGObject wheel THIS interpreter
           # actually needs (see requirements-dev.txt), and re-introduce
           # the "cannot import _gi" crash the pin exists to avoid.
-          pip install --ignore-installed -r desktop/requirements-dev.txt
+          #
+          # Hash-pinned set, not desktop/requirements-dev.txt's floors — see
+          # the macOS job for why a SIGNED bundle cannot take an unpinned
+          # resolve. PyGObject 3.58.0 and pycairo are sdists and still BUILD
+          # here against the apt headers installed above; the pin fixes which
+          # sdist gets built, not whether one does.
+          pip install --ignore-installed --require-hashes \
+            -r .github/requirements/desktop-bundle.txt
 
       # Stamp the bundle version into desktop/assets/version.txt so the
       # shipped shell can report WHICH build the user opened (the open
