@@ -169,9 +169,15 @@
     _shmStep('home');
   };
 
+  // Callable from OUTSIDE the modal too: the expired/ending-trial banner's
+  // "I have a license key" link lands here with the overlay still hidden,
+  // and switching steps inside a hidden overlay paints nothing, so the link
+  // read as dead. Raise the overlay first, then show the paste step.
   window.shmShowLicense = function () {
     _shmStopPoll();
     _err('shm-license-error', '');
+    var o = $('selfhost-modal-overlay');
+    if (o) o.style.display = 'flex';
     _shmStep('license');
     setTimeout(function () { var el = $('shm-license-input'); if (el) el.focus(); }, 60);
   };
