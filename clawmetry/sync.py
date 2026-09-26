@@ -3366,6 +3366,13 @@ def sync_sessions(config: dict, state: dict, paths: dict) -> int:
     # Sort newest-first so recent sessions sync before old ones
     jsonl_files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
 
+    # OpenClaw 2026.9.x+ migrated live session transcripts from .jsonl files
+    # to state/openclaw.sqlite.  When the sessions dir is empty but the SQLite
+    # store exists, emit a single WARNING per restart so the frozen-timestamps
+    # symptom is immediately diagnosable from sync.log.  (#6173)
+    if not jsonl_files and _openclaw_state_sqlite().exists():
+        _warn_sqlite_migration_once()
+
     for fpath in jsonl_files:
         if total >= MAX_EVENTS_PER_CYCLE:
             break  # continue next cycle; progress is saved per-file
@@ -12692,6 +12699,30 @@ CRON_STATE_HEARTBEAT_SEC = 300  # 5 minutes
 def _openclaw_state_sqlite() -> Path:
     """Path to OpenClaw v2026.6.5+ consolidated state DB."""
     return Path(_get_openclaw_dir()) / "state" / "openclaw.sqlite"
+
+
+# Module-level latch so the migration warning fires at most once per daemon
+# restart — frequent enough to appear in sync.log, never often enough to spam.
+_SQLITE_MIGRATION_WARNED: bool = False
+
+
+def _warn_sqlite_migration_once() -> None:
+    """Emit a one-time WARNING when OpenClaw's session store has migrated to
+    SQLite (2026.9.x+) but ClawMetry's filesystem adapter still expects .jsonl
+    files.  The warning is throttled to once per daemon restart so it appears
+    clearly in sync.log without filling it.  (#6173)"""
+    global _SQLITE_MIGRATION_WARNED
+    if _SQLITE_MIGRATION_WARNED:
+        return
+    _SQLITE_MIGRATION_WARNED = True
+    log.warning(
+        "openclaw: no .jsonl session files found in sessions_dir, but "
+        "state/openclaw.sqlite exists.  OpenClaw 2026.9.x+ stores live "
+        "session transcripts in SQLite rather than .jsonl files.  "
+        "ClawMetry cannot yet read from this store, so OpenClaw activity "
+        "timestamps will remain frozen until SQLite ingestion is added.  "
+        "Tracking in https://github.com/vivekchand/clawmetry/issues/6173"
+    )
 
 
 def _load_jobs_from_state_sqlite() -> list | None:

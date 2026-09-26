@@ -356,12 +356,17 @@ def _clawrouter_detect() -> dict:
 def _real_install(sessions_dir: str) -> bool:
     """A genuine OpenClaw install signal, NOT the bare ~/.openclaw dir that
     ClawMetry itself creates as a scratch workspace. Any one of: the openclaw
-    CLI/app, a gateway.pid, real session .jsonl files, or workspace markers."""
+    CLI/app, a gateway.pid, real session .jsonl files, the 2026.9.x+ SQLite
+    state store, or workspace markers."""
     import shutil as _shutil
     if _shutil.which("openclaw") or os.path.isdir("/Applications/OpenClaw.app"):
         return True
     home = os.environ.get("OPENCLAW_HOME") or os.path.expanduser("~/.openclaw")
     if os.path.exists(os.path.join(home, "gateway", "gateway.pid")):
+        return True
+    # OpenClaw 2026.9.x+ migrated live transcripts from .jsonl to SQLite;
+    # the consolidated state DB is the authoritative install signal on those builds.
+    if os.path.isfile(os.path.join(home, "state", "openclaw.sqlite")):
         return True
     if sessions_dir and os.path.isdir(sessions_dir):
         try:
