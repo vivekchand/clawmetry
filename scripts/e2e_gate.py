@@ -35,6 +35,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -285,6 +286,45 @@ def _headers(token):
     }
 
 
+def _next_page_url(link_header, current_url):
+    """Return the ``rel="next"`` URL from a ``Link`` header, or ``None``.
+
+    The value is chosen by whatever answered the request, not by us, and the
+    follow-up request carries the gate's ``Authorization`` header. Two things
+    follow from that, and neither is hypothetical for ``urlopen``: it speaks
+    ``file://`` and ``ftp://`` as readily as https, and it will happily send
+    those headers to any host the string names.
+
+    So the next page has to sit on the same origin as the page we just read.
+    GitHub's own ``next`` link always does -- it is the same endpoint with a
+    higher ``page=`` -- so real pagination is unaffected, while a link pointing
+    anywhere else is dropped rather than followed. Dropping it (instead of
+    raising) keeps the gate's existing failure posture: a partial check-run
+    list is evaluated as pending, never as a pass.
+
+    Same shape as ``_https_redirect_target`` in ``scripts/auto_quarantine.py``,
+    which pins the artifact-download redirect for the same reason.
+    """
+    here = urllib.parse.urlparse(current_url)
+    for part in link_header.split(","):
+        part = part.strip()
+        if 'rel="next"' not in part:
+            continue
+        candidate = part.split(";")[0].strip().lstrip("<").rstrip(">")
+        there = urllib.parse.urlparse(candidate)
+        if (there.scheme.lower(), there.netloc.lower()) != (
+            here.scheme.lower(),
+            here.netloc.lower(),
+        ):
+            print(
+                f"  warn: ignoring pagination link off-origin "
+                f"({there.netloc or 'no host'!r}, expected {here.netloc!r})"
+            )
+            return None
+        return candidate
+    return None
+
+
 def list_check_runs(repo, sha, token):
     """Fetch every check run for a commit, following pagination."""
     url = f"https://api.github.com/repos/{repo}/commits/{sha}/check-runs?per_page=100"
@@ -292,14 +332,10 @@ def list_check_runs(repo, sha, token):
     while url:
         req = urllib.request.Request(url, headers=_headers(token))
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req) as resp:  # noqa: S310 - origin pinned
                 data = json.loads(resp.read())
                 runs.extend(data.get("check_runs", []))
-                url = None
-                for part in resp.headers.get("Link", "").split(","):
-                    part = part.strip()
-                    if 'rel="next"' in part:
-                        url = part.split(";")[0].strip().lstrip("<").rstrip(">")
+                url = _next_page_url(resp.headers.get("Link", ""), url)
         except urllib.error.HTTPError as exc:
             print(f"  warn: check-runs API {exc.code}: {exc.read()[:200]!r}")
             return runs

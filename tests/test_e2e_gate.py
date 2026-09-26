@@ -309,3 +309,39 @@ def test_list_mode_runs_without_network():
         assert e2e_gate.main() == 0
     finally:
         sys.argv = argv
+
+
+# --- pagination follow -------------------------------------------------------
+#
+# list_check_runs pages through the check-runs API by following the Link
+# header's rel="next". That value is chosen by whatever answered the request,
+# and the follow-up request carries the gate's Authorization header, so it is
+# pinned to the origin of the page just read. These cover both halves: real
+# pagination still works, and a link that points anywhere else is dropped.
+
+PAGE1 = "https://api.github.com/repos/o/r/commits/abc/check-runs?per_page=100"
+
+
+def test_next_page_followed_when_it_stays_on_the_same_origin():
+    link = f'<{PAGE1}&page=2>; rel="next", <{PAGE1}&page=9>; rel="last"'
+    assert e2e_gate._next_page_url(link, PAGE1) == f"{PAGE1}&page=2"
+
+
+def test_no_next_link_ends_pagination():
+    assert e2e_gate._next_page_url(f'<{PAGE1}>; rel="prev"', PAGE1) is None
+    assert e2e_gate._next_page_url("", PAGE1) is None
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "https://evil.example/repos/o/r/check-runs",   # other host: would leak the token
+        "http://api.github.com/repos/o/r/check-runs",  # downgraded scheme
+        "file:///etc/passwd",                          # urlopen speaks file://
+        "ftp://api.github.com/x",
+        "//api.github.com/repos/o/r/check-runs",        # scheme-relative, not guessed at
+    ],
+)
+def test_off_origin_next_link_is_not_followed(target):
+    link = f'<{target}>; rel="next"'
+    assert e2e_gate._next_page_url(link, PAGE1) is None
