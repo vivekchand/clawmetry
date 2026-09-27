@@ -182,6 +182,29 @@ _SECRET_VALUE_RX = tuple((label, re.compile(rx, re.I), owners)
                          for label, rx, owners in _SECRET_VALUE_PATTERNS)
 SECRET_VALUE_OWNERS = {label: owners for label, _rx, owners in _SECRET_VALUE_RX}
 _MAX_VALUE_SCAN_CHARS = MAX_INPUT_CHARS
+# Cheap necessary conditions avoid running every shape regex over ordinary
+# long tool output. An unlisted/new category always falls back to its regex.
+# Fold Unicode I variants as well as long-s/Kelvin-sign (via casefold),
+# preserving the extra ASCII-letter matches permitted by Python re.I.
+_SECRET_PREFIXES = {
+    "Hugging Face token": ("hf_",),
+    "GitHub token": ("gh", "github_pat_"),
+    "AWS access key": ("akia", "asia"),
+    "Google API key": ("aiza",),
+    "OpenAI or Anthropic API key": ("sk-",),
+    "Slack token": ("xox",),
+    "Stripe secret key": ("rk_live_", "sk_live_"),
+    "JSON web token": ("eyj",),
+    "private key block": ("-----begin ",),
+    "1Password service account token": ("ops_",),
+    "Buildkite token": ("bkua_",),
+    "Doppler token": ("dp.",),
+    "Modal token": ("ws-", "wk-"),
+    "Perplexity API key": ("pplx-",),
+    "Pulumi token": ("pul-",),
+    "Shopify token": ("shp",),
+    "Vercel token": ("vc",),
+}
 
 
 def _looks_placeholder(value: str) -> bool:
@@ -207,9 +230,14 @@ def _categories_in_views(views) -> tuple:
     """Match already bounded views, preserving category declaration order."""
     try:
         out = []
+        prepared = [(window, window.replace("\u0130", "i").replace("\u0131", "i").casefold())
+                    for window in views]
         for label, rx, _o in _SECRET_VALUE_RX:
+            prefixes = _SECRET_PREFIXES.get(label, ())
             if any(not _looks_placeholder(m.group(0))
-                   for window in views for m in rx.finditer(window)):
+                   for window, lower in prepared
+                   if not prefixes or any(p in lower for p in prefixes)
+                   for m in rx.finditer(window)):
                 out.append(label)
         return tuple(out)
     except Exception:

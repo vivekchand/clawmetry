@@ -186,6 +186,16 @@ def test_a_secret_spanning_host_labels_is_redacted():
     assert step["hosts"] == ("[redacted-host]",)
 
 
+@pytest.mark.parametrize("prefix", ["github", "g\u0131thub", "g\u0130thub"])
+def test_fine_grained_github_tokens_keep_their_distinct_prefix(prefix):
+    """
+    AC-GOV-DET-001.1: both GitHub token prefix families are supported.
+    """
+    value = prefix + "_pat_" + TOKEN[3:] * 2
+    incident = detectors.credential_access([call("echo " + b64(value))], SID)
+    assert incident and incident["evidence"]["value_categories"] == ["GitHub token"]
+
+
 @pytest.mark.parametrize("runtime", sorted(FREE_RUNTIMES | PAID_RUNTIMES))
 @pytest.mark.parametrize("shape", ["direct", "family", "openclaw", "assistant"])
 def test_runtime_profiles_and_event_envelopes_cannot_bypass_decoding(runtime, shape):
