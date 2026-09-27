@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Release: harder-to-evade credential inspection with visible coverage gaps
+
+- Guard now recognizes commonly encoded credentials, including nested percent, Base64, hexadecimal and escaped representations. Tool results keep their original case for this scan, independently of the short error preview.
+- Executable interpreter heredocs remain visible to the behavioral detectors. Padding or adding a placeholder word to a varied token no longer hides the reproduced cases.
+- Destination evidence excludes URL credentials, paths, queries and fragments, and redacts recognized credentials in host labels.
+- Bounded inspection now produces an informational coverage-gap finding when it cannot inspect the complete payload. Guard exposes the check and its reason; observation remains the default.
+- Verified with 639 detector, policy and replay tests, an expanded Guard suite, a real DuckDB-to-Guard integration check, the external credential corpus and 341 nested-encoding combinations. All feature-PR checks passed. See #6182 and `docs/DETECTOR_INSPECTION.md` for the evidence and limits.
+
 ### Release: git transport flags that run a program are high risk; env dumps naming tokens and a root agent are warnings (2026-09-25)
 - **Carries:** #6160 and #6166. Their entries follow.
 - Supersedes the earlier carrier #6165, which carried #6160 only and went stale on `CHANGELOG.md` once #6166 merged.
