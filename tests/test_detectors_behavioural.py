@@ -630,6 +630,7 @@ def test_every_detector_is_reachable_from_run_all():
         "rate_limited", "blocked_on_user", "crashed",
         # Content: prompt-injection signatures in tool results and messages.
         "prompt_injection",
+        "inspection_incomplete",
     }
 
 

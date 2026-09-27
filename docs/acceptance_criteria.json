@@ -13,8 +13,8 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-09-03",
-    "synced_by": "claude-code"
+    "synced_at": "2026-09-27",
+    "synced_by": "codex"
   },
   "_scope": [
     "Only AC families this repository actually implements are gated here.",
@@ -2153,6 +2153,48 @@
       "doc": "Runtime and Session Observability",
       "doc_id": "8e389016-a9c8-4352-9121-72f0e361fdf6",
       "text": "Family-runtime event rows carry the session's working directory as their workspace attribution so approval deny-kills can resolve cwd-based runtimes."
+    },
+    {
+      "id": "AC-GOV-DET-001.1",
+      "doc": "Guard: keeping an agent honest while it runs",
+      "doc_id": "d559f8c3-3797-412b-812f-c71b6d8995ee",
+      "text": "When a supported secret shape is carried in plain text, percent encoding, Base64, hexadecimal, or nested combinations within the bounded inspection budget, the system shall identify its category without including its value in findings."
+    },
+    {
+      "id": "AC-GOV-DET-001.2",
+      "doc": "Guard: keeping an agent honest while it runs",
+      "doc_id": "d559f8c3-3797-412b-812f-c71b6d8995ee",
+      "text": "When a tool result carries an encoded credential, the system shall inspect the original case-preserving result independently of the shortened error-message preview."
+    },
+    {
+      "id": "AC-GOV-DET-001.3",
+      "doc": "Guard: keeping an agent honest while it runs",
+      "doc_id": "d559f8c3-3797-412b-812f-c71b6d8995ee",
+      "text": "When shell input feeds a heredoc to an interpreter, the system shall inspect the executable body; a heredoc used only to write a document shall not be reported as execution."
+    },
+    {
+      "id": "AC-GOV-DET-001.4",
+      "doc": "Guard: keeping an agent honest while it runs",
+      "doc_id": "d559f8c3-3797-412b-812f-c71b6d8995ee",
+      "text": "When a valid-shaped credential contains a placeholder word within otherwise varied content, the system shall not suppress it solely because of that word; exact documented examples and repeated-character placeholders shall retain their exclusions."
+    },
+    {
+      "id": "AC-GOV-DET-001.5",
+      "doc": "Guard: keeping an agent honest while it runs",
+      "doc_id": "d559f8c3-3797-412b-812f-c71b6d8995ee",
+      "text": "When a URL appears in evidence, the system shall keep only a sanitized destination, excluding user information, path, query and fragment, and shall not expose recognizable credentials embedded in host labels."
+    },
+    {
+      "id": "AC-GOV-DET-001.6",
+      "doc": "Guard: keeping an agent honest while it runs",
+      "doc_id": "d559f8c3-3797-412b-812f-c71b6d8995ee",
+      "text": "When the bounded payload inspection cannot cover the supplied input because of size, nesting or expansion limits, the system shall produce an informational incomplete-inspection finding with counts and reasons, without storing raw content or asserting malicious intent."
+    },
+    {
+      "id": "AC-GOV-DET-001.7",
+      "doc": "Guard: keeping an agent honest while it runs",
+      "doc_id": "d559f8c3-3797-412b-812f-c71b6d8995ee",
+      "text": "When an adversarial payload requests excessive decoding or malformed input is supplied, inspection shall remain bounded, perform no network or code execution, and keep the detector pass available."
     }
   ]
 }

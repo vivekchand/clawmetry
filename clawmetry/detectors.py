@@ -10,7 +10,7 @@ stream — NOT an expensive judge. Each detector is pure (no I/O, no store, no
 clock dependence beyond what the caller passes), operates on the last ``W``
 events, never crashes on malformed events, and returns a structured incident.
 
-Twelve detectors in four families. TRAJECTORY (is it stuck?) reads the shape
+Thirteen detectors in four families. TRAJECTORY (is it stuck?) reads the shape
 of the tool stream and lives here. BEHAVIOUR (is it doing something it does
 not normally do?) reads what the calls DID and lives in ``detector_behaviour``:
 ``file_blast_radius``, ``credential_access``, ``network_egress``,
@@ -26,6 +26,9 @@ of tool results and user-sourced messages for prompt-injection signatures:
 ``prompt_injection``, defined in ``detector_injection``. Thresholds are resolved
 in ``detector_calibration``; what a finding costs is computed in
 ``detector_money``.
+
+``inspection_incomplete`` reports credential scanning budgets that were
+exhausted. It is a coverage signal and does not assert malicious intent.
 
 The four trajectory detectors:
 
@@ -84,7 +87,7 @@ from clawmetry.detector_surface import (  # noqa: F401
 # What a call SENT (direction) and CARRIED (credential values); stamped on each
 # step below as ``write_hosts`` and ``secret_values``.
 from clawmetry.detector_payload import (  # noqa: F401
-    _args_text, _secret_value_categories, _write_hosts,
+    _args_text, _secret_scan, _secret_value_categories, _write_hosts,
 )
 from clawmetry.detector_money import (  # noqa: F401
     CRITICAL_SPEND_USD, _SEVERITY_RANK, _severity_promote, annotate_spend,
@@ -134,6 +137,7 @@ DETECTOR_KINDS = (
     "crashed",
     # Content: does text the agent read try to give it instructions?
     "prompt_injection",
+    "inspection_incomplete",
 )
 
 # Kinds only the fleet-wide pass can produce (``detector_swarm``): no single
@@ -447,6 +451,10 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
             continue
         if et in _TOOL_RESULT_TYPES:
             txt = _result_text(data)
+            # Failure previews are lowercased and shortened; neither operation
+            # is valid for inspecting encoded credentials. Walk all result
+            # fields with a separate case-preserving, bounded scan.
+            values, limits = _secret_scan(data)
             sflag = _structured_is_error(data)
             # A structured True wins; otherwise (False or absent) fall back to
             # failure-text markers — adapters that set is_error=False but emit a
@@ -460,7 +468,7 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
                           "has_text": False,
                           # Categories of token-shaped values the output
                           # carried. Never the values themselves.
-                          "secret_values": _secret_value_categories(txt)})
+                          "secret_values": values, "inspection_limits": limits})
             continue
 
         # Tool CALLS (top-level or hosted inside an assistant/model envelope).
@@ -468,6 +476,7 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
         if calls:
             for c in calls:
                 tool = str(c.get("tool") or "")
+                values, limits = _secret_scan(c.get("args"))
                 paths, cmd, hosts = _action_surface(tool, c.get("args"))
                 # An upload is egress even when the command names no URL
                 # (``twine upload``), so its destination joins ``hosts``.
@@ -482,7 +491,7 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
                     # What the call touched; the behavioural detectors read these.
                     "paths": paths, "cmd": cmd, "hosts": hosts,
                     "write_hosts": write_hosts,
-                    "secret_values": _secret_value_categories(_args_text(c.get("args"))),
+                    "secret_values": values, "inspection_limits": limits,
                 })
             continue
 
@@ -1277,6 +1286,28 @@ def crashed(events: Iterable[dict], session_id: str,
         return None
 
 
+def inspection_incomplete(events: Iterable[dict], session_id: str,
+                          runtime: Optional[str] = None, *, thresholds=None,
+                          steps=None, facts=None) -> Optional[dict]:
+    """A bounded credential scan could not inspect the complete payload.
+
+    Informational coverage evidence only: this does not establish hostile
+    intent or claim that other detectors inspected every representation.
+    """
+    rt, _th, st = _prepare(events, steps, thresholds, runtime, session_id)
+    limited = [s for s in st if s.get("inspection_limits")]
+    if not limited:
+        return None
+    return _incident(
+        "inspection_incomplete", session_id, rt, "info",
+        "Credential inspection reached a limit",
+        "Some tool payloads exceeded the bounded credential scan. "
+        "Their contents have not been fully inspected; this does not establish malicious intent.",
+        {"limited_payloads": len(limited),
+         "reasons": sorted({reason for s in limited for reason in s["inspection_limits"]}),
+         "observed": "tool_arguments_and_results"}, limited[0].get("i"))
+
+
 _ALL_DETECTORS = (
     # Trajectory shape: is this agent stuck?
     stuck_loop,
@@ -1294,6 +1325,7 @@ _ALL_DETECTORS = (
     crashed,
     # Content: does text the agent read try to give it instructions?
     prompt_injection,
+    inspection_incomplete,
 )
 
 def run_all(events: Iterable[dict], session_id: str,

@@ -30,7 +30,7 @@ if _REPO_ROOT not in sys.path:
 
 from clawmetry import detectors  # noqa: E402
 
-# The twelve the product promises. Written out rather than derived, because a
+# The kinds the product promises. Written out rather than derived, because a
 # guard that derives BOTH sides of its own comparison cannot catch a deletion.
 EXPECTED_KINDS = {
     "stuck_loop",
@@ -47,6 +47,7 @@ EXPECTED_KINDS = {
     "crashed",
     # Content: does text the agent read try to give it instructions?
     "prompt_injection",
+    "inspection_incomplete",
 }
 
 

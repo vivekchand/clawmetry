@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import re
 
+from clawmetry.detector_decoding import MAX_INPUT_CHARS, text_views
+
 from clawmetry.detector_surface import _MAX_CMD_CHARS, _MAX_SURFACE_ITEMS, _hosts_from_text
 
 
@@ -138,8 +140,8 @@ def _write_hosts(tool: str, args, cmd: str) -> tuple:
 # them to a shared board. Each entry is (category, regex, owner hosts): the
 # hosts the token legitimately goes to. ``None`` means "no claim" (a JWT goes
 # to whatever API issued it); ``()`` means "no host should ever receive this".
-# Only the CATEGORY ever leaves this module. Every regex is case-insensitive
-# because tool-result text is lower-cased before it reaches the detectors.
+# Only categories and limit codes leave this module. The vendored shape rules
+# remain case-insensitive; decoding itself must preserve the original case.
 _NO_OWNER: tuple = ()
 _SECRET_VALUE_PATTERNS = (
     ("Hugging Face token", r"(?<![a-z0-9])hf_[a-z0-9]{30,}",
@@ -179,30 +181,36 @@ _SECRET_VALUE_PATTERNS = (
 _SECRET_VALUE_RX = tuple((label, re.compile(rx, re.I), owners)
                          for label, rx, owners in _SECRET_VALUE_PATTERNS)
 SECRET_VALUE_OWNERS = {label: owners for label, _rx, owners in _SECRET_VALUE_RX}
-_MAX_VALUE_SCAN_CHARS = 8000
+_MAX_VALUE_SCAN_CHARS = MAX_INPUT_CHARS
 
 
 def _looks_placeholder(value: str) -> bool:
     """Documentation tokens: ``AKIAIOSFODNN7EXAMPLE``, ``ghp_XXXX…``. Real
-    tokens are high-entropy; a body with few distinct characters is not one."""
+    tokens must not be suppressed just because part of them looks familiar."""
     body = value.lower()
     body = body.split("_", 1)[-1] if "_" in body[:12] else body
-    return ("example" in body or "xxxx" in body or "your" in body[:8]
-            or len(set(body)) < 8)
+    return value.upper() == "AKIAIOSFODNN7EXAMPLE" or len(set(body)) == 1
 
 
 def _secret_value_categories(text: str) -> tuple:
     """Categories of secret-shaped values in ``text``. Never the values."""
-    if not text:
-        return ()
+    return _secret_scan(text)[0]
+
+
+def _secret_scan(value) -> tuple:
+    """Credential categories plus explicit inspection limits. No raw values."""
+    views, limits = text_views(value)
+    return _categories_in_views(views), limits
+
+
+def _categories_in_views(views) -> tuple:
+    """Match already bounded views, preserving category declaration order."""
     try:
-        window = str(text)[:_MAX_VALUE_SCAN_CHARS]
         out = []
         for label, rx, _o in _SECRET_VALUE_RX:
-            for m in rx.finditer(window):
-                if not _looks_placeholder(m.group(0)):
-                    out.append(label)
-                    break
+            if any(not _looks_placeholder(m.group(0))
+                   for window in views for m in rx.finditer(window)):
+                out.append(label)
         return tuple(out)
     except Exception:
         return ()

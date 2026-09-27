@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Optional
 
 #: Bumped whenever an identifier, an edition or a kind's mapping changes, so a
 #: stored finding says which contract labelled it.
-MAPPING_VERSION = "2026-09-15.1"
+MAPPING_VERSION = "2026-09-27.1"
 
 #: What a finding can establish. The same for every kind today, declared once
 #: so no surface re-derives it.
@@ -246,6 +246,15 @@ MAPPINGS: Dict[str, Dict[str, Any]] = {
                   "benign": "tests/test_detectors_behavioural.py::test_privilege_change_ignores_ordinary_commands"},
     },
     # Silent failure: it stopped, and nobody was told.
+    "inspection_incomplete": {
+        "family": "silent_failure",
+        "owasp_llm": (), "owasp_asi": (), "atlas": (),
+        "status": "none",
+        "none_reason": ("A bounded credential scan reached an inspection limit. "
+                        "This is a coverage gap, not evidence of an attack technique."),
+        "tests": {"positive": "tests/test_detector_evasion.py::test_inspection_limits_are_visible_without_disclosing_content",
+                  "benign": "tests/test_detector_evasion.py::test_ordinary_payload_has_no_incomplete_finding"},
+    },
     "rate_limited": {
         "family": "silent_failure",
         "owasp_llm": (), "owasp_asi": (), "atlas": (),

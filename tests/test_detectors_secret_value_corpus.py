@@ -29,6 +29,9 @@ mostly *values*:
 """
 from __future__ import annotations
 
+import base64
+from urllib.parse import quote
+
 import os
 import re
 import sys
@@ -242,3 +245,27 @@ def test_value_lane_coverage_matches_the_recorded_baseline():
     assert fired == VALUE_LANE_BASELINE, (
         f"value-lane coverage moved to {fired}/{total} (baseline "
         f"{VALUE_LANE_BASELINE}); update VALUE_LANE_BASELINE deliberately")
+
+
+@pytest.mark.parametrize("encoding", ["base64", "url", "hex", "nested"])
+@pytest.mark.parametrize("half", ["true", "false"])
+def test_encoded_external_corpus_preserves_detection_and_near_misses(encoding, half):
+    """
+    AC-GOV-DET-001.1: transformed independent fixtures retain detection.
+    AC-GOV-DET-001.4: encoded near-misses remain benign.
+    """
+    total = fired = 0
+    for rule_id in DLP_RULES:
+        for line in _fixture(rule_id, half) or ():
+            if encoding == "base64":
+                value = base64.b64encode(line.encode()).decode()
+            elif encoding == "hex":
+                value = line.encode().hex()
+            elif encoding == "url":
+                value = "".join("%%%02X" % c for c in line.encode())
+            else:
+                value = base64.b64encode(quote(line, safe="").encode()).decode()
+            total += 1
+            fired += bool(detectors.credential_access(_carrying(value), SID, "claude_code"))
+    assert total >= 30
+    assert fired == (VALUE_LANE_BASELINE if half == "true" else 0)

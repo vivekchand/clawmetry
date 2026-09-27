@@ -19,9 +19,13 @@ Two jobs:
 from __future__ import annotations
 
 import re
+import shlex
+from itertools import islice
+
+from clawmetry.detector_decoding import MAX_INPUT_CHARS
 
 _MAX_SURFACE_ITEMS = 24          # per step; bounds CPU and evidence size
-_MAX_CMD_CHARS = 2000
+_MAX_CMD_CHARS = MAX_INPUT_CHARS
 
 # ── Action surface: what a tool call actually touched ────────────────────────
 # The loop detectors only need (tool, args_hash). The behavioural ones need the
@@ -44,7 +48,7 @@ _CMD_ARG_KEYS = (
 _SHELL_TOOL_SUBSTRINGS = ("bash", "shell", "exec", "terminal", "run_command",
                           "process", "console", "sh")
 
-_URL_RE = re.compile(r"\b[a-z][a-z0-9+.\-]{1,15}://([^/\s'\"<>|)]+)", re.I)
+_URL_RE = re.compile(r"\b[a-z][a-z0-9+.\-]{1,15}://([^/?#\s'\"<>|)]+)", re.I)
 # scp/ssh/rsync style ``user@host:path`` targets — egress without a URL.
 _SSH_HOST_RE = re.compile(
     r"(?:^|\s)[\w.\-]+@([a-z0-9][a-z0-9.\-]*\.[a-z]{2,63})(?=[:\s]|$)", re.I)
@@ -89,7 +93,7 @@ def _iter_str_values(value, depth: int = 0):
             for s in _iter_str_values(v, depth + 1):
                 yield s
     elif isinstance(value, dict) and depth < 2:
-        for k, v in list(value.items())[:_MAX_SURFACE_ITEMS]:
+        for k, v in islice(value.items(), _MAX_SURFACE_ITEMS):
             if k in _PATH_ARG_KEYS or k in _CMD_ARG_KEYS:
                 for s in _iter_str_values(v, depth + 1):
                     yield s
@@ -101,14 +105,37 @@ def _iter_str_values(value, depth: int = 0):
 # protection. Found on real sessions: the detectors flagged the very patch
 # scripts that define their own patterns.
 _HEREDOC_RE = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+_STDIN_INTERPRETER_RE = re.compile(
+    r"(?:python[\d.]*|pypy[\d.]*|bash|sh|zsh|dash|node|nodejs|ruby|perl|php|lua|Rscript)")
+
+
+def _heredoc_runs_code(header: str) -> bool:
+    """Recognize interpreter programs, not filenames or quoted mentions."""
+    lexer = shlex.shlex(header, posix=True, punctuation_chars="|;&")
+    lexer.whitespace_split = True
+    at_program = True
+    for token in lexer:
+        if token and all(c in "|;&" for c in token):
+            at_program = True
+        elif at_program:
+            program = token.rsplit("/", 1)[-1]
+            if program in {"env", "sudo", "exec", "command", "nohup", "time"}:
+                continue
+            if token.startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token):
+                continue
+            if _STDIN_INTERPRETER_RE.fullmatch(program):
+                return True
+            at_program = False
+    return False
 
 
 def _strip_heredocs(cmd: str) -> str:
-    """Drop heredoc BODIES, keep the command lines around them.
+    """Drop document heredoc bodies; preserve interpreter stdin and headers.
 
     ``cat > x.py <<'PY'`` keeps its redirect and target (the blast radius still
     sees the write); only the document between the marker and its terminator is
-    removed. Never raises: on anything unexpected the original text is
+    removed. Interpreter bodies remain executable action surface.
+    Never raises: on anything unexpected the original text is
     returned, which is the pre-existing behaviour."""
     try:
         out = []
@@ -122,8 +149,11 @@ def _strip_heredocs(cmd: str) -> str:
             if not m:
                 continue
             delim = m.group(2)
+            executable = _heredoc_runs_code(line)
             # Skip to the terminator (a line that is just the delimiter).
             while i < len(lines) and lines[i].strip() != delim:
+                if executable:
+                    out.append(lines[i])
                 i += 1
             i += 1  # drop the terminator line too
         return "\n".join(out)
@@ -164,7 +194,7 @@ def _hosts_from_text(text: str) -> list:
     if not text:
         return out
     try:
-        for m in _URL_RE.finditer(text[:_MAX_CMD_CHARS]):
+        for m in islice(_URL_RE.finditer(text[:_MAX_CMD_CHARS]), _MAX_SURFACE_ITEMS):
             netloc = m.group(1)
             host = netloc.rsplit("@", 1)[-1]          # strip user:pass@
             host = host.split("/", 1)[0]
@@ -172,16 +202,34 @@ def _hosts_from_text(text: str) -> list:
                 host = host[:host.find("]") + 1]
             else:
                 host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-            host = host.strip().lower().rstrip(".")
-            if host and host not in _LOCAL_HOSTS and not host.endswith(".local"):
-                out.append(host)
-        for m in _SSH_HOST_RE.finditer(text[:_MAX_CMD_CHARS]):
-            host = m.group(1).strip().lower().rstrip(".")
-            if host and host not in _LOCAL_HOSTS and "." in host:
-                out.append(host)
+            host = host.strip().rstrip(".")
+            if host and host.lower() not in _LOCAL_HOSTS and not host.lower().endswith(".local"):
+                out.append(_safe_host(host))
+        for m in islice(_SSH_HOST_RE.finditer(text[:_MAX_CMD_CHARS]), _MAX_SURFACE_ITEMS):
+            host = m.group(1).strip().rstrip(".")
+            if host and host.lower() not in _LOCAL_HOSTS and "." in host:
+                out.append(_safe_host(host))
     except Exception:
         return out
     return out[:_MAX_SURFACE_ITEMS]
+
+
+def _safe_host(host: str) -> str:
+    """Keep destination structure without publishing credential host labels.
+
+    Imported at call time because payload classification also uses this module.
+    Inspect before lowercasing: Base64 is case-sensitive.
+    """
+    from clawmetry.detector_payload import _secret_scan
+    whole_categories, whole_limits = _secret_scan(host)
+    labels = []
+    for label in host.split(".")[:128]:
+        categories, limits = _secret_scan(label)
+        labels.append("[redacted]" if categories or limits else label.lower())
+    if (whole_categories or whole_limits) and "[redacted]" not in labels:
+        # JWTs and some service tokens span dots. Do not publish their pieces.
+        return "[redacted-host]"
+    return ".".join(labels)
 
 
 def _paths_from_command(cmd: str) -> list:
@@ -210,7 +258,7 @@ def _action_surface(tool: str, args) -> tuple:
             elif _looks_like_path(args):
                 paths.append(args)
         elif isinstance(args, dict):
-            for key, val in list(args.items())[:40]:
+            for key, val in islice(args.items(), 40):
                 k = str(key).lower()
                 if k in _CMD_ARG_KEYS:
                     for s in _iter_str_values(val):
@@ -228,7 +276,16 @@ def _action_surface(tool: str, args) -> tuple:
                 cmd_parts.append(joined)
     except Exception:
         pass
-    cmd = _strip_heredocs(" ".join(cmd_parts))[:_MAX_CMD_CHARS]
+    # Slice before splitting heredocs so a huge script cannot allocate an
+    # unbounded line list. Credential inspection reports input truncation.
+    bounded_parts = []
+    remaining = _MAX_CMD_CHARS
+    for part in cmd_parts:
+        if remaining <= 0:
+            break
+        bounded_parts.append(part[:remaining])
+        remaining -= len(bounded_parts[-1]) + 1
+    cmd = _strip_heredocs(" ".join(bounded_parts))
     if cmd:
         paths.extend(_paths_from_command(cmd))
     hosts = _hosts_from_text(cmd)

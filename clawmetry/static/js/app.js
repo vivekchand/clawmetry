@@ -10800,6 +10800,7 @@ var LOOP_KIND_LABEL = {
   crashed: 'Crashed and restarted',
   // Content: text the agent read tried to give it instructions.
   prompt_injection: 'Read text that tried to give it orders',
+  inspection_incomplete: 'Some tool content could not be fully inspected',
   // Fleet-wide: several unrelated agents doing the same unusual thing.
   // Mirrors clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Acting in step with unrelated agents',
@@ -31979,6 +31980,7 @@ var GUARD_KIND_LABEL = {
   crashed: 'Crashed and restarted',
   // Content: does text the agent read try to give it instructions?
   prompt_injection: 'Prompt injection',
+  inspection_incomplete: 'Credential inspection incomplete',
   // Fleet: several unrelated agents doing the same unusual thing. Keys
   // mirror clawmetry/detector_swarm.py FLEET_KINDS.
   coordinated_action: 'Coordinated with unrelated agents',
