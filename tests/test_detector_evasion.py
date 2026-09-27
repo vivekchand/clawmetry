@@ -113,7 +113,8 @@ def test_destination_evidence_never_contains_url_credentials(url):
     assert b64(TOKEN).rstrip("=").lower() not in published.lower()
     assert percent(TOKEN).lower() not in published.lower()
     assert "password" not in published and "?" not in published and "#" not in published
-    assert "collector.example.net" in published
+    assert steps[0]["hosts"] in {
+        ("collector.example.net",), ("[redacted].collector.example.net",)}
 
 
 def test_inspection_limits_are_visible_without_disclosing_content():
