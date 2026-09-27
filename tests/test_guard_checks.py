@@ -65,6 +65,34 @@ def test_catalogue_matches_registry_and_declares_every_check():
     assert not data['recent_pass']
 
 
+def test_inspection_gap_reaches_guard_through_the_daemon_and_store(store, client, monkeypatch):
+    """
+    AC-GOV-DET-001.6: an incomplete scan survives the real persistence boundary.
+    """
+    import datetime
+    import json
+    from clawmetry import otel_push, siem
+    monkeypatch.setattr(siem, 'enabled', lambda: False)
+    monkeypatch.setattr(otel_push, 'enabled', lambda: False)
+    monkeypatch.setattr(sync, '_agent_inventory_pass', lambda *a, **k: {})
+    monkeypatch.setattr(sync, '_apply_guard_policies', lambda *a, **k: 0)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    sid = 'codex:inspection-gap-store-check'
+    store.ingest_session(dict(session_id=sid, node_id='test-node', agent_type='codex',
+                              status='active', started_at=now, last_active_at=now))
+    store.ingest(dict(id='inspection-gap-event', node_id='test-node', session_id=sid,
+                      event_type='tool_call', ts=now,
+                      data={'tool': 'Bash', 'args': {'command': 'echo ' + 'z' * 100000}}))
+    store._flush_now()
+    assert sync._emit_detector_incidents(store, {}) >= 1
+    response = client.get('/api/guard/sessions')
+    assert response.status_code == 200
+    row = next(s for s in response.json['sessions'] if s['session_id'] == sid)
+    assert row['incident']['kind'] == 'inspection_incomplete'
+    assert row['incident']['severity'] == 'info'
+    assert 'z' * 100 not in json.dumps(row['incident'])
+
+
 def test_unknown_state_is_not_reported_as_enabled():
     # AC-GUX-001.2
     # AC-GUX-001.3

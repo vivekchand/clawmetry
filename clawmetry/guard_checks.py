@@ -24,6 +24,7 @@ DESCRIPTIONS = {
     "action_discrepancy": ("progress", "Continuing after failure", "A failed command is followed by more work without a retry or acknowledgment."),
     "file_blast_radius": ("access", "Wide file changes", "Changes reach unusually many files or include destructive commands."),
     "credential_access": ("access", "Credential access", "Tool arguments reference credentials, keys or sensitive paths."),
+    "inspection_incomplete": ("access", "Incomplete credential inspection", "Some tool content exceeded credential inspection limits. This is a coverage gap, not evidence of an attack."),
     "network_egress": ("access", "Unusual network destinations", "An agent sends data to an unfamiliar destination."),
     "privilege_change": ("access", "Privilege changes", "Commands try to change permissions, identities or access controls."),
     "rate_limited": ("silent", "Provider rate limits", "A provider refuses work because of a usage or rate limit."),
