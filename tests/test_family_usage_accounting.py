@@ -182,6 +182,21 @@ def test_native_records_retire_legacy_source_and_aggregate_cache(store):
     assert totals(store) == (3, 300)
 
 
+def test_retired_usage_restores_token_splits_when_source_reappears(store):
+    original = usage('original', cached=80)
+    reconcile(store, [original])
+    expected = store.query_rollup_model_daily()
+    reconcile(store, [usage('replacement', cached=30)])
+    reconcile(store, [original])
+    assert totals(store) == (1, 100)
+    assert store.query_rollup_model_daily() == expected
+    daily = store.query_daily_usage_splits(runtime='codex')
+    assert sum(r['input_tokens'] for r in daily) == 20
+    assert sum(r['cache_read_tokens'] for r in daily) == 80
+    reconcile(store, [usage('replacement', cached=30)])
+    assert sum(r['cache_read'] for r in store.query_rollup_model_daily()) == 30
+
+
 def test_reconciliation_rolls_back_metrics_and_rollups_together(store, monkeypatch):
     reconcile(store, [event('first', cost=10, tokens=100)])
     before = store.query_rollup_runtime_daily()

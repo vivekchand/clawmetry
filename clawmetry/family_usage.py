@@ -71,6 +71,8 @@ def reconcile(store, session_id, rows):
             # reads a narrow metric projection, never every transcript body.
             split_ids = [row[0] for row in existing
                 if (row[0] in wanted and wanted[row[0]]["model"] != row[6])
+                or (row[7] == "usage" and row[0] in wanted and
+                    (wanted[row[0]]["cost"], wanted[row[0]]["tokens"]) != (row[4], row[5]))
                 or (row[7] == "usage" and row[0] not in wanted and row[5])]
             blobs = {}
             for offset in range(0, len(split_ids), 200):
@@ -85,7 +87,7 @@ def reconcile(store, session_id, rows):
                 if desired is None and event_type == "usage":
                     # Native records supersede legacy snapshots. Keep the
                     # immutable row but retire its old derived allocation.
-                    desired = {"cost": 0.0, "tokens": 0, "model": model}
+                    desired = {"cost": 0.0, "tokens": 0, "model": None}
                 if desired is None:
                     continue
                 new = (desired["cost"], desired["tokens"], desired["model"])
@@ -97,17 +99,20 @@ def reconcile(store, session_id, rows):
                     raise ValueError("family usage tokens must be non-negative")
                 changes.append((eid, *new))
                 event = {"agent_type": atype, "session_id": sid, "ts": ts}
-                # Splits/data are unchanged; only cost, total tokens and the
-                # model attribution differ. Counts cancel for the same model.
+                # An immutable usage row can be retired and restored. Its
+                # effective splits must change along with its total tokens.
                 splits = {"tokens_in": 0, "tokens_out": 0, "cache_read": 0, "cache_write": 0}
                 retired = event_type == "usage" and desired["tokens"] == 0 and desired["cost"] == 0
-                if model != new[2] or retired:
+                if model != new[2] or event_type == "usage":
                     decoded = ls._decode_data_blob_rows([(blobs.get(eid),)], ["data"])[0]
                     splits.update(ls._extract_event_usage(dict(decoded, cost_usd=cost,
                         token_count=tokens, model=model, event_type=event_type)))
                 before.append((event, dict(splits, cost=cost, tokens=tokens, model=model)))
                 after_splits = ({"tokens_in": 0, "tokens_out": 0, "cache_read": 0, "cache_write": 0}
                                 if retired else splits)
+                if event_type == "usage" and not retired:
+                    after_splits = {key: desired[key] for key in
+                        ("tokens_in", "tokens_out", "cache_read", "cache_write")}
                 after.append((event, dict(after_splits, cost=new[0], tokens=new[1], model=new[2])))
             if not changes:
                 ls.invalidate_aggregate_cache()
