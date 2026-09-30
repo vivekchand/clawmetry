@@ -44,7 +44,7 @@
 # version than litellm declares; that is already how this file has carried
 # cryptography against litellm's lower pin. Currently layered:
 #
-#   cryptography==50.0.0        mcp==1.28.1         PyJWT==2.13.0
+#   cryptography==50.0.0        mcp==1.28.1         PyJWT==2.15.0
 #   azure-identity==1.25.3      polars==1.39.3      polars-runtime-32==1.39.3
 #   python-multipart==0.0.32    RestrictedPython==8.5
 #
