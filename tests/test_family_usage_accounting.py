@@ -298,3 +298,36 @@ def test_anomaly_cache_invalidates_at_local_midnight_and_read_failure(monkeypatc
         raise RuntimeError('daemon unavailable')
     monkeypatch.setattr(ca, '_read_days', unavailable)
     assert ca.current() is None
+
+
+def test_anomaly_refresh_preserves_budget_monitor_threshold_rules(monkeypatch):
+    import dashboard as d
+    from clawmetry import cost_anomaly as ca
+    class StopMonitor(BaseException):
+        pass
+    ticks = []
+    def sleep(_):
+        if ticks:
+            raise StopMonitor()
+        ticks.append(1)
+    alerts = []
+    monkeypatch.setattr(d, 'time', SimpleNamespace(time=lambda: 2000000000, sleep=sleep))
+    monkeypatch.setattr(d, '_otel_last_received', 0)
+    monkeypatch.setattr(d, '_last_heartbeat_ts', 0)
+    monkeypatch.setattr(d, '_security_posture_hash', '')
+    monkeypatch.setattr(d, '_budget_alert_cooldowns', {})
+    monkeypatch.setattr(d, 'metrics_store', {'webhooks': [], 'cost': []})
+    monkeypatch.setattr(d, '_get_budget_status', lambda: {'daily_spent': 200})
+    monkeypatch.setattr(d, '_get_budget_config', lambda: {
+        'auto_pause_threshold_usd': 100, 'auto_pause_action': 'alert'})
+    monkeypatch.setattr(d, '_compute_velocity_status', lambda: {'active': False})
+    monkeypatch.setattr(d, '_detect_error_spikes', lambda: None)
+    monkeypatch.setattr(d, '_detect_security_metadata', lambda: {})
+    monkeypatch.setattr(d, '_get_alert_rules', lambda: [])
+    monkeypatch.setattr(d, '_fire_alert', lambda **kw: alerts.append(kw))
+    monkeypatch.setattr(d, '_dispatch_configured_webhooks', lambda *a: None)
+    monkeypatch.setattr(ca, 'current', lambda: None)
+    with pytest.raises(StopMonitor):
+        d._budget_monitor_loop()
+    assert any(a['rule_id'] == 'auto_pause_daily_alert_only' and '$200.00' in a['message']
+               for a in alerts)

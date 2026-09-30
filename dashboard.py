@@ -3564,6 +3564,9 @@ def _budget_monitor_loop():
                     )
 
             # A shared rollup read also revalidates persisted banner amounts.
+            # Budget enforcement and custom rules below still need their
+            # independent configured calendar-window status.
+            status = _get_budget_status()
             from clawmetry.cost_anomaly import current as _current_cost_anomaly
             anomaly = _current_cost_anomaly()
             if anomaly:
