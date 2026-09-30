@@ -81,7 +81,24 @@ jobs:
       # the API is outside any contributor's control, so failing on it would
       # leave every PR red with nothing anyone could do about it.
       - name: Check checked-in font CSS matches a fresh generation
+        id: fonts
         run: python3 scripts/vendor_fonts.py --check
+      - name: Capture regenerated assets when upstream fonts drift
+        if: failure() && steps.fonts.outcome == 'failure'
+        run: python3 scripts/vendor_fonts.py
+      - name: Publish font drift evidence for review
+        if: failure() && steps.fonts.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: regenerated-fonts
+          path: |
+            clawmetry/static/css/fonts.css
+            clawmetry/static/fonts/
+            clawmetry/static/v2/dist/fonts.css
+            clawmetry/static/v2/dist/fonts/
+            frontend/public/fonts.css
+            frontend/public/fonts/
+          retention-days: 7
 
   python-deps:
     name: Python dependency audit
