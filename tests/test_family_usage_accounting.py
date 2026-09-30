@@ -236,3 +236,65 @@ def test_hosted_periods_use_calendar_and_runtime_billing(monkeypatch):
     assert result['codex']['week'] == 120
     assert result['codex']['weekCost'] == 1.2
     assert result['codex']['billingCoverage'] == {'runtime': 'codex'}
+
+
+def test_saved_anomaly_uses_current_totals_and_keeps_history(monkeypatch):
+    from clawmetry import cost_anomaly as ca
+    from datetime import date, timedelta
+    today = date.today()
+    rows = [{'day': today.isoformat(), 'cost_usd': 21},
+            {'day': (today - timedelta(days=6)).isoformat(), 'cost_usd': 28}]
+    reads = []
+    monkeypatch.setattr(ca, '_cache', (None, 0, None))
+    monkeypatch.setattr(ca, '_read_days', lambda *a: reads.append(a) or rows)
+    history = [{'rule_id': 'anomaly_daily', 'message': 'today $89063.11'},
+               {'rule_id': 'anomaly_daily', 'message': 'older'},
+               {'rule_id': 'agent_down', 'message': 'agent down'}]
+    active = ca.refresh_active(history)
+    assert len(active) == 2
+    assert 'today $21.00' in active[0]['message']
+    assert '$4.00/day' in active[0]['message']
+    assert 'all runtimes' in active[0]['message']
+    assert 'not a bill' in active[0]['message']
+    assert history[0]['message'] == 'today $89063.11'
+    assert ca.current()['daily'] == 21
+    assert len(reads) == 1
+    assert reads[0] == ((today - timedelta(days=7)).isoformat(), today.isoformat())
+    # A repaired/rolled-over day stops showing the historical alert.
+    monkeypatch.setattr(ca, '_cache', (None, 0, None))
+    rows[0]['cost_usd'] = 0
+    assert ca.refresh_active(history) == [history[2]]
+
+
+def test_active_alert_endpoint_revalidates_saved_spending(tmp_path, monkeypatch):
+    import dashboard
+    import sqlite3
+    import time
+    from clawmetry import cost_anomaly as ca
+    path = tmp_path / 'alerts.sqlite'
+    def connection():
+        db = sqlite3.connect(path)
+        db.row_factory = sqlite3.Row
+        return db
+    with connection() as db:
+        db.execute('CREATE TABLE alert_history (rule_id TEXT, message TEXT, acknowledged INT, fired_at REAL)')
+        db.execute('INSERT INTO alert_history VALUES (?,?,0,?)',
+                   ('anomaly_daily', 'today $89063.11', time.time()))
+    monkeypatch.setattr(dashboard, '_fleet_db', connection)
+    monkeypatch.setattr(ca, 'current', lambda: {'message': 'current verified amount'})
+    assert dashboard._get_active_alerts()[0]['message'] == 'current verified amount'
+    assert dashboard._get_alert_history()[0]['message'] == 'today $89063.11'
+    monkeypatch.setattr(ca, 'current', lambda: None)
+    assert dashboard._get_active_alerts() == []
+
+
+def test_anomaly_cache_invalidates_at_local_midnight_and_read_failure(monkeypatch):
+    from clawmetry import cost_anomaly as ca
+    from datetime import date, timedelta
+    import time
+    monkeypatch.setattr(ca, '_cache', (date.today() - timedelta(days=1),
+        time.monotonic() + 999, {'message': 'yesterday'}))
+    def unavailable(*args):
+        raise RuntimeError('daemon unavailable')
+    monkeypatch.setattr(ca, '_read_days', unavailable)
+    assert ca.current() is None

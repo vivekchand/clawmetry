@@ -3426,7 +3426,8 @@ def _get_active_alerts():
                 (cutoff,),
             ).fetchall()
             db.close()
-        return [dict(r) for r in rows]
+        from clawmetry.cost_anomaly import refresh_active
+        return refresh_active([dict(r) for r in rows])
     except Exception:
         return []
 
@@ -3562,32 +3563,20 @@ def _budget_monitor_loop():
                         channels=["banner", "telegram"],
                     )
 
-            # Anomaly check: today's cost > 2x 7-day average
-            status = _get_budget_status()
-            daily_spent = status["daily_spent"]
-            if daily_spent > 0:
-                week_avg = (
-                    status["weekly_spent"] / 7 if status["weekly_spent"] > 0 else 0
+            # A shared rollup read also revalidates persisted banner amounts.
+            from clawmetry.cost_anomaly import current as _current_cost_anomaly
+            anomaly = _current_cost_anomaly()
+            if anomaly:
+                _fire_alert(
+                    rule_id="anomaly_daily", alert_type="anomaly",
+                    message=anomaly["message"], channels=["banner", "telegram"],
                 )
-                if week_avg > 0 and daily_spent > week_avg * 2:
-                    ratio = daily_spent / week_avg
-                    _fire_alert(
-                        rule_id="anomaly_daily",
-                        alert_type="anomaly",
-                        message=f"Spending anomaly: today ${daily_spent:.2f} is {ratio:.1f}x the 7-day average (${week_avg:.2f}/day)",
-                        channels=["banner", "telegram"],
-                    )
-                    _dispatch_configured_webhooks(
-                        "cost_spike",
-                        {
-                            "type": "cost_spike",
-                            "agent": "main",
-                            "cost_usd": round(daily_spent, 4),
-                            "threshold": round(week_avg * 2, 4),
-                            "timestamp": now,
-                            "message": f"Cost spike detected: {ratio:.1f}x daily average",
-                        },
-                    )
+                _dispatch_configured_webhooks("cost_spike", {
+                    "type": "cost_spike", "agent": "main",
+                    "cost_usd": round(anomaly["daily"], 4),
+                    "threshold": round(anomaly["average"] * 2, 4),
+                    "timestamp": now, "message": anomaly["message"],
+                })
 
             # Token velocity alert (GH#313): detect runaway agent loops
             try:
