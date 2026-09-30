@@ -38,6 +38,19 @@ ENV PYTHONUNBUFFERED=1 \
 
 COPY dist/ /tmp/dist/
 
+# The OTLP decoder, from a hash-pinned set rather than the `>=` ranges the
+# [otel] extra carries. Installed BEFORE the wheel on purpose: pip then finds
+# both names already satisfied and resolves neither itself, so the extra on
+# the next line contributes the exact artifacts otel-requirements.txt names.
+#
+# The base image above is pinned by digest so an identical build pulls
+# identical bytes. This is that same argument applied to the layer directly
+# above it -- and it counts for more here than in the root Dockerfile, because
+# this image is the one that gets signed and attested. See that file's header.
+COPY otel-requirements.txt /tmp/otel-requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r /tmp/otel-requirements.txt \
+    && rm -f /tmp/otel-requirements.txt
+
 # Exactly one clawmetry wheel, installed with the OTLP decoder extra: the
 # daemon-free intake path (runtimes exporting OTLP straight to this server)
 # answers 501 to http/protobuf without it.

@@ -41,6 +41,7 @@ EXPECTED_KINDS = {
     "credential_access",
     "network_egress",
     "privilege_change",
+    "untrusted_package_source",
     # Silent failure: it stopped, and nobody was told.
     "rate_limited",
     "blocked_on_user",

@@ -164,9 +164,19 @@ def test_image_installs_only_the_published_wheel() -> None:
     text = _read("deploy", "self-hosted", "Dockerfile.release")
     code = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     copies = [ln for ln in code if ln.split()[0].upper() in ("COPY", "ADD")]
-    assert copies == ["COPY dist/ /tmp/dist/"], (
-        f"the release image may copy only the wheel directory, found {copies}: "
-        "copying repo source would ship something other than the published artifact"
+    # The wheel directory, and the hash-pinned OTLP set that is installed and
+    # then deleted in the layer below it. Nothing else: copying repo source
+    # would ship something other than the published artifact. The pin file is
+    # build INPUT rather than source -- `rm -f` on the next line means no part
+    # of it survives into the image filesystem -- which is why it is named here
+    # explicitly instead of the assertion being loosened to a prefix match.
+    assert copies == [
+        "COPY dist/ /tmp/dist/",
+        "COPY otel-requirements.txt /tmp/otel-requirements.txt",
+    ], (
+        f"the release image may copy only the wheel directory and the pinned "
+        f"OTLP set, found {copies}: copying repo source would ship something "
+        "other than the published artifact"
     )
     body = "\n".join(code).lower()
     for forbidden in ("clawmetry_pro", "clawmetry-pro", "wheels/", "license/download"):
@@ -177,6 +187,87 @@ def test_image_installs_only_the_published_wheel() -> None:
     )
     assert "clawmetry_pro" in verify_mod._NO_PRO, (
         "verify_selfhosted_image.py must fail on a Pro module inside the image"
+    )
+
+
+def test_otlp_extra_is_hash_pinned_and_installed_before_the_wheel() -> None:
+    # `pip install "$1[otel]"` resolves opentelemetry-proto>=1.20.0 and
+    # protobuf>=4.21.0 live at build time -- floors that have spanned four
+    # major protobuf versions. This image is signed and its SBOM is attested
+    # per platform digest, and both attest to bytes: an unpinned resolve means
+    # two builds of the SAME clawmetry version can carry different protobuf,
+    # with the signature verifying and the SBOM validating either way.
+    #
+    # Pinning happens by installing the pinned set FIRST. pip then finds both
+    # names satisfied and resolves neither, so the extra contributes exactly
+    # what the file names. Order is the whole mechanism, so it is asserted.
+    text = _read("deploy", "self-hosted", "Dockerfile.release")
+    code = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    body = "\n".join(code)
+
+    pinned = body.find("--require-hashes -r /tmp/otel-requirements.txt")
+    assert pinned >= 0, "the OTLP extra must install from a hash-pinned set"
+    wheel = body.index('pip install --no-cache-dir "$1[otel]"')
+    assert pinned < wheel, (
+        "the pinned OTLP set must install BEFORE the wheel, or the [otel] "
+        "extra resolves the range itself and the pin buys nothing"
+    )
+    assert body.find("rm -f /tmp/otel-requirements.txt") > pinned, (
+        "the pin file is build input and must not survive into the image"
+    )
+
+
+def _pinned_names(*parts: str) -> set:
+    text = _read(*parts)
+    return {
+        ln.split("==")[0].strip()
+        for ln in text.splitlines()
+        if "==" in ln and not ln.lstrip().startswith("#")
+    }
+
+
+def test_release_otel_pin_covers_the_same_names_as_the_source_image() -> None:
+    # deploy/self-hosted/otel-requirements.txt and
+    # .github/requirements/docker-otel.txt pin the same extra for two different
+    # images. They are separate files on purpose: the release build's context is
+    # deploy/self-hosted (asserted above), so nothing under .github/ is even
+    # reachable, and a change motivated by the development image must not
+    # silently alter what ships signed.
+    #
+    # NAMES, deliberately not versions. Each file has its own Dependabot entry
+    # and they will not bump in the same week; holding them to equal versions
+    # would turn a routine bump on one into a red build on the other. What this
+    # catches is the real drift: a name added to the extra in one place and
+    # forgotten in the other, which is how one image quietly stops decoding
+    # http/protobuf while the other still does.
+    release = _pinned_names("deploy", "self-hosted", "otel-requirements.txt")
+    source = _pinned_names(".github", "requirements", "docker-otel.txt")
+    assert release, "the release OTLP pin set must not be empty"
+    assert release == source, (
+        f"the two OTLP pin sets must cover the same packages; release has "
+        f"{sorted(release)}, source image has {sorted(source)}"
+    )
+
+
+def test_release_otel_pin_is_hash_pinned_and_dependabot_can_move_it() -> None:
+    # --require-hashes refuses anything unlisted, so every pinned line needs a
+    # hash or the build fails. And a pin with no updater is just a freeze: the
+    # signed image would sit on today's CVEs forever, which is the other end of
+    # the same problem the unpinned range was at.
+    text = _read("deploy", "self-hosted", "otel-requirements.txt")
+    pins = [ln for ln in text.splitlines() if "==" in ln and not ln.lstrip().startswith("#")]
+    assert pins, "no pinned requirements found"
+    for ln in pins:
+        assert ln.rstrip().endswith("\\"), f"pinned line carries no --hash continuation: {ln!r}"
+    assert "--hash=sha256:" in text
+
+    cfg = yaml.safe_load(_read(".github", "dependabot.yml"))
+    entries = {
+        (u["package-ecosystem"], u["directory"]) for u in cfg["updates"]
+    }
+    assert ("pip", "/deploy/self-hosted") in entries, (
+        "deploy/self-hosted/otel-requirements.txt needs a pip Dependabot entry, "
+        "or the signed image freezes on this protobuf"
     )
 
 

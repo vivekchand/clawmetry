@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-288 modules, 86 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+289 modules, 86 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -176,6 +176,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/detector_decoding.py` | small | Bounded, inert text views for credential inspection (REQ-GOV-DET-001). |
 | `clawmetry/detector_injection.py` | small | the ``prompt_injection`` Guard detector. |
 | `clawmetry/detector_money.py` | small | What a finding costs, and therefore what to look at first. |
+| `clawmetry/detector_package_source.py` | medium | the ``untrusted_package_source`` Guard detector. |
 | `clawmetry/detector_payload.py` | medium | What a tool call SENT, and what it CARRIED. |
 | `clawmetry/detector_surface.py` | medium | What a tool call actually touched, and what a finding may repeat back. |
 | `clawmetry/detector_swarm.py` | medium | Are sessions that should be independent behaving as if they're coordinated? |

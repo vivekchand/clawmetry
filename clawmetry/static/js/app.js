@@ -10795,6 +10795,7 @@ var LOOP_KIND_LABEL = {
   credential_access: 'Opened a password or key file',
   network_egress: 'Contacted somewhere new',
   privilege_change: 'Asked for admin rights',
+  untrusted_package_source: 'Asked a tool to install a package from a path or remote',
   rate_limited: 'Being rate limited by its provider',
   blocked_on_user: 'Waiting for you to answer',
   crashed: 'Crashed and restarted',
@@ -31974,6 +31975,7 @@ var GUARD_KIND_LABEL = {
   credential_access: 'Read credentials',
   network_egress: 'Unusual network destination',
   privilege_change: 'Privilege change',
+  untrusted_package_source: 'Package from an untrusted source',
   // Silent failure: it stopped, and nobody was told.
   rate_limited: 'Rate limited by the provider',
   blocked_on_user: 'Waiting on you',

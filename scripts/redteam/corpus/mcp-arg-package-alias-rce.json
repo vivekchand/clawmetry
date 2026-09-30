@@ -46,10 +46,6 @@
       }
     }
   ],
-  "known_gap": {
-    "issue": "vivekchand/clawmetry-pro#242",
-    "since": "2026-09-10"
-  },
   "expect": {
     "detected": true,
     "any_of": [

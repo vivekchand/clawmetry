@@ -26,6 +26,7 @@ DESCRIPTIONS = {
     "credential_access": ("access", "Credential access", "Tool arguments reference credentials, keys or sensitive paths."),
     "inspection_incomplete": ("access", "Incomplete credential inspection", "Some tool content exceeded credential inspection limits. This is a coverage gap, not evidence of an attack."),
     "network_egress": ("access", "Unusual network destinations", "An agent sends data to an unfamiliar destination."),
+    "untrusted_package_source": ("access", "Package installed from a named source", "A tool argument names a package source (a path, git remote or URL) where a version goes, so a tool that installs it would run that code."),
     "privilege_change": ("access", "Privilege changes", "Commands try to change permissions, identities or access controls."),
     "rate_limited": ("silent", "Provider rate limits", "A provider refuses work because of a usage or rate limit."),
     "blocked_on_user": ("silent", "Waiting for you", "A question or approval request is followed by an idle stretch."),

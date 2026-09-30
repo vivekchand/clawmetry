@@ -100,6 +100,9 @@ from clawmetry.detector_behaviour import (  # noqa: F401
 # results and user-sourced messages, defined in ``detector_injection`` with its
 # signatures in ``prompt_injection`` (REQ-GOV-PIJ-001).
 from clawmetry.detector_injection import prompt_injection  # noqa: F401
+# ``untrusted_package_source``: a tool argument naming a package SOURCE where a
+# version goes (CVE-2026-59176), defined in ``detector_package_source``.
+from clawmetry.detector_package_source import untrusted_package_source  # noqa: F401
 # Which OWASP LLM 2026, OWASP Agentic 2026 and MITRE ATLAS items each kind is
 # relevant to (REQ-GOV-FWM-001). ``run_all`` stamps ``incident["frameworks"]``.
 from clawmetry.framework_map import framework_tags, tag_incident  # noqa: F401
@@ -131,6 +134,7 @@ DETECTOR_KINDS = (
     "credential_access",
     "network_egress",
     "privilege_change",
+    "untrusted_package_source",
     # Silent failure: it stopped, and nobody was told.
     "rate_limited",
     "blocked_on_user",
@@ -1319,6 +1323,7 @@ _ALL_DETECTORS = (
     credential_access,
     network_egress,
     privilege_change,
+    untrusted_package_source,
     # Silent failure: it stopped, and nobody was told.
     rate_limited,
     blocked_on_user,

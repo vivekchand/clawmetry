@@ -164,6 +164,7 @@ KIND_HEADLINE = {
     "credential_access": "opened a password or key file",
     "network_egress": "contacted somewhere new",
     "privilege_change": "asked for admin rights",
+    "untrusted_package_source": "asked a tool to install a package from a path or remote",
     "rate_limited": "is being rate limited",
     "blocked_on_user": "is waiting for you",
     "crashed": "crashed and restarted",

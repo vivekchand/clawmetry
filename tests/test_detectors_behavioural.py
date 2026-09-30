@@ -626,6 +626,8 @@ def test_every_detector_is_reachable_from_run_all():
         "stuck_loop", "no_progress", "repeated_tool_failure",
         "action_discrepancy", "file_blast_radius", "credential_access",
         "network_egress", "privilege_change",
+        # A tool argument naming a package source where a version goes.
+        "untrusted_package_source",
         # Silent failure (rate limited / waiting on a human / crashed).
         "rate_limited", "blocked_on_user", "crashed",
         # Content: prompt-injection signatures in tool results and messages.

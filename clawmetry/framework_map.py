@@ -40,7 +40,7 @@ from typing import Any, Dict, List, Optional
 
 #: Bumped whenever an identifier, an edition or a kind's mapping changes, so a
 #: stored finding says which contract labelled it.
-MAPPING_VERSION = "2026-09-27.1"
+MAPPING_VERSION = "2026-09-30.1"
 
 #: What a finding can establish. The same for every kind today, declared once
 #: so no surface re-derives it.
@@ -244,6 +244,23 @@ MAPPINGS: Dict[str, Dict[str, Any]] = {
         "requires": "a runtime whose adapter records tool-call arguments",
         "tests": {"positive": "tests/test_detectors_behavioural.py::test_privilege_change_flags_sudo",
                   "benign": "tests/test_detectors_behavioural.py::test_privilege_change_ignores_ordinary_commands"},
+    },
+    "untrusted_package_source": {
+        "family": "behaviour",
+        "owasp_llm": (), "owasp_asi": ("ASI02", "ASI04", "ASI05"), "atlas": (),
+        "status": "verified",
+        "rationale": ("ASI05 Example 6 is a package install whose hostile code runs during "
+                      "installation, which is what a tool that installs the named source does. "
+                      "ASI04 covers third-party components that bring unsafe code. ASI02 is a "
+                      "legitimate tool driven into harm by its arguments: here the agent's own "
+                      "argument makes the tool fetch the code (CVE-2026-59176)."),
+        "limits": ("Reads argument keys that say version, package, spec or dependency; a source "
+                   "hidden under any other key is missed, and a shell command's text is left to "
+                   "tool_risk. Reports that the source was named, not that the tool installed it. "
+                   "AML.T0010.005 was not mapped: no tool is shown to be compromised."),
+        "requires": "a runtime whose adapter records tool-call arguments",
+        "tests": {"positive": "tests/test_detector_package_source.py::test_fires_on_the_cve_2026_59176_shape",
+                  "benign": "tests/test_detector_package_source.py::test_quiet_on_versions_tags_and_shas"},
     },
     # Silent failure: it stopped, and nobody was told.
     "inspection_incomplete": {

@@ -1,0 +1,81 @@
+# Hash-pinned install set for the OTLP extra baked into the SIGNED self-hosted
+# release image (Dockerfile.release in this directory).
+#
+# Direct requirements: opentelemetry-proto>=1.20.0 protobuf>=4.21.0
+#
+# Those ranges are what this file replaces. Dockerfile.release installs the
+# published wheel as `pip install "$1[otel]"`, and the `[otel]` extra resolved
+# both names live at build time against floors that have spanned four major
+# protobuf versions. The base image on the FROM line is pinned by digest so an
+# identical build pulls identical bytes; a live resolve on the very next layer
+# gave that back.
+#
+# This matters more here than it does for the root Dockerfile, which got the
+# same treatment first. This image is PUBLISHED and SIGNED: container-image.yml
+# pushes it to ghcr.io/vivekchand/clawmetry, cosign signs the index and every
+# platform manifest, and an SPDX SBOM is attested to each platform digest. An
+# SBOM and a signature attest to bytes. If two builds of the same clawmetry
+# version can bake different protobuf bytes, the signature still verifies and
+# the SBOM still validates -- they just describe whatever the builder happened
+# to resolve that morning. Pinning is what makes the attestation mean "this
+# version", rather than "this build".
+#
+# Deliberately a SECOND file rather than reusing
+# .github/requirements/docker-otel.txt, which pins the same two names today.
+# Two reasons, and the first is not a preference:
+#
+#   1. It is not reachable. container-image.yml builds with
+#      `context: deploy/self-hosted` (tests/test_selfhosted_image_publish.py
+#      pins that), so nothing under .github/ is in the build context. A narrow
+#      context is the point -- it is what stops repo source reaching an image
+#      that must carry only the published wheel.
+#   2. They move for different reasons. That file describes the from-source
+#      development image; this one describes the artifact orgs run in
+#      production. A dev-motivated edit there must not silently change what
+#      ships signed. Same names today, separate reasons to change, so separate
+#      files -- the same argument that file's own header makes for staying
+#      separate from ci-otel-extra.txt.
+#
+# Not folded into the wheel's own requirements either: these are the optional
+# `otel` extra (setup.py), baked in on purpose because the daemon-free intake
+# path (a runtime exporting OTLP straight at this server) answers 501 to
+# http/protobuf without them. A receiver that must be told to
+# `pip install clawmetry[otel]` before it accepts data is not a receiver.
+#
+# Installed with `pip install --require-hashes`, which refuses to install
+# anything not listed here with a matching hash -- so the image gets the exact
+# artifacts this file names, or the build fails. Every transitive dependency is
+# present because --require-hashes demands the whole closure; here the closure
+# is just these two names (opentelemetry-proto requires protobuf, protobuf
+# requires nothing), which is why the file is this short.
+#
+# Each version lists the sha256 of EVERY distribution PyPI publishes for it
+# (wheels for each platform, plus the sdist). pip accepts a download matching
+# any one of them, so the pin does not quietly depend on the builder resolving
+# to the same wheel this file was generated against. That is load-bearing here:
+# this image is built for linux/amd64 AND linux/arm64 in the same job.
+#
+# On the interpreter: the base image is python:3.14-slim. protobuf 7.36.1 ships
+# a cp310-abi3 manylinux wheel, ABI-compatible with 3.14, and
+# opentelemetry-proto 1.44.0 is a pure-python py3-none-any wheel. Both declare
+# requires_python >=3.10. A protobuf release that drops the abi3 wheel would
+# need this checked again before the bump lands.
+#
+# Updating: the `pip` entry for /deploy/self-hosted in .github/dependabot.yml
+# advances this file and rewrites the --hash lines along with the version, so a
+# bump arrives already verifiable. Without that entry the pin would simply
+# freeze the signed image at today's CVEs, which is the other end of the same
+# problem the unpinned range was at.
+
+opentelemetry-proto==1.44.0 \
+    --hash=sha256:898b155a0e1557afd867478fb6158e8122a46329ca0bb8dc53cc55e98f017f56 \
+    --hash=sha256:c547a79c2f8c0c515d31509154682e5921c7cfd5ca67b70e1f9266e2c3e103f3
+protobuf==7.36.1 \
+    --hash=sha256:3cf2ee25d006cee57294a1196ea43b37feb78e0dcd1e8af5c1aeddb777655aca \
+    --hash=sha256:43d3d37b1eb24c113b9b7d02008cac44e423f00b611b7781ae998d7623972969 \
+    --hash=sha256:39c518c05586c016d7874ff6079ee115bcec1ea5fbb1d177fbf7867ef4c67e44 \
+    --hash=sha256:97198b77e369a0abd8e262b8f6c7266c55ddb796a3a12c76d7b8881188ed83aa \
+    --hash=sha256:0b53ce95272aad50ad25d7ff03373743209822e8ba42ea7fad27d2bee1547d00 \
+    --hash=sha256:51139351435d9b43d88a55eaa49fb6f737fbb478fb0cbf2cf694d1a04a9d3363 \
+    --hash=sha256:7d951e46b3f963d6c264c367c437921de9d5aedd9c3f9612b9077736b4e3ad5c \
+    --hash=sha256:d0f6470f0ce2b84e3feaea2d4b816378b37ba4d4aa08a274305373de93e2d524

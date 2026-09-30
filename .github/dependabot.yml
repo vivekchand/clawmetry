@@ -93,6 +93,31 @@ updates:
     labels:
       - "dependencies"
 
+  # pip -- deploy/self-hosted/otel-requirements.txt, the hash-pinned OTLP
+  # decoder baked into that same signed image. The other half of that pin:
+  # --require-hashes makes the install reproducible and integrity-checked, and
+  # this entry is what keeps it moving. Without it the signed image would sit
+  # on one protobuf indefinitely, which is the frozen end of the same problem
+  # the unpinned `[otel]` range was at the other end of.
+  #
+  # Dependabot rewrites the --hash lines along with the version, so a bump
+  # arrives already verifiable. Kept SEPARATE from the /.github/requirements
+  # entry that advances the root image's docker-otel.txt: the two files pin the
+  # same two names today but describe different artifacts (development build vs
+  # published, signed image), and tests/test_selfhosted_image_publish.py only
+  # holds them to the same package NAMES, never the same versions -- so either
+  # may bump on its own week without the other going red.
+  - package-ecosystem: "pip"
+    directory: "/deploy/self-hosted"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
