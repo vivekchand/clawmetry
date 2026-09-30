@@ -3,9 +3,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from clawmetry import local_store as ls
-
-
 @pytest.fixture(scope="session", autouse=True)
 def server():
     """These tests use isolated DuckDB/Flask clients, never a live daemon."""
@@ -14,6 +11,9 @@ def server():
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
+    # Other suites reload local_store. Resolve the same current module that
+    # sync imports instead of retaining a collection-time module instance.
+    from clawmetry import local_store as ls
     monkeypatch.setattr(ls, "DB_PATH", tmp_path / "usage.duckdb")
     ls.invalidate_aggregate_cache()
     result = ls.LocalStore()
@@ -114,7 +114,7 @@ def test_selected_subscription_uses_its_own_label(monkeypatch):
 
 
 def test_sync_growing_session_counts_only_latest_lifetime_total(store, monkeypatch):
-    from clawmetry import sync, entitlements
+    from clawmetry import sync, entitlements, local_store as ls
     from clawmetry.adapters.base import Session, Event
 
     current = {"cost": 10, "tokens": 100, "count": 1}

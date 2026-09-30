@@ -15225,9 +15225,9 @@ def _family_ingest_rev() -> str:
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t2/usage1"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2/usage1/t2"
     except Exception:
-        return "usage1"
+        return "usage1/t2"
 
 
 def _family_adapter_classes():
