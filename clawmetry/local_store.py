@@ -4997,6 +4997,11 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
 
     # ── ingest ──────────────────────────────────────────────────────────
 
+    def reconcile_family_event_usage(self, session_id, rows):
+        """Update family-derived metrics and their rollups after transcript ingest."""
+        from clawmetry.family_usage import reconcile
+        return reconcile(self, session_id, rows)
+
     def ingest(self, event: dict[str, Any]) -> None:
         """Queue one event. Returns immediately; the flusher persists in the
         background. Required keys: ``id``, ``node_id``, ``event_type``, ``ts``.
@@ -18467,7 +18472,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
         """
         # Step 1: pull every billable-turn event in range, ordered so
         # we can pick the richer envelope first per (session, ts).
-        clauses: list[str] = [f"event_type IN {_sql_in_clause(_BILLABLE_TURN_EVENT_TYPES)}"]
+        clauses: list[str] = [f"event_type IN {_sql_in_clause(_BILLABLE_TURN_EVENT_TYPES)}",
+                              "(event_type != 'usage' OR token_count > 0)"]
         params: list[Any] = []
         if agent_id:
             clauses.append("agent_id = ?")
@@ -18521,6 +18527,9 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             bucket["cache_write_tokens"] += splits["cache_write_tokens"]
             bucket["cost_usd"]           += cost_val
             bucket["event_count"]        += 1
+            if payload["etype"] == "usage":
+                bucket["independent_tokens"] = bucket.get("independent_tokens", 0) + sum(splits.values())
+                bucket["independent_input_output"] = bucket.get("independent_input_output", 0) + splits["input_tokens"] + splits["output_tokens"]
 
         return sorted(day_bucket.values(), key=lambda r: r["day"], reverse=True)
 
@@ -18544,7 +18553,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
         nothing is written: a valuation is derived by the local reader, never
         stored here.
         """
-        clauses: list[str] = [f"event_type IN {_sql_in_clause(_BILLABLE_TURN_EVENT_TYPES)}"]
+        clauses: list[str] = [f"event_type IN {_sql_in_clause(_BILLABLE_TURN_EVENT_TYPES)}",
+                              "(event_type != 'usage' OR token_count > 0)"]
         params: list[Any] = []
         if since:
             clauses.append("ts >= ?")
@@ -18639,7 +18649,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             _dt.now(_tz.utc) - _td(days=window_days)
         ).isoformat()
 
-        clauses: list[str] = [f"event_type IN {_sql_in_clause(_BILLABLE_TURN_EVENT_TYPES)}"]
+        clauses: list[str] = [f"event_type IN {_sql_in_clause(_BILLABLE_TURN_EVENT_TYPES)}",
+                              "(event_type != 'usage' OR token_count > 0)"]
         params: list[Any] = []
         if agent_id:
             clauses.append("agent_id = ?")
@@ -19881,6 +19892,10 @@ def _extract_event_usage(e: dict[str, Any]) -> dict[str, Any]:
     d = e.get("data") if isinstance(e.get("data"), dict) else None
     if d is None:
         return _out()
+    if e.get("event_type") == "usage" and tokens == 0 and cost == 0:
+        # A superseded usage source remains in the integrity chain, with no
+        # contribution to either coarse or split-token rollups.
+        return _out()
 
     if not model:
         model = d.get("modelId") or d.get("model") or d.get("model_id")
@@ -20020,7 +20035,8 @@ def _extract_event_usage(e: dict[str, Any]) -> dict[str, Any]:
     # events don't). ``estimate_event_cost_usd`` infers the provider and applies
     # the Anthropic cache multipliers; an explicit/already-priced cost still
     # wins (we only derive when ``cost is None``).
-    if cost is None and model and (tokens_in or tokens_out or cache_read or cache_write):
+    per_call_usage = isinstance(d.get("extra"), dict) and d["extra"].get("usageBasis") == "per_call"
+    if cost is None and not per_call_usage and model and (tokens_in or tokens_out or cache_read or cache_write):
         try:
             from clawmetry.providers_pricing import estimate_event_cost_usd
             est = estimate_event_cost_usd(
@@ -20441,6 +20457,7 @@ _BILLABLE_TURN_EVENT_TYPES = (
     "assistant",
     "subagent:assistant",
     "model.completed",
+    "usage",
 )
 _TOOL_CALL_TOPLEVEL_EVENT_TYPES = (
     "tool.call", "toolCall", "tool_use", "tool_call",
@@ -20837,7 +20854,7 @@ def _pick_billable_turns(rows, extra=None):
             except (ValueError, TypeError, UnicodeDecodeError):
                 continue
         splits = _extract_usage_splits(data)
-        if splits["input_tokens"] <= 0 and splits["output_tokens"] <= 0:
+        if not any(splits.values()):
             # Skip rows with no recoverable usage — the daemon writes
             # session.started / model.changed / tool.call rows with
             # the same event_type net but no usage payload.
@@ -20868,7 +20885,7 @@ def _pick_billable_turns(rows, extra=None):
         }
 
         epoch_s = _ts_to_epoch_s(ts)
-        if epoch_s is None or not sid:
+        if etype == "usage" or epoch_s is None or not sid:
             # No usable dedup key — keep the row but don't dedup it.
             loose.append(payload)
             continue
@@ -20949,6 +20966,14 @@ def _extract_usage_splits(data: dict) -> dict[str, int]:
     am = data.get("assistantMessage")
     if isinstance(am, dict):
         candidates.append(am.get("usage"))
+    adapter_usage = data.get("extra")
+    if isinstance(adapter_usage, dict) and adapter_usage.get("usageBasis") == "per_call":
+        return {
+            "input_tokens": _read_usage_int(adapter_usage, _USAGE_KEYS_INPUT),
+            "output_tokens": _read_usage_int(adapter_usage, _USAGE_KEYS_OUTPUT),
+            "cache_read_tokens": _read_usage_int(adapter_usage, _USAGE_KEYS_CACHE_READ),
+            "cache_write_tokens": _read_usage_int(adapter_usage, _USAGE_KEYS_CACHE_WRITE),
+        }
 
     for u in candidates:
         if not isinstance(u, dict):

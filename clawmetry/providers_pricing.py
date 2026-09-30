@@ -115,6 +115,8 @@ PROVIDER_MAP: dict[str, dict] = {
 # These are short-context estimates, not historical or service-tier invoices.
 # GPT-5.6 is the Sol alias; its promotional rates last at least to 2026-11-21.
 _OPENAI_PRICES = {
+    # Verified 2026-10-01: https://developers.openai.com/api/docs/models/gpt-6-astra
+    "gpt-6-astra": (10.00, 50.00, 1.00, 12.50),
     "gpt-4o": (2.50, 10.00, 1.25, None),
     "gpt-4o-mini": (0.15, 0.60, 0.075, None),
     "gpt-4.1": (2.00, 8.00, 0.50, None),
@@ -674,6 +676,15 @@ def estimate_event_cost_usd(
             prices = _openai_prices(model)
             if prices is not None:
                 total_input = max(0, int(input_tokens))
+                # Astra's full-request long-context rates begin above 272K
+                # input tokens. Callers must price per response, not a
+                # session-wide sum that would cross this threshold falsely.
+                astra = re.sub(r"-\d{4}-\d{2}-\d{2}$", "", (model or "").lower().split("/", 1)[-1]) == "gpt-6-astra"
+                if astra and total_input > 272000:
+                    input_rate *= 2
+                    output_rate *= 1.5
+                    prices = (input_rate, output_rate, prices[2] * 2, prices[3] * 2)
+                    cost = (total_input * input_rate + max(0, int(output_tokens)) * output_rate) / 1_000_000
                 cached = min(total_input, max(0, int(cache_read_tokens)))
                 written = min(total_input - cached, max(0, int(cache_write_tokens)))
                 if prices[2] is not None:

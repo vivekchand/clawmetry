@@ -8617,26 +8617,13 @@ def _build_model_billing(model_usage):
 
 
 def _get_billing_coverage(model_billing, today_cost, week_cost, month_cost,
-                          fallback_all_covered_when_no_models=False):
-    """Detect the user's active subscription plan and split reported
-    API-equivalent cost into ``covered_usd`` (paid for by the plan → $0
-    out-of-pocket) vs ``out_of_pocket_usd`` (actual incremental spend).
+                          fallback_all_covered_when_no_models=False, runtime=None):
+    """Attribute published-rate usage to detected billing routes.
 
-    Users on Claude Max / ChatGPT Plus / Cursor Pro etc. see alarming
-    "$X.YZ" cost numbers on the Cost tab even though their subscription
-    already covers those calls — the incremental cost is $0. This helper
-    is what lets the UI paint a green "Covered by <plan>" badge and stop
-    the panic. Same detection path the fleet heartbeat uses on-device
-    (`clawmetry.sync._build_billing_payload`), so device and dashboard
-    agree on the plan label.
-
-    Split heuristic: proportional to token share of models the per-model
-    billing pass classified as OAuth/included (`apiKeyConfigured=False`).
-    When the caller has no per-model tokens (local_store fast path),
-    ``fallback_all_covered_when_no_models`` treats a detected subscription
-    as covering the full amount — coarse but honest to the device UX.
-
-    Always returns a dict; never raises. Cost fields are floats in USD.
+    A selected runtime can only inherit its own detected subscription.
+    Without per-model evidence, unscoped totals remain unallocated. These
+    estimates never establish an invoice, plan fee, allowance or overage.
+    Legacy output field names are retained for existing renderers.
     """
     try:
         from clawmetry.sync import _build_billing_payload  # noqa: WPS433
@@ -8646,6 +8633,12 @@ def _get_billing_coverage(model_billing, today_cost, week_cost, month_cost,
 
     account_plan = payload.get("account_plan") if isinstance(payload, dict) else None
     runtimes_bm = payload.get("runtimes") or {} if isinstance(payload, dict) else {}
+    if runtime and runtime != "all":
+        # An account-level Claude plan says nothing about Codex, Cursor, or
+        # even another runtime using the same model through an API key.
+        selected = runtimes_bm.get(runtime)
+        runtimes_bm = {runtime: selected} if isinstance(selected, dict) else {}
+        account_plan = selected if isinstance(selected, dict) and selected.get("mode") == "subscription" else None
 
     total_tokens = sum(int(m.get("tokens") or 0) for m in (model_billing or []))
     covered_tokens = sum(
@@ -8657,10 +8650,9 @@ def _get_billing_coverage(model_billing, today_cost, week_cost, month_cost,
     any_metered_now = any((rt or {}).get("mode") == "metered" for rt in runtimes_bm.values())
     if total_tokens > 0:
         ratio = covered_tokens / total_tokens
-    elif (fallback_all_covered_when_no_models or (any_sub_now and not any_metered_now)) and any_sub_now:
-        # No per-model token activity yet, but we've detected a subscription
-        # and no metered runtime — treat as fully covered so the "you're
-        # covered by <plan>" banner still paints on a quiet day/fresh install.
+    elif runtime and runtime != "all" and any_sub_now and not any_metered_now:
+        # Only the selected runtime's own billing route establishes coverage.
+        # With no runtime or per-model attribution, coverage is unknown.
         ratio = 1.0
     else:
         ratio = 0.0

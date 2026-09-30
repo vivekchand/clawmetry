@@ -15218,13 +15218,16 @@ def _family_ingest_rev() -> str:
     session is processed, so without the bump every session already recorded
     keeps "Messages 0" until it happens to grow again. Same rule as above: a
     change to what ingest writes needs a salt, or it reaches new sessions only.
+
+    ``/usage1`` repairs previous lifetime-cost allocations and fills event
+    tokens, including idle sessions previously skipped by their watermark.
     """
     try:
         import importlib.metadata as _ilm
 
-        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t2"
+        return _ilm.version("clawmetry-pro") + "/ctx1/q2/t2/usage1"
     except Exception:
-        return ""
+        return "usage1"
 
 
 def _family_adapter_classes():
@@ -16518,10 +16521,9 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         _session_tool_call_count(_events) if _events else None),
                 })
                 # Events → transcript (rides the existing _build_transcripts path).
-                # Re-ingest the full event set for sessions that advanced (the
-                # PK upsert makes re-ingest idempotent) so the per-event cost
-                # spread below stays correct -- it apportions the WHOLE session
-                # cost across ALL events, so it must see all of them, not a tail.
+                # Re-read the full event set for advanced sessions. Transcript
+                # IDs are insert-only; derived usage is reconciled separately
+                # so a growing lifetime total replaces its earlier allocation.
                 # The session-level skip above keeps this off idle sessions.
                 rows = []
                 for e in _events:
@@ -16563,20 +16565,14 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         "model": s.model or None,
                     })
                 if rows:
-                    # Per-event USD isn't on disk for family runtimes (the
-                    # adapter derives one accurate cost at the SESSION level).
-                    # Spread that real cost across the session's events in
-                    # proportion to each event's token_count so the event-based
-                    # Cost tab sums to the true session cost instead of $0.
-                    if s.cost_usd is not None:
-                        _tot_tok = sum(r["token_count"] for r in rows)
-                        if _tot_tok > 0:
-                            for r in rows:
-                                r["cost_usd"] = round(s.cost_usd * r["token_count"] / _tot_tok, 8)
-                        else:
-                            rows[-1]["cost_usd"] = s.cost_usd
                     try:
+                        from clawmetry.family_usage import allocate_usage
+                        allocate_usage(rows, s)
                         store.ingest_many(rows)
+                        # Transcript inserts ignore existing IDs. Derived
+                        # usage must instead replace earlier allocations,
+                        # including inflated history from older versions.
+                        store.reconcile_family_event_usage(ns_id, rows)
                         total_events += len(rows)
                         # Advance the high-water mark to this session's newest
                         # activity so the next cycle skips it until it grows
@@ -19202,6 +19198,7 @@ def _build_daily_usage(days=14):
         # first, with a zero-filled point for every day so the chart axis lines
         # up across runtimes. Empty {} when the rollup is unavailable.
         by_runtime: dict = {}
+        periods_by_runtime: dict = {}
         try:
             window = [
                 (now - timedelta(days=i)).strftime("%Y-%m-%d")
@@ -19211,9 +19208,12 @@ def _build_daily_usage(days=14):
             since = window[0]
             # rt -> {day: {"tokens": int, "cost_usd": float}}
             rt_days: dict = {}
-            for r in (store.query_rollup_runtime_daily(
-                since=since, limit=10000,
-            ) or []):
+            runtime_rows = store.query_rollup_runtime_daily(
+                since=min(since, wk, mo), limit=10000,
+            ) or []
+            from clawmetry.usage_snapshot import runtime_periods
+            periods_by_runtime = runtime_periods(runtime_rows, tstr, wk, mo)
+            for r in runtime_rows:
                 d = str(r.get("day") or "")[:10]
                 if not d or d not in window_set:
                     continue
@@ -19245,6 +19245,7 @@ def _build_daily_usage(days=14):
             "weekCost": round(sum(v for k, v in daily_cost.items() if k >= wk), 6),
             "monthCost": round(sum(v for k, v in daily_cost.items() if k >= mo), 6),
             "byRuntime": by_runtime,
+            "periodsByRuntime": periods_by_runtime,
         })
     except Exception as _e:
         log.debug("daily usage snapshot build failed: %s", _e)

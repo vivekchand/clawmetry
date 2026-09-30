@@ -139,7 +139,7 @@ def test_force_backfill_repairs_polluted_history(fresh_store):
 
 def test_schema_v11_wipe_migration_present():
     src = open(_LS, encoding="utf-8").read()
-    assert "SCHEMA_VERSION = 11" in src
+    assert int(re.search(r"^SCHEMA_VERSION = (\d+)", src, re.M).group(1)) >= 11
     m = re.search(r"if not migration_failed and current < 11:.*?DELETE FROM rollup_runtime_daily",
                   src, re.S)
     assert m, "the v11 rollup-wipe migration must exist (repairs shipped stores)"

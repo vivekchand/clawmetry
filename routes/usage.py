@@ -471,6 +471,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     daily_output = {r["day"]: int(r.get("output_tokens") or 0) for r in splits_rows}
     daily_cache_read = {r["day"]: int(r.get("cache_read_tokens") or 0) for r in splits_rows}
     daily_cache_write = {r["day"]: int(r.get("cache_write_tokens") or 0) for r in splits_rows}
+    independent = {r["day"]: r for r in splits_rows if r.get("independent_tokens")}
     # Also fill in cost from splits_rows when query_aggregates' cost_usd
     # column was empty for that day (real-data common case — sync.py
     # only stamps cost_usd when ``usage.cost.total`` is present at
@@ -495,16 +496,19 @@ def _try_local_store_usage(runtime: Optional[str] = None):
     # day (synthetic / partial install) → keep whichever is larger so we
     # don't lose data either way.
     for d in set(list(daily_input.keys()) + list(daily_output.keys())):
-        deduped_total = int(daily_input.get(d, 0)) + int(daily_output.get(d, 0))
+        own = independent.get(d, {})
+        own_total = int(own.get("independent_tokens") or 0)
+        deduped_total = (int(daily_input.get(d, 0)) + int(daily_output.get(d, 0))
+                         - int(own.get("independent_input_output") or 0))
         if deduped_total <= 0:
             continue
-        raw_total = int(daily_tokens.get(d, 0))
+        raw_total = max(0, int(daily_tokens.get(d, 0)) - own_total)
         sibling_doubled = 2 * deduped_total
         if raw_total >= sibling_doubled:
             non_msg = raw_total - sibling_doubled
-            daily_tokens[d] = deduped_total + non_msg
+            daily_tokens[d] = own_total + deduped_total + non_msg
         else:
-            daily_tokens[d] = max(raw_total, deduped_total)
+            daily_tokens[d] = own_total + max(raw_total, deduped_total)
 
     if (
         not daily_tokens and not daily_cost
@@ -585,6 +589,7 @@ def _try_local_store_usage(runtime: Optional[str] = None):
         "billingCoverage": _d._get_billing_coverage(
             [], today_cost, week_cost, month_cost,
             fallback_all_covered_when_no_models=True,
+            runtime=runtime,
         ),
         "sessionCosts": {},
         "sessions": _ls_top_sessions_by_cost(limit=20, runtime=runtime),
@@ -2350,7 +2355,7 @@ def api_usage():
         "modelBilling": model_billing,
         "billingSummary": billing_summary,
         "billingCoverage": _d._get_billing_coverage(
-            model_billing, today_cost, week_cost, month_cost
+            model_billing, today_cost, week_cost, month_cost, runtime=_rt
         ),
         "sessionCosts": session_costs,
         "sessions": top_sessions_rows,

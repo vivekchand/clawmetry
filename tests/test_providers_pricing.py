@@ -137,3 +137,15 @@ def test_openai_unknown_variants_do_not_inherit_a_published_cache_discount():
     assert estimate_event_cost_usd(
         "gpt-5.4-pro", input_tokens=100, cache_read_tokens=100,
     ) == pytest.approx(0.003)
+
+
+def test_astra_published_rates_cache_subsets_and_context_boundary():
+    from clawmetry.providers_pricing import estimate_event_cost_usd, rate_basis
+    assert rate_basis('openai', 'gpt-6-astra') == (10, 50, 'model')
+    # 100K input: 40K ordinary, 50K reads, 10K writes; 1K output.
+    assert estimate_event_cost_usd('gpt-6-astra', input_tokens=100000,
+        output_tokens=1000, cache_read_tokens=50000, cache_write_tokens=10000) == .625
+    assert estimate_event_cost_usd('gpt-6-astra', input_tokens=272000, output_tokens=1000) == 2.77
+    assert estimate_event_cost_usd('gpt-6-astra', input_tokens=272001, output_tokens=1000) == 5.51502
+    assert estimate_event_cost_usd('gpt-6-astra-2026-10-01', input_tokens=300000,
+        output_tokens=1000, cache_read_tokens=200000, cache_write_tokens=50000) == 2.725
