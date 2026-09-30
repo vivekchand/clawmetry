@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixed: growing agent sessions no longer inflate reported usage value
+
+- A session whose cumulative estimate grows from $10 to $12 now contributes $12, rather than adding each lifetime estimate. The next ingest repairs selected historical sessions and their daily totals while preserving transcript contents and integrity records.
+- Codex accounting uses owned response records once each, retaining their dates, models and cache token breakdowns. Forked history and duplicate records are excluded. This requires the coordinated Pro 0.7.33 adapter update.
+- Codex no longer inherits another runtime's subscription label. Local and hosted Cost cards use matching calendar periods and runtime-specific coverage. GPT-6 Astra uses verified model, cache and per-response long-context rates.
+- Active usage-anomaly banners refresh their amounts from current totals, use the preceding seven complete days as baseline, and explicitly label the all-runtime estimate. Historical alerts and configured budget enforcement remain intact.
+- Verified with regression tests, independent reconciliation of 107 real Codex rollouts, and repeated real-session ingest through DuckDB, the usage API and encrypted-snapshot construction. Carries #6215.
+
 ### Fixed: OpenClaw exec approval turned off out of band is put back and audited
 - While a require-approval policy covers exec, the daemon now re-reads OpenClaw's effective exec posture (`openclaw exec-policy show --json`) at most once a minute. If any scope no longer gates exec, for example after `exec.approvals.set {"ask": "off"}` through the gateway API (CVE-2026-25253, ATLAS AML.CS0050 S06), it re-applies the `cautious` preset and writes a `guard.exec_approval_drift` audit entry naming the relaxed scopes. Before this change it compared only against its own state file and never noticed.
 - A posture that is already gated when the policy arrives, such as a hand-set deny-all, is left alone and is never relaxed to `cautious` or later to `yolo`. An unreadable posture is never treated as drift.
