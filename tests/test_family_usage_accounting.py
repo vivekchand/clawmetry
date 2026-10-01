@@ -148,6 +148,79 @@ def test_sync_growing_session_counts_only_latest_lifetime_total(store, monkeypat
     assert totals(store) == (12, 120)
 
 
+@pytest.mark.parametrize("poisoned_mark", [False, True])
+def test_loaded_pro_revision_repairs_idle_sessions_after_restart(store, monkeypatch, poisoned_mark):
+    import importlib.metadata
+    import sys
+    from clawmetry import sync, entitlements, local_store as ls
+    from clawmetry.adapters.base import Session, Event
+
+    installed = {"version": "0.7.32"}
+    loaded = SimpleNamespace(__version__="0.7.32")
+    reads = []
+
+    class Adapter:
+        name = "codex"
+        def detect(self):
+            return SimpleNamespace(detected=True)
+        def list_sessions(self, limit):
+            fixed = loaded.__version__ == "0.7.33"
+            return [Session(agent="codex", id="session", model="gpt-5",
+                started_at=1790683200, ended_at=1790683201,
+                cost_usd=10 if fixed else 90000, total_tokens=1000 if fixed else 0)]
+        def list_events(self, session_id, limit):
+            reads.append(loaded.__version__)
+            return [Event(agent="codex", session_id=session_id, id="first",
+                type="message", role="assistant", ts=1790683200, content="fixture")]
+
+    monkeypatch.setitem(sys.modules, "clawmetry_pro", loaded)
+    monkeypatch.setattr(importlib.metadata, "version", lambda _: installed["version"])
+    monkeypatch.setattr(ls, "get_store", lambda *a, **kw: store)
+    monkeypatch.setattr(sync, "_family_adapter_classes", lambda: [Adapter])
+    monkeypatch.setattr(sync, "_sync_allowed", lambda: True)
+    monkeypatch.setattr(sync, "_ingest_keepalive_heartbeat", lambda *a: None)
+    monkeypatch.setattr(sync, "_openclaw_spawned_claude_ids", lambda: set())
+    monkeypatch.setattr(entitlements, "get_entitlement", lambda: SimpleNamespace(allows_runtime=lambda r: True))
+    state = {}
+    config = {"node_id": "test-node"}
+    sync.sync_family_runtimes(config, state, {})
+    assert totals(store) == (90000, 0)
+    immutable = store._fetch("SELECT id, chain_hash FROM events ORDER BY id", [])
+
+    # Replacing the distribution does not replace the process's cached parser.
+    installed["version"] = "0.7.33"
+    assert sync.sync_family_runtimes(config, state, {}) == 0
+    assert reads == ["0.7.32"]
+    mark = state["family_event_high_water"]["codex:session"]
+    assert mark.partition("@@")[2].startswith("0.7.32/")
+    if poisoned_mark:
+        # A previous release could already have stamped the new disk version
+        # using old code. The new salt must repair that mark too.
+        state["family_event_high_water"]["codex:session"] = (
+            mark.partition("@@")[0] + "@@0.7.33/ctx1/q2/usage1/t2")
+
+    # A restarted process loads the new package and parser for the same input.
+    loaded = SimpleNamespace(__version__="0.7.33")
+    monkeypatch.setitem(sys.modules, "clawmetry_pro", loaded)
+    assert sync.sync_family_runtimes(config, state, {}) > 0
+    assert totals(store) == (10, 1000)
+    assert reads == ["0.7.32", "0.7.33"]
+    assert sync.sync_family_runtimes(config, state, {}) == 0
+    assert totals(store) == (10, 1000)
+    assert store._fetch("SELECT id, chain_hash FROM events ORDER BY id", []) == immutable
+    assert store.verify_integrity()["status"] == "valid"
+
+
+@pytest.mark.parametrize("loaded", [None, SimpleNamespace()])
+def test_unavailable_loaded_pro_version_does_not_claim_disk_version(monkeypatch, loaded):
+    import importlib.metadata
+    import sys
+    from clawmetry import sync
+    monkeypatch.setitem(sys.modules, "clawmetry_pro", loaded)
+    monkeypatch.setattr(importlib.metadata, "version", lambda _: "9.9.9")
+    assert sync._family_ingest_rev() == "usage2/t2"
+
+
 def usage(eid, *, cost=1, tokens=100, model='gpt-5', cached=0):
     row = event(eid, cost=cost, tokens=tokens)
     row.update(event_type='usage', model=model)
