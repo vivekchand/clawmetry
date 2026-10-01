@@ -15185,12 +15185,12 @@ def sync_vm_usage_log(config: dict, state: dict, paths: dict) -> int:
 
 
 def _family_ingest_rev() -> str:
-    """Installed clawmetry-pro version, stamped into family high-water marks.
+    """Loaded clawmetry-pro version, stamped into family high-water marks.
 
     The adapters live in clawmetry-pro; what they extract per session
     (tokens, cost, model) changes across pro releases. Stamping the rev
     means an upgrade re-ingests every session once instead of trusting a
-    mark written by older extraction code. "" when pro is absent.
+    mark written by older extraction code. A missing package uses only the salt.
 
     The ``/ctx1`` salt is OSS-side: 2026-08-19 the family upsert started
     persisting ``cwd``/``git_branch`` (kill/pause pid resolution reads them),
@@ -15221,13 +15221,17 @@ def _family_ingest_rev() -> str:
 
     ``/usage1`` repairs previous lifetime-cost allocations and fills event
     tokens, including idle sessions previously skipped by their watermark.
+
+    ``/usage2`` also repairs marks advanced while old adapter modules remained
+    cached after an on-disk Pro upgrade. Use the loaded package version so an
+    install cannot claim the new parser ran; a restart then replays idle data.
     """
     try:
-        import importlib.metadata as _ilm
+        from clawmetry_pro import __version__ as _pro_version
 
-        return _ilm.version("clawmetry-pro") + "/ctx1/q2/usage1/t2"
+        return _pro_version + "/ctx1/q2/usage2/t2"
     except Exception:
-        return "usage1/t2"
+        return "usage2/t2"
 
 
 def _family_adapter_classes():
@@ -16169,7 +16173,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # ``ended`` (the adapter sets it to the last event ts) every turn,
                 # so they're never wrongly skipped; idle/ended sessions cost ~0.
                 _evt_hw = state.setdefault("family_event_high_water", {})
-                # The mark is "<ts>@@<ingest-rev>" (rev = installed
+                # The mark is "<ts>@@<ingest-rev>" (rev = loaded
                 # clawmetry-pro version). A pro upgrade changes what the
                 # adapters extract (live-hit 2026-07-19: nanoclaw sessions
                 # ingested by a pre-deep-usage wheel were skipped forever,
