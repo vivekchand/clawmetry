@@ -82,8 +82,40 @@
 # fastapi dragged along with it. Re-running the documented `uv pip compile`
 # on the direct requirements above resolves fastapi 0.142.2 and starlette
 # 1.7.0. What makes starlette 1.x reachable at all is that fastapi dropped
-# its starlette ceiling in 0.140.5 (`starlette>=0.46.0`, no upper bound);
+# its starlette ceiling by 0.136.3 (`starlette>=0.46.0`, no upper bound);
 # 0.124.4 capped it at <0.51.0, which is what the old note described.
+#
+# FASTAPI IS HELD AT 0.141.1, NOT THE 0.142.2 A FRESH COMPILE RESOLVES, AND
+# THE REASON IS MEASURED, NOT PRECAUTIONARY. fastapi 0.142.0 added
+# `opentelemetry-api>=1.44.0` as a CORE dependency -- fastapi instruments
+# itself now -- and that collides with litellm's own OpenTelemetry callback,
+# which this file installs on purpose (the otel packages are direct
+# requirements above, for the proxy's "otel" callback). Taking 0.142.2 leaves
+# the proxy serving traffic correctly, and the whole spend reconciliation in
+# litellm-gateway.yml still passes, but TRACE CORRELATION breaks: the job's
+# `correlated == 1` assertion fails, because litellm's spans are being ended
+# underneath it.
+#
+# Measured on PR #6232 against the last green main run of the same job:
+#
+#                                   green main   fastapi 0.142.2
+#   litellm _to_ns(None) failures            0                 5
+#   "Calling end() on an ended span"         0                 3
+#   gateway trace-correlation assertion   pass              FAIL
+#
+# The failures are litellm's `async_service_success_hook` ->
+# `opentelemetry.py::_to_ns(start_time)` raising on a None start_time, plus
+# span-lifecycle complaints; all of them appear only with 0.142.x. 0.141.1 is
+# the newest fastapi with NO core opentelemetry dependency, satisfies
+# litellm's `>=0.136.3`, carries no advisory of its own, and needs nothing
+# the closure does not already pin (starlette>=0.46.0, pydantic>=2.9.0,
+# typing-extensions>=4.8.0, typing-inspection>=0.4.2, annotated-doc>=0.0.2).
+#
+# So do not "finish the job" by moving fastapi to 0.142.x here. That is not a
+# version lag; it is the boundary, and it moves when litellm's otel
+# integration stops ending its own spans early under a self-instrumenting
+# fastapi. The end-to-end job is what says so -- read a red correlation
+# assertion as the answer, not a flake.
 #
 # Taken as a two-pin edit rather than a regeneration, because nothing else in
 # the closure needs to move. Every other starlette/fastapi consumer here is
@@ -659,9 +691,9 @@ email-validator==2.3.0 \
     --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4 \
     --hash=sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426
     # via pydantic
-fastapi==0.142.2 \
-    --hash=sha256:06366626f2e70576367714d9ab2fe8472e6c8456dba69b399f9f797ab5e92570 \
-    --hash=sha256:bd5f4d81f1e93a88bcd77caf4dfe3c2dbffc3805407a0007e9a114c18b3a670b
+fastapi==0.141.1 \
+    --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3 \
+    --hash=sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1
     # via
     #   fastapi-sso
     #   litellm
