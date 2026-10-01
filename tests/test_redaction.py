@@ -10,6 +10,18 @@ import pytest
 from clawmetry import redaction
 
 
+@pytest.mark.parametrize("prefix", ["sk-", "sk-proj-", "sk-ant-"])
+def test_provider_key_suffix_is_redacted_completely(prefix):
+    key = prefix + "a" * 20 + "_" + "b" * 20 + "-"
+    assert redaction.redact_text(key) == redaction._fingerprint(key)
+
+
+def test_email_percent_local_part_and_truncated_pem_candidates():
+    assert redaction._EMAIL.findall("alice%dev@example.test") == ["alice%dev@example.test"]
+    assert redaction._EMAIL.search("%" * 60000) is None
+    assert list(redaction._PRIVATE_KEY.finditer("-----BEGIN PRIVATE KEY-----\n" * 2000)) == []
+
+
 @pytest.fixture(autouse=True)
 def _enabled(monkeypatch):
     # Redaction reads the env var at call time; make sure it's on for tests.

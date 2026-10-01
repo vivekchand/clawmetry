@@ -57,6 +57,13 @@ and similar) otherwise appear in this codebase only as strings used to
 attribute costs and parse pricing. ClawMetry observes those calls; it does not
 make them.
 
+The [local assessment privacy component](ASSESSMENT_PRIVACY.md) adds no
+network destination and enables no inference. It provides mandatory masking
+and a consent/egress check for future assessment callers. It does not replace
+the redaction behavior of the existing optional model features above. A
+managed assessment integration must disclose its processor, allowed evidence
+and retention policy separately before sending a sanitized request.
+
 ---
 
 ## What the server can read, and what it cannot

@@ -75,13 +75,16 @@ _KEYVAL = re.compile(
 )
 _BEARER = re.compile(r"(?i)\bBearer\s+([A-Za-z0-9\-._~+/]{8,}=*)")
 _PRIVATE_KEY = re.compile(
-    r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----.*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----",
+    # Do not retry a missing END across every later BEGIN (quadratic on
+    # truncated PEM dumps). Matching labels also avoid partial key capture.
+    r"-----BEGIN (?P<private_key_kind>(?:[A-Z ]{1,80} )?PRIVATE KEY)-----"
+    r"(?:(?!-----BEGIN ).)*?-----END (?P=private_key_kind)-----",
     re.DOTALL,
 )
 # Provider key formats — match the raw token wherever it appears.
 _TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bsk-ant-[A-Za-z0-9\-_]{16,}\b"),        # Anthropic
-    re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9]{16,}\b"),     # OpenAI-style
+    re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])"),  # Anthropic
+    re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}(?![A-Za-z0-9_-])"),  # OpenAI-style
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),                  # AWS access key id
     re.compile(r"\bAIza[0-9A-Za-z\-_]{35}\b"),            # Google API key
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),        # GitHub tokens
@@ -236,13 +239,14 @@ def pii_posture_check() -> dict[str, Any]:
 # email: local@domain.tld, the same shape trace_capture already uses for
 # publication. No checksum exists for an email; the TLD requirement keeps
 # "user@host" log lines and "@decorator" tokens out.
-_EMAIL = re.compile(r"(?<![\w.+-])[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}\b")
+# The left boundary includes every accepted local-part character. Omitting
+# '%' retries a failed long percent run from every position, quadratically.
+_EMAIL = re.compile(r"(?<![\w.%+-])[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}\b")
 
 # IBAN: country code + 2 check digits + BBAN, optional 4-character spacing.
 # The country must be one whose IBAN length is known; the mod-97 check then
 # has to pass. An unknown country code is not an IBAN as far as this tier is
 # concerned, which is the precise side to fail on.
-_IBAN_CANDIDATE = re.compile(r"\b([A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,4})?)\b")
 _IBAN_LENGTHS: dict[str, int] = {
     "AD": 24, "AE": 23, "AL": 28, "AT": 20, "AZ": 28, "BA": 20, "BE": 16,
     "BG": 22, "BH": 22, "BR": 29, "BY": 28, "CH": 21, "CR": 22, "CY": 28,
@@ -257,6 +261,26 @@ _IBAN_LENGTHS: dict[str, int] = {
     "ST": 25, "SV": 28, "TL": 23, "TN": 24, "TR": 26, "UA": 29, "VA": 22,
     "VG": 24, "XK": 20,
 }
+
+
+def _iban_candidate_pattern() -> re.Pattern[str]:
+    # Bound each candidate by its country's length. A greedy generic BBAN
+    # candidate consumes adjacent uppercase prose ("BE68 ... 7034 NEXT"),
+    # fails mod-97, then silently misses the valid identifier before it.
+    lengths = {}
+    for country, length in _IBAN_LENGTHS.items():
+        lengths.setdefault(length, []).append(country)
+    branches = []
+    for length, countries in sorted(lengths.items()):
+        groups, tail = divmod(length - 4, 4)
+        branch = "(?:" + "|".join(sorted(countries)) + r")\d{2}(?: ?[A-Z0-9]{4}){" + str(groups) + "}"
+        if tail:
+            branch += r" ?[A-Z0-9]{" + str(tail) + "}"
+        branches.append(branch)
+    return re.compile(r"\b(" + "|".join(branches) + r")(?![A-Z0-9])", re.IGNORECASE | re.ASCII)
+
+
+_IBAN_CANDIDATE = _iban_candidate_pattern()
 
 
 def iban_valid(candidate: str) -> bool:
@@ -316,6 +340,16 @@ def card_valid(candidate: str) -> bool:
                for pat, lengths in _CARD_BRANDS)
 
 
+def card_candidate_ambiguous(candidate: str) -> bool:
+    """A greedy candidate may include numeric prose after a valid card.
+
+    Only consider actual printed separators, never prefixes of an unbroken
+    longer number. The full value remains invalid as a card number.
+    """
+    return not card_valid(candidate) and any(
+        card_valid(candidate[:match.start()]) for match in re.finditer(r"[ -]+", candidate))
+
+
 # Phone, E.164 only: a leading "+", a country code that does not start with
 # 0, then 8 to 15 digits in total, with optional single separators between
 # groups. The lookbehind refuses a "+" glued to a preceding digit, so the
@@ -330,6 +364,12 @@ def phone_valid(candidate: str) -> bool:
     return 8 <= len(digits) <= 15
 
 
+def phone_candidate_ambiguous(candidate: str) -> bool:
+    """An overlong formatted candidate contains a supported phone prefix."""
+    return not phone_valid(candidate) and any(
+        phone_valid(candidate[:match.start()]) for match in re.finditer(r"[ .()-]+", candidate))
+
+
 # National identifiers. Each has a structural rule and a check, and each
 # is written in the form the document prints it, not a bare digit run.
 # US SSN: AAA-GG-SSSS, area not 000/666/9xx, group not 00, serial not 0000.
@@ -338,7 +378,8 @@ _SSN = re.compile(r"(?<![\w\-])(?!000|666|9\d\d)\d{3}-(?!00)\d{2}-(?!0000)\d{4}(
 # suffix A-D, optional spaces in the printed grouping.
 _NINO = re.compile(
     r"(?<![A-Za-z0-9])(?!BG|GB|NK|KN|TN|NT|ZZ)"
-    r"[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z] ?\d{2} ?\d{2} ?\d{2} ?[A-D](?![A-Za-z0-9])"
+    r"[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z] ?\d{2} ?\d{2} ?\d{2} ?[A-D](?![A-Za-z0-9])",
+    re.IGNORECASE | re.ASCII,
 )
 # India Aadhaar: 12 digits, first digit 2-9, optional 4-4-4 grouping,
 # Verhoeff check digit.
@@ -416,9 +457,9 @@ def _pii_core(text: str, cats: "dict[str, bool]") -> str:
     if cats.get("iban"):
         out = _sub_checked(_IBAN_CANDIDATE, iban_valid, "[iban]", out)
     if cats.get("card"):
-        out = _sub_checked(_CARD_CANDIDATE, card_valid, "[card]", out)
+        out = _sub_checked(_CARD_CANDIDATE, lambda value: card_valid(value) or card_candidate_ambiguous(value), "[card]", out)
     if cats.get("phone"):
-        out = _sub_checked(_PHONE_CANDIDATE, phone_valid, "[phone]", out)
+        out = _sub_checked(_PHONE_CANDIDATE, lambda value: phone_valid(value) or phone_candidate_ambiguous(value), "[phone]", out)
     if cats.get("national_id"):
         out = _SSN.sub("[national_id]", out)
         out = _NINO.sub("[national_id]", out)

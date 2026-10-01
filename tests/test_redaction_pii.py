@@ -58,6 +58,31 @@ def test_iban_spaced_and_compact():
     assert out == "pay [iban] or [iban]"
 
 
+@pytest.mark.parametrize("iban", ["BE68 5390 0754 7034", "BE68539007547034",
+                                  "NL91ABNA0417164300", "GB82 WEST 1234 5698 7654 32",
+                                  "be68539007547034", "gB82 WeSt 1234 5698 7654 32"])
+def test_iban_candidate_stops_before_adjacent_uppercase_prose(iban):
+    assert r.iban_valid(iban)
+    assert r.redact_text(iban + " NEXT") == "[iban] NEXT"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("4111111111111111 12", "[card]"),
+    ("4111 1111 1111 1111 7", "[card]"),
+    ("+44 20 7946 0958 1234", "[phone]"),
+])
+def test_ambiguous_numeric_candidate_is_withheld_not_emitted(value, expected):
+    assert r.redact_text(value) == expected
+
+
+def test_invalid_unbroken_long_card_does_not_get_prefix_validation():
+    candidate = "411111111111111112"
+    assert not r.card_valid(candidate)
+    assert not r.card_candidate_ambiguous(candidate)
+    assert r.redact_text(candidate) == candidate
+
+
+
 def test_us_ssn_dashed_form():
     assert r.redact_text("ssn 123-45-6789.") == "ssn [national_id]."
 
