@@ -28,4 +28,4 @@ Blueprints reached through `@…` mentions and links while reading linked bluepr
 ## Delivery
 
 - Branch: feat/decision-privacy
-- Pull Request URL:
+- Pull Request URL: https://github.com/vivekchand/clawmetry/pull/6227
