@@ -241,3 +241,38 @@ def test_hook_command_works_is_false_for_a_missing_binary(monkeypatch):
     # This one tests the real probe, so step out of the autouse stub above.
     monkeypatch.undo()
     assert trace_stamp.hook_command_works("clawmetry-does-not-exist") is False
+
+
+# ── hook file permissions ──────────────────────────────────────────────────
+# Both hooks ClawMetry writes used to land at 0o755, which grants read and
+# execute to group and other on a file whose path ClawMetry chose. Git runs a
+# client-side hook as the user who invoked the commit or the push, so nothing
+# needs those bits -- and an explicit chmod also overrides a narrower umask on
+# the way past, widening a user who had deliberately tightened theirs.
+#
+# Asserted on the low nine bits only: os.stat returns the file type in the
+# same field, and `& 0o777` is what separates the mode from the fact that it
+# is a regular file. Both installers are covered because they are separate
+# code paths that each carried their own literal.
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_installed_commit_hook_is_owner_only(tmp_path):
+    res = trace_stamp.install(_git_repo(tmp_path))
+    assert res["ok"] and res["status"] == "installed"
+    assert os.stat(res["path"]).st_mode & 0o777 == 0o700
+    # Still runnable by the user git will run it as.
+    assert os.access(res["path"], os.X_OK)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_installed_prepush_hook_is_owner_only(tmp_path):
+    res = trace_stamp.install_prepush(_git_repo(tmp_path))
+    assert res["ok"] and res["status"] == "installed"
+    assert os.stat(res["path"]).st_mode & 0o777 == 0o700
+    assert os.access(res["path"], os.X_OK)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits")
+def test_no_hook_installer_widens_past_owner(tmp_path):
+    """The mask is one constant, so a new installer cannot quietly differ."""
+    assert trace_stamp._HOOK_MODE & 0o077 == 0

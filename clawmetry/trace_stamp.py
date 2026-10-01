@@ -170,6 +170,22 @@ def stamp_file(path: str) -> bool:
 # ── git hook installation ──────────────────────────────────────────────────
 
 _HOOK_MARKER = "# clawmetry trace stamp"
+#: Mode for a hook file ClawMetry writes into the user's repository.
+#:
+#: Owner-only rwx. Git runs a client-side hook as the user who invoked the
+#: commit or the push, so read and execute for group and other buy nothing and
+#: are set on a file whose path ClawMetry chose, not the user. 0o755 -- the
+#: mode this used to use -- also overrides a restrictive umask on the way past,
+#: so a user who had deliberately narrowed their default got widened back.
+#:
+#: The one case that notices: a working tree shared between local accounts
+#: (``core.sharedRepository``), where a colleague committing in the SAME
+#: checkout would no longer be able to run the hook -- git skips a hook it
+#: cannot execute, silently, so stamping would stop rather than break. These
+#: are per-user client hooks installed by per-user tooling, so that is the
+#: correct trade; a shared checkout should install per user.
+_HOOK_MODE = 0o700
+
 _HOOK_BODY = f"""#!/bin/sh
 {_HOOK_MARKER} -- see PRD-pr-trace.md. Removing this line disables the hook.
 # Stamps agent-authored commits with the ClawMetry session that produced them.
@@ -243,7 +259,7 @@ def install(repo: str | None = None, *, verify_binary: bool = True) -> dict:
             }
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(_HOOK_BODY)
-        os.chmod(path, 0o755)
+        os.chmod(path, _HOOK_MODE)
         return {"ok": True, "status": "installed", "path": path}
     except Exception as exc:
         return {"ok": False, "status": "error", "error": str(exc)[:200]}
@@ -312,7 +328,7 @@ def install_prepush(repo: str | None = None) -> dict:
                     "hint": f"add `clawmetry trace autopublish` to {path} yourself"}
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(_PREPUSH_BODY)
-        os.chmod(path, 0o755)
+        os.chmod(path, _HOOK_MODE)
         return {"ok": True, "status": "installed", "path": path}
     except Exception as exc:
         return {"ok": False, "status": "error", "error": str(exc)[:200]}

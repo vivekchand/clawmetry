@@ -53,6 +53,19 @@
 # bump itself clears advisories -- measured: a bare recompile at 1.84.0 trades
 # litellm's 14 advisories for 3 HIGH each in cryptography, mcp and PyJWT.
 #
+# A regeneration is not the only way to lose one. The list above is prose, but
+# every entry is spelled `Name==Version` -- which is also what an automated
+# dependency bump searches this file for, and the comment matches before the
+# real pin does. So a bump can land having edited only this list: the PyJWT
+# floor was raised to 2.15.0 here while the pin below stayed at 2.13.0, and its
+# 12 advisories came back under a green checkmark. Editing a version in this
+# block is therefore never the whole change -- the pin below it, with every
+# sha256 the release publishes, is what actually installs.
+#
+# tests/test_litellm_layered_floors.py now compares the two halves on every PR,
+# so that particular silence is over. Keep the block's `Name==Version` spelling;
+# that guard reads it.
+#
 # starlette is deliberately NOT layered. It is pinned to 0.50.0 by
 # fastapi==0.124.4, which litellm pins in turn; the advisories against it are
 # fixed only in starlette 1.x, which that fastapi will not accept. Clearing it
@@ -1802,9 +1815,9 @@ pygments==2.21.0 \
     --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9 \
     --hash=sha256:610ca751c9bc2492b38eb9a38a7fbc93edbbb2d7182edaf34e66ae493dee5c8c
     # via rich
-pyjwt==2.13.0 \
-    --hash=sha256:41571c89ca91598c79e8ef18a2d07367d4810fbbd6f637794879baf1b7703423 \
-    --hash=sha256:66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728
+pyjwt==2.15.0 \
+    --hash=sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8 \
+    --hash=sha256:b11c5f9791d7bf51c2b39a81ed669f6b2dbbd669df2942f6c60167e9e3d1abe4
     # via
 pynacl==1.6.2 \
     --hash=sha256:018494d6d696ae03c7e656e5e74cdfd8ea1326962cc401bcf018f1ed8436811c \

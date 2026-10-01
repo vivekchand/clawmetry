@@ -253,6 +253,17 @@ jobs:
       - name: py3.9 pip bootstrap pin still installs on 3.9
         run: python3 -m pytest tests/test_pip_bootstrap_py39_pin.py -q
 
+      # The LiteLLM pin set raises several packages by hand, above what litellm
+      # itself pins, because the resolved version carries an open advisory. The
+      # file's header lists those floors as prose -- spelled `Name==Version`,
+      # exactly what a dependency bump searches a requirements file for. So the
+      # comment matches before the real pin does, and a bump can land having
+      # edited only the comment: the PyJWT floor read 2.15.0 in the header while
+      # the pin below stayed at 2.13.0, and 12 advisories came back under a
+      # green checkmark. Compares the two halves, where PRs look.
+      - name: LiteLLM pin set installs the security floors it declares
+        run: python3 -m pytest tests/test_litellm_layered_floors.py -q
+
       # #5739: the field-failure filer could open and refresh an issue but
       # never close one, so a signature that stopped occurring left its issue
       # open forever under a "Still occurring" comment. Runs the reconcile
@@ -285,6 +296,14 @@ jobs:
       # file existed with 29 passing cases and ran in no job at all.
       - name: Quarantine pipeline JUnit parsing
         run: python3 -m pytest tests/test_auto_quarantine.py -q
+
+      # The two git hooks ClawMetry writes into the user's own repository, and
+      # the mode they land at. Named here because this job runs FILE LISTS,
+      # not `pytest tests/`: this file existed with 27 passing cases and ran
+      # in no job at all, so the mode the hooks were installed with was
+      # asserted by nothing that ever executed.
+      - name: Commit-trace git hooks (install, idempotence, hook file mode)
+        run: python3 -m pytest tests/test_trace_stamp.py -q
 
       - name: Published provider pricing and cache accounting
         run: python3 -m pytest tests/test_providers_pricing.py tests/test_pricing_accuracy.py tests/test_price_book.py tests/test_price_book_usage.py -q
@@ -1164,6 +1183,7 @@ jobs:
           python3 -m pytest \
             tests/test_entitlement*.py \
             tests/test_entitlements*.py \
+            tests/test_entitlement_has_capacity_batch.py \
             tests/test_required_tier_canonical.py \
             tests/test_tier_catalog.py \
             tests/test_tier_cli.py \

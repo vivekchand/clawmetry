@@ -316,6 +316,42 @@ def test_list_mode_runs_without_network():
         sys.argv = argv
 
 
+# --- pagination follow -------------------------------------------------------
+#
+# list_check_runs pages through the check-runs API by following the Link
+# header's rel="next". That value is chosen by whatever answered the request,
+# and the follow-up request carries the gate's Authorization header, so it is
+# pinned to the origin of the page just read. These cover both halves: real
+# pagination still works, and a link that points anywhere else is dropped.
+
+PAGE1 = "https://api.github.com/repos/o/r/commits/abc/check-runs?per_page=100"
+
+
+def test_next_page_followed_when_it_stays_on_the_same_origin():
+    link = f'<{PAGE1}&page=2>; rel="next", <{PAGE1}&page=9>; rel="last"'
+    assert e2e_gate._next_page_url(link, PAGE1) == f"{PAGE1}&page=2"
+
+
+def test_no_next_link_ends_pagination():
+    assert e2e_gate._next_page_url(f'<{PAGE1}>; rel="prev"', PAGE1) is None
+    assert e2e_gate._next_page_url("", PAGE1) is None
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "https://evil.example/repos/o/r/check-runs",   # other host: would leak the token
+        "http://api.github.com/repos/o/r/check-runs",  # downgraded scheme
+        "file:///etc/passwd",                          # urlopen speaks file://
+        "ftp://api.github.com/x",
+        "//api.github.com/repos/o/r/check-runs",        # scheme-relative, not guessed at
+    ],
+)
+def test_off_origin_next_link_is_not_followed(target):
+    link = f'<{target}>; rel="next"'
+    assert e2e_gate._next_page_url(link, PAGE1) is None
+
+
 # ---------------------------------------------------------------------------
 # A reporter that posts "pending" and then never returns a verdict.
 #
@@ -398,7 +434,7 @@ def _all_green_runs(except_label=None):
     return runs
 
 
-# ── the stall itself ────────────────────────────────────────────────────────
+# ── the stall itself ────────────────────────────────────────────────────────────────────────────
 
 def test_fresh_pending_status_still_makes_the_gate_wait(monkeypatch):
     """A reporter that is simply still working must not be skipped."""
@@ -442,7 +478,7 @@ def test_a_stall_is_dated_from_the_latest_verdict_not_the_first_ever(monkeypatch
     assert shape(monkeypatch, combined_of(newest), listed) == [IN_PROGRESS]
 
 
-# ── what must never be softened ─────────────────────────────────────────────
+# ── what must never be softened ─────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("state,conclusion", [("failure", "failure"), ("error", "failure")])
 def test_a_red_status_still_blocks_the_merge_at_any_age(monkeypatch, state, conclusion):
@@ -480,7 +516,7 @@ def test_a_stalled_reporter_does_not_wedge_the_whole_gate():
     assert [r.spec.label for r in results if r.state != "passed"] == []
 
 
-# ── failing towards waiting, never towards merging ──────────────────────────
+# ── failing towards waiting, never towards merging ────────────────────────────────────────────────────────────────
 
 def test_an_unreadable_timestamp_never_skips_a_check(monkeypatch):
     for raw in (None, "", "not-a-date", "2026-09-30T02:44:16+00:00"):
@@ -501,7 +537,7 @@ def test_updated_at_is_the_fallback_when_created_at_is_absent():
 def test_a_context_missing_from_the_history_page_is_not_aged(monkeypatch):
     """The list endpoint is newest-first GLOBALLY, so a page can omit a context.
 
-    Absence must mean "no age known" -> keep waiting, never "stale" -> skip.
+    Absence must mean \"no age known\" -> keep waiting, never \"stale\" -> skip.
     """
     pending = entry("pending", STALE + 9999)
     assert shape(monkeypatch, combined_of(pending), []) == [IN_PROGRESS]
@@ -537,7 +573,7 @@ def test_a_failed_status_read_returns_nothing_rather_than_a_verdict(monkeypatch)
     assert e2e_gate.list_commit_statuses("o/r", "sha", "tok") == []
 
 
-# ── shape of the reads themselves ───────────────────────────────────────────
+# ── shape of the reads themselves ────────────────────────────────────────────────────────────────────────────────
 
 def test_current_state_comes_from_the_combined_endpoint(monkeypatch):
     """Both endpoints are read, each for what only it can answer.
