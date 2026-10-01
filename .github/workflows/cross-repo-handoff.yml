@@ -127,6 +127,17 @@ jobs:
           # the suite stubs what it cannot import.
           pip install -r cloud/requirements.txt || true
 
+      - name: Install OSS pinned release (required by cloud server)
+        if: steps.access.outputs.available == 'true'
+        run: |
+          # cloud/run_cloud.py calls require_pinned_oss() which does
+          # importlib.metadata.version("clawmetry"). The package must be
+          # pip-installed (source checkout alone has no pip metadata).
+          # oss_pin.py reads cloud/Dockerfile for the exact pin and returns
+          # "clawmetry==X.Y.Z"; that version must match what require_pinned_oss()
+          # verifies against.
+          pip install "$(python cloud/tests/e2e_browser/oss_pin.py)"
+
       - name: Run C4 cross-repo handoff
         env:
           CLAWMETRY_E2E_STUB_AUTH: "1"
