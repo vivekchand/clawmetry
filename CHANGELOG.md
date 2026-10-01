@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: usage repairs survive background adapter updates
+
+- A running daemon records the parser version actually loaded in memory. Replacing a Pro wheel on disk can no longer mark historical sessions as repaired before the new parser runs.
+- After restart, the corrected parser repairs selected historical sessions, including sessions incorrectly marked by the earlier upgrade path. Repeated ingest keeps totals stable and preserves transcript contents and integrity records.
+- Verified with 57 focused regression tests and an independent two-process upgrade check. Carries #6221 and completes the coordinated accounting repair with Pro 0.7.33.
+
 ### Fixed: growing agent sessions no longer inflate reported usage value
 
 - A session whose cumulative estimate grows from $10 to $12 now contributes $12, rather than adding each lifetime estimate. The next ingest repairs selected historical sessions and their daily totals while preserving transcript contents and integrity records.
