@@ -13472,7 +13472,7 @@ function _invRosterRow(a, rtFilter) {
     covChip = ' <span class="inv-cov-chip inv-cov-sub" title="'
       + _e((a.billingLabel || 'Subscription'))
       + ' sign-in detected. Cost columns estimate usage at API rates; check your provider account for actual charges.">'
-      + t('inventory.covered_chip', null, 'subscription') + '</span>';
+      + t('inventory.subscription_signin_chip', null, 'subscription') + '</span>';
   } else if (a.billingMode === 'metered') {
     covChip = ' <span class="inv-cov-chip inv-cov-met" title="Billed per token at API rates.">'
       + t('inventory.metered_chip', null, 'metered') + '</span>';

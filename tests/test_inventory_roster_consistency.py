@@ -105,7 +105,9 @@ def test_coverage_chip_markup_and_i18n():
         "roster rows must carry the device-parity covered/metered chip"
     )
     en = json.load(open(_EN_JSON, encoding="utf-8"))
-    assert en.get("inventory.covered_chip") == "subscription"
+    assert "t('inventory.subscription_signin_chip'" in body
+    assert "t('inventory.covered_chip'" not in body
+    assert en.get("inventory.subscription_signin_chip") == "subscription"
     assert en.get("inventory.metered_chip") == "metered"
 
 
