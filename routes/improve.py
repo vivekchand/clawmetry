@@ -8,7 +8,6 @@ review action.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -19,6 +18,7 @@ from typing import Any
 from flask import Blueprint, jsonify, request
 
 from clawmetry.config import is_clawmetry_internal_session
+from clawmetry.nonsecret_hash import sha1
 
 
 bp_improve = Blueprint("improve", __name__)
@@ -297,7 +297,7 @@ def _build_candidates(rows: list[dict[str, Any]], *, window_days: int) -> dict[s
         )
         pain_score = _pain_score(group["kind"], count, conversation_count)
         score = (conversation_count * 3) + count + (2 if group["kind"] == "preference" else 0)
-        digest = hashlib.sha1(f"{group['kind']}:{group['key']}".encode()).hexdigest()[:12]
+        digest = sha1(f"{group['kind']}:{group['key']}".encode()).hexdigest()[:12]
         kind_label = group["kind"].capitalize()
         scope = "project" if len(workspaces) == 1 else "workspace"
         runtimes = sorted(group["runtimes"])
