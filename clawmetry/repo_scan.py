@@ -631,7 +631,7 @@ _PROMPT_MAX_BYTES = 256 * 1024
 _PROMPT_EXTS = (".md", ".mdc", ".txt")
 
 _URL_RX = re.compile(r"https?://([A-Za-z0-9.-]+)", re.I)
-_LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")  # nosec B104 - comparison table for URLs found in prompt files; never passed to bind()
 _FETCH_RX = re.compile(r"\b(fetch|download|retrieve|pull|poll|visit|check|get|"
                        r"read|load|request|query|call)\w*\b", re.I)
 _TASK_RX = re.compile(r"\b(tasks?|instructions?|commands?|orders?|to-?do|jobs?|"

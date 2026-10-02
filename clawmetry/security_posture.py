@@ -453,7 +453,7 @@ def openclaw_posture() -> dict:
     # Check 3: Gateway bind address (should be localhost, not 0.0.0.0)
     # In Docker, binding to 0.0.0.0 is expected (Docker manages port exposure)
     bind_host = gateway.get("host") or gateway.get("bind") or "127.0.0.1"
-    if bind_host in ("0.0.0.0", "::") and is_docker:
+    if bind_host in ("0.0.0.0", "::") and is_docker:  # nosec B104 - this IS the bind-all posture check; it reads a configured value, it does not bind
         checks.append(
             {
                 "id": "bind_address",
@@ -467,7 +467,7 @@ def openclaw_posture() -> dict:
                 "weight": 20,
             }
         )
-    elif bind_host in ("0.0.0.0", "::"):
+    elif bind_host in ("0.0.0.0", "::"):  # nosec B104 - this IS the bind-all posture check; it reads a configured value, it does not bind
         checks.append(
             {
                 "id": "bind_address",
@@ -550,7 +550,7 @@ def openclaw_posture() -> dict:
                 "weight": 10,
             }
         )
-    elif bind_host in ("0.0.0.0", "::") and is_docker:
+    elif bind_host in ("0.0.0.0", "::") and is_docker:  # nosec B104 - TLS posture check reading the same configured value; it does not bind
         checks.append(
             {
                 "id": "tls_enabled",
@@ -562,7 +562,7 @@ def openclaw_posture() -> dict:
                 "weight": 10,
             }
         )
-    elif bind_host in ("0.0.0.0", "::"):
+    elif bind_host in ("0.0.0.0", "::"):  # nosec B104 - TLS posture check reading the same configured value; it does not bind
         checks.append(
             {
                 "id": "tls_enabled",

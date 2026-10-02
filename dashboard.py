@@ -13694,7 +13694,7 @@ def _print_login_url_banner(port, host, token):
         return
     # Always frame the token inside the /auth URL; never print the bare token.
     # 0.0.0.0 / :: are bind-all sentinels; the user clicks from localhost.
-    public_binds = ("0.0.0.0", "::", "")
+    public_binds = ("0.0.0.0", "::", "")  # nosec B104 - sentinels compared against, to rewrite the printed URL to localhost; never passed to bind()
     display_host = "localhost" if host in public_binds else host
     url = f"http://{display_host}:{port}/auth?token={token}"
     print(f"  -> {url}  (one-click sign-in)")

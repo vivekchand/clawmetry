@@ -20881,7 +20881,7 @@ def _pick_billable_turns(rows, extra=None):
             "ts":          ts,
             "id":          ev_id,
             "session_id":  sid,
-            "extra":       extra(data, row) if extra is not None else None,
+            "extra":       extra(data, row) if extra is not None else None,  # nosec B610 - `extra` is a local callable parameter, not a Django QuerySet.extra(); no SQL here
         }
 
         epoch_s = _ts_to_epoch_s(ts)
