@@ -5387,7 +5387,7 @@ async function loadMiniWidgets(overview, usage) {
   // Local mode reuses the scoped /api/usage response for period values and
   // /api/runtime-summary for the model and all-time session count. `_cmRuntimeScope` is the
   // override the hero reads; null = node-wide (unchanged path).
-  var _ovModel = overview.model || 'unknown';
+  var _ovModel = widgetScoped ? '—' : (overview.model || 'unknown');
   window._cmRuntimeScope = null;
   try {
     var _ovRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -5477,7 +5477,21 @@ async function loadMiniWidgets(overview, usage) {
         window._cmTodayTokensRaw = _scope.tokensToday;
       }
     }
-  } catch (e) { /* keep the node-dominant values */ }
+  } catch (e) {
+    if (widgetScoped && _cmRuntimeFilter() === widgetRt) {
+      // A failed summary cannot restore another runtime's model or leave
+      // permanent loading text. Retain only separately confirmed usage.
+      window._cmRuntimeScope = _cmScopedOverviewUsage(widgetRt,
+        window._cmGlobalRtCounts && window._cmGlobalRtCounts[widgetRt], null, localPeriods);
+      var countEl = document.getElementById('hot-sessions-count');
+      if (countEl) countEl.textContent = window._cmRuntimeScope.sessions == null
+        ? 'Not measured' : window._cmRuntimeScope.sessions;
+      if (!baseMatches) ['cost-today','cost-week','cost-month','cost-basis-badge','tokens-today','token-rate'].forEach(function (id) {
+        var unavailable = document.getElementById(id);
+        if (unavailable) unavailable.textContent = 'Not measured';
+      });
+    }
+  }
   document.getElementById('model-primary').textContent = _ovModel;
   // Relabel the SESSIONS tile: scoped shows the runtime's TOTAL (matches the
   // switcher) so "today" would be wrong; node-wide stays the live "today".

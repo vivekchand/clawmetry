@@ -147,7 +147,8 @@ function _cmHeroCostChip(){return 'WRONG COST';}
 
 
 @pytest.mark.parametrize("cloud", [False, True])
-def test_real_home_widget_renderer_uses_period_data_and_matching_provenance(cloud):
+@pytest.mark.parametrize("summary_fails", [False, True])
+def test_real_home_widget_renderer_uses_period_data_and_matching_provenance(cloud, summary_fails):
     setup = """
 var els={}, current='claude_code';
 var document={getElementById:id=>els[id]||(els[id]={style:{},textContent:'',innerHTML:''})};
@@ -163,7 +164,7 @@ function applyBillingHintToFlow(){}
 function loadEvalSummary(){}
 function loadEvalRegressionSummary(){}
 function loadEvaluators(){}
-function fetchJsonWithTimeout(){return Promise.resolve({runtimes:{claude_code:{sessions:12,cost_usd:999,primary_model:'claude'}}});}
+function fetchJsonWithTimeout(){return __FAIL__ ? Promise.reject(new Error('unavailable')) : Promise.resolve({runtimes:{claude_code:{sessions:12,cost_usd:999,primary_model:'claude'}}});}
 async function fetch(url){
  var d = url.endsWith('period=day')?{total_cost:2,total_tokens:10}:
    (url.endsWith('period=week')?{total_cost:9}:{total_cost:9,total_tokens:100});
@@ -171,11 +172,21 @@ async function fetch(url){
 }
 var usage={_source:'local_store',coverage:{runtime:'claude_code',status:'ok'},
   todayCost:2,weekCost:9,monthCost:9,today:10,week:50,month:100};
-""".replace("__CLOUD__", json.dumps(cloud))
+""".replace("__CLOUD__", json.dumps(cloud)).replace("__FAIL__", json.dumps(summary_fails))
     result = run_js(["_cmScopedOverviewUsage", "_cmLocalOverviewPeriods", "loadMiniWidgets"], setup, """
 (async()=>{await loadMiniWidgets({sessionsToday:999,model:'node-model'},usage);
 console.log(JSON.stringify({els,scope:window._cmRuntimeScope}));})();
 """)
+    if summary_fails:
+        assert result["els"]["model-primary"]["textContent"] == "—"
+        assert result["els"]["hot-sessions-count"]["textContent"] == 12
+        if cloud:
+            assert result["els"]["cost-today"]["textContent"] == "Not measured"
+            assert result["els"]["tokens-today"]["textContent"] == "Not measured"
+            return
+        assert result["els"]["cost-today"]["innerHTML"] == "2"
+        assert result["scope"]["cost"] == 2
+        return
     assert result["els"]["cost-today"]["innerHTML"].startswith("2 [")
     assert result["els"]["cost-week"]["innerHTML"].startswith("9 [")
     assert result["els"]["cost-month"]["innerHTML"].startswith("9 [")
