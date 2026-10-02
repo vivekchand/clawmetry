@@ -46,7 +46,9 @@ Return ONLY JSON: {"answer":"brief response if no data needed", "queries":[
 For a data question retrieve evidence with 1-4 SELECT queries. For a requested
 visual/dashboard return visual:true for each panel. For ordinary questions use
 visual:false for evidence. For follow-ups adapt the previous queries and filters.
-Choose charts appropriate to the question. For sessions and events always use
+Choose charts appropriate to the question. Keep visual tables focused: prefer at
+most six columns, with the compared runtime or model first. Use separate evidence
+queries for detailed coverage checks. For sessions and events always use
 runtime for actual agent runtime attribution. agent_type is a legacy storage
 field that can say openclaw for Codex or Claude sessions; never group by it to
 compare runtimes. Use only the schema provided, no file

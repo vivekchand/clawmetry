@@ -519,6 +519,21 @@
     thread.appendChild(welcome);
   }
 
+  function setAnswerText(container, content) {
+    // Render only emphasis and inline code. Model output never becomes HTML.
+    container.textContent = '';
+    var source = String(content || '');
+    var pattern = /\*\*([^\n*]+)\*\*|`([^\n`]+)`/g;
+    var offset = 0;
+    var match;
+    while ((match = pattern.exec(source))) {
+      container.appendChild(make('span', '', source.slice(offset, match.index)));
+      container.appendChild(make(match[1] !== undefined ? 'strong' : 'code', '', match[1] !== undefined ? match[1] : match[2]));
+      offset = pattern.lastIndex;
+    }
+    container.appendChild(make('span', '', source.slice(offset)));
+  }
+
   function addMessage(role, content) {
     var thread = el('cm-assistant-thread');
     var main = page() && page().querySelector('.cm-assistant-main');
@@ -535,6 +550,7 @@
     var body = make('div', 'cm-assistant-message-body');
     body.appendChild(make('div', 'cm-assistant-message-label', role === 'user' ? 'You' : 'ClawMetry'));
     var text = make('div', 'cm-assistant-message-content', content || '');
+    if (role !== 'user') setAnswerText(text, content);
     body.appendChild(text);
     article.appendChild(avatar);
     article.appendChild(body);
@@ -556,6 +572,7 @@
         if (columns.indexOf(key) < 0 && columns.length < 16) columns.push(key);
       });
     });
+    if (columns.indexOf('runtime') > 0) columns.unshift(columns.splice(columns.indexOf('runtime'), 1)[0]);
     var wrap = make('div', 'cm-assistant-table-wrap');
     var table = make('table', 'cm-assistant-table');
     var head = make('thead');
@@ -566,7 +583,7 @@
     var body = make('tbody');
     normalized.slice(0, limit || 100).forEach(function (row) {
       var tr = make('tr');
-      columns.forEach(function (column) { tr.appendChild(make('td', '', formatValue(row[column]))); });
+      columns.forEach(function (column) { tr.appendChild(make('td', '', column === 'runtime' && row[column] != null ? displayCategory(row[column]) : formatValue(row[column]))); });
       body.appendChild(tr);
     });
     table.appendChild(body);
@@ -870,7 +887,7 @@
   function appendResult(messageNode, data, question) {
     var response = data || {};
     var content = response.answer || (Array.isArray(response.panels) && response.panels.length ? 'I found these views from the available evidence.' : 'The assistant returned no answer.');
-    messageNode.content.textContent = content;
+    setAnswerText(messageNode.content, content);
     var stack = make('div', 'cm-assistant-result-stack');
     (Array.isArray(response.panels) ? response.panels : []).forEach(function (panel) {
       stack.appendChild(renderPanel(panel, question));

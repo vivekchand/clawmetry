@@ -95,9 +95,9 @@ def test_history_detail_requests_cannot_let_an_older_click_overwrite_a_newer_one
               },
             };
           }
-          set textContent(value) { this._text = String(value == null ? '' : value); }
+          set textContent(value) { this.children = []; this._text = String(value == null ? '' : value); }
           get textContent() {
-            return this._text != null ? this._text : this.children.map((child) => child.textContent).join('');
+            return (this._text == null ? '' : this._text) + this.children.map((child) => child.textContent).join('');
           }
           get firstChild() { return this.children[0] || null; }
           get childElementCount() { return this.children.length; }
@@ -192,13 +192,15 @@ def test_history_detail_requests_cannot_let_an_older_click_overwrite_a_newer_one
           if (history.children.length !== 2) throw new Error('history did not render');
           history.children[0].dispatch('click');
           history.children[1].dispatch('click');
-          pending.b(response({ id: 'b', messages: [{ role: 'assistant', content: 'B answer' }] }));
+          pending.b(response({ id: 'b', messages: [{ role: 'assistant', content: '**B answer** `<script>literal</script>`' }] }));
           await flush();
           await flush();
           pending.a(response({ id: 'a', messages: [{ role: 'assistant', content: 'A answer' }] }));
           await flush();
           await flush();
           if (!elements.get('cm-assistant-thread').textContent.includes('B answer')) throw new Error('newer conversation was lost');
+          if (elements.get('cm-assistant-thread').textContent.includes('**B answer**')) throw new Error('emphasis punctuation was displayed literally');
+          if (!elements.get('cm-assistant-thread').textContent.includes('<script>literal</script>')) throw new Error('untrusted inline code was not kept as text');
           if (elements.get('cm-assistant-thread').textContent.includes('A answer')) throw new Error('older conversation overwrote newer conversation');
 
           const input = elements.get('cm-assistant-input');
