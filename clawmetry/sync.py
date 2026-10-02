@@ -20098,6 +20098,24 @@ def _build_tool_catalog_slice(limit: int = 5000, top: int = 60) -> dict:
     return out
 
 
+def _context_econ_compaction_snapshot(compactions):
+    """Bound compaction metadata while retaining measured versus unknown values."""
+    return [
+        {
+            "session_id": c.get("session_id"),
+            "ts": c.get("ts"),
+            "trigger": c.get("trigger"),
+            "tokens_before": c.get("tokens_before"),
+            "tokens_after": c.get("tokens_after"),
+            "reclaimed": c.get("reclaimed"),
+            "measurement_status": c.get("measurement_status"),
+            "from_hook": c.get("from_hook"),
+            "summary": str(c.get("summary") or "")[:280],
+        }
+        for c in (compactions or [])[:80]
+    ]
+
+
 def _session_chips_from_utilization(utilization):
     """Distinct-session chips from a utilization series, most-recent first, each
     ``{session_id, peak_pct, ts}``. Mirrors the route builder in
@@ -24137,20 +24155,7 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
                 util_limit=400, compaction_limit=80,
             ) or {}
             _ce_comps = _ce.get("compactions") or []
-            context_economics_slice["compactions"] = [
-                {
-                    "session_id":    c.get("session_id"),
-                    "ts":            c.get("ts"),
-                    "trigger":       c.get("trigger"),
-                    "tokens_before": c.get("tokens_before"),
-                    "tokens_after":  c.get("tokens_after"),
-                    "reclaimed":     c.get("reclaimed"),
-                    "from_hook":     c.get("from_hook"),
-                    # short prefix only — never the full compaction summary
-                    "summary":       (str(c.get("summary") or "")[:280]),
-                }
-                for c in _ce_comps[:80]
-            ]
+            context_economics_slice["compactions"] = _context_econ_compaction_snapshot(_ce_comps)
             context_economics_slice["overflow_sessions"] = (
                 _ce.get("overflow_sessions") or []
             )[:50]
