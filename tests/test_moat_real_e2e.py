@@ -57,6 +57,8 @@ from unittest.mock import patch
 import pytest
 from flask import Flask
 
+from tests import _openclaw_store as _ocstore
+
 
 # ── openclaw binary discovery (matches sibling test) ──────────────────────
 
@@ -232,8 +234,12 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
             # Cheapest Anthropic model: real billed turn in CI, and we assert
             # only the JSONL shape (provider/model rows), which Haiku writes
             # identically to Opus. The anthropic/ prefix drives harness
-            # selection; the specific model is free to be cheap.
-            "--model", "anthropic/claude-3-5-haiku-20241022",
+            # selection; the specific model is free to be cheap — but it has
+            # to be an id the installed openclaw's own catalogue carries.
+            # 2026.9.x resolves --model against a bundled catalogue and
+            # answers `Unknown model: <id>` before any HTTP call (measured on
+            # 2026.9.2, 2026-10-02); claude-haiku-4-5 is its cheapest entry.
+            "--model", "anthropic/claude-haiku-4-5",
             "--json", "--timeout", "30",
         ],
         env=env, capture_output=True, text=True, timeout=60,
@@ -249,19 +255,17 @@ def _find_session_jsonl(
         os.path.join(home, *SESSIONS_SUBPATH_FLAT),
     ]
     for sd in candidate_dirs:
-        if not os.path.isdir(sd):
-            continue
-        candidates = [
-            os.path.join(sd, f) for f in os.listdir(sd)
-            if (
-                f.endswith(".jsonl")
-                and not f.endswith(".trajectory.jsonl")
-                and ".trajectory" not in f
-            )
-        ]
-        if candidates:
-            candidates.sort(key=os.path.getmtime, reverse=True)
-            return candidates[0]
+        hit = _ocstore.newest_session_jsonl(sd)
+        if hit:
+            return hit
+    # OpenClaw 2026.9.x keeps the transcript in SQLite and creates no
+    # sessions dir; tests/_openclaw_store.py mirrors it back to JSONL.
+    mirror = _ocstore.mirror_sqlite_sessions(home)
+    if mirror:
+        hit = _ocstore.newest_session_jsonl(mirror)
+        if hit:
+            return hit
+        candidate_dirs.append(mirror)
     tree = []
     for root, _, files in os.walk(home):
         rel = os.path.relpath(root, home)

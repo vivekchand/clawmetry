@@ -50,6 +50,8 @@ from unittest.mock import patch
 import pytest
 from flask import Flask
 
+from tests import _openclaw_store as _ocstore
+
 
 def _find_openclaw_binary() -> str | None:
     env = os.environ.get("OPENCLAW_BIN")
@@ -270,7 +272,17 @@ def _send_message(home: str, message: str) -> subprocess.CompletedProcess:
             # assistant rows with provider/model populated), which Haiku writes
             # identically to Opus. The anthropic/ prefix drives harness
             # selection (see note above); the specific model is free to be cheap.
-            "--model", "anthropic/claude-3-5-haiku-20241022",
+            #
+            # The id has to be one the installed openclaw's own catalogue
+            # carries. 2026.5.12 passed whatever was asked straight to the
+            # provider; 2026.9.x resolves it against a bundled catalogue first
+            # and answers `Unknown model: <id>` before any HTTP call, so the
+            # dated 3.5 id this used to name now fails the turn outright
+            # (measured on 2026.9.2, 2026-10-02). `claude-haiku-4-5` is the
+            # cheapest entry that catalogue holds, and is also what it
+            # normalises the `haiku` alias to and names as its own
+            # defaultUtilityModel.
+            "--model", "anthropic/claude-haiku-4-5",
             "--json", "--timeout", "30",
         ],
         env=env, capture_output=True, text=True, timeout=60,
@@ -292,6 +304,13 @@ def _find_session_jsonl(
          OpenClaw treats HOME as the user's $HOME and appends .openclaw
       3. ``<home>/agents/main/sessions/`` — flat layout (older binaries)
 
+    …and, when none of them holds a transcript, OpenClaw's SQLite store:
+    2026.9.x keeps the conversation in ``agents/main/agent/
+    openclaw-agent.sqlite`` and never creates a ``sessions/`` directory at
+    all. ``tests/_openclaw_store.py`` materialises that store as JSONL with
+    the daemon's own reader, so what this returns is the same shape on both
+    layouts and every assertion downstream is unchanged.
+
     Filters out ``.trajectory.jsonl`` AND ``.trajectory-path.json``
     sidecars — only the bare ``<sid>.jsonl`` is the canonical
     conversation file the OSS daemon reads.
@@ -305,19 +324,16 @@ def _find_session_jsonl(
         os.path.join(home, *SESSIONS_SUBPATH_FLAT),
     ]
     for sd in candidate_dirs:
-        if not os.path.isdir(sd):
-            continue
-        candidates = [
-            os.path.join(sd, f) for f in os.listdir(sd)
-            if (
-                f.endswith(".jsonl")
-                and not f.endswith(".trajectory.jsonl")
-                and ".trajectory" not in f
-            )
-        ]
-        if candidates:
-            candidates.sort(key=os.path.getmtime, reverse=True)
-            return candidates[0]
+        hit = _ocstore.newest_session_jsonl(sd)
+        if hit:
+            return hit
+
+    mirror = _ocstore.mirror_sqlite_sessions(home)
+    if mirror:
+        hit = _ocstore.newest_session_jsonl(mirror)
+        if hit:
+            return hit
+        candidate_dirs.append(mirror)
 
     # No canonical jsonl anywhere — surface the most useful diagnostics
     # we can muster so the next maintainer doesn't have to spelunk
@@ -347,7 +363,10 @@ def _find_session_jsonl(
         "Likely causes: (a) no real LLM key in env — set ANTHROPIC_API_KEY "
         "to a working key so the agent completes the turn and flushes the "
         "conversation file; (b) OpenClaw on this runner pins a version "
-        "with different state-dir semantics — extend the candidate list."
+        "with different state-dir semantics — extend the candidate list; "
+        "(c) it keeps transcripts in SQLite and this run could not read "
+        "that store (the probed dirs include the mirror when one was "
+        "built) — see tests/_openclaw_store.py."
     )
 
 
