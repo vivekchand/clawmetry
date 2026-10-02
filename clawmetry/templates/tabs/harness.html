@@ -2,7 +2,7 @@
   <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
     <div style="font-size:20px;font-weight:700;" id="harness-title">Harness</div>
     <div style="font-size:13px;color:var(--muted,#888);">
-      Everything wrapped around the model that turns "it can talk" into "it can work".
+      Tools, memory, and control rules that help a model perform tasks.
     </div>
     <button onclick="loadHarness()" style="margin-left:auto;" class="btn-ghost" title="Refresh">↻</button>
   </div>
@@ -13,54 +13,54 @@
   <div class="card" style="padding:16px;margin-bottom:14px;" id="harness-anatomy">
     <div style="font-size:15px;font-weight:700;margin-bottom:6px;">What is a harness?</div>
     <div style="font-size:13px;color:var(--muted,#888);line-height:1.6;max-width:760px;">
-      An AI model on its own can only talk: you ask, it answers, it stops.
-      The <b>harness</b> is all the machinery wrapped around the model that lets it
-      actually do work: tools, memory, safety rails, and the loop that keeps it going
-      until the job is done. Claude Code, Cursor, and your agent runtimes are all
-      harnesses around the same few models. ClawMetry is a window into that machinery.
-      Each part below links to the tab where you can watch it live.
-      (Good primer: <a href="https://read.technically.dev/p/whats-harness-engineering"
-      target="_blank" rel="noopener" style="color:var(--accent,#6cf);">What's harness engineering?</a>)
+      A model processes input and produces a response.
+      The <b>harness</b> connects the model to tools, memory, and control rules.
+      It can call the model repeatedly to perform a task.
+      Agent runtimes such as Claude Code and Cursor provide a harness.
+      ClawMetry shows their recorded activity.
+      Use the links below to inspect each part.
+      (<a href="https://read.technically.dev/p/whats-harness-engineering"
+      target="_blank" rel="noopener" style="color:var(--accent,#6cf);">Read about harness engineering</a>)
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-top:14px;">
       <div class="card" style="padding:12px 14px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🔁 The loop</div>
-        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">The agent reads, decides, acts, checks its own work, and goes again until the task is done. This loop is what makes it an agent instead of a chatbot.</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">An agent can read input, choose an action, use a tool, and check the result. This sequence can repeat until the agent finishes or reaches a limit.</div>
         <a href="javascript:switchTab('brain')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Watch it live in Activity →</a>
       </div>
       <div class="card" style="padding:12px 14px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🔧 Tools</div>
-        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">Tools let the agent touch the world: read and edit files, run code, search the web, call other services. No tools, no work.</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">Tools let an agent read or edit files, run code, search the web, and call services. The available tools depend on the runtime and its permissions.</div>
         <a href="javascript:switchTab('tool-catalog')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">See its tools →</a>
       </div>
       <div class="card" style="padding:12px 14px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">📚 Memory</div>
-        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">Models forget everything between sessions. The harness writes notes to files so your agent remembers you, your projects, and its own lessons.</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">A harness can save information from earlier sessions. It can supply this information to the model in a later session.</div>
         <a href="javascript:switchTab('memory')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Read its memory →</a>
       </div>
       <div class="card" style="padding:12px 14px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🪟 Context</div>
-        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">The model can only "see" a limited window of text at once. The harness keeps that window focused, trimming old noise so quality doesn't rot.</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">A model can process a limited amount of text at once. The harness manages that text and can remove older information.</div>
         <a href="javascript:switchTab('context-economics')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">See context usage →</a>
       </div>
       <div class="card" style="padding:12px 14px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">📦 Sandbox</div>
-        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">A safe room where the agent can run code and fail freely, without reaching things it shouldn't touch.</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">A sandbox limits the files, network connections, and other resources that agent code can access. The limits depend on its configuration.</div>
         <a href="javascript:switchTab('security')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Check its sandbox →</a>
       </div>
       <div class="card" style="padding:12px 14px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🚦 Guardrails</div>
-        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">The rules for what the agent may do on its own and what needs your OK first, like deleting files or spending money.</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">Rules define which actions an agent can take and which actions need approval. Examples include file deletion and spending limits.</div>
         <a href="javascript:switchTab('approvals')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Review approvals →</a>
       </div>
       <div class="card" style="padding:12px 14px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">🤝 Teamwork</div>
-        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">For big jobs, one agent leads and hands pieces to helper agents, then stitches the results together.</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">An agent can give parts of a task to other agents. It can then combine their results.</div>
         <a href="javascript:switchTab('agents')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">See who spawned whom →</a>
       </div>
       <div class="card" style="padding:12px 14px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:4px;">💬 Interfaces</div>
-        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">The same agent can meet you in a terminal, on Telegram or Slack, or in a browser. Different doors, one harness behind them.</div>
+        <div style="font-size:12.5px;color:var(--muted,#888);line-height:1.5;">A runtime can provide access through a terminal, a browser, or a messaging service such as Telegram or Slack.</div>
         <a href="javascript:switchTab('flow')" style="font-size:12px;color:var(--accent,#6cf);display:inline-block;margin-top:6px;">Follow the message flow →</a>
       </div>
     </div>
@@ -81,10 +81,10 @@
       <div class="rr-head-controls">
         <label class="rr-pick-label" for="rr-repo-pick">Repo</label>
         <select id="rr-repo-pick" class="rr-pick" onchange="loadRepoReadiness(this.value)"></select>
-        <button type="button" class="btn-ghost" onclick="loadRepoReadiness()" title="Re-scan this repo">&#8635;</button>
+        <button type="button" class="btn-ghost" onclick="loadRepoReadiness()" title="Re-scan this repo">↻</button>
       </div>
     </div>
-    <div id="rr-body" class="rr-body">Scanning the repo&hellip;</div>
+    <div id="rr-body" class="rr-body">Scanning the repo…</div>
   </div>
 
   <!-- Claude surface coverage. Only rendered for the Claude Code runtime,

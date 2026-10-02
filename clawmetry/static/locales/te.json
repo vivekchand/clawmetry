@@ -247,7 +247,6 @@
   "app.maybe_later": "బహుశా తర్వాత",
   "app.mcp_only": "MCP మాత్రమే",
   "app.mcp_servers": "🧩 MCP సర్వర్‌లు",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 మెమొరీ",
   "app.memory_access_history_reads_from_the_local_event_s": "మెమరీ యాక్సెస్ చరిత్ర స్థానిక ఈవెంట్ స్టోర్ నుండి చదువుతుంది, అది ఇక్కడ అందుబాటులో లేదు.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "మెమరీ ఫైల్‌లు ఏజెంట్ మెషీన్‌లో స్థానికంగా నిల్వ చేయబడతాయి మరియు Cloudకు సింక్ చేయబడవు.",

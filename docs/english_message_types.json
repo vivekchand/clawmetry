@@ -1,0 +1,13 @@
+{
+  "alerts.feed_stopped": "description",
+  "alerts.feed_stopped_unknown": "description",
+  "app.no_changes_yet": "description",
+  "banners.store_unreachable": "description",
+  "common.store_unreachable_panel": "description",
+  "overview.heartbeat_panel_tooltip": "description",
+  "overview.heartbeat_tooltip": "description",
+  "overview.compare_hint": "instruction",
+  "overview.compare_mixed": "description",
+  "overview.compare_runs_hint": "instruction",
+  "overview.triage_hint": "instruction"
+}

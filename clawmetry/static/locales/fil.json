@@ -247,7 +247,6 @@
   "app.maybe_later": "Siguro mamaya",
   "app.mcp_only": "MCP lang",
   "app.mcp_servers": "🧩 Mga MCP server",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 Memory",
   "app.memory_access_history_reads_from_the_local_event_s": "Ang kasaysayan ng pag-access sa memory ay binabasa mula sa lokal na event store, na hindi available dito.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "Ang mga memory file ay naka-imbak nang lokal sa makina ng agent at hindi naka-sync sa Cloud.",

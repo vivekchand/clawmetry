@@ -28,7 +28,9 @@
   // ── Small helpers ─────────────────────────────────────────────────────────
   function T(key, fallback, vars) {
     try { if (typeof t === 'function') return t(key, vars || null, fallback); } catch (e) {}
-    return fallback;
+    return String(fallback).replace(/\{(\w+)\}/g, function (match, name) {
+      return vars && vars[name] != null ? vars[name] : match;
+    });
   }
   // Attribute-safe: every value here may land inside a quoted attribute
   // (title="", data-full=""), and app.js's escHtml leaves double quotes alone.
@@ -92,28 +94,46 @@
   // ── Outcome vocabulary (the labels in clawmetry/outcome_classifier.py)
   // Colour + a plain-English sentence for each. Anything else is "unknown".
   var OUTCOMES = {
-    success:         { color: '#22c55e', name: 'Finished',       key: 'success',         fb: 'It finished the task and stopped cleanly.' },
-    failed:          { color: '#ef4444', name: 'Failed',         key: 'failed',          fb: 'It hit an error or gave up before finishing.' },
-    escalated:       { color: '#f59e0b', name: 'Asked for help', key: 'escalated',       fb: 'It stopped to ask a person before going on.' },
-    cognitive_loop:  { color: '#f97316', name: 'Went in circles', key: 'cognitive_loop', fb: 'It kept repeating itself without making progress.' },
-    tool_call_stuck: { color: '#f97316', name: 'Got stuck',      key: 'tool_call_stuck', fb: 'A tool it called never came back.' },
+    success:         { color: '#22c55e', copy: function () { return {
+      name: T('trail.outcome_success', 'Finished'),
+      explain: T('trail.outcome_success_why', 'It finished the task and stopped cleanly.')
+    }; } },
+    failed:          { color: '#ef4444', copy: function () { return {
+      name: T('trail.outcome_failed', 'Failed'),
+      explain: T('trail.outcome_failed_why', 'It hit an error or gave up before finishing.')
+    }; } },
+    escalated:       { color: '#f59e0b', copy: function () { return {
+      name: T('trail.outcome_escalated', 'Asked for help'),
+      explain: T('trail.outcome_escalated_why', 'It stopped to ask a person before going on.')
+    }; } },
+    cognitive_loop:  { color: '#f97316', copy: function () { return {
+      name: T('trail.outcome_cognitive_loop', 'Went in circles'),
+      explain: T('trail.outcome_cognitive_loop_why', 'It kept repeating itself without making progress.')
+    }; } },
+    tool_call_stuck: { color: '#f97316', copy: function () { return {
+      name: T('trail.outcome_tool_call_stuck', 'Got stuck'),
+      explain: T('trail.outcome_tool_call_stuck_why', 'A tool it called never came back.')
+    }; } },
     // "Still running" and "Waiting on you" are the two labels that
     // describe a live process rather than a finished transcript. Each is
     // asserted from a probe of the actual pid, so neither may be softened
     // into "or maybe it just ended" — that hedge is what let a session read
     // "Still running" nine hours after its terminal closed.
-    ongoing:         { color: '#3b82f6', name: 'Still running',  key: 'ongoing',         fb: 'It is working right now.' },
-    waiting:         { color: '#8b5cf6', name: 'Waiting on you', key: 'waiting',         fb: 'It is open and idle at its prompt, waiting for you to say something.' }
+    ongoing:         { color: '#3b82f6', copy: function () { return {
+      name: T('trail.outcome_ongoing', 'Still running'),
+      explain: T('trail.outcome_ongoing_why', 'It is working right now.')
+    }; } },
+    waiting:         { color: '#8b5cf6', copy: function () { return {
+      name: T('trail.outcome_waiting', 'Waiting on you'),
+      explain: T('trail.outcome_waiting_why', 'It is open and idle at its prompt, waiting for you to say something.')
+    }; } }
   };
   function outcomeMeta(label) {
     var k = String(label || '').toLowerCase();
     var o = OUTCOMES[k];
     if (!o) return null;
-    return {
-      color: o.color,
-      name: T('trail.outcome_' + o.key, o.name),
-      explain: T('trail.outcome_' + o.key + '_why', o.fb)
-    };
+    var copy = o.copy();
+    return { color: o.color, name: copy.name, explain: copy.explain };
   }
   window._cmOutcomeMeta = outcomeMeta;
 
@@ -470,7 +490,7 @@
         if (names.length > 60) body += ' <span class="trail-muted">+' + (names.length - 60) + '</span>';
         if (!names.length) body = muted(T('trail.empty_slot', 'Empty'));
         if (versions.length > 1) {
-          note = T('trail.ctx_grew', 'The list changed during the session; this is everything it could use at some point.');
+          note = T('trail.ctx_grew', 'The tool list changed during the session. This view combines the tools available at different times.');
         }
       } else if (kind === 'runtime_meta') {
         // An object cannot be unioned honestly. Show the last version and
@@ -520,7 +540,7 @@
     if (!items.length) {
       var why = (d && d.reason) ? String(d.reason) : '';
       if (r.status === 404 || r.status === 0 || !d) {
-        html += muted(T('trail.context_not_captured', 'Not captured yet. ClawMetry does not record the instructions and tool list for this runtime yet, so this card shows only what the transcript reveals.'));
+        html += muted(T('trail.context_not_captured', 'ClawMetry does not yet record instructions or the tool list for this runtime. This card shows only information from the transcript.'));
       } else {
         html += muted(why || T('trail.context_empty_runtime', 'This runtime does not expose what the agent knew, so there is nothing to show here.', { runtime: runtimeLabel(rt) }));
       }

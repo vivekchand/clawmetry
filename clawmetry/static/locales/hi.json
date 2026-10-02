@@ -247,7 +247,6 @@
   "app.maybe_later": "शायद बाद में",
   "app.mcp_only": "केवल MCP",
   "app.mcp_servers": "🧩 MCP सर्वर",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 मेमोरी",
   "app.memory_access_history_reads_from_the_local_event_s": "मेमोरी एक्सेस इतिहास स्थानीय इवेंट स्टोर से पढ़ता है, जो यहां उपलब्ध नहीं है।",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "मेमोरी फ़ाइलें एजेंट मशीन पर स्थानीय रूप से संग्रहित होती हैं और Cloud के साथ सिंक नहीं की जातीं।",

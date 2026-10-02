@@ -53,10 +53,10 @@
     <div>
       <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;">🎯 <span data-i18n="overview.autonomy_title">How independent is your agent?</span></div>
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
-        <span id="autonomy-score-label" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-primary);">--</span>
+        <span id="autonomy-score-label" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-primary);">Unknown</span>
         <span id="autonomy-trend-badge" style="font-size:12px;font-weight:600;padding:3px 8px;border-radius:20px;"></span>
       </div>
-      <div id="autonomy-median-gap" style="font-size:13px;color:var(--text-muted);margin-top:8px;">--</div>
+      <div id="autonomy-median-gap" style="font-size:13px;color:var(--text-muted);margin-top:8px;">Unknown</div>
       <div id="autonomy-trend-pct" style="font-size:12px;color:var(--text-muted);margin-top:3px;"></div>
     </div>
     <div style="display:flex;flex-direction:column;align-items:flex-end;justify-content:center;">
@@ -75,7 +75,7 @@
     <div>
       <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;"><span id="eval-title-check" style="display:none;">✅ </span><span data-i18n="overview.eval_quality">Session quality</span></div>
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
-        <span id="eval-avg-score" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-muted);">--</span>
+        <span id="eval-avg-score" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-muted);">Unknown</span>
         <span id="eval-coverage" style="font-size:12px;color:var(--text-muted);"></span>
       </div>
       <div id="eval-regression-line" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
@@ -115,7 +115,7 @@
   <div id="compare-runs-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
     <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;gap:12px;flex-wrap:wrap;">
       <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">⚖️ <span data-i18n="overview.compare_title">Did the change help?</span></div>
-      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.compare_hint">Pick a comparison. One word, with the number of sessions it rests on.</div>
+      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.compare_hint">Select a comparison. The result includes the number of sessions used.</div>
     </div>
     <div id="cohort-suggestions" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;">
       <div style="color:var(--text-muted);font-size:12px;" data-i18n="overview.compare_loading">Looking for recent changes...</div>
@@ -124,7 +124,7 @@
     <details id="cohort-advanced" style="margin-top:12px;border-top:1px solid var(--border-primary);padding-top:8px;">
       <summary style="cursor:pointer;font-size:12px;color:var(--text-secondary);font-weight:600;list-style:none;">⚙️ <span data-i18n="overview.compare_advanced">Advanced: compare two runs by id</span></summary>
       <div id="cohort-advanced-body">
-        <div style="font-size:11px;color:var(--text-muted);margin:8px 0;" data-i18n="overview.compare_runs_hint">Paste session ids; green = improvement, red = regression</div>
+        <div style="font-size:11px;color:var(--text-muted);margin:8px 0;" data-i18n="overview.compare_runs_hint">Paste the session IDs. Green indicates improvement. Red indicates a worse result.</div>
         <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:center;">
           <input id="compare-input-a" type="text" placeholder="Session A id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
           <input id="compare-input-b" type="text" placeholder="Session B id" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
@@ -139,11 +139,11 @@
   <div id="triage-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);">
     <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;">
       <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">🪥 <span data-i18n="overview.triage_title">Error triage</span></div>
-      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.triage_hint">Mute known errors so they stop inflating counts</div>
+      <div style="font-size:11px;color:var(--text-muted);" data-i18n="overview.triage_hint">Mute expected errors to exclude them from the counts.</div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:8px;align-items:center;margin-bottom:10px;">
       <input id="triage-input-id" type="text" placeholder="Event id (errored row)" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-family:monospace;">
-      <input id="triage-input-note" type="text" placeholder="Note (optional — why is this expected?)" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
+      <input id="triage-input-note" type="text" placeholder="Optional note: why is this expected?" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
       <button onclick="submitResolveError()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;" data-i18n="app.mark_resolved">Mark resolved</button>
     </div>
     <div id="triage-list-body"></div>
@@ -157,17 +157,17 @@
   </div>
 
   <!-- Heartbeat liveness card (closes #686) — pulse indicator + cadence + ok ratio -->
-  <div id="overview-heartbeat-card" data-i18n-title="overview.heartbeat_tooltip" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 18px;margin-bottom:14px;box-shadow:var(--card-shadow);display:none;align-items:center;gap:18px;flex-wrap:wrap;" title="Your agent fires a heartbeat session every 30 min. Green means on time, amber means drifting, red means missed.">
+  <div id="overview-heartbeat-card" data-i18n-title="overview.heartbeat_tooltip" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:14px 18px;margin-bottom:14px;box-shadow:var(--card-shadow);display:none;align-items:center;gap:18px;flex-wrap:wrap;" title="This panel shows scheduled status messages. Green indicates an on-time message. Amber indicates a delay. Red indicates a missed message.">
     <div style="display:flex;align-items:center;gap:10px;min-width:140px;">
       <span id="overview-hb-dot" style="width:14px;height:14px;border-radius:50%;background:#6b7280;display:inline-block;flex-shrink:0;"></span>
       <div>
         <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;">❤️ <span data-i18n="overview.heartbeat">Heartbeat</span></div>
-        <div id="overview-hb-status-label" style="font-size:13px;font-weight:600;color:var(--text-primary);">--</div>
+        <div id="overview-hb-status-label" style="font-size:13px;font-weight:600;color:var(--text-primary);">Unknown</div>
       </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:2px;min-width:160px;">
       <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="overview.last_beat">Last beat</div>
-      <div id="overview-hb-last-beat" style="font-size:14px;font-weight:600;color:var(--text-primary);">--</div>
+      <div id="overview-hb-last-beat" style="font-size:14px;font-weight:600;color:var(--text-primary);">Unknown</div>
     </div>
     <div style="display:flex;flex-direction:column;gap:2px;min-width:100px;">
       <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="overview.cadence">Cadence</div>
@@ -176,7 +176,7 @@
     <!-- QW8: whole cell hidden when ok_ratio is null instead of rendering dashes. -->
     <div id="overview-hb-ok-ratio-cell" style="display:none;flex-direction:column;gap:2px;min-width:140px;">
       <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;" data-i18n="overview.ok_ratio">OK ratio</div>
-      <div id="overview-hb-ok-ratio" style="font-size:14px;font-weight:600;color:var(--text-primary);">--</div>
+      <div id="overview-hb-ok-ratio" style="font-size:14px;font-weight:600;color:var(--text-primary);">Unknown</div>
     </div>
   </div>
 
@@ -216,22 +216,22 @@
         <div class="stats-footer-sub" id="cost-billing-badge" style="margin-top:2px;display:none;"></div>
       </div>
       <div style="margin-left:auto;text-align:right;">
-        <div class="stats-footer-sub"><span data-i18n="overview.week_abbr">wk:</span> <span id="cost-week">--</span></div>
-        <div class="stats-footer-sub"><span data-i18n="overview.month_abbr">mo:</span> <span id="cost-month">--</span></div>
+        <div class="stats-footer-sub"><span data-i18n="overview.week_abbr">wk:</span> <span id="cost-week">Unknown</span></div>
+        <div class="stats-footer-sub"><span data-i18n="overview.month_abbr">mo:</span> <span id="cost-month">Unknown</span></div>
       </div>
       <span id="cost-trend" style="display:none;" data-i18n="overview.cost_estimated_note">Estimated from usage, may be $0 billed with OAuth auth</span>
       <!-- QW8: Burn / Proj/mo stay hidden until a filler writes a real value
            (nothing in the live frontend fills them today); never render dashes. -->
       <div id="budget-burn-proj-wrap" style="display:none;margin-left:14px;min-width:160px;">
-        <div class="stats-footer-sub"><span data-i18n="overview.burn">Burn:</span> <span id="budget-burn-rate">--</span></div>
-        <div class="stats-footer-sub"><span data-i18n="overview.proj_month">Proj/mo:</span> <span id="budget-projected-month">--</span></div>
+        <div class="stats-footer-sub"><span data-i18n="overview.burn">Burn:</span> <span id="budget-burn-rate">Unknown</span></div>
+        <div class="stats-footer-sub"><span data-i18n="overview.proj_month">Proj/mo:</span> <span id="budget-projected-month">Unknown</span></div>
       </div>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">🤖</span>
       <div>
         <div class="stats-footer-label" data-i18n="overview.model">Model</div>
-        <div class="stats-footer-value" id="model-primary">--</div>
+        <div class="stats-footer-value" id="model-primary">Unknown</div>
       </div>
       <div id="model-breakdown" style="display:none;" data-i18n="app.loading">Loading...</div>
     </div>
@@ -239,15 +239,15 @@
       <span class="stats-footer-icon">📊</span>
       <div>
         <div class="stats-footer-label" data-i18n="overview.tokens">Tokens</div>
-        <div class="stats-footer-value" id="token-rate">--</div>
+        <div class="stats-footer-value" id="token-rate">Unknown</div>
       </div>
-      <span class="stats-footer-sub" style="margin-left:auto;"><span data-i18n="overview.today">today:</span> <span id="tokens-today" style="color:var(--text-success);font-weight:600;">--</span></span>
+      <span class="stats-footer-sub" style="margin-left:auto;"><span data-i18n="overview.today">today:</span> <span id="tokens-today" style="color:var(--text-success);font-weight:600;">Unknown</span></span>
     </div>
     <div class="stats-footer-item">
       <span class="stats-footer-icon">💬</span>
       <div>
         <div class="stats-footer-label" id="hot-sessions-label" data-i18n="overview.sessions_today">Sessions today</div>
-        <div class="stats-footer-value" id="hot-sessions-count">--</div>
+        <div class="stats-footer-value" id="hot-sessions-count">Unknown</div>
       </div>
       <div id="hot-sessions-list" style="display:none;" data-i18n="app.loading">Loading...</div>
     </div>
@@ -255,7 +255,7 @@
       <span class="stats-footer-icon" id="reliability-icon-lt">🔄</span>
       <div>
         <div class="stats-footer-label" data-i18n="overview.reliability">Reliability</div>
-        <div class="stats-footer-value" id="reliability-direction-lt">--</div>
+        <div class="stats-footer-value" id="reliability-direction-lt">Unknown</div>
       </div>
       <span class="stats-footer-sub" style="margin-left:auto;" id="reliability-detail-lt"></span>
     </div>
@@ -556,13 +556,13 @@
 
   <!-- Hidden elements referenced by existing JS -->
   <div style="display:none;">
-    <span id="tokens-peak">--</span>
-    <span id="tools-active">--</span>
-    <span id="tools-recent">--</span>
+    <span id="tokens-peak">Unknown</span>
+    <span id="tools-active">Unknown</span>
+    <span id="tools-recent">Unknown</span>
     <div id="tools-sparklines">
-      <div class="tool-spark"><span>--</span></div>
-      <div class="tool-spark"><span>--</span></div>
-      <div class="tool-spark"><span>--</span></div></div>
+      <div class="tool-spark"><span>Unknown</span></div>
+      <div class="tool-spark"><span>Unknown</span></div>
+      <div class="tool-spark"><span>Unknown</span></div></div>
     <div id="activity-stream"></div>
     <!-- Live log stream overview target (#3761): startLogStream() appends lines
          here via appendLogLine('ov-logs', ...). Hidden in overview; the full
@@ -573,7 +573,7 @@
   <!-- old system health removed, now inside tasks pane -->
 
   <!-- Is your agent alive? -->
-  <div id="heartbeat-panel" data-i18n-title="overview.heartbeat_panel_tooltip" style="margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;box-shadow:var(--card-shadow);" title="Your agent checks in every 30 minutes to prove it's awake. This shows whether it's doing that.">
+  <div id="heartbeat-panel" data-i18n-title="overview.heartbeat_panel_tooltip" style="margin-top:16px;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:10px;padding:14px 18px;box-shadow:var(--card-shadow);" title="This panel shows the status messages from your agent. A missing message does not prove that the agent stopped.">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
       <span style="font-size:14px;font-weight:700;color:var(--text-primary);">❤️ <span data-i18n="overview.is_agent_alive">Is your agent alive?</span></span>
       <span id="hb-status-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:rgba(107,114,128,0.2);color:var(--text-muted);">...</span>
@@ -584,14 +584,14 @@
         <span id="hb-pulse-label" style="font-size:10px;color:var(--text-muted);" data-i18n="app.waiting">waiting...</span>
       </div>
       <div style="flex:1;display:flex;flex-direction:column;gap:5px;min-width:240px;">
-        <div style="font-size:13px;color:var(--text-primary);"><span data-i18n="overview.last_checkin">Last check-in:</span> <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">--</span></div>
-        <div style="font-size:12px;color:var(--text-muted);"><span id="hb-cadence" style="font-weight:600;">--</span></div>
-        <div style="font-size:12px;color:var(--text-muted);"><span id="hb-ok-ratio-line" style="font-weight:600;">--</span></div>
+        <div style="font-size:13px;color:var(--text-primary);"><span data-i18n="overview.last_checkin">Last check-in:</span> <span id="hb-last-beat" style="font-weight:600;color:var(--text-success);">Unknown</span></div>
+        <div style="font-size:12px;color:var(--text-muted);"><span id="hb-cadence" style="font-weight:600;">Unknown</span></div>
+        <div style="font-size:12px;color:var(--text-muted);"><span id="hb-ok-ratio-line" style="font-weight:600;">Unknown</span></div>
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;align-items:center;">
         <div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:2px;" data-i18n="overview.recent_checkins" data-i18n-title="overview.recent_checkins_tooltip" title="Each dot is a recent check-in. Green means quiet, amber means took action.">Recent check-ins</div>
         <div id="hb-sparkline" style="display:flex;align-items:center;gap:4px;height:20px;">
-          <span style="font-size:11px;color:var(--text-muted);">--</span>
+          <span style="font-size:11px;color:var(--text-muted);">Unknown</span>
         </div>
       </div>
     </div>

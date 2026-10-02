@@ -30,7 +30,10 @@
     "AC-OGV-",
     "AC-GUX-",
     "AC-DEC-004.",
-    "AC-DEC-005."
+    "AC-DEC-005.",
+    "AC-STE-002.",
+    "AC-STE-003.",
+    "AC-STE-005."
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -2258,6 +2261,90 @@
       "doc": "Extended Runtime Support",
       "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
       "text": "When a local receipt changes without a newer activity timestamp, the system shall ingest the changed content once and shall deduplicate subsequent unchanged reads."
+    },
+    {
+      "id": "AC-STE-002.1",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When a checked message violates an implemented rule, the checker shall report its source and the rule."
+    },
+    {
+      "id": "AC-STE-002.2",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When a checked message changes or is added, CI shall reject new mechanical violations."
+    },
+    {
+      "id": "AC-STE-002.3",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When existing violations are removed, the baseline shall decrease. New entries shall not be accepted as debt during a pull request."
+    },
+    {
+      "id": "AC-STE-002.4",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When the inventory runs, it shall distinguish checked text, source candidates awaiting extraction, and surfaces in other repositories."
+    },
+    {
+      "id": "AC-STE-002.5",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When a check passes, its report shall identify its limits and shall not claim full compliance."
+    },
+    {
+      "id": "AC-STE-003.1",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When weekly insights or Activity turn explanations request generated prose, both synthesis paths shall use the same English writing instructions."
+    },
+    {
+      "id": "AC-STE-003.2",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When generated prose fails the implemented checks or is empty, the system shall show a fixed fallback and retain the underlying result rows."
+    },
+    {
+      "id": "AC-STE-003.3",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When a generated response is rejected, its known token usage shall still contribute to the estimated cost."
+    },
+    {
+      "id": "AC-STE-003.4",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When language validation runs, it shall require no network call, additional model call, poller, or user configuration."
+    },
+    {
+      "id": "AC-STE-005.1",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When alert narration, Advisor, Dives, or evaluation judges generate explanations, the request shall include the common writing instructions."
+    },
+    {
+      "id": "AC-STE-005.2",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When a generated explanation fails validation, its surface shall use a fixed fallback without changing SQL, chart mappings, scores, verdicts, identifiers, source evidence, or known token usage."
+    },
+    {
+      "id": "AC-STE-005.3",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When validation rejects alert narration, dispatch shall retain the original alert through its existing fallback path."
+    },
+    {
+      "id": "AC-STE-005.4",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "When a structured response contains both prose and machine-readable fields, validation shall apply to the explanation fields after parsing and shall preserve the structured response contract."
+    },
+    {
+      "id": "AC-STE-005.5",
+      "doc": "Clear English explanations",
+      "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
+      "text": "Language validation shall cause no additional model call or corrective retry, including in integrations that already retry invalid JSON."
     }
   ]
 }

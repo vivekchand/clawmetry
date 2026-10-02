@@ -436,10 +436,10 @@ function _cmProfilePlanLine(st) {
   if (!st.licenseValid) return '';
   if (st.tier === 'trial') {
     var d = (st.daysLeft == null) ? '?' : st.daysLeft;
-    return t('profile.trial_days_left', { days: d }, 'Trial · ' + d + ' days left');
+    return t('profile.trial_days_left', { days: d }, "Trial · {days} days left");
   }
   var label = st.tier ? st.tier.charAt(0).toUpperCase() + st.tier.slice(1) : '';
-  return t('profile.plan', { tier: label }, label + ' plan');
+  return t('profile.plan', { tier: label }, "{tier} plan");
 }
 
 function _cmProfileRender(st) {

@@ -247,7 +247,6 @@
   "app.maybe_later": "Ίσως αργότερα",
   "app.mcp_only": "Μόνο MCP",
   "app.mcp_servers": "🧩 Διακομιστές MCP",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 Μνήμη",
   "app.memory_access_history_reads_from_the_local_event_s": "Το ιστορικό πρόσβασης μνήμης διαβάζει από το τοπικό αποθετήριο συμβάντων, το οποίο δεν είναι διαθέσιμο εδώ.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "Τα αρχεία μνήμης αποθηκεύονται τοπικά στο μηχάνημα του πράκτορα και δεν συγχρονίζονται με το Cloud.",
