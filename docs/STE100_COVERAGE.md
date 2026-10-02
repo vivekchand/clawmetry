@@ -135,3 +135,12 @@ Workflow totals, completed and failed agent counts, running counts, and tool-nam
 - The full English CI test selection passes 155 tests, with the optional real DeepEval import test skipped. The built wheel matches every changed runtime and asset file.
 - Two regressions fail with the preceding JavaScript: checked parameterized coverage and the owner fallback before catalog loading. Both pass after the exact changed source is restored.
 - Forwarding helpers, computed keys, trial helper interpolation, other dynamic rendering, editorial review, and release verification remain pending. This follow-up does not change the first release PR while its CI runs.
+
+## Efficiency recommendation fallbacks on 2026-10-02
+
+- All four recommendation types now translate at render time with complete literal English fallbacks. Previously, the title, finding, and instruction were blank before the catalog loaded.
+- The corpus contains 4,029 messages, including 1,037 literal browser fallbacks. It has zero mechanical findings and eight dynamic calls pending.
+- The combined English, efficiency, and spend-flow selection passes 239 tests, with one optional DeepEval import skipped. JavaScript syntax also passes.
+- Four absent-catalog renderer cases and the extraction guard fail with the prior source. The loaded-catalog cases continue to pass. All 44 renderer cases pass with the changes.
+- Model names and targets remain escaped. Call counts, thinking percentage, savings rounding, the estimate explanation, and evidence destinations retain their values. Unknown action types remain omitted.
+- This verifies local rendering and the mechanical subset. Screenshots, released artifacts, hosted verification, and editorial review remain pending for this follow-up.

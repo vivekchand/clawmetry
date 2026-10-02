@@ -18418,16 +18418,39 @@ function _cmEffFmtTokens(n) {
   if (n >= 1000) return Math.round(n / 1000) + 'K';
   return String(Math.round(n));
 }
-// Maps a slice action id -> icon + i18n stem. Copy lives in en.json
-// (efficiency.idea_*); the backend ships numbers only, never copy.
+// Translate each action when rendered, with checked English fallbacks.
+// The backend ships numbers only, never copy.
 var _CM_EFF_IDEAS = {
-  model_downgrade: { icon: '🔁', stem: 'model', evidenceTab: 'models' },
-  context_trim: { icon: '✂️', stem: 'ctx', evidenceTab: 'context-economics' },
-  cache_warm: { icon: '♻️', stem: 'reread', evidenceTab: 'context-economics' },
-  // feat/spend-actions: derived from the measured spend flow (thinking share
-  // of output spend); evidence is the "Where the money goes" chart.
-  thinking_trim: { icon: '🧠', stem: 'think', evidenceTab: 'usage' },
+  model_downgrade: { icon: '🔁', evidenceTab: 'models', copy: function (vars) {
+    return {
+      title: t("efficiency.idea_model_title", null, "Switch small tasks to a smaller model"),
+      finding: t("efficiency.idea_model_finding", vars, "You used {model} for {n} short tasks this month. These look like tasks a smaller model usually handles well."),
+      how: t("efficiency.idea_model_how", vars, "In your agent settings, set the default model for quick tasks to {target}. ClawMetry cannot change this for you."),
+    };
+  } },
+  context_trim: { icon: '✂️', evidenceTab: 'context-economics', copy: function (vars) {
+    return {
+      title: t("efficiency.idea_ctx_title", null, "Trim long conversations"),
+      finding: t("efficiency.idea_ctx_finding", vars, "Long sessions are carrying old conversation your agent re-reads on every reply."),
+      how: t("efficiency.idea_ctx_how", vars, "Start a fresh session for new topics. If your agent supports it, /compact shrinks a long session in place."),
+    };
+  } },
+  cache_warm: { icon: '♻️', evidenceTab: 'context-economics', copy: function (vars) {
+    return {
+      title: t("efficiency.idea_reread_title", null, "Stop paying to re-read old work"),
+      finding: t("efficiency.idea_reread_finding", vars, "Starting a new session for a follow-up makes your agent re-read everything. Continuing the same session reuses it for less."),
+      how: t("efficiency.idea_reread_how", vars, "Reply to follow-ups in the same session soon after, instead of coming back later in a new session."),
+    };
+  } },
+  thinking_trim: { icon: '🧠', evidenceTab: 'usage', copy: function (vars) {
+    return {
+      title: t("efficiency.idea_think_title", null, "Trim thinking on routine work"),
+      finding: t("efficiency.idea_think_finding", vars, "Thinking made up {pct}% of what your agents spent on output this week."),
+      how: t("efficiency.idea_think_how", vars, "Complex tasks can benefit from more model reasoning. Routine tasks may need less. Try a lower reasoning setting for routine sessions. Keep a higher setting for complex tasks."),
+    };
+  } },
 };
+
 // A translated sentence with a figure inside it. The figure is HTML from the
 // shared component, so it is spliced in after the sentence is escaped.
 function _cmI18nFig(key, fallback, figHtml) {
@@ -18444,16 +18467,14 @@ function _cmEffIdeaRowHtml(a, saveEntry) {
     pct: (d.thinking_pct_of_output_cost != null ? d.thinking_pct_of_output_cost : ''),
   };
   var save = Math.max(1, Math.round(Number(a.savings_monthly_usd) || 0));
-  var title = t('efficiency.idea_' + m.stem + '_title', null, '');
-  var finding = t('efficiency.idea_' + m.stem + '_finding', vars, '');
-  var how = t('efficiency.idea_' + m.stem + '_how', vars, '');
+  var copy = m.copy(vars);
   return '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--border-primary,#1f2937);">'
     + '<span style="flex-shrink:0;font-size:15px;">' + m.icon + '</span>'
     + '<div style="flex:1;min-width:0;">'
-      + '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(title) + '</div>'
-      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">' + escHtml(finding) + '</div>'
+      + '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(copy.title) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-secondary);margin-top:2px;">' + escHtml(copy.finding) + '</div>'
       + '<details style="margin-top:4px;"><summary style="cursor:pointer;font-size:12px;color:#3b82f6;">' + escHtml(t('efficiency.how', null, 'How')) + '</summary>'
-        + '<div style="font-size:12px;color:var(--text-secondary);padding:6px 0 0 2px;">' + escHtml(how)
+        + '<div style="font-size:12px;color:var(--text-secondary);padding:6px 0 0 2px;">' + escHtml(copy.how)
         + ' <a href="#" onclick="switchTab(\'' + m.evidenceTab + '\');return false;" style="color:#3b82f6;text-decoration:none;">' + escHtml(t('efficiency.evidence', null, 'See the evidence')) + ' →</a></div>'
       + '</details>'
     + '</div>'

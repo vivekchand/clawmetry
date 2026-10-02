@@ -221,3 +221,59 @@ def test_orchestration_badge_retains_counts_and_singular_labels(loaded, count):
     assert f'{count} sub-agent' + ('s' if count != 1 else ' ·') in html
     assert '3/5 agents done' in html and '(1 running)' in html
     assert '&lt;Read&gt;' in html and '<Read>' not in html
+
+
+@pytest.mark.parametrize('loaded', [False, True])
+@pytest.mark.parametrize('action,stem,tab', [
+    ('model_downgrade', 'model', 'models'),
+    ('context_trim', 'ctx', 'context-economics'),
+    ('cache_warm', 'reread', 'context-economics'),
+    ('thinking_trim', 'think', 'usage'),
+])
+def test_efficiency_recommendation_retains_explanation_and_evidence(loaded, action, stem, tab):
+    metadata = re.search(r'^var _CM_EFF_IDEAS = \{[\s\S]*?^\};', APP, re.M).group()
+    code = ('var DICT={},EN=' + json.dumps(CATALOG if loaded else {})
+            + ";var LANG='en';\n" + TRANSLATE + '\nvar t=T;\n'
+            + 'function escHtml(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}\n'
+            + metadata + '\n' + function('_cmI18nFig') + '\n' + function('_cmEffIdeaRowHtml')
+            + '''
+var figures=[];
+var window={cmCostFigure:(amount,entry,opts)=>{
+  figures.push({amount,entry,opts});
+  return '<span title="Estimated at published rates">'+amount+' USD</span>';
+}};
+var row=_cmEffIdeaRowHtml({id:''' + json.dumps(action) + ''',model:'<Main>',
+  data:{calls:17,target_model:'<Small>',thinking_pct_of_output_cost:42},savings_monthly_usd:12.6},
+  {basis:'estimate'});
+console.log(JSON.stringify({row,figures,unknown:_cmEffIdeaRowHtml({id:'unknown'},{})}));
+''')
+    result = run_js(code)
+    html = result['row']
+    assert CATALOG[f'efficiency.idea_{stem}_title'] in html
+    assert 'How' in html and 'See the evidence' in html
+    assert f"switchTab('{tab}')" in html
+    assert 'save about <span title="Estimated at published rates">13 USD</span>/mo' in html
+    assert not re.search(r'\{\w+\}', html)
+    assert '<Main>' not in html and '<Small>' not in html
+    if stem == 'model':
+        assert '&lt;Main&gt; for 17 short tasks' in html and '&lt;Small&gt;' in html
+    elif stem == 'think':
+        assert '42%' in html
+    elif stem == 'ctx':
+        assert '/compact' in html
+    else:
+        assert 'same session' in html
+    assert result['figures'] == [{'amount': 13, 'entry': {'basis': 'estimate'},
+                                 'opts': {'noBadge': True, 'label': 'Estimated saving per month'}}]
+    assert result['unknown'] == ''
+
+
+def test_efficiency_recommendation_templates_are_checked():
+    keys = {f'efficiency.idea_{stem}_{field}' for stem in ('model', 'ctx', 'reread', 'think')
+            for field in ('title', 'finding', 'how')}
+    calls = [call for call in translations(APP) if call.key in keys]
+    assert {call.key for call in calls} == keys
+    assert len(calls) == len(keys)
+    for call in calls:
+        assert call.pending is None
+        assert call.fallback == CATALOG[call.key]
