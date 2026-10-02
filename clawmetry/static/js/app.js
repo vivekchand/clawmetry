@@ -1001,7 +1001,7 @@ async function saveWebhookConfig() {
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify(payload)
     });
-    if (!r.ok) throw new Error('Save failed');
+    if (!r.ok) throw new Error(t('app.save_failed', null, 'Save failed'));
     status.style.color = 'var(--text-success)';
     status.textContent = 'Saved';
   } catch(e) {
@@ -3538,7 +3538,7 @@ async function selfconfigSave() {
     loadSelfConfig();
     selfconfigSetMode('preview');
   } catch(e) {
-    alert('Save failed: ' + (e.message || e));
+    alert(t('app.save_failed_2', null, 'Save failed: ') + (e.message || e));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Save'; btn.style.opacity = '1'; }
   }
@@ -3557,7 +3557,7 @@ async function selfconfigRestoreVersion() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: content })
     });
-    if (!r.ok) throw new Error('Save failed');
+    if (!r.ok) throw new Error(t('app.save_failed', null, 'Save failed'));
     // Return to "now" with the restored content.
     await selfconfigOpenFile(_selfconfigCurrentFile, null);
     loadSelfConfig();
@@ -7110,11 +7110,11 @@ async function saveEvalKey() {
       inp.value = '';  // never keep the secret in the DOM after save
       loadEvalKeyStatus();
     } else if (el) {
-      el.textContent = (resp && resp.error) || 'Save failed';
+      el.textContent = (resp && resp.error) || t('app.save_failed', null, 'Save failed');
       el.style.color = '#ef4444';
     }
   } catch (e) {
-    if (el) { el.textContent = 'Save failed: ' + e.message; el.style.color = '#ef4444'; }
+    if (el) { el.textContent = t('app.save_failed_2', null, 'Save failed: ') + e.message; el.style.color = '#ef4444'; }
   }
 }
 
@@ -17741,7 +17741,7 @@ async function loadSystemHealth() {
       if (hbEl) {
         var hbStatus = hbData.status || 'unknown';
         var hbDot = hbStatus === 'ok' ? '🟢' : (hbStatus === 'warning' ? '🟡' : (hbStatus === 'silent' ? '🔴' : '⚪'));
-        var hbLabel = hbStatus === 'ok' ? 'Healthy' : (hbStatus === 'warning' ? 'Delayed' : (hbStatus === 'silent' ? 'SILENT' : 'No data yet'));
+        var hbLabel = hbStatus === 'ok' ? 'Healthy' : (hbStatus === 'warning' ? 'Delayed' : (hbStatus === 'silent' ? 'SILENT' : t('overview.no_data_yet', null, 'No data yet')));
         var hbGap = hbData.gap_seconds;
         var hbDetail = '';
         if (hbGap != null) {
@@ -20543,7 +20543,7 @@ async function loadTranscripts() {
       var raw = String(tx.id || '');
       var titleSrc = (tx.title && String(tx.title).trim()) || (tx.name && String(tx.name).trim()) || '';
       var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
-      var title = looksLikeId ? 'Untitled session' : titleSrc;
+      var title = looksLikeId ? t('trail.untitled', null, 'Untitled session') : titleSrc;
       var isPlumbing = _isPlumbingTranscript(titleSrc);
       if (isPlumbing) plumbingTotal++;
       // Self-Evolve runs are hidden by default; "Show plumbing" reveals them de-emphasized.
@@ -30534,7 +30534,7 @@ function loadAgentGraph() {
       'The agent graph is built from your local data store, so it is only available on the dashboard running on your machine (http://localhost:8900).');
     return;
   }
-  statusEl.textContent = 'Loading…';
+  statusEl.textContent = t('app.loading_2', null, 'Loading…');
 
   var win   = parseInt((document.getElementById('agent-graph-window') || {}).value || '86400', 10);
   var now   = Math.floor(Date.now() / 1000);
