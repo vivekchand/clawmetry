@@ -54,6 +54,26 @@ def test_success_resets_only_its_own_tool_failure_streak():
         events + [event(4, "tool_result", tool="Bash", is_error=False)]))
 
 
+def test_family_native_extra_identity_pairs_results_and_resets_failure_streak():
+    events = []
+    for i in range(4):
+        cid = f"native-{i}"
+        events.extend([
+            event(i * 2, tool_name="exec", tool_calls=[{"id": cid, "name": "exec", "arguments": None}],
+                  extra={"callId": cid}),
+            event(i * 2 + 1, "tool_result", role="tool", content="",
+                  extra={"callId": cid, "isError": i < 3}),
+        ])
+    steps = detectors.normalize_events(list(reversed(events)))
+    assert len(steps) == 8
+    results = [step for step in steps if step["kind"] == "tool_result"]
+    assert all(step["relationship"] == "native" and step["tool"] == "exec" for step in results)
+    assert [step["is_error"] for step in results] == [True, True, True, False]
+    assert all(step["outcome_known"] for step in results)
+    assert any(row["kind"] == "repeated_tool_failure" for row in detect(events[:6]))
+    assert not any(row["kind"] == "repeated_tool_failure" for row in detect(events))
+
+
 def test_unknown_parallel_result_is_not_assigned_to_most_recent_call():
     steps = detectors.normalize_events(list(reversed([
         event(1, tool="Bash", call_id="b"), event(2, tool="Read", call_id="r"),

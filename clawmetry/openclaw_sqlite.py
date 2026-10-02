@@ -198,8 +198,12 @@ def _mirror_transcript(conn, sid: str, out_dir: Path, cur: dict, budget: dict) -
                 if line:
                     seen.add(_line_key(line))
 
+    # Early 2026.9.x stores are JSON-only; the compressed column arrived
+    # later. Introspect the read-only schema instead of assuming a version.
+    columns = {row[1] for row in conn.execute('PRAGMA table_info(transcript_events)')}
+    compressed = 'event_zstd' if 'event_zstd' in columns else 'NULL'
     rows = conn.execute(
-        "SELECT seq, event_json, event_zstd FROM transcript_events"
+        f"SELECT seq, event_json, {compressed} FROM transcript_events"
         " WHERE session_id=? AND seq>? ORDER BY seq", (sid, seq),
     )
     written = 0

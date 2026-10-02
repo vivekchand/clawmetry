@@ -371,11 +371,12 @@ def _structured_is_error(data: dict) -> Optional[bool]:
     for k in ("is_error", "isError"):
         if k in data:
             return bool(data.get(k))
-    msg = data.get("message")
-    if isinstance(msg, dict):
-        for k in ("is_error", "isError"):
-            if k in msg:
-                return bool(msg.get(k))
+    for container in ("message", "extra"):
+        nested = data.get(container)
+        if isinstance(nested, dict):
+            for k in ("is_error", "isError"):
+                if k in nested:
+                    return bool(nested.get(k))
     err = data.get("error")
     if err not in (None, "", False):
         return True

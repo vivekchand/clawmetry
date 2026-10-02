@@ -10,17 +10,20 @@ import json
 from clawmetry.incident_store import LIFECYCLE_KINDS, clean_refs, epoch_ms
 
 
-def call_id(data, *, include_id=False):
-    if not isinstance(data, dict):
+def call_id(data, *, include_id=False, _depth=0):
+    if not isinstance(data, dict) or _depth > 4:
         return ""
-    keys = ("tool_call_id", "tool_use_id", "call_id", "toolCallId", "toolUseId",
+    keys = ("tool_call_id", "tool_use_id", "call_id", "callId", "toolCallId", "toolUseId",
             "gen_ai.tool.call.id", "tool.call.id") + (("id",) if include_id else ())
     for key in keys:
         value = data.get(key)
         if isinstance(value, str) and value and len(value) <= 1024:
             return value
-    msg = data.get("message")
-    return call_id(msg, include_id=include_id) if isinstance(msg, dict) else ""
+    for key in ("message", "extra"):
+        value = call_id(data.get(key), include_id=include_id, _depth=_depth + 1)
+        if value:
+            return value
+    return ""
 
 
 def enrich_steps(steps, events):

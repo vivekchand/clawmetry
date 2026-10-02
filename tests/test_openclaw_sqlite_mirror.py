@@ -142,6 +142,19 @@ def test_mirror_is_append_only_across_passes(openclaw_home):
     assert _ids(out / f"{SID}.jsonl") == ["ev-0", "ev-1", "ev-2"]
 
 
+def test_uncompressed_2026_9_3_schema_mirrors_without_optional_zstd_column(openclaw_home):
+    db = ocs.agent_db_path(openclaw_home)
+    with sqlite3.connect(db) as conn:
+        conn.execute("ALTER TABLE transcript_events DROP COLUMN event_zstd")
+    _add_events(db, [_event(0), _event(1, "assistant")])
+    state = {}
+    out = Path(ocs.sync_mirror(openclaw_home, state))
+    assert _ids(out / f"{SID}.jsonl") == ["ev-0", "ev-1"]
+    ocs._fingerprints.clear()
+    ocs.sync_mirror(openclaw_home, state)
+    assert _ids(out / f"{SID}.jsonl") == ["ev-0", "ev-1"]
+
+
 def test_rewritten_transcript_never_duplicates_lines(openclaw_home):
     db = ocs.agent_db_path(openclaw_home)
     _add_events(db, [_event(0), _event(1, "assistant"), _event(2)])
