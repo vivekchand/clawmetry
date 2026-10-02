@@ -1877,7 +1877,7 @@ async function loadContextCoverage() {
   if (!rows.length) { el.innerHTML = ''; return; }
 
   var SIGNALS = [
-    { key: 'utilization', label: 'Window %' },
+    { key: 'utilization', label: 'Window readings' },
     { key: 'compaction',  label: 'Compaction' },
     { key: 'overflow',    label: 'Overflow' }
   ];
@@ -1909,8 +1909,8 @@ async function loadContextCoverage() {
   el.innerHTML = '<div style="border:1px solid var(--border-primary);border-radius:10px;padding:14px;">'
     + '<div style="font-size:13px;font-weight:700;margin-bottom:4px;">What we can see, per runtime</div>'
     + '<div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;max-width:720px;">'
-    + 'A zero only means "ran clean" when we could have seen otherwise. Where a signal is '
-    + '<span style="color:#d97706;">not visible</span>, the runtime does not record it and ClawMetry is blind to it.</div>'
+    + 'Recorded signal counts across all runtimes. A zero means no matching signal was recorded. Where a signal is '
+    + '<span style="color:#d97706;">not visible</span>, ClawMetry cannot measure it.</div>'
     + '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
     + '<thead><tr style="color:var(--text-muted);text-align:left;">'
     + '<th style="padding:6px 10px;font-weight:600;">Runtime</th>'

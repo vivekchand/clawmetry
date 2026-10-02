@@ -17925,12 +17925,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                 # model's *response*, not part of the prompt context, so they
                 # are intentionally excluded. (Bug surfaced 2026-05-23 while
                 # verifying the OSS↔cloud parity fix.)
-                splits = _extract_usage_splits(data)
-                tok = (
-                    int(splits.get("input_tokens", 0))
-                    + int(splits.get("cache_read_tokens", 0))
-                    + int(splits.get("cache_write_tokens", 0))
-                )
+                tok = _context_prompt_tokens(data)
                 if tok > 0:
                     # Carry the turn's model so callers can size the context
                     # window correctly (e.g. 1M for the [1m] Opus variant).
@@ -17938,10 +17933,12 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                     # a hardcoded 200K window read ">100%". Probed across the
                     # same shapes _extract_usage_splits handles.
                     msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+                    extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
                     model = (
                         msg.get("model")
                         or data.get("model")
                         or data.get("modelId")
+                        or extra.get("model")
                         or ""
                     )
                     cw = resolve_context_window(model, tok)
@@ -18028,28 +18025,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
         except (TypeError, ValueError):
             compaction_limit = 200
 
-        def _ctx_tokens(data: dict) -> int:
-            """Prompt-side token total the model saw this turn. Mirrors
-            query_context_window_peek, plus a ``data.extra`` fallback for the
-            Claude Code SDK echo shape (inputTokens / cacheReadInputTokens /
-            cacheCreationInputTokens live under ``extra``, which
-            ``_extract_usage_splits`` doesn't walk)."""
-            splits = _extract_usage_splits(data)
-            tok = (
-                int(splits.get("input_tokens", 0))
-                + int(splits.get("cache_read_tokens", 0))
-                + int(splits.get("cache_write_tokens", 0))
-            )
-            if tok > 0:
-                return tok
-            extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
-            if extra:
-                return (
-                    _read_usage_int(extra, _USAGE_KEYS_INPUT)
-                    + _read_usage_int(extra, _USAGE_KEYS_CACHE_READ)
-                    + _read_usage_int(extra, _USAGE_KEYS_CACHE_WRITE)
-                )
-            return 0
+        _ctx_tokens = _context_prompt_tokens
 
         def _model_of(data: dict, fallback: str) -> str:
             msg = data.get("message") if isinstance(data.get("message"), dict) else {}
@@ -18536,7 +18512,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                     f"ORDER BY ts DESC LIMIT {int(sample_per_runtime)}",
                     list(base_params),
                 ):
-                    if int(_extract_usage_splits(_parse(raw)).get("input_tokens", 0) or 0) > 0:
+                    if _context_prompt_tokens(_parse(raw)) > 0:
                         turns_with_tokens += 1
             except Exception:
                 turns_with_tokens = 0
@@ -21715,6 +21691,36 @@ def _pick_billable_turns(rows, extra=None):
             chosen[collision_key] = payload
 
     return list(chosen.values()) + loose
+
+
+def _context_prompt_tokens(data: dict) -> int:
+    """Read prompt size consistently for context gauges and coverage counts.
+
+    A fully cached prompt can have zero fresh input tokens. Adapter events
+    may put the same reading under ``extra``. Neither case means the window
+    was empty. This read-side helper does not change billing attribution.
+    """
+    if not isinstance(data, dict):
+        return 0
+    splits = _extract_usage_splits(data)
+    total = sum(int(splits.get(k, 0)) for k in
+                ("input_tokens", "cache_read_tokens", "cache_write_tokens"))
+    if total:
+        return total
+    candidates = []
+    for parent, child in (("message", "usage"), ("promptCache", "lastCallUsage"),
+                          ("assistantMessage", "usage")):
+        envelope = data.get(parent)
+        candidates.append(envelope.get(child) if isinstance(envelope, dict) else None)
+    candidates.insert(1, data.get("usage"))
+    candidates.append(data.get("extra"))
+    for usage in candidates:
+        if isinstance(usage, dict):
+            total = sum(_read_usage_int(usage, keys) for keys in
+                        (_USAGE_KEYS_INPUT, _USAGE_KEYS_CACHE_READ, _USAGE_KEYS_CACHE_WRITE))
+            if total:
+                return total
+    return 0
 
 
 def _extract_usage_splits(data: dict) -> dict[str, int]:
