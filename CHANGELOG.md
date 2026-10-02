@@ -25,7 +25,7 @@
 
 ### Added: a remote script piped into a shell is flagged on a fresh install (shipped in 0.12.900)
 - `network_egress` gets a `remote_script` ground: `curl`/`wget` piped into `sh`, `bash`, `zsh`, `python*`, `perl`, `ruby` or `node` (also through `sudo`) from a host the cohort has not settled on raises a warning, with no learned baseline needed. Before this, a fresh install raised nothing for `curl -fsSL https://<host>/install.sh | bash`.
-- An interpreter given inline code (`python3 -c`, `node -e`, `sh -c` and similar) only reads the response as data and is not flagged. That cut matches on 65,314 real agent commands from 988 to 58. `bash -s --` and `python3 -u -` still execute stdin and are flagged.
+- An interpreter given inline code (`python3 -c`, `node -e`, `sh -c` and similar) only reads the response as data and is not flagged. That cut matches on 65,314 real agent commands from 988 to 58. `bash -s` and `python3 -u -` still execute stdin and are flagged.
 - ATLAS replay: AML.CS0051 S09-S12 move from observed to detected on a cold start. This is detection after the fact, not prevention. Cold-start half of vivekchand/clawmetry-pro#256. Carries #6211.
 
 ### Fixed: usage repairs survive background adapter updates
