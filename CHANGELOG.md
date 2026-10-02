@@ -9,6 +9,7 @@
 
 ### Added: checks for clear English explanations
 
+- Additional parameterized browser messages use checked catalog templates. The inventory owner label keeps its readable fallback while the catalog loads. Counts, units, and supplied owner names are preserved.
 - English explanations now have a writing policy and project glossary based on ASD-STE100 Issue 9. The checker covers sentence length, contractions, punctuation, and selected terminology. It does not establish full STE compliance.
 - CI checks the English catalog and literal template text. The migration inventory lists dynamic messages, documentation, and other repositories that still need review.
 - Both weekly insight synthesis paths use shared writing instructions. Activity turn explanations use the same checks with a separate fallback. Rejected summaries use a fixed fallback while preserving result rows and known token usage. Validation adds no model request or network dependency.

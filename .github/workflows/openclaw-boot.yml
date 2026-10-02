@@ -81,14 +81,24 @@ jobs:
         run: |
           set -e
           ok=0
-          # /v1/models is the documented OpenAI-compatible probe surface
-          # served on the gateway port (see docs/gateway/index.md). It
-          # returns JSON once the runtime is fully up.
+          # /ready is the gateway's own readiness endpoint. This probe used
+          # to ask /v1/models, the OpenAI-compatible model list, which
+          # openclaw 2026.9.x no longer routes at all -- it answers a plain
+          # 404 while the gateway is otherwise listening and ready, so the
+          # probe spun for its full 60s against a healthy gateway. Measured
+          # on both sides of that boundary: /ready, /health, /healthz and
+          # /status all answer 200 on 2026.5.12 AND 2026.9.2, while the model
+          # list answers 200 then 404. /ready is the version-agnostic one, and
+          # the one that actually means what this step is asking.
+          #
+          # It is not a weaker gate: /ready refuses the connection until the
+          # HTTP server is bound (measured -- 000 for ~6s, then 200 once
+          # "http server listening" is logged), so it cannot pass early.
           for i in $(seq 1 60); do
             code=$(curl -s -o /tmp/openclaw-logs/probe.json \
               -w "%{http_code}" \
               -H "Authorization: Bearer $OPENCLAW_GATEWAY_TOKEN" \
-              "http://127.0.0.1:18789/v1/models" || echo 000)
+              "http://127.0.0.1:18789/ready" || echo 000)
             case "$code" in
               2*|401|403)
                 # 401/403 still proves the HTTP server is up and the auth
