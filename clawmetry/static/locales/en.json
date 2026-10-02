@@ -412,7 +412,7 @@
   "app.sub_agents_queue_lanes": "🤖 Sub-Agents &amp; Queue Lanes",
   "app.sync_hasn_t_reported_progress_yet": "The collector has not reported progress yet.",
   "app.sync_needs_attention": "Sync needs attention",
-  "app.task_outcomes_unavailable_right_now": "Task outcomes unavailable right now.",
+  "app.task_outcomes_unavailable_right_now": "Task outcomes could not be read. Select Retry.",
   "app.teams": "👔 Teams",
   "app.test": "Test",
   "app.test_failed": "Test failed",

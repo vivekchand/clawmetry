@@ -2717,7 +2717,7 @@ async function loadOutcomeTile() {
     // for a read that has already failed — an unending spinner reads as a
     // broken product. A sentence, and a way to ask again.
     summaryEl.innerHTML = escapeHtml(t("app.task_outcomes_unavailable_right_now", null,
-        "Task outcomes unavailable right now."))
+        "Task outcomes could not be read. Select Retry."))
       + ' <button onclick="loadOutcomeTile()" style="background:transparent;border:1px solid var(--border-primary);'
       + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">'
       + escapeHtml(t('common.retry', null, 'Retry')) + '</button>';
