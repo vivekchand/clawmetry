@@ -121,7 +121,7 @@ def test_the_key_is_imported_non_extractable_and_decrypt_only():
 
 
 def test_the_encryption_key_is_never_put_in_a_request():
-    """One fetch in the file, and it must not carry the key."""
+    """AC-CLOUD-CFD-003.6: no request may carry the encryption key."""
     key = "SECRETKEYVALUE1234567890"
     token = "cm_acct_abcdef123456"
     out = _node(
@@ -190,7 +190,10 @@ def test_published_js_inflates_a_gzip_blob():
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("node_id", ["owner+mini-local", "owner+mini.local", "owner+work station"])
 def test_connect_handoff_keeps_the_registered_node_identity(node_id, legacy):
-    """The setup fragment must write the key where the node page reads it."""
+    """AC-CLOUD-CFD-003.1: the producer and reader preserve node identity.
+
+    AC-CLOUD-CFD-003.2: old fragments preserve literal plus separators too.
+    """
     from clawmetry.cli import _cloud_dashboard_handoff_url
 
     key = generate_encryption_key()
@@ -219,6 +222,7 @@ def test_handoff_percent_encodes_reserved_characters():
 
 @pytest.mark.parametrize("existing", [False, True])
 def test_existing_legacy_node_alias_is_recovered_without_overwriting(existing):
+    """AC-CLOUD-CFD-003.3: recover the missing canonical entry conservatively."""
     setup = (
         "window.CLOUD_NODE_ID='owner+mini-local';window.CLOUD_TOKEN='cm_test_account_token';"
         "localStorage.setItem('cm-enc-key-owner mini-local-cm_test_account_', 'legacy-key');"

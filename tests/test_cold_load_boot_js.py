@@ -57,6 +57,7 @@ def test_cold_load_boot_unit_suite() -> None:
 
 @pytest.mark.parametrize("cloud", [False, True])
 def test_rejected_cloud_session_does_not_probe_local_gateway_credentials(cloud):
+    """AC-CLOUD-CFD-003.7: hosted bootstrap must not probe a local credential."""
     import json
 
     script = "const vm=require('node:vm'),assert=require('node:assert/strict');const calls=[];"
