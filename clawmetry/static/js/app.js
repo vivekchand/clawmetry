@@ -10009,15 +10009,9 @@ function _startBrainSSE() {
       _updateBrainLiveIndicator(true);
       // Issue #1596 — successful reconnect clears banner + retry state.
       _resetBrainSSEReconnectState();
-      // Issue #1606 — on reconnect (not first connect), the server may have
-      // restarted with a changed event shape. Flush the stale cache and
-      // reload so chip filters don't compute against a mixed old+new array.
-      if (_brainSSEEverConnected && !_brainRange) {
-        _brainAllEvents = [];
-        _brainFilter = 'all';
-        _brainTypeFilter = 'all';
-        loadBrainPage(true);
-      }
+      // Committed replay preserves the existing rows across reconnects.
+      // Only an explicit resync invalidates them; a quiet response is not
+      // evidence that the previously loaded activity disappeared.
       _brainSSEEverConnected = true;
     });
 

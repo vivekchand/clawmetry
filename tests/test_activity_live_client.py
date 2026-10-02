@@ -11,7 +11,7 @@ from tests.test_incident_lifecycle import server  # noqa: F401
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / 'clawmetry/static/js/activity-live.js'
 
 
-def run(case):
+def run(case, setup=''):
     node = shutil.which('node')
     if not node:
         pytest.skip('node not installed')
@@ -38,12 +38,13 @@ async function tick(){
 const row=(id,text=id)=>({id,ts:'2026-10-02T00:00:00Z',data:{text}});
 const page=(cursor,rows=[],more=false)=>({cursor,rows,brain_events:rows.map(r=>({eventId:r.id,detail:r.data.text})),has_more:more});
 __SCRIPT__
+__SETUP__
 (async()=>{
 __CASE__
 console.log(JSON.stringify({ok:true,hits,timers:timers.size}));
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
-    program = harness.replace('__SCRIPT__', SCRIPT.read_text()).replace('__CASE__', case)
+    program = harness.replace('__SCRIPT__', SCRIPT.read_text()).replace('__SETUP__', setup).replace('__CASE__', case)
     result = subprocess.run([node, '-e', program], text=True, capture_output=True, timeout=10, check=False)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
@@ -124,3 +125,41 @@ await tick();assert.equal(hits.length,1);assert.equal(connected,1);assert.equal(
 pages=[{resync_required:true}];await tick();assert.equal(resync,1);
 stream.close();stop();assert.equal(stream.readyState,2);assert.equal(timers.size,0);
 ''')
+
+
+def test_brain_quiet_reconnect_preserves_cached_evidence_and_filters():
+    app = SCRIPT.with_name('app.js').read_text()
+    start = app.index('function _startBrainSSE() {')
+    end = app.index('\nfunction _stopBrainSSE()', start)
+    setup = r'''
+let _brainRange=null, _brainSSE=null, _brainSSEConnected=false, _brainSSEEverConnected=false;
+let _brainAllEvents=[], _brainFilter='selected-session', _brainTypeFilter='tool';
+let _brainSSEFirstFailMs=0, _brainRefreshTimer=null;
+function _cmRuntimeFilter(){return 'codex';}
+function _updateBrainLiveIndicator(){}
+function _resetBrainSSEReconnectState(){}
+function _scheduleBrainSSEReconnect(){}
+function renderBrainStream(){}
+function renderBrainChart(){}
+function renderBrainTypeChips(){}
+function loadBrainPage(){}
+document.getElementById=()=>null;
+document.querySelector=()=>({});
+''' + app[start:end]
+    run(r'''
+function brainPage(cursor, ids) {
+ const result=page(cursor,ids.map(id=>row(id)));
+ result.brain_events.forEach(event=>{event.time='2026-10-02T00:00:00Z';event.source='codex';});
+ return result;
+}
+pages=[brainPage('first',['evidence'])];_startBrainSSE();await tick();
+assert.deepEqual(_brainAllEvents.map(event=>event.eventId),['evidence']);
+fail=true;await tick();assert.equal(_brainSSE,null);
+fail=false;pages=[brainPage('quiet',[])];_startBrainSSE();
+await Promise.resolve();await tick();
+assert.deepEqual(_brainAllEvents.map(event=>event.eventId),['evidence']);
+assert.equal(_brainFilter,'selected-session');assert.equal(_brainTypeFilter,'tool');
+pages=[{resync_required:true}];await tick();
+assert.deepEqual(_brainAllEvents,[]);
+_brainSSE.close();
+''', setup)

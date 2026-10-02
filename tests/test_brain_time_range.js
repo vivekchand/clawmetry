@@ -103,11 +103,13 @@ function buildSandbox(domById) {
   sandbox.setTimeout = function () { sandbox._calls.setTimeoutCount++; return 1; };
   sandbox.EventSource = function () {
     sandbox._calls.eventSourceCount++;
-    this.addEventListener = function () {};
+    this.handlers = {};
+    this.addEventListener = function (name, callback) { this.handlers[name] = callback; };
     this.close = function () {};
   };
   sandbox.cmActivityEventSource = function () { return new sandbox.EventSource(); };
   sandbox._updateBrainLiveIndicator = function () {};
+  sandbox._resetBrainSSEReconnectState = function () {};
   sandbox.window = sandbox;
   vm.createContext(sandbox);
   const fns = [
@@ -186,8 +188,16 @@ console.log('PASS group: live mode unaffected');
 // ── (7) source-level guards for paths vm can't easily execute ───────────
 console.log('PASS group: source-level gating anchors');
 {
-  truthy(/if \(_brainSSEEverConnected && !_brainRange\)/.test(src),
-         'SSE reconnect flush is gated on !_brainRange');
+  // Committed replay no longer flushes on connection. Exercise the old
+  // history race directly, independent of how reconnect is implemented.
+  const sb = buildSandbox();
+  vm.runInContext('_startBrainSSE()', sb);
+  sb._brainRange = {since:'2026-07-10T02:00:00Z',until:'2026-07-10T04:00:00Z'};
+  sb._brainSSEEverConnected = true;
+  sb._brainAllEvents = ['historical-evidence'];
+  sb._brainSSE.handlers.connected();
+  eq(sb._brainAllEvents[0], 'historical-evidence', 'reconnect preserves the historical view');
+  eq(sb._calls.loadBrain, 0, 'reconnect does not replace history with a live fetch');
   truthy(/if \(_brainRange\) return; \/\/ stale response for an old range|_bhRange !== _brainRange\) return/.test(src),
          'loadBrainPage drops stale responses for an old range');
   truthy(/if \(!_brainRange && document\.getElementById\('page-brain'\)/.test(src),
