@@ -1985,7 +1985,7 @@ async function loadContextEconomics() {
       + chip('Compactions', s.compaction_count || 0)
       + chip('Overflow', s.overflow_count || 0, (s.overflow_count || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
       + chip('Proactive', s.proactive_count || 0, '#16a34a')
-      + chip('Tokens reclaimed', _ceFmtTokens(s.total_reclaimed || 0), '#16a34a')
+      + chip('Tokens reclaimed', s.reclaimed_data_available ? _ceFmtTokens(s.total_reclaimed || 0) : 'Not measured', s.reclaimed_data_available ? '#16a34a' : 'var(--text-muted)')
       + chip('Overflow sessions', s.overflow_sessions || 0, (s.overflow_sessions || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
       + '</div>';
   }
@@ -2073,21 +2073,22 @@ async function loadContextEconomics() {
         var isOverflow = cp.trigger === 'overflow';
         var trigColor = isOverflow ? '#ef4444' : '#16a34a';
         var trigBg = isOverflow ? 'rgba(239,68,68,.12)' : 'rgba(22,163,74,.12)';
-        var reclaimed = Number(cp.reclaimed || 0);
+        var measured = cp.measurement_status === 'observed';
+        var reclaimed = measured ? Number(cp.reclaimed || 0) : null;
         c += '<div onclick="_ceToggleCompaction(' + idx + ')" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:12px;">';
         c += '<span style="font-size:10px;font-weight:700;color:' + trigColor + ';background:' + trigBg + ';border-radius:4px;padding:1px 7px;text-transform:uppercase;">' + escHtml(cp.trigger || 'proactive') + '</span>';
         c += '<span style="color:var(--text-faint);background:var(--bg-secondary);border-radius:4px;padding:1px 6px;font-size:10px;" title="' + escHtml(cp.session_id || '') + '">' + escHtml(_ceShortSid(cp.session_id)) + '</span>';
         c += '<span style="flex:1;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(String(cp.ts || '')) + '</span>';
-        c += '<span style="color:var(--text-primary);white-space:nowrap;">' + _ceFmtTokens(cp.tokens_before) + ' &#8594; ' + _ceFmtTokens(cp.tokens_after) + '</span>';
-        if (reclaimed > 0) c += '<span style="color:#16a34a;font-weight:600;white-space:nowrap;">&#8722;' + _ceFmtTokens(reclaimed) + '</span>';
+        c += '<span style="color:var(--text-primary);white-space:nowrap;">' + (measured ? (_ceFmtTokens(cp.tokens_before) + ' &#8594; ' + _ceFmtTokens(cp.tokens_after)) : 'Not measured') + '</span>';
+        if (measured && reclaimed > 0) c += '<span style="color:#16a34a;font-weight:600;white-space:nowrap;">&#8722;' + _ceFmtTokens(reclaimed) + '</span>';
         c += '<span style="color:var(--text-faint);">&#9662;</span>';
         c += '</div>';
         // Expandable detail.
         c += '<div id="ce-comp-detail-' + idx + '" style="display:none;padding:12px 16px;background:var(--bg-secondary);border-bottom:1px solid var(--border-secondary);font-size:12px;">';
         c += '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-bottom:10px;">';
-        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Tokens before</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);">' + Number(cp.tokens_before || 0).toLocaleString() + '</div></div>';
-        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Tokens after</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);">' + Number(cp.tokens_after || 0).toLocaleString() + '</div></div>';
-        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Reclaimed</div><div style="font-size:15px;font-weight:700;color:#16a34a;">' + reclaimed.toLocaleString() + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Tokens before</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);">' + (measured ? Number(cp.tokens_before).toLocaleString() : 'Not measured') + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Tokens after</div><div style="font-size:15px;font-weight:700;color:var(--text-primary);">' + (measured ? Number(cp.tokens_after).toLocaleString() : 'Not measured') + '</div></div>';
+        c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Reclaimed</div><div style="font-size:15px;font-weight:700;color:' + (measured ? '#16a34a' : 'var(--text-muted)') + ';">' + (measured ? reclaimed.toLocaleString() : 'Not measured') + '</div></div>';
         c += '<div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Trigger</div><div style="font-size:13px;font-weight:600;color:' + trigColor + ';">' + escHtml(cp.trigger || 'proactive') + (cp.from_hook ? ' (auto-hook)' : '') + '</div></div>';
         c += '</div>';
         if (cp.summary) {
@@ -2131,7 +2132,9 @@ function switchTab(name) {
   if (name === 'context') name = 'context-economics';
   // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
   // run on their own screen instead of on every tab.
+  if (name !== 'assistant' && typeof assistantLeave === 'function') assistantLeave();
   _cmCurrentTab = name;
+  document.body.classList.toggle('cm-assistant-active', name === 'assistant');
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
   // ...and CLOSE pane-scoped streams that don't belong to the tab we're
@@ -2162,6 +2165,15 @@ function switchTab(name) {
   document.querySelectorAll('.left-nav-item').forEach(function(t) { t.classList.remove('active'); });
   var page = document.getElementById('page-' + name);
   if (page) page.classList.add('active');
+  // Keep the visible screen bookmarkable. Preserve session-detail links when
+  // opening their own screen, but do not leave #assistant behind on Home.
+  if (page) {
+    var detailLink = (name === 'trail' && /^#trail=/.test(window.location.hash)) ||
+      (name === 'transcripts' && /[#&]session=/.test(window.location.hash));
+    if (!detailLink && window.location.hash !== '#' + name) {
+      try { window.history.replaceState(null, '', window.location.pathname + window.location.search + '#' + name); } catch (e) {}
+    }
+  }
   // Tell the user, on every tab, whether the selected runtime actually scopes
   // this view (aggregate/node-wide tabs get an honest note; filterable tabs
   // filter themselves below).
@@ -2201,7 +2213,12 @@ function switchTab(name) {
   // Stop cron auto-refresh when leaving crons tab
   if (name !== 'crons' && _cronAutoRefreshTimer) { clearInterval(_cronAutoRefreshTimer); _cronAutoRefreshTimer = null; }
   if (name === 'inventory') { if (typeof renderInventory === 'function') renderInventory(); }
+  if (name === 'setup') { if (typeof loadSetup === 'function') loadSetup(); }
+  if (name === 'improve') { if (typeof loadImprove === 'function') loadImprove(); }
   if (name === 'overview') loadAll();
+  if (name === 'overview' && typeof loadCustomDashboardPanels === 'function') loadCustomDashboardPanels();
+  if (name === 'dives' && typeof loadDivesPage === 'function') loadDivesPage();
+  if (name === 'assistant' && typeof loadAssistantPage === 'function') loadAssistantPage();
   // #5935: boot no longer opens the log and health streams on a screen that
   // does not show them, so the screens that DO show them open them on entry.
   // Both starters guard on their own handle, so this is idempotent.
@@ -6948,15 +6965,15 @@ async function loadEvalSummary() {
     // A server that ignores ?runtime answers for the whole node.
     if (!data || typeof data.scored !== 'number' || (_evQ && data.runtime !== _evRt)) {
       setTitleCheck(false);
-      avgEl.textContent = '--';
-      if (covEl) covEl.textContent = '';
+      avgEl.textContent = 'Not scored';
+      if (covEl) covEl.textContent = 'Judge data is unavailable for this window';
       return;
     }
     if (data.scored === 0) {
       setTitleCheck(false);
-      avgEl.textContent = '';
+      avgEl.textContent = 'Not scored';
       avgEl.style.color = 'var(--text-muted)';
-      if (covEl) covEl.textContent = t("overview.eval_empty", null, "No sessions judged yet today. The judge runs automatically after each session.");
+      if (covEl) covEl.textContent = t("overview.eval_empty", null, "No sessions judged yet. Configure a judge to score finished sessions.");
       return;
     }
     setTitleCheck(true);
@@ -6967,8 +6984,8 @@ async function loadEvalSummary() {
     if (covEl) covEl.textContent = data.scored + ' / ' + data.total + ' scored';
   } catch (e) {
     setTitleCheck(false);
-    avgEl.textContent = '--';
-    if (covEl) covEl.textContent = '';
+    avgEl.textContent = 'Not scored';
+    if (covEl) covEl.textContent = 'Judge data is unavailable for this window';
   }
 }
 
@@ -20163,6 +20180,8 @@ async function loadModelAttribution() {
       if (_maChart) _maChart.innerHTML = cmStoreUnreachableHtml();
       var _maTbl = document.getElementById('model-sessions-table');
       if (_maTbl) _maTbl.innerHTML = '';
+      var _maReview = document.getElementById('model-selection-review');
+      if (_maReview) { _maReview.style.display = 'none'; _maReview.innerHTML = ''; }
       return;
     }
     var models = data.models || [];
@@ -20231,9 +20250,62 @@ async function loadModelAttribution() {
       var swTbl = document.getElementById('model-switches-table');
       if (swTbl) swTbl.querySelector('tbody').innerHTML = swHtml;
     }
+    renderModelSelectionReview({
+      models: models,
+      primaryModel: primaryModel,
+      totalTurns: totalTurns,
+      primaryPct: Number(primaryPct),
+      fallbackRate: Number(fallbackRate),
+      fallbackCount: fallbackCount,
+    });
   } catch(e) {
     console.error('loadModelAttribution', e);
   }
+}
+
+// Attribution tells us where turns went. It does not tell us whether the
+// selected model was the right one for the work, so keep this review explicit
+// about what is observed and send the user to the outcome and savings views
+// for the evidence needed to make a routing change.
+function renderModelSelectionReview(info) {
+  var card = document.getElementById('model-selection-review');
+  if (!card) return;
+  var models = Array.isArray(info && info.models) ? info.models : [];
+  var turns = Number(info && info.totalTurns) || 0;
+  if (!models.length || turns <= 0) {
+    card.style.display = 'none';
+    card.innerHTML = '';
+    return;
+  }
+  var primary = String(info.primaryModel || models[0].model || 'the primary model');
+  var shortPrimary = primary.replace('anthropic/', '').replace('openai/', '');
+  var share = Number(info.primaryPct) || 0;
+  var fallbackRate = Number(info.fallbackRate) || 0;
+  var concentrated = share >= 70;
+  var headline = concentrated
+    ? escHtml(shortPrimary) + ' handled ' + share.toFixed(1) + '% of observed turns.'
+    : 'Routing is spread across ' + models.length + ' observed models.';
+  var interpretation = concentrated
+    ? 'That is a routing concentration signal, not proof that Astra was the right model for every task.'
+    : 'Attribution alone cannot tell us whether each model was appropriate for the task.';
+  card.style.display = '';
+  card.innerHTML = '<div style="padding:16px;">'
+    + '<div style="display:flex;gap:12px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">'
+    + '<div style="min-width:220px;flex:1;">'
+    + '<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);">Model selection review</div>'
+    + '<div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-top:5px;">' + headline + '</div>'
+    + '<div style="font-size:12px;color:var(--text-secondary);margin-top:5px;line-height:1.45;">' + interpretation + '</div>'
+    + '</div>'
+    + '<div style="min-width:170px;font-size:12px;color:var(--text-secondary);">'
+    + '<div><strong style="color:var(--text-primary);">' + Number(turns).toLocaleString() + '</strong> turns observed</div>'
+    + '<div><strong style="color:var(--text-primary);">' + fallbackRate.toFixed(1) + '%</strong> on other models</div>'
+    + '</div>'
+    + '</div>'
+    + '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:12px;">'
+    + '<a href="#" onclick="switchTab(\'evals\');return false;" style="color:#60a5fa;text-decoration:none;">Review outcome evidence →</a>'
+    + '<a href="#" onclick="switchTab(\'usage\');return false;" style="color:#60a5fa;text-decoration:none;">Check measured routing savings →</a>'
+    + '</div>'
+    + '</div>';
 }
 
 // ===== Skill Attribution =====
@@ -22692,6 +22764,13 @@ function _tcSortTools(tools) {
   return arr;
 }
 
+// Keep the catalog renderer's UI state separate from the fetched payload.
+// These used to be implicit globals, which meant the first successful catalog
+// response reached renderToolCatalog() and then died on _tcExpanded.
+var _toolCatalogData = null;
+var _tcExpanded = {};
+var _tcCallsCache = {};
+
 async function loadToolCatalog() {
   var tableEl = document.getElementById('tc-table');
   var sumEl = document.getElementById('tc-summary');
@@ -22704,13 +22783,13 @@ async function loadToolCatalog() {
     _tcCallsCache = {};  // catalog refreshed → drop stale per-call caches
     // Provenance summary chips.
     if (sumEl) {
-      var g = data.groups || {}, t = data.totals || {};
+      var g = data.groups || {}, totals = data.totals || {};
       var chips = '';
       function chip(label, val, color) {
         return '<span style="font-size:12px;color:var(--text-muted);background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:5px 11px;"><strong style="color:' + color + ';">' + val + '</strong> ' + label + '</span>';
       }
-      chips += chip('tools', t.tool_count || 0, 'var(--text-primary)');
-      chips += chip('calls', t.total_calls || 0, 'var(--text-primary)');
+      chips += chip('tools', totals.tool_count || 0, 'var(--text-primary)');
+      chips += chip('calls', totals.total_calls || 0, 'var(--text-primary)');
       chips += chip('builtin', g.builtin || 0, '#0ea5e9');
       chips += chip('MCP', g.mcp || 0, '#8b5cf6');
       chips += chip('plugin', g.plugin || 0, '#d97706');
@@ -29572,9 +29651,16 @@ document.addEventListener('DOMContentLoaded', function() {
 
 //: The tab the dashboard opens on. One place, because the nav markup's
 //: `active` class and the e2e landing guards have to agree with it.
-var CM_LANDING_TAB = 'inventory';
+var CM_LANDING_TAB = 'assistant';
+
+function _cmTabFromHash() {
+  var match = /^#([a-z][a-z0-9-]*)$/.exec(window.location.hash || '');
+  return match && document.getElementById('page-' + match[1]) ? match[1] : null;
+}
 
 function _cmBootLanding() {
+  var tabLink = _cmTabFromHash();
+  if (tabLink) { switchTab(tabLink); return; }
   var trailSid = (typeof _trailSessionFromHash === 'function') ? _trailSessionFromHash(window.location.hash) : null;
   if (trailSid && typeof openTrail === 'function') { openTrail(trailSid); return; }
   // A #session= deep link is a request for the Sessions list, not the roster.
@@ -29585,10 +29671,12 @@ function _cmBootLanding() {
   if (typeof switchTab === 'function') switchTab(CM_LANDING_TAB);
 }
 
-// Hash router. Only `#trail=` is routed here: `#session=` is consumed by
+// Hash router. Tab links and `#trail=` route here; `#session=` is consumed by
 // loadTranscripts() and its setters already call switchTab('transcripts').
 window.addEventListener('hashchange', function () {
   try {
+    var tabLink = _cmTabFromHash();
+    if (tabLink) { switchTab(tabLink); return; }
     var sid = (typeof _trailSessionFromHash === 'function') ? _trailSessionFromHash(window.location.hash) : null;
     if (sid && typeof openTrail === 'function') openTrail(sid);
   } catch (e) { /* non-fatal */ }
@@ -30680,6 +30768,7 @@ async function checkLicenseExpiry() {
     var days = (e && typeof e.days_until_expiry === 'number') ? e.days_until_expiry : null;
     var endingTrial = !!(e && !e.expired && e.tier === 'trial'
       && days !== null && days <= 3);
+    banner.dataset.endingTrial = endingTrial ? 'true' : 'false';
     if (!expiredTrial && !expiredPaid && !endingTrial) { banner.style.display = 'none'; return; }
     // A dismissed EXPIRED banner stays gone for 24h; a dismissed
     // countdown comes back after 4h — the clock is literally running.

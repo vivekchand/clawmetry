@@ -1,0 +1,80 @@
+<div id="page-improve" class="page">
+  <div class="cm-improve-wrap">
+    <section class="cm-improve-hero">
+      <div class="cm-improve-hero-copy">
+        <div class="cm-improve-kicker"><span class="cm-improve-flower" aria-hidden="true"></span>GUIDANCE LOOP</div>
+        <h2>Turn repeated friction into better defaults</h2>
+        <p>ClawMetry watches for corrections, durable preferences, and repeated frustration across your agent conversations. Review the evidence before changing setup files.</p>
+      </div>
+      <div class="cm-improve-hero-note"><strong>Read-only candidates</strong><span>No files change from this view.</span></div>
+    </section>
+
+    <div class="cm-improve-summary" aria-label="Improve summary">
+      <div class="cm-improve-summary-card"><span class="cm-improve-summary-label">Candidates</span><strong id="improve-summary-candidates">--</strong><span id="improve-summary-candidates-note" class="cm-improve-summary-note">signals to review</span></div>
+      <div class="cm-improve-summary-card"><span class="cm-improve-summary-label">Conversations</span><strong id="improve-summary-conversations">--</strong><span class="cm-improve-summary-note">with evidence</span></div>
+      <div class="cm-improve-summary-card"><span class="cm-improve-summary-label">Projects</span><strong id="improve-summary-projects">--</strong><span class="cm-improve-summary-note">across your workspace</span></div>
+      <div class="cm-improve-summary-card"><span class="cm-improve-summary-label">Window</span><strong id="improve-summary-window">30d</strong><span class="cm-improve-summary-note">local history</span></div>
+    </div>
+
+    <div class="cm-improve-toolbar">
+      <div>
+        <div class="cm-improve-section-title">Signals worth reviewing</div>
+        <div class="cm-improve-section-note" id="improve-source-note">Scanning recent user turns from the local store.</div>
+      </div>
+      <div class="cm-improve-filters" role="group" aria-label="Filter improvement signals">
+        <button class="cm-improve-filter is-active" data-improve-kind="all" onclick="improveSetKind('all')">Everything</button>
+        <button class="cm-improve-filter" data-improve-kind="preference" onclick="improveSetKind('preference')">Preferences</button>
+        <button class="cm-improve-filter" data-improve-kind="correction" onclick="improveSetKind('correction')">Corrections</button>
+        <button class="cm-improve-filter" data-improve-kind="frustration" onclick="improveSetKind('frustration')">Friction</button>
+      </div>
+    </div>
+
+    <div class="cm-improve-capability" id="improve-capability-note">
+      <span class="cm-improve-capability-dot" aria-hidden="true"></span>
+      <span>These are evidence-backed candidates. Review them in context before promoting a rule, skill, or instruction.</span>
+    </div>
+
+    <section id="improve-list" class="cm-improve-list" aria-live="polite">
+      <div class="cm-improve-loading">Reading recent conversations…</div>
+    </section>
+
+    <div id="improve-empty" class="cm-improve-empty" style="display:none;">
+      <div class="cm-improve-empty-mark" aria-hidden="true">✦</div>
+      <strong>No guidance candidates in this window.</strong>
+      <span>As conversations accumulate, repeated corrections and preferences will appear here.</span>
+    </div>
+  </div>
+</div>
+
+<div id="improve-review-modal" class="cm-improve-modal" hidden aria-hidden="true">
+  <div class="cm-improve-modal-backdrop" onclick="improveCloseReview()"></div>
+  <section class="cm-improve-modal-card" role="dialog" aria-modal="true" aria-labelledby="improve-review-title">
+    <div class="cm-improve-modal-head">
+      <div>
+        <div class="cm-improve-kicker"><span class="cm-improve-flower" aria-hidden="true"></span>REVIEW CANDIDATE</div>
+        <h3 id="improve-review-title">Review this guidance signal</h3>
+      </div>
+      <button type="button" class="cm-improve-modal-close" onclick="improveCloseReview()" aria-label="Close review">×</button>
+    </div>
+    <div class="cm-improve-review-status"><span class="cm-improve-capability-dot" aria-hidden="true"></span><span id="improve-review-status">Candidate only. No files change here.</span></div>
+    <p id="improve-review-summary" class="cm-improve-review-summary"></p>
+    <div class="cm-improve-review-grid">
+      <div>
+        <div class="cm-improve-review-label">Evidence</div>
+        <div id="improve-review-evidence" class="cm-improve-review-evidence"></div>
+      </div>
+      <div>
+        <div class="cm-improve-review-label">Signal profile</div>
+        <div id="improve-review-profile" class="cm-improve-review-profile"></div>
+        <div class="cm-improve-review-label">Likely destination</div>
+        <div id="improve-review-destination" class="cm-improve-destination"></div>
+        <div class="cm-improve-review-label cm-improve-review-label-next">Next step</div>
+        <p class="cm-improve-review-next">Inspect the relevant instruction, skill, command, agent, or hook in Setup before promoting a change.</p>
+      </div>
+    </div>
+    <div class="cm-improve-modal-actions">
+      <button type="button" class="cm-improve-secondary-button" onclick="improveCloseReview()">Keep reviewing</button>
+      <button type="button" class="cm-improve-primary-button" onclick="improveOpenSetup()">Open Setup</button>
+    </div>
+  </section>
+</div>

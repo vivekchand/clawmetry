@@ -158,18 +158,13 @@ class TestTabsLoad:
         tabs = nav_tabs_locator(page)
         assert tabs.count() > 0, "No nav tabs found in dashboard"
 
-    def test_agents_tab_is_default(self, page: Page):
-        """The Agents roster is the landing page (agent-first IA, 2026-09-20).
-
-        The product opens on who is running, not on the raw session list and
-        not on the KPI board. Both still exist one click away: Sessions
-        directly below Agents, Home above it.
-        """
+    def test_assistant_tab_is_default(self, page: Page):
+        """Open on the chat composer; monitoring views remain one click away."""
         load_dashboard(page)
         overview = page.locator("#page-overview")
         assert overview.count() > 0, "#page-overview element not found"
-        active = page.locator("#page-inventory.active")
-        assert active.count() > 0, "#page-inventory (Agents) should be active by default"
+        active = page.locator("#page-assistant.active")
+        assert active.count() > 0, "#page-assistant should be active by default"
         for other in ("#page-overview.active", "#page-transcripts.active"):
             assert page.locator(other).count() == 0, (
                 f"{other} must not also be active on landing"
