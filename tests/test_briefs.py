@@ -9,7 +9,7 @@ Requirement 0904463d-6472-4812-978c-86d541f1cca5 (REQ-BRIEF-001).
 * The scheduler tick runs due briefs only, bounded by the per-node cap,
   and records the outcome on the row.
 * A brief that fails to run POSTS the failure (never silence).
-* Without a narrator credential the post carries the raw table and says so;
+* Without usable narration the post carries the table and reports the unavailable summary;
   without any credential a free-text question fails honestly while the
   built-in digest (canned SQL) still runs.
 * Routes: list offers the built-in digest until it is saved; save validates
@@ -135,7 +135,8 @@ def test_builtin_digest_runs_without_any_credential_and_says_so():
     assert res["rows"] == 1
     assert len(posts) == 1 and posts[0][0] == CFG["slack_webhook_url"]
     text = posts[0][1]["text"]
-    assert "raw table" in text and "cursor" in text and "#signals" in text
+    assert "summary is unavailable" in text and "cursor" in text and "#signals" in text
+    assert "No model credential" not in text
     assert "—" not in text and " -- " not in text
 
 
@@ -146,7 +147,7 @@ def test_narrated_when_a_credential_exists():
                        poster=poster, channel_config=CFG)
     assert res["status"] == "ok" and res["narrated"] is True
     assert "Cursor ran three sessions" in posts[0][1]["text"]
-    assert "raw table" not in posts[0][1]["text"]
+    assert "summary is unavailable" not in posts[0][1]["text"]
 
 
 def test_question_brief_without_credential_fails_honestly_and_posts_it():

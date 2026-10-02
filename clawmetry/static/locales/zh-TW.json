@@ -247,7 +247,6 @@
   "app.maybe_later": "稍後再說",
   "app.mcp_only": "僅限 MCP",
   "app.mcp_servers": "🧩 MCP 伺服器",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 記憶體",
   "app.memory_access_history_reads_from_the_local_event_s": "記憶體存取歷史記錄讀取自本機事件儲存區，此處無法使用。",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "記憶體檔案儲存在代理機器本機，不會同步至 Cloud。",

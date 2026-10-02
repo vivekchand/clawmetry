@@ -520,9 +520,13 @@ def build_dives_prompt(
 
     schema = build_schema_descriptor(store)
     few_shot_json = json.dumps(_FEW_SHOT_EXAMPLES, indent=2)
+    from clawmetry.english import WRITING_INSTRUCTIONS
 
     parts = [
         _SYSTEM_PROMPT_HEADER,
+        "Apply these writing rules only to the title and description strings. "
+        "Keep the required JSON format and SQL unchanged. "
+        "Use at most 20 words in each sentence. " + WRITING_INSTRUCTIONS,
         "## Schema\n" + schema,
         "## Few-shot examples\n" + few_shot_json,
     ]

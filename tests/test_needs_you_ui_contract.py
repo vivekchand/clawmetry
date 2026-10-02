@@ -98,7 +98,7 @@ def test_inferred_wording_hedges_and_confirmed_does_not(catalogue):
     """The three words the feature's credibility rests on."""
     assert catalogue["needs.confident"].lower() == "waiting for you"
     hedged = catalogue["needs.inferred"].lower()
-    assert any(w in hedged for w in ("looks like", "maybe", "might", "seems")), (
+    assert any(w in hedged for w in ("looks like", "maybe", "might", "seems", "appears")), (
         "the inferred label must read as a guess")
     assert catalogue["needs.badge_maybe"].lower() != \
         catalogue["needs.badge_waiting"].lower()

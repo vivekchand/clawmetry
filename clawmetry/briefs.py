@@ -306,8 +306,8 @@ def compose_post(brief: dict, *, rows: list[dict] | None, narrative: str | None,
     if narrative:
         body = narrative.strip()
     else:
-        body = ("No model credential was available to narrate this, so here is the raw table.\n"
-                + table_text(rows))
+        from clawmetry.english import EXPLANATION_MESSAGES
+        body = EXPLANATION_MESSAGES["brief"] + "\n" + table_text(rows)
     return f"{title}\n{body}\nOpen the dashboard: {link}"
 
 

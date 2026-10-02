@@ -401,10 +401,10 @@
     } else if (typeof st.days === 'number' && st.days > 0) {
       sub = tr('trial.modal_sub_days', { days: st.days },
         'You have ' + st.days + (st.days === 1 ? ' day' : ' days')
-        + ' left on your trial. Upgrade now and nothing interrupts — the trial runs to its last day either way.');
+        + ' left on your trial. You can upgrade during the trial. The trial still continues until its final day.');
     } else {
       sub = tr('trial.modal_sub', null,
-        'Upgrade now and nothing interrupts — the trial runs to its last day either way.');
+        'You can upgrade during the trial. The trial still continues until its final day.');
     }
 
     var dev = deviceValue();
@@ -689,7 +689,7 @@
               return;
             }
             statusEl.className = 'cm-up-status ok';
-            statusEl.textContent = tr('trial.activated', null, 'License installed — reloading…');
+            statusEl.textContent = tr('trial.activated', null, 'The license was installed. The page will reload.');
             setTimeout(function () { try { window.location.reload(); } catch (e) { /* noop */ } }, 900);
           })
           .catch(function () {

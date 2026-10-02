@@ -192,8 +192,9 @@ async function main() {
   await settle();
   ok(s.fetched.length === 0, 'CLOUD_MODE: no request is issued to /api/local/agent-graph');
   ok(s.consoleErrors.length === 0, 'CLOUD_MODE: the agent graph writes no console error');
-  ok(/only available on the dashboard running on your machine/
-       .test(s.els['agent-graph-status'].textContent),
+  var graphNote = s.els['agent-graph-status'].textContent;
+  ok(/agent machine/.test(graphNote) && /local dashboard/.test(graphNote)
+       && /localhost:8900/.test(graphNote),
      'CLOUD_MODE: the agent graph says where it is available');
 
   s = makeSandbox({ cloudMode: false });

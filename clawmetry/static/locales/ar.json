@@ -247,7 +247,6 @@
   "app.maybe_later": "ربما لاحقًا",
   "app.mcp_only": "MCP فقط",
   "app.mcp_servers": "🧩 خوادم MCP",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 الذاكرة",
   "app.memory_access_history_reads_from_the_local_event_s": "يقرأ سجل الوصول إلى الذاكرة من مخزن الأحداث المحلي، وهو غير متاح هنا.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "تُخزَّن ملفات الذاكرة محليًا على جهاز الوكيل ولا تتم مزامنتها مع Cloud.",
