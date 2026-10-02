@@ -174,13 +174,21 @@ def _start_gateway(home: str, port: int, token: str) -> subprocess.Popen:
 
 
 def _wait_for_gateway(port: int, token: str, timeout: int) -> None:
-    """Poll /v1/models until 2xx/401/403 — same probe the CI smoke uses."""
+    """Poll /ready until 2xx/401/403 — same probe the CI smoke uses.
+
+    This asked the OpenAI-compatible model list until 2026-10-02.
+    openclaw 2026.9.x no longer routes it: it answers 404 while the
+    gateway is listening and ready, and a 404 lands in the HTTPError
+    branch below without matching, so this spun until timeout against a
+    healthy gateway. /ready answers 200 on 2026.5.12 and 2026.9.2 alike,
+    and is refused until the HTTP server is bound.
+    """
     deadline = time.monotonic() + timeout
     last = "no attempts"
     while time.monotonic() < deadline:
         try:
             req = urllib.request.Request(
-                f"http://127.0.0.1:{port}/v1/models",
+                f"http://127.0.0.1:{port}/ready",
                 headers={"Authorization": f"Bearer {token}"},
             )
             with urllib.request.urlopen(req, timeout=2) as r:

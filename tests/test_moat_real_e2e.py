@@ -164,12 +164,16 @@ def _start_gateway(home: str, port: int, token: str) -> subprocess.Popen:
 
 
 def _wait_for_gateway(port: int, token: str, timeout: int) -> None:
+    # /ready, not the OpenAI-compatible model list: openclaw 2026.9.x answers
+    # 404 on that while the gateway is up, and a 404 does not match the accept
+    # list below, so the old path spun until timeout. /ready answers 200 on
+    # 2026.5.12 and 2026.9.2 alike.
     deadline = time.monotonic() + timeout
     last = "no attempts"
     while time.monotonic() < deadline:
         try:
             req = urllib.request.Request(
-                f"http://127.0.0.1:{port}/v1/models",
+                f"http://127.0.0.1:{port}/ready",
                 headers={"Authorization": f"Bearer {token}"},
             )
             with urllib.request.urlopen(req, timeout=2) as r:
