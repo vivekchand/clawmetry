@@ -81,7 +81,9 @@
     try {
       if (typeof window.t === 'function') return window.t(key, vars, fallback);
     } catch (e) { /* i18n not loaded yet */ }
-    return fallback;
+    return vars ? String(fallback).replace(/\{(\w+)\}/g, function (m, k) {
+      return vars[k] != null ? vars[k] : m;
+    }) : fallback;
   }
 
   function isCloud() {
@@ -176,13 +178,14 @@
     }
     if (d <= 0) {
       if (typeof st.hours === 'number' && st.hours > 0) {
+        if (st.hours === 1) return tr('trial.pill_one_hour', null, 'Pro trial · 1 hour remaining');
         return tr('trial.pill_hours', { hours: st.hours },
-          'Pro trial · ' + st.hours + (st.hours === 1 ? ' hour' : ' hours') + ' remaining');
+          'Pro trial · {hours} hours remaining');
       }
       return tr('trial.pill_today', null, 'Pro trial · ends today');
     }
     if (d === 1) return tr('trial.pill_one_day', null, 'Pro trial · 1 day remaining');
-    return tr('trial.pill_days', { days: d }, 'Pro trial · ' + d + ' days remaining');
+    return tr('trial.pill_days', { days: d }, 'Pro trial · {days} days remaining');
   }
 
   // Urgency drives colour only — never the wording, which stays factual.
@@ -354,8 +357,9 @@
     var amt = yearly ? p.year : p.month;
     var was = (yearly && p.was) ? '<span class="cm-up-was">$' + p.was + '</span>' : '';
     return was + '$' + amt
-      + '<span class="cm-up-per"> /' + tr(yearly ? 'trial.per_year' : 'trial.per_month',
-          null, yearly ? 'node/yr' : 'node/mo') + '</span>';
+      + '<span class="cm-up-per"> /' + (yearly
+          ? tr('trial.per_year', null, 'node/yr')
+          : tr('trial.per_month', null, 'node/mo')) + '</span>';
   }
 
   function tierRowHtml(tier, name) {
@@ -398,10 +402,12 @@
     if (st.expired) {
       sub = tr('trial.modal_sub_ended', null,
         'Your trial has ended. Pick a plan and everything unlocks again the moment checkout completes.');
+    } else if (st.days === 1) {
+      sub = tr('trial.modal_sub_one_day', null,
+        'Your trial has 1 day left. You can upgrade during the trial. The trial still continues until its final day.');
     } else if (typeof st.days === 'number' && st.days > 0) {
       sub = tr('trial.modal_sub_days', { days: st.days },
-        'You have ' + st.days + (st.days === 1 ? ' day' : ' days')
-        + ' left on your trial. You can upgrade during the trial. The trial still continues until its final day.');
+        'Your trial has {days} days left. You can upgrade during the trial. The trial still continues until its final day.');
     } else {
       sub = tr('trial.modal_sub', null,
         'You can upgrade during the trial. The trial still continues until its final day.');
@@ -436,7 +442,7 @@
         ? ('  <div class="cm-up-device" id="cm-up-device" style="'
            + (_selInterval === 'year' ? '' : 'display:none;') + '">'
            + esc(tr('trial.device', { value: dev },
-               'Includes a free $' + dev + ' desk device.')) + '</div>')
+               'Includes a free ${value} desk device.')) + '</div>')
         : '')
       + '  <button type="button" class="cm-up-cta">'
       +      esc(tr('trial.continue_stripe', null, 'Continue to Stripe')) + '  &rarr;</button>'

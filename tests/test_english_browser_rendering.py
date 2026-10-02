@@ -167,3 +167,39 @@ def test_duration_fallbacks_keep_counts_and_units(loaded):
             + function('_cmHumanizeMinutes')
             + '\nconsole.log(JSON.stringify([1,2,60,120,2880,4320].map(_cmHumanizeMinutes)));')
     assert run_js(code) == ['1 minute', '2 minutes', '1 hour', '2 hours', '2 days', '3 days']
+
+
+@pytest.mark.parametrize('loaded', [False, True, None])
+@pytest.mark.parametrize('days', [1, 2, 3])
+def test_trial_banner_retains_count_and_grammar_before_translation_loads(loaded, days):
+    code = '''
+var window={}, els={'license-expired-banner':{style:{}},'license-expired-msg':{textContent:''}};
+var document={getElementById:k=>els[k]}, localStorage={getItem:()=>null};
+var fetches=0;
+'''
+    code += ('var fetch=async()=>{fetches++;return {json:async()=>({tier:"trial",expired:false,days_until_expiry:'
+             + str(days) + '})}};\n')
+    if loaded is not None:
+        code += ('var DICT={},EN=' + json.dumps(CATALOG if loaded else {})
+                 + ";var LANG='en';\n" + TRANSLATE + '\nwindow.t=T;\n')
+    code += function('checkLicenseExpiry')
+    code += ('\ncheckLicenseExpiry().then(()=>console.log(JSON.stringify({text:els["license-expired-msg"].textContent,'
+             'display:els["license-expired-banner"].style.display,fetches})));')
+    result = run_js(code)
+    unit = 'day' if days == 1 else 'days'
+    assert result == {'text': f'Your trial ends in {days} {unit}. Upgrade to keep every runtime.',
+                      'display': 'flex', 'fetches': 1}
+
+
+def test_trial_templates_are_extracted_instead_of_remaining_dynamic():
+    keys = {'trial.pill_hours', 'trial.pill_days', 'trial.modal_sub_days', 'trial.device',
+            'trial.pill_one_hour', 'trial.modal_sub_one_day', 'trial.per_year', 'trial.per_month',
+            'banners.trial_ending_msg', 'banners.trial_ending_one_day_msg'}
+    found = set()
+    for source in [APP, (ROOT / 'clawmetry/static/js/trial-pill.js').read_text()]:
+        for call in translations(source, {'tr': 2}):
+            if call.key in keys:
+                assert call.fallback is not None and call.pending is None, call.key
+                assert call.fallback == CATALOG[call.key], call.key
+                found.add(call.key)
+    assert found == keys

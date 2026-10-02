@@ -97,6 +97,16 @@ Base revision: `19cb235ae5e8a14e44f5efe871d79ff9c0dc530f`.
 
 These results establish the implemented subset and regression behavior. They do not establish whole-product compliance or a production release.
 
+## Trial fallback verification on 2026-10-02
+
+- The current corpus contains 4,009 messages, including 1,017 literal browser fallbacks. There are zero mechanical findings and 15 remaining dynamic calls.
+- Trial countdowns, modal text, interval labels, and the device-value message now use literal templates. The local fallback fills in their parameters when translation code is absent or throws.
+- Separate singular messages prevent `1 hours` and `1 days` when the English catalog is loaded.
+- The full English CI selection passes 165 tests, with one optional DeepEval import skipped. The banner and trial-wiring selection passes 51 tests.
+- The trial JavaScript suite covers absent translation code, an empty catalog, a loaded catalog, and a failing translator. Counts, device value, monthly and annual prices, and existing checkout tests pass.
+- Restoring the prior JavaScript makes two new Python checks and eight JavaScript checks fail. Restoring the changes makes the selected checks pass.
+- Helper forwarding and table-driven browser keys remain pending. No pricing rule, checkout destination, entitlement, polling interval, or request count changes.
+
 ## CLI follow-up verification on 2026-10-02
 
 - The corpus contains 3,969 extracted messages, including 182 central CLI help values. It has zero mechanical findings.

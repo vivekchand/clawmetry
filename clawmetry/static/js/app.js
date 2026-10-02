@@ -30660,7 +30660,11 @@ async function checkLicenseExpiry() {
     var dismissWindowMs = (expiredTrial || expiredPaid) ? 24 * 3600 * 1000 : 4 * 3600 * 1000;
     if (dismissedAt && (Date.now() - dismissedAt) < dismissWindowMs) { banner.style.display = 'none'; return; }
     var msg = document.getElementById('license-expired-msg');
-    var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) { return fb; };
+    var t = (typeof window.t === 'function') ? window.t : function (k, v, fb) {
+      return v ? String(fb).replace(/\{(\w+)\}/g, function (m, name) {
+        return v[name] != null ? v[name] : m;
+      }) : fb;
+    };
     if (msg && expiredPaid) {
       msg.textContent = t('banners.license_expired_msg', null,
         'Your license has expired. Renew to keep every runtime.');
@@ -30668,9 +30672,12 @@ async function checkLicenseExpiry() {
       if (days <= 0) {
         msg.textContent = t('banners.trial_ends_today_msg', null,
           'Your trial ends today. Upgrade to keep access to every supported runtime. Otherwise, this node will use the free tier.');
+      } else if (days === 1) {
+        msg.textContent = t('banners.trial_ending_one_day_msg', null,
+          'Your trial ends in 1 day. Upgrade to keep every runtime.');
       } else {
         msg.textContent = t('banners.trial_ending_msg', { days: days },
-          'Your trial ends in ' + days + ' day' + (days === 1 ? '' : 's') + '. Upgrade to keep every runtime.');
+          'Your trial ends in {days} days. Upgrade to keep every runtime.');
       }
     }
     // Hide the paste-a-key link when the selfhost modal is not on this page.
