@@ -33,6 +33,9 @@ REGEN = os.environ.get("CLAWMETRY_REGEN_GOLDENS") == "1"
 
 # Fixed args per live method (deterministic dispatch inputs).
 DISPATCH_ARGS = {
+    "activity": {"node_id": "agent+golden", "limit": 2},
+    "incidents": {},
+    "investigation": {"session_id": "sess-a", "runtime": "openclaw", "node_id": "agent+golden", "limit": 2},
     "events": {},
     "sessions": {},
     "aggregates": {},
@@ -192,6 +195,11 @@ def _normalize(method: str, body: dict) -> dict:
     for k in ("_elapsed_ms", "_via"):
         if k in body:
             body[k] = "<volatile>"
+    if method == "activity":
+        body["cursor"] = "<scope-bound-committed-position>"
+        body["coverage"]["read_at"] = "<volatile>"
+    if method == "investigation":
+        body["coverage"]["retained_after"] = "<volatile>"
     if method == "health":
         for k in _HEALTH_VOLATILE:
             if k in body:

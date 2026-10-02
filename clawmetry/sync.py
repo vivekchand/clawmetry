@@ -9624,6 +9624,7 @@ def send_heartbeat(config: dict) -> bool:
 # daemon stays safe when `routes/` isn't on sys.path (some installs run the
 # sync daemon without the dashboard module loaded).
 _PENDING_SHAPES = {
+    "incidents", "investigation", "activity",
     "events", "sessions", "aggregates", "health", "transcript",
     # Added in P4 (#2990): new live shapes from P2 materialized rollups.
     "runtimes", "models", "rollup_sessions",
@@ -9661,6 +9662,9 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     if shape == "health":
         return store.health()
     method_map = {
+        "incidents": "query_incidents",
+        "investigation": "query_investigation",
+        "activity": "query_activity",
         "events":     "query_events",
         "sessions":   "query_sessions",
         "aggregates": "query_aggregates",
@@ -9670,7 +9674,18 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     method = method_map.get(shape)
     if not method:
         raise ValueError(f"unknown shape: {shape}")
-    result = getattr(store, method)(**_filter_store_kwargs(shape, args or {}))
+    if shape in ("incidents", "investigation", "activity"):
+        allowed = {"node_id", "runtime", "session_id", "cursor", "incident_id", "state", "limit"}
+        kwargs = {k: v for k, v in (args or {}).items() if k in allowed}
+        if shape == "activity":
+            kwargs = {k: v for k, v in kwargs.items() if k not in ("incident_id", "state")}
+        elif shape == "incidents":
+            kwargs.pop("cursor", None)
+        else:
+            kwargs.pop("state", None)
+    else:
+        kwargs = _filter_store_kwargs(shape, args or {})
+    result = getattr(store, method)(**kwargs)
     if isinstance(result, dict):
         # transcript_page returns {rows, has_more, next_before_ts} directly.
         result.setdefault("_shape", shape)
@@ -10744,6 +10759,7 @@ CHANNEL_STATUS_CACHE_TTL_SEC = 3600
 # approvals enqueue path.
 _PENDING_ACTIONS = frozenset({
     "guard_check_update",
+    "incident_acknowledge",
     "channel_config_upsert",
     "channel_test",
     "alert_rule_upsert",
@@ -10996,6 +11012,10 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
             "\"Fix with AI\" and cloud-authored cron prompts.",
             atype,
         )
+        return
+    if atype == "incident_acknowledge":
+        from clawmetry.incident_actions import apply_acknowledgement
+        apply_acknowledgement(config, action)
         return
     if atype == "guard_check_update":
         _action_guard_check(config, action)
@@ -12312,6 +12332,8 @@ def _build_q1_cache_pushes(config: dict) -> list:
     now = time.time()
 
     for shape, spec in QUERY_CONTRACT.items():
+        if shape == "activity":
+            continue
         if spec["status"] != STATUS_LIVE:
             continue
         # Skip methods with any required arg — we can't pre-push those without
@@ -12511,7 +12533,7 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                 "blob": blob,
                 "shape": shape,
                 "args_hash": _canonical_args_hash(args),
-                "ttl": 3600,
+                "ttl": 15 if shape in ("incidents", "investigation", "activity") else 3600,
             }, api_key)
         except Exception as e:
             log.warning("pending_query dispatch failed (id=%s shape=%s): %s",
@@ -22605,8 +22627,8 @@ def _emit_detector_incidents(store, state: dict) -> int:
     as a ``loop_signals`` row (reusing the stuck detector's device-alert path)
     and fold the highest-severity incident per session into ``_LATEST_STUCK``
     so the plaintext heartbeat carries it to cloud/device. Deduped per
-    (session, kind) within a re-emit window; self-clears when the behavior stops
-    (we simply stop re-emitting and the 30-min loop_signals window ages out).
+    (session, kind) within a re-emit window. Trajectory findings with stable
+    evidence have durable episodes; silence is stale, never recovery.
     Never raises into the daemon loop. Returns the number of incidents emitted.
     """
     try:
@@ -22616,14 +22638,27 @@ def _emit_detector_incidents(store, state: dict) -> int:
         return 0
 
     from clawmetry import guard_checks as _checks
+    settings_available = True
     try:
         _check_settings = store.list_node_settings()
         disabled = _checks.disabled_kinds(_check_settings)
     except Exception as exc:
         log.warning("Guard check settings unavailable: %s", exc)
         disabled = set()
+        settings_available = False
 
     candidates = _candidate_active_sessions(store)
+    # Lifecycle maintenance is independent of alert re-emission and continues
+    # when a session completes. Never make a failed read look like recovery.
+    try:
+        if hasattr(store, "age_incidents"):
+            from clawmetry.incident_evidence import reconcile_ended_sessions
+            store.age_incidents()
+            if settings_available:
+                reconcile_ended_sessions(store, {s.get("session_id") for s in candidates},
+                                         disabled=disabled)
+    except Exception as exc:
+        log.warning("Incident lifecycle maintenance unavailable: %s", exc, exc_info=True)
     if not candidates:
         return 0
 
@@ -22655,14 +22690,6 @@ def _emit_detector_incidents(store, state: dict) -> int:
     fleet_fps: dict = {}
     for s in candidates:
         sid = s.get("session_id") or ""
-        try:
-            events = store.query_events(
-                session_id=sid, limit=_det.DETECT_EVENT_WINDOW,
-            ) or []
-        except Exception as e:  # noqa: BLE001
-            log.warning("detectors: query_events failed for %s: %s", sid, e)
-            continue
-
         facts = facts_by_session.get(sid) or {}
         # Derived from the session id, not from agent_type: see
         # _detector_runtime. Getting this wrong silently merges every runtime
@@ -22677,6 +22704,16 @@ def _emit_detector_incidents(store, state: dict) -> int:
         except Exception:  # noqa: BLE001
             runtime = None
         runtime = runtime or _detector_runtime(sid, s.get("agent_type") or "") or None
+        try:
+            if hasattr(store, "query_incident_window") and s.get("node_id") and runtime:
+                events = store.query_incident_window(
+                    session_id=sid, node_id=s["node_id"], runtime=runtime,
+                    limit=_det.DETECT_EVENT_WINDOW) or []
+            else:
+                events = store.query_events(session_id=sid, limit=_det.DETECT_EVENT_WINDOW) or []
+        except Exception as e:  # noqa: BLE001
+            log.warning("detectors: query_events failed for %s: %s", sid, e)
+            continue
         baseline = _guard_baseline_for(store, baseline_cache, runtime or "",
                                        facts.get("agent_id") or "")
         try:
@@ -22697,13 +22734,16 @@ def _emit_detector_incidents(store, state: dict) -> int:
         except Exception as _fe:  # noqa: BLE001
             log.debug("detectors: fingerprinting skipped for %s: %s", sid, _fe)
 
+        inspection_complete = settings_available
+        inspection = {}
         try:
             incidents = _det.run_all(events, sid, runtime, facts=facts,
-                                     thresholds=thresholds, steps=steps,
+                                     thresholds=thresholds, steps=steps, inspection=inspection,
                                      **({"disabled": disabled} if disabled else {})) or []
         except Exception as e:  # noqa: BLE001
             log.warning("detectors: run_all errored for %s: %s", sid, e)
             incidents = []
+            inspection_complete = False
         if incidents:
             # A session whose whole tool stream was RECEIVED as telemetry was
             # seen after each action ran; nothing held it. Say so on the
@@ -22717,6 +22757,24 @@ def _emit_detector_incidents(store, state: dict) -> int:
                         _og.label_incident(_inc, _obs)
             except Exception as _oe:  # noqa: BLE001
                 log.debug("detectors: observation label skipped: %s", _oe)
+        # Resolve stable evidence while its exact window still exists, and
+        # persist before the notification cooldown can skip a re-emission.
+        episodes = {}
+        try:
+            if hasattr(store, "record_incident_observation"):
+                from clawmetry.incident_evidence import reconcile_session
+                nodes = {e.get("node_id") for e in events if isinstance(e, dict) and e.get("node_id")}
+                node_id = s.get("node_id") or (next(iter(nodes)) if len(nodes) == 1 else "")
+                if len(nodes) > 1 or (nodes and node_id not in nodes):
+                    log.warning("Incident evidence spans multiple nodes; reconciliation withheld")
+                else:
+                    episodes = reconcile_session(
+                        store, incidents, events, steps, session_id=sid, runtime=runtime or "",
+                        node_id=node_id, completed=inspection_complete, disabled=set(disabled) | {k for k, ok in inspection.items() if not ok},
+                        observed_at=int(now * 1000))
+        except Exception as exc:
+            log.warning("Incident reconciliation unavailable for %s: %s", sid, exc, exc_info=True)
+        if incidents:
             all_incidents.extend(incidents)
             # Remember when this session FIRST looked wrong, so the next tick
             # can say how long it has been that way (and price the stretch).
@@ -22802,6 +22860,17 @@ def _emit_detector_incidents(store, state: dict) -> int:
             except Exception as _ie:  # noqa: BLE001
                 log.debug("detectors: alert delivery skipped: %s", _ie)
             try:
+                # A persisted episode owns its compatibility projection. The
+                # legacy write below is only for unmigrated/older producers.
+                if kind in episodes:
+                    if delivered_via:
+                        inc["delivered_via"] = delivered_via
+                        store.record_incident_observation(
+                            incident=inc, node_id=episodes[kind]["node_id"],
+                            observed_at=int(now * 1000))
+                    memo[memo_key] = now
+                    emitted += 1
+                    continue
                 store.ingest_loop_signal(
                     session_id=sid,
                     # Stable per-kind signature so a re-emit UPSERTs the same row

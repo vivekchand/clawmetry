@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-297 modules, 86 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+304 modules, 88 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -26,6 +26,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | Module | Size | Blueprints | Serves | Purpose |
 |---|---|---|---|---|
 | `routes/_dedupe.py` | small |  |  | sibling-dedupe helper for v3 event sums (issue #1451). |
+| `routes/activity.py` | small | `bp_activity` | `/api/activity` | Persisted activity transports; source logs are only read by the daemon. |
 | `routes/advisor.py` | medium | `bp_advisor` | `/api/advisor` | ClawMetry Advisor: natural-language Q&A over your agent. |
 | `routes/agentops.py` | small | `bp_agentops` | `/api/agentops`, `/api/ground-truth` | the AgentOps scorecard and the ground-truth endpoint. |
 | `routes/agents.py` | medium | `bp_agents` | `/api/agents` | Multi-agent adapter endpoints. |
@@ -61,6 +62,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/infra.py` | large | `bp_config`, `bp_logs`, `bp_memory`, `bp_security` | `/api/automation-analysis`, `/api/context-anatomy`, `/api/cost-optimization`, `/api/cost-optimizer`, `/api/file`, `/api/flow`, `/api/flow-events`, `/api/llmfit`, `/api/logs`, `/api/logs-stream`, `/api/memory`, `/api/memory-access`, `/api/memory-analytics`, `/api/memory-files`, `/api/memory-rag`, `/api/numbat`, `/api/security` | Infrastructure / security / config / logs endpoints. |
 | `routes/insights.py` | medium | `bp_insights` | `/api/insights`, `/insights` | Weekly Insights Digest endpoints. |
 | `routes/inventory.py` | medium | `bp_inventory` | `/api/inventory` | Agent Inventory tab API. |
+| `routes/investigations.py` | small | `bp_investigations` | `/api/guard`, `/api/investigation` | Guard investigations backed by the shared encrypted query contract. |
 | `routes/local_query.py` | large | `bp_local_query` | `/__local_query__`, `/api/local` | coherent local query API over the DuckDB store. |
 | `routes/meta.py` | large | `bp_auth`, `bp_cloud_relay`, `bp_gateway`, `bp_otel`, `bp_otlp_traces`, `bp_version`, `bp_version_impact` | `/.well-known/security.txt`, `/api/anon-auth-fail-ping`, `/api/auth`, `/api/cloud`, `/api/export`, `/api/gw`, `/api/install-age`, `/api/otel`, `/api/otel-status`, `/api/setup-prompt`, `/api/update`, `/api/version`, `/api/version-impact`, `/auth`, `/v1/logs`, `/v1/metrics`, `/v1/traces` | Auth / gateway / OTLP / version / version-impact. |
 | `routes/nemoclaw.py` | small | `bp_nemoclaw` | `/api/nemoclaw` | OSS stub after the impl moved to clawmetry-pro. |
@@ -142,6 +144,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/_gate.py` | medium | Shared 402 ``upgrade_required`` decorator for entitlement-gated routes. |
 | `clawmetry/_paywall.py` | medium | Shared 402 ``upgrade_required`` body builder for OSS stub blueprints. |
 | `clawmetry/_paywall_events.py` | large | In-process rolling store for ``POST /api/paywall/event`` client beacons. |
+| `clawmetry/activity_store.py` | small | Bounded replay of committed event changes, independent of source clocks. |
 | `clawmetry/agent_inventory.py` | medium | Agent supply chain: what each agent runtime loads from disk, and what changed. |
 | `clawmetry/agentops_metrics.py` | medium | AgentOps window metrics: latency, handoffs, guardrails, review, ground truth. |
 | `clawmetry/alert_evaluator.py` | large | Local alert-rule evaluator — pure logic, no I/O (PRD #779 PR-D part 2). |
@@ -219,7 +222,10 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/hook_ownership.py` | medium | Ownership-aware editing of a shared hooks array. |
 | `clawmetry/hooks.py` | medium | Hook lifecycle manager — install manifest and atomic install/uninstall API. |
 | `clawmetry/hooks_claude_code.py` | large | Claude Code hooks → ClawMetry: pre-execution approval gate + phone pushes. |
+| `clawmetry/incident_actions.py` | small | Apply encrypted acknowledgement on the owning node and confirm its state. |
 | `clawmetry/incident_alerts.py` | medium | deliver a detector incident to a human. |
+| `clawmetry/incident_evidence.py` | small | Stable detector evidence and conservative, positive recovery proofs. |
+| `clawmetry/incident_store.py` | medium | Durable Guard episodes, owned by the daemon's existing DuckDB writer. |
 | `clawmetry/ingest_auth.py` | medium | the gate in front of the ingest surfaces. |
 | `clawmetry/ingest_contract.py` | medium | the declared ingest/1 contract registry. |
 | `clawmetry/injected_context.py` | small | Tell what a human typed apart from context a harness injects as a user turn. |
@@ -227,6 +233,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/installs.py` | medium | Install census — find every clawmetry copy on this machine and flag stale ones. |
 | `clawmetry/instrument.py` | medium | ``clawmetry instrument <runtime>`` — switch a runtime's own OpenTelemetry exporter on and point it at the local ClawMetry receiver (WO-57). |
 | `clawmetry/interceptor.py` | medium | Zero-config HTTP interceptor for LLM API cost tracking. |
+| `clawmetry/investigations.py` | small | Scoped, bounded investigation reads shared by local and encrypted clients. |
 | `clawmetry/latency_tracker.py` | small | Per-endpoint p50/p95 handler-latency tracker (in-memory rolling window). |
 | `clawmetry/license.py` | huge | self-hosted Pro/Enterprise license client. |
 | `clawmetry/lifecycle_coverage.py` | medium | Which lifecycle facts each runtime can put on a session's trail. |

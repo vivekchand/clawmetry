@@ -158,6 +158,9 @@ def test_committed_doc_matches_generator():
 # Pinned on purpose: changing a method's trust class is a privacy decision
 # and must be made twice (registry + here), never as a drive-by.
 EXPECTED_TRUST = {
+    "activity": "e2e",
+    "incidents": "e2e",
+    "investigation": "e2e",
     "glance": "plaintext",
     "runtimes": "plaintext",
     "models": "plaintext",

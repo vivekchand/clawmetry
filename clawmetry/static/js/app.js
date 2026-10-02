@@ -2132,6 +2132,7 @@ function switchTab(name) {
   // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
   // run on their own screen instead of on every tab.
   _cmCurrentTab = name;
+  if (window.cmActivityVisibilityChanged) window.cmActivityVisibilityChanged();
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
   // ...and CLOSE pane-scoped streams that don't belong to the tab we're
@@ -9998,13 +9999,8 @@ function _startBrainSSE() {
   _brainSSEConnected = false;
 
   try {
-    var url = '/api/brain-stream';
-    var token =
-      localStorage.getItem('clawmetry-token') ||
-      localStorage.getItem('gw_token') ||
-      localStorage.getItem('cm-token');
-    if (token) url += '?token=' + encodeURIComponent(token);
-    var es = new EventSource(url);
+    // The shared persisted reader supplies authenticated fetches.
+    var es = window.cmActivityEventSource({runtime:typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : ''});
     _brainSSE = es;
 
     es.addEventListener('connected', function() {
@@ -10023,6 +10019,12 @@ function _startBrainSSE() {
       _brainSSEEverConnected = true;
     });
 
+    es.addEventListener('resync', function() {
+      _brainAllEvents = []; renderBrainStream(_brainAllEvents);
+    });
+    es.addEventListener('checkpoint', function() {
+      if (!_brainAllEvents.length) renderBrainStream([]);
+    });
     es.onmessage = function(e) {
       try {
         // Historical window active (race: range applied while a message
@@ -10034,6 +10036,7 @@ function _startBrainSSE() {
         // can suppress itself while live activity is clearly flowing.
         window._cmLastLiveEventMs = Date.now();
         // Prepend to events array
+        if (ev.eventId) _brainAllEvents = _brainAllEvents.filter(function(row) { return row.eventId !== ev.eventId; });
         _brainAllEvents.unshift(ev);
         // Cap at 500 events
         if (_brainAllEvents.length > 500) _brainAllEvents = _brainAllEvents.slice(0, 500);
@@ -10435,31 +10438,18 @@ window.selfevolveRun = async function () {
   }
 };
 
+window.cmLoadPersistedBrain = function () {
+  if (_brainRange || document.hidden || _cmCurrentTab !== 'brain') return;
+  if (!_brainSSE || _brainSSE.readyState === 2) _startBrainSSE();
+};
+
 async function loadBrainPage(silent) {
   // Mount the Grafana-style date/time-range picker on first paint (and
   // re-mount if the tab was rebuilt). Idempotent by design — the helper
   // no-ops when the container already has a picker attached.
   try { _brainMountRangePicker(); } catch (e) {}
-  // Cloud iframe doesn't proxy /api/brain-history (live event stream is
-  // local-only). Without this branch, `loadBrainPage` returned silently and
-  // left the inline `Loading...` placeholder in `#brain-stream` forever
-  // (P0 follow-up to #1235). Replace the spinner with an explicit
-  // empty-state so cloud users understand the surface is local-only and
-  // the spinner stops misrepresenting the load state.
-  // Date-time range investigations DO run on the hosted dashboard: the
-  // cloud intercepts the ranged /api/brain-history fetch and answers it
-  // via the node relay (encrypted end-to-end, decrypted in this browser).
-  // Only the LIVE stream stays local-only.
-  if (window.CLOUD_MODE && !_brainRange) {
-    var cloudEl = document.getElementById('brain-stream');
-    if (cloudEl && /Loading/i.test(cloudEl.innerText || '')) {
-      cloudEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' +
-  '<div style="font-size:15px;font-weight:600;margin-bottom:6px;">🔒 Brain activity stays local — by design.</div>' +
-  '<div style="margin-bottom:8px;">Your prompts, tool calls, and reasoning never leave your machine. We only see aggregated counts.</div>' +
-  '<a href="#local-first" style="color:var(--text-link, #60a5fa);text-decoration:none;">Why local-first →</a>' +
-  '</div>';
-    }
-    return;
+  if (!_brainRange && window.cmActivityEventSource) {
+    return window.cmLoadPersistedBrain(silent);
   }
   // Snapshot the active range so an async response for a STALE range (the
   // user clicked Back-to-live or picked a new window mid-flight) is dropped
@@ -16611,6 +16601,11 @@ function _taRenderTurn(t) {
 }
 
 async function loadTracing() {
+  if (window._pendingInvestigation) {
+    var investigation = window._pendingInvestigation; window._pendingInvestigation = null;
+    return window.cmLoadInvestigation(investigation);
+  }
+  if (window.cmCloseInvestigation) window.cmCloseInvestigation();
   // Session deep-dive handoff (Phase B): a pending session skips the list and
   // opens the per-session detail directly.
   if (window._pendingTraceSession) {
@@ -25065,21 +25060,19 @@ function _backfillFlowFromBrain() {
 
 var _flowBrainSse = null;
 function _startFlowBrainStream() {
-  if (window.CLOUD_MODE) return;
-  if (_flowBrainSse && _flowBrainSse.readyState !== EventSource.CLOSED) return;
+  if (_cmCurrentTab !== 'flow' || document.hidden) return;
+  if (_flowBrainSse && _flowBrainSse.readyState !== 2) return;
   try {
-    var url = '/api/brain-stream';
-    var tok =
-      localStorage.getItem('clawmetry-token') ||
-      localStorage.getItem('gw_token') ||
-      localStorage.getItem('cm-token');
-    if (tok) url += '?token=' + encodeURIComponent(tok);
-    var es = new EventSource(url);
+    var es = window.cmActivityEventSource({runtime:typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : ''});
     _flowBrainSse = es;
+    var seen = new Set();
     es.onmessage = function(e) {
       try {
         var ev = JSON.parse(e.data);
         if (!ev || !ev.type) return;
+        if (ev.eventId && seen.has(ev.eventId)) return;
+        if (ev.eventId) seen.add(ev.eventId);
+        while (seen.size > 500) seen.delete(seen.values().next().value);
         var tool = _brainTypeToFlowTool(ev.type);
         // Accuracy: a type that maps to a real bucket lights that component +
         // pulses its edge; an UNMAPPED type must NOT falsely light "Exec" — we
@@ -32524,7 +32517,10 @@ function loadGuardSessions() {
               '</h4><p>' + guardEsc(finding.detail || 'Open this session to review the matching activity.') + '</p>' +
               (finding.since ? '<small>First seen ' + guardEsc(guardAgo(finding.since)) + '</small>' : '') + '</div>';
           }).join('') + '<footer><span>' + (inc && Number(inc.spend_at_risk_usd) > 0 ? guardMoney(inc.spend_at_risk_usd) + ' estimated at risk' : 'Detected activity, not a blocked action') +
-          '</span><div><button class="btn btn-xs" data-sid="' + guardEsc(s.session_id) +
+          '</span><div>' + (inc && inc.incident_id ? '<button class="btn btn-xs" data-incident="' + guardEsc(inc.incident_id) +
+          '" data-sid="' + guardEsc(s.session_id) + '" data-rt="' + guardEsc(s.runtime) + '" data-node="' + guardEsc(inc.node_id || '') +
+          '" onclick="cmOpenIncident(this.dataset.incident,this.dataset.rt,this.dataset.sid,this.dataset.node)">See what happened</button> ' : '') +
+          '<button class="btn btn-xs" data-sid="' + guardEsc(s.session_id) +
           '" onclick="openTrail(this.dataset.sid)">View session</button> ' + control + '</div></footer></article>');
       }
 

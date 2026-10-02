@@ -38,7 +38,7 @@ key is the same fact the server enforces.
 | `read:metrics` | Counts, tokens, cost and health. No prompts or replies. | `agent_graph`, `aggregates`, `health`, `models`, `runtimes` |
 | `read:sessions` | One row per session: title, model, status, totals. | `rollup_sessions`, `search`, `sessions`, `similar_sessions` |
 | `read:traces` | Spans, traces and outbound API calls. | `external_calls`, `spans`, `traces` |
-| `read:content` | The turns themselves: prompts, replies, tool calls. | `events`, `replay_events`, `session_context`, `transcript`, `transcript_page` |
+| `read:content` | The turns themselves: prompts, replies, tool calls. | `activity`, `events`, `incidents`, `investigation`, `replay_events`, `session_context`, `transcript`, `transcript_page` |
 
 `read:metrics` is exactly the `plaintext` trust class: a metrics-scoped
 key can never return a prompt, a reply or a file path. That invariant is
@@ -53,11 +53,14 @@ pinned by CI, not by convention.
 
 | Method | Status | Trust | Scope | Backing | Args | Description |
 | - | - | - | - | - | - | - |
+| `activity` | live | e2e | `read:content` | `query_activity` | `node_id`, `runtime`, `session_id`, `cursor`, `limit` (default 100, range 1..200) | Bounded persisted activity upserts, committed replay position and explicit resynchronization. |
 | `agent_graph` | live | plaintext | `read:metrics` | `query_agent_graph` | `runtime`, `since`, `until`, `limit` (default 500, range 1..2000) | Cross-session agent spawn graph: nodes (agent_type+id stats) + spawn edges. Optional runtime arg scopes to one runtime ('openclaw' matches legacy NULL agent_type). |
 | `aggregates` | live | plaintext | `read:metrics` | `query_aggregates` | `agent_id`, `since`, `until` | Per-day rollup of events/tokens/cost (aggregate counters only). |
 | `events` | live | e2e | `read:content` | `query_events` | `session_id`, `agent_id`, `event_type`, `since`, `until`, `limit` (default 200, range 1..5000) | Raw event rows (tool calls, messages, errors), newest first. |
 | `external_calls` | live | e2e | `read:traces` | `query_external_calls` | `session_id`, `since`, `until`, `limit` (default 200, range 1..2000) | External (non-LLM) API calls captured by the interceptor. |
 | `health` | live | plaintext | `read:metrics` | `health` | (none) | Store health snapshot (engine, size, ring depth, flush age). |
+| `incidents` | live | e2e | `read:content` | `query_incidents` | `runtime`, `node_id`, `session_id`, `state`, `incident_id`, `limit` (default 100, range 1..500) | Durable Guard episodes with stable evidence and independent acknowledgement. |
+| `investigation` | live | e2e | `read:content` | `query_investigation` | `session_id` (required), `runtime` (required), `node_id` (required), `incident_id`, `cursor`, `limit` (default 100, range 1..200) | Exact scoped evidence, bounded history continuation, execution state and explicit coverage. |
 | `models` | live | plaintext | `read:metrics` | `query_rollup_model_daily` | `runtime`, `since`, `until`, `limit` (default 1000, range 1..10000) | Per-model daily token/cost rollup across runtimes. |
 | `replay_events` | live | e2e | `read:content` | `query_replay_events` | `session_id` (required), `limit` (default 2000, range 1..10000) | Canonical replay-event rows for one session (#4813). Rows in kind-agnostic order; the /api/replay-tree endpoint groups them into turns/delegations/workflows/approvals. |
 | `rollup_sessions` | live | e2e | `read:sessions` | `query_rollup_sessions` | `runtime`, `limit` (default 200, range 1..2000) | Per-session materialized summary (title, status, totals, stuck flag). |
@@ -76,4 +79,4 @@ pinned by CI, not by convention.
 | `session` | planned | e2e | `read:sessions` | `query_sessions_table` | `session_id` (required) | Single-session detail row (title, status, outcome, totals). |
 | `usage` | planned | plaintext | `read:metrics` | `rollup_usage_daily` | `runtime`, `since`, `until` | Daily token/cost usage series (input/output/cache splits). |
 
-Live methods: 17. Planned methods: 5.
+Live methods: 20. Planned methods: 5.

@@ -35,10 +35,10 @@ The four trajectory detectors:
 1. ``stuck_loop``       — TrajAD Type II (circular loops / repeated identical
                           tool calls): K consecutive identical
                           ``(tool, args-hash)`` calls OR a short repeating
-                          n-gram cycle of tool names.
+                          n-gram cycle of identical tool calls and arguments.
 2. ``no_progress``      — busy-but-not-advancing: >= N tool calls in the window
                           with zero file writes/edits and no completion marker.
-3. ``repeated_tool_failure`` — the SAME tool errors >= M times in the window.
+3. ``repeated_tool_failure`` — the SAME tool errors >= M times without a known success.
 4. ``action_discrepancy``    — TRAIL tool-related hallucination, NARROW form: a
                           failed tool result immediately followed by the agent
                           continuing (another tool call / a completion) WITHOUT
@@ -112,6 +112,7 @@ from clawmetry.framework_map import framework_tags, tag_incident  # noqa: F401
 # can show, and ``ALL_INCIDENT_KINDS`` is the list every renderer and policy form
 # derives from. Two lists that must agree are two lists that will drift.
 from clawmetry.repo_scan import WORKSPACE_KINDS  # noqa: F401
+from clawmetry.incident_evidence import attach_evidence, call_id, enrich_steps
 
 # What this module detects, declared once and up front rather than derived at
 # the bottom of the file. Two reasons it is a literal:
@@ -281,7 +282,7 @@ def _iter_tool_calls_from_data(et: str, data: dict) -> list[dict]:
                     else data.get("arguments") if data.get("arguments") is not None
                     else data.get("input"))
             if isinstance(name, str) and name:
-                out.append({"tool": name, "args": args})
+                out.append({"tool": name, "args": args, "call_id": call_id(data, include_id=True)})
             # Some top-level rows still carry a tool_calls array; fall through.
 
         # Shape 2: family ``data.tool_calls`` array (claude_code/codex/cursor
@@ -299,7 +300,7 @@ def _iter_tool_calls_from_data(et: str, data: dict) -> list[dict]:
                         else tc.get("input") if tc.get("input") is not None
                         else fn.get("arguments"))
                 if isinstance(name, str) and name:
-                    out.append({"tool": name, "args": args})
+                    out.append({"tool": name, "args": args, "call_id": call_id(tc, include_id=True)})
 
         # Shape 3: OpenClaw v3 ``toolMetas`` projection.
         metas = data.get("toolMetas")
@@ -312,7 +313,7 @@ def _iter_tool_calls_from_data(et: str, data: dict) -> list[dict]:
                         else m.get("arguments") if m.get("arguments") is not None
                         else m.get("input"))
                 if isinstance(name, str) and name:
-                    out.append({"tool": name, "args": args})
+                    out.append({"tool": name, "args": args, "call_id": call_id(m, include_id=True)})
 
         # Shape 4: assistant ``message.content`` tool_use / toolCall blocks.
         msg = data.get("message") if isinstance(data.get("message"), dict) else None
@@ -329,7 +330,7 @@ def _iter_tool_calls_from_data(et: str, data: dict) -> list[dict]:
                         else blk.get("arguments") if blk.get("arguments") is not None
                         else blk.get("args"))
                 if isinstance(name, str) and name:
-                    out.append({"tool": name, "args": args})
+                    out.append({"tool": name, "args": args, "call_id": call_id(blk, include_id=True)})
     except Exception:
         return out
     return out
@@ -469,6 +470,8 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
             steps.append({"i": i, "kind": "tool_result",
                           "tool": str(tool or ""), "args_hash": "",
                           "is_error": is_err, "result_text": txt,
+                          "tool_call_id": call_id(data),
+                          "outcome_known": sflag is not None or bool(txt),
                           "has_text": False,
                           # Categories of token-shaped values the output
                           # carried. Never the values themselves.
@@ -491,6 +494,7 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
                     "i": i, "kind": "tool_call",
                     "tool": tool,
                     "args_hash": _args_hash(c.get("args")),
+                    "tool_call_id": c.get("call_id") or "",
                     "is_error": False, "result_text": "", "has_text": False,
                     # What the call touched; the behavioural detectors read these.
                     "paths": paths, "cmd": cmd, "hosts": hosts,
@@ -508,7 +512,24 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
 
         steps.append({"i": i, "kind": "other", "tool": "", "args_hash": "",
                       "is_error": False, "result_text": "", "has_text": False})
-    return steps
+    # Some producers project one native call into multiple event envelopes.
+    # Replayed envelopes are not separate attempts. Keep the latest version
+    # of each identified call/result while leaving anonymous events distinct.
+    seen_calls = set()
+    unique = []
+    for step in reversed(steps):
+        cid = step.get("tool_call_id")
+        key = (step["kind"], cid) if cid and step["kind"] in ("tool_call", "tool_result") else None
+        if key and key in seen_calls:
+            continue
+        if key:
+            seen_calls.add(key)
+        unique.append(step)
+    steps = list(reversed(unique))
+    for step in steps:
+        if step["kind"] == "tool_call":
+            step["mutates"] = _step_mutates(step)
+    return enrich_steps(steps, evlist)
 
 
 def _text_looks_failed(text: str) -> bool:
@@ -615,29 +636,37 @@ def _stop_hint() -> str:
 def stuck_loop(events: Iterable[dict], session_id: str,
                runtime: Optional[str] = None, *, thresholds: Optional[dict] = None,
                steps: Optional[list] = None,
-               facts: Optional[dict] = None) -> Optional[dict]:
+               facts: Optional[dict] = None,
+               inspection: dict | None = None) -> Optional[dict]:
     """Flag a session that is circling: either K consecutive identical
-    ``(tool, args_hash)`` calls, or a short repeating n-gram cycle of tool
-    names. TrajAD Type II (process inefficiency / circular loops). Pure,
+    ``(tool, args_hash)`` calls, or a short repeating n-gram cycle of identical calls
+    and arguments. TrajAD Type II (process inefficiency / circular loops). Pure,
     bounded, never raises."""
     try:
         runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
         identical_k = int(th["identical_k"])
-        calls = [s for s in steps if s["kind"] == "tool_call" and s["tool"]]
+        # A successful edit or a real reply breaks the old loop. A pending
+        # edit (or a failed one) is only an attempt and cannot prove progress.
+        tail = []
+        for step in steps:
+            progress = (step["kind"] == "text" and step.get("has_text"))
+            progress = progress or (step["kind"] == "tool_result" and step.get("outcome_known")
+                                    and not step["is_error"] and step.get("call_mutates"))
+            if progress or step["kind"] in ("user", "end"):
+                tail = []
+            else:
+                tail.append(step)
+        calls = [s for s in tail if s["kind"] == "tool_call" and s["tool"]]
         if len(calls) < identical_k:
             return None
 
-        # (a) K consecutive identical (tool, args_hash). Track the longest run.
-        best_run = 1
-        run = 1
-        best_end = 0
-        for j in range(1, len(calls)):
-            same = (calls[j]["tool"] == calls[j - 1]["tool"]
-                    and calls[j]["args_hash"] == calls[j - 1]["args_hash"])
-            run = run + 1 if same else 1
-            if run > best_run:
-                best_run = run
-                best_end = j
+        # (a) Only the current tail, not a past repeated stretch followed by
+        # different work. The lifecycle separately requires proof of recovery.
+        best_run, best_end = 1, len(calls) - 1
+        for previous in reversed(calls[:-1]):
+            if (previous["tool"], previous["args_hash"]) != (calls[-1]["tool"], calls[-1]["args_hash"]):
+                break
+            best_run += 1
         if best_run >= identical_k:
             first_idx = calls[best_end - best_run + 1]["i"]
             tool = calls[best_end]["tool"]
@@ -653,12 +682,14 @@ def stuck_loop(events: Iterable[dict], session_id: str,
                 first_idx,
             )
 
-        # (b) repeating tool-NAME n-gram cycle (e.g. A,B,A,B,A,B).
-        names = [c["tool"] for c in calls]
+        # (b) A changing search query or file is different work, even when the
+        # tool names repeat. Use the full call signature for cycle identity.
+        names = [(c["tool"], c["args_hash"]) for c in calls]
         cyc = _find_repeating_cycle(names, int(th["max_cycle"]),
                                     int(th["cycle_repeats"]))
         if cyc is not None:
-            cycle_tools, repeats, start = cyc
+            cycle_signatures, repeats, start = cyc
+            cycle_tools = [s[0] for s in cycle_signatures]
             first_idx = calls[start]["i"]
             label = "->".join(cycle_tools)
             title = (f"{runtime} looping: {label} cycle repeated {repeats}x, "
@@ -675,6 +706,8 @@ def stuck_loop(events: Iterable[dict], session_id: str,
             )
         return None
     except Exception:
+        if inspection is not None:
+            inspection["stuck_loop"] = False
         return None
 
 
@@ -755,25 +788,24 @@ def repeated_tool_failure(events: Iterable[dict], session_id: str,
                           runtime: Optional[str] = None, *,
                           thresholds: Optional[dict] = None,
                           steps: Optional[list] = None,
-                          facts: Optional[dict] = None) -> Optional[dict]:
+                          facts: Optional[dict] = None,
+               inspection: dict | None = None) -> Optional[dict]:
     """Flag when the SAME tool returns an error >= M times in the window.
-    A tool_result with no ``tool`` name is attributed to the most recent
-    preceding tool_call's tool. Pure, bounded, never raises."""
+    Results use native call identity, or an explicitly unambiguous pending
+    call. A successful result resets only its own tool. Pure and bounded."""
     try:
         runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
         counts: dict[str, int] = {}
         first_idx_by_tool: dict[str, int] = {}
-        last_call_tool = ""
-        worst_tool = ""
         for s in steps:
-            if s["kind"] == "tool_call" and s["tool"]:
-                last_call_tool = s["tool"]
-            elif s["kind"] == "tool_result" and s["is_error"]:
-                tool = s["tool"] or last_call_tool or "tool"
+            if s["kind"] == "tool_result" and s["is_error"]:
+                tool = s["tool"] or "tool"
                 counts[tool] = counts.get(tool, 0) + 1
                 first_idx_by_tool.setdefault(tool, s["i"])
-                if not worst_tool or counts[tool] > counts.get(worst_tool, 0):
-                    worst_tool = tool
+            elif s["kind"] == "tool_result" and s.get("outcome_known") and s["tool"]:
+                counts.pop(s["tool"], None)
+                first_idx_by_tool.pop(s["tool"], None)
+        worst_tool = max(counts, key=counts.get) if counts else ""
         if not worst_tool or counts.get(worst_tool, 0) < int(th["repeat_fail_m"]):
             return None
         fails = counts[worst_tool]
@@ -788,6 +820,8 @@ def repeated_tool_failure(events: Iterable[dict], session_id: str,
             first_idx_by_tool.get(worst_tool),
         )
     except Exception:
+        if inspection is not None:
+            inspection["repeated_tool_failure"] = False
         return None
 
 
@@ -1339,7 +1373,8 @@ def run_all(events: Iterable[dict], session_id: str,
             baseline: Optional[dict] = None,
             thresholds: Optional[dict] = None,
             steps: Optional[list] = None,
-            disabled: Optional[set] = None) -> list[dict]:
+            disabled: Optional[set] = None,
+            inspection: dict | None = None) -> list[dict]:
     """Run every detector over a session's recent events and return the
     incidents found, most expensive to ignore first.
 
@@ -1353,6 +1388,8 @@ def run_all(events: Iterable[dict], session_id: str,
     adding detectors five through eight did not multiply the per-tick cost by
     two — the parse was always the expensive part.
 
+    ``inspection``, when supplied, records which checks completed. Lifecycle
+    consumers must not treat a swallowed detector exception as recovery.
     Never raises.
     """
     try:
@@ -1373,9 +1410,15 @@ def run_all(events: Iterable[dict], session_id: str,
         if disabled and det.__name__ in disabled:
             continue
         try:
-            inc = det(evlist, session_id, rt, thresholds=th, steps=steps, facts=f)
+            extra = {"inspection": inspection} if det.__name__ in ("stuck_loop", "repeated_tool_failure") else {}
+            inc = det(evlist, session_id, rt, thresholds=th, steps=steps, facts=f, **extra)
         except Exception:
             inc = None
+            if inspection is not None:
+                inspection[det.__name__] = False
+        else:
+            if inspection is not None:
+                inspection.setdefault(det.__name__, True)
         if inc:
             out.append(inc)
 
@@ -1388,7 +1431,7 @@ def run_all(events: Iterable[dict], session_id: str,
     )
     # Every finding says which framework items it is relevant to, and that it
     # is a detection, not a pre-action control (clawmetry/framework_map.py).
-    return [tag_incident(inc) for inc in priced]
+    return [tag_incident(attach_evidence(inc, steps)) for inc in priced]
 
 
 def _incident(kind: str, session_id: str, runtime: str, severity: str,

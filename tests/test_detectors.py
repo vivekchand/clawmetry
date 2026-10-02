@@ -99,11 +99,12 @@ def test_stuck_loop_identical_calls_positive():
 
 
 def test_stuck_loop_ngram_cycle_positive():
-    # A,B,A,B,A,B cycle of two distinct tools -> loop.
+    # The same A,B calls repeat. Changing arguments is useful work, covered
+    # independently by test_incident_evidence's search-cycle regression.
     chrono = []
     for i in range(3):
-        chrono.append(_tool_call("Read", {"p": i}, i * 2))
-        chrono.append(_tool_call("Grep", {"q": i}, i * 2 + 1))
+        chrono.append(_tool_call("Read", {"p": "same-file"}, i * 2))
+        chrono.append(_tool_call("Grep", {"q": "same-query"}, i * 2 + 1))
     inc = detectors.stuck_loop(_newest_first(chrono), SID)
     assert inc is not None
     assert inc["evidence"]["pattern"] == "cycle"

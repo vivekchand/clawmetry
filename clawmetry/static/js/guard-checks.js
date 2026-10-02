@@ -27,7 +27,7 @@
     });
     if (view === 'checks') loadChecks();
     if (view === 'attention') { loadGuardSessions(); if (typeof guardLoadApprovalSummary === 'function') guardLoadApprovalSummary(); }
-    if (view === 'activity') { loadGuardActions(); loadGuardSelfReports(); }
+    if (view === 'activity') { loadGuardActions(); loadGuardSelfReports(); if (window.cmLoadIncidentHistory) window.cmLoadIncidentHistory(); }
     if (view === 'settings') { loadGuardPolicies(); loadGuardNondeterminism(); }
   };
   window.guardOpenRelated = function (tab, panel) {

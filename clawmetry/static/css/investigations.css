@@ -1,0 +1,29 @@
+/* A finding keeps its context while the operator reads exact event evidence. */
+#trace-investigation { background:var(--bg-secondary); border:1px solid var(--border-primary); border-radius:10px; padding:24px; }
+.investigation-head h3 { font-size:20px; line-height:1.35; max-width:70ch; margin:0 0 6px; }
+.investigation-scope { font-size:12px; color:var(--text-muted); overflow-wrap:anywhere; }
+.investigation-states { display:flex; flex-wrap:wrap; gap:12px 24px; margin:16px 0; font-size:12px; color:var(--text-secondary); }
+.investigation-state { font-weight:700; }
+.investigation-explanation,.investigation-next { max-width:76ch; margin:14px 0; color:var(--text-secondary); }
+.investigation-facts { display:flex; flex-wrap:wrap; gap:16px 36px; margin:20px 0; padding:16px 0; border-block:1px solid var(--border-secondary); }
+.investigation-facts dt { color:var(--text-muted); font-size:12px; margin-bottom:4px; }
+.investigation-facts dd { font-size:13px; margin:0; font-variant-numeric:tabular-nums; }
+.investigation-coverage { margin:22px 0 12px; padding:12px 16px; border-left:3px solid var(--text-accent); background:var(--bg-hover); color:var(--text-secondary); font-size:12px; }
+.investigation-message { min-height:20px; font-size:12px; color:var(--text-secondary); }
+.investigation-events { margin:12px 0 16px; }
+.investigation-event { border-bottom:1px solid var(--border-secondary); border-left:3px solid transparent; padding:0 12px; }
+.investigation-event[data-evidence="true"] { border-left-color:var(--text-warning); background:var(--bg-warning); }
+.investigation-event[data-recovery="true"] { border-left-color:var(--text-success); background:var(--bg-success); }
+.investigation-event summary { display:flex; align-items:baseline; flex-wrap:wrap; gap:8px 18px; padding:12px 0; cursor:pointer; }
+.investigation-event summary::before { content:'▸'; }
+.investigation-event[open] summary::before { content:'▾'; }
+.investigation-event time { color:var(--text-secondary); font-size:12px; font-variant-numeric:tabular-nums; }
+.investigation-event strong { font-size:13px; }
+.investigation-evidence-label { color:var(--text-warning); font-size:12px; margin-left:auto; }
+.investigation-event[data-recovery="true"] .investigation-evidence-label { color:var(--text-success); }
+.investigation-event-id { color:var(--text-muted); font-size:11px; overflow-wrap:anywhere; }
+.investigation-event pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:360px; overflow:auto; margin:10px 0 16px; padding:12px; background:var(--log-bg); color:var(--text-primary); font-size:12px; }
+.investigation-history-row { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding:16px 0; border-bottom:1px solid var(--border-secondary); }
+.investigation-history-row p { color:var(--text-muted); font-size:12px; margin:4px 0 0; }
+#trace-investigation :focus-visible { outline:2px solid var(--text-accent); outline-offset:3px; }
+@media(max-width:640px) { #trace-investigation { padding:16px; } .investigation-head h3 { font-size:18px; } .investigation-facts { gap:16px; } .investigation-evidence-label { margin-left:0; } }

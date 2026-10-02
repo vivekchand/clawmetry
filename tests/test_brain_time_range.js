@@ -106,6 +106,7 @@ function buildSandbox(domById) {
     this.addEventListener = function () {};
     this.close = function () {};
   };
+  sandbox.cmActivityEventSource = function () { return new sandbox.EventSource(); };
   sandbox._updateBrainLiveIndicator = function () {};
   sandbox.window = sandbox;
   vm.createContext(sandbox);
@@ -168,7 +169,7 @@ console.log('PASS group: SSE gating in history mode');
   const sb = buildSandbox();
   vm.runInContext('_brainRange = {since: "2026-07-10T02:00:00Z", until: "2026-07-10T04:00:00Z"};', sb);
   vm.runInContext('_startBrainSSE()', sb);
-  eq(sb._calls.eventSourceCount, 0, '_startBrainSSE refuses to open an EventSource in history mode');
+  eq(sb._calls.eventSourceCount, 0, '_startBrainSSE refuses to open a persisted reader in history mode');
   vm.runInContext('_scheduleBrainSSEReconnect()', sb);
   eq(sb._calls.setTimeoutCount, 0, '_scheduleBrainSSEReconnect schedules nothing in history mode');
 }
@@ -179,7 +180,7 @@ console.log('PASS group: live mode unaffected');
   const sb = buildSandbox();
   vm.runInContext('_brainRange = null;', sb);
   vm.runInContext('_startBrainSSE()', sb);
-  eq(sb._calls.eventSourceCount, 1, '_startBrainSSE opens normally when live');
+  eq(sb._calls.eventSourceCount, 1, '_startBrainSSE opens the persisted reader when live');
 }
 
 // ── (7) source-level guards for paths vm can't easily execute ───────────

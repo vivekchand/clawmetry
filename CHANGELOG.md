@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: durable Guard investigations and persisted live activity
+
+- Loop and repeated tool failure findings retain their identity, evidence and recovery history across refreshes and restarts. Acknowledgement is separate from recovery; missing telemetry is labelled stale.
+- Guard opens the implicated events in Tracing, with scoped history pages, explicit retention and preview limits, and separate execution and finding states. Hosted investigation uses encrypted node queries and confirmed acknowledgements.
+- Brain, Flow and investigation views share bounded activity reads backed by committed event positions. Reconnects replay late arrivals and updated payloads; expired cursors request a fresh read. Hidden and inactive views pause their readers.
+- The store adds bounded incident and event-change tables. Older source events are not retroactively declared active incidents. Hosted deployment requires the matching cloud relay support.
+
 ### Release: checked English explanations
 
 - **Why:** Dashboard explanations, generated summaries, browser fallbacks, and CLI help need consistent wording that preserves the recorded facts.

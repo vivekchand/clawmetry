@@ -6455,6 +6455,10 @@ def detect_config(args=None):
     app.register_blueprint(bp_delegated)
     app.register_blueprint(bp_readiness)
     app.register_blueprint(bp_guard)
+    from routes.activity import bp_activity
+    from routes.investigations import bp_investigations
+    app.register_blueprint(bp_activity)
+    app.register_blueprint(bp_investigations)
     app.register_blueprint(bp_signals)
     app.register_blueprint(bp_selfdiag)
     app.register_blueprint(bp_health)
@@ -7085,6 +7089,7 @@ DASHBOARD_HTML = r"""
      no legal basis. Regenerate with scripts/vendor_fonts.py. -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=version) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/investigations.css', v=version) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
 <script src="{{ url_for('static', filename='js/trail.js', v=version) }}" defer></script>
@@ -7526,6 +7531,8 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/provenance.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/guard-checks.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/activity-live.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/investigations.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
 
 {# position:fixed overlays must live OUTSIDE #zoom-wrapper: its zoom
