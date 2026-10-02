@@ -25,6 +25,9 @@ const vm = require('vm');
 
 const SRC = path.join(__dirname, '..', 'clawmetry', 'static', 'js', 'trial-pill.js');
 const source = fs.readFileSync(SRC, 'utf8');
+const english = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'clawmetry', 'static', 'locales', 'en.json'), 'utf8'));
+const i18n = fs.readFileSync(path.join(__dirname, '..', 'clawmetry', 'static', 'js', 'i18n.js'), 'utf8');
+const translate = i18n.match(/^  function T\(key, vars, fb\) \{[\s\S]*?^  \}/m)[0];
 
 let failures = 0;
 const pending = [];
@@ -236,6 +239,7 @@ function makeEnv(opts) {
     encodeURIComponent: encodeURIComponent,
   };
   env.window = env;
+  env.__translationMode = opts.translationMode || 'none';
   env.CLOUD_MODE = opts.cloud || false;
   // Hosted cloud renders the pill only when the cloud opts in (it already
   // injects its own trial banner). Default the flag ON for cloud tests that
@@ -280,6 +284,12 @@ function makeEnv(opts) {
 
 function run(env) {
   vm.createContext(env);
+  if (env.__translationMode === 'throws') {
+    env.t = function () { throw new Error('translation unavailable'); };
+  } else if (env.__translationMode !== 'none') {
+    vm.runInContext('var DICT={},EN=' + JSON.stringify(env.__translationMode === 'loaded' ? english : {})
+      + ';var LANG="en";' + translate + ';window.t=T;', env);
+  }
   vm.runInContext(source, env, { filename: 'trial-pill.js' });
   return env;
 }
@@ -783,6 +793,38 @@ check('a dead status endpoint leaves the header clean, not half-rendered', funct
   run(env);
   return flush().then(function () {
     eq(slotHtml(env), '', 'rendered something off a failed status fetch');
+  });
+});
+
+['none', 'empty', 'loaded', 'throws'].forEach(function (mode) {
+  [1, 2].forEach(function (count) {
+    check('trial days, device value and prices survive translation state ' + mode + ', count ' + count, function () {
+      const env = makeEnv({ translationMode: mode,
+        fetch: function () { return { tier: 'trial', days_until_expiry: count }; } });
+      run(env);
+      return flush().then(function () {
+        includes(slotHtml(env), count + (count === 1 ? ' day remaining' : ' days remaining'));
+        openModal(env);
+        const modal = env.document.getElementById('cm-upgrade-modal');
+        includes(modal.innerHTML, 'Your trial has ' + count + (count === 1 ? ' day left.' : ' days left.'));
+        includes(modal.innerHTML, 'Includes a free $149 desk device.');
+        includes(modal.innerHTML, '$190<');
+        includes(modal.innerHTML, 'node/yr');
+        assert(!/\{(?:days|hours|value)\}/.test(modal.innerHTML), 'unexpanded message parameter');
+        modal.querySelectorAll('[data-interval="month"]')[0].click();
+        includes(modal.querySelector('#cm-up-tiers').innerHTML, '$19<');
+        includes(modal.querySelector('#cm-up-tiers').innerHTML, 'node/mo');
+      });
+    });
+    check('trial hours retain grammar with translation state ' + mode + ', count ' + count, function () {
+      const env = makeEnv({ cloud: true, token: 'cm_test', translationMode: mode,
+        fetch: function () { return { plan: 'trial', trial_active: true, trial_days_left: 0, trial_hours_left: count }; } });
+      run(env);
+      return flush().then(function () {
+        includes(slotHtml(env), count + (count === 1 ? ' hour remaining' : ' hours remaining'));
+        assert(slotHtml(env).indexOf('1 hours') === -1, 'incorrect singular hour');
+      });
+    });
   });
 });
 
