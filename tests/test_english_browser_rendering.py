@@ -203,3 +203,21 @@ def test_trial_templates_are_extracted_instead_of_remaining_dynamic():
                 assert call.fallback == CATALOG[call.key], call.key
                 found.add(call.key)
     assert found == keys
+
+
+@pytest.mark.parametrize('loaded', [False, True])
+@pytest.mark.parametrize('count', [1, 2])
+def test_orchestration_badge_retains_counts_and_singular_labels(loaded, count):
+    code = ('var DICT={},EN=' + json.dumps(CATALOG if loaded else {})
+            + ";var LANG='en';\n" + TRANSLATE + '\nvar t=T;\n'
+            + 'function escHtml(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}\n'
+            + 'var _brainOrchSummaries={s:{workflows:{total:' + str(count)
+            + ',running:1},agents:{total:5,completed:2,failed:1},subagents:{total:' + str(count)
+            + '},running_now:[{nowTool:"<Read>"}]}};\n'
+            + function('_brainOrchBadgeHtml')
+            + '\nconsole.log(JSON.stringify(_brainOrchBadgeHtml("s")));')
+    html = run_js(code)
+    assert f'{count} workflow' + ('s' if count != 1 else ' (') in html
+    assert f'{count} sub-agent' + ('s' if count != 1 else ' ·') in html
+    assert '3/5 agents done' in html and '(1 running)' in html
+    assert '&lt;Read&gt;' in html and '<Read>' not in html

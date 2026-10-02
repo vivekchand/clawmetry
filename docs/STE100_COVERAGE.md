@@ -107,6 +107,12 @@ These results establish the implemented subset and regression behavior. They do 
 - Restoring the prior JavaScript makes two new Python checks and eight JavaScript checks fail. Restoring the changes makes the selected checks pass.
 - Helper forwarding and table-driven browser keys remain pending. No pricing rule, checkout destination, entitlement, polling interval, or request count changes.
 
+The orchestration badge and session panel now use literal singular and plural label calls.
+This also keeps the spelling of sub-agent labels consistent before and after the catalog loads.
+The corpus now contains 4,017 messages and 1,025 literal browser fallbacks, with zero mechanical findings and 11 dynamic calls pending.
+All 35 browser-rendering cases pass. Both new catalog-absent badge cases fail with the prior source and pass after restoring the change.
+Workflow totals, completed and failed agent counts, running counts, and tool-name escaping remain intact.
+
 ## CLI follow-up verification on 2026-10-02
 
 - The corpus contains 3,969 extracted messages, including 182 central CLI help values. It has zero mechanical findings.

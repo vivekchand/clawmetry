@@ -8751,14 +8751,14 @@ function _brainOrchBadgeHtml(sid) {
   var wf = sum.workflows || {}, ag = sum.agents || {}, sa = sum.subagents || {};
   var bits = [];
   if (wf.total) {
-    bits.push('\u26a1 ' + wf.total + ' ' + t(wf.total === 1 ? 'brain.workflow' : 'brain.workflows', null, wf.total === 1 ? 'workflow' : 'workflows')
+    bits.push('\u26a1 ' + wf.total + ' ' + (wf.total === 1 ? t('brain.workflow', null, 'workflow') : t('brain.workflows', null, 'workflows'))
       + (wf.running ? ' (' + wf.running + ' ' + t('brain.running', null, 'running') + ')' : ''));
   }
   if (ag.total) {
     bits.push('\ud83e\udd16 ' + ((ag.completed || 0) + (ag.failed || 0)) + '/' + ag.total + ' ' + t('brain.agents_done', null, 'agents done')
       + (ag.failed ? ' \u00b7 \u26a0 ' + ag.failed : ''));
   }
-  if (sa.total) bits.push('\ud83e\udd16 ' + sa.total + ' ' + t(sa.total === 1 ? 'brain.subagent' : 'brain.subagents', null, sa.total === 1 ? 'subagent' : 'subagents'));
+  if (sa.total) bits.push('\ud83e\udd16 ' + sa.total + ' ' + (sa.total === 1 ? t('brain.subagent', null, 'sub-agent') : t('brain.subagents', null, 'sub-agents')));
   var now = (sum.running_now || [])[0];
   if (now && now.nowTool) bits.push('\u25b6 ' + escHtml(now.nowTool));
   if (!bits.length) return '';
@@ -21962,9 +21962,9 @@ async function _loadOrchestrationPanel(sessionId) {
     if (!wfs.length && !subs.length) return;
     var sum = d.summary || {};
     var bits = [];
-    if ((sum.workflows || {}).total) bits.push((sum.workflows.total) + ' ' + t(sum.workflows.total === 1 ? 'brain.workflow' : 'brain.workflows', null, sum.workflows.total === 1 ? 'workflow' : 'workflows'));
+    if ((sum.workflows || {}).total) bits.push((sum.workflows.total) + ' ' + (sum.workflows.total === 1 ? t('brain.workflow', null, 'workflow') : t('brain.workflows', null, 'workflows')));
     if ((sum.agents || {}).total) bits.push(sum.agents.total + ' ' + t('transcripts.orch_agents', null, 'agents'));
-    if (subs.length) bits.push(subs.length + ' ' + t(subs.length === 1 ? 'brain.subagent' : 'brain.subagents', null, subs.length === 1 ? 'sub-agent' : 'sub-agents'));
+    if (subs.length) bits.push(subs.length + ' ' + (subs.length === 1 ? t('brain.subagent', null, 'sub-agent') : t('brain.subagents', null, 'sub-agents')));
     var runningTotal = ((sum.workflows || {}).running || 0) + ((sum.agents || {}).running || 0) + ((sum.subagents || {}).running || 0);
     if (runningTotal) bits.push('<span style="color:#f59e0b;">' + runningTotal + ' ' + t('brain.running', null, 'running') + '</span>');
     if (sum.cost_usd) bits.push('$' + Number(sum.cost_usd).toFixed(2));
