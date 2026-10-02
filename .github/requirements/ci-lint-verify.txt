@@ -25,6 +25,54 @@
 # where the lint job runs on every PR -- it is the signal, not a flake. Lift
 # the 3.9 floor first, or leave the pin.
 #
+# WHAT STAYING ON THESE VERSIONS ACCEPTS. Four names here sit at the LAST
+# release that installs on 3.9, and each is named by published advisories
+# whose only fixes require 3.10+. Measured 2026-10-02 against PyPI
+# Requires-Python and OSV:
+#
+#   click==8.1.8     ceiling; 8.2.0+ needs >=3.10.
+#                    GHSA-47fr-3ffg-hgmw (fixed 8.3.3)
+#   pytest==8.4.2    ceiling; 9.0.0+ needs >=3.10.
+#                    GHSA-6w46-j5rx-g56g (fixed 9.0.3)
+#   requests==2.32.5 ceiling; 2.33.0+ needs >=3.10.
+#                    GHSA-gc5v-m9x4-r6x2 (fixed 2.33.0)
+#   urllib3==2.6.3   ceiling; 2.7.0+ needs >=3.10.
+#                    GHSA-qccp-gfcp-xxvc, GHSA-mf9v-mfxr-j63j (fixed 2.7.0),
+#                    GHSA-8988-9cw3-xx77, GHSA-gh4c-6fx4-qh6g,
+#                    GHSA-vxq7-64xx-v4gw (fixed 2.8.0)
+#
+# So these are CAPPED, not stale. The sweep that raised ten other CI pin sets
+# to urllib3 2.8.0 (#6213) could not raise this one, and an audit that reports
+# any of the above as "fix available" has read the fix version without reading
+# its Requires-Python. Re-deriving that costs a tick every time; this block is
+# here so the next reader does not have to.
+#
+# The acceptance is deliberate, and the exposure it carries is narrow. The only
+# job that installs this file is ci.yml's "Syntax & Lint", which runs this
+# repo's static guard tests -- workflow-YAML validity, pin guards, drift
+# checks. `requests` and `flask` are here so pytest can COLLECT at all
+# (tests/conftest.py imports requests at module scope), and the one requests
+# call site in that conftest is a health probe against a local dashboard. None
+# of the urllib3/requests advisories above -- which concern HTTPS proxy TLS
+# handling, sensitive headers on cross-origin redirects, and decompressing or
+# buffering remote response bodies -- has a reachable trigger in a job that
+# fetches nothing. `click` arrives transitively via flask and nothing here
+# calls click.edit(), the function its advisory is in. The pytest advisory is
+# tmpdir handling where another local user can race it; the runner is
+# single-tenant and ephemeral. All of it is CI-only -- no released wheel, no
+# user machine.
+#
+# Why not the environment-marker trick ci-api-tests.txt uses: that file serves
+# a matrix spanning BOTH interpreters, so carrying each name twice behind
+# mutually exclusive python_full_version markers gets its 3.11 cells the fixed
+# releases while its 3.9 cell keeps the installable ones. This file has no
+# 3.10+ consumer -- "Syntax & Lint" is a single 3.9 job -- so a marker split
+# here would add a second copy of every pin that nothing would ever resolve.
+#
+# The acceptance ends when this job's interpreter moves off 3.9: at that point
+# this file folds into ci-tests.txt, which already pins the fixed releases of
+# all four.
+#
 # Installed with `pip install --require-hashes`, which refuses to install
 # anything not listed here with a matching hash. Each version lists the
 # sha256 of EVERY distribution PyPI publishes for it (every platform wheel,
