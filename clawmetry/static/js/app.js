@@ -27639,7 +27639,7 @@ function loadCostOptimizerData(isRefresh) {
       } else if (_coHosted) {
         html += '<div class="cost-opt-local-fit-hosted" style="color:var(--text-muted);font-size:13px;padding:10px 0;">'
           + escapeHtml(t('app.cost_opt_local_fit_on_device', null,
-              "The agent machine checks which local models fit its hardware. Open its local dashboard to see that advice."))
+              "The agent machine checks which local models fit its hardware. Open the local dashboard on the computer itself to see that advice."))
           + '</div>';
       } else {
         html += '<div style="color:var(--text-muted);font-size:13px;padding:10px 0;">llmfit is not available, so no model fit could be computed. Install it with: <code>pip install llmfit</code></div>';

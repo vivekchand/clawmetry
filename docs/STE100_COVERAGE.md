@@ -91,6 +91,7 @@ Base revision: `19cb235ae5e8a14e44f5efe871d79ff9c0dc530f`.
 - The original connection message promised that nothing was lost. It now reports only that the collector cannot be reached and the list is unavailable.
 - CI explicitly runs both new test modules. The test-file coverage baseline lists 312 files and retains the limit of 909 unlisted files.
 - These results are local. Browser screenshots, hosted verification, editorial review, and a production release remain pending for this follow-up.
+- The hosted cost panel keeps an explicit instruction to open the local dashboard on the agent computer. All 58 cost-panel, browser-renderer, and inventory checks pass after this CI correction.
 - Two inventory regressions fail before TypeScript discovery is added. They pass afterward without adding those source files to the checked-message count.
 
 These results establish the implemented subset and regression behavior. They do not establish whole-product compliance or a production release.
