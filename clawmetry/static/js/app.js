@@ -14394,7 +14394,7 @@ async function loadSessions() {
       // Issue #1364 — legacy loop badge (proxy LoopDetector repeats).
       var _loopCount = loopSessions[sid] || 0;
       if (_loopCount > 0) {
-        html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="Agent may be looping: ' + _loopCount + ' repeated request' + (_loopCount > 1 ? 's' : '') + ' detected. Click to open Brain tab."' +
+        html += '<span class="session-loop-warn" onclick="event.stopPropagation();switchTab(\'brain\')" title="' + escAttr(t('sessions.row_looping', {count: _loopCount}, 'Agent may be looping: {count} repeated requests detected. Click to open Brain tab.')) + '"' +
           ' style="margin-left:6px;color:#d97706;font-size:11px;font-weight:700;background:rgba(217,119,6,0.12);border:1px solid rgba(217,119,6,0.35);border-radius:8px;padding:1px 6px;cursor:pointer;">&#9888; Looping</span>';
       }
     }
@@ -14412,22 +14412,22 @@ async function loadSessions() {
       var _acts = _guard.control_actions || [];
       var _mk = function(action, glyph, label, bg) {
         var on = _acts.indexOf(action) !== -1;
-        var why = on ? (_guard.control_note || (label + ' this session'))
-                     : (_guard.control_reason || 'Not available for this session');
+        var why = on ? (_guard.control_note || t('sessions.row_' + action + '_title', null, label + ' this session'))
+                     : (_guard.control_reason || t('sessions.row_control_unavailable', null, 'Not available for this session'));
         if (on) {
           return '<button class="cm-guard-btn" data-action="' + action + '"' +
             ' data-sid="' + escAttr(sid) + '" data-rt="' + escAttr(_guard.runtime || '') + '"' +
             ' data-cwd="' + escAttr(_guard.cwd || '') + '" title="' + escAttr(why) + '"' +
-            ' style="background:' + bg + ';color:#fff;border:none;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;">' + glyph + ' ' + label + '</button>';
+            ' style="background:' + bg + ';color:#fff;border:none;border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:pointer;">' + glyph + ' ' + escHtml(label) + '</button>';
         }
         return '<button disabled title="' + escAttr(why) + '"' +
           ' style="background:var(--bg-tertiary,#2a2a2a);color:var(--text-muted,#888);border:1px solid var(--border-secondary,#3a3a3a);border-radius:6px;padding:4px 9px;font-size:11px;font-weight:700;cursor:not-allowed;opacity:.6;">' + glyph + ' ' + label + '</button>';
       };
-      html += _mk('pause', '⏸', 'Pause', '#b45309');
-      html += _mk('resume', '▶', 'Resume', '#15803d');
-      html += _mk('stop', '⏹', 'Stop', '#b91c1c');
+      html += _mk('pause', '⏸', t('sessions.row_pause', null, 'Pause'), '#b45309');
+      html += _mk('resume', '▶', t('sessions.row_resume', null, 'Resume'), '#15803d');
+      html += _mk('stop', '⏹', t('sessions.row_stop', null, 'Stop'), '#b91c1c');
     } else {
-      html += '<button class="cm-stop-btn" data-sid="' + escAttr(sid) + '" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ Emergency Stop</button>';
+      html += '<button class="cm-stop-btn" data-sid="' + escAttr(sid) + '" style="background:#b91c1c;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;">⏹ ' + escHtml(t('sessions.row_emergency_stop', null, 'Emergency Stop')) + '</button>';
     }
     html += '</span>';
     html += '</div>';
@@ -14658,7 +14658,7 @@ async function sessionRowControl(sessionId, action, runtime, cwd) {
   var sid = String(sessionId || '').trim();
   if (!sid || !action) return;
   if (action === 'stop' || action === 'kill') {
-    if (!confirm(action.charAt(0).toUpperCase() + action.slice(1) + ' session "' + sid + '"?')) return;
+    if (!confirm(t('sessions.row_' + action + '_confirm', {session: sid}, action.charAt(0).toUpperCase() + action.slice(1) + ' session "{session}"?'))) return;
   }
   try {
     var r = await fetch('/api/guard/control', {
@@ -14669,14 +14669,14 @@ async function sessionRowControl(sessionId, action, runtime, cwd) {
     });
     var data = await r.json();
     if (!r.ok || !data.ok) {
-      var why = (data && (data.detail || data.error)) || 'request failed';
-      alert('Could not ' + action + ' this session: ' + why);
+      var why = (data && (data.detail || data.error)) || t('sessions.row_request_failed', null, 'request failed');
+      alert(t('sessions.row_' + action + '_failed', {error: why}, 'Could not ' + action + ' this session: {error}'));
     } else if (data.advisory_only) {
       alert(t('sessions.pause_advisory_only', null, 'Pause flag set, but no enforcement proxy is running to hold this session. The pause is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.'));
     }
     loadSessions();
   } catch (e) {
-    alert('Could not ' + action + ' this session: ' + e.message);
+    alert(t('sessions.row_' + action + '_failed', {error: e.message}, 'Could not ' + action + ' this session: {error}'));
   }
 }
 
