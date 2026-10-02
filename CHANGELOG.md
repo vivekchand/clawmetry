@@ -2,6 +2,8 @@
 
 ### Added: conversational dashboards from local agent evidence
 
+- Home keeps replies, live state, and cached figures in the selected runtime. Daily costs use the daily response, local period totals reuse DuckDB usage, and unavailable periods remain explicit. Cost review labels its node-wide scope and distinguishes estimates from actual charges or proven savings.
+
 - Assistant is the local opening screen. Ask a question, refine the answer, and create charts, tables, or metrics from recorded data.
 - Save a generated panel to Home. Saved panels and conversations persist locally; panels query current data when Home opens.
 - Use an authenticated Claude harness with tools disabled, an Anthropic API key, or a connected Builder account. Voice input requires an explicit click and transcript review.
