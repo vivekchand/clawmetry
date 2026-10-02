@@ -7,6 +7,7 @@
 - Both weekly insight synthesis paths use shared writing instructions. Activity turn explanations use the same checks with a separate fallback. Rejected summaries use a fixed fallback while preserving result rows and known token usage. Validation adds no model request or network dependency.
 - Alert narration, Advisor answers, chart explanations, and evaluation reasons use the same policy. Validation preserves queries, scores, verdicts, and source evidence. An unavailable brief summary retains its table without inventing a cause.
 - Selected dashboard explanations now use shorter sentences and clearer missing-data labels. Source transcripts remain unchanged.
+- CI also checks literal browser translation fallbacks against the English catalog. Connection and integrity messages retain uncertainty. Renderer tests cover catalog availability, event counts, channel names, and cost figures. Other dynamic messages and editorial review remain pending.
 
 ### Fixed: OpenClaw 2026.9.x sessions appear again
 

@@ -40,8 +40,8 @@
   window.cmStoreUnreachableHtml = function (extraStyle) {
     var msg = (typeof t === 'function')
       ? t('common.store_unreachable_panel', null,
-           "Can't reach the collector on this machine, so this list can't be read right now. Nothing has been lost \u2014 it reappears as soon as the connection is back.")
-      : "Can't reach the collector on this machine, so this list can't be read right now. Nothing has been lost \u2014 it reappears as soon as the connection is back.";
+           "ClawMetry cannot reach the collector on this machine. This list will be available when the connection returns.")
+      : "ClawMetry cannot reach the collector on this machine. This list will be available when the connection returns.";
     var esc = (typeof escHtml === 'function') ? escHtml : function (x) { return String(x); };
     return '<div style="padding:16px;color:#fbbf24;' + (extraStyle || '') + '">' + esc(msg)
       + ' <button type="button" onclick="cmRetryStoreRead()" style="background:transparent;color:#fbbf24;border:1px solid #fbbf24;border-radius:6px;padding:2px 10px;font-size:12px;cursor:pointer;margin-left:6px;">'
@@ -1413,7 +1413,7 @@ function _ensureAnomalyPanel() {
   var panel = document.createElement('div');
   panel.id = 'anomaly-panel';
   panel.style.cssText = 'background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:12px;padding:16px;margin-top:14px;box-shadow:var(--card-shadow);';
-  panel.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;"><div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + t("app.128269_anomaly_detection", null, "&#128269; Anomaly Detection") + '</div><span id="anomaly-panel-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;display:none;"></span></div><div id="anomaly-baselines" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;font-size:11px;"></div><div id="anomaly-list" style="max-height:300px;overflow-y:auto;"></div>';
+  panel.innerHTML = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;"><div style="font-size:14px;font-weight:700;color:var(--text-primary);">' + t("app.128269_anomaly_detection", null, "🔍 Anomaly Detection") + '</div><span id="anomaly-panel-badge" style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;display:none;"></span></div><div id="anomaly-baselines" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;font-size:11px;"></div><div id="anomaly-list" style="max-height:300px;overflow-y:auto;"></div>';
   shPanel.parentNode.insertBefore(panel, shPanel.nextSibling);
   return panel;
 }
@@ -2717,7 +2717,7 @@ async function loadOutcomeTile() {
     // for a read that has already failed — an unending spinner reads as a
     // broken product. A sentence, and a way to ask again.
     summaryEl.innerHTML = escapeHtml(t("app.task_outcomes_unavailable_right_now", null,
-        "Task outcomes could not be read right now."))
+        "Task outcomes unavailable right now."))
       + ' <button onclick="loadOutcomeTile()" style="background:transparent;border:1px solid var(--border-primary);'
       + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">'
       + escapeHtml(t('common.retry', null, 'Retry')) + '</button>';
@@ -3983,7 +3983,7 @@ function renderBillingCoverageBanner(cov, usageData) {
   if (cov.all_covered) {
     color = { bg: 'rgba(34,197,94,0.10)', bd: 'rgba(34,197,94,0.45)', fg: '#16a34a' };
     icon = '✅';
-    title = t('usage.cov_included_title', { plan: plan }, 'Usage included in ' + plan);
+    title = t('usage.cov_included_title', { plan: plan }, 'Usage included in {plan}');
     body = 'The figures below are <strong>usage value at published rates</strong>: what these tokens would cost at the provider\'s list price. '
          + escHtml(plan) + ' includes this usage, so this value is <strong>not an extra bill</strong>. '
          + 'This month: ' + fig(monthCost, 'monthCost', 'Usage value this month') + ' of usage value included in your plan. '
@@ -3997,7 +3997,7 @@ function renderBillingCoverageBanner(cov, usageData) {
       : t('usage.cov_rest_unknown', null, 'Usage whose billing route was not detected');
     color = { bg: 'rgba(59,130,246,0.10)', bd: 'rgba(59,130,246,0.45)', fg: '#2563eb' };
     icon = '🧾';
-    title = t('usage.cov_partly_title', { plan: plan }, 'Part of this usage is included in ' + plan);
+    title = t('usage.cov_partly_title', { plan: plan }, 'Part of this usage is included in {plan}');
     body = escHtml(restLabel) + ': about <strong>' + fig(monthRest, 'out_of_pocket_usd', restLabel) + '</strong> this month at published rates. '
          + 'Included in ' + escHtml(plan) + ': about <strong>' + fig(monthCovered, 'covered_usd', 'Included in your plan') + '</strong> of usage value this month, not an extra bill. '
          + escHtml(unseen);
@@ -4181,7 +4181,7 @@ async function submitCompare() {
   var resp;
   try {
     resp = await fetch('/api/run-compare?a=' + encodeURIComponent(a) + '&b=' + encodeURIComponent(b));
-  } catch (e) { body.innerHTML = '<div style="color:var(--err);font-size:12px;">' + t("app.network_error", null, "Network error") + ': ' + escapeHtmlSafe(e.message) + '</div>'; return; }
+  } catch (e) { body.innerHTML = '<div style="color:var(--err);font-size:12px;">' + t("app.network_error", null, "Network error: ") + escapeHtmlSafe(e.message) + '</div>'; return; }
   if (!resp.ok) {
     var msg = 'Request failed (' + resp.status + ')';
     try { var err = await resp.json(); if (err && err.error) msg = err.error; } catch (e) {}
@@ -4194,7 +4194,7 @@ async function submitCompare() {
 
 function renderCompareResult(data) {
   var body = document.getElementById('compare-runs-body');
-  if (!data || !data.a || !data.b) { body.innerHTML = '<div style="color:var(--text-muted);">' + t("app.no_data", null, "No data.") + '</div>'; return; }
+  if (!data || !data.a || !data.b) { body.innerHTML = '<div style="color:var(--text-muted);">' + t("app.no_data", null, "No data") + '</div>'; return; }
   var rows = [
     ['cost_usd', 'Cost'],
     ['total_tokens', 'Tokens'],
@@ -4368,7 +4368,7 @@ function showCohortSuggestion(idx) {
 
 function _cohortSessionList(side, sessions) {
   if (!sessions || !sessions.length) {
-    return '<div style="font-size:11px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, 'No data.')) + '</div>';
+    return '<div style="font-size:11px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, "No data")) + '</div>';
   }
   return sessions.map(function (r) {
     var label = r.title || r.session_id;
@@ -4390,7 +4390,7 @@ function renderCohortResult(res, title, why) {
   if (!host) return;
   if (!res || !res.a || !res.b) {
     host.style.display = '';
-    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, 'No data.')) + '</div>';
+    host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">' + escapeHtmlSafe(t('app.no_data', null, "No data")) + '</div>';
     return;
   }
   var v = res.verdict || {};
@@ -4466,7 +4466,7 @@ async function runCohortCompare(a, b, title) {
     }
     renderCohortResult(await resp.json(), title);
   } catch (e) {
-    host.innerHTML = '<div style="font-size:12px;color:var(--err);">' + escapeHtmlSafe(t('app.network_error', null, 'Network error')) + '</div>';
+    host.innerHTML = '<div style="font-size:12px;color:var(--err);">' + escapeHtmlSafe(t('common.network_request_failed', null, 'A network error prevented this request. Try again.')) + '</div>';
   }
 }
 
@@ -6375,14 +6375,14 @@ async function loadEvalsJudgeCard() {
     } catch (e) {}
     if (!snapJudge) {
       el.innerHTML = '<span style="color:var(--text-muted);">' +
-        t("evals.judge_unavailable", null, "Judge status is unavailable here. Scores are computed on the machine your agent runs on.") + '</span>';
+        t("evals.judge_unavailable", null, "Judge status is unavailable here. Open the dashboard on the agent machine to check its evaluation settings.") + '</span>';
       return;
     }
     var snapRejected = snapJudge.key_present && snapJudge.last_error === 'auth';
     var chtml = '';
     if (!snapJudge.enabled) {
       chtml += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">' +
-        t("evals.judge_disabled", null, "Scoring is switched off (CLAWMETRY_EVALS_ENABLED=0).") + '</div>';
+        t("evals.judge_disabled", null, "Session scoring is off.") + '</div>';
     } else if (snapRejected) {
       chtml += '<div style="color:#ef4444;font-weight:600;margin-bottom:6px;">● ' +
         t("evals.judge_key_rejected_node", null, "The judge key saved on your machine was rejected by the provider. Replace it there to resume scoring.") + '</div>';
@@ -6401,7 +6401,7 @@ async function loadEvalsJudgeCard() {
         : '<span style="color:#f59e0b;font-weight:600;">' + t("evals.key_missing", null, "not set") + '</span>') + '</span>';
     chtml += '</div>';
     chtml += '<div style="margin-top:10px;font-size:12px;color:var(--text-muted);line-height:1.6;">' +
-      t("evals.key_on_node", null, "The judge API key stays on the machine your agent runs on and is never synced to the cloud. To add or change it, open the dashboard on that machine (Evals tab) or set ANTHROPIC_API_KEY / OPENAI_API_KEY in the daemon environment.") +
+      t("evals.key_on_node", null, "The judge API key stays on the agent machine. Cloud sync does not include it. Open the local dashboard to change the key. Select Quality. Change the judge settings. You can also set ANTHROPIC_API_KEY or OPENAI_API_KEY in the daemon environment.") +
       '</div>';
     el.innerHTML = chtml;
     return;
@@ -6410,7 +6410,7 @@ async function loadEvalsJudgeCard() {
   var judge = meta && meta.judge;
   if (!judge) {
     el.innerHTML = '<span style="color:var(--text-muted);">' +
-      t("evals.judge_unavailable", null, "Judge status is unavailable here. Scores are computed on the machine your agent runs on.") + '</span>';
+      t("evals.judge_unavailable", null, "Judge status is unavailable here. Open the dashboard on the agent machine to check its evaluation settings.") + '</span>';
     return;
   }
   var cfgResp = await fetch('/api/evals/key').catch(function(){return null;});
@@ -6420,7 +6420,7 @@ async function loadEvalsJudgeCard() {
   var html = '';
   if (!judge.enabled) {
     html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">' +
-      t("evals.judge_disabled", null, "Scoring is switched off (CLAWMETRY_EVALS_ENABLED=0).") + '</div>';
+      t("evals.judge_disabled", null, "Session scoring is off.") + '</div>';
   } else if (keyRejected) {
     html += '<div style="color:#ef4444;font-weight:600;margin-bottom:6px;">● ' +
       t("evals.judge_key_rejected", null, "Your judge key was rejected by the provider. Re-add a valid key below.") + '</div>';
@@ -6429,10 +6429,10 @@ async function loadEvalsJudgeCard() {
       t("evals.judge_on", null, "Scoring is ON. Finished sessions are scored automatically in the background.") + '</div>';
   } else {
     html += '<div style="color:#f59e0b;font-weight:600;margin-bottom:6px;">● ' +
-      t("evals.judge_needs_key", null, "Add an API key below to turn scoring on. Any provider works, not just Claude.") + '</div>';
+      t("evals.judge_needs_key", null, "Select a judge provider below. If the provider requires a key, add its API key.") + '</div>';
   }
   html += '<div style="font-size:12px;color:var(--text-muted);line-height:1.6;">' +
-    t("evals.judge_how", null, "How it works: after a session finishes, a small model reads a redacted copy of the transcript and scores it 0 to 5 against your rubric. It runs on your machine, with your own API key, capped at 100 scores per hour. Your transcripts never go to ClawMetry servers.") +
+    t("evals.judge_how", null, "After a session ends, ClawMetry sends a redacted transcript to the configured judge provider. The judge scores it from 0 to 5 against your rubric. The default limit is 100 session evaluations per hour.") +
     '</div>';
   var provLabel = '';
   if (cfg && cfg.providers && cfg.selection && cfg.providers[cfg.selection.provider]) {
@@ -6477,7 +6477,7 @@ function _evalsKeyFormHtml(cfg, hidden) {
   html += '</select>';
   var model = (cfg.selection && cfg.selection.provider === sel && cfg.selection.model) || cfg.providers[sel].default_model;
   html += '<input id="evals-key-model" type="text" value="' + escHtml(model) + '" title="' +
-    t("evals.model_title", null, "Judge model id — any model this provider serves") + '" style="width:190px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
+    t("evals.model_title", null, "Judge model identifier supported by this provider") + '" style="width:190px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
   html += '<input id="evals-key-input" type="password" autocomplete="off" placeholder="' + escHtml(cfg.providers[sel].key_hint) + '" style="flex:1;min-width:180px;font-family:monospace;font-size:12px;padding:7px 10px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:6px;">';
   html += '<input id="evals-key-baseurl" type="text" placeholder="http://localhost:11434/v1" style="' +
     (cfg.providers[sel].needs_base_url ? '' : 'display:none;') +
@@ -6486,7 +6486,7 @@ function _evalsKeyFormHtml(cfg, hidden) {
     t("evals.save_verify", null, "Save & verify") + '</button>';
   html += '</div>';
   html += '<div id="evals-key-status" style="font-size:11px;margin-top:8px;min-height:14px;color:var(--text-muted);">' +
-    t("evals.key_note", null, "Verified with one tiny test call before saving, then stored only on this machine (never synced).") + '</div>';
+    t("evals.key_note", null, "ClawMetry makes one test call before it saves the key on this machine. Cloud sync does not include the key.") + '</div>';
   html += '</div>';
   return html;
 }
@@ -6527,7 +6527,7 @@ async function evalsSaveJudgeKey() {
     if (r.ok && data.ok) {
       if (status) {
         status.style.color = '#22c55e';
-        status.textContent = t("evals.key_verified", null, "Key verified and saved. Scoring starts within a minute.");
+        status.textContent = t("evals.key_verified", null, "The key is verified and saved. Check the scoring status above.");
       }
       setTimeout(function(){ loadEvalsJudgeCard(); loadEvaluators(); }, 1200);
     } else {
@@ -6924,7 +6924,7 @@ async function loadEvalsSuites() {
     html += '</div>';
   } else {
     html += '<div style="margin-bottom:10px;">' +
-      t("evals.suites_empty", null, "No test suites yet. A suite is a small YAML file of test prompts plus what a good answer looks like; run it before each release to catch a prompt regression before your users do.") + '</div>';
+      t("evals.suites_empty", null, "No test suites are available. A suite is a YAML file with test prompts and expected answers. Run a suite before each release to check for changes in answer quality.") + '</div>';
   }
   html += '<div style="color:var(--text-muted);">' +
     t("evals.suites_cli", null, "Suites live in") + ' <code>~/.clawmetry/evals/</code> · ' +
@@ -7026,7 +7026,7 @@ async function openEvalRubricModal() {
     if (keyRow && !keyRow.__cmGated) {
       keyRow.__cmGated = 1;
       keyRow.innerHTML = '<div style="font-size:11px;color:var(--text-muted);line-height:1.5;">' +
-        t("evals.key_on_node", null, "The judge API key stays on the machine your agent runs on and is never synced to the cloud. To add or change it, open the dashboard on that machine (Evals tab) or set ANTHROPIC_API_KEY / OPENAI_API_KEY in the daemon environment.") +
+        t("evals.key_on_node", null, "The judge API key stays on the agent machine. Cloud sync does not include it. Open the local dashboard to change the key. Select Quality. Change the judge settings. You can also set ANTHROPIC_API_KEY or OPENAI_API_KEY in the daemon environment.") +
         '</div>';
     }
     var keySt = document.getElementById('eval-key-status');
@@ -8731,7 +8731,7 @@ function _brainSeqLabel(ev) {
     var tail = parts[parts.length - 1];
     var kindLbl = tail.indexOf('agent-') === 0
       ? (parts.length >= 3 || parts[1].indexOf('wf_') === 0
-          ? t('brain.wf_agent', null, 'wf agent') : t('brain.subagent', null, 'subagent'))
+          ? t('brain.wf_agent', null, 'wf agent') : t('brain.subagent', null, "sub-agent"))
       : (tail.indexOf('wf_') === 0 ? t('brain.workflow', null, 'workflow') : 'child');
     return label + ' \u00b7 ' + parts[0].slice(0, 8) + ' \u21b3 ' + kindLbl + ' ' +
       tail.replace(/^agent-/, '').replace(/^wf_/, '').slice(0, 8);
@@ -10503,7 +10503,7 @@ async function loadBrainPage(silent) {
         }, _bhTry < 12 ? Math.max(2000, (data.eta_sec || 3) * 1000) : 10000);
       } else {
         var sEl2 = document.getElementById('brain-stream');
-        if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, 'Could not fetch this window from your node. The node may be offline, or was mid-sync when the request was made — if it is online, retry in a moment.') + '</div>';
+        if (sEl2) sEl2.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' + t('brain.window_node_offline', null, "Could not reach your node for this window. Check that the machine is online, then retry.") + '</div>';
         if (stEl) stEl.textContent = '';
       }
       return;
@@ -11179,7 +11179,7 @@ async function loadNemoClaw() {
       // Issue #1127: previously said "pip install nemoclaw" but the package
       // is not yet publicly released (only a 0.0.0a1 placeholder exists on
       // PyPI). Replace with an honest "Coming soon" empty state.
-      page.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:14px;">NemoClaw governance is not yet available on this host.<br><span style="font-size:12px;">' + t("app.coming_soon_mdash_nvidia_nemo_guardrails_integrati", null, "Coming soon &mdash; NVIDIA NeMo Guardrails integration is in private preview.") + '</span></div>';
+      page.innerHTML = '<div style="padding:40px 20px;text-align:center;color:var(--text-muted);font-size:14px;">NemoClaw governance is not yet available on this host.<br><span style="font-size:12px;">' + t("app.coming_soon_mdash_nvidia_nemo_guardrails_integrati", null, "The NVIDIA NeMo Guardrails integration is in private preview.") + '</span></div>';
       return;
     }
 
@@ -12237,7 +12237,7 @@ async function loadSecurityFindings() {
     counts = (d && d.counts) || null;
   } catch (e) {
     listEl.innerHTML = '<div style="color:var(--text-muted);padding:12px;font-size:12px;">'
-      + t('security.findings_unavailable', null, "Couldn't read the findings log. It lives on the machine your agent runs on — open the local dashboard to see it.")
+      + t('security.findings_unavailable', null, "ClawMetry could not read the findings log. Open the dashboard on the agent machine to check its recorded findings.")
       + '</div>';
     if (countEl) countEl.textContent = '';
     return null;
@@ -12320,20 +12320,18 @@ async function loadSecurityIntegrity() {
     var n = (d && d.chain_length) || 0;
     var nStr = n.toLocaleString();
     if (d && d.ok === true) {
-      paint(t('app.integrity_intact', null, 'Tamper-evident log: ' + nStr + ' events, intact. Every recorded event is chained, so silent edits would show up here.'),
+      paint(t('app.integrity_intact', { count: nStr }, 'The recorded log contains {count} linked events. Its integrity check passed.'),
             t('app.integrity_intact_badge', null, 'Intact'), '#22c55e', '&#128274;');
     } else if (d && d.ok === false) {
-      paint(t('app.integrity_broken', null, 'Tamper-evident log: a break was detected at event ' + (d.first_break != null ? d.first_break : '?') + '. The activity log may have been altered.'),
-            t('app.integrity_broken_badge', null, 'Tampered'), '#ef4444', '&#9888;');
+      paint(t('app.integrity_broken', { event: d.first_break != null ? d.first_break : '?' }, 'The integrity check found a break at event {event}. The recorded log may have changed.'),
+            t('app.integrity_broken_badge', null, 'Check failed'), '#ef4444', '&#9888;');
     } else if (d && d.status === 'degraded') {
       // Third state, and the common one on a node that ran an older build:
-      // every event still matches its own hash (nothing was altered or
-      // removed), but some could not be placed in a single ordered chain
-      // because the writer chained two flush batches off the same head.
-      // Calling that "Tampered" scared people about a bug of ours; calling it
-      // "Intact" would hide a real insertion. It gets its own honest wording.
+      // the recorded events match their own hashes, but some cannot be placed
+      // in one ordered chain. Matching individual hashes does not prove that
+      // no events were inserted or removed. Keep that uncertainty visible.
       var nUnlinked = (d.unlinked || 0).toLocaleString();
-      paint(t('app.integrity_degraded', null, 'Tamper-evident log: all ' + nStr + ' events match their recorded fingerprint, so nothing was altered or removed. ' + nUnlinked + ' could not be placed in a single ordered chain, a fault in how older versions recorded the order that is now fixed. New events chain normally.'),
+      paint(t('app.integrity_degraded', { count: nStr, unlinked: nUnlinked }, 'The recorded fingerprints match for {count} events. The log cannot place {unlinked} events in one ordered chain. The event order is incomplete.'),
             t('app.integrity_degraded_badge', null, 'Verified, order incomplete'), '#f59e0b', '&#128274;');
     } else if (window.CLOUD_MODE) {
       // Honest cloud state until the cm-cloud-security interceptor serves the
@@ -16387,7 +16385,7 @@ function _traceReasoningNoteHtml(r) {
   var rt = escHtml(r.runtime || 'this runtime');
   var msg = '';
   if (r.coverage === 'none') msg = t('tracing.reasoning_not_exposed', {runtime: rt}, 'Reasoning is not exposed by {runtime}');
-  else if (r.coverage === 'partial' || r.coverage === 'full') msg = t('tracing.reasoning_none_recorded', {runtime: rt}, 'No reasoning was recorded for this session. {runtime} exposes it only under some settings.');
+  else if (r.coverage === 'partial' || r.coverage === 'full') msg = t('tracing.reasoning_none_recorded', {runtime: rt}, "No reasoning was recorded for this session. {runtime} exposes it only under some settings");
   else return '';
   var note = r.note ? '<span style="color:var(--text-muted);"> ' + escHtml(r.note) + '</span>' : '';
   return '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);display:flex;align-items:center;gap:6px;">'
@@ -16450,7 +16448,7 @@ async function loadTurnAnatomy() {
   var el = document.getElementById('ta-list');
   if (!el) return;
   el.style.cssText = '';
-  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_sessions_hellip", null, "Loading sessions&hellip;") + '</div>';
+  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_sessions_hellip", null, "Loading sessions…") + '</div>';
   var data;
   try {
     // Scope server-side by the active runtime (#4782). A foreign OTLP app
@@ -16546,7 +16544,7 @@ async function viewTurnAnatomy(sessionId) {
   if (back) back.style.display = '';
   var meta = document.getElementById('ta-detail-meta');
   var turnsEl = document.getElementById('ta-turns');
-  if (meta) meta.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">' + t("app.loading_turns_hellip", null, "Loading turns&hellip;") + '</div>';
+  if (meta) meta.innerHTML = '<div style="color:var(--text-muted);font-size:13px;">' + t("app.loading_turns_hellip", null, "Loading turns…") + '</div>';
   if (turnsEl) turnsEl.innerHTML = '';
   var data;
   try {
@@ -16624,7 +16622,7 @@ async function loadTracing() {
   tracingShowList();
   var el = document.getElementById('trace-list');
   if (!el) return;
-  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_traces_hellip", null, "Loading traces&hellip;") + '</div>';
+  el.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_traces_hellip", null, "Loading traces…") + '</div>';
   var data;
   try {
     // Scope server-side by the active runtime (#4782). A foreign OTLP app
@@ -16746,7 +16744,7 @@ async function viewTrace(traceId) {
   if (back) back.style.display = '';
   // Reset left-pane loading state + right-pane placeholder until spans land.
   var tg = document.getElementById('trace-treegantt');
-  if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_trace_hellip", null, "Loading trace&hellip;") + '</div>';
+  if (tg) tg.innerHTML = '<div style="padding:18px;color:var(--text-muted);">' + t("app.loading_trace_hellip", null, "Loading trace…") + '</div>';
   var pane = document.getElementById('trace-span-pane');
   if (pane) pane.innerHTML = '<div style="color:var(--text-muted);font-size:12px;text-align:center;padding:32px 14px;">Select a span on the left to see its <b>' + t("app.chat", null, "Chat") + '</b>, <b>' + t("app.inputs", null, "Inputs") + '</b>, <b>' + t("app.outputs", null, "Outputs") + '</b>, <b>' + t("app.attributes", null, "Attributes") + '</b>, and <b>' + t("app.events", null, "Events") + '</b>.</div>';
   window._traceActiveSpanId = null;
@@ -18463,7 +18461,7 @@ function _cmEffIdeaRowHtml(a, saveEntry) {
     // An estimate at published rates (REQ-OBS-CEA-025.9): the card heading
     // carries the badge, the figure keeps the explanation on hover.
     + '<div style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap;">'
-      + _cmI18nFig('efficiency.save_mo', 'save about \u0000/mo',
+      + _cmI18nFig('efficiency.save_mo', "save about {amt}/mo",
           window.cmCostFigure(save, saveEntry, { noBadge: true, label: 'Estimated saving per month' })) + '</div>'
     + '</div>';
 }
@@ -18734,7 +18732,7 @@ function _renderEfficiencyCardInner(card, eff) {
   }
   if (saved >= 1) {
     right += '<div style="font-size:12px;color:var(--text-muted);margin-top:8px;">✨ '
-      + _cmI18nFig('efficiency.already_saved', 'Reusing work already saved you about \u0000/mo.',
+      + _cmI18nFig('efficiency.already_saved', "Reusing work already saved you about {amt}/mo.",
           window.cmCostFigure(saved, window.cmProv.of(eff, 'cache_saved_monthly_usd'), { label: 'Saved by reusing cached work, per month' })) + '</div>';
   }
   card.style.display = '';
@@ -18984,14 +18982,14 @@ async function loadUsage() {
         return window.cmProv ? window.cmProv.text(val, window.cmProv.of(data, key)) : Number(val || 0).toFixed(2) + ' USD';
       };
       if (_cov.all_covered && (cost || 0) > 0) {
-        coverExtra = ' · ' + t('usage.card_included', { plan: planName }, 'included in ' + planName + ', not an extra bill');
+        coverExtra = ' · ' + t('usage.card_included', { plan: planName }, 'included in {plan}, not an extra bill');
       } else if (period && _cov.any_subscription && (period.covered_usd || 0) > 0.005) {
         coverExtra = ' · ' + t('usage.card_split', {
             covered: money(period.covered_usd, 'covered_usd'),
-            rest: money(period.out_of_pocket_usd, 'out_of_pocket_usd') },
-          money(period.covered_usd, 'covered_usd') + ' included in plan, '
-          + money(period.out_of_pocket_usd, 'out_of_pocket_usd')
-          + (_cov.any_metered ? ' metered' : ' route not detected'));
+            rest: money(period.out_of_pocket_usd, 'out_of_pocket_usd'),
+            kind: _cov.any_metered ? t('usage.card_rest_metered', null, 'metered')
+                                  : t('usage.card_rest_unknown', null, 'route not detected') },
+          '{covered} included in plan, {rest} {kind}');
       }
       s.textContent = subText + coverExtra;
       if (coverExtra) {
@@ -21571,11 +21569,11 @@ function _updateLoadEarlierBtn() {
   host.style.display = '';
   if (p.loading) {
     host.innerHTML = '<span style="font-size:12px;color:var(--text-muted);">⏳ '
-      + escHtml(t('transcript.loading_earlier', null, 'Loading earlier messages…')) + '</span>';
+      + escHtml(t('transcript.loading_earlier', null, "Loading earlier messages...")) + '</span>';
   } else if (p.error) {
     host.innerHTML = '<button class="refresh-btn" onclick="loadEarlierMessages()" '
       + 'style="color:#e0625a;">'
-      + escHtml(t('transcript.load_earlier_failed', null, 'Couldn\'t load older messages - tap to retry'))
+      + escHtml(t('transcript.load_earlier_failed', null, "Could not load older messages. Select this message to try again."))
       + '</button>';
   } else {
     host.innerHTML = '<button class="refresh-btn" onclick="loadEarlierMessages()">⬆ '
@@ -21598,10 +21596,10 @@ function _renderHistoryGap(ev) {
   var action;
   if (p.loading || p.draining) {
     action = '<span class="replay-history-gap-status">⏳ '
-      + escHtml(t('transcript.loading_earlier', null, 'Loading earlier messages…')) + '</span>';
+      + escHtml(t('transcript.loading_earlier', null, "Loading earlier messages...")) + '</span>';
   } else if (p.error) {
     action = '<button class="refresh-btn replay-history-gap-btn" style="color:#e0625a;" onclick="loadEarlierMessages()">'
-      + escHtml(t('transcript.load_earlier_failed', null, 'Couldn\'t load older messages - tap to retry'))
+      + escHtml(t('transcript.load_earlier_failed', null, "Could not load older messages. Select this message to try again."))
       + '</button>';
   } else if (p.hasMore) {
     action = '<button class="refresh-btn replay-history-gap-btn" onclick="loadEarlierMessages()">⬆ '
@@ -22558,7 +22556,7 @@ function _cmSyncRender(prog, health) {
     var msg = prog && prog.error
       ? String(prog.error)
       : 'Sync queued ' + (health && health.sync_dlq_depth || 0) + ' batches for retry — the daemon will keep trying.';
-    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + t("app.sync_needs_attention", null, "⚠️ Sync needs attention") + '</div>'
+    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + t("app.sync_needs_attention", null, "Sync needs attention") + '</div>'
       + '<div style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;">' + escHtml(msg) + '</div>'
       + '<div style="margin-top:6px;font-size:11px;"><a href="https://github.com/vivekchand/clawmetry#troubleshooting" target="_blank" rel="noopener" style="color:#fca5a5;">Open troubleshooting docs →</a></div>';
     errBox.style.display = 'block';
@@ -22759,7 +22757,7 @@ function renderToolCatalog() {
   if (!tableEl || !_toolCatalogData) return;
   var tools = _tcSortTools(_toolCatalogData.tools || []);
   if (tools.length === 0) {
-    tableEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">' + t("app.no_tool_calls_recorded_yet_tools_appear_here_as_th", null, "No tool calls recorded yet. Tools appear here as the agent invokes them (derived from tool_call &rarr; tool_result event pairs).") + '</div>';
+    tableEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:24px;text-align:center;">' + t("app.no_tool_calls_recorded_yet_tools_appear_here_as_th", null, "No tool calls recorded yet. Tools appear here as the agent invokes them (derived from tool_call → tool_result event pairs).") + '</div>';
     return;
   }
   var html = '';
@@ -24519,7 +24517,7 @@ function loadFlowRuns() {
   var countEl = document.getElementById('flow-runs-count');
   if (!tbody) return;
   var lim = sel ? parseInt(sel.value, 10) || 30 : 30;
-  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">' + t("app.loading_flow_runs_hellip", null, "Loading flow runs&hellip;") + '</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-muted);font-size:12px;">' + t("app.loading_flow_runs_hellip", null, "Loading flow runs…") + '</td></tr>';
   fetch('/api/flow/runs?limit=' + lim)
     .then(function(r) { return r.json(); })
     .then(function(d) {
@@ -24662,7 +24660,7 @@ function showFlowRunDetail(sid) {
   var body = document.getElementById('flow-runs-detail-body');
   if (!box || !body) return;
   if (title) title.textContent = t("app.run", null, "Run · ") + sid;
-  body.innerHTML = '<div style="color:var(--text-muted);">' + t("app.loading_transcript_hellip", null, "Loading transcript&hellip;") + '</div>';
+  body.innerHTML = '<div style="color:var(--text-muted);">' + t("app.loading_transcript_hellip", null, "Loading transcript…") + '</div>';
   box.style.display = 'block';
   // Re-fetch /api/flow/runs to find this row (cheap; ≤200 rows). Then
   // render a compact summary. The live Flow diagram is intentionally not
@@ -26332,7 +26330,7 @@ function openCompModal(nodeId) {
   document.getElementById('time-travel-bar').classList.remove('active');
 
   if (nodeId === 'node-tui') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'TUI' }, 'Loading TUI messages...')) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'TUI' }, "Loading {channel} messages...")) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadTuiMessages(false);
     window._tuiRefreshTimer = visibilitySetInterval(function() { loadTuiMessages(true); }, 10000);
@@ -26358,7 +26356,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-whatsapp') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'WhatsApp' }, 'Loading WhatsApp messages...')) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'WhatsApp' }, "Loading {channel} messages...")) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadWhatsAppMessages(false);
     _waRefreshTimer = visibilitySetInterval(function() { loadWhatsAppMessages(true); }, 10000);
@@ -26366,7 +26364,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-signal') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Signal' }, 'Loading Signal messages...')) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Signal' }, "Loading {channel} messages...")) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadSignalMessages(false);
     _sigRefreshTimer = visibilitySetInterval(function() { loadSignalMessages(true); }, 10000);
@@ -26374,7 +26372,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-discord') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Discord' }, 'Loading Discord messages...')) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Discord' }, "Loading {channel} messages...")) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadDiscordMessages(false);
     _discordRefreshTimer = visibilitySetInterval(function() { loadDiscordMessages(true); }, 10000);
@@ -26382,7 +26380,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-slack') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Slack' }, 'Loading Slack messages...')) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Slack' }, "Loading {channel} messages...")) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadSlackMessages(false);
     _slackRefreshTimer = visibilitySetInterval(function() { loadSlackMessages(true); }, 10000);
@@ -26390,7 +26388,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-googlechat') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Google Chat' }, 'Loading Google Chat messages...')) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Google Chat' }, "Loading {channel} messages...")) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadGoogleChatMessages(false);
     _gcRefreshTimer = visibilitySetInterval(function() { loadGoogleChatMessages(true); }, 10000);
@@ -26398,7 +26396,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-msteams') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'MS Teams' }, 'Loading MS Teams messages...')) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'MS Teams' }, "Loading {channel} messages...")) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadMSTeamsMessages(false);
     _mstRefreshTimer = visibilitySetInterval(function() { loadMSTeamsMessages(true); }, 10000);
@@ -26406,7 +26404,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-mattermost') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Mattermost' }, 'Loading Mattermost messages...')) + '</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Mattermost' }, "Loading {channel} messages...")) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadMattermostMessages(false);
     _mmRefreshTimer = visibilitySetInterval(function() { loadMattermostMessages(true); }, 10000);
@@ -27641,7 +27639,7 @@ function loadCostOptimizerData(isRefresh) {
       } else if (_coHosted) {
         html += '<div class="cost-opt-local-fit-hosted" style="color:var(--text-muted);font-size:13px;padding:10px 0;">'
           + escapeHtml(t('app.cost_opt_local_fit_on_device', null,
-              'Which local models fit this hardware is worked out on the computer itself, so that advice is only available in the dashboard running there.'))
+              "The agent machine checks which local models fit its hardware. Open its local dashboard to see that advice."))
           + '</div>';
       } else {
         html += '<div style="color:var(--text-muted);font-size:13px;padding:10px 0;">llmfit is not available, so no model fit could be computed. Install it with: <code>pip install llmfit</code></div>';

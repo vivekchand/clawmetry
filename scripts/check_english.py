@@ -10,6 +10,7 @@ import argparse
 from collections import Counter
 from dataclasses import dataclass
 import hashlib
+from html import unescape
 from html.parser import HTMLParser
 import json
 from pathlib import Path
@@ -20,6 +21,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from clawmetry.english import EXPLANATION_MESSAGES, INSIGHT_MESSAGES, TURN_MESSAGES, check_text  # noqa: E402
+from scripts.english_js import translations  # noqa: E402
 
 BASELINE = "docs/english_baseline.json"
 CATALOG = "clawmetry/static/locales/en.json"
@@ -110,6 +112,36 @@ def _load_object(path):
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique)
 
 
+def browser_messages(root, catalog, types):
+    """Literal translation fallbacks only. Other rendering stays pending."""
+    messages = []
+    pending = []
+    errors = []
+    aliases = {"app.js": {"_sigT": 2, "_cmI18nFig": 1},
+               "trial-pill.js": {"tr": 2}, "trail.js": {"T": 1}}
+    for path in sorted((root / "clawmetry/static/js").rglob("*.js")):
+        source = path.relative_to(root).as_posix()
+        try:
+            calls = translations(path.read_text(encoding="utf-8"), aliases.get(path.name))
+        except ValueError as exc:
+            raise ValueError(f"{source}: cannot extract translation calls: {exc}") from exc
+        for call in calls:
+            location = f"{source}:{call.line}"
+            if call.key is not None and call.key not in catalog:
+                errors.append(f"{location}: missing English catalog key {call.key!r}")
+            if call.fallback:
+                key = call.key or "dynamic-key"
+                messages.append(Message(source, "fallback." + key, call.line, call.fallback,
+                                        types.get(key, "unclassified")))
+                if (call.key in catalog
+                        and unescape(call.fallback).strip() != unescape(catalog[call.key]).strip()):
+                    errors.append(f"{location}: fallback differs from English catalog for {call.key!r}")
+            if call.pending or not call.fallback:
+                pending.append({"path": source, "line": call.line, "key": call.key,
+                                "reason": call.pending or "no literal fallback"})
+    return messages, pending, errors
+
+
 def collect(root=ROOT):
     types = _load_object(root / KINDS) if (root / KINDS).exists() else {}
     catalog = _load_object(root / CATALOG)
@@ -125,6 +157,10 @@ def collect(root=ROOT):
     invalid = {k for k, v in types.items() if v not in ("description", "instruction", "label")}
     if unknown or invalid:
         raise ValueError(f"Message types have unknown keys or invalid types: {sorted(unknown | invalid)}")
+    browser, _, errors = browser_messages(root, catalog, types)
+    if errors:
+        raise ValueError("\n".join(errors))
+    messages.extend(browser)
     for path in sorted((root / "clawmetry/templates").rglob("*.html")):
         parser = VisibleText(path.relative_to(root).as_posix())
         text = path.read_text(encoding="utf-8")
@@ -187,10 +223,14 @@ def inventory(root, messages, counts):
         "checked_sources": [{"path": p, "messages": n, "review": "pending"}
                             for p, n in sorted(checked_files.items())],
         "remaining_sources": candidates,
+        "browser_calls_pending": browser_messages(
+            root, _load_object(root / CATALOG),
+            _load_object(root / KINDS) if (root / KINDS).exists() else {},
+        )[1],
         "external_repositories": {"clawmetry-pro": "adapter and paid feature explanations",
                                   "clawmetry-cloud": "hosted UI, errors, email, reports",
                                   "clawmetry-landing": "public technical explanations and help"},
-        "limits": ["JavaScript and Python source candidates are not counted as checked prose.",
+        "limits": ["Only literal translation fallbacks are checked in JavaScript. Other browser rendering and Python source remain pending.",
                    "Template expressions and inserted values require rendered-message review.",
                    "Source evidence and non-English translations require separate treatment.",
                    "The full dictionary, meaning, and parts of speech require editorial review."],

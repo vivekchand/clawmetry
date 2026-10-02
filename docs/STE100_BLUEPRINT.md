@@ -79,25 +79,31 @@ The optional bridge in `clawmetry/deepeval_bridge.py` requests the same rules fo
 Existing JSON schema retries remain unchanged; language rejection does not trigger them.
 The score, pass/fail result, source transcript, and persistence path remain unchanged.
 
-### Next delivery: browser fallback coverage
+### Browser fallback coverage
 
-This delivery follows PR #6248. It has not been implemented or released.
-A partial source audit found 775 literal translation calls with a null parameter argument.
-Among those candidates, 133 keys are missing from the English catalog and 10 fallback strings have mechanical findings.
-Those counts describe source candidates, not reviewed messages. Parameterized calls and other rendering paths are still outside this audit.
+This delivery follows PR #6248. Its design was committed before implementation.
+The first audit used a regular expression and found 775 candidates with a null parameter argument.
+The implemented source extractor replaces that audit for supported translation calls, including parameterized calls.
+It checks 980 literal fallback occurrences. It reports 48 calls with dynamic or missing literal arguments as pending.
+Other browser rendering remains pending. This delivery has not been released.
 
-The browser migration must inspect both the catalog value and the literal fallback at each call site.
-Add missing catalog entries only after confirming that the string is owned prose and checking its meaning in the surrounding UI.
-Preserve parameter names, units, identifiers, HTML escaping, and the distinction between an empty result and an unavailable result.
-Keep source evidence and executable content outside the prose inventory.
+The checker verifies that each supported literal key exists in the English catalog.
+Its literal fallback must match the catalog, with HTML entities decoded for comparison.
+Missing catalog entries are added after reviewing their use in the surrounding UI.
+Parameterized messages retain their values, units, identifiers, and escaping.
+Empty results and unavailable results keep separate explanations.
+Source evidence and executable content stay outside the prose inventory.
 
-Extend `scripts/check_english.py` with source extraction that distinguishes code, comments, string literals, and dynamic expressions.
-Use source locations and stable message keys in findings. Report unsupported expressions as pending coverage.
-Do not use the preliminary regular-expression audit as proof that every JavaScript explanation has been checked.
-The extraction guard must test comments, escaped quotes, nested call arguments, templates, and identifier-like code strings.
+`scripts/english_js.py` distinguishes code, comments, string literals, regex literals, and template expressions without executing source.
+`scripts/check_english.py` reports source locations and message keys. Known forwarding helpers have explicit argument positions.
+Unsupported expressions remain pending. This lexer is not a full JavaScript parser; `node --check` verifies syntax separately.
+Regression tests cover escaped quotes, nested arguments, template expressions, Unicode escapes, division, and optional calls.
 
-Migrate complete surfaces in this order: shared connection errors, Quality, Activity, Security, then remaining browser features.
-Verify both catalog-loaded and fallback rendering before removing a surface from pending coverage.
+Connection, Quality, and Security messages now have consistent catalog and fallback text.
+Security messages retain counts and uncertainty. Matching recorded hashes does not establish that no events were removed.
+Tests execute the shipped translation function and relevant renderers with the catalog both available and unavailable.
+Cost labels retain their amounts and financial basis. Channel loading messages retain the selected channel.
+These checks do not close the complete surfaces: their other dynamic rendering still requires extraction and review.
 This step does not close CLI, documentation, cloud, Pro, website, or full editorial review.
 
 ## System Contracts

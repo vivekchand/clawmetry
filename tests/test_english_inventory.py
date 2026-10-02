@@ -78,6 +78,34 @@ def test_finding_reports_source_and_rule(tmp_path, capsys):
     assert "[example]" in output
 
 
+def test_browser_fallback_must_exist_and_match_catalog(tmp_path, capsys):
+    root = fixture_root(tmp_path, "Data is available.")
+    source = root / "clawmetry/static/js/example.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("t('missing', null, 'Data is available.');")
+    assert main(["--root", str(root)]) == 1
+    assert "missing English catalog key 'missing'" in capsys.readouterr().err
+    source.write_text("t('example', null, 'A different message.');")
+    assert main(["--root", str(root)]) == 1
+    assert "fallback differs from English catalog" in capsys.readouterr().err
+    source.write_text("t('example', null, 'Data is available.');")
+    messages = collect(root)
+    assert any(m.source.endswith('example.js') and m.text == 'Data is available.' for m in messages)
+
+
+def test_dynamic_browser_expressions_remain_pending(tmp_path):
+    root = fixture_root(tmp_path, "Data is available.")
+    source = root / "clawmetry/static/js/example.js"
+    source.parent.mkdir(parents=True)
+    source.write_text("t('example', null, response.text);")
+    messages = collect(root)
+    assert not any(m.source.endswith('example.js') for m in messages)
+    result = inventory(root, messages, {})
+    assert result['browser_calls_pending'] == [
+        {'path': 'clawmetry/static/js/example.js', 'line': 1,
+         'key': 'example', 'reason': 'dynamic fallback'}]
+
+
 def test_duplicate_occurrences_are_counted():
     message = Message("page.html", "visible", 1, "It isn't active.")
     once, _ = violations([message])
