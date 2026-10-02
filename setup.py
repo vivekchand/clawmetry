@@ -157,6 +157,11 @@ setup(
         # made cloud users silently miss the relay. Now base install so
         # `pip install clawmetry && clawmetry connect` "just works".
         "websocket-client>=1.6",
+        # OpenClaw 2026.9.x keeps transcripts in SQLite and zstd-compresses
+        # the large events (clawmetry/openclaw_sqlite.py). Python 3.14+ has
+        # a zstd decoder in the stdlib; older interpreters need this one or
+        # an OpenClaw session stalls at its first compressed event.
+        'zstandard>=0.22; python_version < "3.14"',
         # OS trust store for TLS (Windows CryptoAPI / macOS Security /
         # Linux CA dir) -- makes corporate TLS-interception root CAs
         # (Zscaler/Netskope/Palo Alto) "just work" without certifi hacks.
