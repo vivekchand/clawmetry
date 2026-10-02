@@ -89,27 +89,32 @@ def test_summary_keeps_missing_cost_distinct_from_zero(monkeypatch):
 
 @pytest.mark.parametrize("mode", ["none", "direct", "relay"])
 def test_activity_turn_uses_its_own_fallback(monkeypatch, mode):
+    import importlib
     from flask import Flask
     from clawmetry.english import TURN_MESSAGES
     from routes import brain
 
+    # Older insight tests reload this module. Patch the same current module
+    # that the route imports, regardless of collection or execution order.
+    current_insights = importlib.import_module("clawmetry.insights")
+
     rows = [{"id": "turn-1", "event_type": "assistant", "text": "original evidence"}]
     before = copy.deepcopy(rows)
     monkeypatch.setattr(brain, "_fetch_session_chain", lambda *args: rows)
-    monkeypatch.setattr(insights, "load_config", lambda: {})
-    monkeypatch.setattr(insights, "_resolve_synthesis_credential", lambda cfg: (mode, "key"))
+    monkeypatch.setattr(current_insights, "load_config", lambda: {})
+    monkeypatch.setattr(current_insights, "_resolve_synthesis_credential", lambda cfg: (mode, "key"))
     calls = []
     def generate(*args):
         calls.append(args)
         return "We can't explain it.", 12
-    monkeypatch.setattr(insights, "_synthesize_via_anthropic", generate)
-    monkeypatch.setattr(insights, "_synthesize_via_relay", generate)
+    monkeypatch.setattr(current_insights, "_synthesize_via_anthropic", generate)
+    monkeypatch.setattr(current_insights, "_synthesize_via_relay", generate)
     app = Flask(__name__)
     app.register_blueprint(brain.bp_brain)
     response = app.test_client().get("/api/brain/why/session-1/turn-1")
     assert response.status_code == 200
     narration = response.get_json()["narration"]
-    expected_model = "none" if mode == "none" else insights.SYNTHESIS_MODEL if mode == "direct" else None
+    expected_model = "none" if mode == "none" else current_insights.SYNTHESIS_MODEL if mode == "direct" else None
     assert response.get_json()["model"] == expected_model
     assert narration == TURN_MESSAGES["connect" if mode == "none" else "unavailable"]
     assert "table" not in narration and "week" not in narration
