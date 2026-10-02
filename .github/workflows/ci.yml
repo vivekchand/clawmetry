@@ -967,6 +967,19 @@ jobs:
         run: >-
           pip install --require-hashes
           -r .github/requirements/ci-tests.txt
+      - name: Verify assistant analytics and dashboard persistence
+        run: >-
+          python3 -m pytest -q --tb=short
+          tests/test_assistant_route.py
+          tests/test_assistant_store.py
+          tests/test_assistant_managed.py
+          tests/test_assistant_frontend.py
+          tests/test_assistant_cloud_states.py
+          tests/test_assistant_pipeline.py
+          tests/test_custom_dashboard_panels.py
+          tests/test_context_economics_truthfulness.py
+          tests/test_improve_candidates.py
+          tests/test_setup_improve_surfaces.py
       - name: Verify shared secret redaction and its persistence boundary
         run: python3 -m pytest tests/test_redaction.py -q --tb=short
       - name: Run MOAT verifier suite

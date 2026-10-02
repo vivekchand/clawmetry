@@ -1,20 +1,9 @@
-"""The Ask tab is not in the product, and must not creep back.
+"""Contract tests for the conversational dashboard builder.
 
-Ask (Dives) asked a hosted user to ``export ANTHROPIC_API_KEY`` on a machine
-they were not looking at, and its "Open Settings" link went to the Security
-tab -- which has no key field anywhere on it. A nav item that cannot do its
-one job for a trial user, plus a link to a setting that does not exist, is a
-trust leak, not a feature with a bug. Removed 2026-09-07 rather than shipped
-with an apology banner (FLYWHEEL.md, "Minimal that works beats broad that
-half-works": cut, don't caveat).
-
-What is deliberately KEPT: ``routes/dives.py`` and ``clawmetry/dives_*`` --
-the SQL allowlist and prompt builder are load-bearing for Briefs, Insights,
-Reports and Signals, which are shipped features with their own surfaces.
-This gate is about the USER-FACING tab only.
-
-If Ask is ever rebuilt, it needs a path that works for a hosted trial user
-with nothing exported -- then delete this file in the same PR.
+Ask is a local, read-only natural-language query surface. It must remain
+reachable, persist saved panels through DuckDB, and explain provider setup
+without pretending that a browser can export a shell variable for a remote
+machine.
 """
 from __future__ import annotations
 
@@ -31,26 +20,36 @@ def _read(*parts):
         return fh.read()
 
 
-def test_no_ask_nav_item():
-    """The sidebar entry is gone -- nothing routes a user to a dead tab."""
+def test_ask_nav_item_is_live():
+    """Ask is a live entry point for persistent dashboard panels."""
     html = _read('dashboard.py')
-    assert "switchTab('dives')" not in html
-    assert 'data-tab="dives"' not in html
+    assert "switchTab('dives')" in html
+    assert 'data-tab="dives"' in html
 
 
-def test_no_dives_tab_template_or_page_script():
-    """The page itself and its loader are deleted, not merely unlinked."""
-    assert _read('clawmetry', 'templates', 'tabs', 'dives.html') is None
-    assert _read('clawmetry', 'static', 'js', 'dives.js') is None
+def test_dives_tab_template_and_page_script_are_shipped():
+    """The conversational dashboard builder is shipped with its page loader."""
+    assert _read('clawmetry', 'templates', 'tabs', 'dives.html') is not None
+    assert _read('clawmetry', 'static', 'js', 'dives.js') is not None
     dash = _read('dashboard.py')
-    assert "tabs/dives.html" not in dash
-    assert "js/dives.js" not in dash
+    assert "tabs/dives.html" in dash
+    assert "js/dives.js" in dash
 
 
-def test_app_js_has_no_dives_tab_registration():
-    """A tab left in the registries renders an empty page on deep links."""
+def test_app_js_registers_dives_tab_loader():
+    """The tab transition must load saved panels and the Ask page."""
     app_js = _read('clawmetry', 'static', 'js', 'app.js')
-    assert 'dives' not in app_js
+    assert "name === 'dives'" in app_js
+    assert 'loadDivesPage' in app_js
+
+
+def test_home_surfaces_safe_agent_efficiency_playbook():
+    """The main page links operating habits to the evidence tabs that measure them."""
+    html = _read('clawmetry', 'templates', 'tabs', 'overview.html')
+    assert 'id="agent-efficiency-playbook"' in html
+    for tab in ('brain', 'context-economics', 'guard', 'models'):
+        assert f"switchTab('{tab}')" in html
+        assert f'id="page-{tab}"' in _read('clawmetry', 'templates', 'tabs', tab + '.html')
 
 
 def test_the_anthropic_key_banner_is_gone_from_the_ui():
