@@ -107,12 +107,43 @@ def test_successful_edit_test_cycles_are_progress():
     assert detectors.stuck_loop(list(reversed(events)), "codex:session") is None
 
 
+def test_narration_after_failed_retries_does_not_hide_or_recover_a_loop():
+    from clawmetry.incident_evidence import positive_recovery
+    events = []
+    for i in range(3):
+        events += [event(i * 3, tool="Bash", args={"cmd": "test"}, call_id=f"retry-{i}"),
+                   event(i * 3 + 1, "tool_result", call_id=f"retry-{i}", is_error=True),
+                   event(i * 3 + 2, "assistant", content="Trying the same command again.")]
+    assert any(row["kind"] == "stuck_loop" for row in detect(events))
+    steps = detectors.normalize_events(list(reversed(events)))
+    episode = {"kind": "stuck_loop", "last_evidence_at": steps[-3]["ts"],
+               "evidence": {"call_signatures": [["Bash", steps[-3]["args_hash"]]]}}
+    assert positive_recovery(episode, steps) is None
+    events += [event(9, tool="Edit", args={"path": "test"}, call_id="fix"),
+               event(10, "tool_result", call_id="fix", is_error=False)]
+    proof = positive_recovery(episode, detectors.normalize_events(list(reversed(events))))
+    assert proof["event_id"] == "event-10"
+
+
 def test_missing_result_does_not_prove_loop_recovered():
     from clawmetry.incident_evidence import positive_recovery
     episode = {"kind": "stuck_loop", "last_evidence_at": 1790935202000,
                "evidence": {"call_signatures": [["Read", "same"]]}}
     steps = detectors.normalize_events([event(4, tool="Edit", call_id="pending")])
     assert positive_recovery(episode, steps) is None
+
+
+def test_narration_without_prior_failure_context_cannot_recover_a_loop():
+    from clawmetry.incident_evidence import positive_recovery
+    episode = {"kind": "stuck_loop", "last_evidence_at": 1790935202000,
+               "evidence": {"call_signatures": [["Bash", "same"]]}}
+    narration = event(10, "assistant", content="Trying the same command again.")
+    # The failed result has fallen outside the bounded moving window.
+    assert positive_recovery(episode, detectors.normalize_events([narration])) is None
+    # A new user turn establishes context for subsequent text, even if the
+    # old failed calls are no longer retained in this window.
+    steps = detectors.normalize_events([narration, event(9, "user", content="Move on to the next task")])
+    assert positive_recovery(episode, steps)['event_id'] == 'event-10'
 
 
 def test_failed_detector_pass_and_empty_window_cannot_recover():

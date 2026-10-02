@@ -225,7 +225,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/hooks_claude_code.py` | large | Claude Code hooks → ClawMetry: pre-execution approval gate + phone pushes. |
 | `clawmetry/incident_actions.py` | small | Apply encrypted acknowledgement on the owning node and confirm its state. |
 | `clawmetry/incident_alerts.py` | medium | deliver a detector incident to a human. |
-| `clawmetry/incident_evidence.py` | small | Stable detector evidence and conservative, positive recovery proofs. |
+| `clawmetry/incident_evidence.py` | medium | Stable detector evidence and conservative, positive recovery proofs. |
 | `clawmetry/incident_store.py` | medium | Durable Guard episodes, owned by the daemon's existing DuckDB writer. |
 | `clawmetry/ingest_auth.py` | medium | the gate in front of the ingest surfaces. |
 | `clawmetry/ingest_contract.py` | medium | the declared ingest/1 contract registry. |

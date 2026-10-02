@@ -116,6 +116,27 @@ assert(root.textContent.includes('Recovery evidence'));
 ''')
 
 
+@pytest.mark.parametrize('applied', [False, True])
+def test_acknowledgement_reports_authoritative_application(applied):
+    run(r'''
+const applied=__APPLIED__;
+const incident={incident_id:'episode',state:'active',acknowledged_at:null,evidence_refs:[]};
+payload.incident=incident;
+await cmLoadInvestigation({...scope,incident_id:'episode'});
+function findButton(element){
+ if(element.tag==='button' && element.textContent==='Acknowledge finding')return element;
+ for(const child of element.children){const found=findButton(child);if(found)return found;}
+}
+const button=findButton(root);assert(button);
+payload={ok:true,applied,incident:{...incident,acknowledged_at:applied?Date.now():null}};
+button.handlers.click({currentTarget:button});
+for(let i=0;i<15;i++)await Promise.resolve();
+const message=byId('investigation-message').textContent;
+assert.equal(message.includes('Acknowledgement saved'),applied);
+if(!applied){assert(message.includes('not applied'));assert(findButton(root));}
+'''.replace('__APPLIED__', 'true' if applied else 'false'))
+
+
 def test_group_reads_are_lazy_shared_and_cached():
     run(r"""
 window._cmCurrentTab='overview'; window._cmRuntimeFilter=()=> 'codex';

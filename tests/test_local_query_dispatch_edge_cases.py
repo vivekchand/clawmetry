@@ -93,7 +93,11 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
                                "session_context",
                                # WO-60: runs shaped like this one (tool-call
                                # n-gram similarity, e2e-classed: titles).
-                               "similar_sessions"}, (
+                               "similar_sessions",
+                               # Scoped, bounded investigation reads carry
+                               # agent content and stay on the e2e relay.
+                               "incidents", "investigation", "activity",
+                               "error_groups", "session_catalog"}, (
         "the dispatch allowlist changed — review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"

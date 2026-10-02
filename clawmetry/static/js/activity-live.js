@@ -94,7 +94,7 @@
   // while keeping their existing display/event callbacks.
   window.cmActivityEventSource = function (scope) {
     var handlers = {}, connected = false, closed = false;
-    var stream = {readyState:0, onmessage:null, onerror:null,
+    var stream = {readyState:0, onmessage:null, onerror:null, persistedActivity:true,
       addEventListener:function (name, callback) { (handlers[name] || (handlers[name]=[])).push(callback); }};
     function emit(name, data) {
       var event = {data:JSON.stringify(data)};
@@ -106,7 +106,7 @@
       if (page.resync_required) { emit('resync', page); return; }
       if (!connected && !page.from_cache) { connected = true; stream.readyState = 1; emit('connected', {source:'persisted'}); }
       (page.brain_events || []).forEach(function (row) {
-        if (stream.onmessage) stream.onmessage({data:JSON.stringify(row)});
+        if (stream.onmessage) stream.onmessage({data:JSON.stringify(row), fromCache:!!page.from_cache, activityMode:page.mode});
       });
       emit('checkpoint', {cursor:page.cursor});
     });

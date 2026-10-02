@@ -647,11 +647,11 @@ def stuck_loop(events: Iterable[dict], session_id: str,
     try:
         runtime, th, steps = _prepare(events, steps, thresholds, runtime, session_id)
         identical_k = int(th["identical_k"])
-        # A successful edit or a real reply breaks the old loop. A pending
-        # edit (or a failed one) is only an attempt and cannot prove progress.
+        # A successful edit or a reply without an unresolved tool failure
+        # breaks the old loop. Failed retries with narration are still a loop.
         tail = []
         for step in steps:
-            progress = (step["kind"] == "text" and step.get("has_text"))
+            progress = bool(step.get("progress_text"))
             progress = progress or (step["kind"] == "tool_result" and step.get("outcome_known")
                                     and not step["is_error"] and step.get("call_mutates"))
             unknown_call = step["kind"] == "tool_call" and not step.get("args_known", True)

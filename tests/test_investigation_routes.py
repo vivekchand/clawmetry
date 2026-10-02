@@ -47,11 +47,38 @@ def test_acknowledgement_blocks_cross_site_and_non_boolean_input(client):
 def test_shared_contract_is_content_scoped_and_daemon_allowlisted():
     from clawmetry.query_contract import QUERY_CONTRACT
     from routes.local_query import _DAEMON_METHODS
-    for shape in ("incidents", "investigation", "error_groups", "session_catalog"):
+    for shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog"):
         assert QUERY_CONTRACT[shape]["trust"] == "e2e"
         assert QUERY_CONTRACT[shape]["scope"] == "read:content"
         assert QUERY_CONTRACT[shape]["backing"] in _DAEMON_METHODS
     assert "acknowledge_incident" in _DAEMON_METHODS
+
+
+def test_activity_dispatches_through_the_daemon_method_endpoint(store, monkeypatch):
+    from routes import local_query
+    monkeypatch.setattr(local_query, '_store', lambda: store)
+    app = Flask(__name__)
+    app.register_blueprint(local_query.bp_local_query)
+    response = app.test_client().post('/__local_query__/query_activity', json={
+        'kwargs': {'runtime': 'codex', 'node_id': 'node-a'}})
+    assert response.status_code == 200
+    assert response.json['result']['rows'] == []
+    assert response.json['result']['cursor']
+
+
+def test_sandbox_logs_keep_the_single_method_proxy_contract(monkeypatch):
+    from routes import local_query
+    calls = []
+    def proxy(method, **kwargs):
+        calls.append((method, kwargs))
+        return [{'id': 'audit-entry'}]
+    monkeypatch.setattr(local_query, 'local_store_via_daemon', proxy)
+    app = Flask(__name__)
+    app.register_blueprint(local_query.bp_local_query)
+    response = app.test_client().get('/api/local/sandbox-logs/demo?limit=25')
+    assert response.status_code == 200
+    assert response.json == {'events': [{'id': 'audit-entry'}], 'sandbox': 'demo'}
+    assert calls == [('query_events', {'event_type': 'sandbox.audit_log', 'agent_id': 'demo', 'limit': 25})]
 
 
 def test_pending_investigation_and_activity_use_real_encrypted_daemon_contract(store, monkeypatch):

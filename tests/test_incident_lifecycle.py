@@ -216,6 +216,15 @@ def test_real_detector_pass_updates_episode_during_cooldown_and_recovers_after_e
     assert updated["first_seen"] == episode["first_seen"]
     store.ingest(event(4, error=False)); store._flush_now()
     store.ingest_session(dict(session, status="completed", ended_at=now.isoformat()))
+    # Pin each reconciliation input so a combined-suite failure identifies
+    # whether session selection, persisted evidence or recovery is wrong.
+    assert sync._candidate_active_sessions(store) == []
+    from clawmetry import detectors
+    from clawmetry.incident_evidence import positive_recovery
+    window = store.query_incident_window(session_id="codex:session", runtime="codex", node_id="node-a")
+    assert window[0]["id"] == "failure-4", window
+    proof = positive_recovery(updated, detectors.normalize_events(window))
+    assert proof and proof["event_id"] == "failure-4", (updated, window)
     sync._emit_detector_incidents(store, {})
     recovered = store.query_incidents()[0]
     assert recovered["state"] == "recovered"

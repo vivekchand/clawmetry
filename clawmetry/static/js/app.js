@@ -3883,10 +3883,13 @@ function _cmStartScreenStreams() {
 // on readyState===CLOSED, so this is idempotent).
 (function _installSSEVisibilityGuard() {
   if (typeof document === 'undefined' || !document.addEventListener) return;
-  function _closeAllSSE() {
+  function _closeAllSSE(pausePersisted) {
     ['_brainSSE', '_flowBrainSse', '_flowSse', 'healthStream', 'logStream'].forEach(function(key) {
       try {
         var es = window[key];
+        // Persisted readers pause their own fetches on hidden and resume
+        // from the committed cursor. Keep their subscribers registered.
+        if (pausePersisted === true && es && es.persistedActivity) return;
         if (es && typeof es.close === 'function') {
           es.close();
           window[key] = null;
@@ -3895,7 +3898,7 @@ function _cmStartScreenStreams() {
     });
   }
   document.addEventListener('visibilitychange', function() {
-    if (document.hidden) _closeAllSSE();
+    if (document.hidden) _closeAllSSE(true);
   });
   window.addEventListener('pagehide', _closeAllSSE);
 })();
@@ -9876,6 +9879,9 @@ function _hideBrainGraphDetail() {
 window._hideBrainGraphDetail = _hideBrainGraphDetail;
 
 var _brainSSE = null;
+var _brainActivityRuntime = null;
+var _brainAuxLastLoaded = 0;
+var _brainAuxPending = null;
 var _brainSSEConnected = false;
 // Issue #1596 — exponential backoff state for SSE reconnect. A single
 // retry chain (no parallel storms): `_brainSSERetryTimer` holds the
@@ -10000,9 +10006,18 @@ function _startBrainSSE() {
   _brainSSE = null;
   _brainSSEConnected = false;
 
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (_brainActivityRuntime !== runtime) {
+    _brainActivityRuntime = runtime;
+    _brainAllEvents = []; _brainFilter = 'all';
+    renderBrainStream([]); renderBrainChart([]);
+    renderBrainFilterChips([]); renderBrainTypeChips([]);
+    if (typeof syncBrainGraph === 'function') syncBrainGraph([]);
+  }
+
   try {
     // The shared persisted reader supplies authenticated fetches.
-    var es = window.cmActivityEventSource({runtime:typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : ''});
+    var es = window.cmActivityEventSource({runtime:runtime});
     _brainSSE = es;
 
     es.addEventListener('connected', function() {
@@ -10436,7 +10451,15 @@ window.selfevolveRun = async function () {
 
 window.cmLoadPersistedBrain = function () {
   if (_brainRange || document.hidden || _cmCurrentTab !== 'brain') return;
-  if (!_brainSSE || _brainSSE.readyState === 2) _startBrainSSE();
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (!_brainSSE || _brainSSE.readyState === 2 || _brainActivityRuntime !== runtime) _startBrainSSE();
+  // Keep the existing badges available without adding a second activity
+  // poller or re-reading them on every quiet replay/reconnect.
+  if (!_brainAuxPending && Date.now() - _brainAuxLastLoaded >= 30000) {
+    _brainAuxLastLoaded = Date.now();
+    _brainAuxPending = Promise.allSettled([loadLoopSignals(), loadBrainAtRisk(), loadBrainProgress()])
+      .finally(function () { _brainAuxPending = null; });
+  }
 };
 
 async function loadBrainPage(silent) {
@@ -24691,7 +24714,7 @@ function hideFlowRunDetail() {
 }
 
 function initFlow() {
-  if (flowInitDone) return;
+  if (flowInitDone) { _startFlowBrainStream(); return; }
   flowInitDone = true;
 
   // Performance: Reduce update frequency on mobile
@@ -25055,20 +25078,35 @@ function _backfillFlowFromBrain() {
 }
 
 var _flowBrainSse = null;
+var _flowActivityRuntime = null;
+var _flowActivitySeen = new Set();
 function _startFlowBrainStream() {
   if (_cmCurrentTab !== 'flow' || document.hidden) return;
-  if (_flowBrainSse && _flowBrainSse.readyState !== 2) return;
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (_flowBrainSse && _flowBrainSse.readyState !== 2 && _flowActivityRuntime === runtime) return;
+  if (_flowBrainSse) _flowBrainSse.close();
+  if (_flowActivityRuntime !== runtime) {
+    _flowActivityRuntime = runtime;
+    _flowActivitySeen.clear();
+    clearToolStream(); flowStats.activeTools = {}; updateFlowStats();
+  }
   try {
-    var es = window.cmActivityEventSource({runtime:typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : ''});
+    var es = window.cmActivityEventSource({runtime:runtime});
     _flowBrainSse = es;
-    var seen = new Set();
+    es.addEventListener('resync', function() {
+      _flowActivitySeen.clear(); clearToolStream();
+      flowStats.activeTools = {}; updateFlowStats();
+    });
     es.onmessage = function(e) {
       try {
         var ev = JSON.parse(e.data);
         if (!ev || !ev.type) return;
-        if (ev.eventId && seen.has(ev.eventId)) return;
-        if (ev.eventId) seen.add(ev.eventId);
-        while (seen.size > 500) seen.delete(seen.values().next().value);
+        if (ev.eventId && _flowActivitySeen.has(ev.eventId)) return;
+        if (ev.eventId) _flowActivitySeen.add(ev.eventId);
+        while (_flowActivitySeen.size > 500) _flowActivitySeen.delete(_flowActivitySeen.values().next().value);
+        var age = Date.now() - new Date(ev.time).getTime();
+        var live = !e.fromCache && e.activityMode === 'replay' && age >= 0 && age < 5000;
+        flowStats.events++;
         var tool = _brainTypeToFlowTool(ev.type);
         // Accuracy: a type that maps to a real bucket lights that component +
         // pulses its edge; an UNMAPPED type must NOT falsely light "Exec" — we
@@ -25077,19 +25115,19 @@ function _startFlowBrainStream() {
         if (tool) {
           // Drive Active Tools + the existing tool-call animation off the same
           // DuckDB-backed event. triggerToolCall already handles the 5s expiry.
-          triggerToolCall(tool);
-          _flowPulseEdge('path-brain-' + tool);
-          _flowRailSetStage('tools');
+          if (live) {
+            triggerToolCall(tool);
+            _flowPulseEdge('path-brain-' + tool);
+            _flowRailSetStage('tools');
+          }
           var label = '⚡ ' + tool + ': ' + _flowFeedLabelForTool(tool);
-          addFlowFeedItem(label, '#f0c040', 'tool');
+          addFlowFeedItem(label, '#f0c040', 'tool', ev.time);
         } else {
           // Unknown tool class — neutral pulse, honest label with the raw type.
-          _flowPulseEdge('path-brain-skills');
-          _flowRailSetStage('tools');
+          if (live) { _flowPulseEdge('path-brain-skills'); _flowRailSetStage('tools'); }
           var rawName = String(ev.tool || ev.type || 'tool');
-          addFlowFeedItem('⚡ ' + rawName, '#f0c040', 'tool');
+          addFlowFeedItem('⚡ ' + rawName, '#f0c040', 'tool', ev.time);
         }
-        flowStats.events++;
       } catch(e2) {}
     };
     es.onerror = function() {
@@ -25480,9 +25518,9 @@ var _toolCategoryColors = {
   error: '#e74c3c', heartbeat: '#4a7090', result: '#50c070', ai: '#a080f0'
 };
 
-function addFlowFeedItem(text, color, category) {
+function addFlowFeedItem(text, color, category, recordedAt) {
   if (_toolStreamPaused) return;
-  var now = new Date();
+  var now = recordedAt ? new Date(recordedAt) : new Date();
   var time = now.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
   var cat = category || 'system';
   _flowFeedItems.push({time: time, text: text, color: color || '#888', cat: cat});

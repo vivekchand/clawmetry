@@ -691,8 +691,7 @@ def http_sandbox_logs(sandbox_name: str):
     try:
         limit = min(int(request.args.get("limit", 50)), 200)
         rows = local_store_via_daemon(
-            "query_activity",
-    "query_events",
+            "query_events",
             event_type="sandbox.audit_log",
             agent_id=sandbox_name,
             limit=limit,
@@ -1287,6 +1286,7 @@ _DAEMON_METHODS = frozenset({
     "query_guard_incidents",
     "query_incidents",
     "query_investigation",
+    "query_activity",
     "query_error_groups",
     "query_session_catalog",
     "acknowledge_incident",

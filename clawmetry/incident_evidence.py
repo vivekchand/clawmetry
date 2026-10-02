@@ -34,6 +34,8 @@ def enrich_steps(steps, events):
     """
     pending = []
     by_id = {}
+    last_tool_failed = False
+    progress_context_at = None
     for step in steps:
         ev = events[step["i"]]
         data = ev.get("data")
@@ -49,6 +51,22 @@ def enrich_steps(steps, events):
         step["event_type"] = ev.get("event_type") or ""
         step["span_id"] = data.get("span_id") or ""
         step["trace_id"] = data.get("trace_id") or ""
+        # A retry explanation after a failed tool is narration, not proof
+        # that the loop made progress. Preserve that uncertainty until a
+        # known tool outcome or a new user turn provides another fact.
+        if step["kind"] == "user":
+            last_tool_failed = False
+            progress_context_at = step["ts"]
+        elif step["kind"] == "tool_result":
+            if step["is_error"]:
+                last_tool_failed = True
+                progress_context_at = None
+            elif step.get("outcome_known"):
+                last_tool_failed = False
+                progress_context_at = step["ts"]
+        step["progress_text"] = (step["kind"] == "text" and step.get("has_text")
+                                 and not last_tool_failed)
+        step["progress_context_at"] = progress_context_at
         if step["kind"] == "tool_call":
             pending.append(step)
             if step.get("tool_call_id"):
@@ -121,7 +139,11 @@ def positive_recovery(episode, steps, *, before_index=None):
             if success and step["tool"] and step["tool"] == evidence.get("tool"):
                 return dict(reference(step), reason="tool_succeeded")
         elif episode["kind"] == "stuck_loop":
-            progressed = (step["kind"] == "text" and step.get("has_text"))
+            # A bounded window may start after the implicated failure.
+            # Text alone cannot establish that the missing context changed.
+            context_at = step.get("progress_context_at")
+            progressed = bool(step.get("progress_text") and context_at is not None
+                              and context_at > last)
             progressed = progressed or step.get("event_type") == "session.completed"
             if success and step.get("call_event_id"):
                 changed = signatures and (step["tool"], step.get("call_args_hash")) not in signatures

@@ -263,7 +263,12 @@
     }).then(function (data) {
       if (generation !== state.generation) return;
       if (!data.incident) { message('Awaiting confirmation from the node.'); return; }
-      state.data.incident = data.incident; render(); message('Acknowledgement saved. Recovery and session controls are unchanged.');
+      state.data.incident = data.incident; render();
+      if (data.applied === false) {
+        message('Your acknowledgement change was not applied because a newer change is already recorded. Showing the current state.');
+      } else {
+        message('Acknowledgement saved. Recovery and session controls are unchanged.');
+      }
     }).catch(function () { if (generation === state.generation) message('Acknowledgement was not confirmed. Reconnect and try again.'); })
       .finally(function () { control.disabled = false; });
   }
