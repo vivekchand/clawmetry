@@ -18,6 +18,11 @@ describe the state at that check, not the current delivery state.
 - Pro source changes are merged. Private-wheel deployment remains pending.
 - Complete surface coverage, generated-output review, and qualified dictionary
   and grammar review remain incomplete.
+- The expanded shared blueprint was saved through the authenticated Factory
+  editor and verified after a reload on 2026-10-02. It includes generation,
+  extraction, attribute fallbacks, and the Pro, cloud, and website contracts.
+  The existing requirement already includes this scope. No acceptance criterion
+  was changed. The native Drift Bot status remains pending.
 
 ### Navigation attribute correction
 
@@ -91,7 +96,7 @@ Writing guide: [STE100_WRITING.md](STE100_WRITING.md).
 
 These records were written before implementation and published to Software Factory on 2026-10-02.
 Requirement: `a5f5d75b-43b5-4f55-ab9a-393865c606ca` (version 3).
-Blueprint: `3d07dd70-06dd-4a2e-b4bd-122ee55ac751` (version 3). The expanded generation design is recorded locally. Publishing that revision failed because the Factory keychain credential was unavailable.
+Blueprint: `3d07dd70-06dd-4a2e-b4bd-122ee55ac751` (initial version 3). API publication of the expanded design initially failed because the Factory keychain credential was unavailable. The browser publication recorded above resolves that document gap.
 Initial delivery: [PR #6248](https://github.com/vivekchand/clawmetry/pull/6248), merged on 2026-10-02. Release carrier: [PR #6261](https://github.com/vivekchand/clawmetry/pull/6261), merged on 2026-10-02. Publication and cloud promotion are still pending at this record.
 No production release or whole-product compliance claim is recorded here.
 
