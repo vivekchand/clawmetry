@@ -3562,7 +3562,7 @@ async function selfconfigRestoreVersion() {
     await selfconfigOpenFile(_selfconfigCurrentFile, null);
     loadSelfConfig();
   } catch(e) {
-    alert(t('app.selfconfig_restore_failed', {error: (e.message || e)}, 'Couldn\u2019t restore: {error}'));
+    alert(t('app.selfconfig_restore_failed', {error: (e.message || e)}, 'Could not restore: {error}'));
   }
 }
 
@@ -14670,7 +14670,7 @@ async function guardControl(sessionId, action, runtime, cwd) {
       var why = (data && (data.detail || data.error)) || 'request failed';
       alert('Could not ' + action + ' this session: ' + why);
     } else if (data.advisory_only) {
-      alert(t('sessions.pause_advisory_only', null, 'Pause flag set, but no enforcement proxy is running to hold this session — it is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.'));
+      alert(t('sessions.pause_advisory_only', null, 'Pause flag set, but no enforcement proxy is running to hold this session. The pause is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.'));
     }
     loadSessions();
   } catch (e) {
