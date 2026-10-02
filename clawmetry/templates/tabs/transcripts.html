@@ -15,7 +15,7 @@
     <button class="refresh-btn" onclick="setTranscriptTimeRange('live')" style="font-weight:600;" data-i18n="brain.back_to_live">● Back to live</button>
   </div>
   <div class="refresh-bar" style="margin-top:-6px;">
-    <button class="refresh-btn" id="transcript-plumbing-btn" onclick="toggleTranscriptPlumbing()" data-i18n-title="transcripts.plumbing_tooltip" title="Show Self-Evolve sessions: the agent's own self-review runs (FIX mode + re-analyze), hidden by default because they're plumbing, not your sessions" style="font-weight:500;display:none"><span id="transcript-plumbing-state">○</span> <span data-i18n="transcripts.show_plumbing">Show plumbing</span> <span id="transcript-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button>
+    <button class="refresh-btn" id="transcript-plumbing-btn" onclick="toggleTranscriptPlumbing()" data-i18n-title="transcripts.plumbing_tooltip" title="Show Self-Evolve sessions, where the agent reviews its own work. These sessions are hidden by default." style="font-weight:500;display:none"><span id="transcript-plumbing-state">○</span> <span data-i18n="transcripts.show_plumbing">Show plumbing</span> <span id="transcript-plumbing-count" style="opacity:0.7;font-size:11px;"></span></button>
     <button class="refresh-btn" id="transcript-back-btn" style="display:none" onclick="showTranscriptList()">← <span data-i18n="transcripts.back_to_list">Back to list</span></button>
   </div>
   <div class="card" id="transcript-list" data-i18n="app.loading">Loading...</div>
@@ -97,7 +97,7 @@
           min-width:120px;
           accent-color:#6366f1;
           ">
-        <button id="replay-sort-toggle" onclick="toggleTranscriptSort()" title="Oldest turn at top — click to flip to newest first" style="
+        <button id="replay-sort-toggle" onclick="toggleTranscriptSort()" title="Oldest turn first. Select to show the newest turn first." style="
           padding:5px 12px;
           border-radius:6px;
           border:1px solid var(--border-secondary);
@@ -117,7 +117,7 @@
           font-size:12px;
           white-space:nowrap;
           ">⤢ Expand tools</button>
-        <button id="replay-collapse-tools" onclick="collapseAllToolDives()" title="Collapse every tool call/result — turns the trace back into a skimmable chat" style="
+        <button id="replay-collapse-tools" onclick="collapseAllToolDives()" title="Hide details of all tool calls and results." style="
           padding:5px 10px;
           border-radius:6px;
           border:1px solid var(--border-secondary);
@@ -200,8 +200,8 @@
     <!-- Replay "as of T" state panel: model / thinking level / tokens accumulated.
          Shown by _updateReplayStatePanel() when replay controls are active. -->
     <div id="replay-state" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:7px 14px;margin-bottom:8px;font-size:12px;color:var(--text-secondary);gap:14px;flex-wrap:wrap;align-items:center;">
-      <span>🤖 <span data-i18n="transcripts.replay_model">Model</span>: <strong id="replay-state-model" style="color:var(--text-primary);">—</strong></span>
-      <span>💡 <span data-i18n="transcripts.replay_thinking">Thinking</span>: <strong id="replay-state-thinking" style="color:var(--text-primary);">—</strong></span>
+      <span>🤖 <span data-i18n="transcripts.replay_model">Model</span>: <strong id="replay-state-model" style="color:var(--text-primary);">Unknown</strong></span>
+      <span>💡 <span data-i18n="transcripts.replay_thinking">Thinking</span>: <strong id="replay-state-thinking" style="color:var(--text-primary);">Unknown</strong></span>
       <span>📈 <span data-i18n="transcripts.replay_tokens">Tokens so far</span>: <strong id="replay-state-tokens" style="color:var(--text-primary);">0</strong></span>
     </div>
     <!-- Turn-anchored layout (session-trace redesign): messages on the left,
@@ -211,7 +211,7 @@
     <div class="transcript-layout">
       <div class="chat-messages" id="transcript-messages"></div>
       <aside class="transcript-toc" id="transcript-toc"
-             title="Every user prompt in this session — click to jump"></aside>
+             title="User prompts in this session. Select a prompt to go to it."></aside>
     </div>
     <!-- Runs shaped like this one (WO-60). Below the fold, a power tool: the
          other sessions whose ordered tool calls look like this one, so a

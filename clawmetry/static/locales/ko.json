@@ -247,7 +247,6 @@
   "app.maybe_later": "나중에",
   "app.mcp_only": "MCP 전용",
   "app.mcp_servers": "🧩 MCP 서버",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 메모리",
   "app.memory_access_history_reads_from_the_local_event_s": "메모리 접근 기록은 로컬 이벤트 저장소에서 읽으며, 여기서는 제공되지 않습니다.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "메모리 파일은 에이전트 머신에 로컬로 저장되며 Cloud에 동기화되지 않습니다.",

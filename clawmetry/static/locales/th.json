@@ -247,7 +247,6 @@
   "app.maybe_later": "ไว้ภายหลัง",
   "app.mcp_only": "MCP เท่านั้น",
   "app.mcp_servers": "🧩 เซิร์ฟเวอร์ MCP",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 หน่วยความจำ",
   "app.memory_access_history_reads_from_the_local_event_s": "ประวัติการเข้าถึงหน่วยความจำอ่านจากที่เก็บเหตุการณ์ภายในเครื่อง ซึ่งไม่พร้อมใช้งานที่นี่",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "ไฟล์หน่วยความจำถูกจัดเก็บไว้ภายในเครื่องของเอเจนต์ และจะไม่ซิงค์ไปยัง Cloud",

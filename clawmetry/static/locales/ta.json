@@ -247,7 +247,6 @@
   "app.maybe_later": "பிறகு பார்க்கலாம்",
   "app.mcp_only": "MCP மட்டும்",
   "app.mcp_servers": "🧩 MCP சர்வர்கள்",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 நினைவகம்",
   "app.memory_access_history_reads_from_the_local_event_s": "நினைவக அணுகல் வரலாறு உள்ளூர் நிகழ்வு சேமிப்பகத்திலிருந்து படிக்கிறது, இது இங்கே கிடைக்கவில்லை.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "நினைவக கோப்புகள் முகவர் இயந்திரத்தில் உள்ளூராக சேமிக்கப்படுகின்றன, மேலும் Cloud உடன் ஒத்திசைக்கப்படவில்லை.",

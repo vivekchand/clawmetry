@@ -247,7 +247,6 @@
   "app.maybe_later": "ഒരുപക്ഷേ പിന്നീട്",
   "app.mcp_only": "MCP മാത്രം",
   "app.mcp_servers": "🧩 MCP സെർവറുകൾ",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 മെമ്മറി",
   "app.memory_access_history_reads_from_the_local_event_s": "മെമ്മറി ആക്സസ് ചരിത്രം ലോക്കൽ ഇവന്റ് സ്റ്റോറിൽ നിന്ന് വായിക്കുന്നു, അത് ഇവിടെ ലഭ്യമല്ല.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "മെമ്മറി ഫയലുകൾ ഏജന്റ് മെഷീനിൽ ലോക്കലായി സംഭരിക്കുന്നു, അവ Cloud-ലേക്ക് സിങ്ക് ചെയ്യുന്നില്ല.",

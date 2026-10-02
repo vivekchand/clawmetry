@@ -3,8 +3,7 @@
     <h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0;flex:1;" data-i18n="app.context_economics">🧠 Context usage</h2>
     <button class="refresh-btn" onclick="loadContextEconomics()" data-i18n="app.refresh">↻ Refresh</button>
   </div>
-  <p style="color:var(--text-muted);font-size:13px;margin:2px 0 14px;max-width:760px;" data-i18n="app.how_full_your_agents_context_windows_get_when_open">How full your agents’ context windows get, when your agent compacted (proactively vs forced by an overflow),
-    how many tokens each compaction reclaimed, and which sessions keep slamming into the wall.</p>
+  <p style="color:var(--text-muted);font-size:13px;margin:2px 0 14px;max-width:760px;" data-i18n="app.how_full_your_agents_context_windows_get_when_open">See how much of each context window your agents use. Review compactions that occur before or after the window is full. See how many tokens each compaction removes and which sessions repeatedly reach the limit.</p>
   <!-- Current context window: latest real per-turn reading (the honest
        replacement for the old LLM Context tab's headline gauge) -->
   <div id="ce-current-gauge" style="margin-bottom:14px;"></div>

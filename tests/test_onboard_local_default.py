@@ -361,8 +361,12 @@ def test_ensure_local_dashboard_true_when_already_serving(monkeypatch):
     assert spawned == [], "an already-serving port must not spawn anything"
 
 
-def test_ensure_local_dashboard_spawns_then_polls(monkeypatch):
+def test_ensure_local_dashboard_spawns_then_polls(monkeypatch, tmp_path):
     """Silent port -> start (subprocess fallback branch) -> poll flips alive."""
+    expanduser = os.path.expanduser
+    log_path = tmp_path / "dashboard.log"
+    monkeypatch.setattr(os.path, "expanduser", lambda path: str(log_path)
+                        if path == "~/.clawmetry/dashboard.log" else expanduser(path))
     calls = {"n": 0}
 
     def _urlopen(*a, **k):
@@ -379,6 +383,7 @@ def test_ensure_local_dashboard_spawns_then_polls(monkeypatch):
     assert cli._ensure_local_dashboard(wait_secs=2) is True
     assert len(spawned) == 1
     assert "--port" in spawned[0] and "8900" in spawned[0]
+    assert log_path.exists(), "the test must write its log only in the scratch directory"
 
 
 def test_ensure_local_dashboard_launchd_plist_uses_python_m():

@@ -44,6 +44,7 @@ class _Recorder:
     def __init__(self):
         self.measured_cases: list = []
         self.metric_should_raise = False
+        self.reason = "fake reason"
 
 
 def _build_fake_deepeval(recorder: _Recorder) -> dict[str, types.ModuleType]:
@@ -114,7 +115,7 @@ def _build_fake_deepeval(recorder: _Recorder) -> dict[str, types.ModuleType]:
             out = self.model.generate("judge this", schema=_FakeSchema)
             assert out == {"validated": {"verdict": "ok"}}
             self.score = 0.8
-            self.reason = "fake reason"
+            self.reason = recorder.reason
             return self.score
 
         def is_successful(self):
@@ -173,6 +174,7 @@ def bridge(monkeypatch):
     sys.meta_path.insert(0, finder)
     monkeypatch.delenv("DEEPEVAL_TELEMETRY_OPT_OUT", raising=False)
     monkeypatch.delenv("CLAWMETRY_DEEPEVAL_METRICS", raising=False)
+    monkeypatch.setenv("CLAWMETRY_EVALS_ENABLED", "1")
     _IMPORT_TIME_ENV.clear()
 
     sys.modules.pop("clawmetry.deepeval_bridge", None)
@@ -219,6 +221,44 @@ def _real_shape_rows(secret=""):
 
 def _ok_judge(model, prompt, *, timeout=30.0, max_tokens=200):
     return '{"verdict": "ok"}'
+
+
+@pytest.fixture(scope="session")
+def server():
+    """These unit tests use fake metrics and transports, not a live server."""
+    yield None
+
+
+@pytest.mark.parametrize("invalid_json_first", [False, True])
+@pytest.mark.parametrize("reason", ["The tool arguments match the request.",
+                                   "It can't verify the task.", None, "Good. " * 100])
+def test_reason_validation_preserves_verdict_and_json_retry_contract(bridge, reason, invalid_json_first):
+    """AC-STE-005.1, AC-STE-005.2, AC-STE-005.4, AC-STE-005.5."""
+    import copy
+    from clawmetry.english import WRITING_INSTRUCTIONS, explanation_or_fallback
+    deb, recorder = bridge
+    recorder.reason = reason
+    store = _FakeStore(_real_shape_rows())
+    before = copy.deepcopy(store.rows)
+    calls = []
+    def judge(model, prompt, **kwargs):
+        calls.append(prompt)
+        if invalid_json_first and len(calls) == 1:
+            return "invalid JSON"
+        return '{"verdict": "ok"}'
+    results = deb.score_session_deepeval(
+        "s1", metrics=["argument-correctness"], store=store, judge_call=judge,
+    )
+    assert len(results) == len(store.persisted) == 1
+    result = results[0]
+    assert result["score"] == store.persisted[0]["score"] == 0.8
+    assert result["passed"] is store.persisted[0]["passed"] is True
+    assert result["reason"] == explanation_or_fallback(reason, "evaluation", max_chars=500)
+    assert result["skipped"] is False and result["session_id"] == "s1"
+    assert store.rows == before
+    assert len(calls) == (2 if invalid_json_first else 1)
+    assert all(WRITING_INSTRUCTIONS in prompt for prompt in calls)
+    assert all("Return plain text." not in prompt for prompt in calls)
 
 
 # ── Import hygiene + telemetry contract ─────────────────────────────────────
