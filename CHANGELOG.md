@@ -26,6 +26,12 @@
 - **Already shipped in 0.12.901 without an entry here:** "Failed to load" and Retry states (#6234), "Error:" prefixes in cron toasts and the skills browser (#6235), "Save failed", "Loading", "Untitled session" and "No data yet" (#6236), health status labels, channel loading states and full-screen controls (#6237), and the heartbeat banner, heartbeat status, memory status and cron tool tiles (#6239).
 - **Limits:** new keys are added to `en.json` only; other locales show English for a new key until the translation sync PR merges. Long tooltips, upgrade prompts with links and sentences built by concatenation are still English.
 
+### Fixed: Sessions row Pause, Resume and Stop work again
+
+- **Why:** `app.js` declared `guardControl` twice with different parameter orders. The later declaration (Guard tab) replaced the earlier one (Sessions row), so the row buttons sent the action in the runtime position and the control request never matched a session.
+- **What:** the Sessions row handler is now `sessionRowControl`, so each caller reaches its own function with its own argument order. A test fails if `app.js` declares one top-level function name twice with different parameters. Carries #6265.
+- **Limits:** checked by unit test and by reading the request the row sends. The buttons were not clicked against a live agent.
+
 ### Fixed: OpenClaw 2026.9.x sessions appear again
 
 - **Why:** OpenClaw 2026.9.x stopped writing `agents/main/sessions/<id>.jsonl` and keeps live transcripts in SQLite (`agents/main/agent/openclaw-agent.sqlite`). The daemon only read the `.jsonl` files, so on a current OpenClaw no session, message, token or cost ever reached ClawMetry; #6173 shipped a warning, not a reader.
