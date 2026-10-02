@@ -217,3 +217,33 @@ def test_history_detail_requests_cannot_let_an_older_click_overwrite_a_newer_one
         """
     )
     subprocess.run([node, "-e", script], cwd=ROOT, check=True)
+
+
+def test_saved_panel_headers_stay_readable_with_runtime_lookup_fallback():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node.js is not installed')
+    source = (ROOT / 'clawmetry/static/js/custom-dashboard.js').read_text()
+    helpers = source[source.index('  function esc('):source.index('  function panelTarget(')]
+    table = source[source.index('  function renderTable('):source.index('  function renderChart(')]
+    script = '\n'.join([
+        "var window = {_cmRuntimeLabel: value => value === 'claude_code' ? 'Claude Code' : value};",
+        helpers, table,
+        "var host = {}; renderTable(host, [{runtime:'claude_code', estimated_cost_usd:12, tokens:null, note:'<script>alert(1)</script>'}]);",
+        "console.log(host.innerHTML);",
+    ])
+    result = subprocess.run([node, '-e', script], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert '<th>Estimated Cost Usd</th>' in result.stdout
+    assert '<td>Claude Code</td>' in result.stdout
+    assert 'Not measured' in result.stdout
+    assert '<script>' not in result.stdout
+    assert '&lt;script&gt;' in result.stdout
+
+
+def test_saved_panels_explain_their_scope_and_link_to_assistant():
+    source = (ROOT / 'clawmetry/templates/tabs/overview.html').read_text()
+    section = source.split('id="custom-dashboard-section"', 1)[1].split('</section>', 1)[0]
+    assert "switchTab('assistant')" in section
+    assert 'Each panel keeps its saved filters' in section
+    assert 'runtime selector above does not change these panels' in section

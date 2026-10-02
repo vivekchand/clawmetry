@@ -3879,7 +3879,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .guard-history-tools input,.guard-history-tools select { border:1px solid var(--border-primary); border-radius:6px; padding:9px; font:inherit; color:var(--text-primary); background:var(--bg-secondary); max-width:100%; }
 .alerts-hist-text > span,.alerts-hist-text > small { display:block; margin-top:5px; line-height:1.5; color:var(--text-muted); }
 
-.cm-dashboard-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; }
+.cm-dashboard-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:12px; align-items:start; }
 .cm-dashboard-panel { min-width:0; padding:14px 16px; }
 .cm-dashboard-panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:10px; }
 .cm-dashboard-panel-head h3 { margin:0; color:var(--text-primary); font-size:14px; }
@@ -3887,8 +3887,14 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .cm-dashboard-panel-body { min-height:76px; }
 .cm-dashboard-chart-wrap { height:220px; position:relative; }
 .cm-dashboard-table-wrap { max-height:220px; overflow:auto; }
-.cm-dashboard-table { margin:0; font-size:11px; }
-.cm-dashboard-table th, .cm-dashboard-table td { white-space:nowrap; }
+.cm-dashboard-table { margin:0; width:100%; table-layout:fixed; }
+.cm-dashboard-table th, .cm-dashboard-table td { padding:8px 6px; font-size:11px; white-space:normal; overflow-wrap:anywhere; }
+.cm-dashboard-table th { text-transform:none; letter-spacing:0; line-height:1.4; }
+.cm-dashboard-table tr:last-child td { font-weight:400; color:var(--text-secondary); }
+.cm-dashboard-scope { margin:0 0 12px; color:var(--text-muted); font-size:12px; line-height:1.5; }
+.cm-dashboard-delete { flex-shrink:0; padding:5px 8px; border:1px solid var(--border-primary); border-radius:6px; color:var(--text-secondary); background:var(--bg-secondary); font:inherit; font-size:11px; cursor:pointer; }
+.cm-dashboard-delete:hover { color:var(--text-primary); border-color:var(--text-muted); }
+.cm-dashboard-delete:focus-visible { outline:2px solid var(--text-accent); outline-offset:2px; }
 .cm-dashboard-loading, .cm-dashboard-empty, .cm-dashboard-empty-state { color:var(--text-muted); font-size:12px; padding:14px 4px; }
 .cm-dashboard-empty-state { background:var(--bg-secondary); border:1px dashed var(--border-primary); border-radius:10px; }
 .cm-dashboard-panel-error { margin-bottom:8px; color:var(--text-error,#fca5a5); font-size:11px; }

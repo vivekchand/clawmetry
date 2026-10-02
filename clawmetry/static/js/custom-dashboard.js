@@ -98,7 +98,7 @@
     if (typeof window._cmRuntimeLabel === 'function') {
       try {
         var known = window._cmRuntimeLabel(raw);
-        if (known) return String(known);
+        if (known && String(known) !== raw) return String(known);
       } catch (e) {}
     }
     if (window._CM_RT_LABEL && typeof window._CM_RT_LABEL === 'object' && window._CM_RT_LABEL[raw]) {
