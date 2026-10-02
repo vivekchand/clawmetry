@@ -247,7 +247,6 @@
   "app.maybe_later": "Mungkin nanti",
   "app.mcp_only": "Hanya MCP",
   "app.mcp_servers": "🧩 Server MCP",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 Memori",
   "app.memory_access_history_reads_from_the_local_event_s": "Riwayat akses memori dibaca dari penyimpanan event lokal, yang tidak tersedia di sini.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "Berkas memori disimpan secara lokal di mesin agen dan tidak disinkronkan ke Cloud.",

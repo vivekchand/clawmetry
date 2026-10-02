@@ -262,6 +262,20 @@ jobs:
       - name: Every workflow file must parse
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
+      - name: English policy regression tests
+        run: python3 -m pytest tests/test_english.py tests/test_english_inventory.py tests/test_english_js.py tests/test_english_browser_rendering.py tests/test_english_python.py tests/test_english_cli.py tests/test_insights_english.py tests/test_generated_english.py tests/test_deepeval_bridge.py -q
+
+      - name: English explanations must not add language debt
+        env:
+          ENGLISH_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -n "$ENGLISH_BASE_REF" ] && [ "$ENGLISH_BASE_REF" != "0000000000000000000000000000000000000000" ]; then
+            git fetch --no-tags --depth=1 origin "$ENGLISH_BASE_REF"
+            python3 scripts/check_english.py --base-ref "$ENGLISH_BASE_REF"
+          else
+            python3 scripts/check_english.py
+          fi
+
       # WorkflowIntegrityGuard. Written for ADR-005 ("a CI step that cannot
       # fail is worse than no CI step") and, until #5744, run by NO job at all
       # -- the exact trap this repo's own convention warns about, on the guard
@@ -565,6 +579,13 @@ jobs:
       # because this job runs FILE LISTS.
       - name: Dashboard cold load boot
         run: python3 -m pytest tests/test_cold_load_boot_js.py -q
+
+      # Sessions row Pause / Resume / Stop. app.js declared guardControl twice
+      # with different parameter orders; the later one won, so a row click sent
+      # the action as the runtime and no control reached the agent. Static,
+      # named explicitly because this job runs FILE LISTS.
+      - name: Sessions row controls
+        run: python3 -m pytest tests/test_session_row_control_js.py -q
 
       - name: First-install preparation UI
         run: python3 -m pytest tests/test_startup_readiness.py -q
@@ -1056,6 +1077,7 @@ jobs:
             tests/test_wake_poll.py \
             tests/test_cli_unattended_update.py \
             tests/test_cli_help_no_dashboard_import.py \
+            tests/test_onboard_local_default.py \
             tests/test_behaviour_signals.py \
             tests/test_signals_ui_contract.py \
             tests/test_signal_shifts.py \

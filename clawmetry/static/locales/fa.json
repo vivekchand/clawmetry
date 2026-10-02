@@ -247,7 +247,6 @@
   "app.maybe_later": "شاید بعداً",
   "app.mcp_only": "فقط MCP",
   "app.mcp_servers": "🧩 سرورهای MCP",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 حافظه",
   "app.memory_access_history_reads_from_the_local_event_s": "تاریخچه دسترسی به حافظه از انبار رویداد محلی خوانده می‌شود که اینجا در دسترس نیست.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "فایل‌های حافظه به‌صورت محلی روی ماشین عامل ذخیره می‌شوند و با Cloud همگام‌سازی نمی‌شوند.",

@@ -247,7 +247,6 @@
   "app.maybe_later": "شاید بعد میں",
   "app.mcp_only": "صرف MCP",
   "app.mcp_servers": "🧩 MCP سرورز",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 میموری",
   "app.memory_access_history_reads_from_the_local_event_s": "میموری رسائی کی تاریخ مقامی ایونٹ اسٹور سے پڑھتی ہے، جو یہاں دستیاب نہیں ہے۔",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "میموری فائلیں ایجنٹ مشین پر مقامی طور پر محفوظ ہوتی ہیں اور کلاؤڈ سے ہم وقت نہیں ہوتیں۔",

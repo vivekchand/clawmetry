@@ -17,22 +17,29 @@ description: "Install the pinned OpenClaw (Node CLI) and expose it on PATH for d
 # upgrade is a Dependabot pull request against that lockfile, not a dist-tag
 # resolved fresh on each run.
 #
-# Why the pin is 2026.5.12 and not the newest release:
-#   `latest` was never actually resolved on a run. The actions/cache step this
-#   action used to carry was keyed on the literal string "latest", so the key
-#   never changed and never invalidated; every job since May restored that
-#   cache and logged "openclaw cache hit, skipping install". CI has therefore
-#   been testing against 2026.5.12 for months while appearing to track latest.
-#   2026.5.12 is what the E2E suites are green against today, so pinning it
-#   here is a no-op for behaviour and confines this change to the supply-chain
-#   fix. Moving off it is real work, not a version bump — see the note on the
-#   Dependabot entry in .github/dependabot.yml.
+# Why the pin is 2026.9.2:
+#   It is advisory-clean (`npm audit` reports 0 vulnerabilities) and it installs
+#   on Node 22, so adopting it moved no workflow's Node major. The pin sat at
+#   2026.5.12 until 2026-10-02 on the recorded grounds that moving it required a
+#   Node 24 migration across the whole E2E fleet; that was measured against
+#   openclaw 2026.9.7 alone and does not hold for 2026.9.2, whose engines range
+#   is satisfied by the newest 22.x. Clearing it took 25 advisories to 0,
+#   including the three packages the old note called permanently uncoverable.
+#   The full measurement, the override audit and the boot-gate result are in
+#   this directory's package.json under `//overrides`.
+#
+#   Before that, `latest` was never actually resolved on a run: the
+#   actions/cache step this action used to carry was keyed on the literal
+#   string "latest", so the key never changed and never invalidated; every job
+#   since May restored that cache and logged "openclaw cache hit, skipping
+#   install". CI spent months testing against 2026.5.12 while appearing to
+#   track latest, which is why the pin was written down explicitly.
 #
 # The mirror of this action in vivekchand/clawmetry-cloud (cloud #2300) pins
-# 2026.9.2, deliberately not the same version. Cloud has no live-OpenClaw
-# transcript E2E, so the JSONL/SQLite boundary described above does not reach
-# it. The two copies share a mechanism, not a version; keep them in step on the
-# mechanism and let each pin what its own suites are green against.
+# 2026.9.2 as well — it got there first, and this repository adopted the version
+# cloud had already proven in CI rather than a fresh one. The two copies still
+# share a mechanism rather than a release cadence: keep them in step on the
+# mechanism, and let each pin what its own suites are green against.
 
 inputs:
   gateway-token:
@@ -41,11 +48,13 @@ inputs:
     default: "ci-openclaw-token"
   node-version:
     description: >-
-      Node major to install. The pinned openclaw 2026.5.12 declares
-      `>=22.16.0`, so the default names the major and lets setup-node resolve
-      the newest 22.x. Newer openclaw releases enforce a much narrower range in
-      their own install script rather than only warning, so a Dependabot bump
-      is what would make this need changing.
+      Node major to install. The pinned openclaw 2026.9.2 declares
+      `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`, so the default names the
+      major and lets setup-node resolve the newest 22.x — 22.23.3 today, above
+      that 22.22.3 floor. Naming the bare major rather than an exact version is
+      what makes this work: a pinned 22.22.0 would not satisfy it. One release,
+      openclaw 2026.9.7, raises the floor to Node 24 and would make this need
+      changing; see the note in this directory's package.json.
     required: false
     default: "22"
 

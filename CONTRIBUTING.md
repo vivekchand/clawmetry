@@ -241,3 +241,11 @@ By contributing to OpenClaw Dashboard, you agree that your contributions will be
 ---
 
 **Thanks for making OpenClaw Dashboard better! 🦞**
+## English explanations
+
+Use the [English writing policy](docs/STE100_WRITING.md) for UI text, help, errors, CLI messages, reports, and documentation.
+It uses ASD-STE100 Issue 9 as its reference.
+Run `python3 scripts/check_english.py` before submitting a text change.
+Use `python3 scripts/check_english.py --inventory` to see the checks and remaining coverage.
+Preserve source evidence, values, identifiers, commands, and uncertainty.
+Mechanical checks support editorial review. They do not establish full compliance.
