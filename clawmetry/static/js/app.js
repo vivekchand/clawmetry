@@ -1001,7 +1001,7 @@ async function saveWebhookConfig() {
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify(payload)
     });
-    if (!r.ok) throw new Error('Save failed');
+    if (!r.ok) throw new Error(t('app.save_failed', null, 'Save failed'));
     status.style.color = 'var(--text-success)';
     status.textContent = 'Saved';
   } catch(e) {
@@ -2962,10 +2962,10 @@ async function loadHeartbeat() {
 
     var status = d.status || 'never';
     var labels = {
-      healthy:  { status: 'Alive and well',   pulse: 'checking in',    badge: 'Healthy' },
-      drifting: { status: 'Running a bit late', pulse: 'slow',         badge: 'Late' },
-      missed:   { status: 'Something\u2019s wrong', pulse: 'missed',   badge: 'Missed' },
-      never:    { status: 'No check-ins yet', pulse: 'waiting...',     badge: 'Waiting' }
+      healthy:  { status: t('overview.hb_alive_and_well', null, 'Alive and well'), pulse: t('overview.hb_checking_in', null, 'checking in'), badge: t('overview.status_healthy', null, 'Healthy') },
+      drifting: { status: t('overview.hb_running_late', null, 'Running a bit late'), pulse: t('overview.hb_slow', null, 'slow'), badge: t('overview.hb_late', null, 'Late') },
+      missed:   { status: t('overview.hb_something_wrong', null, 'Something\u2019s wrong'), pulse: t('overview.hb_missed', null, 'missed'), badge: t('overview.hb_missed_badge', null, 'Missed') },
+      never:    { status: t('overview.hb_no_checkins_yet', null, 'No check-ins yet'), pulse: t('app.waiting', null, 'waiting...'), badge: t('overview.hb_waiting_badge', null, 'Waiting') }
     };
     var colors = { healthy: '#22c55e', drifting: '#f59e0b', missed: '#ef4444', never: '#6b7280' };
     var anims = {
@@ -3538,7 +3538,7 @@ async function selfconfigSave() {
     loadSelfConfig();
     selfconfigSetMode('preview');
   } catch(e) {
-    alert('Save failed: ' + (e.message || e));
+    alert(t('app.save_failed_2', null, 'Save failed: ') + (e.message || e));
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Save'; btn.style.opacity = '1'; }
   }
@@ -3557,7 +3557,7 @@ async function selfconfigRestoreVersion() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: content })
     });
-    if (!r.ok) throw new Error('Save failed');
+    if (!r.ok) throw new Error(t('app.save_failed', null, 'Save failed'));
     // Return to "now" with the restored content.
     await selfconfigOpenFile(_selfconfigCurrentFile, null);
     loadSelfConfig();
@@ -7110,11 +7110,11 @@ async function saveEvalKey() {
       inp.value = '';  // never keep the secret in the DOM after save
       loadEvalKeyStatus();
     } else if (el) {
-      el.textContent = (resp && resp.error) || 'Save failed';
+      el.textContent = (resp && resp.error) || t('app.save_failed', null, 'Save failed');
       el.style.color = '#ef4444';
     }
   } catch (e) {
-    if (el) { el.textContent = 'Save failed: ' + e.message; el.style.color = '#ef4444'; }
+    if (el) { el.textContent = t('app.save_failed_2', null, 'Save failed: ') + e.message; el.style.color = '#ef4444'; }
   }
 }
 
@@ -15132,7 +15132,7 @@ async function loadQueueLanes() {
     // Say it failed. Do not fall through to the empty state, which claims
     // there are no runs.
     panel.innerHTML = '<div class="card" style="padding:14px;font-size:13px;color:var(--text-error);">'
-      + 'Failed to load queue lanes: ' + escHtml(String((e && e.message) || e))
+      + escHtml(t('app.failed_to_load_queue_lanes', null, 'Failed to load queue lanes:')) + ' ' + escHtml(String((e && e.message) || e))
       + ' <button onclick="loadQueueLanes()" style="margin-left:8px;background:transparent;'
       + 'border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;'
       + 'padding:2px 10px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button></div>';
@@ -17741,7 +17741,7 @@ async function loadSystemHealth() {
       if (hbEl) {
         var hbStatus = hbData.status || 'unknown';
         var hbDot = hbStatus === 'ok' ? '🟢' : (hbStatus === 'warning' ? '🟡' : (hbStatus === 'silent' ? '🔴' : '⚪'));
-        var hbLabel = hbStatus === 'ok' ? 'Healthy' : (hbStatus === 'warning' ? 'Delayed' : (hbStatus === 'silent' ? 'SILENT' : 'No data yet'));
+        var hbLabel = hbStatus === 'ok' ? 'Healthy' : (hbStatus === 'warning' ? 'Delayed' : (hbStatus === 'silent' ? 'SILENT' : t('overview.no_data_yet', null, 'No data yet')));
         var hbGap = hbData.gap_seconds;
         var hbDetail = '';
         if (hbGap != null) {
@@ -17899,9 +17899,9 @@ async function loadSystemHealth() {
       var dmColor = dmStatus === 'healthy' ? 'var(--text-success,#22c55e)'
                   : dmStatus === 'degraded' ? '#f59e0b'
                   : 'var(--text-error,#dc2626)';
-      var dmLabel = dmStatus === 'healthy' ? 'Healthy'
-                  : dmStatus === 'degraded' ? 'Degraded'
-                  : 'BROKEN';
+      var dmLabel = dmStatus === 'healthy' ? t('overview.status_healthy', null, 'Healthy')
+                  : dmStatus === 'degraded' ? t('overview.status_degraded', null, 'Degraded')
+                  : t('overview.status_broken', null, 'BROKEN');
       var e5 = dm.errors_last_5min || 0;
       var e1h = dm.errors_last_1h || 0;
       var msg = dm.last_error_message || '';
@@ -17941,15 +17941,15 @@ async function loadSystemHealth() {
       var gwStatus = gw.status || 'not_running';
       var gwDot, gwLabel, gwColor;
       if (gwStatus === 'critical') {
-        gwDot = '🔴'; gwLabel = 'Critical'; gwColor = 'var(--text-error,#dc2626)';
+        gwDot = '🔴'; gwLabel = t('security.critical', null, 'Critical'); gwColor = 'var(--text-error,#dc2626)';
       } else if (gwStatus === 'warning') {
-        gwDot = '🟡'; gwLabel = 'Warning'; gwColor = '#f59e0b';
+        gwDot = '🟡'; gwLabel = t('overview.status_warning', null, 'Warning'); gwColor = '#f59e0b';
       } else if (gwStatus === 'healthy') {
-        gwDot = '🟢'; gwLabel = 'Healthy'; gwColor = 'var(--text-success,#22c55e)';
+        gwDot = '🟢'; gwLabel = t('overview.status_healthy', null, 'Healthy'); gwColor = 'var(--text-success,#22c55e)';
       } else if (gwStatus === 'externally_supervised') {
-        gwDot = '🟡'; gwLabel = 'Supervised pause'; gwColor = '#f59e0b';
+        gwDot = '🟡'; gwLabel = t('overview.status_supervised_pause', null, 'Supervised pause'); gwColor = '#f59e0b';
       } else {
-        gwDot = '⚫'; gwLabel = 'Not running'; gwColor = 'var(--text-muted)';
+        gwDot = '⚫'; gwLabel = t('overview.status_not_running', null, 'Not running'); gwColor = 'var(--text-muted)';
       }
       var rss = (typeof gw.rss_mb === 'number') ? gw.rss_mb : null;
       var thr = gw.memory_threshold_mb || 900;
@@ -20543,7 +20543,7 @@ async function loadTranscripts() {
       var raw = String(tx.id || '');
       var titleSrc = (tx.title && String(tx.title).trim()) || (tx.name && String(tx.name).trim()) || '';
       var looksLikeId = !titleSrc || titleSrc === raw || UUIDISH.test(titleSrc) || raw.indexOf(titleSrc) === 0;
-      var title = looksLikeId ? 'Untitled session' : titleSrc;
+      var title = looksLikeId ? t('trail.untitled', null, 'Untitled session') : titleSrc;
       var isPlumbing = _isPlumbingTranscript(titleSrc);
       if (isPlumbing) plumbingTotal++;
       // Self-Evolve runs are hidden by default; "Show plumbing" reveals them de-emphasized.
@@ -26332,7 +26332,7 @@ function openCompModal(nodeId) {
   document.getElementById('time-travel-bar').classList.remove('active');
 
   if (nodeId === 'node-tui') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading TUI messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'TUI' }, 'Loading TUI messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadTuiMessages(false);
     window._tuiRefreshTimer = visibilitySetInterval(function() { loadTuiMessages(true); }, 10000);
@@ -26342,7 +26342,7 @@ function openCompModal(nodeId) {
   if (nodeId === 'node-telegram') {
     _tgOffset = 0;
     _tgAllMessages = [];
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_messages', null, 'Loading messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadTelegramMessages(false);
     _tgRefreshTimer = visibilitySetInterval(function() { loadTelegramMessages(true); }, 10000);
@@ -26358,7 +26358,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-whatsapp') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading WhatsApp messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'WhatsApp' }, 'Loading WhatsApp messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadWhatsAppMessages(false);
     _waRefreshTimer = visibilitySetInterval(function() { loadWhatsAppMessages(true); }, 10000);
@@ -26366,7 +26366,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-signal') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Signal messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Signal' }, 'Loading Signal messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadSignalMessages(false);
     _sigRefreshTimer = visibilitySetInterval(function() { loadSignalMessages(true); }, 10000);
@@ -26374,7 +26374,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-discord') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Discord messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Discord' }, 'Loading Discord messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadDiscordMessages(false);
     _discordRefreshTimer = visibilitySetInterval(function() { loadDiscordMessages(true); }, 10000);
@@ -26382,7 +26382,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-slack') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Slack messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Slack' }, 'Loading Slack messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadSlackMessages(false);
     _slackRefreshTimer = visibilitySetInterval(function() { loadSlackMessages(true); }, 10000);
@@ -26390,7 +26390,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-googlechat') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Google Chat messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Google Chat' }, 'Loading Google Chat messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadGoogleChatMessages(false);
     _gcRefreshTimer = visibilitySetInterval(function() { loadGoogleChatMessages(true); }, 10000);
@@ -26398,7 +26398,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-msteams') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading MS Teams messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'MS Teams' }, 'Loading MS Teams messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadMSTeamsMessages(false);
     _mstRefreshTimer = visibilitySetInterval(function() { loadMSTeamsMessages(true); }, 10000);
@@ -26406,7 +26406,7 @@ function openCompModal(nodeId) {
   }
 
   if (nodeId === 'node-mattermost') {
-    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> Loading Mattermost messages...</div>';
+    document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:40px;"><div class="pulse"></div> ' + escapeHtml(t('app.loading_channel_messages', { channel: 'Mattermost' }, 'Loading Mattermost messages...')) + '</div>';
     document.getElementById('comp-modal-overlay').classList.add('open');
     loadMattermostMessages(false);
     _mmRefreshTimer = visibilitySetInterval(function() { loadMattermostMessages(true); }, 10000);
@@ -30534,7 +30534,7 @@ function loadAgentGraph() {
       'The agent graph is built from your local data store, so it is only available on the dashboard running on your machine (http://localhost:8900).');
     return;
   }
-  statusEl.textContent = 'Loading…';
+  statusEl.textContent = t('app.loading_2', null, 'Loading…');
 
   var win   = parseInt((document.getElementById('agent-graph-window') || {}).value || '86400', 10);
   var now   = Math.floor(Date.now() / 1000);
@@ -30801,8 +30801,8 @@ function cmFileViewerRender(hostId) {
   tools += '<button class="cm-fv-btn" onclick="cmFvCopy(\'' + hid + '\',this)" '
     + 'title="Copy the whole file">⧉ Copy</button>';
   tools += '<button class="cm-fv-btn" onclick="cmFvToggleFullscreen(\'' + hid + '\')" title="'
-    + (s.fs ? 'Exit full screen (Esc)' : 'Full screen') + '">'
-    + (s.fs ? '✕ Exit full screen' : '⤡ Full screen') + '</button>';
+    + escHtml(s.fs ? t('memory.exit_full_screen_esc', null, 'Exit full screen (Esc)') : t('memory.full_screen', null, 'Full screen')) + '">'
+    + (s.fs ? '✕ ' + escHtml(t('memory.exit_full_screen', null, 'Exit full screen')) : '⤡ ' + escHtml(t('memory.full_screen', null, 'Full screen'))) + '</button>';
 
   var body;
   if (s.mode === 'preview') {
@@ -30919,7 +30919,7 @@ function cmPanelToggleFullscreen(panel, btn) {
   }
   if (btn) {
     var label = btn.querySelector('span');
-    if (label) label.textContent = on ? 'Exit full screen' : 'Full screen';
+    if (label) label.textContent = on ? t('memory.exit_full_screen', null, 'Exit full screen') : t('memory.full_screen', null, 'Full screen');
   }
 }
 
