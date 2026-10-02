@@ -66,10 +66,77 @@
 # so that particular silence is over. Keep the block's `Name==Version` spelling;
 # that guard reads it.
 #
-# starlette is deliberately NOT layered. It is pinned to 0.50.0 by
-# fastapi==0.124.4, which litellm pins in turn; the advisories against it are
-# fixed only in starlette 1.x, which that fastapi will not accept. Clearing it
-# needs a fastapi bump from litellm upstream, not an edit here.
+# starlette and fastapi are NOT layered floors. They are the opposite: the
+# resolution catching up with the litellm pin. This block used to read that
+# starlette was "deliberately NOT layered", pinned to 0.50.0 by fastapi
+# 0.124.4 "which litellm pins in turn", and that clearing its advisories
+# "needs a fastapi bump from litellm upstream, not an edit here". That was
+# true when written and is now stale, so the reasoning is recorded here
+# rather than left to be re-derived.
+#
+# The upstream bump has happened. litellm 1.88.6 declares, under the [proxy]
+# extra this file resolves WITH, fastapi >=0.136.3,<1.0 and starlette
+# >=1.0.1,<2.0. The old pins were therefore BELOW litellm's own declared
+# floors, not held up at them -- the file was carrying a fastapi two dozen
+# releases older than the one litellm asks for, and the starlette that
+# fastapi dragged along with it. Re-running the documented `uv pip compile`
+# on the direct requirements above resolves fastapi 0.142.2 and starlette
+# 1.7.0. What makes starlette 1.x reachable at all is that fastapi dropped
+# its starlette ceiling by 0.136.3 (`starlette>=0.46.0`, no upper bound);
+# 0.124.4 capped it at <0.51.0, which is what the old note described.
+#
+# FASTAPI IS HELD AT 0.141.1, NOT THE 0.142.2 A FRESH COMPILE RESOLVES, AND
+# THE REASON IS MEASURED, NOT PRECAUTIONARY. fastapi 0.142.0 added
+# `opentelemetry-api>=1.44.0` as a CORE dependency -- fastapi instruments
+# itself now -- and that collides with litellm's own OpenTelemetry callback,
+# which this file installs on purpose (the otel packages are direct
+# requirements above, for the proxy's "otel" callback). Taking 0.142.2 leaves
+# the proxy serving traffic correctly, and the whole spend reconciliation in
+# litellm-gateway.yml still passes, but TRACE CORRELATION breaks: the job's
+# `correlated == 1` assertion fails, because litellm's spans are being ended
+# underneath it.
+#
+# Measured on PR #6232 against the last green main run of the same job:
+#
+#                                   green main   fastapi 0.142.2
+#   litellm _to_ns(None) failures            0                 5
+#   "Calling end() on an ended span"         0                 3
+#   gateway trace-correlation assertion   pass              FAIL
+#
+# The failures are litellm's `async_service_success_hook` ->
+# `opentelemetry.py::_to_ns(start_time)` raising on a None start_time, plus
+# span-lifecycle complaints; all of them appear only with 0.142.x. 0.141.1 is
+# the newest fastapi with NO core opentelemetry dependency, satisfies
+# litellm's `>=0.136.3`, carries no advisory of its own, and needs nothing
+# the closure does not already pin (starlette>=0.46.0, pydantic>=2.9.0,
+# typing-extensions>=4.8.0, typing-inspection>=0.4.2, annotated-doc>=0.0.2).
+#
+# So do not "finish the job" by moving fastapi to 0.142.x here. That is not a
+# version lag; it is the boundary, and it moves when litellm's otel
+# integration stops ending its own spans early under a self-instrumenting
+# fastapi. The end-to-end job is what says so -- read a red correlation
+# assertion as the answer, not a flake.
+#
+# Taken as a two-pin edit rather than a regeneration, because nothing else in
+# the closure needs to move. Every other starlette/fastapi consumer here is
+# already ceiling-free -- mcp 1.28.1 asks starlette>=0.27, sse-starlette
+# 3.4.11 asks starlette>=0.49.1, fastapi-sso 0.19.0 asks fastapi>=0.80 -- and
+# both new versions' own requirements are satisfied by what is already pinned
+# below: fastapi 0.142.2 wants pydantic>=2.9.0, typing-extensions>=4.8.0,
+# typing-inspection>=0.4.2, annotated-doc>=0.0.2 and
+# opentelemetry-api>=1.44.0; starlette 1.7.0 wants anyio>=4.0.0,<5 and
+# typing-extensions>=4.10.0. A full recompile was measured as well and would
+# have moved 29 further packages and added numpy and granian to the closure;
+# that is a different change with a different risk, and it is not needed to
+# clear these advisories.
+#
+# Clears PYSEC-2026-2280, PYSEC-2026-2281, PYSEC-2026-248 and PYSEC-2026-249
+# (pip-audit against this file reports no remaining advisory). These two are
+# NOT added to the layered-floor block above: that block is for versions held
+# ABOVE what litellm declares, and these two are versions litellm itself
+# requires, so a future regeneration resolves them without hand re-application.
+# The end-to-end job in litellm-gateway.yml is what says whether litellm 1.88.6
+# is happy on the stack it asked for. Read a red run there as the answer.
 #
 # Regenerate: put the direct requirements above in ll.in, then
 #   uv pip compile ll.in --generate-hashes --python-version 3.11 \
@@ -624,9 +691,9 @@ email-validator==2.3.0 \
     --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4 \
     --hash=sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426
     # via pydantic
-fastapi==0.124.4 \
-    --hash=sha256:0e9422e8d6b797515f33f500309f6e1c98ee4e85563ba0f2debb282df6343763 \
-    --hash=sha256:6d1e703698443ccb89e50abe4893f3c84d9d6689c0cf1ca4fad6d3c15cf69f15
+fastapi==0.141.1 \
+    --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3 \
+    --hash=sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1
     # via
     #   fastapi-sso
     #   litellm
@@ -2253,11 +2320,12 @@ sse-starlette==3.4.11 \
     --hash=sha256:1bae716c02f3e6f294be41ff333220692dae7c3cbab077c900f159676719dade \
     --hash=sha256:c7b2244bdff016fe7f64e10075e89a3e6bbf899649cc89b0fe884b5545042453
     # via mcp
-starlette==0.50.0 \
-    --hash=sha256:9e5391843ec9b6e472eed1365a78c8098cfceb7a74bfd4d6b1c0c0095efb3bca \
-    --hash=sha256:a2a17b22203254bcbc2e1f926d2d55f3f9497f769416b3190768befe598fa3ca
+starlette==1.7.0 \
+    --hash=sha256:67f8e99895493dd2911a03f11314af6ceebeae4e704bb9f43dfc6a9db151c93e \
+    --hash=sha256:c79f74ea63cff761804fbbfb182f1e0b440c2d07b164d24700c5a1bab5d6ff5d
     # via
     #   fastapi
+    #   litellm
     #   mcp
     #   sse-starlette
 tiktoken==0.14.0 \
