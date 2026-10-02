@@ -52,7 +52,7 @@ Writing guide: [STE100_WRITING.md](STE100_WRITING.md).
 These records were written before implementation and published to Software Factory on 2026-10-02.
 Requirement: `a5f5d75b-43b5-4f55-ab9a-393865c606ca` (version 3).
 Blueprint: `3d07dd70-06dd-4a2e-b4bd-122ee55ac751` (version 3). The expanded generation design is recorded locally. Publishing that revision failed because the Factory keychain credential was unavailable.
-Draft delivery: [PR #6248](https://github.com/vivekchand/clawmetry/pull/6248).
+Initial delivery: [PR #6248](https://github.com/vivekchand/clawmetry/pull/6248), merged on 2026-10-02. Release carrier: [PR #6261](https://github.com/vivekchand/clawmetry/pull/6261), still in CI at this record.
 No production release or whole-product compliance claim is recorded here.
 
 ## Verification recorded on 2026-10-02
@@ -144,3 +144,12 @@ Workflow totals, completed and failed agent counts, running counts, and tool-nam
 - Four absent-catalog renderer cases and the extraction guard fail with the prior source. The loaded-catalog cases continue to pass. All 44 renderer cases pass with the changes.
 - Model names and targets remain escaped. Call counts, thinking percentage, savings rounding, the estimate explanation, and evidence destinations retain their values. Unknown action types remain omitted.
 - This verifies local rendering and the mechanical subset. Screenshots, released artifacts, hosted verification, and editorial review remain pending for this follow-up.
+
+## Table-driven browser explanations on 2026-10-02
+
+- Trace legend labels, spend-flow labels, and all seven session outcomes now use complete literal translation calls. Translation still runs when the view is drawn, so a later catalog load takes effect.
+- Trail context notes interpolate their recorded count and changed fields when the translation function is absent or throws.
+- The corpus contains 4,056 messages, including 1,064 literal browser fallbacks, with zero mechanical findings. Four forwarding calls remain explicitly pending; unrelated browser rendering is also unreviewed.
+- All 51 browser rendering cases pass. The combined English, efficiency, spend-flow, Trail, and JavaScript-wrapper selection passes 261 tests, with one optional DeepEval import skipped. Both changed scripts pass syntax checks.
+- The extraction guard and two Trail fallback cases fail against the prior scripts. Existing labels, outcome colors, unknown-state behavior, value insertion, and evidence links are retained.
+- These are local verification results. This browser follow-up is not yet published or released.

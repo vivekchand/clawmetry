@@ -16361,18 +16361,18 @@ var _TRACE_KIND_ICONS = {
 // Legend order for the trace header. `reasoning` is the model's thinking
 // (its own span kind); the execute_tool spans it drove nest under it.
 var _TRACE_LEGEND_KINDS = [
-  ['agent', 'tracing.legend_agent', 'Agent'],
-  ['prompt', 'tracing.legend_prompt', 'Prompt'],
-  ['llm', 'tracing.legend_llm', 'Model call'],
-  ['reasoning', 'tracing.legend_reasoning', 'Reasoning'],
-  ['tool', 'tracing.legend_tool', 'Tool']
+  ['agent', function () { return t('tracing.legend_agent', null, 'Agent'); }],
+  ['prompt', function () { return t('tracing.legend_prompt', null, 'Prompt'); }],
+  ['llm', function () { return t('tracing.legend_llm', null, 'Model call'); }],
+  ['reasoning', function () { return t('tracing.legend_reasoning', null, 'Reasoning'); }],
+  ['tool', function () { return t('tracing.legend_tool', null, 'Tool'); }]
 ];
 function _traceLegendHtml() {
   return '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:var(--text-muted);">'
     + _TRACE_LEGEND_KINDS.map(function(k) {
         return '<span style="display:inline-flex;align-items:center;gap:5px;">'
           + '<span style="width:9px;height:9px;border-radius:2px;background:' + _TRACE_KIND_COLORS[k[0]] + ';"></span>'
-          + t(k[1], null, k[2]) + '</span>';
+          + k[1]() + '</span>';
       }).join('')
     + '</div>';
 }
@@ -18495,20 +18495,20 @@ function _cmEffIdeaRowHtml(a, saveEntry) {
 // + truncated tool output), so its copy says "estimated".
 // Palettes validated with the dataviz six-checks script (light + dark).
 var _CM_SF_IN = {
-  user_prompts:    { c: '#2563eb', k: 'usage.sf_user_prompts',    f: 'Your messages' },
-  prior_assistant: { c: '#9333ea', k: 'usage.sf_prior_assistant', f: 'Earlier replies (context)' },
-  tool_results:    { c: '#0d9488', k: 'usage.sf_tool_results',    f: 'Tool results' },
-  overhead:        { c: '#d97706', k: 'usage.sf_overhead',        f: 'System prompt and tool definitions' }
+  user_prompts:    { c: '#2563eb', label: function () { return t('usage.sf_user_prompts', null, 'Your messages'); } },
+  prior_assistant: { c: '#9333ea', label: function () { return t('usage.sf_prior_assistant', null, 'Earlier replies (context)'); } },
+  tool_results:    { c: '#0d9488', label: function () { return t('usage.sf_tool_results', null, 'Tool results'); } },
+  overhead:        { c: '#d97706', label: function () { return t('usage.sf_overhead', null, 'System prompt and tool definitions'); } }
 };
 var _CM_SF_OUT = {
-  thinking:           { c: '#7c3aed', k: 'usage.sf_thinking',  f: 'Thinking' },
-  assistant_text:     { c: '#059669', k: 'usage.sf_text',      f: 'Replies' },
-  builtin_tool_calls: { c: '#0284c7', k: 'usage.sf_builtin',   f: 'Tool calls' },
-  mcp_tool_calls:     { c: '#ea580c', k: 'usage.sf_mcp',       f: 'MCP tool calls' }
+  thinking:           { c: '#7c3aed', label: function () { return t('usage.sf_thinking', null, 'Thinking'); } },
+  assistant_text:     { c: '#059669', label: function () { return t('usage.sf_text', null, 'Replies'); } },
+  builtin_tool_calls: { c: '#0284c7', label: function () { return t('usage.sf_builtin', null, 'Tool calls'); } },
+  mcp_tool_calls:     { c: '#ea580c', label: function () { return t('usage.sf_mcp', null, 'MCP tool calls'); } }
 };
 function _sfLabel(meta, id) {
   var m = meta[id];
-  return m ? t(m.k, null, m.f) : id;
+  return m ? m.label() : id;
 }
 async function loadSpendFlow() {
   var title = document.getElementById('spend-flow-title');

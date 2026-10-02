@@ -277,3 +277,74 @@ def test_efficiency_recommendation_templates_are_checked():
     for call in calls:
         assert call.pending is None
         assert call.fallback == CATALOG[call.key]
+
+
+@pytest.mark.parametrize('loaded', [False, True])
+def test_trace_and_spend_labels_follow_the_catalog_at_render_time(loaded):
+    declarations = '\n'.join(re.search(r'^var ' + name + r' = [\s\S]*?^[}\]];', APP, re.M).group()
+                             for name in ('_TRACE_KIND_COLORS', '_TRACE_LEGEND_KINDS', '_CM_SF_IN', '_CM_SF_OUT'))
+    code = ('var DICT={},EN={},LANG="en";\n' + TRANSLATE + '\nvar t=T;\n'
+            + declarations + '\n' + function('_traceLegendHtml') + '\n' + function('_sfLabel')
+            + '\nEN=' + json.dumps(CATALOG if loaded else {}) + ';\n'
+            + '''console.log(JSON.stringify({legend:_traceLegendHtml(),
+              input:Object.keys(_CM_SF_IN).map(k=>_sfLabel(_CM_SF_IN,k)),
+              output:Object.keys(_CM_SF_OUT).map(k=>_sfLabel(_CM_SF_OUT,k)),
+              unknown:_sfLabel(_CM_SF_IN,'new_kind')}));''')
+    result = run_js(code)
+    for label in ('Agent', 'Prompt', 'Model call', 'Reasoning', 'Tool'):
+        assert label in result['legend']
+    assert result['input'] == ['Your messages', 'Earlier replies (context)', 'Tool results',
+                               'System prompt and tool definitions']
+    assert result['output'] == ['Thinking', 'Replies', 'Tool calls', 'MCP tool calls']
+    assert result['unknown'] == 'new_kind'
+    assert result['legend'].count('width:9px;height:9px') == 5
+
+
+@pytest.mark.parametrize('translator', ['absent', 'empty', 'loaded', 'throws'])
+def test_trail_explanations_and_context_values_work_before_translation_loads(translator):
+    trail = (ROOT / 'clawmetry/static/js/trail.js').read_text()
+    helper = re.search(r'^  function T\([\s\S]*?^  \}', trail, re.M).group()
+    outcomes = re.search(r'^  var OUTCOMES = \{[\s\S]*?^  \};', trail, re.M).group()
+    renderer = re.search(r'^  function outcomeMeta\([\s\S]*?^  \}', trail, re.M).group()
+    code = ''
+    if translator in ('empty', 'loaded'):
+        code = ('var DICT={},EN=' + json.dumps(CATALOG if translator == 'loaded' else {})
+                + ';var LANG="en";\n' + TRANSLATE.replace('function T(', 'function realTranslate(')
+                + '\nvar t=realTranslate;\n')
+    elif translator == 'throws':
+        code = 'var t=()=>{throw new Error("translation unavailable")};\n'
+    code += helper + '\n' + outcomes + '\n' + renderer
+    code += '''
+console.log(JSON.stringify({outcomes:Object.fromEntries(Object.keys(OUTCOMES).map(k=>[k,outcomeMeta(k)])),
+  unknown:outcomeMeta('new_kind'), normalized:outcomeMeta('SUCCESS'),
+  count:T('trail.ctx_changed','Recorded {n} times during the session. Showing the last.',{n:2}),
+  keys:T('trail.ctx_changed_keys','Changed during the session: {keys}. Showing the last.',{keys:'model, tools_count'})}));
+'''
+    result = run_js(code)
+    colors = {'success': '#22c55e', 'failed': '#ef4444', 'escalated': '#f59e0b',
+              'cognitive_loop': '#f97316', 'tool_call_stuck': '#f97316',
+              'ongoing': '#3b82f6', 'waiting': '#8b5cf6'}
+    assert set(result['outcomes']) == set(colors)
+    for key, color in colors.items():
+        assert result['outcomes'][key] == {'color': color, 'name': CATALOG[f'trail.outcome_{key}'],
+                                            'explain': CATALOG[f'trail.outcome_{key}_why']}
+    assert result['unknown'] is None
+    assert result['normalized'] == result['outcomes']['success']
+    assert result['count'] == 'Recorded 2 times during the session. Showing the last.'
+    assert result['keys'] == 'Changed during the session: model, tools_count. Showing the last.'
+
+
+def test_table_driven_labels_have_complete_checked_templates():
+    keys = {f'tracing.legend_{kind}' for kind in ('agent', 'prompt', 'llm', 'reasoning', 'tool')}
+    keys.update(f'usage.sf_{kind}' for kind in ('user_prompts', 'prior_assistant', 'tool_results',
+                                              'overhead', 'thinking', 'text', 'builtin', 'mcp'))
+    keys.update(f'trail.outcome_{kind}{suffix}' for kind in ('success', 'failed', 'escalated',
+               'cognitive_loop', 'tool_call_stuck', 'ongoing', 'waiting') for suffix in ('', '_why'))
+    calls = []
+    for source in (APP, (ROOT / 'clawmetry/static/js/trail.js').read_text()):
+        calls.extend(call for call in translations(source, {'T': 1}) if call.key in keys)
+    assert {call.key for call in calls} == keys
+    assert len(calls) == len(keys)
+    for call in calls:
+        assert call.pending is None
+        assert call.fallback == CATALOG[call.key]
