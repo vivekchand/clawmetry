@@ -34,189 +34,33 @@
         "https://x.com/theonejvo/status/2015401219746128322"
       ],
       "steps": [
-        {
-          "step": "S00",
-          "technique": "AML.T0000",
-          "technique_name": "Search Open Technical Databases",
-          "tactic": "AML.TA0002",
-          "tactic_name": "Reconnaissance"
-        },
-        {
-          "step": "S01",
-          "technique": "AML.T0049",
-          "technique_name": "Exploit Public-Facing Application",
-          "tactic": "AML.TA0004",
-          "tactic_name": "Initial Access"
-        },
-        {
-          "step": "S02",
-          "technique": "AML.T0083",
-          "technique_name": "Credentials from AI Agent Configuration",
-          "tactic": "AML.TA0013",
-          "tactic_name": "Credential Access"
-        },
-        {
-          "step": "S03",
-          "technique": "AML.T0051.001",
-          "technique_name": "LLM Prompt Injection: Indirect",
-          "tactic": "AML.TA0005",
-          "tactic_name": "Execution"
-        },
-        {
-          "step": "S04",
-          "technique": "AML.T0069.002",
-          "technique_name": "Discover LLM System Information: System Prompt",
-          "tactic": "AML.TA0008",
-          "tactic_name": "Discovery"
-        },
-        {
-          "step": "S05",
-          "technique": "AML.T0098",
-          "technique_name": "AI Agent Tool Credential Harvesting",
-          "tactic": "AML.TA0013",
-          "tactic_name": "Credential Access"
-        },
-        {
-          "step": "S06",
-          "technique": "AML.T0053",
-          "technique_name": "AI Agent Tool Invocation",
-          "tactic": "AML.TA0012",
-          "tactic_name": "Privilege Escalation"
-        },
-        {
-          "step": "S07",
-          "technique": "AML.T0092",
-          "technique_name": "Manipulate User LLM Chat History",
-          "tactic": "AML.TA0007",
-          "tactic_name": "Defense Evasion"
-        },
-        {
-          "step": "S08",
-          "technique": "AML.T0025",
-          "technique_name": "Exfiltration via Cyber Means",
-          "tactic": "AML.TA0010",
-          "tactic_name": "Exfiltration"
-        },
-        {
-          "step": "S09",
-          "technique": "AML.T0048.003",
-          "technique_name": "External Harms: User Harm",
-          "tactic": "AML.TA0011",
-          "tactic_name": "Impact"
-        }
+        {"step": "S00", "technique": "AML.T0000", "technique_name": "Search Open Technical Databases", "tactic": "AML.TA0002", "tactic_name": "Reconnaissance"},
+        {"step": "S01", "technique": "AML.T0049", "technique_name": "Exploit Public-Facing Application", "tactic": "AML.TA0004", "tactic_name": "Initial Access"},
+        {"step": "S02", "technique": "AML.T0083", "technique_name": "Credentials from AI Agent Configuration", "tactic": "AML.TA0013", "tactic_name": "Credential Access"},
+        {"step": "S03", "technique": "AML.T0051.001", "technique_name": "LLM Prompt Injection: Indirect", "tactic": "AML.TA0005", "tactic_name": "Execution"},
+        {"step": "S04", "technique": "AML.T0069.002", "technique_name": "Discover LLM System Information: System Prompt", "tactic": "AML.TA0008", "tactic_name": "Discovery"},
+        {"step": "S05", "technique": "AML.T0098", "technique_name": "AI Agent Tool Credential Harvesting", "tactic": "AML.TA0013", "tactic_name": "Credential Access"},
+        {"step": "S06", "technique": "AML.T0053", "technique_name": "AI Agent Tool Invocation", "tactic": "AML.TA0012", "tactic_name": "Privilege Escalation"},
+        {"step": "S07", "technique": "AML.T0092", "technique_name": "Manipulate User LLM Chat History", "tactic": "AML.TA0007", "tactic_name": "Defense Evasion"},
+        {"step": "S08", "technique": "AML.T0025", "technique_name": "Exfiltration via Cyber Means", "tactic": "AML.TA0010", "tactic_name": "Exfiltration"},
+        {"step": "S09", "technique": "AML.T0048.003", "technique_name": "External Harms: User Harm", "tactic": "AML.TA0011", "tactic_name": "Impact"}
       ],
       "mitigations": [
-        {
-          "id": "AML.M0000",
-          "name": "Limit Public Release of Information",
-          "techniques": [
-            "AML.T0000"
-          ]
-        },
-        {
-          "id": "AML.M0005",
-          "name": "Control Access to AI Models and Data at Rest",
-          "techniques": [
-            "AML.T0025",
-            "AML.T0069.002"
-          ]
-        },
-        {
-          "id": "AML.M0019",
-          "name": "Control Access to AI Models and Data in Production",
-          "techniques": [
-            "AML.T0069.002"
-          ]
-        },
-        {
-          "id": "AML.M0020",
-          "name": "Generative AI Guardrails",
-          "techniques": [
-            "AML.T0053",
-            "AML.T0069.002"
-          ]
-        },
-        {
-          "id": "AML.M0021",
-          "name": "Generative AI Guidelines",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0022",
-          "name": "Generative AI Model Alignment",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0024",
-          "name": "AI Telemetry Logging",
-          "techniques": [
-            "AML.T0051.001",
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0026",
-          "name": "Privileged AI Agent Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0027",
-          "name": "Single-User AI Agent Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0028",
-          "name": "AI Agent Tools Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0029",
-          "name": "Human In-the-Loop for AI Agent Actions",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0030",
-          "name": "Restrict AI Agent Tool Invocation on Untrusted Data",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0032",
-          "name": "Segmentation of AI Agent Components",
-          "techniques": [
-            "AML.T0053",
-            "AML.T0098"
-          ]
-        },
-        {
-          "id": "AML.M0033",
-          "name": "Input and Output Validation for AI Agent Components",
-          "techniques": [
-            "AML.T0051.001",
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0035",
-          "name": "AI Red Team",
-          "techniques": [
-            "AML.T0051.001",
-            "AML.T0053"
-          ]
-        }
+        {"id": "AML.M0000", "name": "Limit Public Release of Information", "techniques": ["AML.T0000"]},
+        {"id": "AML.M0005", "name": "Control Access to AI Models and Data at Rest", "techniques": ["AML.T0025", "AML.T0069.002"]},
+        {"id": "AML.M0019", "name": "Control Access to AI Models and Data in Production", "techniques": ["AML.T0069.002"]},
+        {"id": "AML.M0020", "name": "Generative AI Guardrails", "techniques": ["AML.T0053", "AML.T0069.002"]},
+        {"id": "AML.M0021", "name": "Generative AI Guidelines", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0022", "name": "Generative AI Model Alignment", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0024", "name": "AI Telemetry Logging", "techniques": ["AML.T0051.001", "AML.T0053"]},
+        {"id": "AML.M0026", "name": "Privileged AI Agent Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0027", "name": "Single-User AI Agent Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0028", "name": "AI Agent Tools Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0029", "name": "Human In-the-Loop for AI Agent Actions", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0030", "name": "Restrict AI Agent Tool Invocation on Untrusted Data", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0032", "name": "Segmentation of AI Agent Components", "techniques": ["AML.T0053", "AML.T0098"]},
+        {"id": "AML.M0033", "name": "Input and Output Validation for AI Agent Components", "techniques": ["AML.T0051.001", "AML.T0053"]},
+        {"id": "AML.M0035", "name": "AI Red Team", "techniques": ["AML.T0051.001", "AML.T0053"]}
       ]
     },
     {
@@ -230,201 +74,35 @@
         "https://x.com/theonejvo/status/2015892980851474595"
       ],
       "steps": [
-        {
-          "step": "S00",
-          "technique": "AML.T0017",
-          "technique_name": "Develop Capabilities",
-          "tactic": "AML.TA0003",
-          "tactic_name": "Resource Development"
-        },
-        {
-          "step": "S01",
-          "technique": "AML.T0008.002",
-          "technique_name": "Acquire Infrastructure: Domains",
-          "tactic": "AML.TA0003",
-          "tactic_name": "Resource Development"
-        },
-        {
-          "step": "S02",
-          "technique": "AML.T0065",
-          "technique_name": "LLM Prompt Crafting",
-          "tactic": "AML.TA0001",
-          "tactic_name": "AI Attack Adaptation"
-        },
-        {
-          "step": "S03",
-          "technique": "AML.T0115.002",
-          "technique_name": "Publish Poisoned AI Artifacts: AI Agent Tools",
-          "tactic": "AML.TA0003",
-          "tactic_name": "Resource Development"
-        },
-        {
-          "step": "S04",
-          "technique": "AML.T0111",
-          "technique_name": "AI Supply Chain Reputation Inflation",
-          "tactic": "AML.TA0007",
-          "tactic_name": "Defense Evasion"
-        },
-        {
-          "step": "S05",
-          "technique": "AML.T0010.005",
-          "technique_name": "AI Supply Chain Compromise: AI Agent Tool",
-          "tactic": "AML.TA0004",
-          "tactic_name": "Initial Access"
-        },
-        {
-          "step": "S06",
-          "technique": "AML.T0110.000",
-          "technique_name": "AI Agent Tool Poisoning: Definition and Instructions",
-          "tactic": "AML.TA0006",
-          "tactic_name": "Persistence"
-        },
-        {
-          "step": "S07",
-          "technique": "AML.T0011.002",
-          "technique_name": "User Execution: Poisoned AI Agent Tool",
-          "tactic": "AML.TA0005",
-          "tactic_name": "Execution"
-        },
-        {
-          "step": "S08",
-          "technique": "AML.T0051.001",
-          "technique_name": "LLM Prompt Injection: Indirect",
-          "tactic": "AML.TA0005",
-          "tactic_name": "Execution"
-        },
-        {
-          "step": "S09",
-          "technique": "AML.T0074",
-          "technique_name": "Masquerading",
-          "tactic": "AML.TA0007",
-          "tactic_name": "Defense Evasion"
-        },
-        {
-          "step": "S10",
-          "technique": "AML.T0053",
-          "technique_name": "AI Agent Tool Invocation",
-          "tactic": "AML.TA0012",
-          "tactic_name": "Privilege Escalation"
-        },
-        {
-          "step": "S11",
-          "technique": "AML.T0048",
-          "technique_name": "External Harms",
-          "tactic": "AML.TA0011",
-          "tactic_name": "Impact"
-        }
+        {"step": "S00", "technique": "AML.T0017", "technique_name": "Develop Capabilities", "tactic": "AML.TA0003", "tactic_name": "Resource Development"},
+        {"step": "S01", "technique": "AML.T0008.002", "technique_name": "Acquire Infrastructure: Domains", "tactic": "AML.TA0003", "tactic_name": "Resource Development"},
+        {"step": "S02", "technique": "AML.T0065", "technique_name": "LLM Prompt Crafting", "tactic": "AML.TA0001", "tactic_name": "AI Attack Adaptation"},
+        {"step": "S03", "technique": "AML.T0115.002", "technique_name": "Publish Poisoned AI Artifacts: AI Agent Tools", "tactic": "AML.TA0003", "tactic_name": "Resource Development"},
+        {"step": "S04", "technique": "AML.T0111", "technique_name": "AI Supply Chain Reputation Inflation", "tactic": "AML.TA0007", "tactic_name": "Defense Evasion"},
+        {"step": "S05", "technique": "AML.T0010.005", "technique_name": "AI Supply Chain Compromise: AI Agent Tool", "tactic": "AML.TA0004", "tactic_name": "Initial Access"},
+        {"step": "S06", "technique": "AML.T0110.000", "technique_name": "AI Agent Tool Poisoning: Definition and Instructions", "tactic": "AML.TA0006", "tactic_name": "Persistence"},
+        {"step": "S07", "technique": "AML.T0011.002", "technique_name": "User Execution: Poisoned AI Agent Tool", "tactic": "AML.TA0005", "tactic_name": "Execution"},
+        {"step": "S08", "technique": "AML.T0051.001", "technique_name": "LLM Prompt Injection: Indirect", "tactic": "AML.TA0005", "tactic_name": "Execution"},
+        {"step": "S09", "technique": "AML.T0074", "technique_name": "Masquerading", "tactic": "AML.TA0007", "tactic_name": "Defense Evasion"},
+        {"step": "S10", "technique": "AML.T0053", "technique_name": "AI Agent Tool Invocation", "tactic": "AML.TA0012", "tactic_name": "Privilege Escalation"},
+        {"step": "S11", "technique": "AML.T0048", "technique_name": "External Harms", "tactic": "AML.TA0011", "tactic_name": "Impact"}
       ],
       "mitigations": [
-        {
-          "id": "AML.M0011",
-          "name": "Restrict Library Loading",
-          "techniques": [
-            "AML.T0074"
-          ]
-        },
-        {
-          "id": "AML.M0016",
-          "name": "Vulnerability Scanning",
-          "techniques": [
-            "AML.T0115.002"
-          ]
-        },
-        {
-          "id": "AML.M0020",
-          "name": "Generative AI Guardrails",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0021",
-          "name": "Generative AI Guidelines",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0022",
-          "name": "Generative AI Model Alignment",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0024",
-          "name": "AI Telemetry Logging",
-          "techniques": [
-            "AML.T0051.001",
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0025",
-          "name": "Maintain AI Dataset Provenance",
-          "techniques": [
-            "AML.T0074"
-          ]
-        },
-        {
-          "id": "AML.M0026",
-          "name": "Privileged AI Agent Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0027",
-          "name": "Single-User AI Agent Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0028",
-          "name": "AI Agent Tools Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0029",
-          "name": "Human In-the-Loop for AI Agent Actions",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0030",
-          "name": "Restrict AI Agent Tool Invocation on Untrusted Data",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0032",
-          "name": "Segmentation of AI Agent Components",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0033",
-          "name": "Input and Output Validation for AI Agent Components",
-          "techniques": [
-            "AML.T0051.001",
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0035",
-          "name": "AI Red Team",
-          "techniques": [
-            "AML.T0010.005",
-            "AML.T0051.001",
-            "AML.T0053"
-          ]
-        }
+        {"id": "AML.M0011", "name": "Restrict Library Loading", "techniques": ["AML.T0074"]},
+        {"id": "AML.M0016", "name": "Vulnerability Scanning", "techniques": ["AML.T0115.002"]},
+        {"id": "AML.M0020", "name": "Generative AI Guardrails", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0021", "name": "Generative AI Guidelines", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0022", "name": "Generative AI Model Alignment", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0024", "name": "AI Telemetry Logging", "techniques": ["AML.T0051.001", "AML.T0053"]},
+        {"id": "AML.M0025", "name": "Maintain AI Dataset Provenance", "techniques": ["AML.T0074"]},
+        {"id": "AML.M0026", "name": "Privileged AI Agent Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0027", "name": "Single-User AI Agent Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0028", "name": "AI Agent Tools Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0029", "name": "Human In-the-Loop for AI Agent Actions", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0030", "name": "Restrict AI Agent Tool Invocation on Untrusted Data", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0032", "name": "Segmentation of AI Agent Components", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0033", "name": "Input and Output Validation for AI Agent Components", "techniques": ["AML.T0051.001", "AML.T0053"]},
+        {"id": "AML.M0035", "name": "AI Red Team", "techniques": ["AML.T0010.005", "AML.T0051.001", "AML.T0053"]}
       ]
     },
     {
@@ -440,107 +118,22 @@
         "https://openclaw.ai/blog/introducing-openclaw"
       ],
       "steps": [
-        {
-          "step": "S00",
-          "technique": "AML.T0017",
-          "technique_name": "Develop Capabilities",
-          "tactic": "AML.TA0003",
-          "tactic_name": "Resource Development"
-        },
-        {
-          "step": "S01",
-          "technique": "AML.T0079",
-          "technique_name": "Stage Capabilities",
-          "tactic": "AML.TA0003",
-          "tactic_name": "Resource Development"
-        },
-        {
-          "step": "S02",
-          "technique": "AML.T0011.003",
-          "technique_name": "User Execution: Malicious Link",
-          "tactic": "AML.TA0005",
-          "tactic_name": "Execution"
-        },
-        {
-          "step": "S03",
-          "technique": "AML.T0106",
-          "technique_name": "Exploitation for Credential Access",
-          "tactic": "AML.TA0013",
-          "tactic_name": "Credential Access"
-        },
-        {
-          "step": "S04",
-          "technique": "AML.T0107",
-          "technique_name": "Exploitation for Defense Evasion",
-          "tactic": "AML.TA0007",
-          "tactic_name": "Defense Evasion"
-        },
-        {
-          "step": "S05",
-          "technique": "AML.T0012",
-          "technique_name": "Valid Accounts",
-          "tactic": "AML.TA0012",
-          "tactic_name": "Privilege Escalation"
-        },
-        {
-          "step": "S06",
-          "technique": "AML.T0081",
-          "technique_name": "Modify AI Agent Configuration",
-          "tactic": "AML.TA0007",
-          "tactic_name": "Defense Evasion"
-        },
-        {
-          "step": "S07",
-          "technique": "AML.T0105",
-          "technique_name": "Escape to Host",
-          "tactic": "AML.TA0012",
-          "tactic_name": "Privilege Escalation"
-        },
-        {
-          "step": "S08",
-          "technique": "AML.T0050",
-          "technique_name": "Command and Scripting Interpreter",
-          "tactic": "AML.TA0005",
-          "tactic_name": "Execution"
-        }
+        {"step": "S00", "technique": "AML.T0017", "technique_name": "Develop Capabilities", "tactic": "AML.TA0003", "tactic_name": "Resource Development"},
+        {"step": "S01", "technique": "AML.T0079", "technique_name": "Stage Capabilities", "tactic": "AML.TA0003", "tactic_name": "Resource Development"},
+        {"step": "S02", "technique": "AML.T0011.003", "technique_name": "User Execution: Malicious Link", "tactic": "AML.TA0005", "tactic_name": "Execution"},
+        {"step": "S03", "technique": "AML.T0106", "technique_name": "Exploitation for Credential Access", "tactic": "AML.TA0013", "tactic_name": "Credential Access"},
+        {"step": "S04", "technique": "AML.T0107", "technique_name": "Exploitation for Defense Evasion", "tactic": "AML.TA0007", "tactic_name": "Defense Evasion"},
+        {"step": "S05", "technique": "AML.T0012", "technique_name": "Valid Accounts", "tactic": "AML.TA0012", "tactic_name": "Privilege Escalation"},
+        {"step": "S06", "technique": "AML.T0081", "technique_name": "Modify AI Agent Configuration", "tactic": "AML.TA0007", "tactic_name": "Defense Evasion"},
+        {"step": "S07", "technique": "AML.T0105", "technique_name": "Escape to Host", "tactic": "AML.TA0012", "tactic_name": "Privilege Escalation"},
+        {"step": "S08", "technique": "AML.T0050", "technique_name": "Command and Scripting Interpreter", "tactic": "AML.TA0005", "tactic_name": "Execution"}
       ],
       "mitigations": [
-        {
-          "id": "AML.M0005",
-          "name": "Control Access to AI Models and Data at Rest",
-          "techniques": [
-            "AML.T0012"
-          ]
-        },
-        {
-          "id": "AML.M0011",
-          "name": "Restrict Library Loading",
-          "techniques": [
-            "AML.T0050"
-          ]
-        },
-        {
-          "id": "AML.M0016",
-          "name": "Vulnerability Scanning",
-          "techniques": [
-            "AML.T0106",
-            "AML.T0107"
-          ]
-        },
-        {
-          "id": "AML.M0019",
-          "name": "Control Access to AI Models and Data in Production",
-          "techniques": [
-            "AML.T0012"
-          ]
-        },
-        {
-          "id": "AML.M0035",
-          "name": "AI Red Team",
-          "techniques": [
-            "AML.T0081"
-          ]
-        }
+        {"id": "AML.M0005", "name": "Control Access to AI Models and Data at Rest", "techniques": ["AML.T0012"]},
+        {"id": "AML.M0011", "name": "Restrict Library Loading", "techniques": ["AML.T0050"]},
+        {"id": "AML.M0016", "name": "Vulnerability Scanning", "techniques": ["AML.T0106", "AML.T0107"]},
+        {"id": "AML.M0019", "name": "Control Access to AI Models and Data in Production", "techniques": ["AML.T0012"]},
+        {"id": "AML.M0035", "name": "AI Red Team", "techniques": ["AML.T0081"]}
       ]
     },
     {
@@ -554,264 +147,42 @@
         "https://www.hiddenlayer.com/research/exploring-the-security-risks-of-ai-assistants-like-openclaw"
       ],
       "steps": [
-        {
-          "step": "S00",
-          "technique": "AML.T0095.000",
-          "technique_name": "Search Open Websites/Domains: Code Repositories",
-          "tactic": "AML.TA0002",
-          "tactic_name": "Reconnaissance"
-        },
-        {
-          "step": "S01",
-          "technique": "AML.T0002.002",
-          "technique_name": "Acquire Public AI Artifacts: AI Agent Configuration",
-          "tactic": "AML.TA0003",
-          "tactic_name": "Resource Development"
-        },
-        {
-          "step": "S02",
-          "technique": "AML.T0069.000",
-          "technique_name": "Discover LLM System Information: Special Character Sets",
-          "tactic": "AML.TA0008",
-          "tactic_name": "Discovery"
-        },
-        {
-          "step": "S03",
-          "technique": "AML.T0069.001",
-          "technique_name": "Discover LLM System Information: System Instruction Keywords",
-          "tactic": "AML.TA0008",
-          "tactic_name": "Discovery"
-        },
-        {
-          "step": "S04",
-          "technique": "AML.T0065",
-          "technique_name": "LLM Prompt Crafting",
-          "tactic": "AML.TA0001",
-          "tactic_name": "AI Attack Adaptation"
-        },
-        {
-          "step": "S05",
-          "technique": "AML.T0065",
-          "technique_name": "LLM Prompt Crafting",
-          "tactic": "AML.TA0001",
-          "tactic_name": "AI Attack Adaptation"
-        },
-        {
-          "step": "S06",
-          "technique": "AML.T0008",
-          "technique_name": "Acquire Infrastructure",
-          "tactic": "AML.TA0003",
-          "tactic_name": "Resource Development"
-        },
-        {
-          "step": "S07",
-          "technique": "AML.T0079",
-          "technique_name": "Stage Capabilities",
-          "tactic": "AML.TA0003",
-          "tactic_name": "Resource Development"
-        },
-        {
-          "step": "S08",
-          "technique": "AML.T0074",
-          "technique_name": "Masquerading",
-          "tactic": "AML.TA0007",
-          "tactic_name": "Defense Evasion"
-        },
-        {
-          "step": "S09",
-          "technique": "AML.T0078",
-          "technique_name": "Drive-by Compromise",
-          "tactic": "AML.TA0004",
-          "tactic_name": "Initial Access"
-        },
-        {
-          "step": "S10",
-          "technique": "AML.T0051.001",
-          "technique_name": "LLM Prompt Injection: Indirect",
-          "tactic": "AML.TA0005",
-          "tactic_name": "Execution"
-        },
-        {
-          "step": "S11",
-          "technique": "AML.T0054",
-          "technique_name": "LLM Jailbreak",
-          "tactic": "AML.TA0007",
-          "tactic_name": "Defense Evasion"
-        },
-        {
-          "step": "S12",
-          "technique": "AML.T0053",
-          "technique_name": "AI Agent Tool Invocation",
-          "tactic": "AML.TA0005",
-          "tactic_name": "Execution"
-        },
-        {
-          "step": "S13",
-          "technique": "AML.T0081",
-          "technique_name": "Modify AI Agent Configuration",
-          "tactic": "AML.TA0006",
-          "tactic_name": "Persistence"
-        },
-        {
-          "step": "S14",
-          "technique": "AML.T0051.000",
-          "technique_name": "LLM Prompt Injection: Direct",
-          "tactic": "AML.TA0005",
-          "tactic_name": "Execution"
-        },
-        {
-          "step": "S15",
-          "technique": "AML.T0080.001",
-          "technique_name": "AI Agent Context Poisoning: Thread",
-          "tactic": "AML.TA0006",
-          "tactic_name": "Persistence"
-        },
-        {
-          "step": "S16",
-          "technique": "AML.T0108",
-          "technique_name": "AI Agent",
-          "tactic": "AML.TA0014",
-          "tactic_name": "Command and Control"
-        },
-        {
-          "step": "S17",
-          "technique": "AML.T0112.000",
-          "technique_name": "Machine Compromise: Local AI Agent",
-          "tactic": "AML.TA0011",
-          "tactic_name": "Impact"
-        }
+        {"step": "S00", "technique": "AML.T0095.000", "technique_name": "Search Open Websites/Domains: Code Repositories", "tactic": "AML.TA0002", "tactic_name": "Reconnaissance"},
+        {"step": "S01", "technique": "AML.T0002.002", "technique_name": "Acquire Public AI Artifacts: AI Agent Configuration", "tactic": "AML.TA0003", "tactic_name": "Resource Development"},
+        {"step": "S02", "technique": "AML.T0069.000", "technique_name": "Discover LLM System Information: Special Character Sets", "tactic": "AML.TA0008", "tactic_name": "Discovery"},
+        {"step": "S03", "technique": "AML.T0069.001", "technique_name": "Discover LLM System Information: System Instruction Keywords", "tactic": "AML.TA0008", "tactic_name": "Discovery"},
+        {"step": "S04", "technique": "AML.T0065", "technique_name": "LLM Prompt Crafting", "tactic": "AML.TA0001", "tactic_name": "AI Attack Adaptation"},
+        {"step": "S05", "technique": "AML.T0065", "technique_name": "LLM Prompt Crafting", "tactic": "AML.TA0001", "tactic_name": "AI Attack Adaptation"},
+        {"step": "S06", "technique": "AML.T0008", "technique_name": "Acquire Infrastructure", "tactic": "AML.TA0003", "tactic_name": "Resource Development"},
+        {"step": "S07", "technique": "AML.T0079", "technique_name": "Stage Capabilities", "tactic": "AML.TA0003", "tactic_name": "Resource Development"},
+        {"step": "S08", "technique": "AML.T0074", "technique_name": "Masquerading", "tactic": "AML.TA0007", "tactic_name": "Defense Evasion"},
+        {"step": "S09", "technique": "AML.T0078", "technique_name": "Drive-by Compromise", "tactic": "AML.TA0004", "tactic_name": "Initial Access"},
+        {"step": "S10", "technique": "AML.T0051.001", "technique_name": "LLM Prompt Injection: Indirect", "tactic": "AML.TA0005", "tactic_name": "Execution"},
+        {"step": "S11", "technique": "AML.T0054", "technique_name": "LLM Jailbreak", "tactic": "AML.TA0007", "tactic_name": "Defense Evasion"},
+        {"step": "S12", "technique": "AML.T0053", "technique_name": "AI Agent Tool Invocation", "tactic": "AML.TA0005", "tactic_name": "Execution"},
+        {"step": "S13", "technique": "AML.T0081", "technique_name": "Modify AI Agent Configuration", "tactic": "AML.TA0006", "tactic_name": "Persistence"},
+        {"step": "S14", "technique": "AML.T0051.000", "technique_name": "LLM Prompt Injection: Direct", "tactic": "AML.TA0005", "tactic_name": "Execution"},
+        {"step": "S15", "technique": "AML.T0080.001", "technique_name": "AI Agent Context Poisoning: Thread", "tactic": "AML.TA0006", "tactic_name": "Persistence"},
+        {"step": "S16", "technique": "AML.T0108", "technique_name": "AI Agent", "tactic": "AML.TA0014", "tactic_name": "Command and Control"},
+        {"step": "S17", "technique": "AML.T0112.000", "technique_name": "Machine Compromise: Local AI Agent", "tactic": "AML.TA0011", "tactic_name": "Impact"}
       ],
       "mitigations": [
-        {
-          "id": "AML.M0005",
-          "name": "Control Access to AI Models and Data at Rest",
-          "techniques": [
-            "AML.T0069.000",
-            "AML.T0069.001"
-          ]
-        },
-        {
-          "id": "AML.M0011",
-          "name": "Restrict Library Loading",
-          "techniques": [
-            "AML.T0074"
-          ]
-        },
-        {
-          "id": "AML.M0019",
-          "name": "Control Access to AI Models and Data in Production",
-          "techniques": [
-            "AML.T0069.000"
-          ]
-        },
-        {
-          "id": "AML.M0020",
-          "name": "Generative AI Guardrails",
-          "techniques": [
-            "AML.T0053",
-            "AML.T0054",
-            "AML.T0069.000",
-            "AML.T0069.001",
-            "AML.T0078",
-            "AML.T0108",
-            "AML.T0112.000"
-          ]
-        },
-        {
-          "id": "AML.M0021",
-          "name": "Generative AI Guidelines",
-          "techniques": [
-            "AML.T0053",
-            "AML.T0054"
-          ]
-        },
-        {
-          "id": "AML.M0022",
-          "name": "Generative AI Model Alignment",
-          "techniques": [
-            "AML.T0053",
-            "AML.T0054"
-          ]
-        },
-        {
-          "id": "AML.M0024",
-          "name": "AI Telemetry Logging",
-          "techniques": [
-            "AML.T0051.000",
-            "AML.T0051.001",
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0025",
-          "name": "Maintain AI Dataset Provenance",
-          "techniques": [
-            "AML.T0074"
-          ]
-        },
-        {
-          "id": "AML.M0026",
-          "name": "Privileged AI Agent Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0027",
-          "name": "Single-User AI Agent Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0028",
-          "name": "AI Agent Tools Permissions Configuration",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0029",
-          "name": "Human In-the-Loop for AI Agent Actions",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0030",
-          "name": "Restrict AI Agent Tool Invocation on Untrusted Data",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0032",
-          "name": "Segmentation of AI Agent Components",
-          "techniques": [
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0033",
-          "name": "Input and Output Validation for AI Agent Components",
-          "techniques": [
-            "AML.T0051.000",
-            "AML.T0051.001",
-            "AML.T0053"
-          ]
-        },
-        {
-          "id": "AML.M0035",
-          "name": "AI Red Team",
-          "techniques": [
-            "AML.T0051.000",
-            "AML.T0051.001",
-            "AML.T0053",
-            "AML.T0054",
-            "AML.T0080.001",
-            "AML.T0081"
-          ]
-        }
+        {"id": "AML.M0005", "name": "Control Access to AI Models and Data at Rest", "techniques": ["AML.T0069.000", "AML.T0069.001"]},
+        {"id": "AML.M0011", "name": "Restrict Library Loading", "techniques": ["AML.T0074"]},
+        {"id": "AML.M0019", "name": "Control Access to AI Models and Data in Production", "techniques": ["AML.T0069.000"]},
+        {"id": "AML.M0020", "name": "Generative AI Guardrails", "techniques": ["AML.T0053", "AML.T0054", "AML.T0069.000", "AML.T0069.001", "AML.T0078", "AML.T0108", "AML.T0112.000"]},
+        {"id": "AML.M0021", "name": "Generative AI Guidelines", "techniques": ["AML.T0053", "AML.T0054"]},
+        {"id": "AML.M0022", "name": "Generative AI Model Alignment", "techniques": ["AML.T0053", "AML.T0054"]},
+        {"id": "AML.M0024", "name": "AI Telemetry Logging", "techniques": ["AML.T0051.000", "AML.T0051.001", "AML.T0053"]},
+        {"id": "AML.M0025", "name": "Maintain AI Dataset Provenance", "techniques": ["AML.T0074"]},
+        {"id": "AML.M0026", "name": "Privileged AI Agent Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0027", "name": "Single-User AI Agent Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0028", "name": "AI Agent Tools Permissions Configuration", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0029", "name": "Human In-the-Loop for AI Agent Actions", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0030", "name": "Restrict AI Agent Tool Invocation on Untrusted Data", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0032", "name": "Segmentation of AI Agent Components", "techniques": ["AML.T0053"]},
+        {"id": "AML.M0033", "name": "Input and Output Validation for AI Agent Components", "techniques": ["AML.T0051.000", "AML.T0051.001", "AML.T0053"]},
+        {"id": "AML.M0035", "name": "AI Red Team", "techniques": ["AML.T0051.000", "AML.T0051.001", "AML.T0053", "AML.T0054", "AML.T0080.001", "AML.T0081"]}
       ]
     }
   ],
@@ -821,12 +192,7 @@
       "probe": "gate_disabled_out_of_band",
       "relates_to": "AML.CS0050 S06",
       "title": "OpenClaw's exec approval is turned off through the gateway API after ClawMetry turned it on",
-      "expected": {
-        "restored": true,
-        "audited": [
-          "guard.exec_approval_drift"
-        ]
-      },
+      "expected": {"restored": true, "audited": ["guard.exec_approval_drift"]},
       "meaning": "Re-applied. While a require-approval policy covers exec, ClawMetry re-reads OpenClaw's effective posture (openclaw exec-policy show) at most once a minute, re-applies the cautious preset when any scope no longer gates exec, and writes a guard.exec_approval_drift audit entry. Exec runs without approval between the change and the next check, up to 60 seconds. A posture that is already stricter, such as a hand-set deny-all, is left alone."
     },
     {
@@ -834,9 +200,7 @@
       "probe": "gate_binary_unavailable",
       "relates_to": "unavailable agent",
       "title": "The openclaw binary is not on the daemon's PATH",
-      "expected": {
-        "gate_in_force": false
-      },
+      "expected": {"gate_in_force": false},
       "meaning": "Fails open. The gate is never applied and the agent runs without exec approval."
     },
     {
@@ -844,11 +208,7 @@
       "probe": "gate_apply_fails",
       "relates_to": "timeout",
       "title": "Applying the cautious preset fails or times out",
-      "expected": {
-        "gate_in_force": false,
-        "consecutive_failures": 1,
-        "retry_after_secs": 300
-      },
+      "expected": {"gate_in_force": false, "consecutive_failures": 1, "retry_after_secs": 300},
       "meaning": "Fails open. Nothing is recorded as applied, the next attempt waits 300 seconds (doubling to an hour), and the agent runs without exec approval in the meantime. A preset apply is killed after 60 seconds."
     }
   ],
@@ -883,17 +243,16 @@
     {
       "id": "G1",
       "stages": [
-        "AML.CS0049 S09-S10",
-        "AML.CS0051 S09-S12"
+        "AML.CS0049 S09-S10"
       ],
-      "text": "New-host detection needs a learned baseline. On a fresh install neither the lookalike Skill host nor the attacker's page raises anything; with 40 earlier sessions of history both raise network_egress at warning."
+      "text": "New-host detection needs a learned baseline. On a fresh install a plain request to the lookalike Skill host raises nothing; with 40 earlier sessions of history it raises network_egress at warning. A remote script piped into an interpreter does not need the baseline (G2 below)."
     },
     {
       "id": "G2",
       "stages": [
         "AML.CS0051 S09-S12"
       ],
-      "text": "A remote script piped into bash raises no finding on its own. The call classifier rates it high, but no detector reads that rating. ClawMetry has no pre-tool hook of its own for OpenClaw: the only control that acts before the command runs is OpenClaw's exec approval, which ClawMetry turns on only when a require-approval policy covers exec (see FM-1 to FM-3)."
+      "text": "A remote script piped into bash now raises network_egress at warning on a cold start (ground remote_script, vivekchand/clawmetry-pro#256), but only on the daemon's next pass, after the script ran. ClawMetry has no pre-tool hook of its own for OpenClaw: the only control that acts before the command runs is OpenClaw's exec approval, which ClawMetry turns on only when a require-approval policy covers exec (see FM-1 to FM-3)."
     },
     {
       "id": "G4",

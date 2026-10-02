@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-09-27",
+    "synced_at": "2026-10-01",
     "synced_by": "codex"
   },
   "_scope": [
@@ -27,7 +27,10 @@
     "AC-OBS-",
     "AC-RSO-",
     "AC-GOV-",
-    "AC-OGV-"
+    "AC-OGV-",
+    "AC-GUX-",
+    "AC-DEC-004.",
+    "AC-DEC-005."
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -2195,6 +2198,48 @@
       "doc": "Guard: keeping an agent honest while it runs",
       "doc_id": "d559f8c3-3797-412b-812f-c71b6d8995ee",
       "text": "When an adversarial payload requests excessive decoding or malformed input is supplied, inspection shall remain bounded, perform no network or code execution, and keep the detector pass available."
+    },
+    {
+      "id": "AC-DEC-004.2",
+      "doc": "Optional assessments with managed privacy amendment",
+      "doc_id": "b73e5c34-b454-4bba-82b9-91cc6ea8e255",
+      "text": "When preparing a request, the device shall remove secrets irreversibly and mask supported personal identifiers throughout selected state, questions, claims, rubrics, metadata and nested keys/values before the first external hop."
+    },
+    {
+      "id": "AC-DEC-004.3",
+      "doc": "Optional assessments with managed privacy amendment",
+      "doc_id": "b73e5c34-b454-4bba-82b9-91cc6ea8e255",
+      "text": "When the same identifier occurs within an assessment, masking shall preserve equality with an opaque placeholder; placeholders shall not enable cross-account or cross-assessment linkage."
+    },
+    {
+      "id": "AC-DEC-004.4",
+      "doc": "Optional assessments with managed privacy amendment",
+      "doc_id": "b73e5c34-b454-4bba-82b9-91cc6ea8e255",
+      "text": "When masking fails, exceeds size/time limits or cannot meet the selected policy's required coverage, the device shall stop transmission and report why. A general redaction opt-out or fallback sanitizer shall not bypass this gate."
+    },
+    {
+      "id": "AC-DEC-004.7",
+      "doc": "Optional assessments with managed privacy amendment",
+      "doc_id": "b73e5c34-b454-4bba-82b9-91cc6ea8e255",
+      "text": "When coverage is displayed, the system shall name tested identifier categories and languages and disclose unsupported contextual identification. It shall not claim perfect PII removal or anonymity."
+    },
+    {
+      "id": "AC-DEC-005.2",
+      "doc": "Optional assessments with managed privacy amendment",
+      "doc_id": "b73e5c34-b454-4bba-82b9-91cc6ea8e255",
+      "text": "When supported returned content needs restoration, the device shall replace only exact placeholders it issued for that assessment, once, within an allowed field. Unknown, forged or cross-request placeholders shall remain masked."
+    },
+    {
+      "id": "AC-DEC-005.3",
+      "doc": "Optional assessments with managed privacy amendment",
+      "doc_id": "b73e5c34-b454-4bba-82b9-91cc6ea8e255",
+      "text": "When a request ends or its bounded restoration TTL expires, the device shall discard its in-memory map. After restart, results shall remain usable with masked references; lost identifiers shall never be guessed."
+    },
+    {
+      "id": "AC-DEC-005.5",
+      "doc": "Optional assessments with managed privacy amendment",
+      "doc_id": "b73e5c34-b454-4bba-82b9-91cc6ea8e255",
+      "text": "When historical evidence was already irreversibly redacted, the system shall preserve that redaction and shall not claim it can reconstruct the original value."
     }
   ]
 }

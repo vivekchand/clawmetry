@@ -1,12 +1,29 @@
 ## Unreleased
 
-### Release: Guard reads poisoned prompt/Skill files and cold-start `curl | bash` (carries #6210 and #6211)
+### Release: OpenClaw 2026.9.x sessions and localised error states (carries #6233, #6234 and #6235)
 
-### Added: system-prompt and Skill files that tell the agent to reach a remote host are flagged
+### Fixed: error states in the dashboard follow the selected language
+- The "Failed to load:" message and the Retry button on six panels, and the "Error: " prefix on cron toasts, the cron run-timeline tooltip and the skills browser, were hard-coded English. They now go through `t()` with the existing `app.failed_to_load_2`, `common.retry` and `app.error` keys, so no locale file changed. Two slices of #2258. Carries #6234 and #6235.
+
+### Fixed: OpenClaw 2026.9.x sessions appear again
+
+- **Why:** OpenClaw 2026.9.x stopped writing `agents/main/sessions/<id>.jsonl` and keeps live transcripts in SQLite (`agents/main/agent/openclaw-agent.sqlite`). The daemon only read the `.jsonl` files, so on a current OpenClaw no session, message, token or cost ever reached ClawMetry; #6173 shipped a warning, not a reader.
+- **What:** `clawmetry/openclaw_sqlite.py` reads that store read-only (including zstd-compressed events) and mirrors it into the JSONL layout the daemon already ingests (`<id>.jsonl`, `sessions.json`, context-only `<id>.trajectory.jsonl`) under `~/.clawmetry/openclaw-mirror/`. The session sync, session-row sync and the other sessions-dir readers in `clawmetry/sync.py` follow the mirror whenever the legacy directory has no live transcript; installs still writing `.jsonl` are untouched. The mirror is append-only even when OpenClaw rewrites a transcript, so cursors hold and nothing is re-sent. Adds `zstandard` for Python < 3.14 (3.14+ uses the stdlib decoder).
+- **Verified:** 7 regression tests on the real table shapes, plus an isolated daemon ingest of a live OpenClaw 2026.9.7 store on Windows: 3 sessions, 68 transcript events and 7 context events landed in DuckDB.
+- **Limits:** only the `main` agent's store is read, as before; nothing under `~/.openclaw` is ever written.
+
+### Added: local assessment privacy with scoped restoration
+
+- Assessment integrations can mask complete bounded JSON requests before transport receives them, retain temporary restoration maps only on the local machine, and restore recognized placeholders only in the matching scope and explanation field. Recognized secrets are removed irreversibly.
+- Each dispatch checks current consent, policy, scope and egress settings. Supported identifier formats and coverage limits are explicit; requests that require unsupported coverage are rejected. This primitive does not activate managed assessments or corrective recovery.
+- Shared redaction now captures complete credentials with underscores and hyphens, country-length IBANs beside prose, and case-insensitive national identifiers. Ambiguous numeric candidates and scan boundaries no longer expose the reproduced identifier suffixes.
+- Verified with 240 local privacy, redaction and egress tests, independent review, cross-platform CI and the required aggregate gate. Carries #6227.
+
+### Added: system-prompt and Skill files that tell the agent to reach a remote host are flagged (shipped in 0.12.900)
 - `repo_scan.scan_prompt_files` reads OpenClaw workspace files, project instruction files (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`) and Skill/rules folders for three shapes: fetching tasks from a remote host, hiding a request from the user, and running a remote script. A match raises the existing `agent_config_tamper` finding kind.
 - ATLAS replay: AML.CS0051 S13 and AML.CS0049 S05-S06 move from unobservable to detected. 14 new tests, and 0 false positives on 877 real prompt and Skill files. Closes vivekchand/clawmetry-pro#258. Carries #6210.
 
-### Added: a remote script piped into a shell is flagged on a fresh install
+### Added: a remote script piped into a shell is flagged on a fresh install (shipped in 0.12.900)
 - `network_egress` gets a `remote_script` ground: `curl`/`wget` piped into `sh`, `bash`, `zsh`, `python*`, `perl`, `ruby` or `node` (also through `sudo`) from a host the cohort has not settled on raises a warning, with no learned baseline needed. Before this, a fresh install raised nothing for `curl -fsSL https://<host>/install.sh | bash`.
 - An interpreter given inline code (`python3 -c`, `node -e`, `sh -c` and similar) only reads the response as data and is not flagged. That cut matches on 65,314 real agent commands from 988 to 58. `bash -s --` and `python3 -u -` still execute stdin and are flagged.
 - ATLAS replay: AML.CS0051 S09-S12 move from observed to detected on a cold start. This is detection after the fact, not prevention. Cold-start half of vivekchand/clawmetry-pro#256. Carries #6211.

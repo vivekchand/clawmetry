@@ -958,7 +958,7 @@ async function loadAlertRules() {
     // Issue #1257: replace silent "Failed to load" text with an actionable
     // Failed-to-load + Retry pattern. Mirror loadCrons / loadAutonomy / loadSystemHealth.
     var el = document.getElementById('alert-rules-list');
-    if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">Failed to load: ' + escHtml(String(e)) + ' &nbsp;<button onclick="loadAlertRules()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
+    if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">' + escHtml(t('app.failed_to_load_2', null, 'Failed to load: ')) + escHtml(String(e)) + ' &nbsp;<button onclick="loadAlertRules()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button></div>';
   }
 }
 
@@ -1056,7 +1056,7 @@ async function loadAlertHistory() {
   } catch(e) {
     // Issue #1257: Failed-to-load + Retry button pattern (mirror #1314/#1316).
     var el = document.getElementById('alert-history-list');
-    if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">Failed to load: ' + escHtml(String(e)) + ' &nbsp;<button onclick="loadAlertHistory()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
+    if (el) el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">' + escHtml(t('app.failed_to_load_2', null, 'Failed to load: ')) + escHtml(String(e)) + ' &nbsp;<button onclick="loadAlertHistory()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button></div>';
   }
 }
 
@@ -2932,11 +2932,11 @@ async function loadAutonomy() {
     // Issue #1257 part 2 — replace silent failure with explicit
     // Failed-to-load + Retry. Mirrors Brain pattern (PR #1239).
     if (gapEl) {
-      gapEl.innerHTML = '<span style="color:var(--text-error);">Failed to load: '
+      gapEl.innerHTML = '<span style="color:var(--text-error);">' + escHtml(t('app.failed_to_load_2', null, 'Failed to load: '))
         + escHtml(String(e && e.message || e)) + '</span> '
         + '<button onclick="loadAutonomy()" title="Server slow \u2014 usually clears within 30 s" '
         + 'style="margin-left:6px;background:transparent;border:1px solid var(--border-primary);'
-        + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">Retry</button>';
+        + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button>';
     }
   }
 }
@@ -3741,7 +3741,7 @@ async function openSkillBrowser(skillName) {
     // Auto-load SKILL.md
     loadSkillFile(skillName, 'SKILL.md');
   } catch(e) {
-    treeEl.innerHTML = '<div style="padding:12px;color:var(--text-error);">Error: ' + escHtml(String(e)) + '</div>';
+    treeEl.innerHTML = '<div style="padding:12px;color:var(--text-error);">' + escHtml(t('app.error', null, 'Error: ')) + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -3767,7 +3767,7 @@ async function loadSkillFile(skillName, filePath) {
     });
     _cmRtFitHeight();
   } catch(e) {
-    cmFileViewerPlaceholder('skills-browser-content', 'Error: ' + String(e), true);
+    cmFileViewerPlaceholder('skills-browser-content', t('app.error', null, 'Error: ') + String(e), true);
   }
 }
 
@@ -10576,7 +10576,7 @@ async function loadBrainPage(silent) {
     if (el) {
       var stillLoading = /Loading/i.test(el.innerText || '');
       if (!silent || stillLoading) {
-        el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">Failed to load: ' + escHtml(String(e)) + ' &nbsp;<button onclick="loadBrainPage()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
+        el.innerHTML = '<div style="color:var(--text-error);padding:20px;font-size:13px;">' + escHtml(t('app.failed_to_load_2', null, 'Failed to load: ')) + escHtml(String(e)) + ' &nbsp;<button onclick="loadBrainPage()" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button></div>';
       }
       // Boot-time main-thread jank can abort this fetch at its 20 s cap
       // while the server answers in <50 ms once the thread clears (founder
@@ -15022,7 +15022,7 @@ async function loadCrons() {
                 : 'Scheduled jobs could not be loaded right now.')
             + ' <button onclick="loadCrons()" title="Server slow — usually clears within 30 s" '
             + 'style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);'
-            + 'color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button>'
+            + 'color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button>'
             + '</div>';
     if (listEl) listEl.innerHTML = msg;
     console.warn('loadCrons failed', e);
@@ -15135,7 +15135,7 @@ async function loadQueueLanes() {
       + 'Failed to load queue lanes: ' + escHtml(String((e && e.message) || e))
       + ' <button onclick="loadQueueLanes()" style="margin-left:8px;background:transparent;'
       + 'border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;'
-      + 'padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button></div>';
+      + 'padding:2px 10px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button></div>';
     console.warn('loadQueueLanes failed', e);
   }
 }
@@ -15752,7 +15752,7 @@ function _renderCronRunTimeline(jobId, runs, jobJobs) {
     var pillLabel = isOk ? (r.delivered_at ? 'OK ✓' : 'OK') : isErr ? 'FAIL' : escHtml(r.status || '?');
     var tipParts  = [r.status || '?'];
     if (r.delivered_at) tipParts.push('Delivered ' + new Date(r.delivered_at).toLocaleString());
-    if (r.error) tipParts.push('Error: ' + String(r.error).substring(0, 300));
+    if (r.error) tipParts.push(window.t('app.error', null, 'Error: ') + String(r.error).substring(0, 300));
     var pill = '<span title="' + escHtml(tipParts.join(' · ')) + '" style="display:inline-block;padding:2px 8px;border-radius:999px;background:' + pillBg + ';color:' + pillColor + ';font-size:10px;font-weight:700;white-space:nowrap;">' + pillLabel + '</span>';
     rows += '<tr>'
       + '<td style="padding:3px 8px;">' + pill + '</td>'
@@ -15886,21 +15886,21 @@ async function cronRunNow(jobId) {
     var data = await res.json();
     showCronToast(data.message || 'Job triggered');
     setTimeout(loadCrons, 2000);
-  } catch(e) { showCronToast('Error: ' + e.message); }
+  } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
 }
 
 async function cronToggle(jobId, enabled) {
   try {
     var res = await fetch('/api/cron/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId, enabled: enabled})});
     var data = await res.json();
-    if (data.error) { showCronToast('Error: ' + data.error); return; }
+    if (data.error) { showCronToast(t('app.error', null, 'Error: ') + data.error); return; }
     showCronToast(data.message || (enabled ? 'Job enabled' : 'Job disabled'));
     // Update local state immediately for instant UI feedback
     var job = _cronJobs.find(function(j) { return j.id === jobId; });
     if (job) { job.enabled = enabled; renderCrons(); }
     // Then refresh from server after a short delay
     setTimeout(loadCrons, 1000);
-  } catch(e) { showCronToast('Error: ' + e.message); }
+  } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
 }
 
 function cronConfirmDelete(jobId, jobName) {
@@ -15918,7 +15918,7 @@ async function cronDelete(jobId) {
     showCronToast(data.message || 'Job deleted');
     delete _cronExpanded[jobId];
     loadCrons();
-  } catch(e) { showCronToast('Error: ' + e.message); }
+  } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
 }
 
 function cronEdit(jobId) {
@@ -15999,11 +15999,11 @@ async function saveCronEdit() {
     try {
       var res = await fetch('/api/cron/create', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
       var data = await res.json();
-      if (data.error) { showCronToast('Error: ' + data.error); return; }
+      if (data.error) { showCronToast(t('app.error', null, 'Error: ') + data.error); return; }
       showCronToast(data.message || 'Job created');
       closeCronEditModal();
       loadCrons();
-    } catch(e) { showCronToast('Error: ' + e.message); }
+    } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
   } else {
     var patch = { enabled: enabled };
     if (name) patch.name = name;
@@ -16017,7 +16017,7 @@ async function saveCronEdit() {
       showCronToast(data.message || 'Job updated');
       closeCronEditModal();
       loadCrons();
-    } catch(e) { showCronToast('Error: ' + e.message); }
+    } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
   }
 }
 
@@ -16058,7 +16058,7 @@ async function submitCronFix(jobId) {
     var data = await res.json();
     showCronToast(data.message || 'Fix request sent to AI agent');
   } catch(e) {
-    showCronToast('Error: ' + e.message);
+    showCronToast(t('app.error', null, 'Error: ') + e.message);
   }
 }
 
@@ -18057,7 +18057,7 @@ async function loadSystemHealth() {
           : 'System health could not be loaded right now.')
       + ' <button onclick="loadSystemHealth()" title="Server slow \u2014 usually clears within 30 s" '
       + 'style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);'
-      + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">Retry</button>'
+      + 'color:var(--text-secondary);border-radius:4px;padding:1px 8px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button>'
       + '</div>';
     document.getElementById('sh-services').innerHTML = msg;
     document.getElementById('sh-disks').innerHTML = msg;
@@ -26607,7 +26607,7 @@ function _compModalError(retryFn, label, err) {
   var msg = err && err.message ? err.message : String(err || '');
   var call = retryFn ? (retryFn.indexOf('(') !== -1 ? retryFn : retryFn + '()') : '';
   var btn = call
-    ? ' <button onclick="' + call + '" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">Retry</button>'
+    ? ' <button onclick="' + call + '" style="margin-left:8px;background:transparent;border:1px solid var(--border-primary);color:var(--text-secondary);border-radius:4px;padding:2px 10px;font-size:11px;cursor:pointer;">' + escHtml(t('common.retry', null, 'Retry')) + '</button>'
     : '';
   var labelPart = label ? ' ' + escapeHtml(label) : '';
   var msgPart   = msg ? ': ' + escapeHtml(msg) : '';
@@ -31193,7 +31193,7 @@ async function cmRuntimeMountBrowser(container, runtimeId, tab) {
     payload = await r.json();
     }
   } catch (e) {
-    container.innerHTML = '<div style="padding:16px;color:#ef4444;font-size:12px;">Failed to load: '
+    container.innerHTML = '<div style="padding:16px;color:#ef4444;font-size:12px;">' + escHtml(t('app.failed_to_load_2', null, 'Failed to load: '))
       + escHtml(String(e)) + '</div>';
     return;
   }
@@ -31366,7 +31366,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       meta: [sizeStr, mstr, d.language || 'text']
     });
   } catch (e) {
-    cmFileViewerPlaceholder(hostId, 'Failed to load: '
+    cmFileViewerPlaceholder(hostId, t('app.failed_to_load_2', null, 'Failed to load: ')
       + String(e && e.message || e), true);
   }
 }
