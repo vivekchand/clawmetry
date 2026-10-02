@@ -1144,7 +1144,7 @@
   "security.audit_empty": "No recorded activity yet. Approval decisions, budget changes, and pauses appear here.",
   "security.audit_sub": "(approvals, budgets, pauses)",
   "security.audit_title": "Recent activity",
-  "security.cloud_note": "Configuration and threat checks run on the agent machine. They use local files and activity. Open its local dashboard and select Security to run them.",
+  "security.cloud_note": "Configuration and threat checks run on the agent machine. They use local files and activity. Open http://localhost:8900 on that machine. Select Security to run the checks.",
   "security.clean_sessions": "Clean Sessions",
   "security.critical": "Critical",
   "security.failed": "Failed",
@@ -1645,5 +1645,18 @@
   "selfhost.tier_pro": "Pro",
   "selfhost.device_perk": "Includes a free $149 desk device, shipped when your first annual invoice is paid.",
   "selfhost.continue_checkout": "Continue to secure checkout",
-  "selfhost.use_other_account": "Use a different account"
+  "selfhost.use_other_account": "Use a different account",
+  "common.saved": "Saved",
+  "common.saving": "Saving…",
+  "common.live": "Live",
+  "security.retention_invalid_days": "Enter a whole number of days, 1 or more.",
+  "security.retention_unchanged": "Left unchanged.",
+  "security.retention_save_failed": "Could not save.",
+  "app.apikey_no_answer": "ClawMetry did not answer. Is the dashboard still running?",
+  "security.credential_scan_clean": "Clean",
+  "app.coverage_key_paste_first": "Paste a key first.",
+  "app.coverage_key_connecting": "Connecting…",
+  "app.coverage_key_save_failed": "Could not save that key.",
+  "tracing.agent_graph_load_failed": "Could not load agent graph. Is the daemon running?",
+  "tracing.agent_graph_empty": "No agent span data in this time window."
 }

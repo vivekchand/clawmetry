@@ -55,6 +55,16 @@ As a maintainer, I want evidence for each surface so that unfinished coverage re
 - AC-STE-004.2: Before the rollout is declared complete, all in-scope repositories and generated paths shall be reviewed, released, and verified in their served artifacts.
 - AC-STE-004.3: Translations shall retain separate language checks. Source evidence shall remain distinguishable from owned explanations.
 
+### REQ-STE-005: Other generated explanations
+
+As an operator, I want the same writing policy in alerts, Advisor, charts, and evaluations without changing the evidence or result.
+
+- AC-STE-005.1: When alert narration, Advisor, Dives, or evaluation judges generate explanations, the request shall include the common writing instructions.
+- AC-STE-005.2: When a generated explanation fails validation, its surface shall use a fixed fallback without changing SQL, chart mappings, scores, verdicts, identifiers, source evidence, or known token usage.
+- AC-STE-005.3: When validation rejects alert narration, dispatch shall retain the original alert through its existing fallback path.
+- AC-STE-005.4: When a structured response contains both prose and machine-readable fields, validation shall apply to the explanation fields after parsing and shall preserve the structured response contract.
+- AC-STE-005.5: Language validation shall cause no additional model call or corrective retry, including in integrations that already retry invalid JSON.
+
 ## Non-goals and alternatives
 
 This work does not rewrite observed agent output or enforce writing rules on other agents.

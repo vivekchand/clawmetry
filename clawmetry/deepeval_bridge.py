@@ -178,6 +178,12 @@ def _judge_cls() -> type:
 
         def _raw(self, prompt: str) -> str:
             from clawmetry import eval_runner
+            from clawmetry.english import WRITING_INSTRUCTIONS
+            prompt += (
+                "\n\nApply these writing rules only to human-readable explanation fields. "
+                "Preserve the required response schema, keys, scores, verdicts and quoted evidence. "
+                "Use at most 20 words in each sentence. " + WRITING_INSTRUCTIONS
+            )
             self.calls += 1
             caller = self._judge_call or eval_runner._call_judge
             return caller(
@@ -397,11 +403,12 @@ def score_session_deepeval(
             metric = _build_metric(slug, judge, ns)
             metric.measure(case)
             score = float(metric.score) if metric.score is not None else None
+            from clawmetry.english import explanation_or_fallback
             results.append({
                 **base,
                 "score": score,
                 "passed": bool(metric.is_successful()) if score is not None else None,
-                "reason": str(metric.reason or "")[:500],
+                "reason": explanation_or_fallback(metric.reason, "evaluation", max_chars=500),
                 "skipped": False, "skip_reason": None,
             })
         except Exception as e:  # noqa: BLE001 — a judge outage is a skip, not a crash

@@ -8,7 +8,7 @@ Mechanical results and full editorial review are separate evidence.
 
 The first implementation is [ClawMetry PR #6248](https://github.com/vivekchand/clawmetry/pull/6248).
 Assess the new modules and CI integration against that branch until it merges.
-It covers the English catalog, literal templates, weekly insight synthesis, and the Activity turn-explanation caller.
+It covers the English catalog, literal templates, weekly insights, Activity explanations, alerts, Advisor answers, chart explanations, and evaluation reasons.
 Other dynamic messages, documentation, repositories, and editorial review remain pending in `docs/STE100_COVERAGE.md`.
 
 ## Component Blueprint Composition
@@ -58,6 +58,26 @@ Implementation: `clawmetry/insights.py`.
 It records only the rule identifiers in warnings, not the rejected prose or user rows.
 The existing Activity caller in `routes/brain.py` supplies its own fixed fallback because that screen has no digest result table.
 It loads the insight configuration from `clawmetry/insights.py` and does not invent a model name for relay responses.
+
+### Additional generation boundaries
+
+The alert narrator in `clawmetry/narrator.py` applies common instructions and validates narration before returning it to dispatch.
+Rejected narration returns no enrichment, so the existing caller retains its original alert.
+Scheduled briefs retain their four-sentence limit; other alerts retain their three-sentence limit.
+The brief fallback reports an unavailable summary without guessing whether the credential was missing.
+
+Advisor in `routes/advisor.py` validates the final answer after either transport completes.
+Its fallback keeps the response's model, context count, and known token usage.
+Shared transport functions still accept custom output contracts used by Dives.
+
+Dives in `clawmetry/dives_prompt.py` requests the common writing rules for titles and descriptions.
+The boundary in `routes/dives.py` validates these fields after JSON parsing.
+SQL, chart types, axis mappings, and query results are not language-rewritten.
+
+The classic evaluation boundary in `clawmetry/eval_runner.py` validates the reason separately from the parsed score.
+The optional bridge in `clawmetry/deepeval_bridge.py` requests the same rules for explanation fields and validates each completed metric reason.
+Existing JSON schema retries remain unchanged; language rejection does not trigger them.
+The score, pass/fail result, source transcript, and persistence path remain unchanged.
 
 ## System Contracts
 
