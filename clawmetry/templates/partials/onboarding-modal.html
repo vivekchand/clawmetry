@@ -42,18 +42,18 @@
       <img src="/static/img/logo.svg" width="28" height="28" style="border-radius:6px;" alt="">
       <span id="obg-title">Welcome to ClawMetry</span>
     </div>
-    <p class="obg-detect" id="obg-detect">One quick choice and your dashboard is ready.</p>
-    <p class="obg-q">Where should ClawMetry keep an eye on your agents?</p>
+    <p class="obg-detect" id="obg-detect">Select how you want to use ClawMetry.</p>
+    <p class="obg-q">Where do you want to monitor your agents?</p>
     <div class="obg-choices">
       <div class="obg-opt">
         <h3>Managed cloud<span class="obg-rec">Recommended</span></h3>
-        <p>See your agents from any browser at app.clawmetry.com. End-to-end encrypted: only your browser holds the key, we never see your data. Includes a free 7-day Pro trial, no card needed.</p>
+        <p>Monitor your agents at app.clawmetry.com. Agent data is encrypted before it leaves this machine. Your browser decrypts it. Includes a free 7-day Pro trial. No payment card is required.</p>
         <button class="obg-btn obg-btn-primary" id="obg-managed-btn" type="button">Connect ClawMetry Cloud</button>
         <div class="obg-err" id="obg-managed-err"></div>
       </div>
       <div class="obg-opt">
         <h3>Self-host</h3>
-        <p>Everything stays on this machine. Sign in once with Google, GitHub, or email to start the same free 7-day Pro trial and unlock every runtime, or activate a license key you already have.</p>
+        <p>Keep agent data on this machine. Sign in with Google, GitHub, or email for a free 7-day Pro trial. The trial includes every supported runtime. You can also use an existing license key.</p>
         <div id="obg-selfhost-body">
           <button class="obg-btn obg-btn-quiet" id="obg-selfhost-btn" type="button">Set up Self-Host</button>
         </div>
@@ -61,14 +61,14 @@
     </div>
     <button type="button" class="obg-alt" id="obg-free-btn"
             style="background:none;border:none;cursor:pointer;width:100%;padding:0;font:inherit;">
-      I just want OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code, free and with no account
+      Use OpenClaw, NVIDIA NemoClaw, Goose and Qwen Code for free without an account
     </button>
     <div class="obg-err" id="obg-free-err"></div>
     <div class="obg-ingest" id="obg-ingest">
       <span class="obg-dot"></span>
-      <span id="obg-ingest-text">Checking whether your agents are being seen&hellip;</span>
+      <span id="obg-ingest-text">ClawMetry is checking for agent activity.</span>
     </div>
-    <p class="obg-foot">Read-only by design: ClawMetry watches your agents, it never changes them.<br>
-    You can switch between cloud and self-host any time from Settings.</p>
+    <p class="obg-foot">ClawMetry observes agents by default. Agent controls require your action or an enabled policy.<br>
+    Use Settings to switch between cloud and self-hosted use.</p>
   </div>
 </div>

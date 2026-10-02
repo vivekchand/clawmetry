@@ -247,7 +247,6 @@
   "app.maybe_later": "Belki sonra",
   "app.mcp_only": "Yalnızca MCP",
   "app.mcp_servers": "🧩 MCP sunucuları",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 Bellek",
   "app.memory_access_history_reads_from_the_local_event_s": "Bellek erişim geçmişi, burada mevcut olmayan yerel olay deposundan okur.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "Bellek dosyaları ajan makinesinde yerel olarak saklanır ve buluta eşitlenmez.",

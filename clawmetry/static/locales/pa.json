@@ -247,7 +247,6 @@
   "app.maybe_later": "ਸ਼ਾਇਦ ਬਾਅਦ ਵਿੱਚ",
   "app.mcp_only": "ਸਿਰਫ਼ MCP",
   "app.mcp_servers": "🧩 MCP ਸਰਵਰ",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 ਮੈਮੋਰੀ",
   "app.memory_access_history_reads_from_the_local_event_s": "ਮੈਮੋਰੀ ਪਹੁੰਚ ਇਤਿਹਾਸ ਲੋਕਲ ਇਵੈਂਟ ਸਟੋਰ ਤੋਂ ਪੜ੍ਹਦਾ ਹੈ, ਜੋ ਇੱਥੇ ਉਪਲਬਧ ਨਹੀਂ ਹੈ।",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "ਮੈਮੋਰੀ ਫਾਈਲਾਂ ਏਜੰਟ ਮਸ਼ੀਨ ਉੱਤੇ ਲੋਕਲ ਤੌਰ 'ਤੇ ਸਟੋਰ ਹੁੰਦੀਆਂ ਹਨ ਅਤੇ Cloud ਨਾਲ ਸਿੰਕ ਨਹੀਂ ਹੁੰਦੀਆਂ।",

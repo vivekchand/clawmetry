@@ -247,7 +247,6 @@
   "app.maybe_later": "કદાચ પછી",
   "app.mcp_only": "ફક્ત MCP",
   "app.mcp_servers": "🧩 MCP સર્વર્સ",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 મેમરી",
   "app.memory_access_history_reads_from_the_local_event_s": "મેમરી ઍક્સેસ ઇતિહાસ સ્થાનિક ઇવેન્ટ સ્ટોરમાંથી વાંચે છે, જે અહીં ઉપલબ્ધ નથી.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "મેમરી ફાઇલો એજન્ટ મશીન પર સ્થાનિક રીતે સંગ્રહિત થાય છે અને ક્લાઉડ સાથે સિંક થતી નથી.",
