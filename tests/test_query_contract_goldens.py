@@ -60,6 +60,9 @@ DISPATCH_ARGS = {
     "session_context": {"session_id": "sess-a"},
     # WO-60 similar runs: nearest sessions by tool-call shape for one session.
     "similar_sessions": {"session_id": "sess-a"},
+    # OSS-only installation: the paid plugin reports explicit unavailability.
+    "robotics_runs": {},
+    "robotics_events": {"run_id": "a" * 32},
 }
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.
@@ -92,6 +95,9 @@ def seeded(tmp_path, monkeypatch):
 
     import clawmetry.local_store as ls
     importlib.reload(ls)
+    from clawmetry import extensions
+    # Keep this public contract independent of locally installed paid plugins.
+    monkeypatch.setitem(extensions._registry, "robotics.query", [])
     import routes.local_query as lq
     importlib.reload(lq)
 
