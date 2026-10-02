@@ -14637,7 +14637,7 @@ document.addEventListener('click', function(ev) {
   var gb = ev.target.closest && ev.target.closest('.cm-guard-btn');
   if (gb) {
     ev.stopPropagation();
-    guardControl(gb.dataset.sid, gb.dataset.action, gb.dataset.rt, gb.dataset.cwd);
+    sessionRowControl(gb.dataset.sid, gb.dataset.action, gb.dataset.rt, gb.dataset.cwd);
     return;
   }
   var sb = ev.target.closest && ev.target.closest('.cm-stop-btn');
@@ -14652,7 +14652,12 @@ document.addEventListener('click', function(ev) {
 // action are identical to the agent process. Reports the REAL outcome —
 // including advisory_only, where a "pause" is only a proxy flag and no
 // enforcement proxy is running to honor it.
-async function guardControl(sessionId, action, runtime, cwd) {
+//
+// Named apart from the Guard tab's guardControl(sessionId, runtime, cwd,
+// action) further down. Both used to be called guardControl; in one script the
+// later declaration wins, so a row click reached the Guard tab's function with
+// its arguments in the wrong order and no control was ever sent.
+async function sessionRowControl(sessionId, action, runtime, cwd) {
   var sid = String(sessionId || '').trim();
   if (!sid || !action) return;
   if (action === 'stop' || action === 'kill') {
