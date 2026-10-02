@@ -1575,5 +1575,13 @@
   "overview.hb_missed": "missed",
   "overview.hb_missed_badge": "Missed",
   "overview.hb_no_checkins_yet": "No check-ins yet",
-  "overview.hb_waiting_badge": "Waiting"
+  "overview.hb_waiting_badge": "Waiting",
+  "overview.hb_status_delayed": "Delayed",
+  "overview.hb_status_silent": "SILENT",
+  "overview.hb_banner_silent": "Agent heartbeat SILENT for {gap} (expected every {interval}m). Check if agent is running.",
+  "overview.hb_banner_delayed": "Heartbeat delayed: last seen {gap} ago (expected every {interval}m)",
+  "memory.status_bloat": "Bloat detected",
+  "memory.status_growing": "Growing",
+  "overview.cron_errors": "Errors",
+  "overview.scheduled_jobs": "Scheduled Jobs"
 }
