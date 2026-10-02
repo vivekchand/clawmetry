@@ -109,3 +109,13 @@ These results establish the implemented subset and regression behavior. They do 
 - One existing setup test attempted to use the developer's dashboard log. It now uses a temporary log path. The tested startup implementation is unchanged.
 - CI explicitly runs both new test modules and the previously unlisted local-setup regression module. The file-coverage baseline lists 315 files and lowers the limit to 908 unlisted files.
 - Interactive prompts, result messages, other command parsers, editorial review, and release verification remain pending.
+
+## Parameterized browser follow-up on 2026-10-02
+
+- Twenty-six fixed-key calls now use literal catalog templates. Their existing parameter values and escaping boundaries are unchanged.
+- The inventory owner label now supplies its fallback in the correct translation argument. Before the catalog loaded, the previous call could display the raw translation key.
+- The checked corpus contains 3,996 messages, including 1,007 browser fallback occurrences. It has zero mechanical findings. Twenty-one dynamic or incomplete calls remain pending.
+- The combined browser, inventory, attention, heartbeat, and profile checks pass: 90 tests. They include catalog-present and catalog-absent rendering, duration units, and source owner values.
+- The full English CI test selection passes 155 tests, with the optional real DeepEval import test skipped. The built wheel matches every changed runtime and asset file.
+- Two regressions fail with the preceding JavaScript: checked parameterized coverage and the owner fallback before catalog loading. Both pass after the exact changed source is restored.
+- Forwarding helpers, computed keys, trial helper interpolation, other dynamic rendering, editorial review, and release verification remain pending. This follow-up does not change the first release PR while its CI runs.

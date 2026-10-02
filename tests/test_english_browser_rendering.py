@@ -109,3 +109,61 @@ def test_cost_figure_keeps_html_and_amount_when_catalog_is_unavailable(loaded):
     rendered = run_js(code)
     assert rendered == 'save about <span title="Published rates">12.34 USD</span>/mo'
     assert '{amt}' not in rendered and '\0' not in rendered
+
+
+def test_parameterized_fallbacks_are_checked_and_keep_the_same_values():
+    keys = {
+        'app.n_minutes', 'app.n_hours', 'app.n_days', 'alerts.feed_stopped',
+        'overview.hb_banner_silent', 'overview.hb_banner_delayed',
+        'needs.n_working', 'needs.n_quiet', 'needs.never_asks', 'needs.n_waiting',
+        'needs.more', 'skills.never_used_verdict', 'quality.oc_scope',
+        'efficiency.grade_sentence', 'usage.cost_about', 'usage.tokens_sub',
+        'transcript.history_gap_count', 'inputs.seen_turns', 'inputs.tools_count',
+        'inputs.not_exposed', 'profile.trial_days_left', 'profile.plan',
+    }
+    calls, found = [], set()
+    for source in [APP, (ROOT / 'clawmetry/static/js/gw-setup.js').read_text()]:
+        for call in translations(source):
+            if call.key in keys:
+                assert call.fallback is not None and call.pending is None, call.key
+                found.add(call.key)
+                calls.append(source[call.start:call.end])
+    assert found == keys
+    values = '''
+var mins=7, hours=4, days=3, dur='4 hours', gapStr='7 minutes', intervalMin=5;
+var working=2, quiet=3, rtName='Hermes', items=Array(8), unusedCount=4;
+var hit=31, ctx='12k', costStr='12.34 USD', tokStr='12,345', n=9;
+var item={turns:5}, names=['Read','Write'], turns=6, rt='Hermes', toolNames=['Read','Write'];
+var d=3, label='Pro';
+'''
+    code = ("var DICT={},EN={},LANG='en';\n" + TRANSLATE + '\nvar t=T;\n' + values
+            + 'function render(){return [' + ','.join(calls) + '];}\n'
+            + 'var absent=render(); EN=' + json.dumps(CATALOG)
+            + ';console.log(JSON.stringify([absent,render()]));')
+    absent, loaded = run_js(code)
+    assert absent == loaded
+    assert not any(re.search(r'\{\w+\}', text) for text in absent)
+    assert 'about 12.34 USD' in absent
+    assert '12,345 tokens' in absent
+    assert '9 earlier messages not loaded' in absent
+    assert 'Trial · 3 days left' in absent
+
+
+@pytest.mark.parametrize('loaded', [False, True, None])
+def test_owner_fallback_is_a_label_before_the_catalog_loads(loaded):
+    code = ''
+    if loaded is not None:
+        code = ('var DICT={},EN=' + json.dumps(CATALOG if loaded else {})
+                + ";var LANG='en';\n" + TRANSLATE + '\nvar t=T;\n')
+    code += function('_invOwnerLabel')
+    code += '\nconsole.log(JSON.stringify([{}, {owner:" Jamie "}, {owner:" "}, {owner:0}].map(_invOwnerLabel)));'
+    assert run_js(code) == ['me', 'Jamie', 'me', '0']
+
+
+@pytest.mark.parametrize('loaded', [False, True])
+def test_duration_fallbacks_keep_counts_and_units(loaded):
+    code = ('var DICT={},EN=' + json.dumps(CATALOG if loaded else {})
+            + ";var LANG='en';\n" + TRANSLATE + '\nvar t=T;\n'
+            + function('_cmHumanizeMinutes')
+            + '\nconsole.log(JSON.stringify([1,2,60,120,2880,4320].map(_cmHumanizeMinutes)));')
+    assert run_js(code) == ['1 minute', '2 minutes', '1 hour', '2 hours', '2 days', '3 days']

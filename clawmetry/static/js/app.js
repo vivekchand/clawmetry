@@ -1063,11 +1063,11 @@ async function loadAlertHistory() {
 // QW5 — plain-words duration for the "data feed stopped" banner.
 function _cmHumanizeMinutes(mins) {
   mins = Math.max(1, Math.round(mins));
-  if (mins < 60) return mins === 1 ? t('app.one_minute', null, '1 minute') : t('app.n_minutes', { n: mins }, mins + ' minutes');
+  if (mins < 60) return mins === 1 ? t('app.one_minute', null, '1 minute') : t('app.n_minutes', { n: mins }, "{n} minutes");
   var hours = Math.round(mins / 60);
-  if (hours < 48) return hours === 1 ? t('app.one_hour', null, '1 hour') : t('app.n_hours', { n: hours }, hours + ' hours');
+  if (hours < 48) return hours === 1 ? t('app.one_hour', null, '1 hour') : t('app.n_hours', { n: hours }, "{n} hours");
   var days = Math.round(mins / 1440);
-  return days === 1 ? t('app.one_day', null, '1 day') : t('app.n_days', { n: days }, days + ' days');
+  return days === 1 ? t('app.one_day', null, '1 day') : t('app.n_days', { n: days }, "{n} days");
 }
 
 // QW5 — rewrite the server's agent_down message into plain words. The server
@@ -1078,7 +1078,7 @@ function _cmAgentDownBannerCopy(orig) {
     var m = /(\d+)\s*minute/.exec(orig || '');
     if (m) {
       var dur = _cmHumanizeMinutes(parseInt(m[1], 10));
-      return t('alerts.feed_stopped', { duration: dur }, 'One data feed from your agent stopped approximately ' + dur + ' ago. Live activity is still available. Some charts may be delayed.');
+      return t('alerts.feed_stopped', { duration: dur }, "One data feed from your agent stopped approximately {duration} ago. Live activity is still available. Some charts may be delayed.");
     }
   } catch (e) {}
   return t('alerts.feed_stopped_unknown', null, 'One data feed from your agent stopped. Live activity is still available. Some charts may be delayed.');
@@ -1559,8 +1559,8 @@ async function checkHeartbeatStatus() {
       var gapStr = gap >= 3600 ? Math.floor(gap/3600) + 'h ' + Math.floor((gap%3600)/60) + 'm' : Math.floor(gap/60) + ' minutes';
       var intervalMin = Math.floor(data.interval_seconds / 60);
       var msg = data.status === 'silent'
-        ? t('overview.hb_banner_silent', { gap: gapStr, interval: intervalMin }, 'No agent heartbeat for ' + gapStr + '. The expected interval is ' + intervalMin + ' minutes. Make sure that the agent is active.')
-        : t('overview.hb_banner_delayed', { gap: gapStr, interval: intervalMin }, 'The last heartbeat arrived ' + gapStr + ' ago. The expected interval is ' + intervalMin + ' minutes.');
+        ? t('overview.hb_banner_silent', { gap: gapStr, interval: intervalMin }, "No agent heartbeat for {gap}. The expected interval is {interval} minutes. Make sure that the agent is active.")
+        : t('overview.hb_banner_delayed', { gap: gapStr, interval: intervalMin }, "The last heartbeat arrived {gap} ago. The expected interval is {interval} minutes.");
       document.getElementById('heartbeat-banner-msg').textContent = msg;
       banner.style.background = data.status === 'silent' ? '#7f1d1d' : '#451a03';
       banner.style.color = data.status === 'silent' ? '#fca5a5' : '#fbbf24';
@@ -2532,12 +2532,12 @@ function cmRenderNeedsYou(d) {
     if (working === 1) {
       sub = t('needs.one_working', null, '1 agent working');
     } else if (working > 0) {
-      sub = t('needs.n_working', { n: working }, working + ' agents working');
+      sub = t('needs.n_working', { n: working }, "{n} agents working");
     } else if (quiet === 1) {
       sub = t('needs.one_quiet', null, '1 agent is open but has gone quiet');
     } else if (quiet > 0) {
       sub = t('needs.n_quiet', { n: quiet },
-              quiet + ' agents are open but have gone quiet');
+              "{n} agents are open but have gone quiet");
     } else {
       sub = t('needs.none_running', null, 'No agents running');
     }
@@ -2551,7 +2551,7 @@ function cmRenderNeedsYou(d) {
       var rtName = (typeof _cmRuntimeLabel === 'function')
         ? _cmRuntimeLabel(rtNow) : rtNow;
       sub = t('needs.never_asks', { runtime: rtName },
-              rtName + " never asks for permission, so nothing here waits on you.");
+              "{runtime} never asks for permission, so nothing here waits on you.");
     }
     box.innerHTML =
       '<div class="cm-needs-head">' +
@@ -2567,7 +2567,7 @@ function cmRenderNeedsYou(d) {
   box.classList.add('is-waiting');
   var title = items.length === 1
     ? t('needs.one_waiting', null, '1 agent needs you')
-    : t('needs.n_waiting', { n: items.length }, items.length + ' agents need you');
+    : t('needs.n_waiting', { n: items.length }, "{n} agents need you");
 
   var rows = items.slice(0, 6).map(function (it) {
     var hook = _cmAttnConfirmed(it.signal);
@@ -2598,7 +2598,7 @@ function cmRenderNeedsYou(d) {
 
   var extra = items.length > 6
     ? '<div class="cm-needs-note">' +
-        t('needs.more', { n: items.length - 6 }, '+' + (items.length - 6) + ' more') +
+        t('needs.more', { n: items.length - 6 }, "+{n} more") +
       '</div>'
     : '';
 
@@ -3623,7 +3623,7 @@ async function loadSkills() {
     if (dead === 0 && stuck === 0 && installed > 0) {
       verdictCard = unusedCount > 0
         ? card(t('skills.never_used_title', null, 'Never used yet'), unusedCount, '#94a3b8',
-               t('skills.never_used_verdict', { n: unusedCount }, unusedCount + ' skill(s) installed, never used yet.'))
+               t('skills.never_used_verdict', { n: unusedCount }, "{n} skill(s) installed, never used yet."))
         : card(t('skills.all_good', null, 'All good'), '\u2713', '#22c55e',
                t('skills.all_good_sub', null, 'every skill is being used'));
     }
@@ -5785,8 +5785,7 @@ async function _qLoadOutcomeTrend() {
     // contradiction of the grade above it.
     var scope = t(
       'quality.oc_scope', null,
-      'Counted from every run that finished, including the ones with too ' +
-      'little activity to grade.'
+      "Counted from every run that finished, including the ones with too little activity to grade."
     );
     if (!data.comparable) {
       scope += ' ' + t(
@@ -13318,7 +13317,7 @@ function _invHasCost(rt) {
 }
 function _invOwnerLabel(a) {
   var o = (a && a.owner != null) ? String(a.owner).trim() : '';
-  return o || (typeof t === 'function' ? t('inventory.owner_default', 'me') : 'me');
+  return o || (typeof t === 'function' ? t('inventory.owner_default', null, 'me') : 'me');
 }
 // "45s ago" / "6m ago" / "3h ago" / "2d ago". Mirrors _cmLiveAge's voice for
 // the first minute and keeps going for the quiet agents this tab also lists.
@@ -18710,7 +18709,7 @@ function _renderEfficiencyCardInner(card, eff) {
   var hit = Math.round(Number(met.cache_hit_rate_pct) || 0);
   var ctx = _cmEffFmtTokens(met.avg_context_tokens);
   var sentence = t('efficiency.grade_sentence', { hit: hit, ctx: ctx },
-    'Your agent reuses ' + hit + '% of what it reads and carries about ' + ctx + ' tokens of history into each reply.');
+    "Your agent reuses {hit}% of what it reads and carries about {ctx} tokens of history into each reply.");
   var tip = t('efficiency.tooltip', null, 'This A-to-F score estimates how much spending produces useful work. It considers reused input, conversation history, and saved work.');
   var saveEntry = window.cmProv.of(eff, 'actions[].savings_monthly_usd');
   var rows = (eff.actions || []).map(function (a) { return _cmEffIdeaRowHtml(a, saveEntry); }).filter(Boolean);
@@ -18967,14 +18966,14 @@ async function loadUsage() {
           v.innerHTML = // codeql[js/xss] window.cmProv.figure/badge run all values through esc() which sanitises them
             (window.cmProv.isUnknown(costEntry) || cost == null)
             ? window.cmProv.figure(null, costEntry, { label: 'Usage value' })
-            : _e(t('usage.cost_about', { cost: costStr }, 'about ' + costStr))
+            : _e(t('usage.cost_about', { cost: costStr }, "about {cost}"))
               + window.cmProv.badge(costEntry, { label: 'Usage value' });
         } else {
-          v.textContent = t('usage.cost_about', { cost: costStr }, 'about ' + costStr);
+          v.textContent = t('usage.cost_about', { cost: costStr }, "about {cost}");
         }
       }
       if (!s) return;
-      var subText = t('usage.tokens_sub', { tokens: tokStr }, tokStr + ' tokens');
+      var subText = t('usage.tokens_sub', { tokens: tokStr }, "{tokens} tokens");
       var coverExtra = '';
       var period = periodKey && _cov[periodKey];
       var planName = _planLabel(_cov) || 'your subscription';
@@ -21591,7 +21590,7 @@ function _renderHistoryGap(ev) {
   var p = window._transcriptPaging || {};
   var n = (typeof ev.omitted === 'number') ? ev.omitted : null;
   var countLabel = n != null
-    ? t('transcript.history_gap_count', {count: n, n: n}, n + ' earlier messages not loaded')
+    ? t('transcript.history_gap_count', {count: n, n: n}, "{n} earlier messages not loaded")
     : t('transcript.history_gap', null, 'Earlier messages not loaded');
   var action;
   if (p.loading || p.draining) {
@@ -22086,7 +22085,7 @@ function _ctxTextBlock(id, label, item, cloud) {
   var facts = [];
   if (item.size_bytes) facts.push(_ctxFmtBytes(item.size_bytes));
   if (item.sha256) facts.push('<span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;" title="sha256 of the full text">' + escHtml(String(item.sha256).slice(0, 12)) + '</span>');
-  if (item.turns && item.turns > 1) facts.push(escHtml(t('inputs.seen_turns', {n: item.turns}, 'seen on ' + item.turns + ' turns')));
+  if (item.turns && item.turns > 1) facts.push(escHtml(t('inputs.seen_turns', {n: item.turns}, "seen on {n} turns")));
   if (item.content_truncated) facts.push('<span style="color:#d97706;">' + escHtml(t('inputs.truncated', null, 'stored copy cut at 64 KB')) + '</span>');
   var body;
   if (item.content) {
@@ -22116,14 +22115,14 @@ function _ctxNamesBlock(label, items) {
     turns = Math.max(turns, Number(it.turns || 0));
   });
   if (!names.length) return '';
-  var head = names.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: names.length}, names.length + ' tools');
+  var head = names.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: names.length}, "{n} tools");
   var pills = names.map(function(n) {
     return '<span style="display:inline-block;margin:2px 4px 2px 0;padding:1px 7px;border-radius:9px;background:var(--bg-primary);border:1px solid var(--border-secondary);font-size:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary);">' + escHtml(n) + '</span>';
   }).join('');
   return '<div style="border-top:1px solid var(--border-secondary);padding:7px 0;">'
     + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
     + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
-    + '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(head) + (turns > 1 ? ' · ' + escHtml(t('inputs.seen_turns', {n: turns}, 'seen on ' + turns + ' turns')) : '') + '</span>'
+    + '<span style="font-size:10px;color:var(--text-muted);">' + escHtml(head) + (turns > 1 ? ' · ' + escHtml(t('inputs.seen_turns', {n: turns}, "seen on {n} turns")) : '') + '</span>'
     + '</div><div style="margin-top:4px;">' + pills + '</div></div>';
 }
 
@@ -22162,9 +22161,9 @@ function _renderInputsBody(d) {
   if (!items.length) {
     if (cov.inputs === 'none') {
       html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">'
-        + '<strong style="color:var(--text-secondary);">' + escHtml(t('inputs.not_exposed', {runtime: rt}, 'Not exposed by ' + rt)) + '</strong><br>'
+        + '<strong style="color:var(--text-secondary);">' + escHtml(t('inputs.not_exposed', {runtime: rt}, "Not exposed by {runtime}")) + '</strong><br>'
         + escHtml(cov.note || t('inputs.not_exposed_hint', null, 'This runtime does not write its instructions or tool list anywhere ClawMetry can read.')) + '</div>';
-      summaryBits.push(t('inputs.not_exposed', {runtime: rt}, 'Not exposed by ' + rt));
+      summaryBits.push(t('inputs.not_exposed', {runtime: rt}, "Not exposed by {runtime}"));
     } else if (cov.inputs === 'unknown') {
       html = '<div style="padding:8px 0;font-size:11px;color:var(--text-muted);">' + escHtml(t('inputs.adapter_missing', null, 'The adapter for this runtime is not loaded here, so ClawMetry cannot say what it exposes.')) + '</div>';
     } else {
@@ -22185,7 +22184,7 @@ function _renderInputsBody(d) {
   if (sp && sp.size_bytes) summaryBits.push(_ctxFmtBytes(sp.size_bytes) + ' ' + t('inputs.system_prompt', null, 'Instructions (system prompt)').toLowerCase().split(' (')[0]);
   var toolNames = [];
   (byKind.tools_available || []).forEach(function(it) { (it.names || []).forEach(function(n) { if (toolNames.indexOf(n) === -1) toolNames.push(n); }); });
-  if (toolNames.length) summaryBits.push(toolNames.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: toolNames.length}, toolNames.length + ' tools'));
+  if (toolNames.length) summaryBits.push(toolNames.length === 1 ? t('inputs.tool_count_one', null, '1 tool') : t('inputs.tools_count', {n: toolNames.length}, "{n} tools"));
   var rm = (byKind.runtime_meta || [])[0];
   if (rm && rm.meta && rm.meta.model) summaryBits.push(String(rm.meta.model));
   summaryBits.push('<span title="Measured from the runtime\'s own context.compiled event, not estimated." style="color:#10b981;">' + escHtml(t('inputs.measured', null, 'measured')) + '</span>');
