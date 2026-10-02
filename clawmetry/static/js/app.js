@@ -12850,7 +12850,7 @@ var _CM_CAP_TABS = {
   // no-cost runtimes (Cursor/PicoClaw/NanoClaw) keep a context surface.
   // 'agents' (Agent Graph) is EVENTS-derived: spans are reconstructed from
   // every runtime's normalized events at family-ingest time.
-  EVENTS:      ['brain','models','tracing','turn-anatomy','context-economics','agents'],
+  EVENTS:      ['brain','flow','models','tracing','turn-anatomy','context-economics','agents'],
   // Nav uses data-tab="usage" for the Cost tab — 'cost' was a dead id that
   // left the tab visible for no-cost runtimes (Cursor/PicoClaw/NanoClaw).
   COST:        ['usage'],
@@ -12864,7 +12864,7 @@ var _CM_CAP_TABS = {
   // selected runtime via the requesting session-id prefix.
   // policy/selfevolve/version-impact stay OpenClaw gateway/admin concepts.
   GATEWAY_RPC: ['policy','selfevolve','version-impact'],
-  CHANNELS:    ['flow']
+  CHANNELS:    []
 };
 // Node/account-level tabs — not capability-gated, shown for every runtime.
 // approvals: one local queue spans all runtimes (see _CM_CAP_TABS note).
@@ -24758,15 +24758,17 @@ function initFlow() {
     }
   }).catch(function(){});
   // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
-  _startFlowSse();
+  if (!window.cmActivityEventSource) _startFlowSse();
   // Active Tools + Live Tool Call Stream — DuckDB-backed (issue #1127).
   // The flow-events SSE only fires when gateway.log emits the right keywords,
   // which leaves "Active Tools: —" and "Waiting for activity…" stuck on most
   // installs. /api/brain-history + /api/brain-stream read from the same
   // DuckDB store that drives the rest of the Brain tab, so we backfill
   // recent tool events and subscribe to the live stream from there.
-  _backfillFlowFromBrain();
-  _backfillFlowEventCount();
+  if (!window.cmActivityEventSource) {
+    _backfillFlowFromBrain();
+    _backfillFlowEventCount();
+  }
   _startFlowBrainStream();
 
   // Lazy-load Phase 2 follow-up: this used to be a raw `setInterval(...)`
@@ -24871,10 +24873,15 @@ function _buildRuntimeFlowInner(rt, model) {
 function _applyRuntimeFlowDiagram(rt) {
   var svg = document.getElementById('flow-svg');
   if (!svg) return;
+  // Channel routing is not part of a coding runtime's execution path.
+  var journey = document.querySelector('#page-flow .flow-journey');
+  var caps = _cmCapsForRuntime(rt);
+  var channelPath = !rt || rt === 'all' || !!(caps && caps.indexOf('CHANNELS') !== -1);
+  if (journey) journey.hidden = !channelPath;
   if (_origFlowSvgInner === null) _origFlowSvgInner = svg.innerHTML;
+  // The primary-session model is node-wide; it cannot label a selected
+  // runtime's topology. The diagram uses its neutral agent label instead.
   var model = '';
-  try { var ml = document.getElementById('brain-model-text'); model = ml ? (ml.textContent || '') : ''; } catch (e) {}
-  if (model === 'unknown') model = '';
   // Never render a LOCKED runtime (e.g. Claude Code on the free plan) as an
   // active Flow topology — that contradicts the "install OpenClaw" empty-state
   // and reads as if a Pro runtime is live. Fall back to the default OpenClaw
@@ -24882,6 +24889,9 @@ function _applyRuntimeFlowDiagram(rt) {
   var inner = (typeof _cmLockedRuntimes !== 'undefined' && _cmLockedRuntimes && _cmLockedRuntimes[rt])
     ? null
     : _buildRuntimeFlowInner(rt, model);
+  // Unknown topologies keep their recorded call list without borrowing the
+  // channel diagram from a different runtime.
+  svg.style.display = inner || channelPath ? '' : 'none';
   if (inner) {
     svg.innerHTML = inner;
   } else if (svg.innerHTML.indexOf('rtShadow') !== -1) {
@@ -25080,6 +25090,10 @@ function _backfillFlowFromBrain() {
 var _flowBrainSse = null;
 var _flowActivityRuntime = null;
 var _flowActivitySeen = new Set();
+function _flowActivityStatus(message) {
+  var el = document.getElementById('flow-activity-status');
+  if (el) el.textContent = message;
+}
 function _startFlowBrainStream() {
   if (_cmCurrentTab !== 'flow' || document.hidden) return;
   var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
@@ -25088,54 +25102,77 @@ function _startFlowBrainStream() {
   if (_flowActivityRuntime !== runtime) {
     _flowActivityRuntime = runtime;
     _flowActivitySeen.clear();
+    flowStats.msgTimestamps = []; flowStats.messages = 0;
     clearToolStream(); flowStats.activeTools = {}; updateFlowStats();
   }
+  _flowActivityStatus('Connecting to recorded activity...');
   try {
     var es = window.cmActivityEventSource({runtime:runtime});
     _flowBrainSse = es;
+    es.addEventListener('connected', function() {
+      _flowActivityStatus('Connected to recorded activity');
+    });
     es.addEventListener('resync', function() {
       _flowActivitySeen.clear(); clearToolStream();
+      flowStats.msgTimestamps = []; flowStats.messages = 0;
       flowStats.activeTools = {}; updateFlowStats();
+      _flowActivityStatus('Refreshing recorded activity...');
     });
+    es.addEventListener('checkpoint', function() {
+      if (es.readyState === 1) _flowActivityStatus('Connected to recorded activity');
+    });
+    function firstSeen(key) {
+      var seen = _flowActivitySeen.has(key);
+      // Match the reader's retained domain: 500 events, each with at most
+      // 256 calls plus one channel action. Upserts refresh key order too.
+      _flowActivitySeen.delete(key);
+      _flowActivitySeen.add(key);
+      while (_flowActivitySeen.size > 500 * 257) _flowActivitySeen.delete(_flowActivitySeen.values().next().value);
+      return !seen;
+    }
     es.onmessage = function(e) {
       try {
         var ev = JSON.parse(e.data);
         if (!ev || !ev.type) return;
-        if (ev.eventId && _flowActivitySeen.has(ev.eventId)) return;
-        if (ev.eventId) _flowActivitySeen.add(ev.eventId);
-        while (_flowActivitySeen.size > 500) _flowActivitySeen.delete(_flowActivitySeen.values().next().value);
+        var eventType = String(ev.type).toUpperCase();
+        var legacyTool = _brainTypeToFlowTool(eventType);
         var age = Date.now() - new Date(ev.time).getTime();
         var live = !e.fromCache && e.activityMode === 'replay' && age >= 0 && age < 5000;
-        flowStats.events++;
-        var tool = _brainTypeToFlowTool(ev.type);
-        // Accuracy: a type that maps to a real bucket lights that component +
-        // pulses its edge; an UNMAPPED type must NOT falsely light "Exec" — we
-        // pulse the neutral Skills edge and still record the REAL name in the
-        // feed (#flow-live-feed is the exact per-call truth).
-        if (tool) {
-          // Drive Active Tools + the existing tool-call animation off the same
-          // DuckDB-backed event. triggerToolCall already handles the 5s expiry.
+        var scope = [ev.nodeId || '', ev.runtime || runtime || '', ev.sessionId || ''];
+        if (eventType === 'CHANNEL.IN' && firstSeen(JSON.stringify(scope.concat(['in', ev.eventId || ev.time])))) {
+          if (age >= 0 && age < 60000) flowStats.msgTimestamps.push(new Date(ev.time).getTime());
+          flowStats.messages++;
+          if (live) _flowPulseInbound(ev.channel || '');
+        }
+        if (eventType === 'CHANNEL.OUT' && live && firstSeen(JSON.stringify(scope.concat(['out', ev.eventId || ev.time])))) _flowRailSetStage('reply');
+        // A single recorded message can contain several calls. Replay can
+        // later add calls to that same event, so dedup the calls individually.
+        var calls = Array.isArray(ev.toolCalls) ? ev.toolCalls.slice(0, 256) : [];
+        if (!calls.length && (eventType === 'TOOL_CALL' || eventType === 'TOOL.CALL' || eventType === 'TOOL' || legacyTool)) {
+          calls = [{name:ev.tool || (legacyTool ? ev.type : '')}];
+        }
+        calls.forEach(function(call, index) {
+          if (!call || typeof call !== 'object') return;
+          var key = call.id ? ['call', call.id] : ['event', ev.eventId || ev.time, index];
+          if (!firstSeen(JSON.stringify(scope.concat(key)))) return;
+          flowStats.events++;
+          var tool = _brainTypeToFlowTool(call.name || ev.type);
           if (live) {
-            triggerToolCall(tool);
-            _flowPulseEdge('path-brain-' + tool);
+            if (tool) triggerToolCall(tool);
+            _flowPulseEdge('path-brain-' + (tool || 'skills'));
             _flowRailSetStage('tools');
           }
-          var label = '⚡ ' + tool + ': ' + _flowFeedLabelForTool(tool);
-          addFlowFeedItem(label, '#f0c040', 'tool', ev.time);
-        } else {
-          // Unknown tool class — neutral pulse, honest label with the raw type.
-          if (live) { _flowPulseEdge('path-brain-skills'); _flowRailSetStage('tools'); }
-          var rawName = String(ev.tool || ev.type || 'tool');
-          addFlowFeedItem('⚡ ' + rawName, '#f0c040', 'tool', ev.time);
-        }
+          addFlowFeedItem('⚡ ' + escHtml(String(call.name || 'Tool name unavailable')), '#f0c040', 'tool', ev.time);
+        });
       } catch(e2) {}
     };
     es.onerror = function() {
+      _flowActivityStatus('Connection unavailable. Showing recorded activity; retrying...');
       try { es.close(); } catch(e3) {}
       _flowBrainSse = null;
       setTimeout(_startFlowBrainStream, 5000);
     };
-  } catch(e) {}
+  } catch(e) { _flowActivityStatus('Recorded activity unavailable'); }
 }
 
 function _populateFlowSkills() {
@@ -25556,6 +25593,9 @@ function renderToolStream() {
 
 var flowThrottles = {};
 function processFlowEvent(line) {
+  // The log stream still serves Logs, but cannot add unscoped inferred
+  // activity to a Flow view backed by the persisted runtime reader.
+  if (window.cmActivityEventSource) return;
   flowStats.events++;
   var now = Date.now();
   var msg = '', level = '';

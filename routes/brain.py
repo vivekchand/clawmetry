@@ -580,6 +580,7 @@ def _try_local_store_brain(limit, include_artifacts, since=None, until=None):
 
 def _stored_brain_events(rows):
     """Pure projection shared by persisted history and live activity."""
+    from clawmetry.local_store import _runtime_of_session_id
     # Translate the local-store row shape (id/node_id/agent_id/session_id/
     # event_type/ts/data/cost_usd/...) into the brain-history event shape
     # the dashboard JS expects (time/type/detail/src/sessionId/...).
@@ -623,6 +624,10 @@ def _stored_brain_events(rows):
             # machine were signature-only). Label the row honestly instead of
             # rendering an empty line that reads as a truncation bug.
             detail = "(thinking encrypted by the runtime; no text stored)"
+        runtime = r.get("agent_type") or "openclaw"
+        if runtime in ("main", "subagent", "cron"):
+            runtime = "openclaw"
+        runtime = _runtime_of_session_id(r.get("session_id"), runtime)
         row = {
             "time":       r.get("ts", ""),
             "type":       evt_type,
@@ -644,6 +649,8 @@ def _stored_brain_events(rows):
             # via /api/llm-call-timeline/<event_id>. Cheap to add — the JSON
             # carries one extra short string per row.
             "eventId":    r.get("id") or "",
+            "runtime":    runtime,
+            "nodeId":     r.get("node_id") or "",
         }
         if is_err:
             row["isError"] = True
@@ -704,11 +711,18 @@ def _stored_brain_events(rows):
         # RAW row's tool blocks (full args) so the feed's TOOL_CALL rows
         # carry an honest risk chip. Worst block wins on multi-call rows.
         try:
-            if evt_type in ("TOOL_CALL", "TOOL.CALL", "EXEC"):
-                from clawmetry.approvals import _extract_tool_blocks
+            from clawmetry.approvals import _extract_tool_blocks
+            blocks = _extract_tool_blocks(r)
+            if blocks:
+                row["toolCalls"] = [{"id": cid, "name": name[:1024]}
+                                    for cid, name, _ in blocks[:256]]
+                row["toolCallsTruncated"] = len(blocks) > 256
+                if len(blocks) == 1:
+                    row["tool"] = blocks[0][1][:1024]
+            if blocks:
                 from clawmetry.tool_risk import classify_tool_call, risk_rank
                 worst = None
-                for _tcid, _tname, _targs in _extract_tool_blocks(r):
+                for _tcid, _tname, _targs in blocks:
                     v = classify_tool_call(_tname, _targs)
                     if worst is None or v["rank"] > worst["rank"]:
                         worst = v

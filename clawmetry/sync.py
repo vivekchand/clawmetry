@@ -22161,18 +22161,20 @@ def _detector_runtime(session_id: str, agent_type: str) -> str:
     ``runtime:openclaw`` cohort, which quietly destroys the point of a
     per-runtime baseline.
 
-    The session-id prefix is the identity the rest of the product uses
-    (memory: prefix = runtime), and it is what ``detectors._runtime_of``
-    already uses to label the incident, so deriving it the same way here keeps
-    the label and the cohort in agreement. ``agent_type`` remains the fallback
-    for a resolver failure.
+    Resolve from the persisted runtime catalogue, independent of the paid
+    extension. Using the optional waste heuristics here labels a retained
+    paid-runtime session OpenClaw when that extension is absent, then exact
+    recovery queries cannot find the evidence. ``agent_type`` is the fallback
+    for bare session ids; legacy OpenClaw role labels normalize to OpenClaw.
     """
+    fallback = str(agent_type or "").strip().lower()
+    if fallback in ("", "main", "subagent", "cron"):
+        fallback = "openclaw"
     try:
-        from clawmetry import waste_flags as _wf
-        rt = str(_wf.runtime_from_session_id(session_id) or "").strip().lower()
+        from clawmetry.local_store import _runtime_of_session_id
+        return _runtime_of_session_id(session_id, fallback)
     except Exception:
-        rt = ""
-    return rt or str(agent_type or "").strip().lower()
+        return fallback
 
 
 def _guard_cohorts(runtime: str, agent_id: str) -> tuple:

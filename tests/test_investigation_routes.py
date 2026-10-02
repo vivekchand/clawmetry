@@ -135,3 +135,34 @@ def test_sse_checkpoints_after_batch_and_releases_slot(monkeypatch):
         assert next(iterator).startswith('id: committed-position\nevent: checkpoint')
         response.close()
     assert calls == ['brain']
+
+
+def test_persisted_activity_preserves_the_recorded_tool_name():
+    from routes.brain import _stored_brain_events
+    rows = _stored_brain_events([
+        {'id': 'call', 'event_type': 'tool_call', 'session_id': 'codex:s', 'agent_type': 'codex', 'node_id': 'node-a',
+         'data': {'tool_name': 'exec', 'tool_calls': [{'name': 'exec', 'arguments': {}}]}},
+        {'id': 'message', 'event_type': 'message', 'session_id': 'codex:s', 'data': {'text': 'hello'}},
+        {'id': 'native', 'event_type': 'assistant', 'session_id': 'openclaw-session',
+         'data': {'message': {'role': 'assistant', 'content': [
+             {'type': 'tool_use', 'id': 'read-a', 'name': 'Read', 'input': {}},
+             {'type': 'tool_use', 'id': 'read-b', 'name': 'Read', 'input': {}},
+         ]}}},
+    ])
+    assert rows[0]['tool'] == 'exec'
+    assert (rows[0]['runtime'], rows[0]['nodeId']) == ('codex', 'node-a')
+    assert not rows[1].get('tool')
+    assert rows[2]['type'] == 'ASSISTANT'
+    assert rows[2]['toolCalls'] == [{'id': 'read-a', 'name': 'Read'}, {'id': 'read-b', 'name': 'Read'}]
+
+
+@pytest.mark.parametrize('session,agent_type,expected', [
+    ('codex:session', 'main', 'codex'), ('bare-session', 'codex', 'codex'),
+    ('bare-session', 'main', 'openclaw'), ('bare-session', 'subagent', 'openclaw'),
+    ('bare-session', 'cron', 'openclaw'), ('bare-session', '', 'openclaw'),
+])
+def test_activity_projection_uses_the_query_contract_runtime(session, agent_type, expected):
+    from routes.brain import _stored_brain_events
+    row = _stored_brain_events([{'id': 'call', 'event_type': 'tool_call',
+                                'session_id': session, 'agent_type': agent_type, 'data': {}}])[0]
+    assert row['runtime'] == expected

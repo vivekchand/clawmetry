@@ -178,12 +178,25 @@ def test_projection_failure_rolls_back_episode_and_head(store, monkeypatch):
     assert store.query_incident_heads() == []
 
 
+def test_detector_runtime_keeps_recorded_identity_without_paid_extension(monkeypatch):
+    from clawmetry import sync, waste_flags
+    from clawmetry.local_store import _NON_OPENCLAW_RUNTIME_PREFIXES
+    monkeypatch.setattr(waste_flags, "_pro", lambda: None)
+    for runtime in _NON_OPENCLAW_RUNTIME_PREFIXES:
+        assert sync._detector_runtime(runtime + ":recorded", "main") == runtime
+    for role in ("main", "subagent", "cron", "", None):
+        assert sync._detector_runtime("bare-session", role) == "openclaw"
+    assert sync._detector_runtime("bare-session", "custom_runtime") == "custom_runtime"
+
+
 def test_real_detector_pass_updates_episode_during_cooldown_and_recovers_after_end(store, monkeypatch):
     """The actual daemon pass joins ingestion, detectors, persistence and delivery."""
     import time
     from datetime import datetime, timedelta, timezone
 
-    from clawmetry import incident_alerts, sync
+    from clawmetry import incident_alerts, sync, waste_flags
+    # The same retained events must reconcile on an OSS-only install.
+    monkeypatch.setattr(waste_flags, "_pro", lambda: None)
     monkeypatch.setattr(sync, "_agent_inventory_pass", lambda *a, **k: {})
     monkeypatch.setattr(sync, "_workspace_incidents", lambda *a, **k: [])
     monkeypatch.setattr(sync, "_agent_inventory_incidents", lambda *a, **k: [])
@@ -205,6 +218,7 @@ def test_real_detector_pass_updates_episode_during_cooldown_and_recovers_after_e
     rows = store.query_incidents()
     assert len(rows) == 1
     episode = rows[0]
+    assert episode["runtime"] == "codex"
     assert episode["state"] == "active"
     assert episode["delivered_via"] == ["banner"]
     store.ingest(event(3)); store._flush_now()

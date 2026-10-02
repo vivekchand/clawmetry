@@ -173,7 +173,7 @@ def app_activity_setup():
     app = SCRIPT.with_name('app.js').read_text()
     brain = app[app.index('function _startBrainSSE() {'):app.index('\nfunction _stopBrainSSE()')]
     loader = app[app.index('window.cmLoadPersistedBrain ='):app.index('\nasync function loadBrainPage')]
-    flow = app[app.index('function _startFlowBrainStream() {'):app.index('\nfunction _populateFlowSkills()')]
+    flow = app[app.index('function _flowActivityStatus(message) {'):app.index('\nfunction _populateFlowSkills()')]
     visibility = app[app.index('(function _installSSEVisibilityGuard() {'):app.index('\nasync function resolvePrimaryModelFallback()')]
     setup = r'''
 let rt='codex', visible=['old'], _brainRange=null, _brainSSE=null, _brainSSEConnected=false;
@@ -182,7 +182,8 @@ let _brainFilter='previous-session', _brainTypeFilter='tool';
 let _brainSSEFirstFailMs=0, _brainRefreshTimer=null;
 let _brainAuxLastLoaded=0, _brainAuxPending=null, auxCalls=0;
 let _flowBrainSse=null, _flowActivityRuntime='codex', _flowActivitySeen=new Set(), pulses=0;
-let flowStats={events:0,activeTools:{}}, _flowFeedItems=[], shownFlowCount=0;
+let flowStats={events:0,activeTools:{},msgTimestamps:[],messages:0}, _flowFeedItems=[], shownFlowCount=0, inbound=0;
+const flowStatus={textContent:''};
 function _cmRuntimeFilter(){return rt;}
 function _updateBrainLiveIndicator(){}
 function _resetBrainSSEReconnectState(){}
@@ -197,12 +198,14 @@ function loadLoopSignals(){auxCalls++;return Promise.resolve();}
 function loadBrainAtRisk(){auxCalls++;return Promise.resolve();}
 function loadBrainProgress(){auxCalls++;return Promise.resolve();}
 function _brainTypeToFlowTool(){return null;}
+function escHtml(value){return String(value).replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function _flowPulseEdge(){pulses++;}
 function _flowRailSetStage(){}
+function _flowPulseInbound(){inbound++;}
 function addFlowFeedItem(label){_flowFeedItems.push(label);visible=_flowFeedItems.slice();shownFlowCount=flowStats.events;}
 function clearToolStream(){_flowFeedItems=[];visible=[];flowStats.events=0;}
 function updateFlowStats(){}
-document.getElementById=()=>null;document.querySelector=()=>({});
+document.getElementById=id=>id==='flow-activity-status'?flowStatus:null;document.querySelector=()=>({});
 Object.defineProperty(window,'_brainSSE',{get:()=>_brainSSE,set:v=>_brainSSE=v});
 Object.defineProperty(window,'_flowBrainSse',{get:()=>_flowBrainSse,set:v=>_flowBrainSse=v});
 ''' + brain + '\n' + loader + '\n' + flow + '\n' + visibility
@@ -234,7 +237,7 @@ def test_flow_cached_reconnect_deduplicates_and_does_not_pulse_historical_tools(
     run(r'''
 window._cmCurrentTab='flow';
 const first=page('first',[row('one')]);first.mode='bootstrap';
-first.brain_events.forEach(e=>{e.type='tool';e.time='2026-10-02T00:00:00Z';});
+first.brain_events.forEach(e=>{e.type='TOOL_CALL';e.tool='exec';e.time='2026-10-02T00:00:00Z';});
 pages=[first];_startFlowBrainStream();await tick();
 assert.equal(flowStats.events,1);assert.equal(visible.length,1);assert.equal(pulses,0);
 assert.equal(shownFlowCount,1);
@@ -242,11 +245,135 @@ _flowBrainSse.close();pages=[page('quiet',[])];_startFlowBrainStream();
 await Promise.resolve();await tick();
 assert.equal(flowStats.events,1);assert.equal(visible.length,1);assert.equal(pulses,0);
 const fresh=page('next',[row('two')]);fresh.mode='replay';
-fresh.brain_events.forEach(e=>{e.type='tool';e.time=new Date().toISOString();});
+fresh.brain_events.forEach(e=>{e.type='TOOL_CALL';e.tool='exec';e.time=new Date().toISOString();});
 pages=[fresh];await tick();assert.equal(pulses,1);assert.equal(flowStats.events,2);
 pages=[{resync_required:true}];await tick();assert.equal(flowStats.events,0);
 pages=[first];await tick();assert.equal(flowStats.events,1);assert.equal(pulses,1);
 ''', app_activity_setup())
+
+
+def test_flow_counts_only_tool_calls_and_escapes_recorded_tool_names():
+    run(r'''
+window._cmCurrentTab='flow';
+const mixed=page('first',['call','reply','usage','result','error'].map(id=>row(id)));
+mixed.brain_events.forEach((e,i)=>{
+ e.type=['TOOL_CALL','MESSAGE','USAGE','TOOL_RESULT','ERROR'][i];
+ e.tool='<native tool>';e.time='2026-10-02T00:00:00Z';
+});
+pages=[mixed];_startFlowBrainStream();await tick();
+assert.equal(flowStats.events,1);assert.equal(visible.length,1);
+assert.equal(visible[0],'⚡ &lt;native tool&gt;');
+const channel=page('next',[row('inbound')]);channel.mode='replay';
+channel.brain_events[0]={eventId:'inbound',type:'CHANNEL.IN',channel:'webchat',time:new Date().toISOString()};
+pages=[channel];await tick();assert.equal(inbound,1);assert.equal(flowStats.msgTimestamps.length,1);
+assert.equal(flowStats.events,1);assert.equal(visible.length,1);
+const nested=page('nested',[row('assistant-tools')]);
+nested.brain_events[0]={eventId:'assistant-tools',type:'ASSISTANT',time:'2026-10-02T00:00:00Z',
+ toolCalls:[{id:'a',name:'Read'},{id:'b',name:'Read'}]};
+pages=[nested];await tick();assert.equal(flowStats.events,3);assert.equal(visible.length,3);
+// An upsert adds one parallel call; the two existing calls stay counted once.
+nested.brain_events[0].toolCalls.push({id:'c',name:'Write'});
+pages=[nested];await tick();assert.equal(flowStats.events,4);assert.equal(visible.length,4);
+// A different containing event with the same native call cannot count it twice.
+nested.brain_events[0].eventId='another-row';nested.brain_events[0].toolCalls=[{id:'c',name:'Write'}];
+pages=[nested];await tick();assert.equal(flowStats.events,4);
+// Native identities are session-scoped.
+nested.brain_events[0].sessionId='another-session';
+pages=[nested];await tick();assert.equal(flowStats.events,5);
+''', app_activity_setup())
+
+
+def test_flow_channel_rate_includes_recent_bootstrap_and_delayed_replay():
+    run(r'''
+window._cmCurrentTab='flow';
+const recent=page('first',[row('recent'),row('old')]);recent.mode='bootstrap';
+recent.brain_events.forEach((e,i)=>{
+ e.type='CHANNEL.IN';e.time=new Date(Date.now()-(i?61000:15000)).toISOString();
+});
+pages=[recent];_startFlowBrainStream();await tick();
+assert.equal(flowStats.msgTimestamps.length,1);assert.equal(inbound,0);
+_flowBrainSse.close();_startFlowBrainStream();await Promise.resolve();await tick();
+assert.equal(flowStats.msgTimestamps.length,1);assert.equal(inbound,0);
+const delayed=page('second',[row('delayed')]);delayed.mode='replay';
+delayed.brain_events[0].type='CHANNEL.IN';
+delayed.brain_events[0].time=new Date(Date.now()-15000).toISOString();
+pages=[delayed];await tick();assert.equal(flowStats.msgTimestamps.length,2);assert.equal(inbound,0);
+''', app_activity_setup())
+
+
+def test_flow_parallel_call_cache_reconnect_does_not_inflate_counts():
+    run(r'''
+window._cmCurrentTab='flow';
+const large=page('first',Array.from({length:17},(_,i)=>row('event-'+i)));
+large.brain_events.forEach((e,i)=>{
+ e.type='ASSISTANT';e.time='2026-10-02T00:00:00Z';
+ e.toolCalls=Array.from({length:256},(_,j)=>({id:i+':'+j,name:'Read'}));
+});
+pages=[large];_startFlowBrainStream();await tick();assert.equal(flowStats.events,4352);
+_flowBrainSse.close();_startFlowBrainStream();await Promise.resolve();await tick();
+assert.equal(flowStats.events,4352);
+''', app_activity_setup())
+
+
+def test_flow_native_call_identity_includes_runtime_node_and_session():
+    run(r'''
+window._cmCurrentTab='flow';rt='all';
+const mixed=page('first',Array.from({length:4},(_,i)=>row('event-'+i)));
+mixed.brain_events.forEach((e,i)=>{
+ e.type='TOOL_CALL';e.time='2026-10-02T00:00:00Z';e.sessionId='bare-session';
+ e.runtime=i===0?'claude_code':'codex';e.nodeId=i===3?'second-node':'first-node';
+ e.toolCalls=[{id:'same-native-call',name:'Read'}];
+});
+pages=[mixed];_startFlowBrainStream();await tick();assert.equal(flowStats.events,3);
+''', app_activity_setup())
+
+
+def test_flow_connection_feedback_does_not_treat_cached_evidence_as_connected():
+    run(r'''
+window._cmCurrentTab='flow';pages=[page('one',[])];_startFlowBrainStream();
+assert(flowStatus.textContent.startsWith('Connecting'));await tick();
+assert(flowStatus.textContent.startsWith('Connected'));
+fail=true;await tick();assert(flowStatus.textContent.startsWith('Connection unavailable'));
+fail=false;_startFlowBrainStream();await Promise.resolve();
+assert(flowStatus.textContent.startsWith('Connecting'));
+await tick();assert(flowStatus.textContent.startsWith('Connected'));
+''', app_activity_setup())
+
+
+def test_legacy_log_stream_cannot_project_into_persisted_flow():
+    app = SCRIPT.with_name('app.js').read_text()
+    start = app.index('function processFlowEvent(line) {')
+    end = app.index('\n}', start) + 2
+    run(r'''
+processFlowEvent('tool start tool=exec');
+processFlowEvent('inbound message received');
+assert.equal(flowStats.events,0);assert.equal(flowStats.msgTimestamps.length,0);
+assert.equal(_flowFeedItems.length,0);
+''', app_activity_setup() + '\n' + app[start:end])
+
+
+def test_flow_does_not_borrow_channel_topology_for_other_runtimes():
+    app = SCRIPT.with_name('app.js').read_text()
+    start = app.index('function _applyRuntimeFlowDiagram(rt) {')
+    end = app.index('\n}', start) + 2
+    setup = r'''
+const svg={innerHTML:'original-channel-topology',style:{}}, journey={hidden:false};
+let _origFlowSvgInner=null, _cmLockedRuntimes={};
+document.getElementById=id=>id==='flow-svg'?svg:id==='brain-model-text'?{textContent:'another-runtime-model'}:null;
+document.querySelector=()=>journey;
+function _cmCapsForRuntime(rt){return rt==='openclaw'?['EVENTS','CHANNELS']:['EVENTS'];}
+function _buildRuntimeFlowInner(rt,model){assert.equal(model,'');return rt==='codex'?'rtShadow codex-topology':null;}
+function hideUnconfiguredChannels(){}
+''' + app[start:end]
+    run(r'''
+_applyRuntimeFlowDiagram('codex');assert(journey.hidden);assert.equal(svg.style.display,'');
+assert(svg.innerHTML.includes('codex-topology'));
+for(const runtime of ['muse_code','openworker','qm','replit','foreign-otlp']){
+ _applyRuntimeFlowDiagram(runtime);assert(journey.hidden);assert.equal(svg.style.display,'none');
+}
+_applyRuntimeFlowDiagram('openclaw');assert(!journey.hidden);assert.equal(svg.style.display,'');
+assert.equal(svg.innerHTML,'original-channel-topology');
+''', setup)
 
 
 @pytest.mark.parametrize('pane', ['brain', 'flow'])
