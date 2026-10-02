@@ -52,7 +52,7 @@ Writing guide: [STE100_WRITING.md](STE100_WRITING.md).
 These records were written before implementation and published to Software Factory on 2026-10-02.
 Requirement: `a5f5d75b-43b5-4f55-ab9a-393865c606ca` (version 3).
 Blueprint: `3d07dd70-06dd-4a2e-b4bd-122ee55ac751` (version 3). The expanded generation design is recorded locally. Publishing that revision failed because the Factory keychain credential was unavailable.
-Initial delivery: [PR #6248](https://github.com/vivekchand/clawmetry/pull/6248), merged on 2026-10-02. Release carrier: [PR #6261](https://github.com/vivekchand/clawmetry/pull/6261), still in CI at this record.
+Initial delivery: [PR #6248](https://github.com/vivekchand/clawmetry/pull/6248), merged on 2026-10-02. Release carrier: [PR #6261](https://github.com/vivekchand/clawmetry/pull/6261), merged on 2026-10-02. Publication and cloud promotion are still pending at this record.
 No production release or whole-product compliance claim is recorded here.
 
 ## Verification recorded on 2026-10-02
@@ -153,3 +153,7 @@ Workflow totals, completed and failed agent counts, running counts, and tool-nam
 - All 51 browser rendering cases pass. The combined English, efficiency, spend-flow, Trail, and JavaScript-wrapper selection passes 261 tests, with one optional DeepEval import skipped. Both changed scripts pass syntax checks.
 - The extraction guard and two Trail fallback cases fail against the prior scripts. Existing labels, outcome colors, unknown-state behavior, value insertion, and evidence links are retained.
 - These are local verification results. This browser follow-up is not yet published or released.
+
+The browser follow-up was rebased onto release carrier `68b4908f8f` before publication.
+The only differences from its tested tree are the carrier changelog and privacy-test repair; runtime files are identical.
+All 70 changed runtime and asset files match the locally built wheel. The rebased corpus check still passes with 4,056 messages.
