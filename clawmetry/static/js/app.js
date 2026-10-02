@@ -3562,7 +3562,7 @@ async function selfconfigRestoreVersion() {
     await selfconfigOpenFile(_selfconfigCurrentFile, null);
     loadSelfConfig();
   } catch(e) {
-    alert('Couldn\u2019t restore: ' + (e.message || e));
+    alert(t('app.selfconfig_restore_failed', {error: (e.message || e)}, 'Couldn\u2019t restore: {error}'));
   }
 }
 
@@ -11461,7 +11461,7 @@ async function ncApprove(sandbox, chunkId, btn) {
       setTimeout(loadNemoClawApprovals, 500);
     } else {
       if (btn) { btn.disabled = false; btn.textContent = t("app.approve", null, "✓ Approve"); }
-      alert('Approve failed: ' + (data.output || 'unknown error'));
+      alert(t('approvals.approve_failed', {error: (data.output || t('common.unknown_error', null, 'unknown error'))}, 'Approve failed: {error}'));
     }
   } catch(e) {
     if (btn) { btn.disabled = false; btn.textContent = t("app.approve", null, "✓ Approve"); }
@@ -11484,7 +11484,7 @@ async function ncReject(sandbox, chunkId, btn) {
       setTimeout(loadNemoClawApprovals, 500);
     } else {
       if (btn) { btn.disabled = false; btn.textContent = t("app.reject", null, "✗ Reject"); }
-      alert('Reject failed: ' + (data.output || 'unknown error'));
+      alert(t('approvals.reject_failed', {error: (data.output || t('common.unknown_error', null, 'unknown error'))}, 'Reject failed: {error}'));
     }
   } catch(e) {
     if (btn) { btn.disabled = false; btn.textContent = t("app.reject", null, "✗ Reject"); }
@@ -14670,7 +14670,7 @@ async function guardControl(sessionId, action, runtime, cwd) {
       var why = (data && (data.detail || data.error)) || 'request failed';
       alert('Could not ' + action + ' this session: ' + why);
     } else if (data.advisory_only) {
-      alert('Pause flag set, but no enforcement proxy is running to hold this session — it is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.');
+      alert(t('sessions.pause_advisory_only', null, 'Pause flag set, but no enforcement proxy is running to hold this session — it is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.'));
     }
     loadSessions();
   } catch (e) {
@@ -14681,15 +14681,15 @@ async function guardControl(sessionId, action, runtime, cwd) {
 async function stopSession(sessionId) {
   var sid = String(sessionId || '').trim();
   if (!sid) return;
-  if (!confirm('Emergency stop session "' + sid + '"?')) return;
+  if (!confirm(t('sessions.emergency_stop_confirm', {session: sid}, 'Emergency stop session "{session}"?'))) return;
   try {
     var r = await fetch('/api/sessions/' + encodeURIComponent(sid) + '/stop', {method:'POST'});
     var data = await r.json();
     if (!r.ok || !data.ok) throw new Error((data && data.error) || 'Stop failed');
-    alert('Emergency stop signal sent for session: ' + sid);
+    alert(t('sessions.emergency_stop_sent', {session: sid}, 'Emergency stop signal sent for session: {session}'));
     loadSessions();
   } catch(e) {
-    alert('Emergency stop failed: ' + e.message);
+    alert(t('common.emergency_stop_failed', {error: e.message}, 'Emergency stop failed: {error}'));
   }
 }
 
@@ -15205,10 +15205,10 @@ async function cronKillAll() {
   if (!confirm(t("app.emergency_stop_disable_all_active_cron_jobs_this_c", null, "Emergency stop: disable ALL active cron jobs? This cannot be undone automatically."))) return;
   try {
     var r = await fetch('/api/cron/kill-all', {method:'POST'}).then(res => res.json());
-    alert('Disabled ' + (r.disabled||0) + ' cron job(s).' + (r.errors && r.errors.length ? ' Failed: '+r.errors.join(', ') : ''));
+    alert(t('crons.kill_all_done', {n: (r.disabled||0)}, 'Disabled {n} cron job(s).') + (r.errors && r.errors.length ? ' ' + t('crons.kill_all_failed_list', {jobs: r.errors.join(', ')}, 'Failed: {jobs}') : ''));
     loadCrons();
   } catch(e) {
-    alert('Emergency stop failed: ' + e.message);
+    alert(t('common.emergency_stop_failed', {error: e.message}, 'Emergency stop failed: {error}'));
   }
 }
 
@@ -15219,9 +15219,9 @@ async function cronPauseJob(jobId) {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({jobId: jobId, enabled: false})
     }).then(res => res.json());
-    if (r.ok !== false) { loadCrons(); } else { alert('Failed to pause job: ' + (r.error||'unknown error')); }
+    if (r.ok !== false) { loadCrons(); } else { alert(t('crons.pause_job_failed', {error: (r.error || t('common.unknown_error', null, 'unknown error'))}, 'Failed to pause job: {error}')); }
   } catch(e) {
-    alert('Pause failed: ' + e.message);
+    alert(t('crons.pause_failed', {error: e.message}, 'Pause failed: {error}'));
   }
 }
 
@@ -32971,7 +32971,7 @@ function guardSavePolicy() {
     min_severity: v('gp-severity') || 'info'
   };
   var steps = guardReadSteps();
-  if (!steps.length) { alert('Add at least one action.'); return; }
+  if (!steps.length) { alert(t('security.policy_add_action', null, 'Add at least one action.')); return; }
   // `action` stays the first rung so a node running an older daemon (which
   // ignores `steps`) still does something sane rather than nothing.
   body.action = steps[0].action;
@@ -32981,18 +32981,18 @@ function guardSavePolicy() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   }).then(function (r) { return r.json(); }).then(function (d) {
-    if (!d || !d.ok) { alert('Could not save policy: ' + ((d && d.error) || 'unknown')); return; }
+    if (!d || !d.ok) { alert(t('security.policy_save_failed_reason', {error: ((d && d.error) || t('common.unknown_error', null, 'unknown error'))}, 'Could not save policy: {error}')); return; }
     var f = document.getElementById('guard-policy-form');
     if (f) { f.style.display = 'none'; }
     loadGuardPolicies();
-  }).catch(function () { alert('Could not save policy.'); });
+  }).catch(function () { alert(t('security.policy_save_failed', null, 'Could not save policy.')); });
 }
 
 function guardDeletePolicy(pid) {
-  if (!confirm('Delete this policy?')) return;
+  if (!confirm(t('security.policy_delete_confirm', null, 'Delete this policy?'))) return;
   fetch('/api/guard/policies/' + encodeURIComponent(pid), { method: 'DELETE' })
     .then(function () { loadGuardPolicies(); })
-    .catch(function () { alert('Could not delete policy.'); });
+    .catch(function () { alert(t('security.policy_delete_failed', null, 'Could not delete policy.')); });
 }
 
 function loadGuardActions() {
