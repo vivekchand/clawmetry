@@ -580,6 +580,13 @@ jobs:
       - name: Dashboard cold load boot
         run: python3 -m pytest tests/test_cold_load_boot_js.py -q
 
+      # Sessions row Pause / Resume / Stop. app.js declared guardControl twice
+      # with different parameter orders; the later one won, so a row click sent
+      # the action as the runtime and no control reached the agent. Static,
+      # named explicitly because this job runs FILE LISTS.
+      - name: Sessions row controls
+        run: python3 -m pytest tests/test_session_row_control_js.py -q
+
       - name: First-install preparation UI
         run: python3 -m pytest tests/test_startup_readiness.py -q
 

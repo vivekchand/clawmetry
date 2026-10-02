@@ -9,7 +9,9 @@ per-agent SQLite database::
                                    sessions.json entry, byte for byte)
         session_windows            one row per session id
         transcript_events          (session_id, seq) -> event_json, or
-                                   event_zstd for large events
+                                   event_zstd for large events (that column
+                                   exists from 2026.9.6 / agent schema 23;
+                                   earlier stores carry event_json only)
         trajectory_runtime_events  the old <sid>.trajectory.jsonl lines
 
 The event JSON is the SAME shape the ``.jsonl`` lines had (``type`` /
@@ -25,7 +27,8 @@ Read-only on the OpenClaw side: the database is opened ``mode=ro`` and
 nothing is ever written under ``~/.openclaw``.
 
 Verified against a live OpenClaw 2026.9.7 install (schema_version 24) on
-2026-10-02.
+2026-10-02, and against a live 2026.9.2 install (schema_version 19) on the
+same day - the version CI's ``setup-openclaw`` pins.
 """
 
 from __future__ import annotations
@@ -163,6 +166,26 @@ def _table_exists(conn, name: str) -> bool:
     ).fetchone() is not None
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    """True when ``table`` has ``column``.
+
+    ``transcript_events.event_zstd`` is not in every store this module can
+    be pointed at: measured across the releases, it arrives with OpenClaw
+    2026.9.6 (agent schema 23) and is absent from 2026.9.2 - 2026.9.5
+    (schema 19, 19, 19, 21). Naming it unconditionally raised ``no such
+    column: event_zstd``, which ``sync_mirror`` caught and turned into a
+    whole pass returning None - i.e. on those versions the mirror silently
+    produced nothing rather than the transcript it had in hand.
+    """
+    try:
+        return any(
+            row[1] == column
+            for row in conn.execute(f'PRAGMA table_info("{table}")')
+        )
+    except Exception:  # noqa: BLE001 - a probe must never break the pass
+        return False
+
+
 def _mirror_transcript(conn, sid: str, out_dir: Path, cur: dict, budget: dict) -> int:
     """Append this session's new transcript events to ``<sid>.jsonl``.
 
@@ -198,14 +221,19 @@ def _mirror_transcript(conn, sid: str, out_dir: Path, cur: dict, budget: dict) -
                 if line:
                     seen.add(_line_key(line))
 
-    # Early 2026.9.x stores are JSON-only; the compressed column arrived
-    # later. Introspect the read-only schema instead of assuming a version.
-    columns = {row[1] for row in conn.execute('PRAGMA table_info(transcript_events)')}
-    compressed = 'event_zstd' if 'event_zstd' in columns else 'NULL'
-    rows = conn.execute(
-        f"SELECT seq, event_json, {compressed} FROM transcript_events"
-        " WHERE session_id=? AND seq>? ORDER BY seq", (sid, seq),
-    )
+    # Two whole literals rather than one interpolated query: a store whose
+    # schema predates event_zstd (see _column_exists) is read without that
+    # column, and the NULL keeps the row shape below identical either way.
+    if _column_exists(conn, "transcript_events", "event_zstd"):
+        rows = conn.execute(
+            "SELECT seq, event_json, event_zstd FROM transcript_events"
+            " WHERE session_id=? AND seq>? ORDER BY seq", (sid, seq),
+        )
+    else:
+        rows = conn.execute(
+            "SELECT seq, event_json, NULL FROM transcript_events"
+            " WHERE session_id=? AND seq>? ORDER BY seq", (sid, seq),
+        )
     written = 0
     lines: list[str] = []
     last_seq = seq

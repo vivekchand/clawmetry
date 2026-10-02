@@ -32,10 +32,11 @@ like tests/test_event_metrics_extraction.py):
   * any tool_call events round-trip their tool name + args dict.
 
 Model selection (no raw API key needed locally): if ANTHROPIC_API_KEY is set
-(CI) the turn uses anthropic/claude-3-5-haiku-20241022; else if the `claude`
+(CI) the turn uses anthropic/claude-haiku-4-5; else if the `claude`
 CLI is logged in (dev box) it uses claude-cli/<model> via the subscription
 ($0 metered); else the module skips. Either path writes the same canonical
-JSONL the daemon ingests.
+JSONL the daemon ingests — on OpenClaw 2026.9.x via the SQLite mirror
+``tests/_openclaw_store.py`` builds, which is byte-for-byte the same lines.
 
 Run as:
     pytest -v tests/test_e2e_real_openclaw_pipeline.py
@@ -53,6 +54,8 @@ from unittest.mock import patch
 
 import pytest
 from flask import Flask
+
+from tests import _openclaw_store as _ocstore
 
 
 NODE_ID = "agent+e2e-real-test"
@@ -75,7 +78,12 @@ def _pick_model():
     usually has no key but a logged-in `claude` CLI — OpenClaw's claude-cli
     provider drives it via the Claude subscription (no key, $0 metered)."""
     if os.environ.get("ANTHROPIC_API_KEY"):
-        return "anthropic/claude-3-5-haiku-20241022"
+        # An id the installed openclaw's own catalogue carries: 2026.9.x
+        # resolves --model against a bundled catalogue and answers
+        # `Unknown model: <id>` before any HTTP call, so the dated 3.5 id
+        # this used to name fails the turn outright (measured on 2026.9.2,
+        # 2026-10-02). claude-haiku-4-5 is the cheapest entry it holds.
+        return "anthropic/claude-haiku-4-5"
     if shutil.which("claude"):
         return "claude-cli/sonnet"
     return None
@@ -122,12 +130,21 @@ def _run_real_turn(home: str) -> str:
     )
     # rc may be non-zero on a tool/policy hiccup; what matters is that the
     # canonical <sid>.jsonl was written (that is what the daemon ingests).
-    if not os.path.isdir(sessions_dir):
-        pytest.skip(
-            f"openclaw turn wrote no sessions dir (rc={proc.returncode}); "
-            f"stderr tail: {proc.stderr[-400:]!r}"
-        )
-    return sessions_dir
+    if _ocstore.newest_session_jsonl(sessions_dir):
+        return sessions_dir
+    # OpenClaw 2026.9.x writes no sessions dir at all — the transcript is in
+    # agents/main/agent/openclaw-agent.sqlite. Materialise it with the
+    # daemon's own reader and ingest from there; the lines are identical.
+    # Without this the turn below looked like it had not happened and nine
+    # assertions skipped silently instead of failing.
+    mirror = _ocstore.mirror_sqlite_sessions(home)
+    if mirror and _ocstore.newest_session_jsonl(mirror):
+        return mirror
+    pytest.skip(
+        f"openclaw turn wrote no transcript (rc={proc.returncode}); "
+        f"probed {sessions_dir!r} and the SQLite store under {home!r}; "
+        f"stderr tail: {proc.stderr[-400:]!r}"
+    )
 
 
 def _canonical_session(sessions_dir: str) -> tuple[str, int]:

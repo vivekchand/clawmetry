@@ -10,7 +10,11 @@ shapes (captured from OpenClaw 2026.9.7, schema_version 24) and pin:
     already-mirrored lines;
   * ``sync._openclaw_sessions_dir`` picks the mirror only when the legacy
     sessions dir has no live transcript;
-  * ``sync_sessions`` ingests the mirrored events.
+  * ``sync_sessions`` ingests the mirrored events;
+  * a store on the schema that predates ``transcript_events.event_zstd``
+    still mirrors (that column arrives with 2026.9.6 / agent schema 23;
+    2026.9.2 — the version CI pins — is schema 19 and has only
+    ``event_json``).
 """
 from __future__ import annotations
 
@@ -43,6 +47,16 @@ CREATE TABLE trajectory_runtime_events (session_id TEXT NOT NULL,
 """
 
 
+# The same tables as above on the pre-2026.9.6 schema: transcript_events
+# carries event_json only. Naming event_zstd against this store raised
+# "no such column", which sync_mirror turned into a pass that returned
+# None — so on 2026.9.2 the mirror produced nothing at all.
+_SCHEMA_PRE_ZSTD = _SCHEMA.replace(
+    "  event_json TEXT, created_at INTEGER NOT NULL, event_zstd BLOB,\n",
+    "  event_json TEXT, created_at INTEGER NOT NULL,\n",
+)
+
+
 def _event(i: int, role: str = "user") -> dict:
     msg: dict = {"role": role, "content": f"turn {i} — héllo"}
     if role == "assistant":
@@ -69,12 +83,22 @@ def _add_events(db: Path, events: list, start: int = 0) -> None:
 def openclaw_home(tmp_path, monkeypatch):
     """A fake ~/.openclaw with an empty legacy sessions dir + the SQLite
     transcript store, and the mirror redirected under tmp_path."""
+    return _build_openclaw_home(tmp_path, monkeypatch, _SCHEMA)
+
+
+@pytest.fixture
+def openclaw_home_pre_zstd(tmp_path, monkeypatch):
+    """The same, on the schema that predates transcript_events.event_zstd."""
+    return _build_openclaw_home(tmp_path, monkeypatch, _SCHEMA_PRE_ZSTD)
+
+
+def _build_openclaw_home(tmp_path, monkeypatch, schema: str):
     oc = tmp_path / ".openclaw"
     (oc / "agents" / "main" / "sessions").mkdir(parents=True)
     db = ocs.agent_db_path(oc)
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
-    conn.executescript(_SCHEMA)
+    conn.executescript(schema)
     conn.execute("INSERT INTO session_nodes VALUES (?,?,?)", (
         "agent:main:main", SID,
         json.dumps({"sessionId": SID, "chatType": "direct"})))
@@ -236,3 +260,31 @@ def test_sync_sessions_ingests_sqlite_transcripts(openclaw_home, monkeypatch):
     assert [e["id"] for e in flushed[0][1]] == ["ev-0", "ev-1"]
     # Second cycle: cursor held, nothing re-sent.
     assert sync.sync_sessions(config, state, paths) == 0
+
+
+def test_mirror_reads_a_store_without_event_zstd(openclaw_home_pre_zstd):
+    """2026.9.2 (agent schema 19) has no transcript_events.event_zstd.
+
+    The column arrived with 2026.9.6 / schema 23. Selecting it from an
+    older store raised ``no such column: event_zstd``, sync_mirror caught
+    that and returned None, and the whole mirror came out empty on exactly
+    the version ``.github/actions/setup-openclaw`` pins.
+    """
+    db = ocs.agent_db_path(openclaw_home_pre_zstd)
+    cols = {
+        row[1]
+        for row in sqlite3.connect(db).execute(
+            "PRAGMA table_info(transcript_events)")
+    }
+    assert "event_zstd" not in cols, (
+        "fixture no longer models the pre-2026.9.6 schema; this test would "
+        "pass vacuously"
+    )
+
+    _add_events(db, [_event(0), _event(1, "assistant")])
+    out = ocs.sync_mirror(openclaw_home_pre_zstd, {})
+    assert out is not None, "mirror pass gave up on a store it can read"
+    assert _ids(Path(out) / f"{SID}.jsonl") == ["ev-0", "ev-1"]
+    index = json.loads(
+        (Path(out) / "sessions.json").read_text(encoding="utf-8"))
+    assert index["agent:main:main"]["sessionId"] == SID
