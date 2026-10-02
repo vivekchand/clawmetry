@@ -127,6 +127,7 @@ All HTTP endpoints live here, organised by feature: 70 modules, 82 blueprints, l
 | `docs/BUILD_YOUR_OWN_UI.md` | The keyed read API, its scopes, and how to point a coding agent at it |
 | `docs/CUSTOM_RUNTIME_INGEST.md` | The HTTP ingest API for a runtime with no adapter |
 | `docs/EVENT_RETENTION.md` | Store growth and trimming |
+| `docs/CAPABILITY_GAPS.md` | Opt-in capability-gap export: what a record carries, the E01..E08 mapping, `/api/capability-gaps` |
 | `CHANGELOG.md` | Version history |
 | `CONTRIBUTING.md` | Contribution guidelines |
 | `SECURITY.md` | Security posture |
@@ -285,6 +286,7 @@ CLAWMETRY_GUARD_CRITICAL_USD=...       # Spend-at-risk above which a warning bec
 CLAWMETRY_NOPROG_TOOLS__<RUNTIME>=40   # Per-runtime threshold override (highest layer in resolve_thresholds)
 CLAWMETRY_EGRESS_SETTLE_HOURS=24       # A learned host counts as known only after this long in the cohort's memory, so a swarm cannot vouch for its own destination (0 = off)
 CLAWMETRY_ENFORCE=1                    # Turn entitlement enforcement on (default: GRACE, everything allowed)
+CLAWMETRY_CAPGAP_EXPORT_DIR=...        # Opt-in: append capability-gap records (MIX E01..E08) as JSONL in this directory. Unset = off. docs/CAPABILITY_GAPS.md
 
 # Resource budget (FLYWHEEL.md 1e: the daemon must stay near-invisible)
 CLAWMETRY_DUCKDB_THREADS=2             # DuckDB defaults to every core; never ship an uncapped connection
