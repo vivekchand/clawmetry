@@ -1799,5 +1799,17 @@
   "security.policy_save_failed_reason": "Could not save policy: {error}",
   "security.policy_save_failed": "Could not save policy.",
   "security.policy_delete_confirm": "Delete this policy?",
-  "security.policy_delete_failed": "Could not delete policy."
+  "security.policy_delete_failed": "Could not delete policy.",
+  "security.approval_deny_reason_prompt": "Reason for the denial (optional):",
+  "security.approval_approve_failed": "Could not approve this request: {error}",
+  "security.approval_deny_failed": "Could not deny this request: {error}",
+  "security.retention_shorten_confirm_one": "Keep event history for 1 day instead of {current}?\n\nEverything older than 1 day is deleted from this machine within the hour, and cannot be recovered.",
+  "security.retention_shorten_confirm_other": "Keep event history for {days} days instead of {current}?\n\nEverything older than {days} days is deleted from this machine within the hour, and cannot be recovered.",
+  "security.apikey_revoke_confirm": "Revoke this key?\n\nAnything using it stops working on its next request. This cannot be undone. To restore access, create a new key.",
+  "app.detail_view_not_available": "The detail view for {type} is not available yet.",
+  "app.live_view_coming_soon": "Live view coming soon",
+  "app.historical_pattern_analysis_coming_soon": "Historical pattern analysis coming soon",
+  "app.historical_view_coming_soon": "Historical view coming soon",
+  "app.update_confirm_version": "Update ClawMetry to v{version} now?\n\nThe dashboard and sync daemon will restart. Requests in progress may be interrupted.",
+  "app.update_confirm": "Update ClawMetry now?\n\nThe dashboard and sync daemon will restart. Requests in progress may be interrupted."
 }

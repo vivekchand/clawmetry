@@ -11502,10 +11502,10 @@ async function ncReject(sandbox, chunkId, btn) {
 // there was no cloud to relay the decision.
 async function approvalDecide(approvalId, decision, btn) {
   if (!approvalId) return;
-  var label = (decision === 'approve') ? 'Approve' : 'Deny';
+  var label = (decision === 'approve') ? t('app.approve_2', null, 'Approve') : t('app.deny', null, 'Deny');
   var reason = null;
   if (decision === 'deny') {
-    reason = window.prompt('Deny reason (optional):');
+    reason = window.prompt(t('security.approval_deny_reason_prompt', null, 'Reason for the denial (optional):'));
     if (reason === null) return; // cancelled
   }
   if (btn) { btn.disabled = true; btn.textContent = label + '...'; }
@@ -11521,7 +11521,10 @@ async function approvalDecide(approvalId, decision, btn) {
       if (typeof loadToolPolicy === 'function') setTimeout(loadToolPolicy, 300);
     } else {
       if (btn) { btn.disabled = false; btn.textContent = label; }
-      alert(label + ' failed: ' + (data.error || ('HTTP ' + resp.status)));
+      var _why = data.error || ('HTTP ' + resp.status);
+      alert(decision === 'approve'
+        ? t('security.approval_approve_failed', {error: _why}, 'Could not approve this request: {error}')
+        : t('security.approval_deny_failed', {error: _why}, 'Could not deny this request: {error}'));
     }
   } catch(e) {
     if (btn) { btn.disabled = false; btn.textContent = label; }
@@ -11625,11 +11628,9 @@ async function saveRetentionSetting(usePlanDefault) {
   // nag.
   var _cur = window._cmRetentionEffectiveDays;
   if (!usePlanDefault && typeof _cur === 'number' && days < _cur) {
-    var _msg = 'Keep event history for ' + days + ' day'
-      + (days === 1 ? '' : 's') + ' instead of ' + _cur + '?\n\n'
-      + 'Everything older than ' + days + ' day' + (days === 1 ? '' : 's')
-      + ' is deleted from this machine within the hour, and cannot be '
-      + 'recovered.';
+    var _msg = (days === 1)
+      ? t('security.retention_shorten_confirm_one', {current: _cur}, 'Keep event history for 1 day instead of {current}?\n\nEverything older than 1 day is deleted from this machine within the hour, and cannot be recovered.')
+      : t('security.retention_shorten_confirm_other', {days: days, current: _cur}, 'Keep event history for {days} days instead of {current}?\n\nEverything older than {days} days is deleted from this machine within the hour, and cannot be recovered.');
     if (!window.confirm(_msg)) {
       if (status) { status.textContent = t('security.retention_unchanged', null, 'Left unchanged.'); status.style.color = ''; }
       return;
@@ -11929,10 +11930,7 @@ function dismissApiKeyReveal() {
 
 async function revokeApiKey(id) {
   if (!id) return;
-  var ok = window.confirm(
-    'Revoke this key?\n\nAnything using it stops working on its next request. '
-    + 'This cannot be undone; you would have to create a new key.'
-  );
+  var ok = window.confirm(t('security.apikey_revoke_confirm', null, 'Revoke this key?\n\nAnything using it stops working on its next request. This cannot be undone. To restore access, create a new key.'));
   if (!ok) return;
   try {
     await fetch('/api/apikeys/' + encodeURIComponent(id), { method: 'DELETE' });
@@ -12442,7 +12440,7 @@ function openDetailView(type) {
     switchTab('brain');
   } else {
     // For thinking feed and models, stay on overview but could expand in future
-    alert('Detail view for ' + type + ' coming soon!');
+    alert(t('app.detail_view_not_available', {type: type}, 'The detail view for {type} is not available yet.'));
   }
 }
 
@@ -26590,7 +26588,7 @@ function openCompModal(nodeId) {
     return;
   }
 
-  document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">' + c.icon + '</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">' + c.name + '</div><div style="color:var(--text-muted);">Live view coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">' + c.type + '</div></div>';
+  document.getElementById('comp-modal-body').innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">' + c.icon + '</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">' + c.name + '</div><div style="color:var(--text-muted);">' + escHtml(t('app.live_view_coming_soon', null, 'Live view coming soon')) + '</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">' + c.type + '</div></div>';
   document.getElementById('comp-modal-footer').textContent = t("app.last_updated", null, "Last updated: ") + new Date().toLocaleTimeString();
   document.getElementById('comp-modal-overlay').classList.add('open');
 }
@@ -27818,7 +27816,7 @@ function loadAutomationAdvisorDataWithTime() {
   var timeContext = _currentTimeContext ? ' (' + _currentTimeContext.date + ')' : '';
   
   if (_currentTimeContext) {
-    body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">🧠</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Automation Advisor' + timeContext + '</div><div style="color:var(--text-muted);">Historical pattern analysis coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">advisor</div></div>';
+    body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">🧠</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">Automation Advisor' + timeContext + '</div><div style="color:var(--text-muted);">' + escHtml(t('app.historical_pattern_analysis_coming_soon', null, 'Historical pattern analysis coming soon')) + '</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">advisor</div></div>';
     document.getElementById('comp-modal-footer').textContent = t("app.time_travel", null, "Time travel: ") + _currentTimeContext.date;
     return;
   }
@@ -27911,7 +27909,7 @@ function loadComponentWithTimeContext(nodeId) {
     // Default component view
     var body = document.getElementById('comp-modal-body');
     var timeContext = _currentTimeContext ? ' (' + _currentTimeContext.date + ')' : '';
-    body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">' + c.icon + '</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">' + c.name + timeContext + '</div><div style="color:var(--text-muted);">Historical view coming soon</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">' + c.type + '</div></div>';
+    body.innerHTML = '<div style="text-align:center;padding:20px;"><div style="font-size:48px;margin-bottom:16px;">' + c.icon + '</div><div style="font-size:16px;font-weight:600;margin-bottom:8px;">' + c.name + timeContext + '</div><div style="color:var(--text-muted);">' + escHtml(t('app.historical_view_coming_soon', null, 'Historical view coming soon')) + '</div><div style="margin-top:8px;font-size:12px;color:var(--text-muted);text-transform:uppercase;">' + c.type + '</div></div>';
     document.getElementById('comp-modal-footer').textContent = t("app.time_travel", null, "Time travel: ") + (_currentTimeContext ? _currentTimeContext.date : 'Live');
   }
 }
@@ -29912,7 +29910,9 @@ async function updateFromBanner() {
     var s = await fetch('/api/update-check/status').then(function(r){return r.json();});
     target = (s && s.latest_check && s.latest_check.latest) || '';
   } catch(e) {}
-  if (!confirm('Update ClawMetry' + (target ? ' to v' + target : '') + ' now?\n\nThe dashboard and sync daemon will restart. In-flight requests may be interrupted.')) return;
+  if (!confirm(target
+    ? t('app.update_confirm_version', {version: target}, 'Update ClawMetry to v{version} now?\n\nThe dashboard and sync daemon will restart. Requests in progress may be interrupted.')
+    : t('app.update_confirm', null, 'Update ClawMetry now?\n\nThe dashboard and sync daemon will restart. Requests in progress may be interrupted.'))) return;
   btn.disabled = true;
   btn.textContent = t("app.updating", null, "Updating...");
   btn.style.cursor = 'wait';
