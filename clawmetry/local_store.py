@@ -2463,7 +2463,7 @@ _ASSISTANT_ALLOWED_OPERATORS = frozenset({
     "~~", "!~~", "~~*", "!~~*",
 })
 _ASSISTANT_RAW_IDENTIFIERS = frozenset({
-    "blob", "body", "content", "data", "evidence", "messages", "payload", "raw",
+    "blob", "body", "content", "data", "evidence", "messages", "metadata", "payload", "raw",
 })
 _ASSISTANT_MAX_MESSAGES = 50
 _ASSISTANT_MAX_MESSAGE_BYTES = 256 * 1024
@@ -2539,8 +2539,8 @@ def _assistant_validate_sql_ast(
                 collect_ctes(child)
 
     collect_ctes(root)
-    if cte_names.intersection({"sessions", "events"}):
-        return None, "SQL rejected: sessions and events names are reserved"
+    if cte_names.intersection(_ASSISTANT_ALLOWED_TABLES):
+        return None, "SQL rejected: analytics table names are reserved"
 
     def walk(value: Any) -> str | None:
         if isinstance(value, dict):
@@ -2630,9 +2630,15 @@ def _assistant_validate_sql_ast(
     return info, None
 
 
-def _assistant_runtime_ctes(table_names: set[str]) -> str:
-    """Add trusted runtime projections for the legacy session/event tables."""
-    source_tables = table_names.intersection({"sessions", "events"})
+def _assistant_runtime_ctes(cursor: Any, table_names: set[str]) -> str:
+    """Expose metadata-only relations and canonical runtime attribution.
+
+    Rejecting named payload columns alone is insufficient: DuckDB accepts a
+    relation alias as a whole-row struct, including inside to_json(). Project
+    raw columns out before binding any user SQL, including implicit grouping,
+    whole-row values and positional column renaming.
+    """
+    source_tables = table_names.intersection(_ASSISTANT_ALLOWED_TABLES)
     if not source_tables:
         return ""
     prefixes = ", ".join(
@@ -2641,14 +2647,28 @@ def _assistant_runtime_ctes(table_names: set[str]) -> str:
     )
     runtime_expr = "LOWER(split_part(CAST(session_id AS VARCHAR), ':', 1))"
     ctes = []
-    for table_name in ("sessions", "events"):
-        if table_name not in source_tables:
-            continue
+    for table_name in sorted(source_tables):
+        columns = cursor.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = 'main' AND table_name = ? "
+            "ORDER BY ordinal_position", [table_name],
+        ).fetchall()
+        visible = [
+            'source."' + str(name).replace('"', '""') + '"'
+            for name, ctype in columns
+            if str(name).lower() not in _ASSISTANT_RAW_IDENTIFIERS
+            and str(ctype).upper() not in {"BLOB", "BYTEA", "BINARY", "VARBINARY"}
+        ]
+        if table_name in {"sessions", "events"}:
+            visible.append(
+                f"CASE WHEN {runtime_expr} IN ({prefixes}) "
+                f"THEN {runtime_expr} ELSE 'openclaw' END AS runtime"
+            )
+        if not visible:
+            raise ValueError("No analytics metadata columns are available")
         ctes.append(
             f"{table_name} AS ("
-            f"SELECT source.*, "
-            f"CASE WHEN {runtime_expr} IN ({prefixes}) "
-            f"THEN {runtime_expr} ELSE 'openclaw' END AS runtime "
+            f"SELECT {', '.join(visible)} "
             f"FROM main.{table_name} AS source)"
         )
     return "WITH " + ", ".join(ctes) + " SELECT * FROM ("
@@ -20402,7 +20422,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                         }
 
                     query_sql = str(validated_sql).strip().rstrip(";").strip()
-                    runtime_prefix = _assistant_runtime_ctes(ast_tables)
+                    runtime_prefix = _assistant_runtime_ctes(cursor, ast_tables)
                     execution_sql = (
                         runtime_prefix + query_sql + ") AS _assistant_runtime_query"
                         if runtime_prefix

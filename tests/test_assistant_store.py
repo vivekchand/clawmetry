@@ -148,6 +148,7 @@ def test_assistant_query_distinguishes_empty_rows_from_sql_failure(fresh_store):
         """SELECT "read_text"('/tmp/secret')""",
         """SELECT * FROM "read_text"('/tmp/secret')""",
         "SELECT data FROM events",
+        "SELECT metadata FROM sessions",
         "SELECT * FROM events",
     ],
 )
@@ -381,3 +382,30 @@ def test_assistant_methods_are_daemon_allowlisted():
         "save_assistant_conversation",
         "query_assistant_sql",
     } <= _DAEMON_METHODS
+
+
+@pytest.mark.parametrize('table,insert', [
+    ('events', "INSERT INTO events (id,agent_type,node_id,agent_id,event_type,ts,data,created_at) VALUES ('row','openclaw','local','main','message','2026-10-02',?,1)"),
+    ('sessions', "INSERT INTO sessions (agent_type,session_id,metadata,updated_at) VALUES ('openclaw','row',?,1)"),
+    ('memory_blobs', "INSERT INTO memory_blobs (agent_type,agent_id,path,blob,updated_at) VALUES ('openclaw','main','MEMORY.md',?,1)"),
+    ('heartbeats', "INSERT INTO heartbeats (agent_type,node_id,ts,data) VALUES ('openclaw','local','2026-10-02',?)"),
+    ('system_snapshots', "INSERT INTO system_snapshots (agent_type,node_id,ts,kind,data) VALUES ('openclaw','local','2026-10-02','system',?)"),
+    ('crons', "INSERT INTO crons (agent_type,cron_id,data,updated_at) VALUES ('openclaw','row',?,1)"),
+    ('subagents', "INSERT INTO subagents (agent_type,subagent_id,data,updated_at) VALUES ('openclaw','row',?,1)"),
+])
+def test_whole_row_and_json_queries_cannot_expose_payloads(fresh_store, table, insert):
+    import json
+    _local_store, store = fresh_store
+    secret = 'PRIVATE_RAW_PAYLOAD_MUST_STAY_LOCAL'
+    with store._write_lock:
+        store._conn.execute(insert, [secret.encode()])
+    for projection in ('record', 'to_json(record)'):
+        result = store.query_assistant_sql(sql=f'SELECT {projection} AS result FROM {table} record')
+        assert 'error' not in result, result
+        assert len(result['rows']) == 1
+        assert secret not in json.dumps(result, default=str)
+        encoded = result['rows'][0]['result']
+        if projection == 'to_json(record)':
+            record = json.loads(encoded)
+            assert not ({'data', 'blob', 'metadata'} & set(record))
+            assert record['agent_type'] == 'openclaw'
