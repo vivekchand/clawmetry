@@ -114,10 +114,14 @@ jobs:
           nohup openclaw gateway --port 18789 --allow-unconfigured \
             > /tmp/openclaw-logs/gateway.log 2>&1 &
           echo "OPENCLAW_GATEWAY_PID=$!" >> "$GITHUB_ENV"
+          # /ready, not the OpenAI-compatible model list: openclaw 2026.9.x
+          # does not route that and answers 404 while the gateway is up and
+          # ready. /ready answers 200 on both 2026.5.12 and 2026.9.2, and is
+          # refused until the server is bound, so it cannot pass early.
           for i in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer ci-golden-token" \
-              "http://127.0.0.1:18789/v1/models" 2>/dev/null || echo "000")
+              "http://127.0.0.1:18789/ready" 2>/dev/null || echo "000")
             case "$code" in 2*|401|403) echo "gateway up ($code after ${i}s)"; break;; esac
             sleep 1
           done

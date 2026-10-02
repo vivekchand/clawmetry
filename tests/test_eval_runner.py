@@ -45,10 +45,19 @@ from clawmetry.eval_runner import (  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _evals_opted_in(monkeypatch):
+def _evals_opted_in(monkeypatch, tmp_path):
     """Scoring is opt-in since the 2026-09-03 egress hardening; the runner
     tests exercise the scoring path, so opt in unless a test says otherwise."""
     monkeypatch.setenv("CLAWMETRY_EVALS_ENABLED", "1")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-for-mocked-judge")
+    monkeypatch.setattr(eval_runner, "RUBRIC_PATH", tmp_path / "evals.yaml")
+    monkeypatch.setattr(eval_runner, "_EVAL_STATUS_PATH", str(tmp_path / "eval_status.json"))
+
+
+@pytest.fixture(scope="session")
+def server():
+    """The runner uses test stores and mocked judges, not a live dashboard."""
+    yield None
 
 
 # ── Fakes ────────────────────────────────────────────────────────────────────

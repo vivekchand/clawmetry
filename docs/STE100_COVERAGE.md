@@ -1,0 +1,159 @@
+# English migration coverage
+
+Status: implementation in progress. Full STE compliance is not established.
+
+Generate the current inventory with:
+
+```sh
+python3 scripts/check_english.py --inventory
+```
+
+The inventory discovers files on each run. File counts are not review counts.
+The baseline is empty for the currently extracted corpus. This does not close the pending source or editorial reviews.
+
+| Surface | Mechanical checks | Remaining evidence |
+| --- | --- | --- |
+| English catalog | All string values | Full dictionary, grammatical role, and meaning review |
+| Live HTML templates | Literal prose across inline tags and accessibility attributes | Rendered expressions, inserted values, and editorial review |
+| Weekly insight fallbacks | Shared fixed messages | Integration tests and served report verification |
+| Weekly generated insights | Common instructions and validation on both synthesis paths | Generation evaluation and editorial quality review |
+| Activity turn explanations | Same synthesis boundary with a screen-specific fallback | Served behavior and editorial quality review |
+| Overview, alerts, and setup | Selected messages simplified | Complete dynamic-message and visual review |
+| Browser JavaScript | 980 literal translation fallbacks checked; literal keys and catalog text must match | 48 calls with dynamic or missing literal arguments; other rendering and completed messages remain pending |
+| TypeScript frontend | Source files discovered in the inventory | Screen text, translation fallbacks, and rendered expressions require extraction and review |
+| Central CLI parser help | 182 literal argparse prose values checked; rendered parser help tested | Full terminology review; other command parsers, prompts, and result messages remain pending |
+| API errors and desktop | Files discovered in the inventory | Extract owned explanations and migrate by feature |
+| English documentation | Files discovered in the inventory | Editorial migration and documentation lint integration |
+| Pro explanations | Separate repository | Inventory, migration, and verification |
+| Cloud explanations and email | Separate repository | Inventory, migration, and hosted verification |
+| Website explanations | Separate repository | Inventory, migration, and served-page verification |
+| Alerts and scheduled briefs | Shared instructions and validation; original alert or result table retained | Served behavior and editorial review |
+| Advisor answers | Both transports checked; known token usage retained | Served behavior and editorial review |
+| Chart explanations | Titles and descriptions checked after JSON parsing; SQL retained | Served behavior and editorial review |
+| Evaluation reasons | Classic and DeepEval reasons checked; scores and verdicts retained | Served behavior and editorial review |
+| Other generated paths | Pending source review | Complete the inventory across repositories |
+
+## Completion requirements
+
+- Every in-scope source has an owner and a reviewed text inventory.
+- Mechanical findings are resolved or explicitly classified as source evidence or extraction artifacts.
+- New messages cannot bypass the applicable checks.
+- Every generated path has shared instructions, validation, and an assessed fallback.
+- Values, units, uncertainty, commands, and identifiers retain their meaning.
+- An STE-qualified reviewer has assessed the applicable writing rules and dictionary use.
+- Local and hosted artifacts have been released and verified, with evidence recorded per surface.
+
+## Current delivery
+
+Requirements: [STE100_REQUIREMENTS.md](STE100_REQUIREMENTS.md).
+Design: [STE100_BLUEPRINT.md](STE100_BLUEPRINT.md).
+Writing guide: [STE100_WRITING.md](STE100_WRITING.md).
+
+These records were written before implementation and published to Software Factory on 2026-10-02.
+Requirement: `a5f5d75b-43b5-4f55-ab9a-393865c606ca` (version 3).
+Blueprint: `3d07dd70-06dd-4a2e-b4bd-122ee55ac751` (version 3). The expanded generation design is recorded locally. Publishing that revision failed because the Factory keychain credential was unavailable.
+Initial delivery: [PR #6248](https://github.com/vivekchand/clawmetry/pull/6248), merged on 2026-10-02. Release carrier: [PR #6261](https://github.com/vivekchand/clawmetry/pull/6261), merged on 2026-10-02. Publication and cloud promotion are still pending at this record.
+No production release or whole-product compliance claim is recorded here.
+
+## Verification recorded on 2026-10-02
+
+Base revision: `19cb235ae5e8a14e44f5efe871d79ff9c0dc530f`.
+
+- The five language and generation-boundary test modules pass: 105 tests. The optional real DeepEval import test is skipped.
+- Restoring the base insight implementation makes all 12 generated-prose rejection tests fail. Restoring this change makes them pass.
+- The corpus check covers 2,683 extracted messages in 44 sources. Mechanical findings decreased from 109 to zero.
+- The inventory lists 461 source candidates awaiting extraction or review. These are not counted as checked messages.
+- Wrapped sentences cannot bypass the sentence limit. CSS that was incorrectly catalogued as prose is now a code literal.
+- All template translation keys exist in the English catalog. The combined catalog, translation, hosted Security, and guard-inventory run passes 154 tests after integrating main through `fa78c84f5c`.
+- The revised setup template renders with no mechanical findings. Its text describes the actual control boundary.
+- The built wheel contains byte-identical copies of all 61 changed runtime and asset files.
+- Python 3.9 syntax, JavaScript syntax, and CI test-file coverage pass. Nine implemented STE criteria have explicit test declarations in the Factory manifest. The policy, editorial, and full-rollout criteria remain pending.
+- Existing insight tests pass with the new language tests: 75 tests. Four free-tier cases previously inherited the developer's installed Pro license. Their fixture now supplies the intended free tier.
+- The Activity route uses the same validated synthesis and an appropriate fallback. Its missing configuration import is corrected. An unknown relay model stays unknown.
+- The six insight outcome-template tests pass against temporary DuckDB stores.
+- Existing JavaScript tests pass: 232 assertions. The pre-existing Show/Hide handler quoting defect is corrected with the shared attribute-string encoder.
+- Browser security policy rejected the local file preview. CI run `36990448237` captured 74 desktop and mobile views, all with HTTP 200. Desktop Security, Harness, and Quality and mobile Harness were inspected. The changed help text fits; unmigrated dynamic copy remains visible. Onboarding and hosted verification remain pending.
+- The combined language, generated-boundary, insight, classic-judge, and DeepEval test run passes 144 tests. The optional real DeepEval import test is skipped; the live paid judge test is deselected. Model calls and notification delivery are mocked.
+- Existing brief and Dives telemetry tests pass: 42 tests. Existing chart and Advisor auth suites pass 201 tests; one Self-Evolve entitlement assertion fails with HTTP 402 on both the base and changed Advisor implementation.
+- The rebuilt wheel contains byte-identical copies of all 68 changed runtime and asset files after the main integration and parenthetical checks. Fourteen implemented STE criteria now have test declarations.
+- CI caught the missing local dashboard address in Security help. The address is restored, and all 35 hosted Security and guard-inventory checks pass locally.
+
+- Rule 8.5 is checked inside parentheses, including nested notes. The two regression tests fail against the previous implementation and pass after the correction. Parenthetical chart labels remain valid.
+- The initial browser audit used a regular expression and found 775 source candidates. The subsequent lexer-based extraction supersedes those counts for supported calls.
+
+## Browser follow-up verification on 2026-10-02
+
+- The checked corpus contains 3,787 messages in 48 sources, including 980 browser fallback occurrences. It has zero mechanical findings.
+- The inventory separately reports 48 calls with dynamic or missing literal arguments. The source candidates also include the TypeScript frontend, which was missing from the initial inventory.
+- The combined language, extraction, rendering, and generation-boundary run passes 134 tests. The optional real DeepEval import test is skipped.
+- Existing cost labels, catalog, translation, and browser tests pass: 154 tests. The JavaScript wrapper includes the 232 existing assertions.
+- Replacing the changed JavaScript with the first-stage source makes eight renderer cases fail. Restoring the change makes all 15 renderer cases pass.
+- Renderer tests use the shipped translation function with and without the catalog. They retain event counts, uncertain integrity results, channel names, and cost figures with their HTML explanations.
+- The original connection message promised that nothing was lost. It now reports only that the collector cannot be reached and the list is unavailable.
+- CI explicitly runs both new test modules. The test-file coverage baseline lists 312 files and retains the limit of 909 unlisted files.
+- These results are local. Browser screenshots, hosted verification, editorial review, and a production release remain pending for this follow-up.
+- The hosted cost panel keeps an explicit instruction to open the local dashboard on the agent computer. All 58 cost-panel, browser-renderer, and inventory checks pass after this CI correction.
+- Two inventory regressions fail before TypeScript discovery is added. They pass afterward without adding those source files to the checked-message count.
+
+These results establish the implemented subset and regression behavior. They do not establish whole-product compliance or a production release.
+
+## Trial fallback verification on 2026-10-02
+
+- The current corpus contains 4,009 messages, including 1,017 literal browser fallbacks. There are zero mechanical findings and 15 remaining dynamic calls.
+- Trial countdowns, modal text, interval labels, and the device-value message now use literal templates. The local fallback fills in their parameters when translation code is absent or throws.
+- Separate singular messages prevent `1 hours` and `1 days` when the English catalog is loaded.
+- The full English CI selection passes 165 tests, with one optional DeepEval import skipped. The banner and trial-wiring selection passes 51 tests.
+- The trial JavaScript suite covers absent translation code, an empty catalog, a loaded catalog, and a failing translator. Counts, device value, monthly and annual prices, and existing checkout tests pass.
+- Restoring the prior JavaScript makes two new Python checks and eight JavaScript checks fail. Restoring the changes makes the selected checks pass.
+- Helper forwarding and table-driven browser keys remain pending. No pricing rule, checkout destination, entitlement, polling interval, or request count changes.
+
+The orchestration badge and session panel now use literal singular and plural label calls.
+This also keeps the spelling of sub-agent labels consistent before and after the catalog loads.
+The corpus now contains 4,017 messages and 1,025 literal browser fallbacks, with zero mechanical findings and 11 dynamic calls pending.
+All 35 browser-rendering cases pass. Both new catalog-absent badge cases fail with the prior source and pass after restoring the change.
+Workflow totals, completed and failed agent counts, running counts, and tool-name escaping remain intact.
+
+## CLI follow-up verification on 2026-10-02
+
+- The corpus contains 3,969 extracted messages, including 182 central CLI help values. It has zero mechanical findings.
+- The CLI audit found 35 mechanical findings in 30 help values. The migration revises 32 values, including the local setup explanations.
+- Nonliteral or empty central help fields fail the language gate and remain visible in the inventory. Hidden argparse fields are excluded explicitly.
+- The real rendered-help guard fails against the previous CLI source. It passes after restoring the revised help. Command examples include the full `clawmetry` executable name; that regression check also fails against the prior text.
+- The latest full English CI test selection passes 149 tests, with the optional real DeepEval import test skipped. A focused CLI and inventory selection passes 111 tests.
+- Comparing the source AST with prose fields removed proves that parser options, defaults, choices, destinations, and executable behavior are unchanged.
+- The combined CLI, extraction, inventory, license-file, update, local-connection, setup, bundle, and integrity checks pass: 120 tests.
+- One existing setup test attempted to use the developer's dashboard log. It now uses a temporary log path. The tested startup implementation is unchanged.
+- CI explicitly runs both new test modules and the previously unlisted local-setup regression module. The file-coverage baseline lists 315 files and lowers the limit to 908 unlisted files.
+- Interactive prompts, result messages, other command parsers, editorial review, and release verification remain pending.
+
+## Parameterized browser follow-up on 2026-10-02
+
+- Twenty-six fixed-key calls now use literal catalog templates. Their existing parameter values and escaping boundaries are unchanged.
+- The inventory owner label now supplies its fallback in the correct translation argument. Before the catalog loaded, the previous call could display the raw translation key.
+- The checked corpus contains 3,996 messages, including 1,007 browser fallback occurrences. It has zero mechanical findings. Twenty-one dynamic or incomplete calls remain pending.
+- The combined browser, inventory, attention, heartbeat, and profile checks pass: 90 tests. They include catalog-present and catalog-absent rendering, duration units, and source owner values.
+- The full English CI test selection passes 155 tests, with the optional real DeepEval import test skipped. The built wheel matches every changed runtime and asset file.
+- Two regressions fail with the preceding JavaScript: checked parameterized coverage and the owner fallback before catalog loading. Both pass after the exact changed source is restored.
+- Forwarding helpers, computed keys, trial helper interpolation, other dynamic rendering, editorial review, and release verification remain pending. This follow-up does not change the first release PR while its CI runs.
+
+## Efficiency recommendation fallbacks on 2026-10-02
+
+- All four recommendation types now translate at render time with complete literal English fallbacks. Previously, the title, finding, and instruction were blank before the catalog loaded.
+- The corpus contains 4,029 messages, including 1,037 literal browser fallbacks. It has zero mechanical findings and eight dynamic calls pending.
+- The combined English, efficiency, and spend-flow selection passes 239 tests, with one optional DeepEval import skipped. JavaScript syntax also passes.
+- Four absent-catalog renderer cases and the extraction guard fail with the prior source. The loaded-catalog cases continue to pass. All 44 renderer cases pass with the changes.
+- Model names and targets remain escaped. Call counts, thinking percentage, savings rounding, the estimate explanation, and evidence destinations retain their values. Unknown action types remain omitted.
+- This verifies local rendering and the mechanical subset. Screenshots, released artifacts, hosted verification, and editorial review remain pending for this follow-up.
+
+## Table-driven browser explanations on 2026-10-02
+
+- Trace legend labels, spend-flow labels, and all seven session outcomes now use complete literal translation calls. Translation still runs when the view is drawn, so a later catalog load takes effect.
+- Trail context notes interpolate their recorded count and changed fields when the translation function is absent or throws.
+- The corpus contains 4,056 messages, including 1,064 literal browser fallbacks, with zero mechanical findings. Four forwarding calls remain explicitly pending; unrelated browser rendering is also unreviewed.
+- All 51 browser rendering cases pass. The combined English, efficiency, spend-flow, Trail, and JavaScript-wrapper selection passes 261 tests, with one optional DeepEval import skipped. Both changed scripts pass syntax checks.
+- The extraction guard and two Trail fallback cases fail against the prior scripts. Existing labels, outcome colors, unknown-state behavior, value insertion, and evidence links are retained.
+- These are local verification results. This browser follow-up is not yet published or released.
+
+The browser follow-up was rebased onto release carrier `68b4908f8f` before publication.
+The only differences from its tested tree are the carrier changelog and privacy-test repair; runtime files are identical.
+All 70 changed runtime and asset files match the locally built wheel. The rebased corpus check still passes with 4,056 messages.

@@ -247,7 +247,6 @@
   "app.maybe_later": "Quizás más tarde",
   "app.mcp_only": "Solo MCP",
   "app.mcp_servers": "🧩 Servidores MCP",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 Memoria",
   "app.memory_access_history_reads_from_the_local_event_s": "El historial de accesos a memoria se lee del almacén de eventos local, que no está disponible aquí.",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "Los archivos de memoria se almacenan localmente en la máquina del agente y no se sincronizan con Cloud.",

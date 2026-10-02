@@ -286,7 +286,7 @@ _SCORE_RE = re.compile(r"SCORE\s*:\s*([0-9]+(?:\.\d+)?)", re.IGNORECASE)
 _REASON_RE = re.compile(r"REASON\s*:\s*(.+?)(?:\n|$)", re.IGNORECASE | re.DOTALL)
 
 
-def parse_score(text: str) -> tuple[float | None, str | None]:
+def parse_score(text: str, *, max_reason_chars: int | None = 280) -> tuple[float | None, str | None]:
     """Extract ``(score, reason)`` from a judge model's reply.
 
     Tolerant of leading/trailing whitespace, extra prose, and the model
@@ -312,8 +312,8 @@ def parse_score(text: str) -> tuple[float | None, str | None]:
         reason = r.group(1).strip()
         # Truncate runaway reasons to a tweet's length so the column
         # doesn't bloat the DuckDB row size.
-        if len(reason) > 280:
-            reason = reason[:277] + "..."
+        if max_reason_chars is not None and len(reason) > max_reason_chars:
+            reason = reason[:max_reason_chars - 3] + "..."
     return score, reason
 
 
@@ -457,6 +457,12 @@ class EvalRunner:
     def _build_prompt(self, rubric: dict[str, Any], transcript: str) -> str:
         """Compose the final judge prompt: rubric instructions + transcript."""
         instructions = str(rubric.get("prompt") or DEFAULT_RUBRIC["prompt"])
+        from clawmetry.english import WRITING_INSTRUCTIONS
+        instructions += (
+            "\n\nApply these writing rules only to REASON. Keep the SCORE and REASON format. "
+            "Use at most 20 words in each sentence and 280 characters in REASON. "
+            + WRITING_INSTRUCTIONS
+        )
         # PRIVACY: the transcript is about to leave the machine for a THIRD-PARTY
         # judge LLM (Anthropic/OpenAI). Everything else in ClawMetry is E2E
         # encrypted so even our own cloud cannot read it; the judge is the one
@@ -639,7 +645,10 @@ class EvalRunner:
                 skip_reason=f"judge error: {type(e).__name__}",
             )
 
-        score, reason = parse_score(reply)
+        from clawmetry.english import explanation_or_fallback
+        score, reason = parse_score(reply, max_reason_chars=None)
+        if score is not None or reason is not None:
+            reason = explanation_or_fallback(reason, "evaluation", max_chars=280)
         result = EvalResult(
             session_id=session_id,
             score=score,

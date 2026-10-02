@@ -17,7 +17,7 @@
       <div class="guard-modal-head">
         <h3 id="guard-control-title">Confirm</h3>
         <button class="btn btn-xs" onclick="guardControlClose()"
-                aria-label="Close">&times;</button>
+                aria-label="Close">×</button>
       </div>
       <div id="guard-control-body"></div>
       <div class="guard-modal-foot">
@@ -40,7 +40,7 @@
   </nav>
   <section data-guard-panel="checks">
     <div id="guard-check-summary" class="guard-coverage" aria-live="polite">Reading check settings from your node...</div>
-    <p class="guard-scope-note">These settings apply to all runtimes on this node. Checks find evidence; they do not block an action on their own.</p>
+    <p class="guard-scope-note">These settings apply to all runtimes on this node. Checks find evidence. They do not block an action on their own.</p>
     <div id="guard-check-families" class="guard-family-grid" role="group" aria-label="Check families"></div>
     <h3 id="guard-check-question" class="guard-family-question"></h3>
     <div id="guard-check-list" class="guard-check-list"></div>
@@ -81,10 +81,7 @@
       <button class="btn btn-sm btn-primary" onclick="guardShowPolicyForm()" data-i18n="guard.add_policy">Add policy</button>
     </div>
     <p class="section-sub" data-i18n="guard.policies_sub">
-      A policy watches for a detector signal and acts without anyone present. New policies start in
-      monitor mode: they record what they would have done and change nothing. A policy can escalate
-      over time, for example pause now and kill five minutes later if the agent is still stuck. Each
-      step runs only if the agent is still flagged when its wait is up.
+      A policy can act automatically when a detector reports a condition. New policies start in monitor mode. They record the proposed action without changing the agent. An enabled policy can escalate its actions over time. For example, it can pause an agent, then kill it five minutes later if the condition continues. Each step requires the condition to remain active when the waiting period ends.
     </p>
     <div id="guard-policy-form" style="display:none;"></div>
     <div id="guard-policies-body">
@@ -97,9 +94,7 @@
       <h3 data-i18n="guard.nondeterminism">Does it give the same answer twice?</h3>
     </div>
     <p class="section-sub" data-i18n="guard.nondeterminism_sub">
-      An agent can go wrong by answering the same request differently each time. ClawMetry can
-      measure this by replaying failed sessions, but only when you turn it on: each replay runs
-      your agent and costs money.
+      An agent can give different answers to the same request. Enable replay to measure this variation in failed sessions. Each replay runs your agent and can incur costs.
     </p>
     <div id="guard-nondeterminism-body" class="section-sub" style="margin:0"></div>
   </div>
@@ -127,10 +122,7 @@
       <button class="btn btn-sm" onclick="loadGuardInventory()" data-i18n="guard.refresh">Refresh</button>
     </div>
     <p class="section-sub" data-i18n="guard.inventory_sub">
-      MCP servers, skills, plugins, instruction files and hook files that Claude Code, Codex, Cursor,
-      Gemini CLI, opencode and OpenClaw read on this machine, for all runtimes together. When one is
-      added or changed, the running sessions that load it are flagged. ClawMetry only reads these files
-      and never starts a component, so an MCP server's tool descriptions are not checked.
+      This view shows components read by Claude Code, Codex, Cursor, Gemini CLI, opencode, and OpenClaw. It includes MCP servers, skills, plugins, instruction files, and hook files. This view combines these runtimes. New or changed components flag the active sessions that load them. ClawMetry reads these files without starting a component. It does not inspect MCP tool descriptions.
     </p>
     <div id="guard-inventory-body">
       <div class="empty-state" data-i18n="guard.loading">Loading...</div>
@@ -144,11 +136,11 @@
       <button class="btn btn-sm" onclick="loadGuardSelfReports()" data-i18n="guard.refresh">Refresh</button>
     </div>
     <p class="section-sub" data-i18n="guard.agent_reported_sub">
-      Notes agents sent to their operators through the ClawMetry MCP tool, counted per category,
-      and how often a detector finding was also reported by the agent. Uncorroborated means no
-      independent evidence was found, which is not the same as false.
-      <a href="#" onclick="switchTab('signals');return false;" data-i18n="guard.agent_reported_signals_link">See the behaviour signals these sit next to</a>
+      Notes that agents sent through the ClawMetry MCP tool are counted by category.
+      This view also shows how often an agent reported the same condition as a detector.
+      Uncorroborated means that no independent evidence was found. It does not mean that the report is false.
     </p>
+    <a href="#" onclick="switchTab('signals');return false;" data-i18n="guard.agent_reported_signals_link">See related behavior signals</a>
     <div id="guard-selfreports-body">
       <div class="empty-state" data-i18n="guard.loading">Loading...</div>
     </div>

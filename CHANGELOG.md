@@ -1,5 +1,23 @@
 ## Unreleased
 
+### Release: checked English explanations
+
+- **Why:** Dashboard explanations, generated summaries, browser fallbacks, and CLI help need consistent wording that preserves the recorded facts.
+- **What:** Publish the writing policy, shared mechanical checker, glossary, and migrated explanations from #6248. Generated explanations retain their results and usage when a fixed fallback is needed.
+- **Verified:** The feature passed 149 focused English tests and the required CI gate, including 11,025 entitlement checks. The built wheel contains all 69 changed runtime and asset files. CI captured 74 desktop and mobile views.
+- **Limits:** This is an ASD-STE100-aligned mechanical subset. Full dictionary and grammar review, remaining product text, and live release verification remain pending.
+
+### Added: checks for clear English explanations
+
+- Additional parameterized browser messages use checked catalog templates. The inventory owner label keeps its readable fallback while the catalog loads. Counts, units, and supplied owner names are preserved.
+- English explanations now have a writing policy and project glossary based on ASD-STE100 Issue 9. The checker covers sentence length, contractions, punctuation, and selected terminology. It does not establish full STE compliance.
+- CI checks the English catalog and literal template text. The migration inventory lists dynamic messages, documentation, and other repositories that still need review.
+- Both weekly insight synthesis paths use shared writing instructions. Activity turn explanations use the same checks with a separate fallback. Rejected summaries use a fixed fallback while preserving result rows and known token usage. Validation adds no model request or network dependency.
+- Alert narration, Advisor answers, chart explanations, and evaluation reasons use the same policy. Validation preserves queries, scores, verdicts, and source evidence. An unavailable brief summary retains its table without inventing a cause.
+- Selected dashboard explanations now use shorter sentences and clearer missing-data labels. Source transcripts remain unchanged.
+- CI also checks literal browser translation fallbacks against the English catalog. Connection and integrity messages retain uncertainty. Renderer tests cover catalog availability, event counts, channel names, and cost figures. Other dynamic messages and editorial review remain pending.
+- Central command-line help now uses the same checks. Shorter explanations retain option names, defaults, update conditions, and removal behavior. Interactive prompts and command results still require migration.
+
 ### Fixed: OpenClaw 2026.9.x sessions appear again
 
 - **Why:** OpenClaw 2026.9.x stopped writing `agents/main/sessions/<id>.jsonl` and keeps live transcripts in SQLite (`agents/main/agent/openclaw-agent.sqlite`). The daemon only read the `.jsonl` files, so on a current OpenClaw no session, message, token or cost ever reached ClawMetry; #6173 shipped a warning, not a reader.

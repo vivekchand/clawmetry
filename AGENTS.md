@@ -42,6 +42,7 @@ Quick chooser:
 - **Never hand-edit `__version__` or push a `v*` tag.** Publishing is triggered by merging a separate PR whose title starts with `[RELEASE]`; the workflow then bumps the patch version and uploads to PyPI. Full procedure in FLYWHEEL.md §5.
 
 ## Conventions
+- Follow [`docs/STE100_WRITING.md`](./docs/STE100_WRITING.md) for all English explanations that ClawMetry writes. Run `python3 scripts/check_english.py`. Preserve source evidence and technical meaning. A passing mechanical check is not full ASD-STE100 compliance; track remaining work in `docs/STE100_COVERAGE.md`.
 - `snake_case` functions, `PascalCase` classes, `SCREAMING_SNAKE_CASE` constants.
 - No em-dashes / double-dashes in user-facing copy (banners, marketing). Code comments + PR text are fine.
 - Don't store user data outside the local machine; cloud sync is E2E-encrypted and the cloud only ever holds opaque blobs.

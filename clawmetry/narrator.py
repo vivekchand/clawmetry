@@ -23,6 +23,8 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from clawmetry.english import GENERATION_INSTRUCTIONS, check_generated_text
+
 log = logging.getLogger("clawmetry.narrator")
 
 # Haiku is fast and cheap; override with CLAWMETRY_NARRATOR_MODEL.
@@ -159,6 +161,7 @@ def narrate(
         body = {
             "model": _MODEL,
             "max_tokens": _MAX_TOKENS,
+            "system": GENERATION_INSTRUCTIONS + " Use at most 20 words in each sentence.",
             "messages": [{"role": "user", "content": prompt}],
         }
         req = urllib.request.Request(
@@ -175,11 +178,18 @@ def narrate(
             data = json.loads(resp.read().decode())
         blocks = data.get("content") or []
         text = "".join(
-            b.get("text", "") for b in blocks if isinstance(b, dict)
+            b["text"] for b in blocks
+            if isinstance(b, dict) and isinstance(b.get("text"), str)
         ).strip()
+        findings = check_generated_text(
+            text, max_sentences=4 if event_type == "brief" else 3, kind="instruction",
+        )
+        if findings:
+            log.debug("narrator: explanation rejected (%s)", ",".join(f.rule for f in findings))
+            return None
         if text:
             log.debug("narrator: narrated %s (%d chars)", event_type, len(text))
         return text or None
     except Exception as exc:
-        log.debug("narrator: failed for %s: %s", event_type, exc)
+        log.debug("narrator: failed for %s: %s", event_type, type(exc).__name__)
         return None
