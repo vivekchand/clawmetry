@@ -1145,6 +1145,7 @@ jobs:
             tests/test_daemon_spawn_pid_lock.py \
             tests/test_first_run_report.py \
             tests/test_e2e_invariants.py \
+            tests/test_published_e2e_js.py \
             tests/test_data_boundary_contract.py \
             tests/test_egress_suppression.py \
             tests/test_telemetry.py \

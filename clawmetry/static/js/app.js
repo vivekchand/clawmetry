@@ -29444,7 +29444,7 @@ async function bootDashboard() {
       var signedOutMarker = false;
       try { signedOutMarker = localStorage.getItem('cm-signed-out') === '1'; } catch (e) {}
       var recovered = false;
-      if (!signedOutMarker) try {
+      if (!signedOutMarker && !window.CLOUD_MODE) try {
         var dtRes = await _withTimeout(fetch('/api/auth/detected-token'), 3000, 'auth-bootstrap');
         if (dtRes && dtRes.ok) {
           var dt = await dtRes.json();
