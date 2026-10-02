@@ -30,6 +30,7 @@
   // ("Execution context was destroyed").
   function tryZeroClick(done){
     triedZeroClick = true;
+    if(window.CLOUD_MODE){ done(null); return; }
     fetch('/api/auth/detected-token')
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(d){
@@ -49,6 +50,7 @@
   // The probe never stores the token — signing back in stays a user action
   // (clawmetryLocalSignin below).
   function offerLocalSignin(){
+    if(window.CLOUD_MODE)return;
     var btn = document.getElementById('login-local-btn');
     if(!btn) return;
     fetch('/api/auth/detected-token')
