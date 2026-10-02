@@ -1,11 +1,12 @@
 ## Unreleased
 
-### Release: OpenClaw 2026.9.x sessions and localised dashboard labels (carries #6233, #6234, #6235, #6236 and #6237)
+### Release: OpenClaw 2026.9.x sessions and localised dashboard labels (carries #6233, #6234, #6235, #6236, #6237 and #6239)
 
 ### Fixed: error states in the dashboard follow the selected language
 - The "Failed to load:" message and the Retry button on six panels, and the "Error: " prefix on cron toasts, the cron run-timeline tooltip and the skills browser, were hard-coded English. They now go through `t()` with the existing `app.failed_to_load_2`, `common.retry` and `app.error` keys, so no locale file changed. Two slices of #2258. Carries #6234 and #6235.
 - "Save failed", "Loading…", "Untitled session" and "No data yet" also go through `t()` with existing keys. Carries #6236.
 - Channel loading lines, the full-screen buttons, daemon and gateway status labels in System Health, the heartbeat card labels and the queue lanes error are now translatable. This adds 21 keys to `en.json`; other languages show English until the translation sync lands. Carries #6237.
+- The heartbeat banner, the Healthy / Delayed / SILENT line in System Health, the memory analytics status and the cron tool tiles are translatable too, with 8 more keys in `en.json`. Translations for the keys from #6237 are included (#6238). Carries #6239.
 
 ### Fixed: OpenClaw 2026.9.x sessions appear again
 
