@@ -13465,15 +13465,14 @@ function _invRosterRow(a, rtFilter) {
   var work = (a.sessions || 0) + ((a.sessions === 1) ? ' session' : ' sessions');
   var model = a.primaryModel || '--';
   var highlight = (rtFilter !== 'all' && rt === rtFilter) ? ' inv-row-active' : '';
-  // Subscription coverage, mirroring the desk device's green "covered" / amber
-  // "metered" chip: a subscription runtime's usage adds $0 on top of the flat
-  // plan fee, so its cost columns are API-equivalent value, not extra spend.
+  // Authentication can identify a subscription, not its remaining allowance
+  // or overage invoice. Keep the usage estimate separate from actual charges.
   var covChip = '';
   if (a.billingMode === 'subscription') {
     covChip = ' <span class="inv-cov-chip inv-cov-sub" title="'
       + _e((a.billingLabel || 'Subscription'))
-      + ' includes this agent\'s usage. The cost columns show usage value at published rates, not an extra bill.">'
-      + t('inventory.covered_chip', null, 'covered') + '</span>';
+      + ' sign-in detected. Cost columns estimate usage at API rates; check your provider account for actual charges.">'
+      + t('inventory.covered_chip', null, 'subscription') + '</span>';
   } else if (a.billingMode === 'metered') {
     covChip = ' <span class="inv-cov-chip inv-cov-met" title="Billed per token at API rates.">'
       + t('inventory.metered_chip', null, 'metered') + '</span>';
@@ -13929,23 +13928,13 @@ async function renderInventory() {
   }
   setTxt('inv-tile-agents', String(agents.length));
   setSub('inv-tile-agents-sub', agents.filter(_invIsRecentlyActive).length + ' active in 24h');
-  // Subscription honesty (device parity): when the account plan is a
-  // subscription, today's marginal spend is the METERED agents' cost only -
-  // the plan is a flat fee already paid. Mirror the desk device's hero:
-  // "$0.00 extra / Claude Max 20x covers it - ~$X.XX at API rates".
-  var plan = inv.accountPlan || null;
-  var extra = Number(inv.extraCost24hUsd);
+  // This node-wide sum is an API-equivalent estimate. A detected account
+  // plan cannot establish what each runtime's provider actually charged.
   var todaySub = document.getElementById('inv-tile-today-sub');
-  if (plan && plan.mode === 'subscription') {
-    setTxt('inv-tile-today', _invFmtUsd(isFinite(extra) ? extra : 0) + ' extra');
-    if (todaySub) {
-      todaySub.textContent = (plan.label || 'Subscription') + ' covers it · ~'
-        + _invFmtUsd(totalCost24h) + ' at API rates';
-      todaySub.style.display = '';
-    }
-  } else {
-    setTxt('inv-tile-today', _invFmtUsd(totalCost24h));
-    if (todaySub) { todaySub.textContent = ''; todaySub.style.display = 'none'; }
+  setTxt('inv-tile-today', _invFmtUsd(totalCost24h));
+  if (todaySub) {
+    todaySub.textContent = 'API-equivalent estimate · Check your provider account for actual charges';
+    todaySub.style.display = '';
   }
   var health = _invHealth(agents);
   setTxt('inv-tile-health', health.txt);
