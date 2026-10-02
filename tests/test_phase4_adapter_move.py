@@ -34,7 +34,7 @@ def test_oss_only_keeps_mechanism_and_free_adapters():
         "claude_code", "codex", "cursor", "aider",
         "opencode", "hermes", "picoclaw", "nanoclaw",
         "pi", "deepagents", "n8n", "antigravity",
-        "copilot", "grok", "qm", "deepseek_harness", "exo", "kimi",
+        "copilot", "grok", "qm", "deepseek_harness", "exo", "kimi", "opendots",
     ):
         try:
             importlib.import_module(f"clawmetry.adapters.{name}")
@@ -72,7 +72,7 @@ def test_family_adapter_specs_split_by_tier():
     # Bump when a runtime is added. The real invariant (loader == catalogue)
     # is test_entitlements.py::test_paid_runtimes_match_family_adapter_specs;
     # this is the blunt tripwire that catches an accidental extra entry.
-    assert len(specs) == 30, f"expected 30 family adapters, got {len(specs)}"
+    assert len(specs) == 31, f"expected 31 family adapters, got {len(specs)}"
 
     free_specs = [s for s in specs if s[0].startswith("clawmetry.adapters.")]
     paid_specs = [s for s in specs if s[0].startswith("clawmetry_pro.adapters.")]
@@ -104,7 +104,7 @@ def test_family_adapter_classes_keeps_free_when_pro_absent(monkeypatch):
         "claude_code", "codex", "cursor", "aider",
         "opencode", "hermes", "picoclaw", "nanoclaw",
         "pi", "deepagents", "n8n", "antigravity",
-        "copilot", "grok", "qm", "deepseek_harness", "exo", "kimi",
+        "copilot", "grok", "qm", "deepseek_harness", "exo", "kimi", "opendots",
     ):
         monkeypatch.setitem(sys.modules, f"clawmetry_pro.adapters.{name}", None)
 

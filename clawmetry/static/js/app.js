@@ -6086,7 +6086,7 @@ var _Q_RUNTIME_NAMES = {
   kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
-  muse_code: 'Muse Code', openexecutive: 'OpenExecutive',
+  muse_code: 'Muse Code', openexecutive: 'OpenExecutive', opendots: 'OpenDots',
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -12604,7 +12604,7 @@ var _CM_RT_LABEL = {
   deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
-  muse_code: 'Muse Code', openexecutive: 'OpenExecutive',
+  muse_code: 'Muse Code', openexecutive: 'OpenExecutive', opendots: 'OpenDots',
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -12617,7 +12617,7 @@ var _CM_RT_PREFIXES = {
   kimi: 1,
   devin: 1, gemini_cli: 1, cline: 1, openhands: 1,
   openworker: 1, grok_bot: 1, lovable: 1, replit: 1,
-  muse_code: 1, openexecutive: 1,
+  muse_code: 1, openexecutive: 1, opendots: 1,
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -12822,6 +12822,7 @@ var _CM_RT_CAPS = {
   // OpenExecutive: cost is a floor (specialist calls write no usage row);
   // specialists are steps, not child sessions, so no SUBAGENTS panel.
   openexecutive: ['SESSIONS','EVENTS','COST'],
+  opendots: ['SESSIONS','EVENTS','BRAIN'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS','SUBAGENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS','SUBAGENTS'],   // no COST
@@ -24806,6 +24807,7 @@ var _RT_FLOW = {
   gemini_cli: { label:'Gemini CLI', src:['⌨️','Terminal'], accent:'#4285f4', stroke:'#1a73e8', tools:[['⚡','Shell'],['📖','ReadFile'],['📁','ReadFolder'],['🔍','SearchText']] },
   cline: { label:'Cline', src:['⌨️','Terminal'], accent:'#5a4fcf', stroke:'#463cad', tools:[['📖','read_files'],['🔍','search_codebase'],['⚡','run_commands'],['🧩','apply_patch']] },
   openhands: { label:'OpenHands', src:['⌨️','Terminal'], accent:'#c9a227', stroke:'#a8871c', tools:[['⚡','terminal'],['📝','file_editor'],['✅','task_tracker'],['🤝','delegate']] },
+  opendots: { label:'OpenDots', src:['⠿','Local work records'], subtitle:'Local work records', accent:'#33665a', stroke:'#214d43', tools:[], minimal:true },
   openexecutive: { label:'OpenExecutive', src:['💬','Chat + Slack'], accent:'#1e3a8a', stroke:'#172f6e', tools:[['🧑‍💼','Specialists'],['🗓️','Scheduler'],['✉️','Send'],['📚','Knowledge']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
@@ -24840,7 +24842,7 @@ function _buildRuntimeFlowInner(rt, model) {
   h += '<g class="flow-node flow-node-brain"><rect x="' + agentX + '" y="' + agentY + '" width="' + agentW + '" height="' + agentH + '" rx="14" fill="' + s.accent + '" stroke="' + s.stroke + '" stroke-width="3" filter="url(#rtShadow)"/>'
     + '<text x="' + agentCx + '" y="' + (agentY + 31) + '" style="font-size:22px;text-anchor:middle;">🧠</text>'
     + '<text x="' + agentCx + '" y="' + (agentY + 55) + '" style="font-size:17px;font-weight:800;fill:#fff;text-anchor:middle;">' + escHtml(s.label) + '</text>'
-    + '<text x="' + agentCx + '" y="' + (agentY + 73) + '" style="font-size:10px;fill:rgba(255,255,255,0.85);text-anchor:middle;">' + escHtml(model || (s.minimal ? 'OpenClaw-family' : 'coding agent')) + '</text>'
+    + '<text x="' + agentCx + '" y="' + (agentY + 73) + '" style="font-size:10px;fill:rgba(255,255,255,0.85);text-anchor:middle;">' + escHtml(model || s.subtitle || (s.minimal ? 'OpenClaw-family' : 'coding agent')) + '</text>'
     + '<circle cx="' + agentCx + '" cy="' + (agentY + agentH - 9) + '" r="4" fill="#fff"><animate attributeName="opacity" values="0.4;1;0.4" dur="1.4s" repeatCount="indefinite"/></circle></g>';
   // Tool column (right).
   for (var j = 0; j < n; j++) { var y = y0 + j * (th + gap), cy = y + th / 2;
@@ -30169,7 +30171,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 32 runtimes side by side. Respects the global
+// the headline demo path — the 33 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -31026,6 +31028,7 @@ function _cmRuntimeIcon(id) {
     gemini_cli: '♊',
     cline: '🖇',
     openexecutive: '🏛️',
+    opendots: '⠿',
     openhands: '🙌',
   };
   return map[id] || '•';
@@ -33693,7 +33696,7 @@ async function renderFirstRunReport(overview) {
   // at: it probes local runtime paths and prescribes `clawmetry connect` /
   // `clawmetry --sample`. On a hosted node page the probe runs inside the
   // cloud container, which has no runtimes and never will, so it reported
-  // "No supported runtime was detected ... checked 32 runtimes" about the
+  // "No supported runtime was detected ... checked 33 runtimes" about the
   // server while the reader was looking at their own laptop's sessions.
   // A local-machine diagnostic has no honest answer to give here.
   if (window.CLOUD_MODE) { el.style.display = 'none'; return; }
@@ -33754,7 +33757,7 @@ async function renderFirstRunReport(overview) {
 
   // How widely we looked, and where to get the detail.
   //
-  // This used to render the expanded probe path for all 32 runtimes. Two
+  // This used to render the expanded probe path for all 33 runtimes. Two
   // problems with putting that on a screen. It carries the account name
   // (`/Users/<name>/...`) into every screenshot, screen-share and pasted
   // issue of an empty dashboard, which is the rule the detector surface

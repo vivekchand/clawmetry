@@ -16,7 +16,7 @@ liest die Session-Dateien, die deine Coding-Agenten ohnehin schon schreiben, und
 die Tool-Aufrufe und alle Token- und Kostendaten, die die Runtime offenlegt, in eine einzige
 Ansicht — damit du einen langen Lauf, der funktioniert, von einem unterscheiden kannst, der feststeckt.
 
-Funktioniert mit **32 KI-Agenten-Runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 weitere. Ein Dashboard für deine gesamte Agenten-Flotte. ([die vollständige Liste](SUPPORTED_RUNTIMES.txt), generiert aus dem Katalog.)
+Funktioniert mit **32 KI-Agenten-Runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 29 weitere. Ein Dashboard für deine gesamte Agenten-Flotte. ([die vollständige Liste](SUPPORTED_RUNTIMES.txt), generiert aus dem Katalog.)
 
 > 🌐 **Lies dies auf:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [mehr →](docs/i18n/)
 

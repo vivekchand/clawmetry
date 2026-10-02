@@ -1279,6 +1279,10 @@ def _catalog() -> list:
         ),
     ))
 
+    # OpenDots stores dot instructions/memories in SQLite and learning in
+    # CopilotKit Intelligence. No file roots to scan or invent here.
+    catalog.append(RuntimeCatalogEntry(id="opendots", label="OpenDots", roots=()))
+
     # ── Replit Agent (replit.com) ───────────────────────────────────
     # Instructions/memory are replit.md at the workspace root — the agent
     # both reads it as standing guidance and rewrites it as project docs.
@@ -1720,7 +1724,7 @@ def list_all_files(category: Optional[str] = None,
     Backs the "All runtimes" scope of the Memory / Skills browser. Only
     groups that actually exist on disk are returned — the per-runtime
     view is where we spell out the paths we looked at and came up empty,
-    because listing every absent root for 32 runtimes would be a wall of
+    because listing every absent root for 33 runtimes would be a wall of
     noise rather than an answer.
 
     ``allowed``, when given, restricts the sweep to that set of runtime
