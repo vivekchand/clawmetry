@@ -131,6 +131,20 @@ Cost labels retain their amounts and financial basis. Channel loading messages r
 These checks do not close the complete surfaces: their other dynamic rendering still requires extraction and review.
 This step does not close CLI, documentation, cloud, Pro, website, or full editorial review.
 
+### Parameterized browser explanations
+
+This follow-up design is recorded before implementation, after consolidating the initial browser and CLI work into PR #6248.
+The inventory still lists 48 calls with computed keys, computed fallbacks, or missing literal fallbacks.
+Calls with a fixed catalog key and known parameters can use the catalog's literal template directly.
+The migration shall retain each supplied value, unit, singular/plural distinction, and HTML-escaping boundary.
+It shall not evaluate arbitrary source expressions or replace observed agent text.
+
+Forwarding helpers and table-driven keys require separate treatment. They shall remain pending unless their complete key and fallback set is extracted and checked.
+A helper that can run before the translation library loads shall interpolate supported placeholders locally, or retain its existing computed fallback until that behavior is implemented and tested.
+Tests shall use the shipped translation function and relevant rendered functions with the catalog present and absent. Any helper change shall also be tested without a translation function.
+No poller, API call, package dependency, or pricing behavior changes are required.
+The initial release PR remains fixed while its CI runs. This follow-up will have its own verification and release evidence.
+
 ## System Contracts
 
 - English descriptions use a 25-word limit. Instructions use a 20-word limit.
