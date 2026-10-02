@@ -1583,5 +1583,18 @@
   "memory.status_bloat": "Bloat detected",
   "memory.status_growing": "Growing",
   "overview.cron_errors": "Errors",
-  "overview.scheduled_jobs": "Scheduled Jobs"
+  "overview.scheduled_jobs": "Scheduled Jobs",
+  "common.saved": "Saved",
+  "common.saving": "Saving…",
+  "common.live": "Live",
+  "security.retention_invalid_days": "Enter a whole number of days, 1 or more.",
+  "security.retention_unchanged": "Left unchanged.",
+  "security.retention_save_failed": "Could not save.",
+  "app.apikey_no_answer": "ClawMetry did not answer. Is the dashboard still running?",
+  "security.credential_scan_clean": "Clean",
+  "app.coverage_key_paste_first": "Paste a key first.",
+  "app.coverage_key_connecting": "Connecting…",
+  "app.coverage_key_save_failed": "Could not save that key.",
+  "tracing.agent_graph_load_failed": "Could not load agent graph. Is the daemon running?",
+  "tracing.agent_graph_empty": "No agent span data in this time window."
 }
