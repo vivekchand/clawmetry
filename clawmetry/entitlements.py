@@ -413,6 +413,7 @@ TIER_LABELS = {
 }
 
 FEATURE_LABELS = {
+    "robotics": "Robot observation and governance",
     "sessions": "Sessions",
     "transcripts": "Transcripts",
     "usage": "Usage",
@@ -510,6 +511,7 @@ STARTER_FEATURES = frozenset(
 
 PRO_ONLY_FEATURES = frozenset(
     {
+        "robotics",
         # Intercepting a runtime's OWN permission prompt and answering it
         # remotely — the hands-free half. Starter is told an approval is
         # waiting (``approval_queue``); Pro answers it without going back

@@ -131,6 +131,8 @@ def test_live_int_arg_defaults_match():
                 continue
             coerced = lq._coerce_args(name, dict(_required_args(name)))
             assert coerced[arg] == meta["default"], (name, arg)
+            if type(meta["default"]) is not int:
+                continue  # Boolean defaults are not integer ranges.
             capped = lq._coerce_args(
                 name, {**_required_args(name), arg: 10 ** 9}
             )
@@ -163,6 +165,8 @@ EXPECTED_TRUST = {
     "activity": "e2e",
     "incidents": "e2e",
     "investigation": "e2e",
+    "robotics_runs": qc.TRUST_E2E,
+    "robotics_events": qc.TRUST_E2E,
     "glance": "plaintext",
     "runtimes": "plaintext",
     "models": "plaintext",

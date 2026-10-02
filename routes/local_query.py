@@ -203,6 +203,18 @@ def _coerce_args(shape: str, raw: dict) -> dict:
                 "node_id": raw["node_id"], "incident_id": raw.get("incident_id") or None,
                 "cursor": raw.get("cursor") or None, "event_id": raw.get("event_id") or None,
                 "limit": _safe_int(raw.get("limit"), default=100, lo=1, hi=200)}
+    if shape == "robotics_runs":
+        return {"limit": _safe_int(raw.get("limit"), default=50, lo=1, hi=100),
+                "before_ns": raw.get("before_ns"), "before_run_id": raw.get("before_run_id")}
+    if shape == "robotics_events":
+        if not raw.get("run_id"):
+            raise ValueError("robotics_events requires run_id")
+        if type(raw.get("tail", False)) is not bool:
+            raise ValueError("robotics_events tail must be a boolean")
+        return {"run_id": raw["run_id"],
+                "before": raw.get("before"), "tail": raw.get("tail", False),
+                "after": _safe_int(raw.get("after"), default=0, lo=0, hi=1000000000),
+                "limit": _safe_int(raw.get("limit"), default=500, lo=1, hi=1000)}
     if shape == "events":
         return {
             "session_id": raw.get("session_id"),
@@ -419,7 +431,7 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog", "robotics_runs", "robotics_events"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -745,6 +757,9 @@ def http_query():
 # which is a smaller foot-gun but still a foot-gun.
 
 _DAEMON_METHODS = frozenset({
+    "robotics_query",
+    "robotics_runs",
+    "robotics_events",
     # `clawmetry maintenance rescrub-spans` (REQ-OBS-OTG-001): the operator's
     # explicit rescrub of spans stored before scrubbing existed. A dry run
     # unless apply=True; pages by span_id so each call stays bounded.

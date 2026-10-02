@@ -8309,6 +8309,9 @@ def _cmd_export(args) -> None:
 
 def main() -> None:
     import argparse
+    if len(sys.argv) > 1 and sys.argv[1] == "robot":
+        from clawmetry.robotics import cli_main as _robot_cli
+        raise SystemExit(_robot_cli(sys.argv[2:]))
     # FAST PATH — `clawmetry hooks …` must dispatch before the dashboard
     # import below (~300ms): `hooks run pretooluse` executes on EVERY Claude
     # Code tool call, and a policy-miss must cost ~40ms, not a third of a

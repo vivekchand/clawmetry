@@ -253,11 +253,13 @@ def client():
     return app.test_client()
 
 
-def test_api_extensions_shape_empty(client):
+def test_api_extensions_shape_empty(client, monkeypatch):
+    monkeypatch.setattr(ext, "_select_entry_points", lambda group: [])
     resp = client.get("/api/extensions")
     assert resp.status_code == 200
     body = json.loads(resp.data)
     assert body == {
+        "navigation": [],
         "plugins": [],
         "plugin_count": 0,
         "failed_plugins": [],
@@ -267,6 +269,14 @@ def test_api_extensions_shape_empty(client):
         "events": [],
         "handler_counts": {},
     }
+
+
+def test_api_extensions_navigation_receives_registered_routes(client):
+    def navigation(payload):
+        assert "extensions.api_extensions" in payload["endpoints"]
+        return [{"label": "Workbench", "href": "/workbench"}]
+    ext.register("ui.navigation", navigation)
+    assert client.get("/api/extensions").get_json()["navigation"] == [{"label": "Workbench", "href": "/workbench"}]
 
 
 def test_api_extensions_reports_loaded_plugins(client, monkeypatch):
@@ -305,6 +315,7 @@ def test_api_extensions_never_raises(client, monkeypatch):
     assert resp.status_code == 200
     body = json.loads(resp.data)
     assert body == {
+        "navigation": [],
         "plugins": [],
         "plugin_count": 0,
         "failed_plugins": [],

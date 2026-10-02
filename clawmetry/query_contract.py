@@ -148,6 +148,23 @@ QUERY_CONTRACT: dict = {
         "backing": "query_investigation",
         "doc": "Exact scoped evidence, bounded history continuation, execution state and explicit coverage.",
     },
+    "robotics_runs": {
+        "status": STATUS_LIVE,
+        "args": {"limit": _arg(default=50, lo=1, hi=100), "before_ns": _arg(), "before_run_id": _arg()},
+        "trust": TRUST_E2E,
+        "scope": SCOPE_TRACES,
+        "backing": "robotics_runs",
+        "doc": "Paid robot run summaries and measured state, newest first with a stable page cursor.",
+    },
+    "robotics_events": {
+        "status": STATUS_LIVE,
+        "args": {"run_id": _arg(required=True), "after": _arg(default=0, lo=0, hi=1000000000),
+                 "limit": _arg(default=500, lo=1, hi=1000), "before": _arg(), "tail": _arg(default=False)},
+        "trust": TRUST_E2E,
+        "scope": SCOPE_TRACES,
+        "backing": "robotics_events",
+        "doc": "Paid robot trace page, ordered by source sequence with a continuation cursor.",
+    },
     # ── live: served today by routes/local_query.py (_SHAPES/_dispatch) ──
     "events": {
         "status": STATUS_LIVE,

@@ -9684,6 +9684,7 @@ def send_heartbeat(config: dict) -> bool:
 # sync daemon without the dashboard module loaded).
 _PENDING_SHAPES = {
     "incidents", "investigation", "activity", "error_groups", "session_catalog",
+    "robotics_runs", "robotics_events",
     "events", "sessions", "aggregates", "health", "transcript",
     # Added in P4 (#2990): new live shapes from P2 materialized rollups.
     "runtimes", "models", "rollup_sessions",
@@ -9726,6 +9727,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
         "error_groups": "query_error_groups",
         "session_catalog": "query_session_catalog",
         "activity": "query_activity",
+        "robotics_runs": "robotics_runs",
+        "robotics_events": "robotics_events",
         "events":     "query_events",
         "sessions":   "query_sessions",
         "aggregates": "query_aggregates",
@@ -9767,6 +9770,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
 # but defined here so the daemon-only fallback path doesn't need the
 # routes package on sys.path.
 _SHAPE_ALLOWED_KWARGS = {
+    "robotics_runs": {"limit", "before_ns", "before_run_id"},
+    "robotics_events": {"run_id", "after", "limit", "before", "tail"},
     "events":     {"session_id", "agent_id", "event_type", "since", "until", "limit"},
     "sessions":   {"agent_id", "since", "until", "limit"},
     "aggregates": {"agent_id", "since", "until"},
@@ -12613,7 +12618,8 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                 "blob": blob,
                 "shape": shape,
                 "args_hash": _canonical_args_hash(args),
-                "ttl": 15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600,
+                "ttl": (5 if shape in {"robotics_runs", "robotics_events"} else
+                        15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600),
             }, api_key)
         except Exception as e:
             log.warning("pending_query dispatch failed (id=%s shape=%s): %s",
@@ -24903,6 +24909,16 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     # renders its honest collecting state, never a silent blank).
     if _spend_flow_slice is not None:
         payload["spendFlow"] = _spend_flow_slice
+
+    # Paid robotics summary shares the normal encrypted envelope.
+    try:
+        from clawmetry.extensions import call as _robotics_snapshot
+        from clawmetry.local_store import get_store as _robotics_store
+        _robotics_slice = _robotics_snapshot("robotics.snapshot", {"store": _robotics_store()})
+        if _robotics_slice is not None:
+            payload["robotics"] = _robotics_slice
+    except Exception as _robotics_error:
+        log.warning("Robotics snapshot unavailable: %s", _robotics_error)
 
     # ── NemoClaw / sandbox enrichment ────────────────────────────────────────
     # Detect NemoClaw and add optional sandbox metadata to the snapshot.

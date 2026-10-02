@@ -34688,3 +34688,20 @@ async function renderFirstRunReport(overview) {
   el.innerHTML = h;
   el.style.display = 'block';
 }
+// Optional private-package workbenches. Discover once, with no standing poller.
+document.addEventListener('DOMContentLoaded', function () {
+    if (window.CLOUD_MODE) return;
+    fetch('/api/extensions', {credentials: 'same-origin'}).then(function (response) {
+        return response.ok ? response.json() : {};
+    }).then(function (body) {
+        var parent = document.querySelector('.nav-tabs');
+        if (!parent) return;
+        (Array.isArray(body.navigation) ? body.navigation : []).slice(0, 8).forEach(function (entry) {
+            if (!entry || typeof entry.href !== 'string' || !/^\/[a-zA-Z0-9/_-]+$/.test(entry.href)) return;
+            var link = document.createElement('a');
+            link.className = 'nav-tab'; link.href = entry.href;
+            link.textContent = String(entry.label || 'Workbench').slice(0, 40);
+            parent.appendChild(link);
+        });
+    }).catch(function () {});
+});
