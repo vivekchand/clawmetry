@@ -3741,7 +3741,7 @@ async function openSkillBrowser(skillName) {
     // Auto-load SKILL.md
     loadSkillFile(skillName, 'SKILL.md');
   } catch(e) {
-    treeEl.innerHTML = '<div style="padding:12px;color:var(--text-error);">Error: ' + escHtml(String(e)) + '</div>';
+    treeEl.innerHTML = '<div style="padding:12px;color:var(--text-error);">' + escHtml(t('app.error', null, 'Error: ')) + escHtml(String(e)) + '</div>';
   }
 }
 
@@ -3767,7 +3767,7 @@ async function loadSkillFile(skillName, filePath) {
     });
     _cmRtFitHeight();
   } catch(e) {
-    cmFileViewerPlaceholder('skills-browser-content', 'Error: ' + String(e), true);
+    cmFileViewerPlaceholder('skills-browser-content', t('app.error', null, 'Error: ') + String(e), true);
   }
 }
 
@@ -15752,7 +15752,7 @@ function _renderCronRunTimeline(jobId, runs, jobJobs) {
     var pillLabel = isOk ? (r.delivered_at ? 'OK ✓' : 'OK') : isErr ? 'FAIL' : escHtml(r.status || '?');
     var tipParts  = [r.status || '?'];
     if (r.delivered_at) tipParts.push('Delivered ' + new Date(r.delivered_at).toLocaleString());
-    if (r.error) tipParts.push('Error: ' + String(r.error).substring(0, 300));
+    if (r.error) tipParts.push(window.t('app.error', null, 'Error: ') + String(r.error).substring(0, 300));
     var pill = '<span title="' + escHtml(tipParts.join(' · ')) + '" style="display:inline-block;padding:2px 8px;border-radius:999px;background:' + pillBg + ';color:' + pillColor + ';font-size:10px;font-weight:700;white-space:nowrap;">' + pillLabel + '</span>';
     rows += '<tr>'
       + '<td style="padding:3px 8px;">' + pill + '</td>'
@@ -15886,21 +15886,21 @@ async function cronRunNow(jobId) {
     var data = await res.json();
     showCronToast(data.message || 'Job triggered');
     setTimeout(loadCrons, 2000);
-  } catch(e) { showCronToast('Error: ' + e.message); }
+  } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
 }
 
 async function cronToggle(jobId, enabled) {
   try {
     var res = await fetch('/api/cron/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({jobId: jobId, enabled: enabled})});
     var data = await res.json();
-    if (data.error) { showCronToast('Error: ' + data.error); return; }
+    if (data.error) { showCronToast(t('app.error', null, 'Error: ') + data.error); return; }
     showCronToast(data.message || (enabled ? 'Job enabled' : 'Job disabled'));
     // Update local state immediately for instant UI feedback
     var job = _cronJobs.find(function(j) { return j.id === jobId; });
     if (job) { job.enabled = enabled; renderCrons(); }
     // Then refresh from server after a short delay
     setTimeout(loadCrons, 1000);
-  } catch(e) { showCronToast('Error: ' + e.message); }
+  } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
 }
 
 function cronConfirmDelete(jobId, jobName) {
@@ -15918,7 +15918,7 @@ async function cronDelete(jobId) {
     showCronToast(data.message || 'Job deleted');
     delete _cronExpanded[jobId];
     loadCrons();
-  } catch(e) { showCronToast('Error: ' + e.message); }
+  } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
 }
 
 function cronEdit(jobId) {
@@ -15999,11 +15999,11 @@ async function saveCronEdit() {
     try {
       var res = await fetch('/api/cron/create', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
       var data = await res.json();
-      if (data.error) { showCronToast('Error: ' + data.error); return; }
+      if (data.error) { showCronToast(t('app.error', null, 'Error: ') + data.error); return; }
       showCronToast(data.message || 'Job created');
       closeCronEditModal();
       loadCrons();
-    } catch(e) { showCronToast('Error: ' + e.message); }
+    } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
   } else {
     var patch = { enabled: enabled };
     if (name) patch.name = name;
@@ -16017,7 +16017,7 @@ async function saveCronEdit() {
       showCronToast(data.message || 'Job updated');
       closeCronEditModal();
       loadCrons();
-    } catch(e) { showCronToast('Error: ' + e.message); }
+    } catch(e) { showCronToast(t('app.error', null, 'Error: ') + e.message); }
   }
 }
 
@@ -16058,7 +16058,7 @@ async function submitCronFix(jobId) {
     var data = await res.json();
     showCronToast(data.message || 'Fix request sent to AI agent');
   } catch(e) {
-    showCronToast('Error: ' + e.message);
+    showCronToast(t('app.error', null, 'Error: ') + e.message);
   }
 }
 
