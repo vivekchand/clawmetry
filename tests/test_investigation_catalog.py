@@ -91,6 +91,23 @@ def test_error_window_excludes_older_events_and_large_bodies_stay_explicit(store
     assert not seen[0]['rows'][0]['data']
 
 
+def test_compressed_error_bodies_are_bounded_before_json_decode(store, monkeypatch):
+    from clawmetry import ccr, entitlements, extensions
+    monkeypatch.setattr(entitlements, 'get_entitlement', lambda: SimpleNamespace(allows_feature=lambda name: True))
+    monkeypatch.setattr(extensions, 'load_plugins', lambda: None)
+    seen = []
+    monkeypatch.setattr(extensions, 'call', lambda name, payload: seen.append(payload) or {'rows': []})
+    events(store, count=1)
+    packed = ccr.compress(b'{"message":"' + b'x' * 1_000_000 + b'"}', force=True)
+    assert len(packed) < 65536
+    store._conn.execute('UPDATE events SET data=? WHERE id=?', [packed, 'node-a-codex-0'])
+    monkeypatch.setattr(ccr.zlib, 'decompress', lambda *a: (_ for _ in ()).throw(AssertionError('unbounded decode')))
+    result = store.query_error_groups()
+    assert result['coverage']['omitted_body_count'] == 1
+    assert seen[0]['rows'][0]['data'] is None
+    assert seen[0]['rows'][0]['body_omitted'] is True
+
+
 def test_cli_seam_preserves_arguments_and_legacy_session_grammar(monkeypatch):
     from clawmetry import extensions
     from clawmetry.cli_cmds import _common, dispatch

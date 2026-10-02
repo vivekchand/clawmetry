@@ -60,7 +60,19 @@ class InvestigationCatalogMixin:
                             f'WHERE {where} AND created_at>=? AND created_at<=? '
                             "AND (is_error=TRUE OR event_type LIKE 'error.%' OR event_type LIKE '%.failed') "
                             'ORDER BY created_at DESC,id DESC LIMIT ?', [*params, cutoff, now, lim + 1])
-        rows = [_row_to_event(row, cols) for row in source[:lim]]
+        # Compressed byte length does not bound expanded JSON size. Decode
+        # with an output cap before the ordinary event JSON parser runs.
+        from clawmetry import ccr
+        rows = []
+        data_index = cols.index('data')
+        for source_row in source[:lim]:
+            values = list(source_row)
+            raw = values[data_index]
+            decoded = ccr.maybe_decompress(raw, max_bytes=65536)
+            if raw is not None and decoded is None:
+                values[-1] = True  # body_omitted
+            values[data_index] = decoded
+            rows.append(_row_to_event(values, cols))
         ids = [row['id'] for row in rows]
         resolved = {}
         if ids:
