@@ -1782,5 +1782,22 @@
   "profile.switch_account_confirm": "Confirm sign out of this account",
   "profile.signing_out": "Signing out",
   "profile.switch_account_failed": "Could not sign out",
-  "common.network_request_failed": "A network error prevented this request. Try again."
+  "common.network_request_failed": "A network error prevented this request. Try again.",
+  "common.unknown_error": "unknown error",
+  "app.selfconfig_restore_failed": "Could not restore: {error}",
+  "approvals.approve_failed": "Approve failed: {error}",
+  "approvals.reject_failed": "Reject failed: {error}",
+  "sessions.pause_advisory_only": "Pause flag set, but no enforcement proxy is running to hold this session. The pause is advisory only. Start the proxy (clawmetry proxy start) to make pause bite.",
+  "sessions.emergency_stop_confirm": "Emergency stop session \"{session}\"?",
+  "sessions.emergency_stop_sent": "Emergency stop signal sent for session: {session}",
+  "common.emergency_stop_failed": "Emergency stop failed: {error}",
+  "crons.kill_all_done": "Disabled {n} cron job(s).",
+  "crons.kill_all_failed_list": "Failed: {jobs}",
+  "crons.pause_job_failed": "Failed to pause job: {error}",
+  "crons.pause_failed": "Pause failed: {error}",
+  "security.policy_add_action": "Add at least one action.",
+  "security.policy_save_failed_reason": "Could not save policy: {error}",
+  "security.policy_save_failed": "Could not save policy.",
+  "security.policy_delete_confirm": "Delete this policy?",
+  "security.policy_delete_failed": "Could not delete policy."
 }
