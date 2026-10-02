@@ -1961,12 +1961,17 @@ async function loadContextEconomics() {
   // Recompute the summary from the scoped lists so the chips always agree
   // with the gauge and compaction log below them, local and cloud alike.
   var _ovCount = comps.filter(function(c){ return c.trigger === 'overflow'; }).length;
+  var _knownReclaimed = comps.filter(function(c) {
+    return c.measurement_status === 'observed' && c.reclaimed != null
+      && Number.isFinite(Number(c.reclaimed));
+  });
   var s = {
     compaction_count: comps.length,
     overflow_count: _ovCount,
     proactive_count: comps.length - _ovCount,
-    total_reclaimed: comps.reduce(function(t2, c){ return t2 + Number(c.reclaimed || 0); }, 0),
-    peak_pct: Math.round(util.reduce(function(m, u){ return Math.max(m, Number(u.pct || 0)); }, 0) * 10) / 10,
+    total_reclaimed: _knownReclaimed.reduce(function(t2, c){ return t2 + Number(c.reclaimed); }, 0),
+    reclaimed_data_available: _knownReclaimed.length > 0,
+    peak_pct: util.length ? Math.round(util.reduce(function(m, u){ return Math.max(m, Number(u.pct || 0)); }, 0) * 10) / 10 : null,
     overflow_sessions: overflow.length
   };
   _ceCompactionsCache = comps;
@@ -1981,7 +1986,7 @@ async function loadContextEconomics() {
     var peakColor = (s.peak_pct || 0) >= 90 ? '#ef4444' : ((s.peak_pct || 0) >= 70 ? '#d97706' : 'var(--text-primary)');
     sumEl.innerHTML = '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
       + chip('Turns', util.length)
-      + chip('Peak window', (s.peak_pct || 0) + '%', peakColor)
+      + chip('Peak window', s.peak_pct === null ? 'Not measured' : s.peak_pct + '%', s.peak_pct === null ? 'var(--text-muted)' : peakColor)
       + chip('Compactions', s.compaction_count || 0)
       + chip('Overflow', s.overflow_count || 0, (s.overflow_count || 0) > 0 ? '#ef4444' : 'var(--text-muted)')
       + chip('Proactive', s.proactive_count || 0, '#16a34a')

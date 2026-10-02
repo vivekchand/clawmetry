@@ -114,7 +114,7 @@ def api_context_economics():
     ]
     total_reclaimed = sum(known_reclaimed)
     overflow_count = sum(1 for c in compactions if c.get("trigger") == "overflow")
-    peak_pct = max((float(u.get("pct") or 0) for u in utilization), default=0.0)
+    peak_pct = max((float(u.get("pct") or 0) for u in utilization), default=None)
     summary = {
         "compaction_count":     len(compactions),
         "overflow_count":       overflow_count,
@@ -122,7 +122,7 @@ def api_context_economics():
         "total_reclaimed":      total_reclaimed,
         "reclaimed_data_available": bool(known_reclaimed),
         "reclaimed_known_count": len(known_reclaimed),
-        "peak_pct":             round(peak_pct, 2),
+        "peak_pct":             round(peak_pct, 2) if peak_pct is not None else None,
         "overflow_sessions":    len(overflow_sessions),
         "utilization_points":   len(utilization),
     }
