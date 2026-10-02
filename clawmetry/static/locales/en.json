@@ -1669,7 +1669,7 @@
   "evals.key_verified": "The key is verified and saved. Check the scoring status above.",
   "evals.suites_empty": "No test suites are available. A suite is a YAML file with test prompts and expected answers. Run a suite before each release to check for changes in answer quality.",
   "security.findings_unavailable": "ClawMetry could not read the findings log. Open the dashboard on the agent machine to check its recorded findings.",
-  "app.cost_opt_local_fit_on_device": "The agent machine checks which local models fit its hardware. Open its local dashboard to see that advice.",
+  "app.cost_opt_local_fit_on_device": "The agent machine checks which local models fit its hardware. Open the local dashboard on the computer itself to see that advice.",
   "app.investigate": "Investigate →",
   "app.see_sessions": "See sessions →",
   "app.latest_turn_any_session": "latest turn, any session in scope",
