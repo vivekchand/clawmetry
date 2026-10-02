@@ -199,6 +199,7 @@ def test_history_detail_requests_cannot_let_an_older_click_overwrite_a_newer_one
           await flush();
           await flush();
           if (!elements.get('cm-assistant-thread').textContent.includes('B answer')) throw new Error('newer conversation was lost');
+          if (!elements.get('cm-assistant-status-message').hidden) throw new Error('loaded conversation kept its loading notice');
           if (elements.get('cm-assistant-thread').textContent.includes('**B answer**')) throw new Error('emphasis punctuation was displayed literally');
           if (!elements.get('cm-assistant-thread').textContent.includes('<script>literal</script>')) throw new Error('untrusted inline code was not kept as text');
           if (elements.get('cm-assistant-thread').textContent.includes('A answer')) throw new Error('older conversation overwrote newer conversation');

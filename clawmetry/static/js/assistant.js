@@ -957,6 +957,7 @@
       if (!messages.length) showWelcome();
       messages.forEach(renderConversationMessage);
       renderHistory();
+      setStatusMessage('');
     }).catch(function (error) {
       if (state.conversationRequest === request) state.conversationRequest = null;
       if (!isMounted() || navigationToken !== state.navigationToken || (error && error.name === 'AbortError' && request.cancelReason)) return;
