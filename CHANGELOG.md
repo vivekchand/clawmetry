@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed: encrypted dashboard unlock for machine names and compressed data
+
+- **Why:** setup links changed the plus separator in a machine ID into a space in the saved-key name. Hosted readers also rejected correctly authenticated compressed data as invalid JSON.
+- **What:** encode setup fragments, preserve old literal-plus links, recover missing account-scoped saved keys without overwriting existing entries, and expose the shared gzip-aware payload decoder for hosted readers. Cloud authentication no longer probes a local-only gateway token endpoint.
+- **Verified:** 72 focused regression checks and 233 JavaScript assertions, including a failing legacy-identity regression with the old parser restored. The cloud companion covers compressed and uncompressed payloads, real wrong keys, and retention of valid keys after data errors. Carries #6280.
+
 ### Release: checked English explanations
 
 - **Why:** Dashboard explanations, generated summaries, browser fallbacks, and CLI help need consistent wording that preserves the recorded facts.
