@@ -386,6 +386,18 @@ jobs:
       - name: Docker runtime pin still matches requirements.txt
         run: python3 -m pytest tests/test_docker_runtime_pin.py -q
 
+      # The SIGNED self-hosted image installs clawmetry's own runtime
+      # dependencies from the hash-pinned
+      # deploy/self-hosted/runtime-requirements.txt, ahead of the wheel, so the
+      # wheel's `install_requires` ranges are never resolved against the index
+      # at build time. Same silent one-directional drift as the guard above: a
+      # dependency added to setup.py just never reaches the pinned set, the
+      # wheel install resolves that one name live, and `docker build` still
+      # succeeds -- on the one image that is published, cosign-signed and SBOM
+      # attested. Named explicitly because this job runs FILE LISTS.
+      - name: Self-hosted runtime pin still matches setup.py
+        run: python3 -m pytest tests/test_selfhosted_runtime_pin.py -q
+
       # docs/INGEST.md is GENERATED from clawmetry/ingest_contract.py, the same
       # way MODULE_MAP.md is generated from the tree. A generated doc with no
       # drift check is a hand-maintained doc that nobody knows is stale, which
