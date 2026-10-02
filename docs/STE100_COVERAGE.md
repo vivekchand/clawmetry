@@ -2,6 +2,46 @@
 
 Status: implementation in progress. Full STE compliance is not established.
 
+## Delivery update on 2026-10-02
+
+The evidence below is a chronological record. Earlier pending release notes
+describe the state at that check, not the current delivery state.
+
+- The initial migration and parameterized browser follow-up are published in
+  OSS 0.12.903. The published package files were compared with release source.
+  The cloud deploy now pins that version.
+- The cloud fleet cost explanation is deployed and was inspected beside a
+  connected node and real session data. The website's English control and
+  installation explanations were also inspected on the production homepage.
+- The website's new locale keys currently have English fallbacks. Those values
+  do not establish translated coverage.
+- Pro source changes are merged. Private-wheel deployment remains pending.
+- Complete surface coverage, generated-output review, and qualified dictionary
+  and grammar review remain incomplete.
+
+### Navigation attribute correction
+
+The connected dashboard exposed `nav.guard_tooltip` instead of its explanation.
+The translation runtime now retains original tooltip, input-hint, and
+accessible-name text when a key or catalog is unavailable. The Guard label and
+tooltip now have English catalog entries. Its explanation refers to available
+controls without promising that every agent can be stopped.
+
+The catalog guard now includes the live dashboard navigation as well as tab
+templates. CI explicitly runs that guard. Four cases execute the complete
+translation runtime with catalogs present or absent and with application before
+or after boot. They cover partial translations, repeated application, and
+language changes. All four cases and the navigation catalog guard fail with the
+preceding runtime and catalog, and pass with the correction.
+
+The selected language, navigation, catalog, and workflow checks pass locally:
+975 passed and 449 skipped. Skips concern inapplicable workflow checks and the
+optional DeepEval import. The focused browser and catalog run passed 172 tests
+before the two additional boot cases were added. The corpus contains 4,147
+extracted messages with zero mechanical findings. JavaScript syntax and the
+test-file coverage ratchet pass. The correction is not released or verified
+live yet.
+
 Generate the current inventory with:
 
 ```sh

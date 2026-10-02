@@ -1832,5 +1832,7 @@
   "sessions.row_pause_failed": "Could not pause this session: {error}",
   "sessions.row_resume_failed": "Could not resume this session: {error}",
   "sessions.row_stop_failed": "Could not stop this session: {error}",
-  "sessions.row_kill_failed": "Could not kill this session: {error}"
+  "sessions.row_kill_failed": "Could not kill this session: {error}",
+  "nav.guard": "Guard",
+  "nav.guard_tooltip": "Review running agents, detector warnings, and the controls available for each agent."
 }

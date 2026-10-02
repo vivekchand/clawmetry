@@ -29,6 +29,84 @@ def run_js(body):
     return json.loads(result.stdout)
 
 
+@pytest.mark.parametrize('catalog_available', [False, True])
+@pytest.mark.parametrize('apply_before_boot', [False, True])
+def test_dom_attributes_keep_original_fallbacks_across_language_changes(catalog_available, apply_before_boot):
+    """Run the complete shipped runtime, including boot and language switching."""
+    body = r'''
+const vm = require('vm');
+const attributes = ['title', 'placeholder', 'aria-label'];
+const nodes = [];
+const en = {}, fr = {};
+for (const kind of ['missing', 'known', 'english', 'local', 'empty']) {
+  const attrs = {};
+  for (const attr of attributes) {
+    attrs['data-i18n-' + attr] = kind + '.' + attr;
+    if (kind !== 'empty') attrs[attr] = 'Original ' + kind + ' ' + attr;
+    if (kind === 'known' || kind === 'english') en[kind + '.' + attr] = 'English ' + attr;
+    if (kind === 'known' || kind === 'local') fr[kind + '.' + attr] = 'French ' + attr;
+  }
+  nodes.push({
+    attrs,
+    getAttribute: name => Object.prototype.hasOwnProperty.call(attrs, name) ? attrs[name] : null,
+    setAttribute: (name, value) => { attrs[name] = String(value); }
+  });
+}
+const listeners = {};
+const document = {
+  currentScript: null, readyState: 'loading', cookie: '',
+  documentElement: {setAttribute() {}},
+  getElementById: () => null,
+  addEventListener: (name, fn) => { listeners[name] = fn; },
+  querySelectorAll: selector => nodes.filter(n => n.getAttribute(selector.slice(1, -1)) !== null)
+};
+const context = {
+  document, window: {dispatchEvent() {}}, URLSearchParams,
+  navigator: {languages: ['en']}, location: {hostname: 'localhost', search: ''},
+  localStorage: {getItem: () => null, setItem() {}},
+  fetch: async url => ({ok: true, json: async () => {
+    if (url.endsWith('_meta.json')) return [{code: 'en'}, {code: 'fr'}];
+    if (url.endsWith('en.json')) return __TEST_AVAILABLE__ ? en : null;
+    if (url.endsWith('fr.json')) return fr;
+    throw Error('Unexpected request: ' + url);
+  }})
+};
+vm.createContext(context);
+vm.runInContext(__TEST_SOURCE__, context);
+const read = () => nodes.map(n => attributes.map(a => n.getAttribute(a)));
+(async () => {
+  if (__TEST_PREAPPLY__) context.window.i18n.apply(document);
+  const before = read();
+  listeners.DOMContentLoaded();
+  await new Promise(setImmediate);
+  const boot = read();
+  await context.window.i18n.setLang('fr');
+  const french = read();
+  context.window.i18n.apply(document);
+  context.window.i18n.apply(document);
+  const repeated = read();
+  await context.window.i18n.setLang('en');
+  const english = read();
+  await context.window.i18n.setLang('fr');
+  await context.window.i18n.setLang('en');
+  console.log(JSON.stringify({before, boot, french, repeated, english, again: read()}));
+})().catch(e => { console.error(e); process.exitCode = 1; });
+'''
+    values = {'AVAILABLE': catalog_available, 'PREAPPLY': apply_before_boot, 'SOURCE': I18N}
+    result = run_js(re.sub(r'__TEST_(\w+)__', lambda m: json.dumps(values[m[1]]), body))
+    attributes = ['title', 'placeholder', 'aria-label']
+    original = [[f'Original {kind} {attr}' for attr in attributes]
+                for kind in ['missing', 'known', 'english', 'local']] + [['', '', '']]
+    english = [row[:] for row in original]
+    if catalog_available:
+        english[1] = english[2] = [f'English {attr}' for attr in attributes]
+    french = [row[:] for row in english]
+    french[1] = french[3] = [f'French {attr}' for attr in attributes]
+    assert result['before'] == original[:-1] + ([['', '', '']] if apply_before_boot else [[None, None, None]])
+    assert result['boot'] == result['english'] == result['again'] == english
+    assert result['french'] == result['repeated'] == french
+
+
 def function(name):
     return re.search(r'^(?:async )?function ' + re.escape(name) + r'\b[\s\S]*?^\}', APP, re.M).group()
 
