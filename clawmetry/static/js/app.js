@@ -30531,7 +30531,7 @@ function loadAgentGraph() {
   // deployment cannot answer.
   if (window.CLOUD_MODE) {
     statusEl.textContent = t('app.agent_graph_local_only', null,
-      'The agent graph uses the local data store. Open the dashboard on this machine (http://localhost:8900) to see it.');
+      'The agent graph is available only on the agent machine. Open its local dashboard at http://localhost:8900.');
     return;
   }
   statusEl.textContent = t('app.loading_2', null, 'Loading…');
@@ -30559,7 +30559,7 @@ function loadAgentGraph() {
       if (data && data._cloud_disabled) {
         statusEl.style.display = 'block';
         statusEl.textContent = t('app.agent_graph_local_only', null,
-          'The agent graph uses the local data store. Open the dashboard on this machine (http://localhost:8900) to see it.');
+          'The agent graph is available only on the agent machine. Open its local dashboard at http://localhost:8900.');
         return;
       }
       statusEl.style.display = 'none';

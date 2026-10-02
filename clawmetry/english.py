@@ -22,6 +22,10 @@ INSIGHT_MESSAGES = {
     "connect_one": "The result table contains 1 row. Connect this machine to ClawMetry Cloud for an AI summary.",
     "connect_other": "The result table contains {count} rows. Connect this machine to ClawMetry Cloud for an AI summary.",
 }
+TURN_MESSAGES = {
+    "unavailable": "The explanation is unavailable. Review the recorded activity for this turn.",
+    "connect": "Connect this machine to ClawMetry Cloud for an AI explanation of this turn.",
+}
 GENERATION_INSTRUCTIONS = (
     "Write clear English using ASD-STE100 Issue 9 as the reference. "
     "Use at most 25 words per descriptive sentence and 20 per instruction. "

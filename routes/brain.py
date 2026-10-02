@@ -2192,9 +2192,11 @@ def api_brain_clusters():
 _WHY_HINT = (
     "These rows are events from an AI agent session (oldest first). "
     "The last row is the target assistant turn. "
-    "Explain in exactly 3 sentences why that assistant output happened. "
-    "Lead with the most direct cause (which user message or tool result triggered it). "
-    "If the same tool or query appears 3+ times (loop / anomaly), say so first."
+    "Use at most 3 sentences to explain the recorded context for the assistant output. "
+    "Identify the preceding user message or tool result when relevant. "
+    "Distinguish a possible cause from a cause established by the recorded events. "
+    "If the same tool or query appears at least 3 times, report that repetition. "
+    "Repetition alone does not establish an error."
 )
 
 
@@ -2233,17 +2235,16 @@ def api_brain_why(session_id, event_id):
         for et, count in type_counts.items()
     )
 
-    from clawmetry.insights import _resolve_synthesis_credential, _synthesize_narrative
-    from clawmetry.config import load_config
+    from clawmetry.insights import (
+        SYNTHESIS_MODEL, _resolve_synthesis_credential, _synthesize_narrative, load_config,
+    )
+    from clawmetry.english import TURN_MESSAGES
 
     cfg = load_config()
     mode, secret = _resolve_synthesis_credential(cfg)
 
     if mode == "none":
-        narration = (
-            f"{len(context)} context events. "
-            "Connect to Cloud for AI narration — no key required."
-        )
+        narration = TURN_MESSAGES["connect"]
         used_model = "none"
     else:
         narration, _ = _synthesize_narrative(
@@ -2252,8 +2253,10 @@ def api_brain_why(session_id, event_id):
             _WHY_HINT,
             context,
             mode=mode,
+            fallback=lambda count: TURN_MESSAGES["unavailable"],
         )
-        used_model = "claude-sonnet-4-6"
+        # The relay response does not establish which model was used.
+        used_model = SYNTHESIS_MODEL if mode == "direct" else None
 
     return jsonify({
         "session_id": session_id,

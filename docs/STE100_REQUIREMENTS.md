@@ -42,7 +42,7 @@ As a contributor, I want checks during review so that new text cannot silently b
 
 As an operator, I want generated explanations to follow the same policy without extra latency or disclosure of my data.
 
-- AC-STE-003.1: When weekly insights request generated prose, both synthesis paths shall use the same English writing instructions.
+- AC-STE-003.1: When weekly insights or Activity turn explanations request generated prose, both synthesis paths shall use the same English writing instructions.
 - AC-STE-003.2: When generated prose fails the implemented checks or is empty, the system shall show a fixed fallback and retain the underlying result rows.
 - AC-STE-003.3: When a generated response is rejected, its known token usage shall still contribute to the estimated cost.
 - AC-STE-003.4: When language validation runs, it shall require no network call, additional model call, poller, or user configuration.

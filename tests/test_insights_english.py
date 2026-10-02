@@ -1,4 +1,10 @@
-"""AC-STE-003.1/.2/.3/.4: validate generated text without another model call."""
+"""English policy regression coverage.
+
+AC-STE-003.1: both transports use the common instructions.
+AC-STE-003.2: rejected prose retains rows and uses a fixed fallback.
+AC-STE-003.3: rejected prose retains known token usage.
+AC-STE-003.4: validation makes no additional model call.
+"""
 import copy
 import json
 
@@ -79,3 +85,34 @@ def test_summary_keeps_missing_cost_distinct_from_zero(monkeypatch):
     assert "Cost not recorded" in digest.summary
     assert "$0.00" not in digest.summary
     assert not check_text(digest.summary)
+
+
+@pytest.mark.parametrize("mode", ["none", "direct", "relay"])
+def test_activity_turn_uses_its_own_fallback(monkeypatch, mode):
+    from flask import Flask
+    from clawmetry.english import TURN_MESSAGES
+    from routes import brain
+
+    rows = [{"id": "turn-1", "event_type": "assistant", "text": "original evidence"}]
+    before = copy.deepcopy(rows)
+    monkeypatch.setattr(brain, "_fetch_session_chain", lambda *args: rows)
+    monkeypatch.setattr(insights, "load_config", lambda: {})
+    monkeypatch.setattr(insights, "_resolve_synthesis_credential", lambda cfg: (mode, "key"))
+    calls = []
+    def generate(*args):
+        calls.append(args)
+        return "We can't explain it.", 12
+    monkeypatch.setattr(insights, "_synthesize_via_anthropic", generate)
+    monkeypatch.setattr(insights, "_synthesize_via_relay", generate)
+    app = Flask(__name__)
+    app.register_blueprint(brain.bp_brain)
+    response = app.test_client().get("/api/brain/why/session-1/turn-1")
+    assert response.status_code == 200
+    narration = response.get_json()["narration"]
+    expected_model = "none" if mode == "none" else insights.SYNTHESIS_MODEL if mode == "direct" else None
+    assert response.get_json()["model"] == expected_model
+    assert narration == TURN_MESSAGES["connect" if mode == "none" else "unavailable"]
+    assert "table" not in narration and "week" not in narration
+    assert not check_text(narration)
+    assert rows == before
+    assert len(calls) == (0 if mode == "none" else 1)

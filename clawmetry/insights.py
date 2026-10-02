@@ -30,7 +30,7 @@ import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from clawmetry.endpoints import ingest_url as _resolve_ingest_url
 
@@ -663,6 +663,7 @@ def _synthesize_narrative(
     hint: str,
     rows: list[dict],
     mode: str = "direct",
+    fallback: Optional[Callable[[int], str]] = None,
 ) -> tuple[str, int]:
     """Generate and check prose on both paths, retaining known token usage.
 
@@ -670,8 +671,9 @@ def _synthesize_narrative(
     compliance or factual correctness. Result rows are never rewritten.
     """
     from clawmetry.english import check_generated_text, insight_fallback
+    fallback = fallback or insight_fallback
     if not rows:
-        return insight_fallback(0), 0
+        return fallback(0), 0
     tokens = 0
     try:
         if mode == "relay":
@@ -682,13 +684,13 @@ def _synthesize_narrative(
         if findings:
             log.warning("insights: summary language check failed (mode=%s, rules=%s)",
                         mode, ",".join(sorted({f.rule for f in findings})))
-            return insight_fallback(len(rows)), tokens
+            return fallback(len(rows)), tokens
         return text, tokens
     except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError, TypeError, AttributeError) as exc:
         # Never log rejected prose, result rows, credentials, or upstream
         # response bodies. Keep the failure class for diagnosis.
         log.warning("insights: synthesis unavailable (mode=%s, error=%s)", mode, type(exc).__name__)
-        return insight_fallback(len(rows)), tokens
+        return fallback(len(rows)), tokens
 
 
 def _estimate_cost(tokens_used: int) -> float:

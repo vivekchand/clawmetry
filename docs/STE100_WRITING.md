@@ -77,7 +77,7 @@ Validate the result before displaying or storing the explanation.
 Use fixed fallbacks when validation fails. Retain the source results and known token usage.
 Do not rewrite observed agent text, send it to an extra service, or retry generation just to satisfy a style check.
 
-The first integration is weekly insights. Other generated paths remain pending until separately integrated and verified.
+The first integrations are weekly insights and Activity turn explanations. Other generated paths remain pending until separately integrated and verified.
 The fallback and its result count require review just like any other message.
 
 ## Claims and release

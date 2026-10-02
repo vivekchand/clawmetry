@@ -19,7 +19,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from clawmetry.english import INSIGHT_MESSAGES, check_text  # noqa: E402
+from clawmetry.english import INSIGHT_MESSAGES, TURN_MESSAGES, check_text  # noqa: E402
 
 BASELINE = "docs/english_baseline.json"
 CATALOG = "clawmetry/static/locales/en.json"
@@ -138,6 +138,8 @@ def collect(root=ROOT):
         messages.extend(parser.messages)
     for key, value in INSIGHT_MESSAGES.items():
         messages.append(Message("clawmetry/english.py", key, 1, value, "description"))
+    for key, value in TURN_MESSAGES.items():
+        messages.append(Message("clawmetry/english.py", "turn." + key, 1, value, "description"))
     return messages
 
 

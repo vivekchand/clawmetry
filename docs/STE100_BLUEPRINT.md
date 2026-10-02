@@ -6,6 +6,11 @@ This design implements [Clear English explanations](STE100_REQUIREMENTS.md).
 It combines an editorial policy, a project glossary, offline checks, and a migration inventory.
 Mechanical results and full editorial review are separate evidence.
 
+The first implementation is [ClawMetry PR #6248](https://github.com/vivekchand/clawmetry/pull/6248).
+Assess the new modules and CI integration against that branch until it merges.
+It covers the English catalog, literal templates, weekly insight synthesis, and the Activity turn-explanation caller.
+Other dynamic messages, documentation, repositories, and editorial review remain pending in `docs/STE100_COVERAGE.md`.
+
 ## Component Blueprint Composition
 
 The existing English catalog and translation runtime continue to supply browser text.
@@ -51,6 +56,8 @@ responsibilities:
 Implementation: `clawmetry/insights.py`.
 `#InsightLanguageBoundary` calls `#EnglishPolicy` once per generated explanation.
 It records only the rule identifiers in warnings, not the rejected prose or user rows.
+The existing Activity caller in `routes/brain.py` supplies its own fixed fallback because that screen has no digest result table.
+It loads the insight configuration from `clawmetry/insights.py` and does not invent a model name for relay responses.
 
 ## System Contracts
 

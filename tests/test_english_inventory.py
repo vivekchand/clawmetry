@@ -1,4 +1,11 @@
-"""AC-STE-002.1/.2/.3/.4/.5: corpus extraction and a baseline that only shrinks."""
+"""English policy regression coverage.
+
+AC-STE-002.1: checked findings retain their source and rule.
+AC-STE-002.2: changed and added text cannot inherit an exception.
+AC-STE-002.3: the baseline can only shrink.
+AC-STE-002.4: the inventory distinguishes pending sources.
+AC-STE-002.5: passing reports state the checker limits.
+"""
 import json
 from pathlib import Path
 import subprocess
@@ -59,6 +66,16 @@ def test_changed_text_cannot_inherit_an_old_exception(tmp_path):
     assert main(["--root", str(root), "--bootstrap-baseline"]) == 0
     (root / CATALOG).write_text(json.dumps({"example": "The tool stopped; open the session."}))
     assert main(["--root", str(root)]) == 1
+
+
+def test_finding_reports_source_and_rule(tmp_path, capsys):
+    root = fixture_root(tmp_path, "Data is available.")
+    assert main(["--root", str(root), "--bootstrap-baseline"]) == 0
+    (root / CATALOG).write_text(json.dumps({"example": "The agent stopped; open its session."}))
+    assert main(["--root", str(root)]) == 1
+    output = capsys.readouterr().out
+    assert CATALOG + ":1: STE-8.1:" in output
+    assert "[example]" in output
 
 
 def test_duplicate_occurrences_are_counted():

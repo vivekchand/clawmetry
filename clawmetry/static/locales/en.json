@@ -38,7 +38,7 @@
   "app.add_integration": "+ Add Integration",
   "app.add_new_webhook_to_workspace": "Add New Webhook to Workspace",
   "app.advisor": "Advisor",
-  "app.agent_graph_local_only": "The agent graph uses the local data store. Open the dashboard on this machine (http://localhost:8900) to see it.",
+  "app.agent_graph_local_only": "The agent graph is available only on the agent machine. Open its local dashboard at http://localhost:8900.",
   "app.agent_runtime": "Agent Runtime",
   "app.agent_working": "⚙️ Agent working…",
   "app.ai_model": "AI Model",
