@@ -60,6 +60,7 @@
 }
 
 .cm-assistant-eyebrow {
+  flex-wrap: wrap;
   gap: 9px;
   margin-bottom: 20px;
   color: var(--cm-muted);
@@ -578,7 +579,7 @@
   .cm-assistant-hero { padding: 20px 16px 17px; }
   .cm-assistant-hero-row { align-items: flex-start; flex-direction: column; gap: 16px; }
   .cm-assistant-status-pill { align-self: flex-start; }
-  .cm-assistant-scope { display: none; }
+  .cm-assistant-scope { margin-left: 0; }
   .cm-assistant-main { padding: 16px 12px 18px; }
   .cm-assistant-history { padding: 17px 12px; }
   .cm-assistant-setup { padding: 13px; }
