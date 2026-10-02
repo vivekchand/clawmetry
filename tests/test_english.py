@@ -46,6 +46,26 @@ def test_conservative_word_count_supports_protected_forms():
     assert word_count("Open https://example.com/a.b?x=3.14 for {session_id}.") == 4
 
 
+def test_parenthetical_text_has_its_own_sentence_limit():
+    assert "STE-5.1" in rules("Check the agent (" + "word " * 21 + ").", "instruction")
+    assert "STE-6.3" in rules("The agent stopped (" + "word " * 26 + ").")
+    assert not rules("The agent stopped (the session has no activity).")
+
+
+def test_nested_notes_and_punctuation_do_not_hide_long_sentences():
+    assert word_count("Read the report (including its notes (if present)).") == 4
+    assert "STE-5.1" in rules("Read (the report (" + "word " * 21 + ")).", "instruction")
+    # A period inside a note must not split the outer sentence into shorter
+    # pieces that independently pass its word limit.
+    text = "word " * 12 + "(A note. Another note.) " + "word " * 12
+    assert "STE-5.1" in rules(text, "instruction")
+    assert "STE-5.1" in rules("Read (" + "word " * 21, "instruction")
+
+
+def test_chart_title_can_include_a_parenthetical_label():
+    assert not check_generated_text("Cost (USD)", max_sentences=1)
+
+
 def test_decimal_and_identifier_do_not_create_sentences():
     assert len(sentences("The cost is $3.14. Open https://example.com. Try again.")) == 3
     assert len(sentences("Use these items:\n- The first item\n- The second item")) == 3

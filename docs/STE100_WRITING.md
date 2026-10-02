@@ -29,6 +29,7 @@ Use complete words rather than removing articles to shorten a sentence.
 
 The standard permits 20 words in a procedural sentence and 25 in a descriptive sentence.
 Apply its word-count rules to identifiers, numbers, units, parentheses, proper names, and displayed labels.
+Text in parentheses counts as one word in the outer sentence. Check its contents as a separate sentence too (Rule 8.5).
 The project checker uses a conservative count for supported forms.
 It cannot identify every proper name or determine the grammatical role of a word.
 Unclassified strings use the stricter limit until their type is recorded in `docs/english_message_types.json`.
@@ -77,7 +78,8 @@ Validate the result before displaying or storing the explanation.
 Use fixed fallbacks when validation fails. Retain the source results and known token usage.
 Do not rewrite observed agent text, send it to an extra service, or retry generation just to satisfy a style check.
 
-The first integrations are weekly insights and Activity turn explanations. Other generated paths remain pending until separately integrated and verified.
+Current integrations cover weekly insights, Activity explanations, alerts, Advisor, charts, and evaluation reasons.
+Other generated paths remain pending until separately integrated and verified.
 The fallback and its result count require review just like any other message.
 
 ## Claims and release

@@ -110,6 +110,32 @@ def sentences(text: str) -> list[str]:
     return [s.strip() for s in re.split(r"[.!?]+(?:\s+|$)|\x1e", text) if s.strip()]
 
 
+def _parenthetical_parts(text: str) -> tuple[str, list[str]]:
+    """Rule 8.5: one word in the outer sentence, separate text to check.
+
+    Keep unmatched parentheses in the outer text. Nested notes are checked
+    individually while each complete outer group counts as one word.
+    """
+    stack = []
+    spans = []
+    notes = []
+    for index, char in enumerate(text):
+        if char == "(":
+            stack.append(index)
+        elif char == ")" and stack:
+            start = stack.pop()
+            notes.append(text[start + 1:index])
+            if not stack:
+                spans.append((start, index + 1))
+    parts = []
+    end = 0
+    for start, stop in spans:
+        parts.extend((text[end:start], " CMVALUE "))
+        end = stop
+    parts.append(text[end:])
+    return "".join(parts), notes
+
+
 def word_count(text: str) -> int:
     """Conservative STE-style count for the supported forms.
 
@@ -119,7 +145,7 @@ def word_count(text: str) -> int:
     This function does not identify arbitrary noun phrases or word meanings.
     """
     text = _protect(text)
-    text = re.sub(r"\([^()]*\)", " CMVALUE ", text)
+    text, _ = _parenthetical_parts(text)
     text = re.sub(r'"[^"\n]+"|“[^”\n]+”', " CMVALUE ", text)
     text = _UNITS.sub("CMVALUE", text)
     for name in sorted(terminology()["proper_names"], key=len, reverse=True):
@@ -145,10 +171,15 @@ def check_text(text: str, kind: str = "description") -> list[Finding]:
         findings.append(Finding("CM-DASH", "Use a period, comma, or colon instead of a dash."))
     limit = 25 if kind == "description" else 20
     rule = "STE-6.3" if kind == "description" else "STE-5.1"
-    for sentence in sentences(text):
-        count = word_count(sentence)
-        if count > limit:
-            findings.append(Finding(rule, f"Use at most {limit} words; this sentence has {count}."))
+    outer, notes = _parenthetical_parts(protected)
+    for part in [outer] + notes:
+        # Remove nested notes before splitting on punctuation. Their complete
+        # contents are checked through the notes list, not lost or split up.
+        part, _ = _parenthetical_parts(part)
+        for sentence in sentences(part):
+            count = word_count(sentence)
+            if count > limit:
+                findings.append(Finding(rule, f"Use at most {limit} words; this sentence has {count}."))
     for phrase, replacement in terminology()["preferred_words"].items():
         if re.search(r"\b" + re.escape(phrase) + r"\b", protected, flags=re.I):
             findings.append(Finding("CM-TERM", f"Replace {phrase!r}: {replacement}."))
@@ -168,6 +199,9 @@ def check_generated_text(
     if isinstance(text, str):
         if "`" in text or re.search(r"<[!/A-Za-z][^>]*>", text):
             findings.append(Finding("CM-FORMAT", "Return plain text without markup or code blocks."))
+        # This is the surface's prose-length contract. Parenthetical labels
+        # such as "Cost (USD)" do not consume another sentence here; their
+        # independent word limit was already checked by check_text.
         if max_sentences is not None and len(sentences(text)) > max_sentences:
             findings.append(Finding("CM-SUMMARY", f"Use at most {max_sentences} sentences."))
     return findings

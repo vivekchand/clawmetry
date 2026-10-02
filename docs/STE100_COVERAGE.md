@@ -57,12 +57,12 @@ No production release or whole-product compliance claim is recorded here.
 
 Base revision: `19cb235ae5e8a14e44f5efe871d79ff9c0dc530f`.
 
-- The three new test modules pass: 57 tests.
+- The five language and generation-boundary test modules pass: 105 tests. The optional real DeepEval import test is skipped.
 - Restoring the base insight implementation makes all 12 generated-prose rejection tests fail. Restoring this change makes them pass.
-- The corpus check covers 2,670 extracted messages in 44 sources. Mechanical findings decreased from 109 to zero.
+- The corpus check covers 2,683 extracted messages in 44 sources. Mechanical findings decreased from 109 to zero.
 - The inventory lists 461 source candidates awaiting extraction or review. These are not counted as checked messages.
 - Wrapped sentences cannot bypass the sentence limit. CSS that was incorrectly catalogued as prose is now a code literal.
-- All template translation keys exist in the English catalog. The language suites contain 57 tests; the translation suites contain 119 tests.
+- All template translation keys exist in the English catalog. The combined catalog, translation, hosted Security, and guard-inventory run passes 154 tests after integrating main through `fa78c84f5c`.
 - The revised setup template renders with no mechanical findings. Its text describes the actual control boundary.
 - The built wheel contains byte-identical copies of all 61 changed runtime and asset files.
 - Python 3.9 syntax, JavaScript syntax, and CI test-file coverage pass. Nine implemented STE criteria have explicit test declarations in the Factory manifest. The policy, editorial, and full-rollout criteria remain pending.
@@ -71,9 +71,12 @@ Base revision: `19cb235ae5e8a14e44f5efe871d79ff9c0dc530f`.
 - The six insight outcome-template tests pass against temporary DuckDB stores.
 - Existing JavaScript tests pass: 232 assertions. The pre-existing Show/Hide handler quoting defect is corrected with the shared attribute-string encoder.
 - Browser security policy rejected the local file preview. CI run `36990448237` captured 74 desktop and mobile views, all with HTTP 200. Desktop Security, Harness, and Quality and mobile Harness were inspected. The changed help text fits; unmigrated dynamic copy remains visible. Onboarding and hosted verification remain pending.
-- The combined language, generated-boundary, insight, classic-judge, and DeepEval test run passes 141 tests. The optional real DeepEval import test is skipped; the live paid judge test is deselected. Model calls and notification delivery are mocked.
+- The combined language, generated-boundary, insight, classic-judge, and DeepEval test run passes 144 tests. The optional real DeepEval import test is skipped; the live paid judge test is deselected. Model calls and notification delivery are mocked.
 - Existing brief and Dives telemetry tests pass: 42 tests. Existing chart and Advisor auth suites pass 201 tests; one Self-Evolve entitlement assertion fails with HTTP 402 on both the base and changed Advisor implementation.
-- The expanded wheel contains byte-identical copies of all 68 changed runtime and asset files. Fourteen implemented STE criteria now have test declarations.
+- The rebuilt wheel contains byte-identical copies of all 68 changed runtime and asset files after the main integration and parenthetical checks. Fourteen implemented STE criteria now have test declarations.
 - CI caught the missing local dashboard address in Security help. The address is restored, and all 35 hosted Security and guard-inventory checks pass locally.
+
+- Rule 8.5 is checked inside parentheses, including nested notes. The two regression tests fail against the previous implementation and pass after the correction. Parenthetical chart labels remain valid.
+- A partial source audit found 775 literal JavaScript translation-call candidates, including 133 missing catalog entries and 10 with mechanical findings. These are pending candidates, not an expansion of the checked corpus.
 
 These results establish the implemented subset and regression behavior. They do not establish whole-product compliance or a production release.
