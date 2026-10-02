@@ -51,6 +51,21 @@ COPY otel-requirements.txt /tmp/otel-requirements.txt
 RUN pip install --no-cache-dir --require-hashes -r /tmp/otel-requirements.txt \
     && rm -f /tmp/otel-requirements.txt
 
+# clawmetry's OWN runtime dependencies, from a hash-pinned set rather than the
+# open floors install_requires carries (`flask>=2.0,<4`, `duckdb>=0.10`,
+# `certifi>=2024.7.4`). Installed BEFORE the wheel for the same reason as the
+# layer above: pip then finds every name already satisfied and resolves none of
+# them itself, so the wheel install on the next line contributes exactly the
+# artifacts runtime-requirements.txt names.
+#
+# Without this, that one `pip install` was the only unpinned resolve left in a
+# file whose base image is pinned by digest and whose OTLP layer is hash-pinned
+# -- and it was the biggest of the three, at 15 packages. See that file's
+# header for why it is separate from the root image's docker-runtime.txt.
+COPY runtime-requirements.txt /tmp/runtime-requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r /tmp/runtime-requirements.txt \
+    && rm -f /tmp/runtime-requirements.txt
+
 # Exactly one clawmetry wheel, installed with the OTLP decoder extra: the
 # daemon-free intake path (runtimes exporting OTLP straight to this server)
 # answers 501 to http/protobuf without it.
