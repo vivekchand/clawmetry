@@ -106,6 +106,20 @@ def test_dynamic_browser_expressions_remain_pending(tmp_path):
          'key': 'example', 'reason': 'dynamic fallback'}]
 
 
+@pytest.mark.parametrize('expression', ['response.text', "''"])
+def test_unchecked_cli_help_cannot_pass_the_gate(tmp_path, capsys, expression):
+    root = fixture_root(tmp_path, "Data is available.")
+    assert main(["--root", str(root), "--bootstrap-baseline"]) == 0
+    source = root / 'clawmetry/cli.py'
+    source.write_text("parser.add_argument('--example', help=" + expression + ")")
+    assert main(["--root", str(root)]) == 1
+    assert 'CM-EXTRACT' in capsys.readouterr().out
+    result = inventory(root, collect(root), {})
+    assert len(result['cli_help_pending']) == 1
+    assert result['cli_help_pending'][0]['path'] == 'clawmetry/cli.py'
+    assert not any(m.source == 'clawmetry/cli.py' for m in collect(root))
+
+
 def test_duplicate_occurrences_are_counted():
     message = Message("page.html", "visible", 1, "It isn't active.")
     once, _ = violations([message])

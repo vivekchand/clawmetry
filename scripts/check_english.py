@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from clawmetry.english import EXPLANATION_MESSAGES, INSIGHT_MESSAGES, TURN_MESSAGES, check_text  # noqa: E402
 from scripts.english_js import translations  # noqa: E402
+from scripts.english_python import argparse_help  # noqa: E402
 
 BASELINE = "docs/english_baseline.json"
 CATALOG = "clawmetry/static/locales/en.json"
@@ -142,6 +143,26 @@ def browser_messages(root, catalog, types):
     return messages, pending, errors
 
 
+def cli_messages(root):
+    """Central argparse prose only. Interactive and result text stay pending."""
+    path = root / "clawmetry/cli.py"
+    if not path.exists():
+        return [], []
+    source = path.relative_to(root).as_posix()
+    try:
+        fields = argparse_help(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ValueError(f"{source}: cannot extract CLI help: {exc}") from exc
+    messages, pending = [], []
+    for field in fields:
+        if field.pending:
+            pending.append({"path": source, "line": field.line, "key": field.key,
+                            "reason": field.pending})
+        else:
+            messages.append(Message(source, field.key, field.line, field.text, "instruction"))
+    return messages, pending
+
+
 def collect(root=ROOT):
     types = _load_object(root / KINDS) if (root / KINDS).exists() else {}
     catalog = _load_object(root / CATALOG)
@@ -161,6 +182,7 @@ def collect(root=ROOT):
     if errors:
         raise ValueError("\n".join(errors))
     messages.extend(browser)
+    messages.extend(cli_messages(root)[0])
     for path in sorted((root / "clawmetry/templates").rglob("*.html")):
         parser = VisibleText(path.relative_to(root).as_posix())
         text = path.read_text(encoding="utf-8")
@@ -229,10 +251,12 @@ def inventory(root, messages, counts):
             root, _load_object(root / CATALOG),
             _load_object(root / KINDS) if (root / KINDS).exists() else {},
         )[1],
+        "cli_help_pending": cli_messages(root)[1],
         "external_repositories": {"clawmetry-pro": "adapter and paid feature explanations",
                                   "clawmetry-cloud": "hosted UI, errors, email, reports",
                                   "clawmetry-landing": "public technical explanations and help"},
-        "limits": ["Only literal translation fallbacks are checked in JavaScript. Other browser rendering and Python source remain pending.",
+        "limits": ["Only literal translation fallbacks are checked in JavaScript. Other browser rendering remains pending.",
+                   "Only central argparse prose is checked in Python. Interactive prompts, result messages, other parsers, and logs remain pending.",
                    "Template expressions and inserted values require rendered-message review.",
                    "Source evidence and non-English translations require separate treatment.",
                    "The full dictionary, meaning, and parts of speech require editorial review."],
@@ -262,6 +286,11 @@ def main(argv=None):
         if args.inventory:
             print(json.dumps(inventory(args.root, messages, actual), indent=2))
             return 0
+        pending_help = cli_messages(args.root)[1]
+        if pending_help:
+            for field in pending_help:
+                print(f"{field['path']}:{field['line']}: CM-EXTRACT: {field['reason']} [{field['key']}]")
+            raise ValueError("Central CLI help must use non-empty literal text or argparse.SUPPRESS.")
         path = args.root / BASELINE
         if args.bootstrap_baseline and path.exists():
             raise ValueError("Baseline already exists. Bootstrap cannot replace it.")

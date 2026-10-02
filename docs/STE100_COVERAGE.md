@@ -21,7 +21,8 @@ The baseline is empty for the currently extracted corpus. This does not close th
 | Overview, alerts, and setup | Selected messages simplified | Complete dynamic-message and visual review |
 | Browser JavaScript | 980 literal translation fallbacks checked; literal keys and catalog text must match | 48 calls with dynamic or missing literal arguments; other rendering and completed messages remain pending |
 | TypeScript frontend | Source files discovered in the inventory | Screen text, translation fallbacks, and rendered expressions require extraction and review |
-| CLI, API errors, and desktop | Files discovered in the inventory | Extract owned explanations and migrate by feature |
+| Central CLI parser help | 182 literal argparse prose values checked; rendered parser help tested | Full terminology review; other command parsers, prompts, and result messages remain pending |
+| API errors and desktop | Files discovered in the inventory | Extract owned explanations and migrate by feature |
 | English documentation | Files discovered in the inventory | Editorial migration and documentation lint integration |
 | Pro explanations | Separate repository | Inventory, migration, and verification |
 | Cloud explanations and email | Separate repository | Inventory, migration, and hosted verification |
@@ -94,3 +95,15 @@ Base revision: `19cb235ae5e8a14e44f5efe871d79ff9c0dc530f`.
 - Two inventory regressions fail before TypeScript discovery is added. They pass afterward without adding those source files to the checked-message count.
 
 These results establish the implemented subset and regression behavior. They do not establish whole-product compliance or a production release.
+
+## CLI follow-up verification on 2026-10-02
+
+- The corpus contains 3,969 extracted messages, including 182 central CLI help values. It has zero mechanical findings.
+- The CLI audit found 35 mechanical findings in 30 help values. The migration revises 32 values, including the local setup explanations.
+- Nonliteral or empty central help fields fail the language gate and remain visible in the inventory. Hidden argparse fields are excluded explicitly.
+- The real rendered-help guard fails against the previous CLI source. It passes after restoring the revised help.
+- Comparing the source AST with prose fields removed proves that parser options, defaults, choices, destinations, and executable behavior are unchanged.
+- The combined CLI, extraction, inventory, license-file, update, local-connection, setup, bundle, and integrity checks pass: 120 tests.
+- One existing setup test attempted to use the developer's dashboard log. It now uses a temporary log path. The tested startup implementation is unchanged.
+- CI explicitly runs both new test modules. The file-coverage baseline lists 314 files and retains the limit of 909 unlisted files.
+- Interactive prompts, result messages, other command parsers, editorial review, and release verification remain pending.

@@ -8510,8 +8510,8 @@ def main() -> None:
     parser.add_argument(
         "--sample",
         action="store_true",
-        help="Open the dashboard on three synthetic sample sessions instead "
-             "of your own data (a separate store; your data is untouched)",
+        help="Open the dashboard with three synthetic sample sessions. "
+             "ClawMetry stores these sessions separately from your data.",
     )
     sub = parser.add_subparsers(dest="cmd")
 
@@ -8531,7 +8531,7 @@ def main() -> None:
     )
     p_onboard.add_argument(
         "--local", "--no-cloud", action="store_true", dest="local",
-        help="Local only: no cloud account, nothing leaves this machine",
+        help="Use the local dashboard without creating a cloud account",
     )
     p_onboard.add_argument(
         "--cloud", action="store_true", dest="cloud",
@@ -8570,15 +8570,14 @@ def main() -> None:
         "--start-sync-now",
         action="store_true",
         dest="start_sync_now",
-        help="Skip the ownership OTP and start syncing immediately "
-        "(the command copied from the dashboard uses this; "
-        "sync-on-connect is otherwise already the default)",
+        help="Skip the ownership verification code. Start cloud sync immediately. Cloud sync "
+             "starts by default unless you defer it.",
     )
     p_connect.add_argument(
         "--defer-sync",
         action="store_true",
         dest="defer_sync",
-        help="Connect but leave sync paused; start it later with `clawmetry sync`",
+        help="Connect with cloud sync paused. To start it later, run `clawmetry sync`.",
     )
     p_connect.add_argument(
         "--foreground", action="store_true", help="Run daemon in foreground"
@@ -8598,14 +8597,12 @@ def main() -> None:
         "--keep-local",
         action="store_true",
         dest="keep_local",
-        help="Sign in for the account + trial license but keep this install "
-        "local-only: the nocloud marker stays, no snapshots ever leave "
-        "this machine (the desktop app's Self-Hosted choice uses this)",
+        help="Sign in for the account and trial license. Keep cloud sync disabled on this machine.",
     )
 
     # setup — alias for onboard (new user-facing name)
     p_setup = sub.add_parser(
-        "setup", help="Setup wizard — connect to ClawMetry Cloud"
+        "setup", help="Set up ClawMetry on this machine"
     )
     p_setup.add_argument("--key", metavar="cm_xxx", help="API key (skip prompt)")
     p_setup.add_argument(
@@ -8619,7 +8616,7 @@ def main() -> None:
     )
     p_setup.add_argument(
         "--local", "--no-cloud", action="store_true", dest="local",
-        help="Local only: no cloud account, nothing leaves this machine",
+        help="Use the local dashboard without creating a cloud account",
     )
     p_setup.add_argument(
         "--cloud", action="store_true", dest="cloud",
@@ -8647,24 +8644,25 @@ def main() -> None:
     )
     p_sync.add_argument(
         "--restart", action="store_true",
-        help="Restart the running daemon (bounces launchd/systemd; safe, no SIGKILL)",
+        help="Restart the running sync daemon",
     )
 
     # status
     p_status = sub.add_parser("status", help="Show local + cloud sync status")
     p_status.add_argument("--show-key", action="store_true", help="Reveal secret key")
-    p_status.add_argument("--live", action="store_true", help="Live one-line status bar (sessions · tokens · cost · model · tok/s); Ctrl-C to exit")
+    p_status.add_argument(
+        "--live", action="store_true",
+        help="Show a live status bar with sessions, tokens, cost, model, and tokens per second. "
+             "To exit, press Ctrl-C.",
+    )
     p_status.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
         help=(
-            "Emit the status snapshot as JSON (jq-friendly) instead of the "
-            "human table. Matches the sibling flag on `tier --json` / "
-            "`license --json` / `runtimes --json` / `features --json` / "
-            "`channels --json` / `diagnose --json` / `verify-integrity --json` "
-            "so wrappers can parse cloud-sync / daemon / runtime state without "
-            "screen-scraping. Ignored when combined with --live."
+            "Print the status snapshot as JSON for use in scripts. "
+            "The result contains cloud sync, daemon, and runtime state. "
+            "The `--live` option takes precedence over this option."
         ),
     )
 
@@ -8816,23 +8814,23 @@ def main() -> None:
         action="store_true",
         dest="regression",
         help=(
-            "Replay last week's failed sessions against the current "
-            "config (manual cost-guarded; see --window / --limit)"
+            "Replay failed sessions against the current configuration. This manual action uses "
+            "API tokens. Use `--window` and `--limit` to control the replay scope."
         ),
     )
     p_eval.add_argument(
         "--window",
         metavar="DURATION",
         default="7d",
-        help="Lookback window for --regression (e.g. 7d, 14d; default 7d)",
+        help="Time window for `--regression`, such as 7d or 14d (default: 7d)",
     )
     p_eval.add_argument(
         "--limit",
         type=int,
         default=None,
         help=(
-            "Hard ceiling on replays per --regression invocation "
-            "(default: CLAWMETRY_EVALS_REGRESSION_MAX or 10)"
+            "Maximum number of replays for each `--regression` call (default: "
+            "CLAWMETRY_EVALS_REGRESSION_MAX or 10)"
         ),
     )
 
@@ -8842,12 +8840,10 @@ def main() -> None:
         "--unattended",
         action="store_true",
         help=(
-            "Apply the daemon's unattended-update policy instead of blindly "
-            "upgrading: honor the CLAWMETRY_AUTO_UPDATE kill switch (including "
-            "implicit CI disable) and the CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS "
-            "stability window, installing the newest aged-in release (pinned) "
-            "rather than the absolute latest. Used by the desktop shell's 6h "
-            "background upgrade."
+            "Apply the daemon's automatic update policy. Respect `CLAWMETRY_AUTO_UPDATE`, "
+            "automatic CI disabling, and `CLAWMETRY_AUTOUPDATE_MIN_AGE_HOURS`. Install the newest "
+            "release that satisfies these limits. The desktop app uses this policy for its "
+            "six-hour update check."
         ),
     )
 
@@ -8877,11 +8873,9 @@ def main() -> None:
     p_key_create.add_argument(
         "--origin", action="append", default=[], metavar="URL",
         help=(
-            "A site allowed to call this API from a browser, e.g. "
-            "https://my-ui.vercel.app. Repeatable, and required unless you "
-            "pass --origin none for a key used outside a browser. There is "
-            "no wildcard: any page in any tab can already reach localhost, "
-            "and the origin allowlist is what stops it reading the reply."
+            "Allow a browser site to read this API, for example https://my-ui.vercel.app. Repeat "
+            "this option for each site. For clients outside a browser, use `--origin none`. "
+            "Wildcard origins are not supported."
         ),
     )
     p_key_create.add_argument(
@@ -8923,9 +8917,9 @@ def main() -> None:
 
     p_mcp = sub.add_parser(
         "mcp",
-        help="MCP server: `mcp` serves on stdio; `mcp install [--runtime <id>|all] "
-             "[--dry-run] [--write-guidance]` registers it with each runtime; "
-             "`mcp uninstall`; `mcp status`",
+        help="Start the MCP server with `mcp` over stdio. Register it with `mcp install [--runtime "
+             "<id>|all] [--dry-run] [--write-guidance]`. Remove registrations with `mcp "
+             "uninstall`. Show status with `mcp status`.",
     )
     p_mcp.add_argument("mcp_args", nargs="*")
 
@@ -8942,15 +8936,15 @@ def main() -> None:
     p_uninstall.add_argument(
         "--unattended",
         action="store_true",
-        help="Non-interactive, minimal output, always exit 0 even on partial "
-        "failures. Implies --yes. This is what the macOS app-vanished watchdog uses "
-        "when it detects that /Applications/ClawMetry.app has been dragged to trash.",
+        help="Use minimal output without prompts. Exit with code 0 even if some removal steps "
+             "fail. This option implies `--yes`. The macOS watchdog uses it after the app is moved "
+             "to trash.",
     )
     p_uninstall.add_argument(
         "--keep-data",
         action="store_true",
-        help="Preserve the DuckDB local store and history DB. Removes runtime, "
-        "config, and daemons; keeps event data on disk in case you reinstall.",
+        help="Keep the DuckDB and history databases. Remove the runtime, configuration, and "
+             "daemons. Keep event data on disk for a later installation.",
     )
     p_uninstall.add_argument(
         "--dry-run",
@@ -8997,7 +8991,7 @@ def main() -> None:
         "key",
         nargs="?",
         default=None,
-        help="License key (CLAW1.…) — omit when using --file",
+        help="License key (CLAW1.…). Omit it when using `--file`.",
     )
     p_activate.add_argument(
         "--file",
@@ -9044,11 +9038,9 @@ def main() -> None:
         default=None,
         metavar="PATH",
         help=(
-            "For 'set': read the key from PATH instead of typing it. The key "
-            "is never accepted as a command-line argument -- that would put "
-            "an organisation's secret in shell history and in every `ps` "
-            "listing. Without --file the key is read from stdin, or prompted "
-            "for without echo."
+            "For 'set', read the key from PATH. The key is not accepted as a command-line "
+            "argument. This keeps it out of shell history and process listings. Without `--file`, "
+            "read from stdin or use a prompt that hides the key."
         ),
     )
     p_team_key.add_argument(
@@ -9090,7 +9082,7 @@ def main() -> None:
         "license_key",
         nargs="?",
         default=None,
-        help="License key (CLAW1.…) — required for 'activate' / 'verify' unless --file is used",
+        help="License key (CLAW1.…). Required for 'activate' or 'verify' unless `--file` is used.",
     )
     p_license.add_argument(
         "--file",
@@ -9195,10 +9187,10 @@ def main() -> None:
         metavar="N",
         default=None,
         help=(
-            "Print the lock-reason payload for N concurrent channels "
-            "(same shape as GET /api/entitlement/lock-reason?channels=N). "
-            "The channels axis is capacity-scoped -- every adapter itself "
-            "is free -- so N is a count, not an adapter id."
+            "Print the lock reason for N concurrent channels. "
+            "The result matches `GET /api/entitlement/lock-reason?channels=N`. "
+            "Each channel adapter is free. The limit applies to the channel count. "
+            "N is a count, not an adapter identifier."
         ),
     )
 
@@ -9222,9 +9214,9 @@ def main() -> None:
         metavar="N",
         default=None,
         help=(
-            "Print the lock-reason payload for N registered nodes "
-            "(same shape as GET /api/entitlement/lock-reason?nodes=N). "
-            "The nodes axis is capacity-scoped -- N is a count, not an id."
+            "Print the lock reason for N registered nodes. "
+            "The result matches `GET /api/entitlement/lock-reason?nodes=N`. "
+            "N is a node count, not an identifier."
         ),
     )
 
@@ -9266,8 +9258,8 @@ def main() -> None:
     maint_sub = p_maint.add_subparsers(dest="maintenance_cmd")
     p_rescrub = maint_sub.add_parser(
         "rescrub-spans",
-        help=("Scrub spans stored before span redaction existed. A dry run "
-              "that only counts, unless --apply is given"),
+        help=("Check spans stored before span redaction was available. By default, only count the "
+              "spans that would change. Use `--apply` to change them."),
     )
     p_rescrub.add_argument(
         "--apply", action="store_true",
@@ -9319,9 +9311,8 @@ def main() -> None:
     p_bundle.add_argument(
         "--tier", dest="perspective", metavar="TIER", default=None,
         help=(
-            "Resolve from a hypothetical perspective tier (delegates to "
-            "min_tier_for_all_at / affordable_tiers_at; the perspective is "
-            "echoed on the payload but does not shape the answer)"
+            "Report the selected tier as the perspective. This value does not change the required "
+            "tier or the available tiers."
         ),
     )
     p_bundle.add_argument(
@@ -9429,9 +9420,8 @@ def main() -> None:
         action="store_true",
         dest="as_json",
         help=(
-            "Emit the verify_integrity result as JSON (mirrors the store's "
-            "return shape plus synthetic 'store_open_failed' / 'daemon_too_old'"
-            " statuses; exit codes unchanged)"
+            "Print the integrity result as JSON. Include `store_open_failed` or `daemon_too_old` "
+            "when applicable. The exit codes stay the same."
         ),
     )
 
@@ -9475,8 +9465,7 @@ def main() -> None:
     p_compliance = sub.add_parser(
         "compliance",
         help=(
-            "Compliance Pack — generate an auditor-ready evidence bundle "
-            "from the running dashboard (Pro)"
+            "Generate a compliance evidence bundle from the running dashboard (Pro)"
         ),
     )
     comp_sub = p_compliance.add_subparsers(dest="compliance_cmd")
@@ -9489,21 +9478,21 @@ def main() -> None:
         dest="framework",
         default="nist-ai-rmf",
         metavar="ID",
-        help="Control map to evaluate (default: nist-ai-rmf; also: soc2-cc)",
+        help="Control map to evaluate (default: nist-ai-rmf, also available: soc2-cc)",
     )
     p_comp_bundle.add_argument(
         "--from",
         dest="date_from",
         default=None,
         metavar="DATE",
-        help="Start of reporting period (ISO date; default: 30 days ago)",
+        help="Start of the reporting period (ISO date, default: 30 days ago)",
     )
     p_comp_bundle.add_argument(
         "--to",
         dest="date_to",
         default=None,
         metavar="DATE",
-        help="End of reporting period (ISO date; default: now)",
+        help="End of the reporting period (ISO date, default: now)",
     )
     p_comp_bundle.add_argument(
         "--out",
@@ -9535,9 +9524,9 @@ def main() -> None:
     # `instrument` is likewise intercepted by the fast path (WO-57).
     p_instr = sub.add_parser(
         "instrument",
-        help="Turn on a runtime's own OpenTelemetry export and point it at "
-             "this ClawMetry: instrument <runtime> [--project] [--content] "
-             "[--uninstall | --status]  (--help lists runtimes)")
+        help="Enable OpenTelemetry export from a runtime to ClawMetry. Use `instrument <runtime> "
+             "[--project] [--content] [--uninstall | --status]`. Use `instrument --help` to list "
+             "runtimes.")
     p_instr.add_argument("instrument_args", nargs="*")
 
     # `hook` (singular) is likewise intercepted by its fast path in main();
@@ -9546,8 +9535,8 @@ def main() -> None:
     # into Claude Code's settings.json (clawmetry/claude_code_gate.py).
     p_hook = sub.add_parser(
         "hook",
-        help="Runtime pre-tool hook client (auto-installed): "
-             "hook claude-code --base <dashboard url>")
+        help="Runtime pre-tool hook client, installed automatically. Usage: `hook claude-code "
+             "--base <dashboard url>`.")
     p_hook.add_argument("hook_cmd", nargs="*")
 
     _subcmds = (

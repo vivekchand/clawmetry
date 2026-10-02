@@ -8,6 +8,7 @@
 - Alert narration, Advisor answers, chart explanations, and evaluation reasons use the same policy. Validation preserves queries, scores, verdicts, and source evidence. An unavailable brief summary retains its table without inventing a cause.
 - Selected dashboard explanations now use shorter sentences and clearer missing-data labels. Source transcripts remain unchanged.
 - CI also checks literal browser translation fallbacks against the English catalog. Connection and integrity messages retain uncertainty. Renderer tests cover catalog availability, event counts, channel names, and cost figures. Other dynamic messages and editorial review remain pending.
+- Central command-line help now uses the same checks. Shorter explanations retain option names, defaults, update conditions, and removal behavior. Interactive prompts and command results still require migration.
 
 ### Fixed: OpenClaw 2026.9.x sessions appear again
 

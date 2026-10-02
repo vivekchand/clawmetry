@@ -19,27 +19,28 @@ Language checks operate on owned text after generation and before display or sto
 
 ## Feature-Specific Components
 
-### Next delivery: command-line help
+### Command-line help
 
-The central parser in `clawmetry/cli.py` has 182 literal help values. A source audit found 30 values with mechanical findings.
-These are source candidates until the extraction and migration checks are implemented.
+The central parser in `clawmetry/cli.py` has 182 literal help values. The initial source audit found 35 mechanical findings in 30 values.
+The AST extractor and prose migration now check those values, with no remaining mechanical findings.
 This delivery applies the existing requirements to command discovery and option help. It does not yet close interactive prompts or command-result messages.
 
-Extend `#EnglishInventory` with an AST extractor in `scripts/english_python.py`.
+`#EnglishInventory` uses an AST extractor in `scripts/english_python.py`.
 It reads literal `help`, `description`, `epilog`, and `title` arguments from supported argparse calls without importing or executing the CLI.
 Adjacent Python string literals form one message. Dynamic expressions remain explicit pending entries.
+Central parser prose must be literal for the language gate to pass. The inventory still reports unsupported or empty fields for review.
 Findings retain the source file, line, parser receiver, option name, and field.
 Only prose fields are checked. Option spellings, defaults, choices, destinations, and program behavior are not rewritten.
 
-Migrate central parser help in `clawmetry/cli.py` after reviewing each finding in context.
-Keep command examples and option references explicit. Revise claims that exceed the behavior established by the code.
+Central parser help in `clawmetry/cli.py` is revised after reviewing each finding in context.
+Command examples and option references stay explicit. Local setup help no longer implies that all network activity is disabled.
 The CLI help checks use the 20-word instruction limit and the same empty debt baseline as the browser corpus.
 The inventory continues to list all other Python text as pending.
 
-Verification must exercise real argparse help without loading the dashboard or using a user's configuration.
-Check local setup, cloud connection, update policy, key-file input, and destructive command options together with the existing CLI tests.
-Compare the parsed source before and after migration with only prose fields removed. The remainder must be identical.
-Prove that the new language guard fails against the previous help text.
+Tests render real argparse help without loading the dashboard, store, or sync daemon.
+The regression checks cover local setup, cloud connection, update policy, key-file input, and destructive command options.
+Comparing the parsed source before and after migration, with only prose fields removed, gives identical results.
+The new rendered-help guard fails against the previous help text and passes after migration.
 No additional runtime dependency, network call, or model request is required.
 
 ```component

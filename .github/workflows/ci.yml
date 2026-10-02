@@ -263,7 +263,7 @@ jobs:
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
       - name: English policy regression tests
-        run: python3 -m pytest tests/test_english.py tests/test_english_inventory.py tests/test_english_js.py tests/test_english_browser_rendering.py tests/test_insights_english.py tests/test_generated_english.py tests/test_deepeval_bridge.py -q
+        run: python3 -m pytest tests/test_english.py tests/test_english_inventory.py tests/test_english_js.py tests/test_english_browser_rendering.py tests/test_english_python.py tests/test_english_cli.py tests/test_insights_english.py tests/test_generated_english.py tests/test_deepeval_bridge.py -q
 
       - name: English explanations must not add language debt
         env:
