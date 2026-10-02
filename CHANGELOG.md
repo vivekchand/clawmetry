@@ -5,7 +5,7 @@
 - **Why:** OpenClaw 2026.9.x stopped writing `agents/main/sessions/<id>.jsonl` and keeps live transcripts in SQLite (`agents/main/agent/openclaw-agent.sqlite`). The daemon only read the `.jsonl` files, so on a current OpenClaw no session, message, token or cost ever reached ClawMetry; #6173 shipped a warning, not a reader.
 - **What:** `clawmetry/openclaw_sqlite.py` reads that store read-only (including zstd-compressed events) and mirrors it into the JSONL layout the daemon already ingests (`<id>.jsonl`, `sessions.json`, context-only `<id>.trajectory.jsonl`) under `~/.clawmetry/openclaw-mirror/`. The session sync, session-row sync and the other sessions-dir readers in `clawmetry/sync.py` follow the mirror whenever the legacy directory has no live transcript; installs still writing `.jsonl` are untouched. The mirror is append-only even when OpenClaw rewrites a transcript, so cursors hold and nothing is re-sent. Adds `zstandard` for Python < 3.14 (3.14+ uses the stdlib decoder).
 - **Verified:** 7 regression tests on the real table shapes, plus an isolated daemon ingest of a live OpenClaw 2026.9.7 store on Windows: 3 sessions, 68 transcript events and 7 context events landed in DuckDB.
-- **Limits:** only the `main` agent's store is read, as before; nothing under `~/.openclaw` is ever written.
+- **Limits:** only the `main` agent's store is read, as before; nothing under `~/.openclaw` is ever written. Carries #6233.
 
 ### Added: local assessment privacy with scoped restoration
 
