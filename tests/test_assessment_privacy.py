@@ -272,7 +272,11 @@ def test_idle_ttl_actually_clears_map_and_close_forbids_reuse(sessions):
     session = sessions(map_ttl_seconds=0.04)
     out, _ = send(session, {"state": "alice@example.test"})
     assert session._values
-    time.sleep(0.12)
+    # Wait for the real background callback, not a scheduling assumption.
+    # A busy macOS CI runner can resume this test before the timer thread.
+    assert session._timer.interval == 0.04
+    session._timer.join(timeout=2.0)
+    assert not session._timer.is_alive(), "the expiry timer did not finish"
     assert session._values == {} and session._tokens == {} and session._masked is None
     assert session.restore(out["state"], scope="account_one", field="explanation") == out["state"]
     with pytest.raises(privacy.PrivacyError, match="session_expired"):

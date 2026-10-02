@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Release: checked English explanations
+
+- **Why:** Dashboard explanations, generated summaries, browser fallbacks, and CLI help need consistent wording that preserves the recorded facts.
+- **What:** Publish the writing policy, shared mechanical checker, glossary, and migrated explanations from #6248. Generated explanations retain their results and usage when a fixed fallback is needed.
+- **Verified:** The feature passed 149 focused English tests and the required CI gate, including 11,025 entitlement checks. The built wheel contains all 69 changed runtime and asset files. CI captured 74 desktop and mobile views.
+- **Limits:** This is an ASD-STE100-aligned mechanical subset. Full dictionary and grammar review, remaining product text, and live release verification remain pending.
+
 ### Added: checks for clear English explanations
 
 - English explanations now have a writing policy and project glossary based on ASD-STE100 Issue 9. The checker covers sentence length, contractions, punctuation, and selected terminology. It does not establish full STE compliance.
