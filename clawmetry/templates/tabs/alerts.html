@@ -17,7 +17,7 @@
         <span data-i18n="alerts.title">Alerts</span>
         <span class="pro-chip" data-i18n-title="alerts.pro_feature" title="Pro feature" data-i18n="alerts.pro">Pro</span>
       </h2>
-      <div class="alerts-sub">Alerts tell you what happened. Guard checks find evidence; approval requests ask you to decide.</div>
+      <div class="alerts-sub">Alerts tell you what happened. Guard checks find evidence. Approval requests ask you to make a decision.</div>
     </div>
     <button class="alerts-btn-primary" onclick="alertsHandleNewRule()" data-i18n="alerts.new_rule">+ New alert rule</button>
   </div>
@@ -36,7 +36,7 @@
        alert when all of the alerts are disabled?" (founder, 2026-08-15). These
        fire from hardcoded checks, not from the rules above. -->
   <h4 class="alerts-section-h" data-i18n="alerts.builtins_title">Always on</h4>
-  <div class="alerts-builtins-note" data-i18n="alerts.builtins_note">These run without any rules from you. They're what raised the red banners at the top of the dashboard. Each one delivers in-app, plus any channel you've connected in Notifications. Use the switch to mute one, or click a channel pill to change where it goes.</div>
+  <div class="alerts-builtins-note" data-i18n="alerts.builtins_note">These monitors run without custom rules. They produce the red banners at the top of the dashboard. Alerts appear here and in channels connected through Notifications. Use a switch to mute a monitor. Select a channel to change where its alerts go.</div>
   <div id="alerts-builtins-list" class="alerts-list">
     <div class="alerts-loading" data-i18n="alerts.loading_builtins">Loading monitors…</div>
   </div>
@@ -47,7 +47,7 @@
     <label>Find an alert <input id="guard-alert-search" type="search" placeholder="Search recent notifications" oninput="alertsFilterHistory()"></label>
     <label>Show <select id="guard-alert-state" onchange="alertsFilterHistory()"><option value="all">All notifications</option><option value="open">Not marked resolved</option><option value="resolved">Resolved</option></select></label>
   </div>
-  <p class="guard-scope-note">Recent notifications on this node. Matching repeats are grouped; detection settings live in Guard.</p>
+  <p class="guard-scope-note">Recent notifications on this node. Repeated notifications are grouped. Open Guard to change detection settings.</p>
   <div id="alerts-history-list" class="alerts-history">
     <div class="alerts-loading" data-i18n="alerts.loading_history">Loading history…</div>
   </div>
@@ -66,9 +66,7 @@
   <div class="alerts-modal-card" onclick="event.stopPropagation()">
     <div class="alerts-modal-icon">🔔</div>
     <h3 class="alerts-modal-title" id="alerts-paywall-title" data-i18n="app.sign_up_for_clawmetry_cloud">Sign up for ClawMetry Cloud</h3>
-    <p class="alerts-modal-body" id="alerts-paywall-body" data-i18n="app.alerts_need_the_cloud_to_deliver_slack_pagerduty_t">Alerts need the cloud to deliver Slack / PagerDuty / Telegram / Email
-      messages. Sign up — your data stays encrypted, Pro features include a
-      7-day free trial.</p>
+    <p class="alerts-modal-body" id="alerts-paywall-body" data-i18n="app.alerts_need_the_cloud_to_deliver_slack_pagerduty_t">Connect a delivery channel to receive alerts outside this dashboard. Your agent data stays encrypted. Pro includes a 7-day free trial.</p>
     <div class="alerts-modal-actions">
       <button class="alerts-btn-pro" id="alerts-paywall-cta" onclick="alertsCtaClick()" data-i18n="alerts.signup_for_cloud">Sign up for Cloud</button>
       <button class="alerts-btn-ghost" onclick="alertsClosePaywall()" data-i18n="alerts.maybe_later">Maybe later</button>
@@ -90,7 +88,7 @@
   <div class="alerts-modal-card" onclick="event.stopPropagation()">
     <div class="alerts-modal-icon">📬</div>
     <h3 class="alerts-modal-title" data-i18n="alerts.delivery_title">Where should this alert go?</h3>
-    <p class="alerts-modal-body" id="alerts-delivery-body" data-i18n="alerts.delivery_body">You haven't set up anywhere to send alerts yet. ClawMetry can show this one in the app, or deliver it to Slack, Telegram, or PagerDuty.</p>
+    <p class="alerts-modal-body" id="alerts-delivery-body" data-i18n="alerts.delivery_body">No delivery channel is configured. ClawMetry can show this one in the app, or deliver it to Slack, Telegram, or PagerDuty.</p>
     <div class="alerts-modal-actions">
       <button class="alerts-btn-pro" onclick="alertsDeliverySetUp()" data-i18n="alerts.delivery_setup">Set up a channel</button>
       <button class="alerts-btn-ghost" onclick="alertsDeliveryInAppOnly()" data-i18n="alerts.delivery_inapp">Show it in the app</button>

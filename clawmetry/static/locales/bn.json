@@ -247,7 +247,6 @@
   "app.maybe_later": "হয়তো পরে",
   "app.mcp_only": "শুধু MCP",
   "app.mcp_servers": "🧩 MCP সার্ভার",
-  "app.mem_file_hover_mem_file_active_background_var_bg_t": ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}",
   "app.memory": "💾 মেমরি",
   "app.memory_access_history_reads_from_the_local_event_s": "মেমরি অ্যাক্সেস ইতিহাস স্থানীয় ইভেন্ট স্টোর থেকে পড়ে, যা এখানে উপলব্ধ নয়।",
   "app.memory_files_are_stored_locally_on_the_agent_machi": "মেমরি ফাইলগুলো এজেন্ট মেশিনে স্থানীয়ভাবে সংরক্ষিত থাকে এবং ক্লাউডে সিঙ্ক করা হয় না।",

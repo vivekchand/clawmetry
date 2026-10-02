@@ -470,7 +470,7 @@
         if (names.length > 60) body += ' <span class="trail-muted">+' + (names.length - 60) + '</span>';
         if (!names.length) body = muted(T('trail.empty_slot', 'Empty'));
         if (versions.length > 1) {
-          note = T('trail.ctx_grew', 'The list changed during the session; this is everything it could use at some point.');
+          note = T('trail.ctx_grew', 'The tool list changed during the session. This view combines the tools available at different times.');
         }
       } else if (kind === 'runtime_meta') {
         // An object cannot be unioned honestly. Show the last version and
@@ -520,7 +520,7 @@
     if (!items.length) {
       var why = (d && d.reason) ? String(d.reason) : '';
       if (r.status === 404 || r.status === 0 || !d) {
-        html += muted(T('trail.context_not_captured', 'Not captured yet. ClawMetry does not record the instructions and tool list for this runtime yet, so this card shows only what the transcript reveals.'));
+        html += muted(T('trail.context_not_captured', 'ClawMetry does not yet record instructions or the tool list for this runtime. This card shows only information from the transcript.'));
       } else {
         html += muted(why || T('trail.context_empty_runtime', 'This runtime does not expose what the agent knew, so there is nothing to show here.', { runtime: runtimeLabel(rt) }));
       }

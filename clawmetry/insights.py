@@ -576,8 +576,10 @@ def _load_anthropic_key(cfg: dict) -> str | None:
 def _build_synthesis_prompt(title: str, hint: str, rows: list[dict]) -> str:
     """Single source of truth for the synthesis prompt — used by both the
     direct and relay paths so cloud-side output matches local-key output."""
+    from clawmetry.english import GENERATION_INSTRUCTIONS
     return (
-        f"You are summarising ONE insight for an engineer's weekly digest.\n\n"
+        f"Summarize one insight for a person who manages AI agents.\n"
+        f"{GENERATION_INSTRUCTIONS}\n\n"
         f"Insight title: {title}\n"
         f"Hint: {hint}\n\n"
         f"Raw rows (DuckDB result):\n{json.dumps(rows[:20], default=str)}\n\n"
@@ -612,10 +614,11 @@ def _synthesize_via_anthropic(
     with urllib.request.urlopen(req, timeout=SYNTHESIS_TIMEOUT_SECS) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     blocks = data.get("content") or []
-    text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict)).strip()
+    parts = [b.get("text", "") for b in blocks if isinstance(b, dict)] if isinstance(blocks, list) else []
+    text = "".join(parts).strip() if all(isinstance(p, str) for p in parts) else ""
     usage = data.get("usage") or {}
     tokens = int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
-    return text or f"{len(rows)} rows.", tokens
+    return text, tokens
 
 
 def _synthesize_via_relay(
@@ -648,9 +651,10 @@ def _synthesize_via_relay(
     )
     with urllib.request.urlopen(req, timeout=SYNTHESIS_TIMEOUT_SECS) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    text = (data.get("text") or "").strip()
+    raw_text = data.get("text")
+    text = raw_text.strip() if isinstance(raw_text, str) else ""
     tokens = int(data.get("tokens") or 0)
-    return text or f"{len(rows)} rows.", tokens
+    return text, tokens
 
 
 def _synthesize_narrative(
@@ -660,18 +664,31 @@ def _synthesize_narrative(
     rows: list[dict],
     mode: str = "direct",
 ) -> tuple[str, int]:
-    """Sonnet → ≤3-sentence narrative. Returns ``(narrative, tokens_used)``;
-    falls back to ``"<n> rows."`` on any error. ``mode`` selects between
-    the direct Anthropic call and the cloud relay (#1420 P0b)."""
+    """Generate and check prose on both paths, retaining known token usage.
+
+    The offline check covers mechanical language rules, not full STE
+    compliance or factual correctness. Result rows are never rewritten.
+    """
+    from clawmetry.english import check_generated_text, insight_fallback
     if not rows:
-        return "no data this week.", 0
+        return insight_fallback(0), 0
+    tokens = 0
     try:
         if mode == "relay":
-            return _synthesize_via_relay(secret, title, hint, rows)
-        return _synthesize_via_anthropic(secret, title, hint, rows)
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError) as exc:
-        log.warning("insights: synthesis failed for %r (mode=%s): %s", title, mode, exc)
-        return f"{len(rows)} rows (LLM synthesis unavailable).", 0
+            text, tokens = _synthesize_via_relay(secret, title, hint, rows)
+        else:
+            text, tokens = _synthesize_via_anthropic(secret, title, hint, rows)
+        findings = check_generated_text(text)
+        if findings:
+            log.warning("insights: summary language check failed (mode=%s, rules=%s)",
+                        mode, ",".join(sorted({f.rule for f in findings})))
+            return insight_fallback(len(rows)), tokens
+        return text, tokens
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError, TypeError, AttributeError) as exc:
+        # Never log rejected prose, result rows, credentials, or upstream
+        # response bodies. Keep the failure class for diagnosis.
+        log.warning("insights: synthesis unavailable (mode=%s, error=%s)", mode, type(exc).__name__)
+        return insight_fallback(len(rows)), tokens
 
 
 def _estimate_cost(tokens_used: int) -> float:
@@ -727,11 +744,8 @@ class WeeklyDigestGenerator:
                 # zero-friction option (pair the node) instead of the old
                 # "Set ANTHROPIC_API_KEY" copy that turned ~95% of first-touch
                 # users away per #1420 P0b.
-                narrative = (
-                    f"{len(rows)} rows. (Connect this node to Cloud for free "
-                    f"AI-written summaries — no Anthropic key required.)"
-                    if rows else "no data this week."
-                )
+                from clawmetry.english import insight_fallback
+                narrative = insight_fallback(len(rows), connect=True)
             digest.insights.append(InsightResult(
                 key=key, title=title, narrative=narrative, rows=rows,
             ))
@@ -750,12 +764,12 @@ class WeeklyDigestGenerator:
                          else "cost not recorded")
             digest.summary = (
                 f"{r.get('events') or 0:,} events across "
-                f"{r.get('sessions') or 0} sessions; "
-                f"{cost_text}; "
+                f"{r.get('sessions') or 0} sessions. "
+                f"{cost_text.capitalize()}. "
                 f"{r.get('tokens') or 0:,} tokens."
             )
         else:
-            digest.summary = "Quiet week — no events recorded in the local store."
+            digest.summary = "The local data store has no recorded events for this week."
 
         digest.synthesized = bool(mode != "none" and secret)
         digest.cost_usd = _estimate_cost(digest.tokens_used)

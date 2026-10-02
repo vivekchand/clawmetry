@@ -575,7 +575,7 @@
             return;
           }
           statusEl.className = 'cm-hbo-status ok';
-          statusEl.textContent = 'License installed — reloading…';
+          statusEl.textContent = 'The license was installed. The page will reload.';
           return refreshAndMaybeUnblock(true);
         })
         .catch(function (err) {
@@ -1078,10 +1078,10 @@ function _cmAgentDownBannerCopy(orig) {
     var m = /(\d+)\s*minute/.exec(orig || '');
     if (m) {
       var dur = _cmHumanizeMinutes(parseInt(m[1], 10));
-      return t('alerts.feed_stopped', { duration: dur }, 'One of our data feeds from your agent stopped about ' + dur + ' ago. You’re still seeing live activity, but some charts may lag.');
+      return t('alerts.feed_stopped', { duration: dur }, 'One data feed from your agent stopped approximately ' + dur + ' ago. Live activity is still available. Some charts may be delayed.');
     }
   } catch (e) {}
-  return t('alerts.feed_stopped_unknown', null, 'One of our data feeds from your agent stopped. You’re still seeing live activity, but some charts may lag.');
+  return t('alerts.feed_stopped_unknown', null, 'One data feed from your agent stopped. Live activity is still available. Some charts may be delayed.');
 }
 
 // Where an alert sends you. Returns {label, go} or null when the alert
@@ -1559,8 +1559,8 @@ async function checkHeartbeatStatus() {
       var gapStr = gap >= 3600 ? Math.floor(gap/3600) + 'h ' + Math.floor((gap%3600)/60) + 'm' : Math.floor(gap/60) + ' minutes';
       var intervalMin = Math.floor(data.interval_seconds / 60);
       var msg = data.status === 'silent'
-        ? t('overview.hb_banner_silent', { gap: gapStr, interval: intervalMin }, 'Agent heartbeat SILENT for ' + gapStr + ' (expected every ' + intervalMin + 'm). Check if agent is running.')
-        : t('overview.hb_banner_delayed', { gap: gapStr, interval: intervalMin }, 'Heartbeat delayed: last seen ' + gapStr + ' ago (expected every ' + intervalMin + 'm)');
+        ? t('overview.hb_banner_silent', { gap: gapStr, interval: intervalMin }, 'No agent heartbeat for ' + gapStr + '. The expected interval is ' + intervalMin + ' minutes. Make sure that the agent is active.')
+        : t('overview.hb_banner_delayed', { gap: gapStr, interval: intervalMin }, 'The last heartbeat arrived ' + gapStr + ' ago. The expected interval is ' + intervalMin + ' minutes.');
       document.getElementById('heartbeat-banner-msg').textContent = msg;
       banner.style.background = data.status === 'silent' ? '#7f1d1d' : '#451a03';
       banner.style.color = data.status === 'silent' ? '#fca5a5' : '#fbbf24';
@@ -2429,7 +2429,7 @@ function _friendlyBytes(n) {
 // THREE states, and telling them apart is the whole point:
 //   waiting  -> one row per blocked agent, with its confidence
 //   quiet    -> "Nothing needs you right now" + how many are working
-//   unknown  -> "Can't tell right now" when the daemon has gone silent
+//   unknown  -> "Status is unavailable." when the daemon has gone silent
 //
 // The third is why this is not a one-liner. An empty list from a wedged
 // detector must never render as all-clear: a calm reassurance that turns out
@@ -2511,7 +2511,7 @@ function cmRenderNeedsYou(d) {
     box.innerHTML =
       '<div class="cm-needs-head">' +
         '<span class="cm-needs-title">' +
-          t('needs.unknown_title', null, "Can't tell right now") + '</span>' +
+          t('needs.unknown_title', null, "Status is unavailable.") + '</span>' +
         '<span class="cm-needs-sub">' + sub + '</span>' +
       '</div>';
     box.style.display = '';
@@ -2574,7 +2574,7 @@ function cmRenderNeedsYou(d) {
     var where = [it.project, it.git_branch].filter(Boolean).join(' · ');
     var confidence = hook
       ? t('needs.confident', null, 'Waiting for you')
-      : t('needs.inferred', null, "Looks like it's waiting");
+      : t('needs.inferred', null, "The agent appears to need your input.");
     return '' +
       '<button type="button" class="cm-needs-row" ' +
         'onclick="cmOpenNeedsSession(' + JSON.stringify(it.session_id || '').replace(/"/g, '&quot;') + ')" ' +
@@ -2850,7 +2850,7 @@ async function loadAutonomy() {
     if (d.score == null) {
       labelEl.textContent = t("app.just_getting_started", null, "Just getting started");
       labelEl.style.color = 'var(--text-muted)';
-      if (gapEl) gapEl.textContent = t("app.use_your_agent_a_bit", null, "Use your agent a bit and we\u2019ll show how independent it\u2019s becoming.");
+      if (gapEl) gapEl.textContent = t("app.use_your_agent_a_bit", null, "Use your agent to collect activity data. ClawMetry will show how often it needs your help.");
       if (badgeEl) { badgeEl.textContent = ''; badgeEl.style.background = ''; badgeEl.style.border = ''; }
       if (trendEl) trendEl.textContent = '';
       if (sampEl) sampEl.textContent = '';
@@ -2962,9 +2962,9 @@ async function loadHeartbeat() {
 
     var status = d.status || 'never';
     var labels = {
-      healthy:  { status: t('overview.hb_alive_and_well', null, 'Alive and well'), pulse: t('overview.hb_checking_in', null, 'checking in'), badge: t('overview.status_healthy', null, 'Healthy') },
+      healthy:  { status: t('overview.hb_alive_and_well', null, 'Heartbeat received'), pulse: t('overview.hb_checking_in', null, 'checking in'), badge: t('overview.status_healthy', null, 'Healthy') },
       drifting: { status: t('overview.hb_running_late', null, 'Running a bit late'), pulse: t('overview.hb_slow', null, 'slow'), badge: t('overview.hb_late', null, 'Late') },
-      missed:   { status: t('overview.hb_something_wrong', null, 'Something\u2019s wrong'), pulse: t('overview.hb_missed', null, 'missed'), badge: t('overview.hb_missed_badge', null, 'Missed') },
+      missed:   { status: t('overview.hb_something_wrong', null, 'Heartbeat problem'), pulse: t('overview.hb_missed', null, 'missed'), badge: t('overview.hb_missed_badge', null, 'Missed') },
       never:    { status: t('overview.hb_no_checkins_yet', null, 'No check-ins yet'), pulse: t('app.waiting', null, 'waiting...'), badge: t('overview.hb_waiting_badge', null, 'Waiting') }
     };
     var colors = { healthy: '#22c55e', drifting: '#f59e0b', missed: '#ef4444', never: '#6b7280' };
@@ -3181,7 +3181,7 @@ async function loadSelfConfig() {
       selfconfigOpenFile(_selfconfigCurrentFile, _selfconfigSelectedTs);
     }
   } catch(e) {
-    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.couldnt_load_right_now", null, "Couldn\u2019t load right now.") + '</span>';
+    inner.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.couldnt_load_right_now", null, "Could not load the data now. Try again.") + '</span>';
   }
 }
 
@@ -3261,7 +3261,7 @@ async function _selfconfigRenderTimeline(filename) {
       : fetch('/api/selfconfig/' + encodeURIComponent(filename)).then(function(r){return r.json();}));
     _selfconfigRevisions = d.revisions || [];
     if (!_selfconfigRevisions.length) {
-      list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 6px;">' + t("app.no_changes_yet", null, "No changes yet. When your agent updates this, it\u2019ll show up here.") + '</div>';
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 6px;">' + t("app.no_changes_yet", null, "No changes are recorded yet. Changes appear here when your agent updates this item.") + '</div>';
       return;
     }
     // Pre-fetch summaries for each adjacent pair in the background (non-blocking).
@@ -3280,7 +3280,7 @@ async function _selfconfigRenderTimeline(filename) {
     });
     _renderTimelineRows(filename);
   } catch(e) {
-    list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.couldnt_load", null, "Couldn\u2019t load.") + '</span>';
+    list.innerHTML = '<span style="color:var(--text-muted);font-size:12px;padding:6px;">' + t("app.couldnt_load", null, "Could not load the data. Try again.") + '</span>';
   }
 }
 
@@ -3403,7 +3403,7 @@ async function _selfconfigRenderReader(filename, ts) {
     }
     _selfconfigUpdateStatusBar(filename, ts, d);
   } catch(e) {
-    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.couldnt_load_this_version", null, "Couldn\u2019t load this version.") + '</div>';
+    if (bodyEl) bodyEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:0;">' + t("app.couldnt_load_this_version", null, "Could not load this version. Try again.") + '</div>';
   }
 }
 
@@ -3646,7 +3646,7 @@ async function loadSkills() {
       workshopCard;
 
     if (skills.length === 0) {
-      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.nothing_installed_yet_skills", null, "Nothing installed yet. Skills let your agent handle specific tasks \u2014 add some to get started.") + '</div>';
+      listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.nothing_installed_yet_skills", null, "No skills are installed yet. Skills help your agent perform specific tasks. Add a skill to start.") + '</div>';
       return;
     }
 
@@ -3696,7 +3696,7 @@ async function loadSkills() {
     html += '</tbody></table>';
     listEl.innerHTML = html;
   } catch (e) {
-    if (listEl) listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.couldnt_load_right_now", null, "Couldn\u2019t load right now.") + '</div>';
+    if (listEl) listEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:16px;">' + t("app.couldnt_load_right_now", null, "Could not load the data now. Try again.") + '</div>';
   }
 }
 
@@ -4327,7 +4327,7 @@ async function loadCohortSuggested() {
     host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
       + escapeHtmlSafe(window.CLOUD_MODE
           ? t('overview.compare_cloud_wait', null, 'Suggested comparisons arrive with the next snapshot from your node.')
-          : t('overview.compare_unreachable', null, 'Could not reach the local store.')) + '</div>';
+          : t('overview.compare_unreachable', null, 'ClawMetry cannot reach the local data store. Try again.')) + '</div>';
     return;
   }
   _cohortSuggested = data;
@@ -4335,8 +4335,8 @@ async function loadCohortSuggested() {
   if (!list.length) {
     host.innerHTML = '<div style="font-size:12px;color:var(--text-muted);">'
       + escapeHtmlSafe(data && data.store_available === false
-          ? t('overview.compare_unreachable', null, 'Could not reach the local store.')
-          : t('overview.compare_none', null, 'Nothing changed recently. Suggestions appear when a new model or runtime version shows up, or after a week of sessions.'))
+          ? t('overview.compare_unreachable', null, 'ClawMetry cannot reach the local data store. Try again.')
+          : t('overview.compare_none', null, 'No recent changes are available for comparison. Suggestions appear after a new model, a new runtime version, or a week of sessions.'))
       + '</div>';
     return;
   }
@@ -4403,7 +4403,7 @@ function renderCohortResult(res, title, why) {
     + '</div>';
   if (v.reason) html += '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">' + escapeHtmlSafe(v.reason) + '</div>';
   if (v.mixed) {
-    html += '<div style="font-size:11px;color:var(--warn, #eab308);margin-top:4px;">' + escapeHtmlSafe(t('overview.compare_mixed', null, 'Mixed: some numbers moved the other way.'))
+    html += '<div style="font-size:11px;color:var(--warn, #eab308);margin-top:4px;">' + escapeHtmlSafe(t('overview.compare_mixed', null, 'Mixed: some measurements improved and others became worse.'))
       + ' ' + escapeHtmlSafe((v.against || []).map(function (k) { return k.replace(/_/g, ' '); }).join(', ')) + '</div>';
   }
   var comp = res.comparability || {};
@@ -4490,7 +4490,7 @@ async function loadSimilarRuns(sessionId) {
     if (!resp.ok) throw new Error('http ' + resp.status);
     data = await resp.json();
   } catch (e) {
-    body.innerHTML = escapeHtmlSafe(t('overview.compare_unreachable', null, 'Could not reach the local store.'));
+    body.innerHTML = escapeHtmlSafe(t('overview.compare_unreachable', null, 'ClawMetry cannot reach the local data store. Try again.'));
     return;
   }
   var rows = (data && data.neighbours) || [];
@@ -5643,7 +5643,7 @@ async function loadQualityTab() {
     var pe = document.getElementById('q-patterns');
     var re = document.getElementById('q-runs');
     var msg = t('quality.store_unavailable', null,
-                'Nothing to show from here — this view reads your local run history.');
+                'This view needs your local session history. No history is available here.');
     if (pe) pe.innerHTML = '<li class="q-empty" style="grid-column:1/-1;">' + escHtml(msg) + '</li>';
     if (re) re.innerHTML = '<li class="q-empty">' + escHtml(msg) + '</li>';
     var st = document.getElementById('q-status-line');
@@ -5918,7 +5918,7 @@ async function qReview(btn, sessionId, status) {
     // Say what happened and leave the row usable, rather than a dead spinner.
     if (actions) actions.innerHTML =
       '<span class="q-spot-verdict wrong">' +
-      escHtml(t('quality.spot_save_failed', null, "Didn't save. Try again.")) +
+      escHtml(t('quality.spot_save_failed', null, "Could not save the change. Try again.")) +
       '</span>';
     return;
   }
@@ -6260,7 +6260,7 @@ function qOpenBuilder(bid, sid, story) {
   var name = _qGuessCheckName(story || '');
   el.innerHTML =
     '<p class="b-eyebrow">' + t('quality.builder_eyebrow', null, 'Watch for this pattern') + '</p>' +
-    '<p class="b-title">' + t('quality.builder_title', null, "Turn this rough run into a check we'll fail-fast next time.") + '</p>' +
+    '<p class="b-title">' + t('quality.builder_title', null, "Create a check for this session problem.") + '</p>' +
     '<div>' +
       '<label>' + t('quality.builder_when', null, 'Fail the run when…') + '</label>' +
       '<textarea id="' + bid + '-when">' + escHtml(pattern) + '</textarea>' +
@@ -6324,7 +6324,7 @@ async function qSaveCheck(bid, sid) {
     });
     var out = await r.json().catch(function() { return null; });
     var msg = (out && out.ok)
-      ? t('quality.check_saved', null, "Saved. We'll fail-fast this pattern next time.")
+      ? t('quality.check_saved', null, "The check was saved. Future checks can identify this pattern.")
       : (out && out.error) || t('quality.check_saved_deferred', null, "Saved locally. Live enforcement lands in the next release.");
     _qToast(msg);
   } catch (e) {
@@ -10419,7 +10419,7 @@ window.selfevolveRun = async function () {
   var status = document.getElementById('selfevolve-status');
   var origText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = t("app.analyzing", null, "Analyzing…"); btn.style.opacity = '0.6'; }
-  if (status) status.textContent = t("app.reviewing_recent_activity_this_takes_15_seconds", null, "Reviewing recent activity — this takes ~15 seconds…");
+  if (status) status.textContent = t("app.reviewing_recent_activity_this_takes_15_seconds", null, "Review of recent activity takes approximately 15 seconds.");
   try {
     var resp = await fetch('/api/selfevolve/analyze', { method: 'POST' });
     var d = await resp.json();
@@ -10496,7 +10496,7 @@ async function loadBrainPage(silent) {
       var _bhTry = _brainRangeRetries++;
       if (stEl) stEl.textContent = _bhTry < 12
         ? t('brain.window_fetching', null, 'Fetching this window from your node…')
-        : t('brain.window_fetching_busy', null, 'Your node is busy syncing — still fetching this window…');
+        : t('brain.window_fetching_busy', null, 'This machine is syncing data. The selected time range is not ready yet.');
       if (_bhTry < 36) {
         setTimeout(function() {
           if (_bhRange === _brainRange) loadBrainPage(true);
@@ -17308,7 +17308,7 @@ async function _loadMemoryAllFiles() {
   if (!document.getElementById('mem-ide-css')) {
     var cs = document.createElement('style');
     cs.id = 'mem-ide-css';
-    cs.textContent = t("app.mem_file_hover_mem_file_active_background_var_bg_t", null, ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}");
+    cs.textContent = ".mem-file:hover,.mem-file.active{background:var(--bg-tertiary,#1e293b)!important}";
     document.head.appendChild(cs);
   }
   // IDE layout: sidebar + content viewer
@@ -18141,7 +18141,7 @@ async function loadDiagnostics() {
   // URLs, which the browser logs as console errors on every System Health
   // refresh. Skip the call entirely and render a static "local-only" note.
   if (window.CLOUD_MODE) {
-    el.innerHTML = '<div style="color:var(--text-muted);">' + t("app.diagnostics_are_local_only_open_the_dashboard_on_t", null, "Diagnostics are local-only — open the dashboard on the host to inspect detected config.") + '</div>';
+    el.innerHTML = '<div style="color:var(--text-muted);">' + t("app.diagnostics_are_local_only_open_the_dashboard_on_t", null, "Diagnostics are available on the local dashboard. Open it on the agent machine to see the detected configuration.") + '</div>';
     return true;
   }
   try {
@@ -18405,7 +18405,7 @@ function _cmEffBadgeHtml(grade, px) {
 function _cmEffChipHtml(eff) {
   if (!_cmEffUsable(eff)) return '';
   var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
-  var tip = t('efficiency.tooltip', null, 'A to F score of how much of your spend does useful work: how often your agent reuses what it already read, how much history each reply carries, and whether saved work pays for itself.')
+  var tip = t('efficiency.tooltip', null, 'This A-to-F score estimates how much spending produces useful work. It considers reused input, conversation history, and saved work.')
     + ' ' + _cmEffScopeLine(rt);
   var save = Math.round(_cmEffTotalSavings(eff));
   return '<a href="#" title="' + escHtml(tip) + '" '
@@ -18713,7 +18713,7 @@ function _renderEfficiencyCardInner(card, eff) {
   var ctx = _cmEffFmtTokens(met.avg_context_tokens);
   var sentence = t('efficiency.grade_sentence', { hit: hit, ctx: ctx },
     'Your agent reuses ' + hit + '% of what it reads and carries about ' + ctx + ' tokens of history into each reply.');
-  var tip = t('efficiency.tooltip', null, 'A to F score of how much of your spend does useful work: how often your agent reuses what it already read, how much history each reply carries, and whether saved work pays for itself.');
+  var tip = t('efficiency.tooltip', null, 'This A-to-F score estimates how much spending produces useful work. It considers reused input, conversation history, and saved work.');
   var saveEntry = window.cmProv.of(eff, 'actions[].savings_monthly_usd');
   var rows = (eff.actions || []).map(function (a) { return _cmEffIdeaRowHtml(a, saveEntry); }).filter(Boolean);
   var total = Math.round(_cmEffTotalSavings(eff));
@@ -18722,7 +18722,7 @@ function _renderEfficiencyCardInner(card, eff) {
   if (rows.length) {
     right = '<div style="font-size:14px;font-weight:600;color:var(--text-primary);">' + escHtml(t('efficiency.savings_ideas', null, 'Savings ideas'))
         + (saveEntry ? ' ' + window.cmProv.badge(saveEntry, { label: 'Estimated savings' }) : '') + '</div>'
-      + '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 4px;">' + escHtml(t('efficiency.subtitle', null, 'Things you can do to spend less. ClawMetry only suggests; it never changes your agent.')) + '</div>'
+      + '<div style="font-size:12px;color:var(--text-muted);margin:2px 0 4px;">' + escHtml(t('efficiency.subtitle', null, 'Suggestions to reduce costs. These suggestions do not change your agent.')) + '</div>'
       + rows.join('')
       + (rows.length >= 2 && total >= 1
         ? '<div style="border-top:1px solid var(--border-primary,#1f2937);padding-top:8px;font-size:12px;color:var(--text-secondary);">'
@@ -19472,7 +19472,7 @@ function renderProviderCostChart(providers) {
   var el = document.getElementById('provider-cost-chart');
   if (!el) return;
   if (!providers || providers.length === 0) {
-    el.innerHTML = '<span style="color:var(--text-muted);">' + t("app.no_provider_cost_data_yet_start_using_models_from_", null, "No provider cost data yet — start using models from multiple providers.") + '</span>';
+    el.innerHTML = '<span style="color:var(--text-muted);">' + t("app.no_provider_cost_data_yet_start_using_models_from_", null, "No provider cost data is available yet. Use models from multiple providers to compare their costs.") + '</span>';
     return;
   }
   var providerColors = {
@@ -19536,7 +19536,7 @@ function renderCostComparison(data) {
   var actualModel = actual.model || 'current model';
   var actualTokens = actual.tokens || 0;
   if (actualTokens === 0) {
-    el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_token_data_for_the_last_30_days_usage_will_appe", null, "No token data for the last 30 days — usage will appear here once available.") + '</span>';
+    el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_token_data_for_the_last_30_days_usage_will_appe", null, "No token data is available for the last 30 days. Usage will appear here when data is available.") + '</span>';
     return;
   }
   var providerColors = {
@@ -19609,7 +19609,7 @@ function renderSpendOptimization(data) {
   if (!el) return;
   var recs = data.recommendations || [];
   if (recs.length === 0) {
-    el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_optimization_suggestions_yet_run_more_agents_wi", null, "No optimization suggestions yet — run more agents with span data enabled to see recommendations.") + '</span>';
+    el.innerHTML = '<span style="color:var(--text-muted)">' + t("app.no_optimization_suggestions_yet_run_more_agents_wi", null, "No suggestions are available yet. Run agents with span data enabled to obtain recommendations.") + '</span>';
     return;
   }
   // This is the loudest number on the card and it is a counterfactual: what
@@ -20606,7 +20606,7 @@ async function loadTranscripts() {
       // claim about the user's sessions we have no standing to make.
       ? cmStoreUnreachableHtml()
       : _txWinEmpty
-      ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this window. Try a wider window — or note that only recently synced sessions are listed here.') + '</div>'
+      ? '<div style="padding:16px;color:#666;">' + t('transcripts.window_empty', null, 'No sessions were active in this time range. Try a wider range. This list includes only recently synced sessions.') + '</div>'
       : _rtNoTx
       ? _cmRuntimeEmptyMsg(_rtFilter)
       : (plumbingTotal > 0 && !window._transcriptShowPlumbing)
@@ -21350,7 +21350,7 @@ function toggleTranscriptSort() {
   if (btn) {
     var isNewest = window._transcriptSort === 'newest';
     btn.textContent = isNewest ? '↑ Newest first' : '↓ Oldest first';
-    btn.title = isNewest ? 'Newest turn at top — click to flip back' : 'Oldest turn at top — click to flip to newest first';
+    btn.title = isNewest ? 'Newest turn first. Select to show the oldest turn first.' : 'Oldest turn first. Select to show the newest turn first.';
   }
   if (typeof _replayRenderCurrent === 'function') _replayRenderCurrent();
   // Jump to the top so the sort change is visible without a manual scroll.
@@ -22104,7 +22104,7 @@ function _ctxTextBlock(id, label, item, cloud) {
     + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
     + '<span style="font-size:11px;font-weight:700;color:var(--text-primary);">' + escHtml(label) + '</span>'
     + '<span style="font-size:10px;color:var(--text-muted);">' + facts.join(' · ') + '</span>'
-    + (body ? '<button class="refresh-btn" style="margin-left:auto;font-size:10px;padding:2px 8px;" onclick="var b=document.getElementById(\'' + bid + '\');var o=b.style.display===\'none\';b.style.display=o?\'\':\'none\';this.textContent=o?' + JSON.stringify(t('inputs.hide', null, 'Hide')) + ':' + JSON.stringify(t('inputs.show', null, 'Show')) + ';">' + escHtml(t('inputs.show', null, 'Show')) + '</button>' : '')
+    + (body ? '<button class="refresh-btn" style="margin-left:auto;font-size:10px;padding:2px 8px;" onclick="var b=document.getElementById(\'' + bid + '\');var o=b.style.display===\'none\';b.style.display=o?\'\':\'none\';this.textContent=o?' + attrJsStr(t('inputs.hide', null, 'Hide')) + ':' + attrJsStr(t('inputs.show', null, 'Show')) + ';">' + escHtml(t('inputs.show', null, 'Show')) + '</button>' : '')
     + '</div>'
     + (body ? '<div id="' + bid + '" style="display:none;">' + body + '</div>' : '')
     + '</div>';
@@ -22181,7 +22181,7 @@ function _renderInputsBody(d) {
   html += _ctxFilesBlock(t('inputs.context_files', null, 'Context files'), byKind.context_file || []);
   html += _ctxMetaBlock(t('inputs.setup', null, 'Setup'), byKind.runtime_meta || []);
   if (cov.inputs === 'partial') {
-    html += '<div style="padding-top:6px;font-size:10px;color:var(--text-muted);">' + escHtml(cov.note || t('inputs.partial_hint', null, 'This runtime shares part of its setup; the rest is not written to disk.')) + '</div>';
+    html += '<div style="padding-top:6px;font-size:10px;color:var(--text-muted);">' + escHtml(cov.note || t('inputs.partial_hint', null, 'This runtime records part of its setup. The remaining setup is not written to disk.')) + '</div>';
   }
   var sp = (byKind.system_prompt || [])[0];
   if (sp && sp.size_bytes) summaryBits.push(_ctxFmtBytes(sp.size_bytes) + ' ' + t('inputs.system_prompt', null, 'Instructions (system prompt)').toLowerCase().split(' (')[0]);
@@ -22569,7 +22569,7 @@ function _cmSyncRender(prog, health) {
 
   // Hard fail-safe: if no progress for 90s after start, surface an error.
   if (!hasErr && elapsed > 90 && (!prog || !prog.phase)) {
-    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + t("app.sync_hasn_t_reported_progress_yet", null, "⚠️ Sync hasn’t reported progress yet") + '</div>'
+    errBox.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + t("app.sync_hasn_t_reported_progress_yet", null, "The collector has not reported progress yet.") + '</div>'
       + '<div style="font-size:12px;">Check that the daemon is running. On macOS: <code>launchctl kickstart -k gui/$(id -u)/com.clawmetry.sync</code></div>';
     errBox.style.display = 'block';
   }
@@ -22578,7 +22578,7 @@ function _cmSyncRender(prog, health) {
   var verified = prog && prog.status === 'complete' &&
                  health && (health.event_count || 0) > 0;
   if (verified) {
-    title.textContent = t("app.verified_your_data_is_live", null, "✓ Verified — your data is live");
+    title.textContent = t("app.verified_your_data_is_live", null, "Verified: your data is live.");
     sub.textContent = (health.event_count || 0).toLocaleString() + ' events indexed';
     setTimeout(_cmSyncDismiss, 1500);
   }
@@ -30531,7 +30531,7 @@ function loadAgentGraph() {
   // deployment cannot answer.
   if (window.CLOUD_MODE) {
     statusEl.textContent = t('app.agent_graph_local_only', null,
-      'The agent graph is built from your local data store, so it is only available on the dashboard running on your machine (http://localhost:8900).');
+      'The agent graph uses the local data store. Open the dashboard on this machine (http://localhost:8900) to see it.');
     return;
   }
   statusEl.textContent = t('app.loading_2', null, 'Loading…');
@@ -30559,7 +30559,7 @@ function loadAgentGraph() {
       if (data && data._cloud_disabled) {
         statusEl.style.display = 'block';
         statusEl.textContent = t('app.agent_graph_local_only', null,
-          'The agent graph is built from your local data store, so it is only available on the dashboard running on your machine (http://localhost:8900).');
+          'The agent graph uses the local data store. Open the dashboard on this machine (http://localhost:8900) to see it.');
         return;
       }
       statusEl.style.display = 'none';
@@ -30670,7 +30670,7 @@ async function checkLicenseExpiry() {
     } else if (msg && endingTrial) {
       if (days <= 0) {
         msg.textContent = t('banners.trial_ends_today_msg', null,
-          'Your trial ends today. Upgrade now to keep every runtime — after that, this node drops to the free tier.');
+          'Your trial ends today. Upgrade to keep access to every supported runtime. Otherwise, this node will use the free tier.');
       } else {
         msg.textContent = t('banners.trial_ending_msg', { days: days },
           'Your trial ends in ' + days + ' day' + (days === 1 ? '' : 's') + '. Upgrade to keep every runtime.');

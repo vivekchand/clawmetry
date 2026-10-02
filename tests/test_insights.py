@@ -24,6 +24,19 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
+@pytest.fixture(scope="session")
+def server():
+    """These tests use temporary stores and Flask clients, not a live server."""
+    yield None
+
+
+@pytest.fixture
+def free_tier(monkeypatch):
+    """Free-tier cases must not inherit a developer's installed Pro license."""
+    import dashboard as dashboard_module
+    monkeypatch.setattr(dashboard_module, "_is_pro_user", lambda: False)
+
+
 @pytest.fixture
 def fresh_store(tmp_path, monkeypatch):
     """Empty DuckDB at a tmp path, with the local_store reloaded so the
@@ -141,7 +154,7 @@ def test_save_and_load_config_round_trip(fresh_insights):
 
 
 def test_view_endpoints_open_for_free_tier_with_upsell(
-    fresh_insights, monkeypatch
+    fresh_insights, monkeypatch, free_tier
 ):
     """Tier split (#1420 P0a): view endpoints (preview + /insights HTML)
     are universal — paired Free callers see the dashboard digest plus an
@@ -170,7 +183,7 @@ def test_view_endpoints_open_for_free_tier_with_upsell(
     assert r2.status_code == 200, r2.data
 
 
-def test_oss_only_tier_gets_pair_cta_not_pro_upsell(fresh_insights, monkeypatch):
+def test_oss_only_tier_gets_pair_cta_not_pro_upsell(fresh_insights, monkeypatch, free_tier):
     """OSS-only nodes (no ``cm_`` token) need the pair-to-Cloud CTA, not
     the Slack/dispatch upsell. Closes the first-touch friction wall from
     #1420 P0b: ask the OSS user to pair (free + zero-config AI summaries)
@@ -194,7 +207,7 @@ def test_oss_only_tier_gets_pair_cta_not_pro_upsell(fresh_insights, monkeypatch)
     assert "No Anthropic key required" in body.get("_upgrade_cta", "")
 
 
-def test_send_now_pro_paywall_for_free_tier(fresh_insights, monkeypatch):
+def test_send_now_pro_paywall_for_free_tier(fresh_insights, monkeypatch, free_tier):
     """Dispatch is Cloud-Pro only. Free / OSS callers get a 402 with the
     upsell envelope so the UI can route them to billing instead of a
     silent failure (project_free_plan_upsell.md, project_alerts_pro_feature.md).
@@ -221,7 +234,7 @@ def test_send_now_pro_paywall_for_free_tier(fresh_insights, monkeypatch):
 
 
 def test_config_get_returns_200_with_upsell_for_free_tier(
-    fresh_insights, monkeypatch
+    fresh_insights, monkeypatch, free_tier
 ):
     """/api/insights/config GET is the dashboard's nav-tab-reveal probe.
     Returning 404 there caused the browser to console.error on every page

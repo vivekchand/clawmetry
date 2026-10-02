@@ -77,7 +77,7 @@
         <div style="font-size:22px;flex-shrink:0;">🔑</div>
         <div style="flex:1;min-width:220px;">
           <div style="font-size:13px;font-weight:700;color:var(--text-primary);" data-i18n="security.apikeys_title">Build your own view</div>
-          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.5;" data-i18n="security.apikeys_sub">Give a page, a script or a coding agent read access to this machine's agent data, scoped to exactly what it needs. Nothing here can start, pause or stop an agent.</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px;line-height:1.5;" data-i18n="security.apikeys_sub">Give a page, script, or coding agent permission to read selected agent data from this machine. This access cannot start, pause, or stop an agent.</div>
         </div>
         <button class="refresh-btn" id="apikeys-new-btn" onclick="toggleApiKeyForm();" data-i18n="security.apikeys_new">New key</button>
       </div>
@@ -194,7 +194,7 @@
          spinners here. They are hidden on cloud (_cmSecurityCloudTrim) and
          this line says where they really run. -->
     <div id="security-cloud-note" style="display:none;padding:12px 14px;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;color:var(--text-secondary);font-size:12px;line-height:1.55;">
-      <span data-i18n="security.cloud_note">Config posture checks and threat scans run on the machine your agent runs on: they read files and activity that stay on it. Open ClawMetry there (localhost:8900 → Security) to run them.</span>
+      <span data-i18n="security.cloud_note">Configuration and threat checks run on the agent machine. They use local files and activity. Open its local dashboard and select Security to run them.</span>
     </div>
     <!-- Threat Detection -->
     <div id="security-threat-heading" style="
@@ -324,7 +324,7 @@
         <span style="font-size:12px;font-weight:700;color:var(--text-primary);">🗂️ <span data-i18n="security.findings_title">Recorded findings</span></span>
         <span id="security-findings-count" style="font-size:11px;color:var(--text-muted);"></span>
       </div>
-      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;" data-i18n="security.findings_sub">Kept on disk, so findings stay here after the scan above moves on. Includes anything a connected security tool reported. Open a row to read the session it came from.</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;" data-i18n="security.findings_sub">Recorded findings remain available after a scan. They include reports from connected security tools. Open a row to read its source session.</div>
       <div id="security-findings-list">
         <div style="color:var(--text-muted);padding:12px;font-size:12px;" data-i18n="security.findings_loading">Loading findings...</div>
       </div>
