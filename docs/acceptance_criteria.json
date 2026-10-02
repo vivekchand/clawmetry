@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-10-01",
+    "synced_at": "2026-10-02",
     "synced_by": "codex"
   },
   "_scope": [
@@ -2240,6 +2240,24 @@
       "doc": "Optional assessments with managed privacy amendment",
       "doc_id": "b73e5c34-b454-4bba-82b9-91cc6ea8e255",
       "text": "When historical evidence was already irreversibly redacted, the system shall preserve that redaction and shall not claim it can reconstruct the original value."
+    },
+    {
+      "id": "AC-GOV-ERS-011.1",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When OpenDots is selected on an unentitled installation, the system shall keep it behind the paid runtime boundary and shall not ingest its sessions or events."
+    },
+    {
+      "id": "AC-GOV-ERS-011.2",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When OpenDots coverage is displayed, the system shall identify local conversation metadata, scheduled work and call receipts as the supported evidence and shall mark model, token and cost records unavailable."
+    },
+    {
+      "id": "AC-GOV-ERS-011.3",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When a local receipt changes without a newer activity timestamp, the system shall ingest the changed content once and shall deduplicate subsequent unchanged reads."
     }
   ]
 }

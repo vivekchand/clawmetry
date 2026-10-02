@@ -11,6 +11,9 @@ from clawmetry.adapters.base import DetectResult, Event, Session
 
 
 def test_opendots_is_paid_and_loaded_only_from_pro():
+    """
+    AC-GOV-ERS-011.1: OpenDots belongs to the paid extension boundary.
+    """
     from clawmetry import entitlements as ent, sync
     assert 'opendots' in ent.PAID_RUNTIMES
     assert 'opendots' not in ent.FREE_RUNTIMES
@@ -23,10 +26,14 @@ def test_opendots_is_paid_and_loaded_only_from_pro():
 
 
 def test_opendots_ui_and_snapshot_do_not_claim_usage():
+    """
+    AC-GOV-ERS-011.2: Local work coverage does not claim usage records.
+    """
     from clawmetry import sync
     src = (Path(__file__).parents[1] / 'clawmetry/static/js/app.js').read_text()
     caps = re.search(r"opendots:\s*\[(.*?)\]", src).group(1)
     assert set(re.findall(r"'([A-Z]+)'", caps)) == {'SESSIONS', 'EVENTS', 'BRAIN'}
+    assert "opendots: { label:'OpenDots', src:['⠿','Local work records']" in src
     record = sync._build_runtime_records()['opendots']
     assert set(record['records'].values()) == {'unavailable'}
     assert record['suppress_zero']
@@ -55,6 +62,9 @@ def isolated_store(tmp_path, monkeypatch):
 
 
 def test_same_timestamp_content_revision_reingests_once(isolated_store, monkeypatch):
+    """
+    AC-GOV-ERS-011.3: Changed content arrives once even at the same time.
+    """
     sync, store = isolated_store
     revision = ['a' * 20]
     class Adapter:
@@ -87,3 +97,25 @@ def test_same_timestamp_content_revision_reingests_once(isolated_store, monkeypa
     data = [json.loads(r[0]) if isinstance(r[0], (str, bytes)) else r[0] for r in rows]
     assert {r['content'] for r in data} == {'Original', 'Late transcript'}
     assert {r['_runtime'] for r in data} == {'opendots'}
+
+
+def test_unentitled_opendots_never_reads_session_content(isolated_store, monkeypatch):
+    """
+    AC-GOV-ERS-011.1: Installed Pro adapters cannot bypass the ingest gate.
+    """
+    from clawmetry import entitlements as ent
+    sync, store = isolated_store
+    monkeypatch.setattr(ent, 'get_entitlement', lambda: ent.Entitlement(
+        tier=ent.TIER_OSS, source='test', grace=False))
+    reads = []
+    class Adapter:
+        name = 'opendots'
+        def detect(self):
+            return DetectResult(self.name, 'OpenDots', True)
+        def list_sessions(self, limit=50):
+            reads.append('sessions')
+            return []
+    monkeypatch.setattr(sync, '_family_adapter_classes', lambda: [Adapter])
+    assert sync.sync_family_runtimes({'node_id': 'isolated-test-node'}, {}, {}) == 0
+    assert reads == []
+    assert store._fetch("SELECT count(*) FROM sessions WHERE session_id LIKE 'opendots:%'", [])[0][0] == 0
