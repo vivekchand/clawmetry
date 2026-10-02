@@ -209,54 +209,57 @@ updates:
   #
   # READ BEFORE MERGING A BUMP HERE. This is not a routine dependency. The
   # directory's package.json carries the long form under its `//overrides`
-  # key; the short version, re-measured 2026-10-02 against openclaw 2026.9.7:
+  # key, including the override audit and the boot-gate result. The short
+  # version, as of 2026-10-02:
   #
-  #   1. The SQLite transcript boundary is CLEARED. It used to be the second
-  #      of the two blockers recorded here: OpenClaw moved per-session
-  #      `<sid>.jsonl` transcripts into
-  #      `agents/<id>/agent/openclaw-agent.sqlite`, and the daemon only
-  #      globbed `agents/main/sessions/*.jsonl`, so a bump past that boundary
-  #      took the live E2E suites red. #6233 shipped
+  #   1. The pin is 2026.9.2 and the tree is ADVISORY-CLEAN -- `npm audit`
+  #      reports 0 vulnerabilities. Nothing is being held back. The 25
+  #      advisories this entry used to describe (19 openclaw, 4
+  #      @earendil-works/pi-coding-agent, 2 extract-zip) are gone: 2026.9.2
+  #      fixes its own and no longer depends on the other two, which leave the
+  #      tree along with pdfjs-dist and basic-ftp. Those 25 were the whole of
+  #      this repository's OSSF Scorecard VulnerabilitiesID.
+  #
+  #   2. THERE IS NO NODE BLOCKER, and the claim that there was one is the
+  #      correction this note exists to record. It said openclaw's
+  #      `engines.node` had moved to ">=24.16.0 <25 || >=26.1.0", so moving the
+  #      pin meant a Node MAJOR move for every setup-openclaw caller and for
+  #      clawmetry-cloud's copy too. That floor is specific to 2026.9.7, the
+  #      newest release, and was measured against it alone. 2026.6.35 declares
+  #      ">=22.19.0"; everything from 2026.7.1 to 2026.9.6 declares
+  #      ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0". The action's
+  #      `node-version` default is the bare major "22", which setup-node
+  #      resolves to the newest 22.x (22.23.3 today), so 2026.9.2 installs with
+  #      no workflow change at all.
+  #
+  #      The caller count was wrong in the same direction: "nine are on 20,
+  #      three on 22" counted workflows that do not call this action. All six
+  #      that do take the default.
+  #
+  #   3. The SQLite transcript boundary is CLEARED, and that still holds.
+  #      OpenClaw moved per-session `<sid>.jsonl` transcripts into
+  #      `agents/<id>/agent/openclaw-agent.sqlite`, and the daemon only globbed
+  #      `agents/main/sessions/*.jsonl`, so a bump past that boundary used to
+  #      take the live E2E suites red. #6233 shipped
   #      `clawmetry/openclaw_sqlite.py`, which reads that store read-only and
   #      mirrors it into the JSONL layout the daemon already ingests; its
   #      CHANGELOG entry records a verified daemon ingest of a live OpenClaw
-  #      2026.9.7 store. Released in 0.12.901. Not a reason to hold the pin
-  #      any more, and the 2026.5.28..2026.6.34 boundary hunt is moot.
+  #      2026.9.7 store. Released in 0.12.901.
   #
-  #   2. The advisory trade now FAVOURS the bump, which it did not in
-  #      September. Measured by regenerating the lockfile with only the
-  #      version changed to 2026.9.7, keeping the overrides below as they
-  #      are: 3 advisories before (all high -- openclaw <=2026.6.5-beta.6,
-  #      extract-zip, @earendil-works/pi-coding-agent <=0.78.1) and 3 after
-  #      (2 high + 1 moderate, no critical). All three current highs clear.
-  #      The 2026-09-22 figures below -- 4 packages / 26 advisories to 16 /
-  #      67 at 2026.5.27, gaining a critical -- do NOT reproduce at 2026.9.7:
-  #      the overrides have been extended since, and the top-level copies
-  #      stay patched (brace-expansion 5.0.12, ip-address 10.7.2, openclaw's
-  #      own undici 8.10.2).
+  #   4. The overrides block STAYS. Six of its nine keys still resolve to a
+  #      patched copy at the hoisted root, and deleting the block at 2026.9.2
+  #      brings undici back high. Three keys (markdown-it, basic-ftp,
+  #      pdfjs-dist) are inert because their packages left the tree; they are
+  #      kept as no-ops that become correct again if a future openclaw pulls
+  #      those packages back in.
   #
-  #      Why no override clears the 3 that remain: openclaw 2026.9.7 takes
-  #      `npm` 11.20.0 as a direct dependency, and all three resolve under
-  #      node_modules/npm/node_modules/ with `inBundle: true`
-  #      (brace-expansion GHSA-q2hr-2g5m-vwhr, undici GHSA-r53p-7pc4-xj5r,
-  #      ip-address GHSA-j6r3-76f7-8jcv). `overrides` cannot rewrite a
-  #      package manager's bundled dependencies, so these are not clearable
-  #      from this file at any openclaw version.
+  # A bump here is still not a bare version change: run the gateway boot gate
+  # (.github/workflows/openclaw-boot.yml) for any change to that lockfile or
+  # its overrides. `npm ci` and `openclaw --version` both pass over a broken
+  # module graph -- booting the gateway is what catches it.
   #
-  #   3. THE REMAINING BLOCKER IS NODE, and it is new. openclaw 2026.9.7
-  #      declares `engines.node: ">=24.16.0 <25 || >=26.1.0"`. This action's
-  #      `node-version` default is the bare major "22", and no workflow in
-  #      this repository sets up Node 24 (nine are on "20", three on "22").
-  #      So the bump is a Node major move for every setup-openclaw caller --
-  #      ci.yml, e2e-nightly.yml, moat-keystone-drive-nightly.yml,
-  #      openclaw-boot.yml and oss-golden-path.yml, plus clawmetry-cloud's
-  #      own copy of the action in cloud-e2e-screenshots.yml -- and not a
-  #      version change. That is the decision the pin now waits on, and it is
-  #      a larger one than a dependency bump: raise the default and the whole
-  #      E2E fleet moves with it.
-  #
-  # Expect the bump PR to fail until that Node default moves; that failure is
-  # the signal, not a flake.
+  # The one move that WOULD need a Node major is 2026.9.7. Nothing forces it:
+  # the tree is already clean at 2026.9.2.
   - package-ecosystem: "npm"
     directory: "/.github/actions/setup-openclaw"
     schedule:
