@@ -30,12 +30,13 @@ Verified against a live OpenClaw 2026.9.7 install (schema_version 24) on
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
 import time
 from pathlib import Path
+
+from clawmetry import nonsecret_hash
 
 log = logging.getLogger("clawmetry.openclaw_sqlite")
 
@@ -135,7 +136,7 @@ def _line_key(line: str) -> str:
     obj = _loads(line)
     if isinstance(obj, dict) and obj.get("id"):
         return str(obj["id"])
-    return hashlib.sha1(line.encode("utf-8", "replace")).hexdigest()
+    return nonsecret_hash.sha1(line.encode("utf-8", "replace")).hexdigest()
 
 
 def _fingerprint(db: Path) -> tuple:
