@@ -29668,7 +29668,7 @@ function _cmBootLanding() {
     if (typeof switchTab === 'function') switchTab('transcripts');
     return;
   }
-  if (typeof switchTab === 'function') switchTab(CM_LANDING_TAB);
+  if (typeof switchTab === 'function') switchTab(window.CLOUD_MODE ? 'inventory' : CM_LANDING_TAB);
 }
 
 // Hash router. Tab links and `#trail=` route here; `#session=` is consumed by

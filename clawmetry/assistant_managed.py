@@ -6,11 +6,18 @@ import json
 import os
 import base64
 import uuid
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from urllib import error, request
+
+try:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    _CRYPTO_AVAILABLE = True
+except ImportError:
+    # Minimal dashboard installs can still use their local harness. Never
+    # substitute plaintext for an unavailable encrypted managed transport.
+    _CRYPTO_AVAILABLE = False
 
 
 class ManagedAssistantError(RuntimeError):
@@ -203,7 +210,7 @@ def status() -> dict:
                         continue
     result = {
         "configured": True,
-        "available": bool(endpoint_ready and provider_available),
+        "available": bool(endpoint_ready and provider_available and _CRYPTO_AVAILABLE),
         "endpoint_ready": endpoint_ready,
         "capability_advertised": capability_advertised,
         "balance_cents": balance,
@@ -215,6 +222,8 @@ def status() -> dict:
 
 def complete(system: str, prompt: str) -> str:
     """Complete one prompt against the managed account and return only text."""
+    if not _CRYPTO_AVAILABLE:
+        raise ManagedAssistantUnavailable("managed assistant encryption is unavailable")
     if not isinstance(system, str) or not isinstance(prompt, str) or not prompt.strip():
         raise ManagedAssistantError("managed assistant request is invalid")
     private_key = X25519PrivateKey.generate()

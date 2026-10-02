@@ -211,7 +211,7 @@ def test_appjs_routes_trail():
     assert "var CM_LANDING_TAB = 'assistant';" in js, (
         "the boot landing must default to the conversational assistant"
     )
-    assert "switchTab(CM_LANDING_TAB);" in js, "_cmBootLanding must use the declared landing tab"
+    assert "switchTab(window.CLOUD_MODE ? 'inventory' : CM_LANDING_TAB);" in js, "Hosted users keep the working roster until Assistant can query their node"
     assert "/[#&]session=/.test" in js, "a #session= deep link must still land on Sessions"
     assert "_cmVerdictBadge(tx)" in js, "session rows must carry the verdict badge"
     assert "openTrail(this.getAttribute" in js, "session rows need a one-click Open trail"

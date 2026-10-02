@@ -113,6 +113,14 @@ function _cmSetupRenderSummary() {
 async function loadSetup(force) {
   var grid = document.getElementById('setup-runtime-grid');
   if (!grid) return;
+  if (window.CLOUD_MODE) {
+    grid.textContent = 'Setup files stay on your agent’s computer. Open the local ClawMetry dashboard to inspect its rules, skills, and hooks.';
+    ['runtimes', 'files', 'projects', 'global'].forEach(function (name) {
+      var count = document.getElementById('setup-summary-' + name);
+      if (count) count.textContent = 'Local only';
+    });
+    return;
+  }
   if (_cmSetupState.catalog && !force) {
     _cmSetupRenderSummary();
     _cmSetupRenderCatalog();

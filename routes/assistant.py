@@ -137,11 +137,14 @@ def _generate(mode, credential, system, prompt):
     if mode == "claude_cli":
         # No tools, MCP, skills, hooks or project customization. Auth remains
         # owned by the installed harness; generated content cannot act on files.
+        executable = shutil.which("claude")
+        if not executable:
+            raise ValueError("The Claude harness is unavailable.")
         with tempfile.TemporaryDirectory(prefix="clawmetry-assistant-") as workdir:
             env = dict(os.environ)
             env.pop("CLAUDECODE", None)
             proc = subprocess.run(
-                [credential, "-p", "--output-format", "json", "--tools", "",
+                [executable, "-p", "--output-format", "json", "--tools", "",
                  "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                  "--no-session-persistence", "--setting-sources", "", "--safe-mode",
                  "--system-prompt", system],
@@ -310,8 +313,8 @@ def _managed_status(window):
         }
     try:
         return managed.status()
-    except managed.ManagedAssistantError as exc:
-        return {"available": False, "message": str(exc), "balance_cents": None}
+    except managed.ManagedAssistantError:
+        return {"available": False, "message": "Managed access could not be verified. Check your Builder connection.", "balance_cents": None}
 
 
 @bp_assistant.get("/api/assistant/status")
@@ -358,8 +361,8 @@ def assistant_checkout():
         return jsonify(url=managed.checkout(500))
     except managed.ManagedAssistantNotConfigured:
         return jsonify(error="Connect your Builder account before topping up credits."), 412
-    except managed.ManagedAssistantError as exc:
-        return jsonify(error=str(exc)), 502
+    except managed.ManagedAssistantError:
+        return jsonify(error="Checkout is unavailable. Check your Builder connection and retry."), 502
 
 
 @bp_assistant.get("/api/assistant/conversations")
@@ -480,12 +483,14 @@ def assistant_chat():
         return jsonify(response)
     except managed.ManagedAssistantCreditsError:
         return jsonify(error="Your ClawMetry credits are used up. Top up or switch to your own harness or API key."), 402
-    except managed.ManagedAssistantError as exc:
-        return jsonify(error=str(exc)), 502
+    except managed.ManagedAssistantAuthError:
+        return jsonify(error="Your Builder connection was rejected. Check the account key or choose another engine."), 502
+    except managed.ManagedAssistantError:
+        return jsonify(error="Managed access is unavailable. Retry shortly or choose your own harness or API key."), 502
     except (subprocess.TimeoutExpired, TimeoutError):
         return jsonify(error="The AI provider took too long. Try a narrower question or retry."), 504
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 502
+    except ValueError:
+        return jsonify(error="The assistant could not produce a valid answer. Check your selected engine and retry."), 502
     except Exception:
         _log.warning("Assistant request failed", exc_info=False)
         return jsonify(error="The assistant could not finish this request. Please retry."), 500

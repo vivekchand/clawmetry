@@ -974,6 +974,7 @@ jobs:
           tests/test_assistant_store.py
           tests/test_assistant_managed.py
           tests/test_assistant_frontend.py
+          tests/test_assistant_cloud_states.py
           tests/test_assistant_pipeline.py
           tests/test_custom_dashboard_panels.py
           tests/test_context_economics_truthfulness.py

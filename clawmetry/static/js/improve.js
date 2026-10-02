@@ -191,6 +191,16 @@ function _cmImproveFetch(url, options, timeoutMs) {
   async function loadImprove() {
     var list = document.getElementById('improve-list');
     if (!list) return;
+    if (window.CLOUD_MODE) {
+      list.textContent = 'Guidance candidates use conversations saved on your agent’s computer. Open the local ClawMetry dashboard to review their evidence.';
+      ['candidates', 'conversations', 'projects', 'window'].forEach(function (name) {
+        var count = document.getElementById('improve-summary-' + name);
+        if (count) count.textContent = 'Local only';
+      });
+      var source = document.getElementById('improve-source-note');
+      if (source) source.textContent = 'Review available on your agent’s computer.';
+      return;
+    }
     if (_cmImproveState.loaded && _cmImproveState.data) {
       renderSummary(_cmImproveState.data);
       renderList();

@@ -360,6 +360,24 @@
 
   function loadStatus() {
     if (state.statusRequest) return;
+    if (window.CLOUD_MODE) {
+      state.status = { available: false, data_available: false };
+      state.dataAvailable = false;
+      state.dataStatusMessage = 'Assistant runs on your agent’s computer, where your private data and harness are available. Open ClawMetry there to ask questions and save panels.';
+      state.statusLoadedAt = Date.now();
+      setConversationReady(false);
+      setStatusPill('Available on your computer', 'warning');
+      setStatusMessage(state.dataStatusMessage, 'warning');
+      renderDataNotice({ data_notice: 'Your local conversations and saved panels are not synced to this hosted dashboard.' });
+      renderSetupState();
+      ['cm-assistant-input', 'cm-assistant-engine', 'cm-assistant-voice', 'cm-assistant-new-chat'].forEach(function (id) {
+        var control = el(id);
+        if (control) control.disabled = true;
+      });
+      var billing = el('cm-assistant-managed-note');
+      if (billing) billing.hidden = true;
+      return;
+    }
     var navigationToken = state.navigationToken;
     var request = requestJson('/api/assistant/status', { credentials: 'same-origin' }, 12000, 'status');
     request.navigationToken = navigationToken;
@@ -433,6 +451,11 @@
   }
 
   function loadHistory(force) {
+    if (window.CLOUD_MODE) {
+      var history = el('cm-assistant-history-list');
+      if (history) history.textContent = 'Conversations are saved on your agent’s computer.';
+      return;
+    }
     if (state.historyRequest) return;
     if (!force && state.historyLoadedAt && Date.now() - state.historyLoadedAt < 30000) {
       renderHistory();

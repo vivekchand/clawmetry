@@ -146,3 +146,22 @@ def test_plaintext_managed_response_is_rejected(monkeypatch):
     monkeypatch.setattr(managed, "_json_request", lambda *a, **kw: {"text": "private answer"})
     with pytest.raises(managed.ManagedAssistantUnavailable):
         managed.complete("system", "question")
+
+
+def test_missing_crypto_does_not_prevent_dashboard_import():
+    import subprocess
+    import sys
+    code = """
+import sys
+sys.modules['cryptography'] = None
+from clawmetry import assistant_managed as managed
+assert managed._CRYPTO_AVAILABLE is False
+try:
+    managed.complete('system', 'prompt')
+except managed.ManagedAssistantUnavailable:
+    pass
+else:
+    raise AssertionError('managed transport must never fall back to plaintext')
+import routes.assistant
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)

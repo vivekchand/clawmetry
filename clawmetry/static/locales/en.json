@@ -1011,7 +1011,7 @@
   "overview.cron_jobs": "Cron Jobs",
   "overview.daemon_health": "Daemon health",
   "overview.disk_usage": "Disk Usage",
-  "overview.eval_empty": "No sessions judged yet today. The judge runs automatically after each session.",
+  "overview.eval_empty": "No sessions judged yet. Configure a judge to score finished sessions.",
   "overview.eval_quality": "Session quality",
   "overview.eval_setup": "Judge key & rubric",
   "overview.gateway_health": "Gateway health",

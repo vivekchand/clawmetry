@@ -461,3 +461,33 @@ def test_missing_local_data_is_explicit_without_managed_requests(client, monkeyp
     assert state["data_available"] is False
     assert state["available"] is False
     assert "local" in state["message"].lower()
+
+
+@pytest.mark.parametrize('failure', [ValueError, assistant.managed.ManagedAssistantError])
+def test_generation_errors_do_not_echo_internal_exception_details(client, monkeypatch, failure):
+    _provider(monkeypatch)
+    _chat_store(monkeypatch)
+    def fail(*args):
+        raise failure('private-path /tmp/private-key sk-ant-secret')
+    monkeypatch.setattr(assistant, '_generate', fail)
+    response = client.post('/api/assistant/chat', json={'message': 'Show usage'})
+    assert response.status_code == 502
+    assert 'private' not in response.get_data(as_text=True)
+    assert 'sk-ant-secret' not in response.get_data(as_text=True)
+
+
+def test_harness_executable_is_resolved_locally_and_question_uses_stdin(monkeypatch):
+    from types import SimpleNamespace
+    seen = {}
+    monkeypatch.setattr(assistant.shutil, 'which', lambda name: '/opt/claude' if name == 'claude' else None)
+    def run(argv, **kwargs):
+        seen.update(argv=argv, **kwargs)
+        return SimpleNamespace(returncode=0, stdout='{"result":"answer"}')
+    monkeypatch.setattr(assistant.subprocess, 'run', run)
+    question = '--dangerously-skip-permissions; untrusted question'
+    assert assistant._generate('claude_cli', '/untrusted/credential', 'safe system', question) == 'answer'
+    assert seen['argv'][0] == '/opt/claude'
+    assert '/untrusted/credential' not in seen['argv']
+    assert question not in seen['argv'] and seen['input'] == question
+    assert '--safe-mode' in seen['argv'] and '--strict-mcp-config' in seen['argv']
+    assert seen['argv'][seen['argv'].index('--tools') + 1] == ''

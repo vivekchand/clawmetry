@@ -267,6 +267,11 @@
     stopActiveLoads();
     var generation = _loadGeneration;
     destroyCharts();
+    if (window.CLOUD_MODE) {
+      section.style.display = '';
+      grid.textContent = 'Your custom panels are saved on your agent’s computer. Open the local ClawMetry dashboard to create or view them.';
+      return;
+    }
     grid.innerHTML = '<div class="cm-dashboard-loading">Loading saved panels…</div>';
     try {
       var payload = await requestJson('/api/dashboard/panels?limit=50', {}, LOAD_TIMEOUT_MS);
