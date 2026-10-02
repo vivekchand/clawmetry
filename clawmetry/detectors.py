@@ -495,6 +495,7 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
                     "i": i, "kind": "tool_call",
                     "tool": tool,
                     "args_hash": _args_hash(c.get("args")),
+                    "args_known": c.get("args") is not None,
                     "tool_call_id": c.get("call_id") or "",
                     "is_error": False, "result_text": "", "has_text": False,
                     # What the call touched; the behavioural detectors read these.
@@ -653,7 +654,8 @@ def stuck_loop(events: Iterable[dict], session_id: str,
             progress = (step["kind"] == "text" and step.get("has_text"))
             progress = progress or (step["kind"] == "tool_result" and step.get("outcome_known")
                                     and not step["is_error"] and step.get("call_mutates"))
-            if progress or step["kind"] in ("user", "end"):
+            unknown_call = step["kind"] == "tool_call" and not step.get("args_known", True)
+            if progress or step["kind"] in ("user", "end") or unknown_call:
                 tail = []
             else:
                 tail.append(step)

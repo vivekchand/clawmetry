@@ -90,6 +90,13 @@ def test_search_cycles_with_different_arguments_are_not_loops():
     assert detectors.stuck_loop(list(reversed(events)), "codex:session") is None
 
 
+def test_missing_arguments_cannot_prove_identical_call_loop():
+    unknown = [event(i, tool="exec", call_id=f"c{i}") for i in range(3)]
+    assert detectors.stuck_loop(list(reversed(unknown)), "codex:session") is None
+    explicit_empty = [event(i, tool="List", args={}, call_id=f"c{i}") for i in range(3)]
+    assert detectors.stuck_loop(list(reversed(explicit_empty)), "codex:session") is not None
+
+
 def test_successful_edit_test_cycles_are_progress():
     events = []
     for i in range(3):
