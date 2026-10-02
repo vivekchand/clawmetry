@@ -164,19 +164,22 @@ def test_image_installs_only_the_published_wheel() -> None:
     text = _read("deploy", "self-hosted", "Dockerfile.release")
     code = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     copies = [ln for ln in code if ln.split()[0].upper() in ("COPY", "ADD")]
-    # The wheel directory, and the hash-pinned OTLP set that is installed and
-    # then deleted in the layer below it. Nothing else: copying repo source
-    # would ship something other than the published artifact. The pin file is
+    # The wheel directory, and the two hash-pinned sets that are each installed
+    # and then deleted in the layer below them -- the OTLP extra, and
+    # clawmetry's own runtime dependencies. Nothing else: copying repo source
+    # would ship something other than the published artifact. A pin file is
     # build INPUT rather than source -- `rm -f` on the next line means no part
-    # of it survives into the image filesystem -- which is why it is named here
-    # explicitly instead of the assertion being loosened to a prefix match.
+    # of it survives into the image filesystem -- which is why each is named
+    # here explicitly instead of the assertion being loosened to a prefix
+    # match. Add a third only if it has that same property.
     assert copies == [
         "COPY dist/ /tmp/dist/",
         "COPY otel-requirements.txt /tmp/otel-requirements.txt",
+        "COPY runtime-requirements.txt /tmp/runtime-requirements.txt",
     ], (
-        f"the release image may copy only the wheel directory and the pinned "
-        f"OTLP set, found {copies}: copying repo source would ship something "
-        "other than the published artifact"
+        f"the release image may copy only the wheel directory and the two "
+        f"pinned install sets, found {copies}: copying repo source would ship "
+        "something other than the published artifact"
     )
     body = "\n".join(code).lower()
     for forbidden in ("clawmetry_pro", "clawmetry-pro", "wheels/", "license/download"):
