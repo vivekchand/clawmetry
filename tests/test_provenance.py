@@ -21,6 +21,8 @@ figures we remembered to label; it walks the real response, recognises money
 and score keys by shape, and fails on any it finds with no basis behind it. A
 hand-kept list is exactly the thing that drifts.
 """
+import ast
+from html.parser import HTMLParser
 import json
 import os
 import re
@@ -362,14 +364,29 @@ def test_the_component_is_loaded_by_the_live_dashboard_before_app_js():
     tests/test_dashboard_html_defined_once.py, not here.
     """
     text = open(os.path.join(REPO, "dashboard.py"), encoding="utf-8").read()
-    blocks = [m.start() for m in re.finditer(r"^DASHBOARD_HTML = r\"\"\"",
-                                             text, re.M)]
-    assert blocks, "no DASHBOARD_HTML definition found in dashboard.py"
-    live = text[blocks[-1]:]
-    prov_at = live.find("js/provenance.js")
-    app_at = live.find("js/app.js', v=version")
-    assert prov_at != -1, "provenance.js is not loaded by the LIVE template"
-    assert app_at != -1
+    templates = [node.value.value for node in ast.parse(text).body
+                 if isinstance(node, ast.Assign)
+                 and any(isinstance(target, ast.Name) and target.id == "DASHBOARD_HTML"
+                         for target in node.targets)]
+    assert templates, "no DASHBOARD_HTML definition found in dashboard.py"
+
+    class ScriptSources(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.sources = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "script":
+                self.sources.append(dict(attrs).get("src", ""))
+
+    parser = ScriptSources()
+    parser.feed(templates[-1])
+    # Check actual script tags, not comments or a particular cache-key
+    # expression. Source builds and released wheels use different cache keys.
+    for asset in ("js/provenance.js", "js/app.js"):
+        assert sum(asset in src for src in parser.sources) == 1, asset
+    prov_at = next(i for i, src in enumerate(parser.sources) if "js/provenance.js" in src)
+    app_at = next(i for i, src in enumerate(parser.sources) if "js/app.js" in src)
     assert prov_at < app_at, "provenance.js must load before app.js"
 
 
