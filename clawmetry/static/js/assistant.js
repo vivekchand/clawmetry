@@ -9,7 +9,7 @@
   var SUGGESTIONS = [
     'Which agents were most effective today?',
     'How efficiently did agents manage their context?',
-    'Did we use Astra when a cheaper model would do?',
+    'Could a cheaper model handle some of my work?',
     'Build a cost and effectiveness dashboard',
   ];
   var state = {

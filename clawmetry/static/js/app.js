@@ -20286,7 +20286,7 @@ function renderModelSelectionReview(info) {
     ? escHtml(shortPrimary) + ' handled ' + share.toFixed(1) + '% of observed turns.'
     : 'Routing is spread across ' + models.length + ' observed models.';
   var interpretation = concentrated
-    ? 'That is a routing concentration signal, not proof that Astra was the right model for every task.'
+    ? 'That share shows which model was used most. It does not measure whether that model fit each task.'
     : 'Attribution alone cannot tell us whether each model was appropriate for the task.';
   card.style.display = '';
   card.innerHTML = '<div style="padding:16px;">'
