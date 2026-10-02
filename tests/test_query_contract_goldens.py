@@ -33,6 +33,8 @@ REGEN = os.environ.get("CLAWMETRY_REGEN_GOLDENS") == "1"
 
 # Fixed args per live method (deterministic dispatch inputs).
 DISPATCH_ARGS = {
+    "error_groups": {},
+    "session_catalog": {"node_id": "agent+golden", "limit": 2},
     "activity": {"node_id": "agent+golden", "limit": 2},
     "incidents": {},
     "investigation": {"session_id": "sess-a", "runtime": "openclaw", "node_id": "agent+golden", "limit": 2},
@@ -73,6 +75,12 @@ _HEALTH_VOLATILE = {
     # Read-cache counters depend on how many reads ran before health().
     "read_cache_entries", "read_cache_hits", "read_cache_misses",
 }
+
+
+@pytest.fixture(scope="session", autouse=True)
+def server():
+    """The contract corpus uses an isolated store, never the operator's gateway."""
+    yield None
 
 
 @pytest.fixture
@@ -183,6 +191,9 @@ def seeded(tmp_path, monkeypatch):
             break
         time.sleep(0.02)
 
+    from clawmetry import entitlements
+    monkeypatch.setenv('CLAWMETRY_ENFORCE', '1')
+    monkeypatch.setattr(entitlements, 'get_entitlement', lambda: entitlements._build(entitlements.TIER_OSS, 'test'))
     yield lq
     try:
         store.stop(flush=True)

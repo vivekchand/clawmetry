@@ -179,6 +179,13 @@ def _proxy_dispatch(shape: str, args: dict):
 def _coerce_args(shape: str, raw: dict) -> dict:
     """Strict per-shape arg coercion. Drops anything not in the per-shape
     allowed-keys set, casts limit/since/until to safe types."""
+    if shape in ("error_groups", "session_catalog"):
+        args = {key: raw.get(key) or None for key in ("node_id", "runtime", "session_id")}
+        args["limit"] = _safe_int(raw.get("limit"), default=500 if shape == "error_groups" else 100,
+                                  lo=1, hi=1000 if shape == "error_groups" else 200)
+        if shape == "error_groups":
+            args["days"] = _safe_int(raw.get("days"), default=7, lo=1, hi=90)
+        return args
     if shape == "activity":
         return {"node_id": raw.get("node_id") or None, "runtime": raw.get("runtime") or None,
                 "session_id": raw.get("session_id") or None, "cursor": raw.get("cursor") or None,
@@ -194,7 +201,7 @@ def _coerce_args(shape: str, raw: dict) -> dict:
                 raise ValueError("investigation requires session_id, runtime and node_id")
         return {"session_id": raw["session_id"], "runtime": raw["runtime"],
                 "node_id": raw["node_id"], "incident_id": raw.get("incident_id") or None,
-                "cursor": raw.get("cursor") or None,
+                "cursor": raw.get("cursor") or None, "event_id": raw.get("event_id") or None,
                 "limit": _safe_int(raw.get("limit"), default=100, lo=1, hi=200)}
     if shape == "events":
         return {
@@ -412,7 +419,7 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -1280,6 +1287,8 @@ _DAEMON_METHODS = frozenset({
     "query_guard_incidents",
     "query_incidents",
     "query_investigation",
+    "query_error_groups",
+    "query_session_catalog",
     "acknowledge_incident",
     # Agent supply chain inventory (#5947), read by /api/guard/inventory.
     "query_agent_inventory",

@@ -6,6 +6,8 @@
 - Guard opens the implicated events in Tracing, with scoped history pages, explicit retention and preview limits, and separate execution and finding states. Hosted investigation uses encrypted node queries and confirmed acknowledgements.
 - Brain, Flow and investigation views share bounded activity reads backed by committed event positions. Reconnects replay late arrivals and updated payloads; expired cursors request a fresh read. Hidden and inactive views pause their readers.
 - The store adds bounded incident and event-change tables. Older source events are not retroactively declared active incidents. Hosted deployment requires the matching cloud relay support.
+- Entitled recurring-error groups retain per-event resolution and open representative events directly in Tracing. Counts describe the bounded read window; incomplete messages remain separate.
+- Session list, inspect and watch commands use the private extension and the same persisted reads, with JSON output and resumable activity checkpoints. Existing session commands remain available.
 
 ### Release: checked English explanations
 

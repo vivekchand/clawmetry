@@ -6459,6 +6459,8 @@ def detect_config(args=None):
     from routes.investigations import bp_investigations
     app.register_blueprint(bp_activity)
     app.register_blueprint(bp_investigations)
+    from routes.error_groups import bp_error_groups
+    app.register_blueprint(bp_error_groups)
     app.register_blueprint(bp_signals)
     app.register_blueprint(bp_selfdiag)
     app.register_blueprint(bp_health)
@@ -7533,6 +7535,7 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/guard-checks.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/activity-live.js', v=version) }}"></script>
 <script src="{{ url_for('static', filename='js/investigations.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/error-groups.js', v=version) }}"></script>
 </div> <!-- end zoom-wrapper -->
 
 {# position:fixed overlays must live OUTSIDE #zoom-wrapper: its zoom

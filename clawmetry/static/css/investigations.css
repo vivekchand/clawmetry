@@ -27,3 +27,10 @@
 .investigation-history-row p { color:var(--text-muted); font-size:12px; margin:4px 0 0; }
 #trace-investigation :focus-visible { outline:2px solid var(--text-accent); outline-offset:3px; }
 @media(max-width:640px) { #trace-investigation { padding:16px; } .investigation-head h3 { font-size:18px; } .investigation-facts { gap:16px; } .investigation-evidence-label { margin-left:0; } }
+
+#trace-investigation .refresh-btn { margin:8px 8px 12px 0; }
+#trace-investigation button:focus-visible, #triage-groups button:focus-visible { outline:2px solid var(--text-accent); outline-offset:3px; }
+#triage-groups { margin:16px 0; }
+#triage-groups > summary { cursor:pointer; font-weight:600; }
+#triage-groups-body { margin-top:12px; overflow-wrap:anywhere; }
+#triage-groups-body .refresh-btn { margin:0 0 12px; }

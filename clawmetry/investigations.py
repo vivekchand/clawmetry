@@ -95,11 +95,13 @@ class InvestigationStoreMixin:
     """Reads on LocalStore's existing read connection; no second writer."""
 
     def query_investigation(self, *, session_id, runtime, node_id,
-                            incident_id=None, cursor=None, limit=100):
+                            incident_id=None, event_id=None, cursor=None, limit=100):
         from clawmetry.local_store import _EVENT_COLS, _row_to_event
         from clawmetry.retention import resolve
         where, params = scope_sql(session_id, runtime, node_id)
         scope = {"session_id": session_id, "runtime": runtime, "node_id": node_id}
+        if event_id is not None and (not isinstance(event_id, str) or not event_id or len(event_id) > 1024):
+            raise ValueError("invalid event_id")
         lim = max(1, min(int(limit), MAX_PAGE))
         now = int(time.time() * 1000)
         retention = resolve(store=self)
@@ -113,6 +115,7 @@ class InvestigationStoreMixin:
                     "order": "source_time_desc_event_id_desc", "source": "persisted"}
         body = {"schema_version": 1, "scope": scope, "incident": None,
                 "rows": [], "evidence_rows": [], "native_spans": [],
+                "selected_event_ids": [event_id] if event_id else [],
                 "execution": {"status": "unknown", "outcome": None, "last_active_at": None},
                 "coverage": coverage, "resync_required": False}
         history_where, history_params = where + " AND created_at >= ?", params + [cutoff]
@@ -165,6 +168,15 @@ class InvestigationStoreMixin:
                 if missing:
                     coverage["missing_reason"] = "not_retained_or_not_available_in_scope"
                 body["native_spans"] = self._investigation_native_spans(refs, scope, cutoff)
+        if event_id:
+            selected = [_row_to_event(r, _EVENT_COLS) for r in self._fetch(
+                f"SELECT {cols} FROM events WHERE {where} AND created_at>=? AND id=?",
+                params + [cutoff, event_id])]
+            known = {r['id'] for r in body['evidence_rows']}
+            body['evidence_rows'].extend(r for r in selected if r['id'] not in known)
+            if not selected:
+                coverage['missing_event_ids'] = list(dict.fromkeys(coverage['missing_event_ids'] + [event_id]))
+                coverage.update(evidence_complete=False, missing_reason='not_retained_or_not_available_in_scope')
         coverage["payload_truncated_ids"] = _bounded_rows(body["rows"] + body["evidence_rows"])
         coverage["truncated"] = bool(more or coverage["payload_truncated_ids"])
         return body

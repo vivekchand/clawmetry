@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-304 modules, 88 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+306 modules, 89 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -49,6 +49,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/delegated.py` | small | `bp_delegated` | `/api/cursor`, `/api/delegated-usage` | Connect a Cursor account from the dashboard, and read delegated usage. |
 | `routes/device.py` | medium | `bp_device` | `/api/device`, `/device-preview` | Device snapshot — a compact, screen-sized JSON for hardware companions. |
 | `routes/dives.py` | medium | `bp_dives` | `/api/dives` | ClawMetry Dives: NL-to-SQL-to-chart over the local DuckDB store. |
+| `routes/error_groups.py` | small | `bp_error_groups` | `/api/error-triage` | Entitled recurring-error reads over the shared encrypted query contract. |
 | `routes/evals.py` | medium | `bp_evals` | `/api/evals`, `/api/evaluators` | Eval (LLM-as-judge) endpoints. |
 | `routes/extensions.py` | small | `bp_extensions` | `/api/extensions` | diagnostic introspection for the entry-point plugin loader. |
 | `routes/fleet_history.py` | medium | `bp_fleet` | `/api/nodes`, `/fleet` | Multi-node fleet endpoints. |
@@ -233,7 +234,8 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/installs.py` | medium | Install census — find every clawmetry copy on this machine and flag stale ones. |
 | `clawmetry/instrument.py` | medium | ``clawmetry instrument <runtime>`` — switch a runtime's own OpenTelemetry exporter on and point it at the local ClawMetry receiver (WO-57). |
 | `clawmetry/interceptor.py` | medium | Zero-config HTTP interceptor for LLM API cost tracking. |
-| `clawmetry/investigations.py` | small | Scoped, bounded investigation reads shared by local and encrypted clients. |
+| `clawmetry/investigation_catalog.py` | small | Bounded persisted session discovery and the entitled error-group seam. |
+| `clawmetry/investigations.py` | medium | Scoped, bounded investigation reads shared by local and encrypted clients. |
 | `clawmetry/latency_tracker.py` | small | Per-endpoint p50/p95 handler-latency tracker (in-memory rolling window). |
 | `clawmetry/license.py` | huge | self-hosted Pro/Enterprise license client. |
 | `clawmetry/lifecycle_coverage.py` | medium | Which lifecycle facts each runtime can put on a session's trail. |

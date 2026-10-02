@@ -1091,7 +1091,7 @@ jobs:
             tests/test_detectors_rate_limited_blocked_crashed.py \
             tests/test_detectors.py \
             tests/test_incident_lifecycle.py tests/test_activity_replay.py tests/test_activity_live_client.py \
-            tests/test_incident_evidence.py tests/test_investigation_reads.py tests/test_investigation_routes.py \
+            tests/test_incident_evidence.py tests/test_investigation_reads.py tests/test_investigation_catalog.py tests/test_investigation_client.py tests/test_investigation_routes.py \
             tests/test_detectors_behavioural.py \
             tests/test_detectors_ngram.py \
             tests/test_detectors_secret_value_corpus.py \

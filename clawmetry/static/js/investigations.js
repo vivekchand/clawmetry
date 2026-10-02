@@ -12,7 +12,7 @@
     return node;
   }
   function button(text, click) {
-    var node = el('button', text, 'btn btn-sm');
+    var node = el('button', text, 'refresh-btn');
     node.type = 'button'; node.addEventListener('click', click); return node;
   }
   function when(value) {
@@ -55,6 +55,10 @@
     window._pendingInvestigation = {incident_id: id, runtime: runtime, session_id: session, node_id: node};
     switchTab('tracing');
   };
+  window.cmOpenEvidence = function (runtime, session, node, eventId) {
+    window._pendingInvestigation = {runtime: runtime, session_id: session, node_id: node, event_id: eventId};
+    switchTab('tracing');
+  };
   window.cmLoadInvestigation = function (scope) {
     stopLive();
     var generation = ++state.generation;
@@ -64,7 +68,7 @@
     byId('trace-back-btn').style.display = '';
     byId('trace-standard-detail').hidden = true;
     var panel = byId('trace-investigation');
-    panel.hidden = false; panel.replaceChildren(el('p', 'Reading this finding and its evidence...', 'section-sub'));
+    panel.hidden = false; panel.replaceChildren(el('p', 'Reading recorded activity and evidence...', 'section-sub'));
     // Older Guard previews may carry the episode ID without its node. Resolve
     // that exact ID first; never guess a node or use a wildcard session read.
     var resolve = scope.node_id ? Promise.resolve(scope) : request('/api/guard/incidents?' + args(scope)).then(function (data) {
@@ -96,43 +100,27 @@
     var panel = byId('trace-investigation');
     panel.replaceChildren();
     var head = el('header', undefined, 'investigation-head');
-    head.append(el('h3', incident ? incident.title || 'Guard finding' : 'Session investigation'));
+    var title = el('h3', incident ? incident.title || 'Guard finding' : 'Session investigation');
+    title.id = 'investigation-title'; head.append(title);
     head.append(el('p', [data.scope.runtime, data.scope.session_id, 'Node ' + data.scope.node_id].join(' · '), 'investigation-scope'));
     var states = el('div', undefined, 'investigation-states');
     var findingState = el('span', 'Finding: ' + incidentState(incident), 'investigation-state'); findingState.id = 'investigation-finding-state';
     var executionState = el('span', 'Execution: ' + ((data.execution || {}).status || 'unknown')); executionState.id = 'investigation-execution-state';
-    states.append(findingState, executionState);
-    if (incident && incident.acknowledged_at) states.append(el('span', 'Acknowledged ' + when(incident.acknowledged_at)));
+    if (incident || state.scope.incident_id) states.append(findingState);
+    states.append(executionState);
+    var acknowledged = el('span'); acknowledged.id = 'investigation-acknowledged'; states.append(acknowledged);
     head.append(states); panel.append(head);
-    if (incident) {
-      panel.append(el('p', incident.detail || 'Review the recorded evidence below.', 'investigation-explanation'));
-      var facts = el('dl', undefined, 'investigation-facts');
-      function fact(name, value) { var group = el('div'); group.append(el('dt', name), el('dd', value)); facts.append(group); }
-      fact('First observed', when(incident.first_seen));
-      fact('Latest evidence', when(incident.last_evidence_at));
-      var cost = incident.spend_at_risk_usd;
-      fact('Cost at risk', incident.cost_provenance === 'unknown' || cost == null ? 'Unknown' :
-        '$' + Number(cost).toFixed(4) + ' estimated (' + String(incident.spend_basis || '').replace(/_/g, ' ') + ')');
-      if (incident.recovered_at) fact('Recovery observed', when(incident.recovered_at));
-      panel.append(facts);
-      var next = incidentState(incident) === 'Recovered' ? 'Review the successful result to see what changed.' :
-        incidentState(incident) === 'Stale' ? 'Reconnect the node or resume observing before deciding whether this is still happening.' :
-        incident.kind === 'repeated_tool_failure' ? 'Review the first failed result, then check the tool inputs and permissions.' :
-        'Review the repeated calls and their inputs before deciding how to respond.';
-      panel.append(el('p', next, 'investigation-next'));
-      panel.append(button(incident.acknowledged_at ? 'Undo acknowledgement' : 'Acknowledge finding', acknowledge));
-    }
+    var findingBody = el('section'); findingBody.id = 'investigation-finding-body'; panel.append(findingBody);
+    renderFinding(incident);
     var notice = el('div', undefined, 'investigation-coverage');
     notice.setAttribute('role', 'status');
-    var missing = coverage.missing_event_ids || [];
-    notice.append(el('p', missing.length ? missing.length + ' referenced events are outside the retained history or unavailable on this node.' :
-      'The available referenced evidence is highlighted below.'));
+    var evidenceNotice = el('p'); evidenceNotice.id = 'investigation-evidence-coverage'; notice.append(evidenceNotice);
     if (coverage.retention_days != null) notice.append(el('p', 'This node keeps up to ' + coverage.retention_days + ' days of event history.'));
     if ((coverage.payload_truncated_ids || []).length) notice.append(el('p', 'Large event bodies are shortened and marked as previews.'));
     if (coverage.incident_available === false) notice.append(el('p', 'This finding is unavailable in the selected scope. No recovery has been inferred.'));
     panel.append(notice);
     var msg = el('p', '', 'investigation-message'); msg.id = 'investigation-message'; msg.setAttribute('role', 'status'); panel.append(msg);
-    var live = el('p', 'Reading persisted activity...', 'section-sub'); live.id = 'investigation-live-status'; live.setAttribute('role', 'status'); panel.append(live);
+    var live = el('p', 'Reading recorded activity...', 'section-sub'); live.id = 'investigation-live-status'; live.setAttribute('role', 'status'); panel.append(live);
     panel.append(button('Follow latest activity', startLive));
     panel.append(el('h4', 'Recorded activity'));
     var list = el('div', undefined, 'investigation-events'); list.id = 'investigation-events'; panel.append(list);
@@ -142,12 +130,50 @@
     if (selected) selected.open = true;
   }
 
+  function renderFinding(incident) {
+    var section = byId('investigation-finding-body'); if (!section) return;
+    section.replaceChildren();
+    var title = byId('investigation-title'), acknowledged = byId('investigation-acknowledged');
+    if (title) title.textContent = incident ? incident.title || 'Guard finding' : 'Session investigation';
+    if (acknowledged) {
+      acknowledged.hidden = !(incident && incident.acknowledged_at);
+      acknowledged.textContent = incident && incident.acknowledged_at ? 'Acknowledged ' + when(incident.acknowledged_at) : '';
+    }
+    if (incident) {
+      section.append(el('p', incident.detail || 'Review the recorded evidence below.', 'investigation-explanation'));
+      var facts = el('dl', undefined, 'investigation-facts');
+      function fact(name, value) { var group = el('div'); group.append(el('dt', name), el('dd', value)); facts.append(group); }
+      fact('First observed', when(incident.first_seen));
+      fact('Latest evidence', when(incident.last_evidence_at));
+      var cost = incident.spend_at_risk_usd;
+      fact('Cost at risk', incident.cost_provenance === 'unknown' || cost == null ? 'Unknown' :
+        '$' + Number(cost).toFixed(4) + ' estimated (' + String(incident.spend_basis || '').replace(/_/g, ' ') + ')');
+      if (incident.recovered_at) fact('Recovery observed', when(incident.recovered_at));
+      section.append(facts);
+      var next = incidentState(incident) === 'Recovered' ? 'Review the successful result to see what changed.' :
+        incidentState(incident) === 'Stale' ? 'Reconnect the node or resume observing before deciding whether this is still happening.' :
+        incident.kind === 'repeated_tool_failure' ? 'Review the first failed result, then check the tool inputs and permissions.' :
+        'Review the repeated calls and their inputs before deciding how to respond.';
+      section.append(el('p', next, 'investigation-next'));
+      section.append(button(incident.acknowledged_at ? 'Undo acknowledgement' : 'Acknowledge finding', acknowledge));
+    }
+  }
+
   function renderEvents() {
     var list = byId('investigation-events'); if (!list) return;
+    var openIds = new Set(Array.from(list.querySelectorAll('details[open]')).map(function (node) { return node.dataset.eventId; }));
     list.replaceChildren();
     var incident = state.data.incident || {};
     var refs = new Set((incident.evidence_refs || []).map(function (r) { return r.event_id; }));
+    var selectedIds = new Set(state.data.selected_event_ids || []);
+    selectedIds.forEach(function (id) { refs.add(id); });
     var recovery = (incident.recovery_ref || {}).event_id;
+    var requested = new Set(refs); if (recovery) requested.add(recovery);
+    var unloaded = Array.from(requested).filter(function (id) { return !state.rows.has(id); });
+    var evidenceNotice = byId('investigation-evidence-coverage');
+    if (evidenceNotice) evidenceNotice.textContent = unloaded.length ?
+      unloaded.length + ' referenced events are not loaded. They may arrive on the next update; reopen this investigation to check retained evidence.' :
+      'The available referenced evidence is highlighted below.';
     var rows = Array.from(state.rows.values()).sort(function (a, b) {
       return String(a.ts).localeCompare(String(b.ts)) || String(a.id).localeCompare(String(b.id));
     });
@@ -156,10 +182,11 @@
       var evidence = refs.has(row.id), recovered = row.id === recovery;
       var item = el('details', undefined, 'investigation-event');
       item.dataset.eventId = row.id; item.dataset.evidence = String(evidence);
+      item.open = openIds.has(row.id);
       if (recovered) item.dataset.recovery = 'true';
       var summary = el('summary');
-      summary.append(el('time', when(row.ts)), el('strong', row.event_type || 'Event'));
-      if (evidence || recovered) summary.append(el('span', recovered ? 'Recovery evidence' : 'Finding evidence', 'investigation-evidence-label'));
+      summary.append(el('time', when(row.ts)), el('strong', (row.event_type || 'Event').replace(/[._]/g, ' ').replace(/^./, function (c) { return c.toUpperCase(); })));
+      if (evidence || recovered) summary.append(el('span', recovered ? 'Recovery evidence' : selectedIds.has(row.id) ? 'Selected error' : 'Finding evidence', 'investigation-evidence-label'));
       item.append(summary, el('p', row.id, 'investigation-event-id'));
       var pre = el('pre', JSON.stringify(row.data, null, 2)); item.append(pre);
       list.append(item);
@@ -192,6 +219,7 @@
   function trimRows() {
     var keep = new Set(((state.data.incident || {}).evidence_refs || []).map(function (ref) { return ref.event_id; }));
     keep.add(((state.data.incident || {}).recovery_ref || {}).event_id);
+    (state.data.selected_event_ids || []).forEach(function (id) { keep.add(id); });
     for (var id of state.rows.keys()) {
       if (state.rows.size <= 1000) break;
       if (!keep.has(id)) state.rows.delete(id);
@@ -207,7 +235,11 @@
       if (error) { if (status) status.textContent = 'Connection unavailable. Recorded activity remains visible; recovery has not been inferred.'; return; }
       if (page.resync_required) { window.cmLoadInvestigation(state.scope); return; }
       var finding = (page.incidents || []).find(function (row) { return row.incident_id === state.scope.incident_id; });
-      if (finding) state.data.incident = finding;
+      if (finding) {
+        var changed = JSON.stringify(finding) !== JSON.stringify(state.data.incident);
+        state.data.incident = finding;
+        if (changed) renderFinding(finding);
+      }
       if (page.execution) state.data.execution = page.execution;
       var findingState = byId('investigation-finding-state'), executionState = byId('investigation-execution-state');
       if (findingState) findingState.textContent = 'Finding: ' + incidentState(state.data.incident);
@@ -218,7 +250,7 @@
       var latest = Array.from(state.rows.values()).reduce(function (last, row) {
         var at = new Date(row.ts).getTime(); return Number.isFinite(at) ? Math.max(last, at) : last;
       }, 0);
-      if (status) status.textContent = (page.from_cache ? 'Showing recorded activity while reconnecting. ' : 'Connected to persisted activity. ') + 'Latest observed: ' + when(latest) + '. Showing up to 1,000 events.';
+      if (status) status.textContent = (page.from_cache ? 'Showing recorded activity while reconnecting. ' : 'Connected. ') + 'Latest recorded activity: ' + when(latest) + '. Showing up to 1,000 events.';
     }, 'tracing');
   }
 

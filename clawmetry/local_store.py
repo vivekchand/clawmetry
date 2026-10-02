@@ -54,6 +54,7 @@ from clawmetry.local_store_projects import ProjectsMixin  # project attribution 
 from clawmetry.activity_store import ActivityStoreMixin, ACTIVITY_DDL
 from clawmetry.incident_store import IncidentStoreMixin, INCIDENT_DDL
 from clawmetry.investigations import InvestigationStoreMixin
+from clawmetry.investigation_catalog import InvestigationCatalogMixin
 # REQ-OBS-OIA-001: a value the store cannot hold is refused on its own, not a
 # store failure (span batch retry, OTLP record refusal, event token count).
 from clawmetry.store_errors import (  # noqa: F401  (re-exported for tests)
@@ -3678,7 +3679,7 @@ def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:
     return fallback or "openclaw"
 
 
-class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMixin, InvestigationStoreMixin, ActivityStoreMixin):
+class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMixin, InvestigationStoreMixin, InvestigationCatalogMixin, ActivityStoreMixin):
     """Thread-safe local event store with a background batched flusher.
 
     `read_only=True` opens the DuckDB in RO mode — read paths work the same,

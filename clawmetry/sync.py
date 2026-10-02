@@ -9624,7 +9624,7 @@ def send_heartbeat(config: dict) -> bool:
 # daemon stays safe when `routes/` isn't on sys.path (some installs run the
 # sync daemon without the dashboard module loaded).
 _PENDING_SHAPES = {
-    "incidents", "investigation", "activity",
+    "incidents", "investigation", "activity", "error_groups", "session_catalog",
     "events", "sessions", "aggregates", "health", "transcript",
     # Added in P4 (#2990): new live shapes from P2 materialized rollups.
     "runtimes", "models", "rollup_sessions",
@@ -9664,6 +9664,8 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     method_map = {
         "incidents": "query_incidents",
         "investigation": "query_investigation",
+        "error_groups": "query_error_groups",
+        "session_catalog": "query_session_catalog",
         "activity": "query_activity",
         "events":     "query_events",
         "sessions":   "query_sessions",
@@ -9674,13 +9676,19 @@ def _local_dispatch_fallback(shape: str, args: dict) -> dict:
     method = method_map.get(shape)
     if not method:
         raise ValueError(f"unknown shape: {shape}")
-    if shape in ("incidents", "investigation", "activity"):
-        allowed = {"node_id", "runtime", "session_id", "cursor", "incident_id", "state", "limit"}
+    if shape in ("error_groups", "session_catalog"):
+        allowed = {"node_id", "runtime", "session_id", "limit"}
+        if shape == "error_groups":
+            allowed.add("days")
+        kwargs = {k: v for k, v in (args or {}).items() if k in allowed}
+    elif shape in ("incidents", "investigation", "activity"):
+        allowed = {"node_id", "runtime", "session_id", "cursor", "incident_id", "state", "limit", "event_id"}
         kwargs = {k: v for k, v in (args or {}).items() if k in allowed}
         if shape == "activity":
-            kwargs = {k: v for k, v in kwargs.items() if k not in ("incident_id", "state")}
+            kwargs = {k: v for k, v in kwargs.items() if k not in ("incident_id", "state", "event_id")}
         elif shape == "incidents":
             kwargs.pop("cursor", None)
+            kwargs.pop("event_id", None)
         else:
             kwargs.pop("state", None)
     else:
@@ -12533,7 +12541,7 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
                 "blob": blob,
                 "shape": shape,
                 "args_hash": _canonical_args_hash(args),
-                "ttl": 15 if shape in ("incidents", "investigation", "activity") else 3600,
+                "ttl": 15 if shape in ("incidents", "investigation", "activity", "error_groups", "session_catalog") else 3600,
             }, api_key)
         except Exception as e:
             log.warning("pending_query dispatch failed (id=%s shape=%s): %s",

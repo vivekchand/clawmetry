@@ -2381,6 +2381,24 @@
       "doc": "Durable incident investigations: evidence, recovery and live execution",
       "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
       "text": "When an execution is still running, the live view shall show persisted activity before completion and distinguish connection state, last observed activity and stale evidence; hidden or inactive views shall not maintain their own polling work."
+    },
+    {
+      "id": "AC-OBS-INV-003.1",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When incidental identifiers or timestamps differ in otherwise equivalent errors, entitled users shall see versioned groups scoped by runtime, provider, tool and error category, with occurrence count, affected sessions and first and last observation; authentication failures and rate limits shall remain distinct."
+    },
+    {
+      "id": "AC-OBS-INV-003.2",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When one error occurrence is resolved, its resolution shall remain event-specific and later occurrences shall remain visible; group previews shall obey existing redaction and content boundaries."
+    },
+    {
+      "id": "AC-OBS-INV-005.1",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When an entitled operator uses sessions list, inspect or watch, the CLI shall preserve runtime and session scope and support machine-readable JSON with the same incident identities, evidence and coverage semantics as the dashboard."
     }
   ]
 }

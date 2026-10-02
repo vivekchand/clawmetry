@@ -2133,6 +2133,7 @@ function switchTab(name) {
   // run on their own screen instead of on every tab.
   _cmCurrentTab = name;
   if (window.cmActivityVisibilityChanged) window.cmActivityVisibilityChanged();
+  if (window.cmErrorGroupsVisibilityChanged) window.cmErrorGroupsVisibilityChanged();
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
   // ...and CLOSE pane-scoped streams that don't belong to the tab we're
@@ -4516,6 +4517,7 @@ async function loadSimilarRuns(sessionId) {
 // ── Error triage (#2196 item #5) ────────────────────────────────────────────
 
 async function loadTriageList() {
+  if (window.cmLoadErrorGroups) cmLoadErrorGroups();
   var body = document.getElementById('triage-list-body');
   if (!body) return;
   var data;
@@ -4558,14 +4560,14 @@ async function submitResolveError() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({event_id: eid, note: note}),
     });
-    if (resp.ok) { idEl.value = ''; noteEl.value = ''; loadTriageList(); }
+    if (resp.ok) { idEl.value = ''; noteEl.value = ''; if (window.cmLoadErrorGroups) cmLoadErrorGroups(true); loadTriageList(); }
   } catch (e) {}
 }
 
 async function unresolveError(eid) {
   try {
     var resp = await fetch('/api/error-triage/resolve?event_id=' + encodeURIComponent(eid), {method: 'DELETE'});
-    if (resp.ok) loadTriageList();
+    if (resp.ok) { if (window.cmLoadErrorGroups) cmLoadErrorGroups(true); loadTriageList(); }
   } catch (e) {}
 }
 

@@ -47,7 +47,7 @@ def test_acknowledgement_blocks_cross_site_and_non_boolean_input(client):
 def test_shared_contract_is_content_scoped_and_daemon_allowlisted():
     from clawmetry.query_contract import QUERY_CONTRACT
     from routes.local_query import _DAEMON_METHODS
-    for shape in ("incidents", "investigation"):
+    for shape in ("incidents", "investigation", "error_groups", "session_catalog"):
         assert QUERY_CONTRACT[shape]["trust"] == "e2e"
         assert QUERY_CONTRACT[shape]["scope"] == "read:content"
         assert QUERY_CONTRACT[shape]["backing"] in _DAEMON_METHODS

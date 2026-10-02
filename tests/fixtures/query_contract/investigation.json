@@ -20,7 +20,7 @@
       "session_id": "sess-a"
     },
     "retained_after": "<volatile>",
-    "retention_days": 30,
+    "retention_days": 7,
     "returned": 2,
     "source": "persisted",
     "to_ts": "2026-01-02T10:00:02Z",
@@ -77,5 +77,6 @@
     "node_id": "agent+golden",
     "runtime": "openclaw",
     "session_id": "sess-a"
-  }
+  },
+  "selected_event_ids": []
 }
