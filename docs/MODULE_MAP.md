@@ -191,7 +191,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/doctor.py` | medium | clawmetry doctor — enterprise network connectivity diagnostics. |
 | `clawmetry/efficiency.py` | medium | Efficiency grade + measured savings (pure math). |
 | `clawmetry/endpoints.py` | small | clawmetry.endpoints — single source of truth for cloud endpoint resolution. |
-| `clawmetry/english.py` | small | Offline checks for the ClawMetry English policy, not a STE certification. |
+| `clawmetry/english.py` | medium | Offline checks for the ClawMetry English policy, not a STE certification. |
 | `clawmetry/entitlements.py` | huge | open-core entitlement resolution. |
 | `clawmetry/entitlements_capacity_batch.py` | small | has_capacity_batch + has_capacity_batch_at. |
 | `clawmetry/error_signal.py` | small | OSS delegating shim after the impl moved to clawmetry-pro. |
