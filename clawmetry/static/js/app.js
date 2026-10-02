@@ -1559,8 +1559,8 @@ async function checkHeartbeatStatus() {
       var gapStr = gap >= 3600 ? Math.floor(gap/3600) + 'h ' + Math.floor((gap%3600)/60) + 'm' : Math.floor(gap/60) + ' minutes';
       var intervalMin = Math.floor(data.interval_seconds / 60);
       var msg = data.status === 'silent'
-        ? 'Agent heartbeat SILENT for ' + gapStr + ' (expected every ' + intervalMin + 'm). Check if agent is running.'
-        : 'Heartbeat delayed: last seen ' + gapStr + ' ago (expected every ' + intervalMin + 'm)';
+        ? t('overview.hb_banner_silent', { gap: gapStr, interval: intervalMin }, 'Agent heartbeat SILENT for ' + gapStr + ' (expected every ' + intervalMin + 'm). Check if agent is running.')
+        : t('overview.hb_banner_delayed', { gap: gapStr, interval: intervalMin }, 'Heartbeat delayed: last seen ' + gapStr + ' ago (expected every ' + intervalMin + 'm)');
       document.getElementById('heartbeat-banner-msg').textContent = msg;
       banner.style.background = data.status === 'silent' ? '#7f1d1d' : '#451a03';
       banner.style.color = data.status === 'silent' ? '#fca5a5' : '#fbbf24';
@@ -16192,7 +16192,7 @@ async function loadMemoryAnalytics() {
   try {
     var d = await fetch('/api/memory-analytics').then(function(r){return r.json()});
     var statusColor = d.hasBloat ? '#ef4444' : (d.hasWarnings ? '#f59e0b' : '#22c55e');
-    var statusLabel = d.hasBloat ? '⚠ Bloat detected' : (d.hasWarnings ? '⚡ Growing' : '✓ Healthy');
+    var statusLabel = d.hasBloat ? '⚠ ' + t('memory.status_bloat', null, 'Bloat detected') : (d.hasWarnings ? '⚡ ' + t('memory.status_growing', null, 'Growing') : '✓ ' + t('overview.status_healthy', null, 'Healthy'));
     var html = '<div class="card" style="padding:16px;margin-bottom:0">';
     // Stats row
     html += '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:12px">';
@@ -17741,7 +17741,7 @@ async function loadSystemHealth() {
       if (hbEl) {
         var hbStatus = hbData.status || 'unknown';
         var hbDot = hbStatus === 'ok' ? '🟢' : (hbStatus === 'warning' ? '🟡' : (hbStatus === 'silent' ? '🔴' : '⚪'));
-        var hbLabel = hbStatus === 'ok' ? 'Healthy' : (hbStatus === 'warning' ? 'Delayed' : (hbStatus === 'silent' ? 'SILENT' : t('overview.no_data_yet', null, 'No data yet')));
+        var hbLabel = hbStatus === 'ok' ? t('overview.status_healthy', null, 'Healthy') : (hbStatus === 'warning' ? t('overview.hb_status_delayed', null, 'Delayed') : (hbStatus === 'silent' ? t('overview.hb_status_silent', null, 'SILENT') : t('overview.no_data_yet', null, 'No data yet')));
         var hbGap = hbData.gap_seconds;
         var hbDetail = '';
         if (hbGap != null) {
@@ -28227,15 +28227,15 @@ function loadToolData(toolKey, comp, isRefresh) {
     } else if (toolKey === 'cron') {
       var jobs = data.cron_jobs || [];
       html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">';
-      html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + jobs.length + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Cron Jobs</div></div>';
+      html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:var(--text-primary);">' + jobs.length + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">' + t('overview.cron_jobs', null, 'Cron Jobs') + '</div></div>';
       var cronOk = jobs.filter(function(j){return j.lastStatus!=='error';}).length;
       var cronErr = jobs.filter(function(j){return j.lastStatus==='error';}).length;
-      html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#22c55e;">' + cronOk + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Healthy</div></div>';
-      html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:'+(cronErr>0?'#ef4444':'var(--text-primary)')+';">' + cronErr + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">Errors</div></div>';
+      html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:#22c55e;">' + cronOk + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">' + t('overview.status_healthy', null, 'Healthy') + '</div></div>';
+      html += '<div style="background:var(--bg-secondary);border-radius:10px;padding:12px;text-align:center;"><div style="font-size:24px;font-weight:700;color:'+(cronErr>0?'#ef4444':'var(--text-primary)')+';">' + cronErr + '</div><div style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">' + t('overview.cron_errors', null, 'Errors') + '</div></div>';
       html += '</div>';
 
       if (jobs.length > 0) {
-        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Scheduled Jobs</div>';
+        html += '<div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">' + t('overview.scheduled_jobs', null, 'Scheduled Jobs') + '</div>';
         html += '<div style="display:flex;flex-direction:column;gap:6px;max-height:55vh;overflow-y:auto;">';
         jobs.forEach(function(j) {
           var isErr = j.lastStatus === 'error';
