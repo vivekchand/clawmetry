@@ -8917,9 +8917,10 @@ def main() -> None:
 
     p_mcp = sub.add_parser(
         "mcp",
-        help="Start the MCP server with `mcp` over stdio. Register it with `mcp install [--runtime "
-             "<id>|all] [--dry-run] [--write-guidance]`. Remove registrations with `mcp "
-             "uninstall`. Show status with `mcp status`.",
+        help="Start the MCP server with `clawmetry mcp` over stdio. "
+             "Register it with `clawmetry mcp install [--runtime <id>|all] [--dry-run] [--write-guidance]`. "
+             "Remove registrations with `clawmetry mcp uninstall`. "
+             "Show status with `clawmetry mcp status`.",
     )
     p_mcp.add_argument("mcp_args", nargs="*")
 
@@ -9524,9 +9525,9 @@ def main() -> None:
     # `instrument` is likewise intercepted by the fast path (WO-57).
     p_instr = sub.add_parser(
         "instrument",
-        help="Enable OpenTelemetry export from a runtime to ClawMetry. Use `instrument <runtime> "
-             "[--project] [--content] [--uninstall | --status]`. Use `instrument --help` to list "
-             "runtimes.")
+        help="Enable OpenTelemetry export from a runtime to ClawMetry. "
+             "Use `clawmetry instrument <runtime> [--project] [--content] [--uninstall | --status]`. "
+             "Use `clawmetry instrument --help` to list runtimes.")
     p_instr.add_argument("instrument_args", nargs="*")
 
     # `hook` (singular) is likewise intercepted by its fast path in main();
@@ -9535,8 +9536,8 @@ def main() -> None:
     # into Claude Code's settings.json (clawmetry/claude_code_gate.py).
     p_hook = sub.add_parser(
         "hook",
-        help="Runtime pre-tool hook client, installed automatically. Usage: `hook claude-code "
-             "--base <dashboard url>`.")
+        help="Runtime pre-tool hook client, installed automatically. "
+             "Usage: `clawmetry hook claude-code --base <dashboard url>`.")
     p_hook.add_argument("hook_cmd", nargs="*")
 
     _subcmds = (

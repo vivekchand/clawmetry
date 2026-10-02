@@ -101,9 +101,10 @@ These results establish the implemented subset and regression behavior. They do 
 - The corpus contains 3,969 extracted messages, including 182 central CLI help values. It has zero mechanical findings.
 - The CLI audit found 35 mechanical findings in 30 help values. The migration revises 32 values, including the local setup explanations.
 - Nonliteral or empty central help fields fail the language gate and remain visible in the inventory. Hidden argparse fields are excluded explicitly.
-- The real rendered-help guard fails against the previous CLI source. It passes after restoring the revised help.
+- The real rendered-help guard fails against the previous CLI source. It passes after restoring the revised help. Command examples include the full `clawmetry` executable name; that regression check also fails against the prior text.
+- The latest full English CI test selection passes 149 tests, with the optional real DeepEval import test skipped. A focused CLI and inventory selection passes 111 tests.
 - Comparing the source AST with prose fields removed proves that parser options, defaults, choices, destinations, and executable behavior are unchanged.
 - The combined CLI, extraction, inventory, license-file, update, local-connection, setup, bundle, and integrity checks pass: 120 tests.
 - One existing setup test attempted to use the developer's dashboard log. It now uses a temporary log path. The tested startup implementation is unchanged.
-- CI explicitly runs both new test modules. The file-coverage baseline lists 314 files and retains the limit of 909 unlisted files.
+- CI explicitly runs both new test modules and the previously unlisted local-setup regression module. The file-coverage baseline lists 315 files and lowers the limit to 908 unlisted files.
 - Interactive prompts, result messages, other command parsers, editorial review, and release verification remain pending.

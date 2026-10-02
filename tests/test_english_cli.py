@@ -82,3 +82,10 @@ def test_help_keeps_conditions_and_important_options(cli_parser, command, fragme
     rendered = ' '.join(subcommands(cli_parser)[command].format_help().split())
     for fragment in fragments:
         assert fragment in rendered
+
+
+def test_top_level_examples_name_the_executable(cli_parser):
+    rendered = ' '.join(cli_parser.format_help().split())
+    assert 'clawmetry mcp install' in rendered
+    assert 'clawmetry instrument --help' in rendered
+    assert 'clawmetry hook claude-code --base' in rendered
