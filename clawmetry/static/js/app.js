@@ -1003,7 +1003,7 @@ async function saveWebhookConfig() {
     });
     if (!r.ok) throw new Error(t('app.save_failed', null, 'Save failed'));
     status.style.color = 'var(--text-success)';
-    status.textContent = 'Saved';
+    status.textContent = t('common.saved', null, 'Saved');
   } catch(e) {
     status.style.color = 'var(--text-error)';
     status.textContent = t("app.save_failed", null, "Save failed");
@@ -3510,7 +3510,7 @@ async function selfconfigSave() {
   var btn = document.getElementById('selfconfig-save-btn');
   if (!textarea || !_selfconfigCurrentFile) return;
   var newContent = textarea.value;
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; btn.style.opacity = '0.6'; }
+  if (btn) { btn.disabled = true; btn.textContent = t('common.saving', null, 'Saving\u2026'); btn.style.opacity = '0.6'; }
   var tracked = _isTrackedFile(_selfconfigCurrentFile);
   try {
     var r;
@@ -3540,7 +3540,7 @@ async function selfconfigSave() {
   } catch(e) {
     alert(t('app.save_failed_2', null, 'Save failed: ') + (e.message || e));
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Save'; btn.style.opacity = '1'; }
+    if (btn) { btn.disabled = false; btn.textContent = t('common.save', null, 'Save'); btn.style.opacity = '1'; }
   }
 }
 
@@ -11609,7 +11609,7 @@ async function saveRetentionSetting(usePlanDefault) {
     days = parseInt(input && input.value, 10);
     if (!(days >= 1)) {
       if (status) {
-        status.textContent = 'Enter a whole number of days, 1 or more.';
+        status.textContent = t('security.retention_invalid_days', null, 'Enter a whole number of days, 1 or more.');
         status.style.color = 'var(--danger, #dc2626)';
       }
       return;
@@ -11631,7 +11631,7 @@ async function saveRetentionSetting(usePlanDefault) {
       + ' is deleted from this machine within the hour, and cannot be '
       + 'recovered.';
     if (!window.confirm(_msg)) {
-      if (status) { status.textContent = 'Left unchanged.'; status.style.color = ''; }
+      if (status) { status.textContent = t('security.retention_unchanged', null, 'Left unchanged.'); status.style.color = ''; }
       return;
     }
   }
@@ -11650,7 +11650,7 @@ async function saveRetentionSetting(usePlanDefault) {
     }
   } catch (e) {
     if (status) {
-      status.textContent = 'Could not save.';
+      status.textContent = t('security.retention_save_failed', null, 'Could not save.');
       status.style.color = 'var(--danger, #dc2626)';
     }
   }
@@ -11877,7 +11877,7 @@ async function createApiKey() {
     });
     data = await res.json();
   } catch (e) {
-    if (err) err.textContent = 'ClawMetry did not answer. Is the dashboard still running?';
+    if (err) err.textContent = t('app.apikey_no_answer', null, 'ClawMetry did not answer. Is the dashboard still running?');
     return;
   }
   if (!data || data.ok === false) {
@@ -12154,7 +12154,7 @@ async function loadSecurityPage(silent) {
         badgeEl.style.background = '#dc2626';
         badgeEl.style.color = '#fff';
       } else {
-        badgeEl.textContent = 'Clean';
+        badgeEl.textContent = t('security.credential_scan_clean', null, 'Clean');
         badgeEl.style.background = 'rgba(34,197,94,0.15)';
         badgeEl.style.color = '#86efac';
       }
@@ -15926,7 +15926,7 @@ function cronEdit(jobId) {
   if (!job) return;
   document.getElementById('cron-edit-mode').value = 'edit';
   document.getElementById('cron-modal-title').textContent = t("app.edit_cron_job", null, "Edit Cron Job");
-  document.getElementById('cron-save-btn').textContent = 'Save';
+  document.getElementById('cron-save-btn').textContent = t('common.save', null, 'Save');
   document.getElementById('cron-edit-id').value = job.id;
   document.getElementById('cron-edit-name').value = job.name || '';
   var sched = job.schedule || {};
@@ -22999,19 +22999,19 @@ async function saveClaudeCoverageKey() {
   var msg = document.getElementById('claude-coverage-msg');
   if (!input) return;
   var key = String(input.value || '').trim();
-  if (!key) { if (msg) msg.textContent = 'Paste a key first.'; return; }
-  if (msg) msg.textContent = 'Connecting…';
+  if (!key) { if (msg) msg.textContent = t('app.coverage_key_paste_first', null, 'Paste a key first.'); return; }
+  if (msg) msg.textContent = t('app.coverage_key_connecting', null, 'Connecting…');
   try {
     var r = await fetch('/api/org-analytics/key', {
       method: 'POST', credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: key })
     });
-    if (!r.ok) { if (msg) msg.textContent = 'Could not save that key.'; return; }
+    if (!r.ok) { if (msg) msg.textContent = t('app.coverage_key_save_failed', null, 'Could not save that key.'); return; }
     input.value = '';
     await loadClaudeCoverage();
   } catch (e) {
-    if (msg) msg.textContent = 'Could not save that key.';
+    if (msg) msg.textContent = t('app.coverage_key_save_failed', null, 'Could not save that key.');
   }
 }
 
@@ -27826,7 +27826,7 @@ function loadAutomationAdvisorDataWithTime() {
   }
   
   body.innerHTML = '<div style="text-align:center;padding:40px;"><div style="font-size:24px;margin-bottom:20px;">' + t("app.loading_automation_analysis", null, "🧠 Loading automation analysis...") + '</div></div>';
-  document.getElementById('comp-modal-footer').textContent = 'Live';
+  document.getElementById('comp-modal-footer').textContent = t('common.live', null, 'Live');
   
   fetch('/api/automation-analysis').then(function(r){return r.json();}).then(function(data) {
     var html = '<div style="padding:20px;">';
@@ -30566,7 +30566,7 @@ function loadAgentGraph() {
       _renderAgentGraph(data.nodes || [], data.edges || []);
     })
     .catch(function() {
-      statusEl.textContent = 'Could not load agent graph. Is the daemon running?';
+      statusEl.textContent = t('tracing.agent_graph_load_failed', null, 'Could not load agent graph. Is the daemon running?');
     });
 }
 
@@ -30579,7 +30579,7 @@ function _renderAgentGraph(nodes, edges) {
   if (!nodes.length) {
     svgEl.style.display = 'none';
     var statusEl = document.getElementById('agent-graph-status');
-    if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'No agent span data in this time window.'; }
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = t('tracing.agent_graph_empty', null, 'No agent span data in this time window.'); }
     return;
   }
 
