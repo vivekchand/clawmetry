@@ -98,6 +98,7 @@ Source evidence and executable content stay outside the prose inventory.
 `scripts/check_english.py` reports source locations and message keys. Known forwarding helpers have explicit argument positions.
 Unsupported expressions remain pending. This lexer is not a full JavaScript parser; `node --check` verifies syntax separately.
 Regression tests cover escaped quotes, nested arguments, template expressions, Unicode escapes, division, and optional calls.
+The inventory separately discovers `frontend/src` TypeScript and TSX files as pending sources. Their JSX and translation API require separate extraction.
 
 Connection, Quality, and Security messages now have consistent catalog and fallback text.
 Security messages retain counts and uncertainty. Matching recorded hashes does not establish that no events were removed.

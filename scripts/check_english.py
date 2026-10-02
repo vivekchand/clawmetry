@@ -200,6 +200,8 @@ def inventory(root, messages, counts):
     checked_files = Counter(m.source for m in messages)
     candidates = []
     scopes = [("clawmetry/static/js", "*.js", "dynamic browser text"),
+              ("frontend/src", "*.ts", "TypeScript browser text"),
+              ("frontend/src", "*.tsx", "TypeScript browser screens"),
               ("clawmetry", "*.py", "CLI, generated text, and package messages"),
               ("routes", "*.py", "API and error explanations"),
               ("helpers", "*.py", "shared explanations"),

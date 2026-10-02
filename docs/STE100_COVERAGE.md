@@ -20,6 +20,7 @@ The baseline is empty for the currently extracted corpus. This does not close th
 | Activity turn explanations | Same synthesis boundary with a screen-specific fallback | Served behavior and editorial quality review |
 | Overview, alerts, and setup | Selected messages simplified | Complete dynamic-message and visual review |
 | Browser JavaScript | 980 literal translation fallbacks checked; literal keys and catalog text must match | 48 calls with dynamic or missing literal arguments; other rendering and completed messages remain pending |
+| TypeScript frontend | Source files discovered in the inventory | Screen text, translation fallbacks, and rendered expressions require extraction and review |
 | CLI, API errors, and desktop | Files discovered in the inventory | Extract owned explanations and migrate by feature |
 | English documentation | Files discovered in the inventory | Editorial migration and documentation lint integration |
 | Pro explanations | Separate repository | Inventory, migration, and verification |
@@ -82,7 +83,7 @@ Base revision: `19cb235ae5e8a14e44f5efe871d79ff9c0dc530f`.
 ## Browser follow-up verification on 2026-10-02
 
 - The checked corpus contains 3,787 messages in 48 sources, including 980 browser fallback occurrences. It has zero mechanical findings.
-- The inventory separately reports 48 calls with dynamic or missing literal arguments and 461 source files awaiting further extraction or review.
+- The inventory separately reports 48 calls with dynamic or missing literal arguments. The source candidates also include the TypeScript frontend, which was missing from the initial inventory.
 - The combined language, extraction, rendering, and generation-boundary run passes 134 tests. The optional real DeepEval import test is skipped.
 - Existing cost labels, catalog, translation, and browser tests pass: 154 tests. The JavaScript wrapper includes the 232 existing assertions.
 - Replacing the changed JavaScript with the first-stage source makes eight renderer cases fail. Restoring the change makes all 15 renderer cases pass.
@@ -90,5 +91,6 @@ Base revision: `19cb235ae5e8a14e44f5efe871d79ff9c0dc530f`.
 - The original connection message promised that nothing was lost. It now reports only that the collector cannot be reached and the list is unavailable.
 - CI explicitly runs both new test modules. The test-file coverage baseline lists 312 files and retains the limit of 909 unlisted files.
 - These results are local. Browser screenshots, hosted verification, editorial review, and a production release remain pending for this follow-up.
+- Two inventory regressions fail before TypeScript discovery is added. They pass afterward without adding those source files to the checked-message count.
 
 These results establish the implemented subset and regression behavior. They do not establish whole-product compliance or a production release.

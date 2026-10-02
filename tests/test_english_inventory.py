@@ -142,16 +142,19 @@ def test_invalid_base_ref_fails_closed(tmp_path):
     assert main(["--root", str(root), "--base-ref", "not-a-revision"]) == 1
 
 
-def test_inventory_does_not_count_source_files_as_reviewed(tmp_path):
+@pytest.mark.parametrize('relative_path', ['clawmetry/static/js/new-feature.js',
+                                          'frontend/src/feature.ts',
+                                          'frontend/src/pages/Feature.tsx'])
+def test_inventory_does_not_count_source_files_as_reviewed(tmp_path, relative_path):
     root = fixture_root(tmp_path)
-    source = root / "clawmetry/static/js/new-feature.js"
+    source = root / relative_path
     source.parent.mkdir(parents=True)
     source.write_text('show("An unchecked message");')
     messages = collect(root)
     counts, _ = violations(messages)
     result = inventory(root, messages, counts)
-    assert any(s["path"].endswith("new-feature.js") for s in result["remaining_sources"])
-    assert not any(s["path"].endswith("new-feature.js") for s in result["checked_sources"])
+    assert any(s["path"] == relative_path for s in result["remaining_sources"])
+    assert not any(s["path"] == relative_path for s in result["checked_sources"])
     assert "Full compliance is not established" in result["claim"]
     assert set(result["external_repositories"]) == {"clawmetry-pro", "clawmetry-cloud", "clawmetry-landing"}
 
