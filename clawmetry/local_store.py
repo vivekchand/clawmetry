@@ -15747,6 +15747,85 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             out.append(d)
         return out
 
+    def ingest_replay_events(self, rows: Iterable[dict[str, Any]]) -> int:
+        """Upsert canonical replay events (#4813) keyed on ``span_id``.
+
+        Rows come from an adapter ``iter_replay_events`` mapper through the
+        sync daemon. Each row is checked with ``replay_schema.validate``;
+        an invalid row is skipped and logged, never raised, so one bad
+        record cannot block a session's replay. Free-text payload fields
+        pass through the same secret redaction as events and spans before
+        they rest in DuckDB plaintext. A re-delivered span_id overwrites
+        its row (a mapper re-reading a grown transcript yields the same
+        ids) and keeps the original ``created_at``. Returns the number of
+        rows written."""
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: ingest_replay_events() called on read-only store"
+            )
+        from clawmetry import replay_schema as _rs
+        redact = None
+        try:
+            from clawmetry import redaction as _redaction
+            if not _redaction._disabled():
+                redact = _redaction.redact_text
+        except Exception:
+            redact = None  # partial install: never block ingest
+
+        def _scrub(value: Any) -> Any:
+            if redact is None:
+                return value
+            if isinstance(value, str):
+                return redact(value)
+            if isinstance(value, dict):
+                return {k: _scrub(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_scrub(v) for v in value]
+            return value
+
+        now = int(time.time() * 1000)
+        params: list[list[Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            errors = _rs.validate(row)
+            if errors:
+                log.debug("replay event %s skipped: %s",
+                          row.get("span_id"), "; ".join(errors))
+                continue
+            params.append([
+                str(row["span_id"]),
+                (str(row["parent_span_id"])
+                 if row.get("parent_span_id") else None),
+                str(row["session_id"]),
+                str(row["runtime"]),
+                str(row["kind"]),
+                float(row["ts"]),
+                _to_blob(_scrub(row.get("payload")) or {}),
+                _to_blob(row.get("mode")),
+                _to_blob(row.get("approval")),
+                now,
+            ])
+        if not params:
+            return 0
+        with self._write_lock:
+            self._conn.executemany("""
+                INSERT INTO replay_events (
+                    span_id, parent_span_id, session_id, runtime, kind, ts,
+                    payload, mode, approval, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (span_id) DO UPDATE SET
+                    parent_span_id = excluded.parent_span_id,
+                    session_id     = excluded.session_id,
+                    runtime        = excluded.runtime,
+                    kind           = excluded.kind,
+                    ts             = excluded.ts,
+                    payload        = excluded.payload,
+                    mode           = excluded.mode,
+                    approval       = excluded.approval
+            """, params)
+        return len(params)
+
     def query_replay_events(
         self,
         *,

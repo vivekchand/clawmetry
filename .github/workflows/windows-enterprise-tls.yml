@@ -21,6 +21,13 @@ on:
       - tests/test_enterprise_tls.py
       - tests/test_winconsole.py
       - .github/workflows/windows-enterprise-tls.yml
+      # The pinned install set itself. Without this path the job never runs on
+      # a bump to it, so a Dependabot bump that violates one of mitmproxy's
+      # exact-version caps merges green and the break only surfaces on the next
+      # PR that happens to touch one of the source files above. That is how the
+      # 2026-09-26 group bump (cryptography, h2, msgpack, tornado) sat broken on
+      # main for six days.
+      - .github/requirements/windows-enterprise-tls.txt
   workflow_dispatch:
 
 # Least privilege: checkout + pytest + a local mitmproxy. No API writes.

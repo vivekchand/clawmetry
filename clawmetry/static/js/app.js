@@ -2680,6 +2680,9 @@ async function loadNeedsYou() {
 async function loadActivityToday() {
   var strip = document.getElementById('activity-today-strip');
   if (!strip) return;
+  // A failed read replaces the counters with Retry. Keep the trusted template
+  // so the next successful read can restore the elements it updates.
+  if (strip._cmActivityMarkup === undefined) strip._cmActivityMarkup = strip.innerHTML;
   var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   var _q = (_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '';
   var d = {};
@@ -2703,6 +2706,7 @@ async function loadActivityToday() {
       brow = d.browser_actions_today || 0, msgs = d.messages_today || 0,
       uniq = d.unique_tools_today || 0;
   if (!(tool || exec || brow || msgs || uniq)) { strip.style.display = 'none'; return; }
+  if (!document.getElementById('at-tool-calls')) strip.innerHTML = strip._cmActivityMarkup;
   var set = function(id, v){ var el = document.getElementById(id); if (el) el.textContent = v; };
   set('at-tool-calls', tool); set('at-exec-calls', exec); set('at-browser-actions', brow);
   set('at-messages', msgs); set('at-unique-tools', uniq);
@@ -4597,7 +4601,29 @@ async function unresolveError(eid) {
 // fan-out, producing the "3× /api/overview in 1 second" burst.
 var _loadAllInFlight = null;
 var _loadAllLastFinishedMs = 0;
+var _loadAllLastSucceededMs = 0;
 var _LOADALL_COALESCE_MS = 2000;
+// These node-wide summaries are repainted by both activity and task updates.
+// Share the request and keep the result for one minute instead of fetching
+// twice on every ten-second tick. Failures are retried, never cached as data.
+var _cmHomeSummaryCache = {};
+function _cmFetchHomeSummary(url) {
+  var entry = _cmHomeSummaryCache[url];
+  if (entry && entry.pending) return entry.pending;
+  if (entry && Date.now() - entry.at < 60000) return Promise.resolve(entry.data);
+  entry = {};
+  _cmHomeSummaryCache[url] = entry;
+  entry.pending = fetchJsonWithTimeout(url, 12000).then(function (data) {
+    entry.data = data;
+    entry.at = Date.now();
+    entry.pending = null;
+    return data;
+  }, function (error) {
+    delete _cmHomeSummaryCache[url];
+    throw error;
+  });
+  return entry.pending;
+}
 // Human-first Overview hero (FLYWHEEL vision). Answers, in plain words a
 // first-timer gets in ~5s: is my agent alive, what did it just do, is it
 // healthy, what did it cost. Reads only already-fetched state (no new request):
@@ -4610,8 +4636,8 @@ function _renderWasteSummary() {
   // Overview "recoverable spend" card — the fleet roll-up of the per-session
   // cost-intel waste signals (the productivity-gains framework as a live number).
   var page = document.getElementById('page-overview');
-  if (!page) return;
-  fetch('/api/waste-summary').then(function(r){ return r.json(); }).then(function(w){
+  if (!page || !_cmIsOverviewTab()) return;
+  _cmFetchHomeSummary('/api/waste-summary').then(function(w){
     var ex = document.getElementById('cm-waste-summary');
     if (!w || typeof w !== 'object') { if (ex) ex.remove(); return; }
     var rows = [];
@@ -4667,8 +4693,8 @@ function _renderOutLoopSources() {
   // on any SDK (OpenAI Agents, LangChain, Vercel AI SDK, E2B, …). Self-removing
   // when no source is tagged, so it is invisible for users who don't use it.
   var page = document.getElementById('page-overview');
-  if (!page) return;
-  fetch('/api/local/external-calls?limit=2000').then(function(r){ return r.json(); }).then(function(d){
+  if (!page || !_cmIsOverviewTab()) return;
+  _cmFetchHomeSummary('/api/local/external-calls?limit=2000').then(function(d){
     var ex = document.getElementById('cm-outloop-sources');
     var rows = (d && Array.isArray(d.rows)) ? d.rows : (Array.isArray(d) ? d : []);
     var named = rows.filter(function(c){ return c && c.source; });
@@ -5196,6 +5222,7 @@ async function loadAll() {
     try { loadTriageList(); } catch (e) {}
     // Cohort compare suggestions (WO-60), fire-and-forget; honest empty states.
     try { loadCohortSuggested(); } catch (e) {}
+    _loadAllLastSucceededMs = Date.now();
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
@@ -13050,7 +13077,7 @@ function _cmApplyRuntimeScopeNote(name) {
   if (name === 'overview') {
     if (rt === 'all') { if (existing) existing.parentNode.removeChild(existing); return; }
     var _ovl = _cmRuntimeLabel(rt);
-    var _ovmsg = 'Showing <strong>' + escHtml(_ovl) + '</strong>: today\'s tasks, activity, tokens and cost below are scoped to it. The autonomy score, reliability and activity heatmap stay <strong>node-wide</strong> (all runtimes).';
+    var _ovmsg = 'Showing <strong>' + escHtml(_ovl) + '</strong>: today\'s tasks, activity, tokens and cost below are scoped to it. The autonomy score and reliability stay <strong>node-wide</strong> (all runtimes).';
     var _ovhtml = '<div id="' + noteId + '" style="display:flex;align-items:center;gap:8px;margin:0 0 14px;padding:9px 13px;border-radius:8px;background:rgba(59,130,246,0.10);border:1px solid rgba(59,130,246,0.35);font-size:12px;color:var(--text-secondary);line-height:1.4;"><span style="color:#3b82f6;font-size:13px;flex-shrink:0;">&#127760;</span><span>' + _ovmsg + '</span></div>';
     if (existing) existing.outerHTML = _ovhtml;
     else page.insertAdjacentHTML('afterbegin', _ovhtml);
@@ -13371,7 +13398,7 @@ function _cmApplyRuntimeSelection(val) {
   // Reload the current tab so any runtime-aware view re-filters in place.
   // loadAll coalesces calls 2 s apart; a switch must not be swallowed by that,
   // or the Overview keeps the previous runtime's cards until the next refresh.
-  try { _loadAllLastFinishedMs = 0; } catch (e) {}
+  try { _loadAllLastFinishedMs = 0; _loadAllLastSucceededMs = 0; } catch (e) {}
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
   // System Health refreshes on a 30s timer and is not part of loadAll, so
   // re-scope it now or the previous runtime's checks linger.
@@ -24012,6 +24039,13 @@ function startOverviewRefresh() {
     // _cmCurrentTab is unset on first boot, where Overview is the default.
     if (!_cmIsOverviewTab()) return;
     if (_overviewRefreshRunning) return;
+    // Keep live-session status fresh at ten seconds, but refresh the broad
+    // analytics fan-out only once a minute. Failed initial loads still retry
+    // on the next tick, and explicit navigation/refresh calls loadAll directly.
+    if (_loadAllLastSucceededMs && Date.now() - _loadAllLastSucceededMs < 60000) {
+      try { _renderOverviewHero(); } catch (e) {}
+      return;
+    }
     _overviewRefreshRunning = true;
     try { await loadAll(); } finally { _overviewRefreshRunning = false; }
   }, 10000);
