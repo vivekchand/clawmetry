@@ -188,6 +188,14 @@ def _holder_cmdline_verdict(pid: int) -> str:
     ``_proc_cmdline`` reads nothing on a Windows host without psutil, and
     treating "I could not look" as "not ours" there would let an upgrade
     reclaim a lock a perfectly healthy daemon still holds.
+
+    The one exception is Linux: ``/proc/<pid>/cmdline`` is always non-empty for
+    a live process.  An empty read there means the process has already exited or
+    is a zombie — the process-table entry is still visible to ``is_alive()`` but
+    the process can no longer hold a lock meaningfully.  Return ``"foreign"`` so
+    the stale entry is reclaimed rather than leaving the daemon locked out in a
+    supervisor restart loop (field-failure #6271, daemon_lock_refused on Linux /
+    py3.12 caused by a zombie holding a recycled PID).
     """
     try:
         from clawmetry.process_control import _proc_cmdline
@@ -195,6 +203,11 @@ def _holder_cmdline_verdict(pid: int) -> str:
     except Exception:  # noqa: BLE001
         return "unknown"
     if not blob:
+        # On Linux /proc/<pid>/cmdline is populated for every live process;
+        # empty means exited or zombie.  On other platforms an empty result
+        # just means "could not read" — keep "unknown" there.
+        if sys.platform.startswith("linux"):
+            return "foreign"
         return "unknown"
     if "clawmetry" in blob and ("sync" in blob or "daemon" in blob):
         return "ours"
