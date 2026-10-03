@@ -1444,10 +1444,7 @@ def _cmd_connect(args) -> None:
     _node_id = config.get("node_id", "")
     from clawmetry.endpoints import app_url as _resolve_app_url2
     _app_base_done = _resolve_app_url2()
-    _dashboard_url = (
-        f"{_app_base_done}/cloud"
-        f"#token={api_key}&key={enc_key}&node={_node_id}"
-    )
+    _dashboard_url = _cloud_dashboard_handoff_url(_app_base_done, api_key, enc_key, _node_id)
 
     # Cloud includes the local dashboard too (the onboard copy promises
     # BOTH app.clawmetry.com and localhost:8900) — make it true, best-effort.
@@ -1467,6 +1464,17 @@ def _cmd_connect(args) -> None:
     _warn_if_placeholder_account(api_key)
 
     _open_url_without_argv(_dashboard_url)
+
+
+def _cloud_dashboard_handoff_url(app_base, account_token, encryption_key, node_id):
+    """Carry opaque credentials and node IDs in the fragment without form decoding loss."""
+    from urllib.parse import quote, urlencode
+
+    fragment = urlencode(
+        {"token": account_token, "key": encryption_key, "node": node_id},
+        quote_via=quote,  # %20 for spaces; the legacy browser reader preserves raw '+'.
+    )
+    return f"{app_base}/cloud#{fragment}"
 
 
 def _quiet_unlink(path):

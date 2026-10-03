@@ -1222,6 +1222,30 @@ def auth_token():
 _v1_root = "/v1/" if os.environ.get("CLAWMETRY_V2_DEFAULT") == "1" else "/"
 
 
+def _static_asset_version() -> str:
+    """Return a cache key that changes when shipped static assets change.
+
+    The dashboard HTML is deliberately no-store, but browsers may cache a
+    same-version JavaScript URL. That made a freshly added tab look absent
+    until a hard refresh. Use the newest static-file mtime as a lightweight
+    content deployment key while keeping the visible product version honest.
+    """
+    import dashboard as _d
+
+    static_root = os.path.join(os.path.dirname(os.path.dirname(__file__)), "clawmetry", "static")
+    newest = 0
+    try:
+        for root, _dirs, files in os.walk(static_root):
+            for filename in files:
+                try:
+                    newest = max(newest, os.stat(os.path.join(root, filename)).st_mtime_ns)
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return f"{_d.__version__}-{newest}"
+
+
 @bp_auth.route(_v1_root)
 def index():
     import dashboard as _d
@@ -1262,6 +1286,7 @@ def index():
         render_template_string(
             _d.DASHBOARD_HTML,
             version=_d.__version__,
+            asset_version=_static_asset_version(),
             v2_enabled=v2_enabled,
             is_pro=is_pro,
             legacy_nav=legacy_nav,

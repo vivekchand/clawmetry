@@ -34,6 +34,51 @@
     </div>
   </div>
 
+  <!-- User-authored charts from Ask. Definitions persist in DuckDB and the
+       live query is re-run when Home opens, so this becomes a durable control
+       room rather than a one-session result. -->
+  <section id="custom-dashboard-section" style="display:none;margin-bottom:14px;">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:0 0 8px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">Your dashboard</div>
+      <a href="#" onclick="switchTab('assistant');return false;" style="font-size:12px;color:#60a5fa;text-decoration:none;">Ask for another panel →</a>
+    </div>
+    <p class="cm-dashboard-scope">Each panel keeps its saved filters. The runtime selector above does not change these panels.</p>
+    <div id="custom-dashboard-grid" class="cm-dashboard-grid"></div>
+  </section>
+
+  <!-- Safe, evidence-backed operating habits inspired by the agent-maxing
+       discussion: parallel work, session reuse, unattended supervision, and
+       routing by outcomes. Each link opens the surface that measures the
+       habit, so this is guidance rather than a promise of savings. -->
+  <section id="agent-efficiency-playbook" class="card" style="margin-bottom:14px;padding:16px 18px;">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.2px;">⚡ Agent efficiency playbook</div>
+      <span style="font-size:11px;color:var(--text-muted);">Use measured evidence to get more useful work from your agents.</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin-top:12px;">
+      <div style="padding:11px 12px;border:1px solid var(--border-secondary);border-radius:8px;">
+        <div style="font-weight:700;color:var(--text-primary);font-size:12px;">1. Parallelize independent work</div>
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;margin-top:4px;">Activity shows active sessions, throughput, and unproductive runs.</div>
+        <a href="#" onclick="switchTab('brain');return false;" style="display:inline-block;margin-top:7px;font-size:11px;color:#60a5fa;text-decoration:none;">Open Activity →</a>
+      </div>
+      <div style="padding:11px 12px;border:1px solid var(--border-secondary);border-radius:8px;">
+        <div style="font-weight:700;color:var(--text-primary);font-size:12px;">2. Continue work in the same session</div>
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;margin-top:4px;">Context usage shows prompt reuse, compactions, and what was measured.</div>
+        <a href="#" onclick="switchTab('context-economics');return false;" style="display:inline-block;margin-top:7px;font-size:11px;color:#60a5fa;text-decoration:none;">Open Context usage →</a>
+      </div>
+      <div style="padding:11px 12px;border:1px solid var(--border-secondary);border-radius:8px;">
+        <div style="font-weight:700;color:var(--text-primary);font-size:12px;">3. Let unattended work be watched</div>
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;margin-top:4px;">Guard and Sessions show what is still running, waiting, or needs review.</div>
+        <a href="#" onclick="switchTab('guard');return false;" style="display:inline-block;margin-top:7px;font-size:11px;color:#60a5fa;text-decoration:none;">Open Guard →</a>
+      </div>
+      <div style="padding:11px 12px;border:1px solid var(--border-secondary);border-radius:8px;">
+        <div style="font-weight:700;color:var(--text-primary);font-size:12px;">4. Route by outcome and cost</div>
+        <div style="font-size:12px;color:var(--text-secondary);line-height:1.45;margin-top:4px;">Models, Quality, and Cost together show whether a routing change helped.</div>
+        <a href="#" onclick="switchTab('models');return false;" style="display:inline-block;margin-top:7px;font-size:11px;color:#60a5fa;text-decoration:none;">Review routing →</a>
+      </div>
+    </div>
+  </section>
+
   <!-- Today's activity counters. JS: app.js loadActivityToday() -> /api/activity-today
        (cloud: cm-cloud-activity serves it from the snapshot's activityToday slice).
        Surfaces signals that were captured but never shown (UI-coverage audit 2026-06-06). -->
@@ -73,12 +118,13 @@
        one is set (transcripts are redacted before they go to the judge). -->
   <div id="eval-card" style="background:var(--bg-secondary);border:2px solid var(--border-primary);border-radius:12px;padding:18px 22px;margin-bottom:14px;box-shadow:var(--card-shadow);display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;">
     <div>
-      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;"><span id="eval-title-check" style="display:none;">✅ </span><span data-i18n="overview.eval_quality">Session quality</span></div>
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;"><span id="eval-title-check" style="display:none;">✅ </span><span data-i18n="overview.eval_quality">LLM judge quality</span></div>
       <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
         <span id="eval-avg-score" style="font-size:26px;font-weight:800;line-height:1.1;color:var(--text-muted);">Unknown</span>
         <span id="eval-coverage" style="font-size:12px;color:var(--text-muted);"></span>
       </div>
       <div id="eval-regression-line" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
+      <div style="font-size:11px;color:var(--text-muted);line-height:1.4;max-width:560px;margin-top:8px;">Task outcomes count whether a run finished successfully. The judge score checks how the work was done and needs a configured judge. <a href="#" onclick="switchTab('evals');return false;" style="color:#60a5fa;text-decoration:none;">Open Quality for the evidence →</a></div>
     </div>
     <!-- QW7: setup lives behind a small gear icon; the title keeps the old label. -->
     <button onclick="openEvalRubricModal()" title="Judge key &amp; rubric" data-i18n-title="overview.eval_setup" aria-label="Judge key &amp; rubric" style="background:var(--button-bg);color:var(--text-secondary);border:1px solid var(--border-primary);border-radius:8px;padding:6px 10px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;">⚙</button>
