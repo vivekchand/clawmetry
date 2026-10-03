@@ -1,5 +1,11 @@
 ## Unreleased
 
+### Fixed
+
+- Keep the Assistant in the dashboard's native theme, with the question box as the main focus. Answers stream as they arrive, and Stop cancels the active response.
+- Make hosted Setup show synced rules, skills, commands, and agent files with runtime filters and file previews. Explain unavailable files and unlock states directly in the page.
+- Make hosted Improve use encrypted, runtime-scoped guidance snapshots from DuckDB. Show evidence coverage and freshness, and exclude delegated agent messages from human guidance candidates.
+
 ### Added: a workflow replay is drawn as a graph
 
 - **Why:** a workflow runtime such as n8n runs a graph of nodes, and its replay was a flat list of raw event rows. The list did not show which node failed or which nodes never ran.
