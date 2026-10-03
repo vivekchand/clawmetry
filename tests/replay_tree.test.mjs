@@ -159,6 +159,88 @@ check('nested delegation sits inside its parent',
 check('delegation label escaped', nestedHtml.includes('Explore &lt;repo&gt;'));
 check('delegation approvals badge', nestedHtml.includes('replay-tree-badge approvals">✓1'));
 
+// A workflow whose start event carries nodes is drawn as a graph.
+const wfStart = {
+  span_id: 'wf1', kind: 'workflow.start', runtime: 'n8n',
+  payload: {
+    workflow: 'Digest <daily>', status: 'error',
+    nodes: [
+      {name: 'Trigger', type: 'manualTrigger', position: [0, 0]},
+      {name: 'Agent', type: 'agent', position: [200, 0]},
+      {name: 'Model', type: 'lmChatAnthropic', position: [200, 200]},
+      {name: 'Never <run>', type: 'code', position: [400, 0]},
+    ],
+    edges: [
+      {from: 'Trigger', to: 'Agent', type: 'main', output: 0},
+      {from: 'Model', to: 'Agent', type: 'ai_languageModel', output: 0},
+      {from: 'Agent', to: 'Never <run>', type: 'main', output: 0},
+      {from: 'Agent', to: 'Gone', type: 'main', output: 0},
+    ],
+  },
+};
+const stage = (node, status, extra) => ({
+  span_id: 'st-' + node, parent_span_id: 'wf1', kind: 'workflow.stage',
+  runtime: 'n8n', payload: Object.assign({node, status}, extra || {}),
+});
+const wfTree = {
+  session_id: 'n8n-1', runtime: 'n8n', row_count: 5, mode: null, turns: [],
+  workflows: [{span_id: 'wf1', kind: 'workflow', events: [
+    wfStart, stage('Trigger', 'success', {duration_ms: 1}),
+    stage('Agent', 'error', {is_error: true, error: 'boom'}),
+    stage('Model', 'success'), stage('Model', 'error', {is_error: true}),
+  ]}],
+};
+const wfMount = new _StubEl('div');
+api.renderTree(wfTree, wfMount);
+const wfHtml = wfMount.innerHTML;
+check('workflow graph rendered', wfHtml.includes('<svg class="replay-wf-graph"'));
+check('one box per node', (wfHtml.match(/class="replay-wf-node"/g) || []).length === 4);
+check('edge to an unknown node is dropped',
+      (wfHtml.match(/class="replay-wf-edge/g) || []).length === 3);
+check('sub-node edge is marked', wfHtml.includes('replay-wf-edge replay-wf-edge-sub'));
+check('node that ran well is marked success',
+      wfHtml.includes('data-node="Trigger" data-status="success"'));
+check('failed node is marked error', wfHtml.includes('data-node="Agent" data-status="error"'));
+check('latest run of a node wins', wfHtml.includes('data-node="Model" data-status="error"'));
+check('node with no run is marked none',
+      wfHtml.includes('data-node="Never &lt;run&gt;" data-status="none"'));
+check('node name escaped', !wfHtml.includes('Never <run>'));
+check('workflow name in the summary, escaped', wfHtml.includes('workflow Digest &lt;daily&gt;'));
+check('run count caption', wfHtml.includes('3 of 4 nodes ran'));
+check('event rows stay available', wfHtml.includes('class="replay-wf-events"') &&
+      wfHtml.includes('workflow.stage'));
+
+// No canvas positions: nodes are placed in columns and still all drawn.
+const noPos = JSON.parse(JSON.stringify(wfTree));
+noPos.workflows[0].events[0].payload.nodes.forEach(n => { delete n.position; });
+const noPosMount = new _StubEl('div');
+api.renderTree(noPos, noPosMount);
+check('graph without positions still draws every node',
+      (noPosMount.innerHTML.match(/class="replay-wf-node"/g) || []).length === 4);
+check('graph without positions has no NaN', !noPosMount.innerHTML.includes('NaN'));
+
+// A start with no nodes (a Goose recipe) keeps the plain list.
+const recipeMount = new _StubEl('div');
+api.renderTree({
+  session_id: 'g1', runtime: 'goose', row_count: 1, mode: null, turns: [],
+  workflows: [{span_id: 'r1', kind: 'workflow', events: [
+    {span_id: 'r1', kind: 'workflow.start', runtime: 'goose',
+     payload: {workflow: 'recipe', title: 'Release notes', steps: []}}]}],
+}, recipeMount);
+check('workflow without nodes has no graph', !recipeMount.innerHTML.includes('replay-wf-graph'));
+check('workflow without nodes still lists its events',
+      recipeMount.innerHTML.includes('workflow.start'));
+check('recipe title in the summary', recipeMount.innerHTML.includes('workflow Release notes'));
+
+// Data n8n keeps outside the database: the graph, and a note instead of counts.
+const offMount = new _StubEl('div');
+const off = JSON.parse(JSON.stringify(wfTree));
+off.workflows[0].events = [off.workflows[0].events[0]];
+off.workflows[0].events[0].payload.run_data = 'offloaded:fs';
+api.renderTree(off, offMount);
+check('offloaded run says the node runs are not stored',
+      offMount.innerHTML.includes('not stored in the database'));
+
 if (fail > 0) {
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(1);
