@@ -47,7 +47,7 @@ laat zien welke, per runtime), en een actie observeren is niet hetzelfde als hem
 blokkeren ([welke bedieningsmogelijkheden echt zijn, per runtime](docs/APPROVALS.md)).
 
 
-## Werkt met 32 agent runtimes
+## Werkt met 33 agent runtimes
 
 **Gratis in de open source app:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
@@ -80,7 +80,7 @@ Twee vragen die het waard zijn om te beantwoorden voordat je een agent-vergelijk
 Een gebruikspercentage is alleen zo eerlijk als waar het door gedeeld wordt. ClawMetry
 schaalt het venster per provider op basis van [een tabel die je kunt lezen en waar je een
 PR op kunt indienen](clawmetry/context_windows.py), die Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama en GLM dekt. Het meet niet alle 32
+DeepSeek, Kimi, Qwen, Mistral, Llama en GLM dekt. Het meet niet alle 33
 runtimes met de liniaal van één leverancier. Dat maakt uit: een beurt van 300K GPT-5-tokens
 afgezet tegen Anthropics 200K leest als ">100%, overlopen" terwijl deze eigenlijk op 75% van
 GPT-5's 400K zit. Diezelfde liniaal verbergt een daadwerkelijk overlopen beurt van 130K
@@ -100,7 +100,7 @@ schoon" of "we zijn blind"**. Een `0` die eigenlijk blind betekent, zegt dat ook
 
 | Pad | Toegevoegd aan je agent | Standaard? |
 |---|---|---|
-| Sessiebestand-tailing (alle 32 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
+| Sessiebestand-tailing (alle 33 runtimes) | **0**. Apart proces, geen ClawMetry-code in je agent | aan |
 | HTTP-interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** per LLM-aanroep, oftewel 0,009% van een aanroep van 5s | uit |
 | Pre-tool hook-gate (warme cache) | **+44 ms** per gecontroleerde tool-aanroep, boven een interpreter-basis van 36 ms | uit |
 | Handhavingsproxy | **+9,7 ms** per LLM-aanroep | uit |

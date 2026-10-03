@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 import tempfile
 import time
@@ -8170,6 +8171,7 @@ _LITE_RT_LABELS = {
     "replit": "Replit Agent",
     "muse_code": "Muse Code",
     "openexecutive": "OpenExecutive",
+    "opendots": "OpenDots",
 
 }
 
@@ -15060,6 +15062,7 @@ _FAMILY_ADAPTER_SPECS = (
     # the audit log with per-call usage, and the outbound sends its scheduler
     # has queued. The store has no fixed home, so the adapter discovers it.
     ("clawmetry_pro.adapters.openexecutive", "OpenExecutiveAdapter"),
+    ("clawmetry_pro.adapters.opendots", "OpenDotsAdapter"),
 )
 
 
@@ -16216,6 +16219,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # would freeze every quiet session at whatever it was last doing.
                 # Cheap: adapter fields only, no event read.
                 _s_extra = s.extra if isinstance(s.extra, dict) else {}
+                # Some native stores update records without advancing their
+                # timestamps (OpenDots late call transcripts). Adapters may
+                # provide a content digest to invalidate this session's mark.
+                _session_rev = _ingest_rev
+                _data_rev = _s_extra.get("ingestRevision")
+                if isinstance(_data_rev, str) and re.fullmatch(r"[0-9a-f]{16,64}", _data_rev):
+                    _session_rev += "/data:" + _data_rev
                 _record_session_phase(
                     store, ns_id, runtime,
                     phase=getattr(s, "phase", None),
@@ -16257,7 +16267,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 _child_running = bool(getattr(s, "parent_id", None)) and (
                     (getattr(s, "cost_status", "") or "") == "running")
                 if (_hw_ts and _activity and _activity <= _hw_ts
-                        and _hw_rev == _ingest_rev and not _child_running):
+                        and _hw_rev == _session_rev and not _child_running):
                     continue
                 metadata = {
                     "runtime": runtime,
@@ -16648,13 +16658,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         # again. Only on a clean ingest -- a failure leaves the
                         # mark behind so we retry the session next cycle.
                         if _activity:
-                            _evt_hw[ns_id] = _activity + "@@" + _ingest_rev
+                            _evt_hw[ns_id] = _activity + "@@" + _session_rev
                     except Exception as _ee:
                         log.warning("family event ingest failed (%s): %s", ns_id, _ee)
                 elif _activity:
                     # No event rows (e.g. an empty/metadata-only session): still
                     # mark it seen so we don't re-scan it every cycle forever.
-                    _evt_hw[ns_id] = _activity + "@@" + _ingest_rev
+                    _evt_hw[ns_id] = _activity + "@@" + _session_rev
                 # Replay stream (#4813): adapters with iter_replay_events
                 # feed the replay_events table for this session. Independent
                 # of the event rows above so an empty transcript read still
@@ -16945,6 +16955,7 @@ _RUNTIME_PREFIXES = frozenset({
     "replit",
     "muse_code",
     "openexecutive",
+    "opendots",
 })
 
 

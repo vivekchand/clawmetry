@@ -2245,6 +2245,24 @@
       "text": "When historical evidence was already irreversibly redacted, the system shall preserve that redaction and shall not claim it can reconstruct the original value."
     },
     {
+      "id": "AC-GOV-ERS-011.1",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When OpenDots is selected on an unentitled installation, the system shall keep it behind the paid runtime boundary and shall not ingest its sessions or events."
+    },
+    {
+      "id": "AC-GOV-ERS-011.2",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When OpenDots coverage is displayed, the system shall identify local conversation metadata, scheduled work and call receipts as the supported evidence and shall mark model, token and cost records unavailable."
+    },
+    {
+      "id": "AC-GOV-ERS-011.3",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When a local receipt changes without a newer activity timestamp, the system shall ingest the changed content once and shall deduplicate subsequent unchanged reads."
+    },
+    {
       "id": "AC-STE-002.1",
       "doc": "Clear English explanations",
       "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",

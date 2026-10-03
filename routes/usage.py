@@ -77,6 +77,7 @@ _NON_OPENCLAW_RT_SET = frozenset((
     "replit",
     "muse_code",
     "openexecutive",
+    "opendots",
 ))
 
 def _event_runtime(ev) -> str:
@@ -1208,6 +1209,7 @@ _RUNTIME_PREFIXES = frozenset({
     "replit",
     "muse_code",
     "openexecutive",
+    "opendots",
 })
 
 

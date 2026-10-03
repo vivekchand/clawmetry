@@ -1083,6 +1083,7 @@ jobs:
             tests/test_family_runtime_ingest.py \
             tests/test_family_usage_accounting.py \
             tests/test_phase4_adapter_move.py \
+            tests/test_opendots_wiring.py \
             tests/test_openclaw_detection_real.py \
             tests/test_openclaw_doctor_cache.py \
             tests/test_repo_scan_daemon_wiring.py \

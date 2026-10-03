@@ -34,6 +34,15 @@
 
 - Context gauges and coverage share prompt-token readings, including adapter fields and fully cached prompts. Missing peaks and compaction measurements remain distinct from observed zero; cloud snapshots retain measurement status.
 
+### Added: OpenDots runtime wiring
+
+- Register OpenDots through the paid adapter path, runtime catalogue, discovery,
+  filters and capability map. The Pro adapter reads local conversation metadata,
+  scheduled work and call receipts. Chat messages and model usage are not stored
+  in the local OpenDots database.
+- Allow adapters to supply a content digest for ingestion watermarks, so late
+  record updates with unchanged timestamps can reach the local store.
+
 ### Release: checked English explanations
 
 - **Why:** Dashboard explanations, generated summaries, browser fallbacks, and CLI help need consistent wording that preserves the recorded facts.

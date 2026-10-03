@@ -55,6 +55,8 @@ SCHEMA_PREFIX = "0.2."
 # attribution stable even for harnesses ClawMetry has no adapter for yet
 # (windsurf, kiro, goose, …).
 _AGENT_TO_RUNTIME = {
+    "opendots": "opendots",
+    "open-dots": "opendots",
     "claude-code": "claude_code",
     "codex": "codex",
     "cursor": "cursor",
