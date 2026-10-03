@@ -25699,6 +25699,14 @@ def run_daemon() -> None:
     except Exception as _e:
         log.warning("local query server: failed to start: %s", _e)
 
+    # Local collectors must not wait for cloud I/O or historical backfill.
+    # The daemon already owns its store and has published the query service.
+    try:
+        from clawmetry import extensions as _store_extensions
+        _store_extensions.emit("daemon.store.ready", {"node_id": config.get("node_id")})
+    except Exception as _e:
+        log.warning("local extension collectors could not start: %s", _e)
+
     # ── Startup sync: recent-first so Brain feed shows current activity ──
     try:
         from clawmetry import assistant_executor, assistant_relay, local_store
