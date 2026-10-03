@@ -328,3 +328,77 @@ def test_endpoint_returns_empty_shape_for_unknown_session(store, monkeypatch):
     assert body["turns"] == []
     assert body["workflows"] == []
     assert body["row_count"] == 0
+
+
+def _replay_client(store, monkeypatch):
+    from flask import Flask
+    from routes.sessions import bp_sessions
+    from clawmetry import local_store as ls
+
+    monkeypatch.setattr(
+        "routes.local_query.local_store_via_daemon",
+        lambda *a, **kw: None,
+    )
+    monkeypatch.setattr(ls, "get_store", lambda read_only=False: store)
+    app = Flask(__name__)
+    app.register_blueprint(bp_sessions)
+    return app.test_client()
+
+
+def _turn_rows(session_id, count):
+    return [{
+        "span_id": "%s:%06d" % (session_id, i),
+        "parent_span_id": None,
+        "session_id": session_id,
+        "runtime": "codex",
+        "kind": "llm.call",
+        "ts": 1_700_000_000.0 + i,
+        "payload": {"prompt": "p%d" % i},
+    } for i in range(count)]
+
+
+def test_replay_tree_reads_past_the_store_default(store, monkeypatch):
+    """A session longer than the store's 2000-row default is served whole.
+
+    The endpoint used the default limit, so a 2500-event session came back
+    as its first 2000 events with nothing saying the rest was missing.
+    """
+    assert store.ingest_replay_events(_turn_rows("codex:long", 2500)) == 2500
+    body = _replay_client(store, monkeypatch).get(
+        "/api/replay-tree/codex:long").get_json()
+    assert body["row_count"] == 2500
+    assert len(body["turns"]) == 2500
+    assert body["truncated"] is False
+
+
+def test_replay_tree_reports_a_cut_session(store, monkeypatch):
+    """Past the endpoint cap the tree is the earliest events, flagged."""
+    import routes.sessions as rs
+
+    monkeypatch.setattr(rs, "_REPLAY_TREE_MAX_EVENTS", 5)
+    assert store.ingest_replay_events(_turn_rows("codex:cut", 9)) == 9
+    client = _replay_client(store, monkeypatch)
+    body = client.get("/api/replay-tree/codex:cut").get_json()
+    assert body["truncated"] is True
+    assert body["event_limit"] == 5
+    assert body["row_count"] == 5
+    assert [t["turn_id"] for t in body["turns"]] == [
+        "codex:cut:%06d" % i for i in range(5)]
+
+    # Exactly at the cap is not a cut.
+    monkeypatch.setattr(rs, "_REPLAY_TREE_MAX_EVENTS", 9)
+    body = client.get("/api/replay-tree/codex:cut").get_json()
+    assert body["truncated"] is False
+    assert body["row_count"] == 9
+
+
+def test_replay_tree_cap_fits_the_daemon_proxy_ceiling():
+    """The ``replay_events`` query shape clamps to 10000 rows. The endpoint
+    asks for cap + 1, so a cap at or above that ceiling could never see the
+    extra row on that path and would report a long session as complete."""
+    import routes.sessions as rs
+    from routes.local_query import _coerce_args as sanitize
+
+    asked = rs._REPLAY_TREE_MAX_EVENTS + 1
+    got = sanitize("replay_events", {"session_id": "s", "limit": asked})
+    assert got["limit"] == asked

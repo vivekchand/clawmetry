@@ -2729,6 +2729,11 @@ body.has-profile-menu #logout-btn { display: none !important; }
   background: color-mix(in srgb, #d63b3b 24%, var(--bg-tertiary));
   border-color: #d63b3b; color: #fff;
 }
+.replay-tree-truncated {
+  padding: 6px 10px; border-radius: 6px; font-size: 12px;
+  background: var(--bg-secondary); color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+}
 .replay-tree-workflows { display: flex; flex-direction: column; gap: 6px; }
 .replay-tree-workflow { border-left: 3px solid var(--accent); padding: 6px 10px;
   background: var(--bg-secondary); border-radius: 6px; }

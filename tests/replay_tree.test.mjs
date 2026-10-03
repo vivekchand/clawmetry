@@ -87,6 +87,14 @@ check('yolo mode chip painted', populatedMount.innerHTML.includes('data-yolo="1"
 check('turn rendered', populatedMount.innerHTML.includes('data-turn-id="u1"'));
 check('llm.call event rendered', populatedMount.innerHTML.includes('llm.call'));
 
+check('complete tree has no cut notice', !populatedMount.innerHTML.includes('replay-tree-truncated'));
+
+// A cut tree says how many events it lists.
+const cutMount = new _StubEl('div');
+api.renderTree(Object.assign({}, tree, {truncated: true, row_count: 8000, event_limit: 8000}), cutMount);
+check('cut tree shows the notice', cutMount.innerHTML.includes('class="replay-tree-truncated"'));
+check('cut notice names the event count', cutMount.innerHTML.includes('The first 8000 events'));
+
 // Custom kind renderer wins over neutral fallback.
 api.registerKindRenderer('claude_code', 'llm.call', () => '<div class="CUSTOM"></div>');
 const customMount = new _StubEl('div');

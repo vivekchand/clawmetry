@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: long sessions were cut short in the replay tree without notice
+
+- **Why:** `GET /api/replay-tree/<session_id>` read the store with its default limit of 2000 events. A longer session came back as its first 2000 events and nothing said the rest was missing. Two Codex sessions on the test machine have more than 4500 replay events each.
+- **What:** the endpoint now reads up to 8000 events. The response carries `truncated` and `event_limit`. A session past the limit returns its earliest 8000 events with `truncated: true`, and the replay view shows a note that states how many events are listed.
+- **Verified:** 3 new endpoint tests cover a 2500-event session served whole, a session past the limit, and a session exactly at the limit. 3 new renderer checks cover the note.
+- **Limits:** a session past 8000 events still shows only its start. There is no paging yet.
+
 ### Fixed: sync daemon reclaims a stale lock left by a terminated process
 
 - The daemon now verifies that the lock-holder PID is alive before refusing to start on Linux. A process killed without cleanup (SIGKILL, container restart) left a stale lock that blocked all future daemon starts until the lock file was manually removed. Carries #6290.
