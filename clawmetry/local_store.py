@@ -805,6 +805,14 @@ _DDL = [
         -- 'none' when a session has events but no human prompt).
         intent                  VARCHAR,
         intent_source           VARCHAR,
+        -- #4814: how the session ran. Latest ``mode.changed`` replay event
+        -- wins (a session can enter and leave plan mode), so these are the
+        -- CURRENT mode and mode_resolved_at is that event's epoch seconds.
+        -- NULL until a replay mapper has reported a mode for the session.
+        mode_permission         VARCHAR,
+        mode_sandbox            VARCHAR,
+        mode_collaboration      VARCHAR,
+        mode_resolved_at        DOUBLE,
         PRIMARY KEY (agent_type, session_id)
     )
     """,
@@ -2910,6 +2918,11 @@ _MIGRATIONS_V2 = [
     ("sessions", "attention_since",  "BIGINT"),
     ("sessions", "attention_signal", "VARCHAR"),
     ("sessions", "attention_tool",   "VARCHAR"),
+    # #4814 — session mode, filled from mode.changed replay events.
+    ("sessions", "mode_permission",    "VARCHAR"),
+    ("sessions", "mode_sandbox",       "VARCHAR"),
+    ("sessions", "mode_collaboration", "VARCHAR"),
+    ("sessions", "mode_resolved_at",   "DOUBLE"),
     # Issue #2200 — hash-chain columns. chain_prev_hash/chain_hash are NULL on
     # existing rows and populated on new events when CLAWMETRY_INTEGRITY=1.
     ("events",   "chain_prev_hash",   "VARCHAR"),
@@ -15802,6 +15815,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
 
         now = int(time.time() * 1000)
         params: list[list[Any]] = []
+        latest_mode: dict[str, tuple[float, dict[str, Any]]] = {}
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -15823,6 +15837,14 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                 _to_blob(row.get("approval")),
                 now,
             ])
+            if row["kind"] == _rs.KIND_MODE_CHANGED:
+                # Latest mode per session in this batch (#4814). ``>=`` so
+                # that of two events in the same second the later one in
+                # transcript order wins.
+                sid = str(row["session_id"])
+                ts = float(row["ts"])
+                if sid not in latest_mode or ts >= latest_mode[sid][0]:
+                    latest_mode[sid] = (ts, row.get("mode") or {})
         if not params:
             return 0
         with self._write_lock:
@@ -15841,6 +15863,32 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                     mode           = excluded.mode,
                     approval       = excluded.approval
             """, params)
+            for sid, (ts, mode) in latest_mode.items():
+                # Project the session's current mode onto its sessions row
+                # (#4814) so the list can show it without loading the tree.
+                # A missing row is a no-op; the mapper re-yields the same
+                # events on the next pass. Never moves backwards in time.
+                # The WHERE also skips an unchanged row: a re-read transcript
+                # must not rewrite the session row every daemon cycle.
+                perm = _clean_str(mode.get("permission"), 64)
+                sandbox = _clean_str(mode.get("sandbox"), 64)
+                collab = _clean_str(mode.get("collaboration"), 64)
+                try:
+                    self._conn.execute(
+                        "UPDATE sessions SET mode_permission = ?, "
+                        "mode_sandbox = ?, mode_collaboration = ?, "
+                        "mode_resolved_at = ? WHERE session_id = ? AND "
+                        "(mode_resolved_at IS NULL OR mode_resolved_at < ? "
+                        " OR (mode_resolved_at = ? AND ("
+                        "  mode_permission IS DISTINCT FROM ? OR "
+                        "  mode_sandbox IS DISTINCT FROM ? OR "
+                        "  mode_collaboration IS DISTINCT FROM ?)))",
+                        [perm, sandbox, collab, ts, sid, ts, ts,
+                         perm, sandbox, collab],
+                    )
+                except Exception:
+                    log.debug("local store: session mode update failed "
+                              "for %s", sid, exc_info=True)
         return len(params)
 
     def query_replay_events(
@@ -17637,6 +17685,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                    s.attention_state, s.attention_since, s.attention_signal,
                    s.attention_tool,
                    s.intent, s.intent_source,
+                   s.mode_permission, s.mode_sandbox, s.mode_collaboration,
                    -- Trail outcome counts from the git join (plaintext,
                    -- no subjects). 0 when no scan has linked this session.
                    (SELECT COUNT(DISTINCT l.sha) FROM git_session_commits l
@@ -17654,7 +17703,9 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                 "last_active_at", "ended_at", "status", "total_tokens",
                 "cost_usd", "message_count", "metadata", "cwd", "git_branch",
                 "attention_state", "attention_since", "attention_signal",
-                "attention_tool", "intent", "intent_source", "commits"]
+                "attention_tool", "intent", "intent_source",
+                "mode_permission", "mode_sandbox", "mode_collaboration",
+                "commits"]
         # PR counts need the commit -> PR join; one grouped query for the
         # page rather than a correlated subquery per row.
         pr_counts: dict[str, dict[str, int]] = {}

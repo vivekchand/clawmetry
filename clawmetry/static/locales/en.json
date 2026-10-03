@@ -1879,5 +1879,12 @@
   "sessions.just_started_tip": "This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.",
   "sessions.not_measured_tip": "Not measured yet. The sync daemon has not read the transcript of this session.",
   "sessions.cost_downstream_tip_one": "The true cost of this ask. It spawned {count} sub-agent that spent this much downstream. It is billed under its own key but caused by this session. (Context graph)",
-  "sessions.cost_downstream_tip_other": "The true cost of this ask. It spawned {count} sub-agents that spent this much downstream. They are billed under their own keys but caused by this session. (Context graph)"
+  "sessions.cost_downstream_tip_other": "The true cost of this ask. It spawned {count} sub-agents that spent this much downstream. They are billed under their own keys but caused by this session. (Context graph)",
+  "sessions.mode_yolo": "YOLO",
+  "sessions.mode_yolo_tip": "This session runs tools without asking for permission.",
+  "sessions.mode_plan": "Plan",
+  "sessions.mode_plan_tip": "This session is in plan mode. The agent proposes changes and does not make them.",
+  "sessions.mode_accept_edits": "Auto-edit",
+  "sessions.mode_accept_edits_tip": "This session applies file edits without asking. Other tools still ask.",
+  "sessions.mode_sandbox_tip": "Sandbox: {sandbox}."
 }
