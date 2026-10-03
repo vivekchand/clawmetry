@@ -2442,6 +2442,30 @@
       "doc": "Conversational dashboards grounded in local agent evidence",
       "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
       "text": "When the user stops waiting, switches conversation or leaves Assistant, subsequent events shall not overwrite the visible conversation; abandoned streaming work shall release bounded request resources. Unavailable streaming transport shall produce an explicit recoverable error."
+    },
+    {
+      "id": "AC-ASSIST-006.1",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "On a connected hosted node with synced files, Setup shall show the available runtime inventory, category counts and readable instruction/skill contents, using the existing encrypted file transport. It shall not replace all measurements with Local only. Local-only credential-bearing runtime configuration remains excluded under AC-OBS-LADC-003.9, with a precise explanation for that category rather than disabling the page.\\"
+    },
+    {
+      "id": "AC-ASSIST-006.2",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "On a connected hosted node with recorded user turns, Improve shall show candidates and supporting evidence derived from the node's recorded history. It shall preserve the selected runtime or explicitly label an all-runtime view, and review shall remain read-only.\\"
+    },
+    {
+      "id": "AC-ASSIST-006.3",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "Missing keys, pending sync, unavailable nodes, older collectors and genuinely empty observations shall have distinct recoverable states. Missing or inaccessible data shall never be reported as measured zero, and changing runtime shall not retain the previous runtime's results.\\"
+    },
+    {
+      "id": "AC-ASSIST-006.4",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "Hosted reads shall reuse cached, bounded encrypted snapshots or on-demand relay; cloud servers shall not receive plaintext setup content or guidance excerpts, nor shall viewing a tab trigger model inference or agent configuration changes."
     }
   ]
 }
