@@ -2245,6 +2245,24 @@
       "text": "When historical evidence was already irreversibly redacted, the system shall preserve that redaction and shall not claim it can reconstruct the original value."
     },
     {
+      "id": "AC-GOV-ERS-011.1",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When OpenDots is selected on an unentitled installation, the system shall keep it behind the paid runtime boundary and shall not ingest its sessions or events."
+    },
+    {
+      "id": "AC-GOV-ERS-011.2",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When OpenDots coverage is displayed, the system shall identify local conversation metadata, scheduled work and call receipts as the supported evidence and shall mark model, token and cost records unavailable."
+    },
+    {
+      "id": "AC-GOV-ERS-011.3",
+      "doc": "Extended Runtime Support",
+      "doc_id": "4868d4ff-75ef-4044-821c-dc5f77bcf072",
+      "text": "When a local receipt changes without a newer activity timestamp, the system shall ingest the changed content once and shall deduplicate subsequent unchanged reads."
+    },
+    {
       "id": "AC-STE-002.1",
       "doc": "Clear English explanations",
       "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
@@ -2327,6 +2345,78 @@
       "doc": "Clear English explanations",
       "doc_id": "a5f5d75b-43b5-4f55-ab9a-393865c606ca",
       "text": "Language validation shall cause no additional model call or corrective retry, including in integrations that already retry invalid JSON."
+    },
+    {
+      "id": "AC-OBS-INV-001.1",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When repeated observations describe the same ongoing finding, the system shall retain one episode identity, its first observation and stable evidence references while updating its latest evidence and severity."
+    },
+    {
+      "id": "AC-OBS-INV-001.2",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When a later successful result establishes recovery from repeated tool failure, or later positive progress establishes recovery from a stuck loop, the system shall preserve the original episode and record the recovery evidence; a later recurrence shall receive a distinct episode identity."
+    },
+    {
+      "id": "AC-OBS-INV-001.3",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When a read fails, a detector cannot complete, an event window is empty, a check is disabled, or observations stop arriving, the system shall not report recovery from that absence."
+    },
+    {
+      "id": "AC-OBS-INV-001.4",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When an operator acknowledges a finding, the system shall retain that acknowledgement separately from its active, recovered or stale state, and shall preserve existing control capabilities, policy latches and entitlement behavior."
+    },
+    {
+      "id": "AC-OBS-INV-002.1",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When an operator opens a Guard finding, Tracing shall retain the selected node, runtime and session and identify the available implicated events, with explicit notice when retained evidence is unavailable."
+    },
+    {
+      "id": "AC-OBS-INV-002.2",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When an investigation is displayed, it shall explain what was observed and why, label measured, estimated or unknown cost, and display execution state separately from incident state."
+    },
+    {
+      "id": "AC-OBS-INV-002.3",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When local or hosted investigation requests exceed a preview limit, the system shall provide bounded continuation through the same read contract and report requested coverage, available coverage, truncation and node reachability without exposing plaintext content to the cloud server."
+    },
+    {
+      "id": "AC-OBS-INV-004.1",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When events arrive late relative to their source timestamps or a client reconnects, the live view shall resume by durable ingestion position with bounded pages, suppress duplicates and explicitly request resynchronization if the cursor cannot be honored."
+    },
+    {
+      "id": "AC-OBS-INV-004.2",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When an execution is still running, the live view shall show persisted activity before completion and distinguish connection state, last observed activity and stale evidence; hidden or inactive views shall not maintain their own polling work."
+    },
+    {
+      "id": "AC-OBS-INV-003.1",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When incidental identifiers or timestamps differ in otherwise equivalent errors, entitled users shall see versioned groups scoped by runtime, provider, tool and error category, with occurrence count, affected sessions and first and last observation; authentication failures and rate limits shall remain distinct."
+    },
+    {
+      "id": "AC-OBS-INV-003.2",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When one error occurrence is resolved, its resolution shall remain event-specific and later occurrences shall remain visible; group previews shall obey existing redaction and content boundaries."
+    },
+    {
+      "id": "AC-OBS-INV-005.1",
+      "doc": "Durable incident investigations: evidence, recovery and live execution",
+      "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
+      "text": "When an entitled operator uses sessions list, inspect or watch, the CLI shall preserve runtime and session scope and support machine-readable JSON with the same incident identities, evidence and coverage semantics as the dashboard."
     }
   ]
 }

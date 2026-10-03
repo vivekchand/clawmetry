@@ -4,13 +4,6 @@
 
 - The daemon now verifies that the lock-holder PID is alive before refusing to start on Linux. A process killed without cleanup (SIGKILL, container restart) left a stale lock that blocked all future daemon starts until the lock file was manually removed. Carries #6290.
 
-### Added: durable Guard investigations and committed activity replay
-
-- Guard findings retain their identity and evidence across refreshes and restarts. Operators can open a finding directly in Tracing, distinguish recovery from stale evidence, and acknowledge it independently of execution state.
-- The daemon persists incident episodes and positive recovery evidence in DuckDB. Scoped investigation and activity reads use bounded pages and committed ingestion positions, preserving late events and payload updates.
-- Brain and Flow share active-view subscriptions, pause when hidden, and reconnect without duplicating recorded work. Flow preserves native parallel calls, runtime identity and source timestamps, with explicit connection state and limited-preview scope.
-- The cloud companion relays encrypted reads and node-confirmed acknowledgements. Carries #6250.
-
 ### Added: OpenDots runtime support (Pro)
 
 - The OSS layer adds OpenDots to the runtime catalogue, daemon loader, discovery, runtime filters, and capability maps. The paid adapter ships through clawmetry-pro; the OSS layer is inert without it. Adapters without a session digest retain existing watermark behavior. Carries #6249.
@@ -22,6 +15,15 @@
 ### Hardened: bandit non-bulk medium findings are explicitly acknowledged
 
 - Security-scan annotations cover the remaining non-bulk `medium` findings so `make lint` passes the bandit pass without a suppression file. No behaviour change. Carries #6279.
+
+### Added: durable Guard investigations and persisted live activity
+
+- Loop and repeated tool failure findings retain their identity, evidence and recovery history across refreshes and restarts. Acknowledgement is separate from recovery. Missing telemetry is labelled stale.
+- Guard opens the implicated events in Tracing, with scoped history pages, explicit retention and preview limits, and separate execution and finding states. Hosted investigation uses encrypted node queries and confirmed acknowledgements.
+- Brain, Flow and investigation views share bounded activity reads backed by committed event positions. Reconnects replay late arrivals and updated payloads. Expired cursors request a fresh read. Hidden and inactive views pause their readers.
+- The store adds bounded incident and event-change tables. Older source events are not retroactively declared active incidents. Hosted deployment requires the matching cloud relay support.
+- Entitled recurring-error groups retain per-event resolution and open representative events directly in Tracing. Counts describe the bounded read window. Incomplete messages remain separate.
+- Session list, inspect and watch commands use the private extension and the same persisted reads, with JSON output and resumable activity checkpoints. Existing session commands remain available.
 
 ### Added: opt-in capability-gap export
 
@@ -56,6 +58,15 @@
 - Hosted dashboards retain Agents as the opening screen. Local-only surfaces explain where their data is available before making requests.
 
 - Context gauges and coverage share prompt-token readings, including adapter fields and fully cached prompts. Missing peaks and compaction measurements remain distinct from observed zero; cloud snapshots retain measurement status.
+
+### Added: OpenDots runtime wiring
+
+- Register OpenDots through the paid adapter path, runtime catalogue, discovery,
+  filters and capability map. The Pro adapter reads local conversation metadata,
+  scheduled work and call receipts. Chat messages and model usage are not stored
+  in the local OpenDots database.
+- Allow adapters to supply a content digest for ingestion watermarks, so late
+  record updates with unchanged timestamps can reach the local store.
 
 ### Release: checked English explanations
 

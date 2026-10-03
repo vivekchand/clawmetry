@@ -18,6 +18,8 @@
 
   <!-- TRACE DETAIL  -  MLflow-style split-pane (tree-left, span-detail-right) -->
   <div id="trace-detail" style="display:none;">
+    <section id="trace-investigation" hidden aria-label="Finding investigation"></section>
+    <div id="trace-standard-detail">
     <!-- Trace header: title (first prompt) + key stats inline -->
     <div class="card" id="trace-detail-meta" style="margin-bottom:10px;padding:14px 16px;"></div>
 
@@ -43,6 +45,7 @@
           Select a span on the left to see its <b data-i18n="app.chat">Chat</b>, <b data-i18n="app.inputs">Inputs</b>, <b data-i18n="app.outputs">Outputs</b>, <b data-i18n="app.attributes">Attributes</b>, and <b data-i18n="app.events">Events</b>.
         </div>
       </div>
+    </div>
     </div>
   </div>
 </div>

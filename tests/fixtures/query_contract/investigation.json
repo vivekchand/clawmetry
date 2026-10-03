@@ -1,0 +1,82 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "investigation",
+  "_via": "<volatile>",
+  "coverage": {
+    "evidence_complete": true,
+    "from_ts": "2026-01-02T10:00:01Z",
+    "has_more": true,
+    "incident_available": true,
+    "limit": 2,
+    "missing_event_ids": [],
+    "next_cursor": "eyJ2IjoxLCJzY29wZSI6ImU0M2Y4NWZjNWNiMTBmYTcwOGI5NmUwMiIsImtpbmQiOiJoaXN0b3J5IiwicG9zaXRpb24iOlsiMjAyNi0wMS0wMlQxMDowMDowMVoiLCJldi0wMDEiXX0",
+    "node_reachable": true,
+    "order": "source_time_desc_event_id_desc",
+    "payload_truncated_ids": [],
+    "requested": {
+      "incident_id": null,
+      "node_id": "agent+golden",
+      "runtime": "openclaw",
+      "session_id": "sess-a"
+    },
+    "retained_after": "<volatile>",
+    "retention_days": 7,
+    "returned": 2,
+    "source": "persisted",
+    "to_ts": "2026-01-02T10:00:02Z",
+    "truncated": true
+  },
+  "evidence_rows": [],
+  "execution": {
+    "ended_at": null,
+    "last_active_at": "2026-01-02T10:00:02Z",
+    "outcome": null,
+    "source": "persisted_session",
+    "status": "active"
+  },
+  "incident": null,
+  "native_spans": [],
+  "resync_required": false,
+  "rows": [
+    {
+      "agent_id": "main",
+      "agent_type": "openclaw",
+      "cost_usd": 0.003,
+      "data": {
+        "seq": 2,
+        "tool": "Bash"
+      },
+      "event_type": "tool_call",
+      "id": "ev-002",
+      "model": "claude-opus-4-7",
+      "node_id": "agent+golden",
+      "session_id": "sess-a",
+      "token_count": 30,
+      "ts": "2026-01-02T10:00:02Z",
+      "workspace_id": null
+    },
+    {
+      "agent_id": "main",
+      "agent_type": "openclaw",
+      "cost_usd": 0.002,
+      "data": {
+        "text": "golden alpha"
+      },
+      "event_type": "message",
+      "id": "ev-001",
+      "model": "claude-opus-4-7",
+      "node_id": "agent+golden",
+      "session_id": "sess-a",
+      "token_count": 20,
+      "ts": "2026-01-02T10:00:01Z",
+      "workspace_id": null
+    }
+  ],
+  "schema_version": 1,
+  "scope": {
+    "node_id": "agent+golden",
+    "runtime": "openclaw",
+    "session_id": "sess-a"
+  },
+  "selected_event_ids": []
+}

@@ -516,6 +516,9 @@ def build_guard_sessions_body(limit: int = 50, call=None,
         except (TypeError, ValueError):
             at_risk = 0.0
         candidate = {
+            "incident_id": details.get("incident_id"),
+            "incident_state": details.get("state"),
+            "node_id": details.get("node_id"),
             "kind": str(details.get("kind") or ""),
             "title": str(details.get("message") or ""),
             "detail": str(details.get("detail") or ""),

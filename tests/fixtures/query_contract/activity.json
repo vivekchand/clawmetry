@@ -1,0 +1,88 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "activity",
+  "_via": "<volatile>",
+  "brain_events": [
+    {
+      "agentId": "main",
+      "cost": 0.003,
+      "detail": "",
+      "eventId": "ev-002",
+      "model": "claude-opus-4-7",
+      "nodeId": "agent+golden",
+      "runtime": "openclaw",
+      "sessionId": "sess-a",
+      "src": "sess-a",
+      "time": "2026-01-02T10:00:02Z",
+      "tokens": 30,
+      "type": "TOOL_CALL"
+    },
+    {
+      "agentId": "worker",
+      "cost": 0.004,
+      "detail": "",
+      "eventId": "ev-003",
+      "model": "claude-haiku-4-5",
+      "nodeId": "agent+golden",
+      "runtime": "openclaw",
+      "sessionId": "sess-b",
+      "src": "sess-b",
+      "time": "2026-01-02T10:00:03Z",
+      "tokens": 40,
+      "type": "TOOL_CALL"
+    }
+  ],
+  "coverage": {
+    "node_reachable": true,
+    "payload_truncated_ids": [],
+    "preview_limited": true,
+    "read_at": "<volatile>"
+  },
+  "cursor": "<scope-bound-committed-position>",
+  "has_more": false,
+  "mode": "bootstrap",
+  "removed_ids": [],
+  "resync_required": false,
+  "rows": [
+    {
+      "agent_id": "main",
+      "agent_type": "openclaw",
+      "cost_usd": 0.003,
+      "data": {
+        "seq": 2,
+        "tool": "Bash"
+      },
+      "event_type": "tool_call",
+      "id": "ev-002",
+      "model": "claude-opus-4-7",
+      "node_id": "agent+golden",
+      "session_id": "sess-a",
+      "token_count": 30,
+      "ts": "2026-01-02T10:00:02Z",
+      "workspace_id": null
+    },
+    {
+      "agent_id": "worker",
+      "agent_type": "openclaw",
+      "cost_usd": 0.004,
+      "data": {
+        "seq": 3,
+        "tool": "Bash"
+      },
+      "event_type": "tool_call",
+      "id": "ev-003",
+      "model": "claude-haiku-4-5",
+      "node_id": "agent+golden",
+      "session_id": "sess-b",
+      "token_count": 40,
+      "ts": "2026-01-02T10:00:03Z",
+      "workspace_id": null
+    }
+  ],
+  "schema_version": 1,
+  "scope": {
+    "node_id": "agent+golden",
+    "runtime": null,
+    "session_id": null
+  }
+}
