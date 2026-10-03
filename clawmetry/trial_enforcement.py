@@ -136,6 +136,17 @@ _ALLOWED_PATH_EXACT = frozenset({
     "/robots.txt",
     "/api/entitlement",         # exact, also matched by prefix — belt & braces
     "/api/health",              # k8s / docker / cURL liveness probe
+    # Existing physical stop controls must remain reachable after a trial
+    # expires. Authentication still applies; neither reset nor trace reads
+    # are exempted. Assets are restricted to the stop-capable shell.
+    "/robotics",
+    "/api/robotics/control",
+    "/api/robotics/control/stop",
+    "/robotics/assets/app.js",
+    "/robotics/assets/style.css",
+    "/robotics/assets/pose.js",
+    "/robotics/assets/playback.js",
+    "/robotics/assets/hardware.json",
     "/api/account/signout",     # forget the wrong account. Strictly narrows
                                 # entitlement (it deletes the licence), so it
                                 # can never be a way around the block

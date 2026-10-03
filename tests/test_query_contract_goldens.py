@@ -63,6 +63,7 @@ DISPATCH_ARGS = {
     # OSS-only installation: the paid plugin reports explicit unavailability.
     "robotics_runs": {},
     "robotics_events": {"run_id": "a" * 32},
+    "robotics_incidents": {"run_id": "a" * 32},
 }
 
 # health() fields that legitimately vary run-to-run / machine-to-machine.

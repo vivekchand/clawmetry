@@ -37,7 +37,7 @@ key is the same fact the server enforces.
 | - | - | - |
 | `read:metrics` | Counts, tokens, cost and health. No prompts or replies. | `agent_graph`, `aggregates`, `health`, `models`, `runtimes` |
 | `read:sessions` | One row per session: title, model, status, totals. | `rollup_sessions`, `search`, `sessions`, `similar_sessions` |
-| `read:traces` | Spans, traces and outbound API calls. | `external_calls`, `robotics_events`, `robotics_runs`, `spans`, `traces` |
+| `read:traces` | Spans, traces and outbound API calls. | `external_calls`, `robotics_events`, `robotics_incidents`, `robotics_runs`, `spans`, `traces` |
 | `read:content` | The turns themselves: prompts, replies, tool calls. | `activity`, `error_groups`, `events`, `incidents`, `investigation`, `replay_events`, `session_catalog`, `session_context`, `transcript`, `transcript_page` |
 
 `read:metrics` is exactly the `plaintext` trust class: a metrics-scoped
@@ -65,6 +65,7 @@ pinned by CI, not by convention.
 | `models` | live | plaintext | `read:metrics` | `query_rollup_model_daily` | `runtime`, `since`, `until`, `limit` (default 1000, range 1..10000) | Per-model daily token/cost rollup across runtimes. |
 | `replay_events` | live | e2e | `read:content` | `query_replay_events` | `session_id` (required), `limit` (default 2000, range 1..10000) | Canonical replay-event rows for one session (#4813). Rows in kind-agnostic order; the /api/replay-tree endpoint groups them into turns/delegations/workflows/approvals. |
 | `robotics_events` | live | e2e | `read:traces` | `robotics_events` | `run_id` (required), `after` (default 0, range 0..1000000000), `limit` (default 500, range 1..1000), `before`, `tail` (default False) | Paid robot trace page, ordered by source sequence with a continuation cursor. |
+| `robotics_incidents` | live | e2e | `read:traces` | `robotics_incidents` | `run_id` (required), `before_ns`, `before_id`, `limit` (default 64, range 1..64) | Durable paid robot Guard incident history with a stable page cursor. |
 | `robotics_runs` | live | e2e | `read:traces` | `robotics_runs` | `limit` (default 50, range 1..100), `before_ns`, `before_run_id` | Paid robot run summaries and measured state, newest first with a stable page cursor. |
 | `rollup_sessions` | live | e2e | `read:sessions` | `query_rollup_sessions` | `runtime`, `limit` (default 200, range 1..2000) | Per-session materialized summary (title, status, totals, stuck flag). |
 | `runtimes` | live | plaintext | `read:metrics` | `query_rollup_runtime_daily` | `since`, `until`, `limit` (default 1000, range 1..10000) | Per-runtime daily activity/cost rollup (claude_code, openclaw, ...). |
@@ -83,4 +84,4 @@ pinned by CI, not by convention.
 | `session` | planned | e2e | `read:sessions` | `query_sessions_table` | `session_id` (required) | Single-session detail row (title, status, outcome, totals). |
 | `usage` | planned | plaintext | `read:metrics` | `rollup_usage_daily` | `runtime`, `since`, `until` | Daily token/cost usage series (input/output/cache splits). |
 
-Live methods: 24. Planned methods: 5.
+Live methods: 25. Planned methods: 5.

@@ -4110,3 +4110,6 @@ body.has-profile-menu #logout-btn { display: none !important; }
 body.cm-assistant-active #update-banner,
 body.cm-assistant-active #license-expired-banner[data-ending-trial="true"] { display: none !important; }
 .cm-dashboard-number { font-size: 42px; font-weight: 650; padding: 22px; }
+
+/* Plugin-owned AI views share the normal dashboard header and runtime filter. */
+.cm-ai-view-switch{display:flex;align-items:center;gap:2px;border:1px solid var(--border-primary,#232329);border-radius:7px;padding:3px;flex-shrink:0}.cm-ai-view-switch a{padding:5px 8px;color:var(--text-muted,#9b9ba3);font-size:11px;font-weight:600;white-space:nowrap;text-decoration:none;border-radius:4px}.cm-ai-view-switch a[aria-current=page]{background:var(--bg-hover,#1a1a1e);color:var(--text-primary,#f2f2f3)}.cm-ai-view-switch a:hover{color:var(--text-primary,#f2f2f3)}.cm-ai-view-switch a:focus-visible{outline:2px solid var(--text-accent,#60a5fa);outline-offset:2px}

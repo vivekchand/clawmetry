@@ -84,7 +84,7 @@ def test_statuses_and_version():
 
 def _required_args(name: str) -> dict:
     return {
-        a: "probe-value"
+        a: "a" * 32 if name == "robotics_incidents" and a == "run_id" else "probe-value"
         for a, meta in qc.QUERY_CONTRACT[name]["args"].items()
         if meta.get("required")
     }
@@ -167,6 +167,7 @@ EXPECTED_TRUST = {
     "investigation": "e2e",
     "robotics_runs": qc.TRUST_E2E,
     "robotics_events": qc.TRUST_E2E,
+    "robotics_incidents": qc.TRUST_E2E,
     "glance": "plaintext",
     "runtimes": "plaintext",
     "models": "plaintext",

@@ -165,6 +165,15 @@ QUERY_CONTRACT: dict = {
         "backing": "robotics_events",
         "doc": "Paid robot trace page, ordered by source sequence with a continuation cursor.",
     },
+    "robotics_incidents": {
+        "status": STATUS_LIVE,
+        "args": {"run_id": _arg(required=True), "before_ns": _arg(), "before_id": _arg(),
+                 "limit": _arg(default=64, lo=1, hi=64)},
+        "trust": TRUST_E2E,
+        "scope": SCOPE_TRACES,
+        "backing": "robotics_incidents",
+        "doc": "Durable paid robot Guard incident history with a stable page cursor.",
+    },
     # ── live: served today by routes/local_query.py (_SHAPES/_dispatch) ──
     "events": {
         "status": STATUS_LIVE,

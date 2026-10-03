@@ -97,7 +97,7 @@ def test_known_shapes_are_exactly_the_allowlist(lq_app):
                                # Scoped evidence and private robotics stay on the encrypted relay.
                                "incidents", "investigation", "activity",
                                "error_groups", "session_catalog",
-                               "robotics_runs", "robotics_events"}, (
+                               "robotics_runs", "robotics_events", "robotics_incidents"}, (
         "the dispatch allowlist changed — review for new query surface before "
         "widening what the relay/cloud can ask the local store to run "
         f"(got {sorted(lq._SHAPES)})"

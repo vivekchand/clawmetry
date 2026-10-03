@@ -497,3 +497,14 @@ def test_api_extensions_probed_row_never_leaks_traceback(client, monkeypatch):
     assert row["error"] == "plain"
     assert "Traceback" not in row["error"]
     assert "license.key" not in row["error"]
+
+
+def test_workbench_navigation_keeps_scope_and_validates_plugin_links():
+    """Execute shipped navigation for local and selected-node cloud views."""
+    from pathlib import Path
+    import subprocess
+    result = subprocess.run(
+        ['node', str(Path(__file__).with_name('workbench_navigation_check.cjs'))],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr

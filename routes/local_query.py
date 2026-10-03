@@ -25,6 +25,7 @@ node_id ownership check).
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -215,6 +216,11 @@ def _coerce_args(shape: str, raw: dict) -> dict:
                 "before": raw.get("before"), "tail": raw.get("tail", False),
                 "after": _safe_int(raw.get("after"), default=0, lo=0, hi=1000000000),
                 "limit": _safe_int(raw.get("limit"), default=500, lo=1, hi=1000)}
+    if shape == "robotics_incidents":
+        if not isinstance(raw.get("run_id"), str) or not re.fullmatch(r"[0-9a-f]{32}", raw["run_id"]):
+            raise ValueError("robotics_incidents requires a valid run_id")
+        return {"run_id": raw["run_id"], "before_ns": raw.get("before_ns"), "before_id": raw.get("before_id"),
+                "limit": _safe_int(raw.get("limit"), default=64, lo=1, hi=64)}
     if shape == "events":
         return {
             "session_id": raw.get("session_id"),
@@ -431,7 +437,7 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog", "robotics_runs", "robotics_events"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog", "robotics_runs", "robotics_events", "robotics_incidents"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -760,6 +766,7 @@ _DAEMON_METHODS = frozenset({
     "robotics_query",
     "robotics_runs",
     "robotics_events",
+    "robotics_incidents",
     # `clawmetry maintenance rescrub-spans` (REQ-OBS-OTG-001): the operator's
     # explicit rescrub of spans stored before scrubbing existed. A dry run
     # unless apply=True; pages by span_id so each call stays bounded.

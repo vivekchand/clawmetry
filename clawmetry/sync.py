@@ -2077,24 +2077,33 @@ def _persist_cloud_plan_to_disk(
     _sync_auto_update_with_plan(tier, allow_provision=allow_provision)
     # Idempotent reconcile: this is now called on EVERY heartbeat (not just on a
     # plan change), so short-circuit when the on-disk cache already reflects this
-    # tier. We compare only the ``plan`` field (the entitlement-relevant part) so
-    # the trial ``expiry`` countdown doesn't churn a write + entitlement
-    # invalidation every cycle. Only an actual tier transition re-writes + flips
-    # the resolver, so paid runtimes start syncing the moment the plan upgrades.
+    # tier and authoritative trial verdict. A days-left estimate must not churn
+    # a write every cycle, but an exact cloud deadline must repair caches made
+    # by older clients that rounded a trial down to whole days.
     _trial_end_epoch = _parse_trial_end(trial_end)
     _trial_used = bool(trial_used) if trial_used is not None else None
+    _trial_deadline_applies = (
+        _trial_end_epoch is not None
+        and (tier == "trial" or tier not in _PAID_PLAN_TIERS)
+    )
     try:
         _existing_plan = None
         _existing_trial = None
+        _existing_expiry = None
         if os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
             with open(_CLOUD_PLAN_CACHE_PATH, encoding="utf-8") as _fh:
                 _cached = json.load(_fh) or {}
             _existing_plan = _cached.get("plan")
             _existing_trial = (_cached.get("trial_used"), _cached.get("trial_end"))
+            _existing_expiry = _cached.get("expiry")
         if tier is None:
             if _existing_plan is None and not os.path.isfile(_CLOUD_PLAN_CACHE_PATH):
                 return  # already absent; nothing to reconcile
-        elif _existing_plan == tier and _existing_trial == (_trial_used, _trial_end_epoch):
+        elif (
+            _existing_plan == tier
+            and _existing_trial == (_trial_used, _trial_end_epoch)
+            and (not _trial_deadline_applies or _existing_expiry == _trial_end_epoch)
+        ):
             # Cache already matches the live tier AND the trial verdict; no
             # write, no invalidate. The trial pair is part of the comparison
             # because a lapsing trial does NOT change ``plan`` (it stays
@@ -2118,18 +2127,18 @@ def _persist_cloud_plan_to_disk(
             except Exception:
                 expiry = None
             # An authoritative trial_end from the cloud wins over the derived
-            # days-left countdown for UNPAID tiers: it is the same value
+            # days-left countdown for trials and unpaid tiers: the same value
             # Stripe/billing reconcile against, and it keeps working after the
             # trial lapses (days_left goes to 0/None but trial_end stays
             # meaningful).
             #
-            # NEVER for a paid tier. Signup is trial-by-default, so essentially
-            # every paying customer carries trial_used=True and a trial_end
+            # Never for a purchased subscription. Signup is trial-by-default,
+            # so every paying customer carries trial_used=True and a trial_end
             # that is long past -- stamping that onto their entitlement makes
             # Entitlement.expired True and hard-blocks a subscriber who is
             # paying us right now. Their subscription expiry comes from the
             # plan, not from the trial they took before they bought.
-            if _trial_end_epoch is not None and tier not in _PAID_PLAN_TIERS:
+            if _trial_deadline_applies:
                 expiry = _trial_end_epoch
             payload = {"plan": tier, "node_limit": 1, "expiry": expiry}
             if _trial_used is not None:
