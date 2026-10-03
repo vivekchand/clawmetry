@@ -26221,7 +26221,16 @@ def run_daemon() -> None:
 
     while True:
         try:
-            state = load_state()
+            # field-failure #6302 (daemon_ingest_stalled on Linux py3.11):
+            # load_state() internally guards the JSON read, but not the
+            # STATE_FILE.exists() call that precedes it.  An OSError/
+            # PermissionError there propagated to the outer "Sync cycle
+            # error" handler, leaving last_sync unwritten every cycle.
+            try:
+                state = load_state()
+            except Exception as _ls_e:
+                log.warning("load_state failed, using empty state (non-fatal): %s", _ls_e)
+                state = {"last_event_ids": {}, "last_log_offsets": {}, "last_sync": None}
 
             # ── BOOTSTRAP.md "First Contact" capture (issue #690) ─────────
             # Best-effort; runs early in the tick so we snapshot the file
