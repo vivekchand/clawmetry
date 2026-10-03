@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: the replay shows background work in flight and marks a forked sub-agent
+
+- **Why:** a Claude Code turn can start while background agents or workflows from earlier turns are still running, and a sub-agent can be a fork that starts with the whole context of its parent. The replay showed neither. A turn read as if nothing else was running, and a fork read like a sub-agent that was given a fresh brief.
+- **What:** a turn whose opening model call carries `in_flight_at_start` shows a badge with the number of background agents and a badge with the number of workflows that were running when the turn started. A delegation whose `agent.spawn` event has `context_inheritance: fork` shows an "Inherited context" tag, at every nesting depth. Part of #4815 and clawmetry-pro#123.
+- **Verified:** 10 new renderer checks cover both counts, a zero count, a count that is not a number, a turn without counts, a fork at the top level and nested, a fresh sub-agent and a delegation without a spawn payload. The output for a sample turn was rendered to an image and inspected in the light theme.
+- **Limits:** the badges appear only for a runtime whose replay mapper sends these fields. The Claude Code mapper that does so ships in the Pro adapter package. A sub-agent that starts with a fresh context has no tag. The badges were not opened in a running dashboard and the dark theme was not inspected.
+
 ### Added: `CLAWMETRY_PROJECT` on the collector names the project of new sessions
 
 - **Why:** a session's project came from its repository or working directory, or from an assignment made by hand through `/api/projects/assignments`. A machine that works for one client, a CI runner or a container had no way to say so once, in its configuration (#5941).
@@ -12,13 +19,13 @@
 - Keep the Assistant in the dashboard's native theme, with the question box as the main focus. Answers stream as they arrive, and Stop cancels the active response.
 - Make hosted Setup show synced rules, skills, commands, and agent files with runtime filters and file previews. Explain unavailable files and unlock states directly in the page.
 - Make hosted Improve use encrypted, runtime-scoped guidance snapshots from DuckDB. Show evidence coverage and freshness, and exclude delegated agent messages from human guidance candidates.
+
 ### Fixed: a loop of identical tool calls went unreported when the tool replies arrived as user messages
 
 - **Why:** 0.12.906 made the loop check start again at each user turn. The Anthropic message format returns a tool's output inside a `user` message, and the event reader classed every such message as a user turn. A session stored in that form, for example a Claude CLI run started by OpenClaw, therefore never raised `stuck_loop`, however many times it repeated one call. 0.12.905 reported these sessions. The same reading hid failed replies of this form from the repeated-failure check.
 - **What:** a user message whose content holds `tool_result` blocks is read as one tool reply per block. Each reply is matched to its call by `tool_use_id` and carries the block's `is_error` flag. A user message with text is a user turn as before.
 - **Verified:** 5 new tests cover the step list, six identical calls, six calls with changing arguments, a real user turn between two short runs, and four failed replies. 3 of them fail on the 0.12.906 code.
 - **Limits:** sessions stored in this form can now raise `repeated_tool_failure` and `action_discrepancy`, which they could not before. The hook-failure and waiting-for-user checks read events on their own and still treat such a message as a user turn.
-
 
 ### Added: a workflow replay is drawn as a graph
 

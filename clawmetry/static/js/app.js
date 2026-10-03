@@ -31854,7 +31854,28 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
            '</div>';
   }
 
-  function _renderDelegations(delegations, runtime, depth) {
+  function _tr(key, vars, fallback) {
+    return (typeof t === 'function') ? t(key, vars, fallback) : fallback;
+  }
+
+  // A sub-agent that started with its parent's whole context (a Claude
+  // Code fork) is tagged, so its transcript is not read as a fresh brief.
+  // The delegation entry has no spawn payload; the spawn event sits in the
+  // event list of whoever spawned it, under the same span id.
+  function _forkTag(spanId, ownerEvents) {
+    for (var i = 0; i < (ownerEvents || []).length; i++) {
+      var ev = ownerEvents[i];
+      if (!ev || ev.span_id !== spanId || ev.kind !== 'agent.spawn') continue;
+      if (!ev.payload || ev.payload.context_inheritance !== 'fork') return '';
+      return ' <span class="replay-tree-badge fork" title="' +
+             _escape(_tr('trail.fork_title', null,
+                         'This sub-agent started with the full context of its parent.')) +
+             '">' + _escape(_tr('trail.fork_tag', null, 'Inherited context')) + '</span>';
+    }
+    return '';
+  }
+
+  function _renderDelegations(delegations, runtime, depth, ownerEvents) {
     depth = depth || 1;
     if (!delegations || !delegations.length) return '';
     var html = '<div class="replay-tree-delegations" data-depth="' + depth + '">';
@@ -31864,6 +31885,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       var dApprovals = (d.approvals || []).length;
       html += '<summary>↳ delegated span ' + _escape(d.span_id) +
               (d.label ? ' <span class="replay-tree-delegation-label">' + _escape(d.label) + '</span>' : '') +
+              _forkTag(d.span_id, ownerEvents) +
               (dApprovals ? ' <span class="replay-tree-badge approvals">✓' + dApprovals + '</span>' : '') +
               '</summary>';
       for (var j = 0; j < (d.events || []).length; j++) {
@@ -31871,10 +31893,42 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       }
       // Nested delegations render recursively — arbitrary depth (issue
       // #4815 Claude Code Task nesting stresses this).
-      html += _renderDelegations(d.delegations, runtime, depth + 1);
+      html += _renderDelegations(d.delegations, runtime, depth + 1, d.events);
       html += '</details>';
     }
     html += '</div>';
+    return html;
+  }
+
+  // Background agents and workflows that were still running when the turn
+  // opened (clawmetry-pro#123). The mapper puts the counts on the turn's
+  // opening llm.call as `in_flight_at_start`; a turn without them gets no
+  // badge, and a count that is not a positive whole number is not shown.
+  function _inFlightBadges(events) {
+    var counts = null;
+    for (var i = 0; i < (events || []).length; i++) {
+      var ev = events[i];
+      if (!ev || ev.kind !== 'llm.call') continue;
+      var p = ev.payload;
+      if (p && p.in_flight_at_start && typeof p.in_flight_at_start === 'object') {
+        counts = p.in_flight_at_start;
+      }
+      break;
+    }
+    if (!counts) return '';
+    var title = _escape(_tr('trail.in_flight_title', null,
+                            'Still running when this turn started.'));
+    var html = '';
+    var kinds = [
+      ['background_agents', 'trail.in_flight_agents', 'Background agents running: '],
+      ['workflows', 'trail.in_flight_workflows', 'Workflows running: '],
+    ];
+    for (var k = 0; k < kinds.length; k++) {
+      var n = counts[kinds[k][0]];
+      if (typeof n !== 'number' || n < 1 || n !== Math.floor(n)) continue;
+      html += ' <span class="replay-tree-badge in-flight" title="' + title + '">' +
+              _escape(_tr(kinds[k][1], {n: n}, kinds[k][2] + n)) + '</span>';
+    }
     return html;
   }
 
@@ -31893,6 +31947,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
                 '✓' + approvalCount + (deniedCount ? ' ✗' + deniedCount : '') +
                 '</span>';
     }
+    badges += _inFlightBadges(turn.events);
     html += '<header class="replay-tree-turn-header">' +
             '<span class="replay-tree-turn-id">turn ' + _escape(turn.turn_id) + '</span>' +
             badges + '</header>';
@@ -31901,7 +31956,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       html += _renderEvent(turn.events[i], runtime);
     }
     // Inline delegations under the turn that spawned them.
-    html += _renderDelegations(turn.delegations, runtime, 1);
+    html += _renderDelegations(turn.delegations, runtime, 1, turn.events);
     html += '</section>';
     return html;
   }
@@ -31932,10 +31987,6 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
   // as a graph: one box per node, coloured by the status of its last run.
   // A start without nodes (a Goose recipe) keeps the plain event list.
   var _WF_NODE_W = 150, _WF_NODE_H = 34, _WF_PAD = 12;
-
-  function _tr(key, vars, fallback) {
-    return (typeof t === 'function') ? t(key, vars, fallback) : fallback;
-  }
 
   function _workflowStart(wf) {
     var events = (wf && wf.events) || [];
