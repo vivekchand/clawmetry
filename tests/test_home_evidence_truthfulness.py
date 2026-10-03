@@ -80,6 +80,8 @@ var data={reasoning_cost_usd:40, reasoning_pct_of_cost:40,total_cost_usd:100,
   flagged_session_count:3,session_count:7,compaction_heavy_sessions:2,
   compressible_sessions:1,compressible_usd:5,low_cache_sessions:1};
 function fetch(){return Promise.resolve({json:()=>Promise.resolve(data)});}
+function _cmIsOverviewTab(){return true;}
+function _cmFetchHomeSummary(url){return fetch(url).then(r=>r.json());}
 """, """
 (async()=>{_renderWasteSummary(); await new Promise(r=>setImmediate(r)); console.log(JSON.stringify(rendered));})();
 """)
@@ -88,6 +90,66 @@ function fetch(){return Promise.resolve({json:()=>Promise.resolve(data)});}
     assert "estimates at published rates" in result
     for claim in ["billed, no deliverable", "Recoverable spend", "without changing answers", "keep sessions warm"]:
         assert claim not in result
+
+
+def test_home_summaries_share_inflight_cache_success_and_retry_errors():
+    result = run_js(["_cmFetchHomeSummary"], """
+var _cmHomeSummaryCache={}, now=1000, requests=[], resolvers=[];
+Date.now=()=>now;
+function fetchJsonWithTimeout(url){requests.push(url); return new Promise((resolve,reject)=>resolvers.push({resolve,reject}));}
+""", """
+(async()=>{
+  var a=_cmFetchHomeSummary('/summary'), b=_cmFetchHomeSummary('/summary');
+  var shared=a===b;
+  resolvers[0].resolve({count:3}); await a;
+  now=60999; var cached=await _cmFetchHomeSummary('/summary');
+  now=61000; var refresh=_cmFetchHomeSummary('/summary');
+  resolvers[1].reject(new Error('offline')); await refresh.catch(()=>{});
+  var retry=_cmFetchHomeSummary('/summary'); resolvers[2].resolve({count:4}); await retry;
+  console.log(JSON.stringify({shared,cached,requests}));
+})();
+""")
+    assert result == {"shared": True, "cached": {"count": 3}, "requests": ["/summary"] * 3}
+
+
+def test_home_refresh_keeps_live_status_fast_without_repeating_full_fanout():
+    result = run_js(["startOverviewRefresh"], """
+var window={}, timers=[], active=true, now=11000, full=0, live=0;
+var _overviewRefreshRunning=false, _loadAllLastSucceededMs=1000;
+Date.now=()=>now;
+function clearInterval(){}
+function visibilitySetInterval(fn,ms){timers.push({fn,ms});return timers.length;}
+function _cmIsOverviewTab(){return active;}
+function loadMainActivity(){}
+function _renderOverviewHero(){live++;}
+async function loadAll(){full++; _loadAllLastSucceededMs=now;}
+""", """
+(async()=>{
+  startOverviewRefresh(); await timers[0].fn();
+  var fast={full,live};
+  now=61000; await timers[0].fn(); var minute={full,live};
+  now=71000; await timers[0].fn();
+  _loadAllLastSucceededMs=0; await timers[0].fn(); var retry={full,live};
+  active=false; now=200000; await timers[0].fn();
+  console.log(JSON.stringify({fast,minute,retry,offTab:{full,live},intervals:timers.map(t=>t.ms)}));
+})();
+""")
+    assert result["fast"] == {"full": 0, "live": 1}
+    assert result["minute"] == {"full": 1, "live": 1}
+    assert result["retry"] == {"full": 2, "live": 2}
+    assert result["offTab"] == result["retry"]
+    assert result["intervals"] == [10000, 5000]
+
+
+def test_home_summary_renderers_do_not_fetch_off_tab():
+    result = run_js(["_renderWasteSummary", "_renderOutLoopSources"], """
+var document={getElementById:()=>({})}, calls=0;
+function _cmIsOverviewTab(){return false;}
+function _cmFetchHomeSummary(){calls++; return Promise.resolve({});}
+""", """
+_renderWasteSummary(); _renderOutLoopSources(); console.log(JSON.stringify(calls));
+""")
+    assert result == 0
 
 
 def test_scoped_usage_keeps_day_week_month_distinct_even_when_week_equals_month():
