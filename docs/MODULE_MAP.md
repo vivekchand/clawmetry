@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-317 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+318 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -63,7 +63,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/heartbeat.py` | medium | `bp_heartbeat` | `/api/heartbeat`, `/api/heartbeat-loops` | Heartbeat liveness panel API endpoint (#686). |
 | `routes/hitl.py` | medium | `bp_hitl` | `/api/hitl` | Human-in-the-loop (HITL) pause API. |
 | `routes/hooks.py` | large | `bp_hooks` | `/api/hooks`, `/api/lifecycle`, `/api/sessions` | local receiver for runtime pre-tool hooks. |
-| `routes/improve.py` | medium | `bp_improve` | `/api/improve` | Read-only guidance candidates derived from observed agent conversations. |
+| `routes/improve.py` | small | `bp_improve` | `/api/improve` | Read-only guidance evidence, shared with the encrypted daemon snapshot. |
 | `routes/infra.py` | large | `bp_config`, `bp_logs`, `bp_memory`, `bp_security` | `/api/automation-analysis`, `/api/context-anatomy`, `/api/cost-optimization`, `/api/cost-optimizer`, `/api/file`, `/api/flow`, `/api/flow-events`, `/api/llmfit`, `/api/logs`, `/api/logs-stream`, `/api/memory`, `/api/memory-access`, `/api/memory-analytics`, `/api/memory-files`, `/api/memory-rag`, `/api/numbat`, `/api/security` | Infrastructure / security / config / logs endpoints. |
 | `routes/insights.py` | medium | `bp_insights` | `/api/insights`, `/insights` | Weekly Insights Digest endpoints. |
 | `routes/inventory.py` | medium | `bp_inventory` | `/api/inventory` | Agent Inventory tab API. |
@@ -232,6 +232,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/hook_ownership.py` | medium | Ownership-aware editing of a shared hooks array. |
 | `clawmetry/hooks.py` | medium | Hook lifecycle manager — install manifest and atomic install/uninstall API. |
 | `clawmetry/hooks_claude_code.py` | large | Claude Code hooks → ClawMetry: pre-execution approval gate + phone pushes. |
+| `clawmetry/improve_candidates.py` | medium | Bounded, runtime-balanced guidance evidence for local and encrypted views. |
 | `clawmetry/incident_actions.py` | small | Apply encrypted acknowledgement on the owning node and confirm its state. |
 | `clawmetry/incident_alerts.py` | medium | deliver a detector incident to a human. |
 | `clawmetry/incident_evidence.py` | medium | Stable detector evidence and conservative, positive recovery proofs. |

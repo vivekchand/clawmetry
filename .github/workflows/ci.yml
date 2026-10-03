@@ -990,6 +990,9 @@ jobs:
           tests/test_context_economics_truthfulness.py
           tests/test_home_evidence_truthfulness.py
           tests/test_improve_candidates.py
+          tests/test_improve_snapshot.py
+          tests/test_improve_frontend.py
+          tests/test_runtime_memory_sync.py
           tests/test_setup_improve_surfaces.py
       - name: Verify shared secret redaction and its persistence boundary
         run: python3 -m pytest tests/test_redaction.py -q --tb=short

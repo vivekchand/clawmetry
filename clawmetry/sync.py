@@ -24680,6 +24680,16 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_br:
         log.debug("snapshot: briefs slice failed: %s", _e_br)
 
+    # AC-ASSIST-006.2/.4: daemon-owned, bounded shared candidate evidence.
+    # This stays inside the encrypted snapshot, never the plaintext heartbeat.
+    from clawmetry.improve_candidates import build_snapshot as _improve_snapshot
+    from clawmetry import local_store as _improve_ls
+    try:
+        _improve_slice = _improve_snapshot(_improve_ls.get_store(), node_id=node_id)
+    except Exception:
+        from clawmetry.improve_candidates import unavailable as _improve_unavailable
+        _improve_slice = {"improve": _improve_unavailable(node_id=node_id), "improveByRuntime": {}}
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -24726,6 +24736,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # WO-62 Briefs: saved questions with a schedule and a channel, read-only
         # on the cloud (manage them on the local dashboard).
         "briefs": _briefs_slice,
+        "improve": _improve_slice["improve"],
+        "improveByRuntime": _improve_slice["improveByRuntime"],
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),
