@@ -6459,6 +6459,12 @@ def detect_config(args=None):
     app.register_blueprint(bp_delegated)
     app.register_blueprint(bp_readiness)
     app.register_blueprint(bp_guard)
+    from routes.activity import bp_activity
+    from routes.investigations import bp_investigations
+    app.register_blueprint(bp_activity)
+    app.register_blueprint(bp_investigations)
+    from routes.error_groups import bp_error_groups
+    app.register_blueprint(bp_error_groups)
     app.register_blueprint(bp_improve)
     app.register_blueprint(bp_signals)
     app.register_blueprint(bp_selfdiag)
@@ -7093,6 +7099,7 @@ DASHBOARD_HTML = r"""
      no legal basis. Regenerate with scripts/vendor_fonts.py. -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=asset_version|default(version, true)) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=asset_version|default(version, true)) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/investigations.css', v=asset_version|default(version, true)) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css', v=asset_version|default(version, true)) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=asset_version|default(version, true)) }}" defer></script>
@@ -7558,6 +7565,9 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/provenance.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/guard-checks.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/activity-live.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/investigations.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/error-groups.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/dives.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/assistant.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/custom-dashboard.js', v=asset_version|default(version, true)) }}"></script>

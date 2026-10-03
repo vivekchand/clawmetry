@@ -1,5 +1,14 @@
 ## Unreleased
 
+### Added: durable Guard investigations and persisted live activity
+
+- Loop and repeated tool failure findings retain their identity, evidence and recovery history across refreshes and restarts. Acknowledgement is separate from recovery. Missing telemetry is labelled stale.
+- Guard opens the implicated events in Tracing, with scoped history pages, explicit retention and preview limits, and separate execution and finding states. Hosted investigation uses encrypted node queries and confirmed acknowledgements.
+- Brain, Flow and investigation views share bounded activity reads backed by committed event positions. Reconnects replay late arrivals and updated payloads. Expired cursors request a fresh read. Hidden and inactive views pause their readers.
+- The store adds bounded incident and event-change tables. Older source events are not retroactively declared active incidents. Hosted deployment requires the matching cloud relay support.
+- Entitled recurring-error groups retain per-event resolution and open representative events directly in Tracing. Counts describe the bounded read window. Incomplete messages remain separate.
+- Session list, inspect and watch commands use the private extension and the same persisted reads, with JSON output and resumable activity checkpoints. Existing session commands remain available.
+
 ### Added: opt-in capability-gap export
 
 - **Why:** ClawMetry records when an agent asked for a tool that does not exist, hit a permission refusal, a rate limit or a budget boundary. There was no machine-readable, taxonomy-tagged way for a local measurement tool to read those signals without reading transcripts (#5412, proposed by @flyoung588).

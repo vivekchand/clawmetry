@@ -53,17 +53,23 @@ def compress(raw: bytes, *, force: bool = False) -> bytes:
         return raw
 
 
-def maybe_decompress(raw):
+def maybe_decompress(raw, *, max_bytes=None):
     """Inflate a CCR blob; pass anything else through untouched. Accepts bytes
     or str (str is returned as-is — it cannot carry the binary magic). Never
     raises; on a corrupt blob returns the raw bytes so the caller's own decode
-    path decides what to do."""
+    path decides what to do. Bounded callers may supply ``max_bytes``; an
+    oversized or incomplete compressed payload then returns None without
+    inflating the remainder."""
     if not isinstance(raw, (bytes, bytearray)):
         return raw
     raw = bytes(raw)
     if not raw.startswith(_MAGIC):
-        return raw
+        return None if max_bytes is not None and len(raw) > max_bytes else raw
     try:
+        if max_bytes is not None:
+            decoder = zlib.decompressobj()
+            result = decoder.decompress(raw[len(_MAGIC):], max_bytes + 1)
+            return result if decoder.eof and len(result) <= max_bytes else None
         return zlib.decompress(raw[len(_MAGIC):])
     except Exception:
         return raw

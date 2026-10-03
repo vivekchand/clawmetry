@@ -102,6 +102,52 @@ def _arg(required: bool = False, **extra) -> dict:
 
 
 QUERY_CONTRACT: dict = {
+    "error_groups": {
+        "status": STATUS_LIVE,
+        "args": {"node_id": _arg(), "runtime": _arg(), "session_id": _arg(),
+                 "days": _arg(default=7, lo=1, hi=90), "limit": _arg(default=500, lo=1, hi=1000)},
+        "trust": TRUST_E2E, "scope": SCOPE_CONTENT, "backing": "query_error_groups",
+        "doc": "Entitled, bounded recurring error groups with per-event resolution and explicit coverage.",
+    },
+    "session_catalog": {
+        "status": STATUS_LIVE,
+        "args": {"node_id": _arg(), "runtime": _arg(), "session_id": _arg(),
+                 "limit": _arg(default=100, lo=1, hi=200)},
+        "trust": TRUST_E2E, "scope": SCOPE_CONTENT, "backing": "query_session_catalog",
+        "doc": "Bounded persisted session discovery, scoped before the limit.",
+    },
+    "activity": {
+        "status": STATUS_LIVE,
+        "args": {
+            "node_id": _arg(), "runtime": _arg(), "session_id": _arg(),
+            "cursor": _arg(), "limit": _arg(default=100, lo=1, hi=200),
+        },
+        "trust": TRUST_E2E, "scope": SCOPE_CONTENT,
+        "backing": "query_activity",
+        "doc": "Bounded persisted activity upserts, committed replay position and explicit resynchronization.",
+    },
+    "incidents": {
+        "status": STATUS_LIVE,
+        "args": {
+            "runtime": _arg(), "node_id": _arg(), "session_id": _arg(),
+            "state": _arg(), "incident_id": _arg(),
+            "limit": _arg(default=100, lo=1, hi=500),
+        },
+        "trust": TRUST_E2E, "scope": SCOPE_CONTENT,
+        "backing": "query_incidents",
+        "doc": "Durable Guard episodes with stable evidence and independent acknowledgement.",
+    },
+    "investigation": {
+        "status": STATUS_LIVE,
+        "args": {
+            "session_id": _arg(required=True), "runtime": _arg(required=True),
+            "node_id": _arg(required=True), "incident_id": _arg(), "event_id": _arg(), "cursor": _arg(),
+            "limit": _arg(default=100, lo=1, hi=200),
+        },
+        "trust": TRUST_E2E, "scope": SCOPE_CONTENT,
+        "backing": "query_investigation",
+        "doc": "Exact scoped evidence, bounded history continuation, execution state and explicit coverage.",
+    },
     # ── live: served today by routes/local_query.py (_SHAPES/_dispatch) ──
     "events": {
         "status": STATUS_LIVE,
