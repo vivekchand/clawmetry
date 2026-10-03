@@ -26550,6 +26550,12 @@ def run_daemon() -> None:
                     log.warning(f"alerts: evaluator tick errored: {_ae}")
                 # Per-project budgets ride the same throttle. Independent of
                 # cloud rules: a node with no cloud account still alerts.
+                # CLAWMETRY_PROJECT on the collector tags new sessions first,
+                # so a budget on that project counts them on this same tick.
+                try:
+                    tag_env_project_sessions()
+                except Exception as _epe:
+                    log.warning(f"env project: tick errored: {_epe}")
                 try:
                     evaluate_project_budget_alerts(config)
                 except Exception as _pbe:
@@ -28584,6 +28590,41 @@ def _evaluate_alerts_local(config: dict, state: dict) -> int:
 
     state["alerts_last_eval_ts"] = _iso_now()
     return delivered
+
+
+# When this collector process started. Only sessions that begin after it are
+# tagged from CLAWMETRY_PROJECT, so setting the variable never rewrites the
+# project of history collected before it.
+_ENV_PROJECT_SINCE = time.time()
+_env_project_warned: set = set()
+
+
+def tag_env_project_sessions(since: float | None = None) -> int:
+    """Assign new sessions to ``CLAWMETRY_PROJECT`` when the collector has it
+    set (#5941). Runs on the alert tick. Returns the number of sessions
+    assigned by this call. Never raises into the daemon loop."""
+    name = os.environ.get("CLAWMETRY_PROJECT", "").strip()
+    if not name:
+        return 0
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        res = store.record_env_project_assignments(
+            project_name=name,
+            since=_ENV_PROJECT_SINCE if since is None else since)
+    except Exception as e:
+        log.warning("env project: assignment failed: %s", e)
+        return 0
+    if not res.get("ok"):
+        err = str(res.get("error") or "")
+        if err not in _env_project_warned:
+            _env_project_warned.add(err)
+            log.warning("env project: CLAWMETRY_PROJECT ignored: %s", err)
+        return 0
+    n = int(res.get("assigned") or 0)
+    if n:
+        log.info("env project: assigned %d new session(s) to the CLAWMETRY_PROJECT project", n)
+    return n
 
 
 def evaluate_project_budget_alerts(config: dict) -> int:

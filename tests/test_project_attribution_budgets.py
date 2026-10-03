@@ -19,6 +19,12 @@ Acceptance criteria proven here (docs/acceptance_criteria.json):
   ``test_assignment_covers_history_and_respects_its_effective_period``,
   ``test_a_correction_supersedes_without_erasing``,
   ``test_project_is_not_stored_on_session_rows``
+  The collector's ``CLAWMETRY_PROJECT`` is one more operator assignment:
+  ``test_env_project_tags_sessions_started_after_the_collector``,
+  ``test_env_project_never_overrides_an_operator_assignment``,
+  ``test_a_changed_env_project_applies_to_later_sessions_only``,
+  ``test_env_project_refuses_a_name_it_cannot_store``,
+  ``test_daemon_tick_tags_sessions_from_the_environment``
 * AC-OBS-PRJ-001.5 -- no full local path in published figures:
   ``test_same_directory_name_in_two_places_stays_two_projects``,
   ``test_csv_export_by_project_reports_completeness``
@@ -258,6 +264,97 @@ def test_a_session_assignment_beats_a_project_assignment(store):
     projects = _by_label(store.query_project_usage(days=30, now=NOW))
     assert projects["Billing"]["cost_usd"] == pytest.approx(1.0)
     assert projects["Internal"]["cost_usd"] == pytest.approx(1.0)
+
+
+# ── CLAWMETRY_PROJECT on the collector (#5941) ───────────────────────────
+
+SINCE = "2026-09-01T08:00:00Z"
+
+
+def test_env_project_tags_sessions_started_after_the_collector(store):
+    _session(store, "claude_code:old", "/work/api", started="2026-08-30T09:00:00Z")
+    _session(store, "claude_code:new", "/work/api", started="2026-09-01T09:00:00Z")
+    _session(store, "codex:new", "", started="2026-09-01T09:30:00Z")
+    store.ingest_sessions_batch([{"session_id": "codex:nostart", "node_id": "box1"}])
+    for sid in ("claude_code:old", "claude_code:new", "codex:new"):
+        _spend(store, sid, "2026-09-01T10:00:00Z", 1.0)
+
+    res = store.record_env_project_assignments("Client A", since=SINCE)
+    assert res["ok"] and res["assigned"] == 2
+    # A second tick finds nothing left to do.
+    assert store.record_env_project_assignments("Client A", since=SINCE)["assigned"] == 0
+
+    rows = [a for a in store.query_project_assignments() if a["actor"] == "daemon:env"]
+    assert sorted(a["match_value"] for a in rows) == ["claude_code:new", "codex:new"]
+    assert all(a["match_type"] == "session" and a["project_name"] == "Client A"
+               and "CLAWMETRY_PROJECT" in a["reason"] for a in rows)
+
+    by = _by_label(store.query_project_usage(days=30, now=NOW))
+    assert by["Client A"]["cost_usd"] == pytest.approx(2.0)
+    assert by["Client A"]["source"] == "assigned"
+    # History collected before the collector started keeps its derived project.
+    assert by["api"]["cost_usd"] == pytest.approx(1.0)
+
+
+def test_env_project_never_overrides_an_operator_assignment(store):
+    _session(store, "claude_code:a", "/work/api")
+    _session(store, "claude_code:b", "/work/api")
+    assert store.add_project_assignment(
+        "session", "claude_code:a", "Billing", reason="set by hand", actor="ana")["ok"]
+    assert store.record_env_project_assignments("Client A", since=SINCE)["assigned"] == 1
+    resolved = store._resolve_projects(["claude_code:a", "claude_code:b"])
+    assert resolved["claude_code:a"]["label"] == "Billing"
+    assert resolved["claude_code:b"]["label"] == "Client A"
+    # A later correction supersedes the collector's row without erasing it.
+    assert store.add_project_assignment(
+        "session", "claude_code:b", "Billing", reason="wrong client", actor="ana")["ok"]
+    assert store._resolve_projects(["claude_code:b"])["claude_code:b"]["label"] == "Billing"
+    env = [a for a in store.query_project_assignments() if a["actor"] == "daemon:env"]
+    assert len(env) == 1 and env[0]["superseded_by"]
+
+
+def test_a_changed_env_project_applies_to_later_sessions_only(store):
+    _session(store, "claude_code:a", "/work/api")
+    assert store.record_env_project_assignments("Client A", since=SINCE)["assigned"] == 1
+    _session(store, "claude_code:b", "/work/api", started="2026-09-01T11:00:00Z")
+    assert store.record_env_project_assignments("Client B", since=SINCE)["assigned"] == 1
+    resolved = store._resolve_projects(["claude_code:a", "claude_code:b"])
+    assert resolved["claude_code:a"]["label"] == "Client A"
+    assert resolved["claude_code:b"]["label"] == "Client B"
+
+
+def test_env_project_refuses_a_name_it_cannot_store(store):
+    _session(store, "claude_code:a", "/work/api")
+    assert not store.record_env_project_assignments("   ", since=SINCE)["ok"]
+    assert not store.record_env_project_assignments("x" * 121, since=SINCE)["ok"]
+    assert not store.record_env_project_assignments("Client A")["ok"]
+    assert store.query_project_assignments() == []
+
+
+def test_daemon_tick_tags_sessions_from_the_environment(store, monkeypatch):
+    from clawmetry import sync
+    import clawmetry.local_store as ls
+    monkeypatch.setattr(ls, "get_store", lambda *a, **k: store)
+    since = datetime(2026, 9, 1, 8, 0, tzinfo=timezone.utc).timestamp()
+    _session(store, "claude_code:a", "/work/api")
+
+    monkeypatch.delenv("CLAWMETRY_PROJECT", raising=False)
+    assert sync.tag_env_project_sessions(since=since) == 0
+    assert store.query_project_assignments() == []
+
+    monkeypatch.setenv("CLAWMETRY_PROJECT", "  Client A ")
+    assert sync.tag_env_project_sessions(since=since) == 1
+    assert sync.tag_env_project_sessions(since=since) == 0
+    assert store._resolve_projects(["claude_code:a"])["claude_code:a"]["label"] == "Client A"
+
+    # The default cut-off is this process's start, so a session from 2026-09-01
+    # is history and stays untouched.
+    _session(store, "claude_code:b", "/work/api")
+    assert sync.tag_env_project_sessions() == 0
+
+    # An unusable name is ignored, never raised into the loop.
+    monkeypatch.setenv("CLAWMETRY_PROJECT", "x" * 121)
+    assert sync.tag_env_project_sessions(since=since) == 0
 
 
 def test_project_is_not_stored_on_session_rows(store):
