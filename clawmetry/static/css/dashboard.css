@@ -2718,6 +2718,12 @@ body.has-profile-menu #logout-btn { display: none !important; }
    defaults; per-runtime templates (Claude Code #4815, OpenClaw #4816,
    Pro adapters) may layer richer styles via registerKindRenderer().
 */
+@media (max-width: 700px) {
+  #transcript-list .transcript-item { flex-wrap: wrap; gap: 8px; }
+  /* Give the title and metadata their own row before the action buttons. */
+  #transcript-list .transcript-item > div:first-child { flex-basis: 100% !important; }
+  #transcript-list .transcript-meta-row { flex-wrap: wrap; }
+}
 .replay-details { min-width: 0; padding: 10px 12px; border: 1px solid var(--border-secondary); border-radius: 8px; }
 .replay-details > summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
 .replay-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
