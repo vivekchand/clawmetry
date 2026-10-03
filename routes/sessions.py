@@ -747,6 +747,12 @@ def _try_local_store_sessions():
             "attention":        r.get("attention_state") or "",
             "attention_signal": r.get("attention_signal") or "",
             "attention_tool":   r.get("attention_tool") or "",
+            # How the session ran (#4814): the current permission, sandbox
+            # and collaboration mode from the replay stream. Empty string
+            # means no mapper has reported a mode, which is not "default".
+            "mode_permission":    r.get("mode_permission") or "",
+            "mode_sandbox":       r.get("mode_sandbox") or "",
+            "mode_collaboration": r.get("mode_collaboration") or "",
             # Trail (outcome alignment): what the user asked for, in full,
             # and what the session produced in git. ``intent`` is the first
             # user prompt (redacted, capped at 4000 chars) rather than the
