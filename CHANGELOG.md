@@ -7,6 +7,13 @@
 - **Verified:** 18 new renderer checks cover node status, the latest run of a node, an edge to an unknown node, escaped names, a graph without positions, a workflow without nodes and an execution whose node runs are not stored. The output for three captured n8n executions was rendered to an image and inspected.
 - **Limits:** the graph appears only for a runtime whose replay mapper sends nodes. The n8n mapper that does so ships in the Pro adapter package. A Goose recipe has no nodes and keeps the list. The graph was not opened in a running dashboard.
 
+### Fixed: the runtime hook registry replaced hooks it did not own
+
+- **Why:** `clawmetry.hooks.install` set the config key of a hook to its own value. A `hooks.PreToolUse` list in `~/.claude/settings.json` that already held a user hook was replaced. It also wrote a `__clawmetry` key next to the hook events, and it rewrote a config it could not parse as an empty one. Uninstall copied the backup taken at install time over the config, which dropped every edit made since. No shipped component installs through this registry yet, so no user config was affected.
+- **What:** install appends its entries to a list that is already there and writes nothing else into the config. It stops with an error when the config is not a JSON object. The manifest records what was added. Uninstall restores the exact prior bytes when the config is unchanged since install, and removes only the recorded entries when it has changed. `status()` and `verify_all()` report a hook whose config entry was removed by hand. The config file keeps its file mode.
+- **Verified:** `tests/test_hooks.py` targeted an older API and every test in it errored. It is rewritten against the shipped API (26 tests) and now runs in CI.
+- **Limits:** a config that changed after install is rewritten with two-space indentation on uninstall. Comments are not supported in the config file.
+
 ### Fixed: long sessions were cut short in the replay tree without notice
 
 - **Why:** `GET /api/replay-tree/<session_id>` read the store with its default limit of 2000 events. A longer session came back as its first 2000 events and nothing said the rest was missing. Two Codex sessions on the test machine have more than 4500 replay events each.
