@@ -14,6 +14,7 @@
 - Switching sessions discards late transcript, history-page and side-panel responses. Narrow screens put session titles above the action buttons.
 - Verified with the reported Claude Code session, a fresh real Claude exchange, a long Codex conversation with older history, and regression tests that fail when the old renderer takeover or position reset is restored.
 
+
 ### Fixed: the runtime hook registry replaced hooks it did not own
 
 - **Why:** `clawmetry.hooks.install` set the config key of a hook to its own value. A `hooks.PreToolUse` list in `~/.claude/settings.json` that already held a user hook was replaced. It also wrote a `__clawmetry` key next to the hook events, and it rewrote a config it could not parse as an empty one. Uninstall copied the backup taken at install time over the config, which dropped every edit made since. No shipped component installs through this registry yet, so no user config was affected.
