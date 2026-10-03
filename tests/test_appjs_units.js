@@ -686,6 +686,7 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
         getElementById: function(id) { return elements[id] || null; },
       },
       window: {
+        CLOUD_MODE: !!opts.cloudMode,
         location: {
           // Defensive: any reload attempt during bootstrap is a bug — the
           // Playwright fixture in tests/e2e/zero-click-auth.mjs crashes
@@ -770,6 +771,15 @@ console.log('auth-bootstrap.js zero-click auto-login (issue #1356)');
   })();
 
   // ── Scenario B: detected-token returns 403 (non-localhost) ──
+  (async function cloudDoesNotProbeLocalCredentials(){
+    for(const stored of [null,'cm_cloud_token']){
+      const result=await runBootstrap({cloudMode:true,
+        initialLocalStorage:stored?{'clawmetry-token':stored}:{},
+        fetchHandler:url=>({ok:true,json:()=>Promise.resolve({authRequired:true,valid:false})})});
+      truthy(result.calls.every(url=>url.indexOf('/api/auth/detected-token')<0),
+        'cloud auth never probes local gateway credentials');
+    }
+  })();
   //
   // The bootstrap MUST NOT throw on a 403. It should fall through and
   // call /api/auth/check with no token, surface the overlay (since

@@ -55,6 +55,26 @@ def test_cold_load_boot_unit_suite() -> None:
     assert "PASS" in output, "no PASS line in output:\n" + output
 
 
+@pytest.mark.parametrize("cloud", [False, True])
+def test_rejected_cloud_session_does_not_probe_local_gateway_credentials(cloud):
+    import json
+
+    script = "const vm=require('node:vm'),assert=require('node:assert/strict');const calls=[];"
+    script += "const ctx={window:{CLOUD_MODE:" + json.dumps(cloud) + "},"
+    script += """
+      localStorage:{getItem:()=>null},setTimeout(){},BOOT_HARD_TIMEOUT_MS:8000,
+      _safeFinishBoot(){},_shouldPingAuthFailFirstLoad:()=>false,
+      _withTimeout:p=>p,document:{getElementById:()=>({style:{}})},
+      fetch:async url=>{calls.push(url);return {ok:false,json:async()=>({authRequired:true,valid:false})};}};
+    vm.createContext(ctx);
+    """
+    script += "vm.runInContext(" + json.dumps(_function("bootDashboard", is_async=True)) + ",ctx);"
+    script += "ctx.bootDashboard().then(()=>assert.equal(calls.includes('/api/auth/detected-token'),"
+    script += json.dumps(not cloud) + "));"
+    result = subprocess.run(["node", "-"], input=script, text=True, capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
 def test_opening_overview_loads_what_startup_no_longer_preloads() -> None:
     """Startup skips system health and tasks off-Overview, so the first visit
     must load them at once rather than on the next 10-30 s refresh tick."""
