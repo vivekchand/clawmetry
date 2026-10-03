@@ -1,25 +1,5 @@
 <div class="page active" id="page-assistant">
   <section class="cm-assistant" aria-labelledby="cm-assistant-title">
-    <div class="cm-assistant-backdrop" aria-hidden="true"></div>
-
-    <header class="cm-assistant-hero">
-      <div class="cm-assistant-eyebrow">
-        <span class="cm-assistant-mark" aria-hidden="true"><span></span><span></span><span></span></span>
-        <span>ClawMetry assistant</span>
-        <span class="cm-assistant-scope" id="cm-assistant-scope">All runtimes on this node</span>
-      </div>
-      <div class="cm-assistant-hero-row">
-        <div>
-          <h1 id="cm-assistant-title">How can I help?</h1>
-          <p>Ask about your agents in plain English. I can turn the answer into a live dashboard panel you can keep.</p>
-        </div>
-        <div class="cm-assistant-status-pill" id="cm-assistant-status-pill" role="status" aria-live="polite">
-          <span class="cm-assistant-status-dot" aria-hidden="true"></span>
-          <span id="cm-assistant-status-label">Checking your assistant...</span>
-        </div>
-      </div>
-    </header>
-
     <div class="cm-assistant-layout">
       <aside class="cm-assistant-history" aria-label="Assistant conversations">
         <div class="cm-assistant-history-head">
@@ -49,25 +29,27 @@
         </div>
       </aside>
 
-      <main class="cm-assistant-main">
-        <div class="cm-assistant-setup" id="cm-assistant-setup" aria-label="Suggested questions">
-          <div class="cm-assistant-setup-copy">
-            <span class="cm-assistant-setup-glyph" aria-hidden="true">✦</span>
+      <div class="cm-assistant-main">
+        <header class="cm-assistant-hero">
+          <div class="cm-assistant-eyebrow">
+            <span class="cm-assistant-scope" id="cm-assistant-scope">All runtimes on this node</span>
+          </div>
+          <div class="cm-assistant-hero-row">
             <div>
-              <strong id="cm-assistant-setup-title">Start with a question</strong>
-              <p id="cm-assistant-setup-description">Ask for a decision, an explanation, or a panel for Home.</p>
+              <h1 id="cm-assistant-title">How can I help?</h1>
+              <p>Ask about your agents. Turn an answer into a dashboard you can keep.</p>
+            </div>
+            <div class="cm-assistant-status-pill" id="cm-assistant-status-pill" role="status" aria-live="polite">
+              <span class="cm-assistant-status-dot" aria-hidden="true"></span>
+              <span id="cm-assistant-status-label">Checking your assistant...</span>
             </div>
           </div>
-          <div class="cm-assistant-suggestions" id="cm-assistant-suggestions"></div>
-        </div>
-
-        <div class="cm-assistant-status-message" id="cm-assistant-status-message" role="status" aria-live="polite" hidden></div>
-        <div class="cm-assistant-data-notice" id="cm-assistant-data-notice" hidden></div>
-
+        </header>
+        <section class="cm-assistant-thread" id="cm-assistant-thread" aria-label="Conversation"></section>
         <form class="cm-assistant-composer" id="cm-assistant-composer" novalidate>
           <label class="cm-assistant-sr-only" for="cm-assistant-input">Ask ClawMetry a question</label>
           <div class="cm-assistant-input-row">
-            <textarea id="cm-assistant-input" rows="1" maxlength="4000" autocomplete="off" spellcheck="true" placeholder="Ask about effectiveness, context, cost, or your agents..." aria-describedby="cm-assistant-composer-hint"></textarea>
+            <textarea id="cm-assistant-input" rows="1" maxlength="4000" autocomplete="off" spellcheck="true" placeholder="Ask anything about your agents, or describe a dashboard..." aria-describedby="cm-assistant-composer-hint"></textarea>
             <button type="button" class="cm-assistant-voice" id="cm-assistant-voice" aria-label="Start voice input" aria-pressed="false" title="Voice input">
               <span class="cm-assistant-voice-icon" aria-hidden="true">●</span>
               <span class="cm-assistant-sr-only">Voice</span>
@@ -92,16 +74,21 @@
             <span>Used for this page only. ClawMetry never saves it.</span>
           </div>
         </form>
-
-        <section class="cm-assistant-thread" id="cm-assistant-thread" aria-label="Conversation">
-          <div class="cm-assistant-welcome" id="cm-assistant-welcome">
-            <div class="cm-assistant-welcome-orb" aria-hidden="true"><span></span></div>
-            <h2>Bring me a question.</h2>
-            <p>I will use the evidence ClawMetry has on this node, explain what is measured, and call out what is missing.</p>
+        <div class="cm-assistant-setup" id="cm-assistant-setup" aria-label="Suggested questions">
+          <div class="cm-assistant-setup-copy">
+            <span class="cm-assistant-setup-glyph" aria-hidden="true">✦</span>
+            <div>
+              <strong id="cm-assistant-setup-title">Start with a question</strong>
+              <p id="cm-assistant-setup-description">Ask for a decision, an explanation, or a panel for Home.</p>
+            </div>
           </div>
-        </section>
-        <div class="cm-assistant-footnote">Answers use local observability data. Generated SQL is read-only and shown as a source detail.</div>
-      </main>
+          <div class="cm-assistant-suggestions" id="cm-assistant-suggestions"></div>
+        </div>
+
+        <div class="cm-assistant-status-message" id="cm-assistant-status-message" role="status" aria-live="polite" hidden></div>
+        <div class="cm-assistant-data-notice" id="cm-assistant-data-notice" hidden></div>
+
+      </div>
     </div>
   </section>
 </div>

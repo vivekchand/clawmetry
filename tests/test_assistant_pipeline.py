@@ -339,3 +339,56 @@ def test_real_store_keeps_empty_results_distinct_from_sql_errors(real_stack, mon
     assert body["sources"][0]["error"] is None
     assert body["sources"][1]["rows"] == 0
     assert body["sources"][1]["error"]
+
+
+def test_stream_persists_only_complete_answer_in_real_duckdb(real_stack, monkeypatch):
+    """AC-ASSIST-005.3 Completed text, sources and panels survive a store reopen."""
+    import threading
+    from clawmetry import assistant_providers
+
+    finish = threading.Event()
+    jobs = []
+
+    def generate(mode, credential, system, prompt, **kwargs):
+        jobs.append(kwargs["control"])
+        if system.startswith(assistant._PLAN):
+            return json.dumps(_two_chart_plan())
+        kwargs["on_text"]("Recorded ")
+        assert finish.wait(3)
+        kwargs["on_text"]("runtime totals.")
+        return "Recorded runtime totals."
+
+    monkeypatch.setattr(assistant_providers, "generate", generate)
+    response = real_stack["client"].post("/api/assistant/chat", json={
+        "message": "Compare runtime costs", "stream": True,
+    }, buffered=False)
+    iterator = iter(response.response)
+    try:
+        for chunk in iterator:
+            if chunk.startswith(b"event: delta"):
+                break
+        assert real_stack["store_ref"]["store"].query_assistant_conversations() == []
+        finish.set()
+        done = None
+        for chunk in iterator:
+            if chunk.startswith(b"event: done"):
+                done = json.loads(chunk.decode().split("data: ", 1)[1])
+        assert done is not None
+        cid = done["conversation_id"]
+        store = real_stack["store_ref"]["store"]
+        assert len(store.query_assistant_conversations()) == 1
+        stored = store.query_assistant_conversation(conversation_id=cid)["messages"][-1]
+        assert stored["content"] == "Recorded runtime totals."
+        assert stored["panels"] == done["panels"]
+        assert stored["sources"] == done["sources"]
+        assert len(stored["panels"]) == 2
+        store.stop(flush=False)
+        real_stack["local_store"]._reset_singleton_for_tests()
+        reopened = real_stack["local_store"].get_store()
+        real_stack["store_ref"]["store"] = reopened
+        assert reopened.query_assistant_conversation(conversation_id=cid)["messages"][-1] == stored
+    finally:
+        finish.set()
+        response.close()
+        for job in jobs:
+            job.worker.join(2)

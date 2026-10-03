@@ -7,7 +7,7 @@
         <h2>See what is shaping your agents.</h2>
         <p>Rules, skills, commands, sub-agents, and hooks are spread across different harnesses. ClawMetry gathers the files it can find into one quiet, reviewable view.</p>
       </div>
-      <button class="cm-setup-refresh" type="button" onclick="loadSetup(true)">Rescan setup</button>
+      <button id="setup-refresh" class="cm-setup-refresh" type="button" onclick="loadSetup(true)">Rescan setup</button>
     </section>
 
     <div class="cm-setup-summary" id="setup-summary" aria-live="polite">
@@ -20,7 +20,7 @@
     <div class="cm-setup-toolbar">
       <div>
         <div class="cm-setup-section-title">Setup map</div>
-        <div class="cm-setup-section-note">Pick a harness to review the files it exposes.</div>
+        <div id="setup-source-note" class="cm-setup-section-note">Pick a harness to review the files it exposes.</div>
       </div>
       <div class="cm-setup-filters" role="group" aria-label="Filter setup files">
         <button class="cm-setup-filter is-active" data-setup-kind="all" onclick="setupSetKind('all')">Everything</button>
