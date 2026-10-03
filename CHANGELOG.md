@@ -1,5 +1,10 @@
 ## Unreleased
 
+### Added: Qwen Code session replay
+
+- Qwen Code sessions now feed the replay tree. The reader maps each chat recording into the canonical replay stream: one turn per user prompt, reasoning and model replies with usage, tool calls with their results, and the recorded decision on each tool call. The mode chip reads "unknown" because Qwen Code keeps no approval mode in the chat log. Sub-agent transcripts attach under the call that started them, with their resolved approval mode on the spawn. The daemon writes the stream for every adapter that offers one, so later runtime mappers need no daemon change.
+
+
 ### Added: conversational dashboards from local agent evidence
 
 - Home keeps replies, live state, and cached figures in the selected runtime. Daily costs use the daily response, local period totals reuse DuckDB usage, and unavailable periods remain explicit. Cost review labels its node-wide scope and distinguishes estimates from actual charges or proven savings.
