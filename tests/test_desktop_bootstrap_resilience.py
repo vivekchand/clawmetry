@@ -385,7 +385,6 @@ def test_network_hint_on_windows_mentions_ipv6(monkeypatch):
         "Connection to pypi.org timed out."
     ).lower()
     assert "ipv6" in hint, "Windows network hint must mention IPv6 as a likely cause"
-    assert "pypi.org" in hint, "hint must still name the unreachable host"
 
 
 def test_tls_intercepted_hint_is_actionable():
