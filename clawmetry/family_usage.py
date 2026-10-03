@@ -135,5 +135,6 @@ def reconcile(store, session_id, rows):
                         [value for change in chunk for value in change],
                     )
                 store._apply_rollup_deltas_locked(new_m, new_r)
+                store._record_event_changes_locked([change[0] for change in changes])
     ls.invalidate_aggregate_cache()
     return len(changes)

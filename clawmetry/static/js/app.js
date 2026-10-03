@@ -2139,6 +2139,8 @@ function switchTab(name) {
   // run on their own screen instead of on every tab.
   if (name !== 'assistant' && typeof assistantLeave === 'function') assistantLeave();
   _cmCurrentTab = name;
+  if (window.cmActivityVisibilityChanged) window.cmActivityVisibilityChanged();
+  if (window.cmErrorGroupsVisibilityChanged) window.cmErrorGroupsVisibilityChanged();
   document.body.classList.toggle('cm-assistant-active', name === 'assistant');
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
@@ -3907,10 +3909,13 @@ function _cmStartScreenStreams() {
 // on readyState===CLOSED, so this is idempotent).
 (function _installSSEVisibilityGuard() {
   if (typeof document === 'undefined' || !document.addEventListener) return;
-  function _closeAllSSE() {
+  function _closeAllSSE(pausePersisted) {
     ['_brainSSE', '_flowBrainSse', '_flowSse', 'healthStream', 'logStream'].forEach(function(key) {
       try {
         var es = window[key];
+        // Persisted readers pause their own fetches on hidden and resume
+        // from the committed cursor. Keep their subscribers registered.
+        if (pausePersisted === true && es && es.persistedActivity) return;
         if (es && typeof es.close === 'function') {
           es.close();
           window[key] = null;
@@ -3919,7 +3924,7 @@ function _cmStartScreenStreams() {
     });
   }
   document.addEventListener('visibilitychange', function() {
-    if (document.hidden) _closeAllSSE();
+    if (document.hidden) _closeAllSSE(true);
   });
   window.addEventListener('pagehide', _closeAllSSE);
 })();
@@ -4541,6 +4546,7 @@ async function loadSimilarRuns(sessionId) {
 // ── Error triage (#2196 item #5) ────────────────────────────────────────────
 
 async function loadTriageList() {
+  if (window.cmLoadErrorGroups) cmLoadErrorGroups();
   var body = document.getElementById('triage-list-body');
   if (!body) return;
   var data;
@@ -4583,14 +4589,14 @@ async function submitResolveError() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({event_id: eid, note: note}),
     });
-    if (resp.ok) { idEl.value = ''; noteEl.value = ''; loadTriageList(); }
+    if (resp.ok) { idEl.value = ''; noteEl.value = ''; if (window.cmLoadErrorGroups) cmLoadErrorGroups(true); loadTriageList(); }
   } catch (e) {}
 }
 
 async function unresolveError(eid) {
   try {
     var resp = await fetch('/api/error-triage/resolve?event_id=' + encodeURIComponent(eid), {method: 'DELETE'});
-    if (resp.ok) loadTriageList();
+    if (resp.ok) { if (window.cmLoadErrorGroups) cmLoadErrorGroups(true); loadTriageList(); }
   } catch (e) {}
 }
 
@@ -10000,6 +10006,9 @@ function _hideBrainGraphDetail() {
 window._hideBrainGraphDetail = _hideBrainGraphDetail;
 
 var _brainSSE = null;
+var _brainActivityRuntime = null;
+var _brainAuxLastLoaded = 0;
+var _brainAuxPending = null;
 var _brainSSEConnected = false;
 // Issue #1596 — exponential backoff state for SSE reconnect. A single
 // retry chain (no parallel storms): `_brainSSERetryTimer` holds the
@@ -10124,32 +10133,36 @@ function _startBrainSSE() {
   _brainSSE = null;
   _brainSSEConnected = false;
 
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (_brainActivityRuntime !== runtime) {
+    _brainActivityRuntime = runtime;
+    _brainAllEvents = []; _brainFilter = 'all';
+    renderBrainStream([]); renderBrainChart([]);
+    renderBrainFilterChips([]); renderBrainTypeChips([]);
+    if (typeof syncBrainGraph === 'function') syncBrainGraph([]);
+  }
+
   try {
-    var url = '/api/brain-stream';
-    var token =
-      localStorage.getItem('clawmetry-token') ||
-      localStorage.getItem('gw_token') ||
-      localStorage.getItem('cm-token');
-    if (token) url += '?token=' + encodeURIComponent(token);
-    var es = new EventSource(url);
+    // The shared persisted reader supplies authenticated fetches.
+    var es = window.cmActivityEventSource({runtime:runtime});
     _brainSSE = es;
 
     es.addEventListener('connected', function() {
       _updateBrainLiveIndicator(true);
       // Issue #1596 — successful reconnect clears banner + retry state.
       _resetBrainSSEReconnectState();
-      // Issue #1606 — on reconnect (not first connect), the server may have
-      // restarted with a changed event shape. Flush the stale cache and
-      // reload so chip filters don't compute against a mixed old+new array.
-      if (_brainSSEEverConnected && !_brainRange) {
-        _brainAllEvents = [];
-        _brainFilter = 'all';
-        _brainTypeFilter = 'all';
-        loadBrainPage(true);
-      }
+      // Committed replay preserves the existing rows across reconnects.
+      // Only an explicit resync invalidates them; a quiet response is not
+      // evidence that the previously loaded activity disappeared.
       _brainSSEEverConnected = true;
     });
 
+    es.addEventListener('resync', function() {
+      _brainAllEvents = []; renderBrainStream(_brainAllEvents);
+    });
+    es.addEventListener('checkpoint', function() {
+      if (!_brainAllEvents.length) renderBrainStream([]);
+    });
     es.onmessage = function(e) {
       try {
         // Historical window active (race: range applied while a message
@@ -10161,6 +10174,7 @@ function _startBrainSSE() {
         // can suppress itself while live activity is clearly flowing.
         window._cmLastLiveEventMs = Date.now();
         // Prepend to events array
+        if (ev.eventId) _brainAllEvents = _brainAllEvents.filter(function(row) { return row.eventId !== ev.eventId; });
         _brainAllEvents.unshift(ev);
         // Cap at 500 events
         if (_brainAllEvents.length > 500) _brainAllEvents = _brainAllEvents.slice(0, 500);
@@ -10562,31 +10576,26 @@ window.selfevolveRun = async function () {
   }
 };
 
+window.cmLoadPersistedBrain = function () {
+  if (_brainRange || document.hidden || _cmCurrentTab !== 'brain') return;
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (!_brainSSE || _brainSSE.readyState === 2 || _brainActivityRuntime !== runtime) _startBrainSSE();
+  // Keep the existing badges available without adding a second activity
+  // poller or re-reading them on every quiet replay/reconnect.
+  if (!_brainAuxPending && Date.now() - _brainAuxLastLoaded >= 30000) {
+    _brainAuxLastLoaded = Date.now();
+    _brainAuxPending = Promise.allSettled([loadLoopSignals(), loadBrainAtRisk(), loadBrainProgress()])
+      .finally(function () { _brainAuxPending = null; });
+  }
+};
+
 async function loadBrainPage(silent) {
   // Mount the Grafana-style date/time-range picker on first paint (and
   // re-mount if the tab was rebuilt). Idempotent by design — the helper
   // no-ops when the container already has a picker attached.
   try { _brainMountRangePicker(); } catch (e) {}
-  // Cloud iframe doesn't proxy /api/brain-history (live event stream is
-  // local-only). Without this branch, `loadBrainPage` returned silently and
-  // left the inline `Loading...` placeholder in `#brain-stream` forever
-  // (P0 follow-up to #1235). Replace the spinner with an explicit
-  // empty-state so cloud users understand the surface is local-only and
-  // the spinner stops misrepresenting the load state.
-  // Date-time range investigations DO run on the hosted dashboard: the
-  // cloud intercepts the ranged /api/brain-history fetch and answers it
-  // via the node relay (encrypted end-to-end, decrypted in this browser).
-  // Only the LIVE stream stays local-only.
-  if (window.CLOUD_MODE && !_brainRange) {
-    var cloudEl = document.getElementById('brain-stream');
-    if (cloudEl && /Loading/i.test(cloudEl.innerText || '')) {
-      cloudEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' +
-  '<div style="font-size:15px;font-weight:600;margin-bottom:6px;">🔒 Brain activity stays local — by design.</div>' +
-  '<div style="margin-bottom:8px;">Your prompts, tool calls, and reasoning never leave your machine. We only see aggregated counts.</div>' +
-  '<a href="#local-first" style="color:var(--text-link, #60a5fa);text-decoration:none;">Why local-first →</a>' +
-  '</div>';
-    }
-    return;
+  if (!_brainRange && window.cmActivityEventSource) {
+    return window.cmLoadPersistedBrain(silent);
   }
   // Snapshot the active range so an async response for a STALE range (the
   // user clicked Back-to-live or picked a new window mid-flight) is dropped
@@ -12967,7 +12976,7 @@ var _CM_CAP_TABS = {
   // no-cost runtimes (Cursor/PicoClaw/NanoClaw) keep a context surface.
   // 'agents' (Agent Graph) is EVENTS-derived: spans are reconstructed from
   // every runtime's normalized events at family-ingest time.
-  EVENTS:      ['brain','models','tracing','turn-anatomy','context-economics','agents'],
+  EVENTS:      ['brain','flow','models','tracing','turn-anatomy','context-economics','agents'],
   // Nav uses data-tab="usage" for the Cost tab — 'cost' was a dead id that
   // left the tab visible for no-cost runtimes (Cursor/PicoClaw/NanoClaw).
   COST:        ['usage'],
@@ -12981,7 +12990,7 @@ var _CM_CAP_TABS = {
   // selected runtime via the requesting session-id prefix.
   // policy/selfevolve/version-impact stay OpenClaw gateway/admin concepts.
   GATEWAY_RPC: ['policy','selfevolve','version-impact'],
-  CHANNELS:    ['flow']
+  CHANNELS:    []
 };
 // Node/account-level tabs — not capability-gated, shown for every runtime.
 // approvals: one local queue spans all runtimes (see _CM_CAP_TABS note).
@@ -16731,6 +16740,11 @@ function _taRenderTurn(t) {
 }
 
 async function loadTracing() {
+  if (window._pendingInvestigation) {
+    var investigation = window._pendingInvestigation; window._pendingInvestigation = null;
+    return window.cmLoadInvestigation(investigation);
+  }
+  if (window.cmCloseInvestigation) window.cmCloseInvestigation();
   // Session deep-dive handoff (Phase B): a pending session skips the list and
   // opens the per-session detail directly.
   if (window._pendingTraceSession) {
@@ -24910,7 +24924,7 @@ function hideFlowRunDetail() {
 }
 
 function initFlow() {
-  if (flowInitDone) return;
+  if (flowInitDone) { _startFlowBrainStream(); return; }
   flowInitDone = true;
 
   // Performance: Reduce update frequency on mobile
@@ -24954,15 +24968,17 @@ function initFlow() {
     }
   }).catch(function(){});
   // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
-  _startFlowSse();
+  if (!window.cmActivityEventSource) _startFlowSse();
   // Active Tools + Live Tool Call Stream — DuckDB-backed (issue #1127).
   // The flow-events SSE only fires when gateway.log emits the right keywords,
   // which leaves "Active Tools: —" and "Waiting for activity…" stuck on most
   // installs. /api/brain-history + /api/brain-stream read from the same
   // DuckDB store that drives the rest of the Brain tab, so we backfill
   // recent tool events and subscribe to the live stream from there.
-  _backfillFlowFromBrain();
-  _backfillFlowEventCount();
+  if (!window.cmActivityEventSource) {
+    _backfillFlowFromBrain();
+    _backfillFlowEventCount();
+  }
   _startFlowBrainStream();
 
   // Lazy-load Phase 2 follow-up: this used to be a raw `setInterval(...)`
@@ -25068,10 +25084,15 @@ function _buildRuntimeFlowInner(rt, model) {
 function _applyRuntimeFlowDiagram(rt) {
   var svg = document.getElementById('flow-svg');
   if (!svg) return;
+  // Channel routing is not part of a coding runtime's execution path.
+  var journey = document.querySelector('#page-flow .flow-journey');
+  var caps = _cmCapsForRuntime(rt);
+  var channelPath = !rt || rt === 'all' || !!(caps && caps.indexOf('CHANNELS') !== -1);
+  if (journey) journey.hidden = !channelPath;
   if (_origFlowSvgInner === null) _origFlowSvgInner = svg.innerHTML;
+  // The primary-session model is node-wide; it cannot label a selected
+  // runtime's topology. The diagram uses its neutral agent label instead.
   var model = '';
-  try { var ml = document.getElementById('brain-model-text'); model = ml ? (ml.textContent || '') : ''; } catch (e) {}
-  if (model === 'unknown') model = '';
   // Never render a LOCKED runtime (e.g. Claude Code on the free plan) as an
   // active Flow topology — that contradicts the "install OpenClaw" empty-state
   // and reads as if a Pro runtime is live. Fall back to the default OpenClaw
@@ -25079,6 +25100,9 @@ function _applyRuntimeFlowDiagram(rt) {
   var inner = (typeof _cmLockedRuntimes !== 'undefined' && _cmLockedRuntimes && _cmLockedRuntimes[rt])
     ? null
     : _buildRuntimeFlowInner(rt, model);
+  // Unknown topologies keep their recorded call list without borrowing the
+  // channel diagram from a different runtime.
+  svg.style.display = inner || channelPath ? '' : 'none';
   if (inner) {
     svg.innerHTML = inner;
   } else if (svg.innerHTML.indexOf('rtShadow') !== -1) {
@@ -25275,51 +25299,91 @@ function _backfillFlowFromBrain() {
 }
 
 var _flowBrainSse = null;
+var _flowActivityRuntime = null;
+var _flowActivitySeen = new Set();
+function _flowActivityStatus(message) {
+  var el = document.getElementById('flow-activity-status');
+  if (el) el.textContent = message;
+}
 function _startFlowBrainStream() {
-  if (window.CLOUD_MODE) return;
-  if (_flowBrainSse && _flowBrainSse.readyState !== EventSource.CLOSED) return;
+  if (_cmCurrentTab !== 'flow' || document.hidden) return;
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (_flowBrainSse && _flowBrainSse.readyState !== 2 && _flowActivityRuntime === runtime) return;
+  if (_flowBrainSse) _flowBrainSse.close();
+  if (_flowActivityRuntime !== runtime) {
+    _flowActivityRuntime = runtime;
+    _flowActivitySeen.clear();
+    flowStats.msgTimestamps = []; flowStats.messages = 0;
+    clearToolStream(); flowStats.activeTools = {}; updateFlowStats();
+  }
+  _flowActivityStatus('Connecting to recorded activity...');
   try {
-    var url = '/api/brain-stream';
-    var tok =
-      localStorage.getItem('clawmetry-token') ||
-      localStorage.getItem('gw_token') ||
-      localStorage.getItem('cm-token');
-    if (tok) url += '?token=' + encodeURIComponent(tok);
-    var es = new EventSource(url);
+    var es = window.cmActivityEventSource({runtime:runtime});
     _flowBrainSse = es;
+    es.addEventListener('connected', function() {
+      _flowActivityStatus('Connected to recorded activity');
+    });
+    es.addEventListener('resync', function() {
+      _flowActivitySeen.clear(); clearToolStream();
+      flowStats.msgTimestamps = []; flowStats.messages = 0;
+      flowStats.activeTools = {}; updateFlowStats();
+      _flowActivityStatus('Refreshing recorded activity...');
+    });
+    es.addEventListener('checkpoint', function() {
+      if (es.readyState === 1) _flowActivityStatus('Connected to recorded activity');
+    });
+    function firstSeen(key) {
+      var seen = _flowActivitySeen.has(key);
+      // Match the reader's retained domain: 500 events, each with at most
+      // 256 calls plus one channel action. Upserts refresh key order too.
+      _flowActivitySeen.delete(key);
+      _flowActivitySeen.add(key);
+      while (_flowActivitySeen.size > 500 * 257) _flowActivitySeen.delete(_flowActivitySeen.values().next().value);
+      return !seen;
+    }
     es.onmessage = function(e) {
       try {
         var ev = JSON.parse(e.data);
         if (!ev || !ev.type) return;
-        var tool = _brainTypeToFlowTool(ev.type);
-        // Accuracy: a type that maps to a real bucket lights that component +
-        // pulses its edge; an UNMAPPED type must NOT falsely light "Exec" — we
-        // pulse the neutral Skills edge and still record the REAL name in the
-        // feed (#flow-live-feed is the exact per-call truth).
-        if (tool) {
-          // Drive Active Tools + the existing tool-call animation off the same
-          // DuckDB-backed event. triggerToolCall already handles the 5s expiry.
-          triggerToolCall(tool);
-          _flowPulseEdge('path-brain-' + tool);
-          _flowRailSetStage('tools');
-          var label = '⚡ ' + tool + ': ' + _flowFeedLabelForTool(tool);
-          addFlowFeedItem(label, '#f0c040', 'tool');
-        } else {
-          // Unknown tool class — neutral pulse, honest label with the raw type.
-          _flowPulseEdge('path-brain-skills');
-          _flowRailSetStage('tools');
-          var rawName = String(ev.tool || ev.type || 'tool');
-          addFlowFeedItem('⚡ ' + rawName, '#f0c040', 'tool');
+        var eventType = String(ev.type).toUpperCase();
+        var legacyTool = _brainTypeToFlowTool(eventType);
+        var age = Date.now() - new Date(ev.time).getTime();
+        var live = !e.fromCache && e.activityMode === 'replay' && age >= 0 && age < 5000;
+        var scope = [ev.nodeId || '', ev.runtime || runtime || '', ev.sessionId || ''];
+        if (eventType === 'CHANNEL.IN' && firstSeen(JSON.stringify(scope.concat(['in', ev.eventId || ev.time])))) {
+          if (age >= 0 && age < 60000) flowStats.msgTimestamps.push(new Date(ev.time).getTime());
+          flowStats.messages++;
+          if (live) _flowPulseInbound(ev.channel || '');
         }
-        flowStats.events++;
+        if (eventType === 'CHANNEL.OUT' && live && firstSeen(JSON.stringify(scope.concat(['out', ev.eventId || ev.time])))) _flowRailSetStage('reply');
+        // A single recorded message can contain several calls. Replay can
+        // later add calls to that same event, so dedup the calls individually.
+        var calls = Array.isArray(ev.toolCalls) ? ev.toolCalls.slice(0, 256) : [];
+        if (!calls.length && (eventType === 'TOOL_CALL' || eventType === 'TOOL.CALL' || eventType === 'TOOL' || legacyTool)) {
+          calls = [{name:ev.tool || (legacyTool ? ev.type : '')}];
+        }
+        calls.forEach(function(call, index) {
+          if (!call || typeof call !== 'object') return;
+          var key = call.id ? ['call', call.id] : ['event', ev.eventId || ev.time, index];
+          if (!firstSeen(JSON.stringify(scope.concat(key)))) return;
+          flowStats.events++;
+          var tool = _brainTypeToFlowTool(call.name || ev.type);
+          if (live) {
+            if (tool) triggerToolCall(tool);
+            _flowPulseEdge('path-brain-' + (tool || 'skills'));
+            _flowRailSetStage('tools');
+          }
+          addFlowFeedItem('⚡ ' + escHtml(String(call.name || 'Tool name unavailable')), '#f0c040', 'tool', ev.time);
+        });
       } catch(e2) {}
     };
     es.onerror = function() {
+      _flowActivityStatus('Connection unavailable. Showing recorded activity; retrying...');
       try { es.close(); } catch(e3) {}
       _flowBrainSse = null;
       setTimeout(_startFlowBrainStream, 5000);
     };
-  } catch(e) {}
+  } catch(e) { _flowActivityStatus('Recorded activity unavailable'); }
 }
 
 function _populateFlowSkills() {
@@ -25702,9 +25766,9 @@ var _toolCategoryColors = {
   error: '#e74c3c', heartbeat: '#4a7090', result: '#50c070', ai: '#a080f0'
 };
 
-function addFlowFeedItem(text, color, category) {
+function addFlowFeedItem(text, color, category, recordedAt) {
   if (_toolStreamPaused) return;
-  var now = new Date();
+  var now = recordedAt ? new Date(recordedAt) : new Date();
   var time = now.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
   var cat = category || 'system';
   _flowFeedItems.push({time: time, text: text, color: color || '#888', cat: cat});
@@ -25740,6 +25804,9 @@ function renderToolStream() {
 
 var flowThrottles = {};
 function processFlowEvent(line) {
+  // The log stream still serves Logs, but cannot add unscoped inferred
+  // activity to a Flow view backed by the persisted runtime reader.
+  if (window.cmActivityEventSource) return;
   flowStats.events++;
   var now = Date.now();
   var msg = '', level = '';
@@ -32755,7 +32822,10 @@ function loadGuardSessions() {
               '</h4><p>' + guardEsc(finding.detail || 'Open this session to review the matching activity.') + '</p>' +
               (finding.since ? '<small>First seen ' + guardEsc(guardAgo(finding.since)) + '</small>' : '') + '</div>';
           }).join('') + '<footer><span>' + (inc && Number(inc.spend_at_risk_usd) > 0 ? guardMoney(inc.spend_at_risk_usd) + ' estimated at risk' : 'Detected activity, not a blocked action') +
-          '</span><div><button class="btn btn-xs" data-sid="' + guardEsc(s.session_id) +
+          '</span><div>' + (inc && inc.incident_id ? '<button class="btn btn-xs" data-incident="' + guardEsc(inc.incident_id) +
+          '" data-sid="' + guardEsc(s.session_id) + '" data-rt="' + guardEsc(s.runtime) + '" data-node="' + guardEsc(inc.node_id || '') +
+          '" onclick="cmOpenIncident(this.dataset.incident,this.dataset.rt,this.dataset.sid,this.dataset.node)">See what happened</button> ' : '') +
+          '<button class="btn btn-xs" data-sid="' + guardEsc(s.session_id) +
           '" onclick="openTrail(this.dataset.sid)">View session</button> ' + control + '</div></footer></article>');
       }
 

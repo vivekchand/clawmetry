@@ -33,6 +33,15 @@ def dispatch(argv: list[str]) -> int:
     from clawmetry.cli_cmds import _common
 
     try:
+        if len(argv) > 1 and argv[0] == 'sessions' and argv[1] in ('list', 'inspect', 'watch'):
+            from clawmetry import extensions
+            extensions.load_plugins()
+            result = extensions.call('cli.sessions', {'argv': argv[1:]})
+            if result is None:
+                raise _common.CliError('upgrade_required',
+                    'Install the paid ClawMetry extension to use session investigations.',
+                    _common.EXIT_ENTITLEMENT)
+            return int(result)
         parser = _common.build_parser()
         args = parser.parse_args(argv)
         handler = getattr(args, "_handler", None)
