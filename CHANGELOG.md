@@ -7,6 +7,13 @@
 - **Verified:** 18 new renderer checks cover node status, the latest run of a node, an edge to an unknown node, escaped names, a graph without positions, a workflow without nodes and an execution whose node runs are not stored. The output for three captured n8n executions was rendered to an image and inspected.
 - **Limits:** the graph appears only for a runtime whose replay mapper sends nodes. The n8n mapper that does so ships in the Pro adapter package. A Goose recipe has no nodes and keeps the list. The graph was not opened in a running dashboard.
 
+### Fixed: Sessions stays a readable conversation
+
+- Opening a session with recorded replay events keeps the conversation, filters, tool details and playback controls visible. Raw event details are now an optional section that loads when opened.
+- The reader opens at the latest recorded message, shows the recorded model and token count, and restarts from the beginning when Play is pressed. Missing measurements are labelled as not recorded.
+- Switching sessions discards late transcript, history-page and side-panel responses. Narrow screens put session titles above the action buttons.
+- Verified with the reported Claude Code session, a fresh real Claude exchange, a long Codex conversation with older history, and regression tests that fail when the old renderer takeover or position reset is restored.
+
 ### Fixed: the runtime hook registry replaced hooks it did not own
 
 - **Why:** `clawmetry.hooks.install` set the config key of a hook to its own value. A `hooks.PreToolUse` list in `~/.claude/settings.json` that already held a user hook was replaced. It also wrote a `__clawmetry` key next to the hook events, and it rewrote a config it could not parse as an empty one. Uninstall copied the backup taken at install time over the config, which dropped every edit made since. No shipped component installs through this registry yet, so no user config was affected.

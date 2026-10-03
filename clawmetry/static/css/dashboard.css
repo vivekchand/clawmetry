@@ -2718,7 +2718,17 @@ body.has-profile-menu #logout-btn { display: none !important; }
    defaults; per-runtime templates (Claude Code #4815, OpenClaw #4816,
    Pro adapters) may layer richer styles via registerKindRenderer().
 */
-.replay-tree { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+@media (max-width: 700px) {
+  #transcript-list .transcript-item { flex-wrap: wrap; gap: 8px; }
+  /* Give the title and metadata their own row before the action buttons. */
+  #transcript-list .transcript-item > div:first-child { flex-basis: 100% !important; }
+  #transcript-list .transcript-meta-row { flex-wrap: wrap; }
+}
+.replay-details { min-width: 0; padding: 10px 12px; border: 1px solid var(--border-secondary); border-radius: 8px; }
+.replay-details > summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+.replay-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.replay-details-body { max-height: 60vh; overflow: auto; padding-top: 12px; }
+.replay-tree { display: flex; flex-direction: column; min-width: 0; gap: 10px; padding: 4px 0; }
 .replay-tree-mode-chip {
   display: inline-block; padding: 3px 10px; border-radius: 12px;
   font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
@@ -2761,7 +2771,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
   padding: 10px 12px; background: var(--bg-secondary);
 }
 .replay-tree-turn-header {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere;
   font-size: 12px; color: var(--text-muted);
   margin-bottom: 6px; padding-bottom: 6px;
   border-bottom: 1px dashed var(--border-secondary);
@@ -2779,7 +2789,7 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .replay-tree-kind {
   min-width: 100px; color: var(--accent); font-weight: 600;
 }
-.replay-tree-body { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replay-tree-body { min-width: 0; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .replay-tree-kind-agent .replay-tree-kind { color: #b070ff; }
 .replay-tree-kind-workflow .replay-tree-kind { color: #ffa060; }
 .replay-tree-kind-approval .replay-tree-kind { color: #4a9eff; }
