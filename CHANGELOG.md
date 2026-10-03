@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixed: sync daemon reclaims a stale lock left by a terminated process
+
+- The daemon now verifies that the lock-holder PID is alive before refusing to start on Linux. A process killed without cleanup (SIGKILL, container restart) left a stale lock that blocked all future daemon starts until the lock file was manually removed. Carries #6290.
+
+### Added: OpenDots runtime support (Pro)
+
+- The OSS layer adds OpenDots to the runtime catalogue, daemon loader, discovery, runtime filters, and capability maps. The paid adapter ships through clawmetry-pro; the OSS layer is inert without it. Adapters without a session digest retain existing watermark behavior. Carries #6249.
+
 ### Fixed: nav tooltips show their English text when a translation is missing
 
 - Tooltip strings in the nav that were not yet in a locale's catalog showed blank space or a raw key. The Guard, Assistant, Brain and Fleet nav entries now carry checked English fallbacks so every locale reads a complete sentence until the translation sync catches up. Carries #6277.
