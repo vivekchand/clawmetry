@@ -8,6 +8,20 @@
 - **Verified:** 29 new tests cover each emitted code, precedence and the fixed field set. They also cover exporter dedup across a restart, the daemon hook with the variable unset and set, and the route. The detector pass is unchanged when the variable is unset.
 - **Limits:** the mapping is conservative and marker based. A failure without a mapped marker is not exported. Sessions idle longer than the detector window are not re-read.
 
+### Added: conversational dashboards from local agent evidence
+
+- Home keeps replies, live state, and cached figures in the selected runtime. Daily costs use the daily response, local period totals reuse DuckDB usage, and unavailable periods remain explicit. Cost review labels its node-wide scope and distinguishes estimates from actual charges or proven savings.
+
+- Assistant is the local opening screen. Ask a question, refine the answer, and create charts, tables, or metrics from recorded data.
+- Save a generated panel to Home. Saved panels and conversations persist locally; panels query current data when Home opens.
+- Use an authenticated Claude harness with tools disabled, an Anthropic API key, or a connected Builder account. Voice input requires an explicit click and transcript review.
+- Queries are read-only and bounded. Raw payload columns are removed before a generated query runs. Sources disclose query errors, limited previews, and missing measurements.
+- Setup gathers known rules, skills, commands, and hooks. Improve presents guidance candidates with conversation evidence for review.
+- Page navigation isolates each screen and preserves tab links. Context and model reviews distinguish recorded usage from unmeasured effectiveness or savings.
+- Hosted dashboards retain Agents as the opening screen. Local-only surfaces explain where their data is available before making requests.
+
+- Context gauges and coverage share prompt-token readings, including adapter fields and fully cached prompts. Missing peaks and compaction measurements remain distinct from observed zero; cloud snapshots retain measurement status.
+
 ### Release: checked English explanations
 
 - **Why:** Dashboard explanations, generated summaries, browser fallbacks, and CLI help need consistent wording that preserves the recorded facts.
