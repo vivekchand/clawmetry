@@ -49,7 +49,7 @@ _TTS_URL_PATTERNS = [
 _EXCLUDED_HOST_DEFAULTS = frozenset([
     "localhost",
     "127.0.0.1",
-    "0.0.0.0",
+    "0.0.0.0",  # nosec B104 - excluded-host allowlist for capture; never passed to bind()
     "169.254.",        # link-local / AWS metadata
     "::1",
     # LLM providers already tracked as llm_call
