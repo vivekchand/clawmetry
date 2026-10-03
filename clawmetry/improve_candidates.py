@@ -401,7 +401,12 @@ def _select_rows(store, *, days, node_id, allowed, now):
     """One key-first query, with fair ordering BEFORE global row/byte caps.
 
     The SQL filters time, node, entitled runtime, message event kinds and
-    internal sessions. Typed roles exclude assistant/system traffic before ranking. Legacy roles
+    internal/delegated sessions. A child's user role describes a delegated
+    instruction, not a human preference. Keep the exact persisted session id
+    (including its runtime prefix), as the subagents agent_type is legacy and
+    may be openclaw for other runtimes. Exclude embedded subagent event lanes
+    too, since those share the human parent's session id.
+    Typed roles exclude assistant/system traffic before ranking. Legacy roles
     and text live inside potentially compressed BLOBs;
     decode only this bounded selection, reporting any omitted evidence.
     No filesystem reads, UDFs, per-runtime scans or second DB connection.
@@ -428,6 +433,13 @@ def _select_rows(store, *, days, node_id, allowed, now):
             WHERE ts >= ? AND ts <= ? {where}
               AND (role IN ('user', 'human') OR event_type IN ('message', 'prompt.submitted', 'user', 'user_prompt'))
               AND (role IN ('user', 'human') OR role IS NULL OR role = '')
+              AND coalesce(event_type, '') NOT LIKE 'subagent:%'
+              AND NOT EXISTS (
+                  SELECT 1 FROM subagents child
+                  WHERE child.subagent_id = events.session_id
+                    AND child.parent_session_id IS NOT NULL
+                    AND child.parent_session_id <> ''
+              )
               AND agent_id IS DISTINCT FROM 'clawmetry-daemon'
               AND NOT regexp_matches(coalesce(session_id,''), '(^|:)clawmetry-')
               AND NOT contains(replace(lower(coalesce(workspace_id,'')), chr(92), '/'), '/harnessruns')

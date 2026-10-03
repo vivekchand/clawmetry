@@ -120,6 +120,64 @@ def test_internal_synthetic_tool_and_duplicate_turns_excluded(store):
     assert body['conversation_count'] == 1
 
 
+@pytest.mark.parametrize('runtime,prefix', [
+    ('codex', 'codex:'), ('claude_code', 'claude_code:'), ('openclaw', ''),
+])
+def test_recorded_children_excluded_before_sampling_and_encrypted_cards(store, runtime, prefix):
+    """AC-ASSIST-006.2/.4: user role in a delegated session is not human evidence."""
+    parent, child, grandchild = (prefix + name for name in ('parent', 'child', 'grandchild'))
+    for sid, parent_id in ((child, parent), (grandchild, child)):
+        # Real family sync uses legacy agent_type=openclaw even for Codex.
+        store.ingest_subagent({'agent_type': 'openclaw', 'subagent_id': sid,
+                              'parent_session_id': parent_id, 'runtime': runtime})
+    # Newer delegated instructions must not consume the human's runtime cap.
+    for i in range(ic.MAX_ROWS_PER_RUNTIME + 1):
+        seed(store, 'child-' + str(i), session=child, runtime=runtime)
+    seed(store, 'grandchild', session=grandchild, runtime=runtime)
+    # Identical text is valid in a human parent: no wording heuristics.
+    seed(store, 'human', session=parent, runtime=runtime, age=1000)
+    body = store.query_improve_candidates(runtime=runtime, node_id='node-a')
+    assert body['message_count'] == body['conversation_count'] == 1
+    assert body['coverage']['candidate_events'] == body['coverage']['inspected_events'] == 1
+    assert body['coverage']['status'] == 'complete'
+    assert body['signals'][0]['seen_count'] == body['signals'][0]['conversation_count'] == 1
+    assert body['signals'][0]['excerpt'] == 'Always keep answers concise.'
+    snapshot = ic.build_snapshot(store, node_id='node-a')
+    assert snapshot['improveByRuntime'][runtime] == body
+    assert snapshot['improve']['signals'] == body['signals']
+
+
+def test_child_exclusion_preserves_exact_runtime_node_and_unlinked_sessions(store):
+    """A matching suffix in another runtime, or no parent link, is not delegation."""
+    store.ingest_subagent({'subagent_id': 'codex:shared', 'parent_session_id': 'codex:parent'})
+    seed(store, 'delegated', session='codex:shared')
+    seed(store, 'human-other-runtime', session='claude_code:shared', runtime='claude_code')
+    seed(store, 'other-node', session='codex:node-b-human', node='node-b')
+    for i, parent in enumerate((None, '')):
+        sid = 'codex:unlinked-' + str(i)
+        store.ingest_subagent({'subagent_id': sid, 'parent_session_id': parent})
+        seed(store, 'unlinked-' + str(i), session=sid)
+    snapshot = ic.build_snapshot(store, node_id='node-a')
+    assert snapshot['improve']['message_count'] == 3
+    codex = snapshot['improveByRuntime']['codex']
+    assert codex['message_count'] == codex['coverage']['candidate_events'] == 2
+    assert codex['signals'][0]['runtimes'] == ['codex']
+    assert snapshot['improveByRuntime']['claude_code']['message_count'] == 1
+    assert store.query_improve_candidates(runtime='codex', node_id='node-b')['message_count'] == 1
+
+
+def test_embedded_subagent_event_lane_excluded_before_sampling(store):
+    """OpenClaw records embedded CLI subagents on the parent's session id."""
+    for i in range(ic.MAX_ROWS_PER_RUNTIME + 1):
+        seed(store, 'embedded-' + str(i), session='parent', runtime='openclaw',
+             event_type='subagent:user', data={'role': 'user',
+                 'content': 'Never use the human preference.', '_oc_cc_kind': 'subagent'})
+    seed(store, 'human', session='parent', runtime='openclaw', age=1000)
+    body = store.query_improve_candidates(runtime='openclaw')
+    assert body['message_count'] == body['coverage']['candidate_events'] == 1
+    assert body['signals'][0]['excerpt'] == 'Always keep answers concise.'
+
+
 def test_legacy_secrets_scrubbed_before_keys_excerpts_and_workspace_labels(store):
     secret = 'sk-ant-' + 'a'*30
     seed(store, 'secret', text='Always use '+secret+' for jane@example.com.', workspace='/work/jane@example.com')
