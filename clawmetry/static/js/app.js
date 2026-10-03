@@ -4597,7 +4597,29 @@ async function unresolveError(eid) {
 // fan-out, producing the "3× /api/overview in 1 second" burst.
 var _loadAllInFlight = null;
 var _loadAllLastFinishedMs = 0;
+var _loadAllLastSucceededMs = 0;
 var _LOADALL_COALESCE_MS = 2000;
+// These node-wide summaries are repainted by both activity and task updates.
+// Share the request and keep the result for one minute instead of fetching
+// twice on every ten-second tick. Failures are retried, never cached as data.
+var _cmHomeSummaryCache = {};
+function _cmFetchHomeSummary(url) {
+  var entry = _cmHomeSummaryCache[url];
+  if (entry && entry.pending) return entry.pending;
+  if (entry && Date.now() - entry.at < 60000) return Promise.resolve(entry.data);
+  entry = {};
+  _cmHomeSummaryCache[url] = entry;
+  entry.pending = fetchJsonWithTimeout(url, 12000).then(function (data) {
+    entry.data = data;
+    entry.at = Date.now();
+    entry.pending = null;
+    return data;
+  }, function (error) {
+    delete _cmHomeSummaryCache[url];
+    throw error;
+  });
+  return entry.pending;
+}
 // Human-first Overview hero (FLYWHEEL vision). Answers, in plain words a
 // first-timer gets in ~5s: is my agent alive, what did it just do, is it
 // healthy, what did it cost. Reads only already-fetched state (no new request):
@@ -4610,8 +4632,8 @@ function _renderWasteSummary() {
   // Overview "recoverable spend" card — the fleet roll-up of the per-session
   // cost-intel waste signals (the productivity-gains framework as a live number).
   var page = document.getElementById('page-overview');
-  if (!page) return;
-  fetch('/api/waste-summary').then(function(r){ return r.json(); }).then(function(w){
+  if (!page || !_cmIsOverviewTab()) return;
+  _cmFetchHomeSummary('/api/waste-summary').then(function(w){
     var ex = document.getElementById('cm-waste-summary');
     if (!w || typeof w !== 'object') { if (ex) ex.remove(); return; }
     var rows = [];
@@ -4667,8 +4689,8 @@ function _renderOutLoopSources() {
   // on any SDK (OpenAI Agents, LangChain, Vercel AI SDK, E2B, …). Self-removing
   // when no source is tagged, so it is invisible for users who don't use it.
   var page = document.getElementById('page-overview');
-  if (!page) return;
-  fetch('/api/local/external-calls?limit=2000').then(function(r){ return r.json(); }).then(function(d){
+  if (!page || !_cmIsOverviewTab()) return;
+  _cmFetchHomeSummary('/api/local/external-calls?limit=2000').then(function(d){
     var ex = document.getElementById('cm-outloop-sources');
     var rows = (d && Array.isArray(d.rows)) ? d.rows : (Array.isArray(d) ? d : []);
     var named = rows.filter(function(c){ return c && c.source; });
@@ -5196,6 +5218,7 @@ async function loadAll() {
     try { loadTriageList(); } catch (e) {}
     // Cohort compare suggestions (WO-60), fire-and-forget; honest empty states.
     try { loadCohortSuggested(); } catch (e) {}
+    _loadAllLastSucceededMs = Date.now();
     return true;
   } catch (e) {
     console.error('Initial load failed', e);
@@ -13371,7 +13394,7 @@ function _cmApplyRuntimeSelection(val) {
   // Reload the current tab so any runtime-aware view re-filters in place.
   // loadAll coalesces calls 2 s apart; a switch must not be swallowed by that,
   // or the Overview keeps the previous runtime's cards until the next refresh.
-  try { _loadAllLastFinishedMs = 0; } catch (e) {}
+  try { _loadAllLastFinishedMs = 0; _loadAllLastSucceededMs = 0; } catch (e) {}
   if (typeof switchTab === 'function' && _cmCurrentTab) switchTab(_cmCurrentTab);
   // System Health refreshes on a 30s timer and is not part of loadAll, so
   // re-scope it now or the previous runtime's checks linger.
@@ -24012,6 +24035,13 @@ function startOverviewRefresh() {
     // _cmCurrentTab is unset on first boot, where Overview is the default.
     if (!_cmIsOverviewTab()) return;
     if (_overviewRefreshRunning) return;
+    // Keep live-session status fresh at ten seconds, but refresh the broad
+    // analytics fan-out only once a minute. Failed initial loads still retry
+    // on the next tick, and explicit navigation/refresh calls loadAll directly.
+    if (_loadAllLastSucceededMs && Date.now() - _loadAllLastSucceededMs < 60000) {
+      try { _renderOverviewHero(); } catch (e) {}
+      return;
+    }
     _overviewRefreshRunning = true;
     try { await loadAll(); } finally { _overviewRefreshRunning = false; }
   }, 10000);
