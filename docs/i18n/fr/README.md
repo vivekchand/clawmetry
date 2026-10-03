@@ -16,7 +16,7 @@ lit les fichiers de session que vos agents de codage écrivent déjà, et réuni
 les appels d'outils et toutes les données de tokens et de coûts que le runtime expose dans une
 seule vue, pour que vous puissiez distinguer une exécution longue qui fonctionne d'une exécution bloquée.
 
-Compatible avec **32 runtimes d'agents IA** : Claude Code, OpenAI Codex, Hermes, OpenClaw et 28 autres. Un seul tableau de bord pour toute votre flotte d'agents. ([la liste complète](SUPPORTED_RUNTIMES.txt), générée à partir du catalogue.)
+Compatible avec **33 runtimes d'agents IA** : Claude Code, OpenAI Codex, Hermes, OpenClaw et 29 autres. Un seul tableau de bord pour toute votre flotte d'agents. ([la liste complète](SUPPORTED_RUNTIMES.txt), générée à partir du catalogue.)
 
 > 🌐 **Lire ceci en :** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [plus →](docs/i18n/)
 
@@ -37,7 +37,7 @@ que vous avez déjà, les lit en lecture seule, et ne change rien à leur foncti
 |---|---|
 | **Ce que ça fait** | Lit les fichiers de session et les journaux que vos agents écrivent déjà. Pas de SDK, pas de modification de code, pas d'instrumentation dans votre application. |
 | **Ce que vous voyez** | Chronologie de session, relecture outil par outil, répartition des tokens et des coûts, et signaux de trajectoire (boucles, échecs répétés) — par runtime. |
-| **Ce qui est gratuit** | `pip install clawmetry` lit **OpenClaw, NVIDIA NemoClaw, Goose et Qwen Code** sans compte, sans clé et sans appel réseau. Les 28 autres — Claude Code, Codex, Cursor et le reste — sont lus par le compagnon propriétaire `clawmetry-pro`, fourni avec l'essai de 7 jours ou un forfait — voir [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) pour la répartition exacte. |
+| **Ce qui est gratuit** | `pip install clawmetry` lit **OpenClaw, NVIDIA NemoClaw, Goose et Qwen Code** sans compte, sans clé et sans appel réseau. Les 29 autres — Claude Code, Codex, Cursor et le reste — sont lus par le compagnon propriétaire `clawmetry-pro`, fourni avec l'essai de 7 jours ou un forfait — voir [docs/ENTITLEMENTS.md](docs/ENTITLEMENTS.md) pour la répartition exacte. |
 | **Comment démarrer** | `pip install clawmetry && clawmetry`, puis ouvrez localhost:8900. Pas encore d'agents sur cette machine ? `clawmetry --sample` s'ouvre avec trois sessions synthétiques étiquetées. |
 | **Ce qui quitte votre machine** | Aucune donnée de session, sauf si vous exécutez `clawmetry connect`. Deux choses s'exécutent par défaut, toutes deux désactivables et ne transportant aucun contenu de session : un ping d'installation anonyme et une vérification de version PyPI. Chaque destination est inventoriée dans [docs/EGRESS.md](docs/EGRESS.md), reconstitué à partir d'une capture réseau plutôt que d'une lecture des commentaires. |
 
@@ -47,7 +47,7 @@ indique lesquels, par runtime), et observer une action n'est pas la même chose 
 la bloquer ([quels contrôles sont réels, par runtime](docs/APPROVALS.md)).
 
 
-## Compatible avec 32 runtimes d'agents
+## Compatible avec 33 runtimes d'agents
 
 **Gratuit dans l'application open source :** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
@@ -80,7 +80,7 @@ Deux questions qui méritent une réponse avant de faire confiance à tout outil
 Un pourcentage d'utilisation n'est honnête que si son dénominateur l'est aussi. ClawMetry
 dimensionne la fenêtre par fournisseur à partir d'[une table que vous pouvez lire et
 proposer en PR](clawmetry/context_windows.py), couvrant Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama et GLM. Il ne mesure pas les 32
+DeepSeek, Kimi, Qwen, Mistral, Llama et GLM. Il ne mesure pas les 33
 runtimes avec la règle d'un seul fournisseur. C'est important : un tour GPT-5 de 300K tokens noté
 avec les 200K d'Anthropic affiche ">100 %, explosé" alors qu'il est en réalité à 75 % des
 400K de GPT-5. La même règle masque un tour DeepSeek réellement en dépassement à 130K
@@ -100,7 +100,7 @@ ClawMetry ne peut voir les événements de compaction que sur certains runtimes.
 
 | Chemin | Ajouté à votre agent | Par défaut ? |
 |---|---|---|
-| Lecture en continu des fichiers de session (les 32 runtimes) | **0**. Processus séparé, aucun code ClawMetry dans votre agent | activé |
+| Lecture en continu des fichiers de session (les 33 runtimes) | **0**. Processus séparé, aucun code ClawMetry dans votre agent | activé |
 | Intercepteur HTTP (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** par appel LLM, soit 0,009 % d'un appel de 5s | désactivé |
 | Portail de hook pré-outil (cache chaud) | **+44 ms** par appel d'outil intercepté, au-dessus d'un plancher d'interpréteur de 36 ms | désactivé |
 | Proxy d'application des règles | **+9,7 ms** par appel LLM | désactivé |

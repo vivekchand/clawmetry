@@ -200,7 +200,7 @@ def test_pre_chain_redelivery_gets_stamped_in_place(store):
     with store._write_lock:
         store._conn.execute(
             f"INSERT INTO events ({store._EVENT_INSERT_COLS}) VALUES "
-            "(" + ",".join("?" * 16) + ")",
+            "(" + ",".join("?" * store._EVENT_INSERT_NCOLS) + ")",
             list(row) + [None, None],
         )
     store.ingest(e)

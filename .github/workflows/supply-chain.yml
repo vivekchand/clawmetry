@@ -256,7 +256,7 @@ jobs:
           python3 -m pip install --quiet --require-hashes
           -r .github/requirements/actions-scanners.txt
 
-      - name: Audit every workflow definition
+      - name: Audit every workflow and action definition
         env:
           # zizmor resolves action tags through the GitHub API. Unauthenticated,
           # those calls share the runner's IP rate limit and fail intermittently
@@ -266,7 +266,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p audit
-          # Workflow definitions AND the composite actions under .github/actions.
+          # Workflow definitions AND every action definition in the repository.
           #
           # A composite action's steps run inline in the calling job, with that
           # job's token and secrets, so it carries the same rule families a
@@ -275,17 +275,27 @@ jobs:
           # gap on its own mirror of this scan (cloud #2299), which left this
           # repo the only one of the three whose actions nothing audited.
           #
-          # Composite actions are named individually rather than by directory:
+          # The search is repo-wide, not `.github/actions` only. That narrower
+          # walk closed the gap for `setup-openclaw` and left it open for
+          # `integrations/github-action`, the action this repository PUBLISHES
+          # — whose steps run in OTHER people's jobs, with their token. It was
+          # the one action definition here with a blast radius outside this
+          # repository, and it was the one nothing audited. Coverage follows
+          # what a file IS, not which directory happens to hold it.
+          #
+          # node_modules is pruned: a dependency's own action.yml is not ours
+          # to audit, and vendoring one would otherwise swamp the report.
+          #
+          # Action definitions are named individually rather than by directory:
           # pointing zizmor at a directory hands it every YAML file inside, and
           # a non-action YAML landing there later would abort the audit
           # (recorded as a scanner outage below) rather than be skipped.
           inputs=".github/workflows"
-          if [ -d .github/actions ]; then
-            while IFS= read -r a; do
-              inputs="$inputs $a"
-            done < <(find .github/actions -type f \
-              \( -name 'action.yml' -o -name 'action.yaml' \) | sort)
-          fi
+          while IFS= read -r a; do
+            inputs="$inputs $a"
+          done < <(find . -type d -name node_modules -prune -o \
+            -type f \( -name 'action.yml' -o -name 'action.yaml' \) -print \
+            | sed 's|^\./||' | sort)
           # Record the file set the scanner was handed. A finding list is
           # identical whether it audited thirty-seven files or none, so
           # coverage is the one thing the JSON cannot tell you afterwards.
@@ -424,7 +434,7 @@ jobs:
               except Exception:
                   zizmor_failed = True
           print(
-              f"| zizmor | workflow definitions ({covered} file(s)) | "
+              f"| zizmor | workflow + action definitions ({covered} file(s)) | "
               + ("**SCAN FAILED**" if zizmor_failed else str(len(findings)))
               + " |"
           )

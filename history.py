@@ -236,7 +236,7 @@ class HistoryDB:
         conn = self._get_conn()
         stats = {}
         for table in ['metrics', 'sessions_log', 'cron_runs', 'snapshots']:
-            row = conn.execute(f'SELECT COUNT(*) as cnt, MIN(timestamp) as oldest, MAX(timestamp) as newest FROM {table}').fetchone()
+            row = conn.execute(f'SELECT COUNT(*) as cnt, MIN(timestamp) as oldest, MAX(timestamp) as newest FROM {table}').fetchone()  # nosec B608 - table name comes from the hardcoded literal list in the enclosing loop
             stats[table] = dict(row)
         return stats
 
@@ -259,7 +259,7 @@ class HistoryDB:
 
         # Delete old raw data
         for table in ['metrics', 'sessions_log', 'cron_runs', 'snapshots']:
-            conn.execute(f'DELETE FROM {table} WHERE timestamp < ?', (cutoff,))
+            conn.execute(f'DELETE FROM {table} WHERE timestamp < ?', (cutoff,))  # nosec B608 - table name comes from the hardcoded literal list in the enclosing loop; cutoff is bound
 
         # Delete old rollups
         conn.execute('DELETE FROM metrics_rollup WHERE timestamp < ?', (cutoff,))

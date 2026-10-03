@@ -65,7 +65,7 @@ _MUTATING_CMD_RE = re.compile(
     r"\bnpm\s+(?:install|i)\b|\bpip\s+install\b", re.I)
 # Hosts that are not egress: the machine talking to itself.
 _LOCAL_HOSTS = frozenset({
-    "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "host.docker.internal",
+    "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "host.docker.internal",  # nosec B104 - allowlist of hosts to NOT count as egress; never passed to bind()
     "169.254.169.254",  # the metadata endpoint IS interesting -> see below
 })
 _IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")

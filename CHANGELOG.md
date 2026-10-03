@@ -1,8 +1,38 @@
 ## Unreleased
 
+### Added: durable Guard investigations and persisted live activity
+
+- Loop and repeated tool failure findings retain their identity, evidence and recovery history across refreshes and restarts. Acknowledgement is separate from recovery. Missing telemetry is labelled stale.
+- Guard opens the implicated events in Tracing, with scoped history pages, explicit retention and preview limits, and separate execution and finding states. Hosted investigation uses encrypted node queries and confirmed acknowledgements.
+- Brain, Flow and investigation views share bounded activity reads backed by committed event positions. Reconnects replay late arrivals and updated payloads. Expired cursors request a fresh read. Hidden and inactive views pause their readers.
+- The store adds bounded incident and event-change tables. Older source events are not retroactively declared active incidents. Hosted deployment requires the matching cloud relay support.
+- Entitled recurring-error groups retain per-event resolution and open representative events directly in Tracing. Counts describe the bounded read window. Incomplete messages remain separate.
+- Session list, inspect and watch commands use the private extension and the same persisted reads, with JSON output and resumable activity checkpoints. Existing session commands remain available.
+
+### Added: OpenClaw session replay
+
+- **Why:** the replay viewer had a write path and a Qwen Code mapper (#6292) but nothing for OpenClaw, the runtime the OSS package exists for. A session's tool calls, results, approvals and sub-agent spawns were in the store as flat events and in the OpenClaw state database, and the replay tree for every OpenClaw session came back empty (#4816).
+- **What:** `OpenClawAdapter.iter_replay_events` (in `clawmetry/adapters/openclaw_replay.py`) maps one session onto the canonical replay events: the v3 transcript (legacy `agents/main/sessions` or the 2026.9.x SQLite mirror) gives `llm.call`, `llm.response` with usage and model, `thinking`, `tool.call`, `tool.result` and `compaction`; `~/.openclaw/state/openclaw.sqlite`, opened read-only, gives the leading `mode.changed` from `exec_approvals_config` (`yolo` only when execs are never asked about and never refused), `approval.requested` / `approval.decided` from `operator_approvals` (system resolutions as `policy`, operator and device resolutions as `user`) and `agent.spawn` from `subagent_runs` with the child session id resolved through `sessions.json`. The daemon writes the rows after every transcript batch (`sync._ingest_openclaw_replay_events`), so `GET /api/replay-tree/<session_id>` now serves OpenClaw sessions. The transcript `parentId` is a chain and is never written as a delegation edge; an approval points at the tool call it decided.
+- **Privacy:** the state database is read with `mode=ro` and never locked for writing. `presentation_json` and `raw_json` are not read. Free text (prompts, replies, tool output) is capped at 4000 characters per field and passes the store's secret redaction before it rests in DuckDB, like every other replay row.
+- **Verified:** 32 tests over the shipped v3 fixture, a transcript in the live 2026.9.x shape (millisecond timestamps, string user content), the real `exec_approvals_config`, `operator_approvals` and `subagent_runs` table shapes, a corrupt database, a database without the tables, the store upsert, the daemon hook and the replay-tree endpoint. Mapped cleanly on a live OpenClaw 2026.9.3 node.
+- **Limits:** the ACP replay stream (`acp_replay_events`), `flow_runs` / `task_runs` workflows and `plugin_binding_approvals` are not read yet; on a live 2026.9.3 node the first two tables are empty and the third is not session scoped, so there is no verified shape to map. An approval for a tool call the transcript does not show is counted in the session but not placed on a turn. `agent.return` is not emitted; the run table records no end.
+
+### Added: opt-in capability-gap export
+
+- **Why:** ClawMetry records when an agent asked for a tool that does not exist, hit a permission refusal, a rate limit or a budget boundary. There was no machine-readable, taxonomy-tagged way for a local measurement tool to read those signals without reading transcripts (#5412, proposed by @flyoung588).
+- **What:** `CLAWMETRY_CAPGAP_EXPORT_DIR=<dir>` makes the daemon append one JSONL record per gap to `<dir>/capability_gaps.jsonl` on the detector tick, mapped to the MIX taxonomy. `E01_NO_MATCH`, `E02_NO_ACCESS`, `E05_CAPACITY_GAP` and `E08_CAPITAL_NEED` are emitted. The other four codes are declared and not emitted. A denied approval is recorded as `E02_NO_ACCESS`. `GET /api/capability-gaps` classifies recent store rows on request, with `window`, `session`, `runtime`, `code` and `limit` filters, and returns the contract next to the records. Documented in `docs/CAPABILITY_GAPS.md`.
+- **Privacy:** a record carries the code, session id, runtime, tool name, the fixed marker that fired, an HTTP status, the event id and timestamps. Never prompts, arguments, outputs, exception text or credentials. Files are created `0600`. Nothing is sent over the network. Off unless the variable is set.
+- **Verified:** 29 new tests cover each emitted code, precedence and the fixed field set. They also cover exporter dedup across a restart, the daemon hook with the variable unset and set, and the route. The detector pass is unchanged when the variable is unset.
+- **Limits:** the mapping is conservative and marker based. A failure without a mapped marker is not exported. Sessions idle longer than the detector window are not re-read.
+
 ### Added: Qwen Code session replay
 
 - Qwen Code sessions now feed the replay tree. The reader maps each chat recording into the canonical replay stream: one turn per user prompt, reasoning and model replies with usage, tool calls with their results, and the recorded decision on each tool call. The mode chip reads "unknown" because Qwen Code keeps no approval mode in the chat log. Sub-agent transcripts attach under the call that started them, with their resolved approval mode on the spawn. The daemon writes the stream for every adapter that offers one, so later runtime mappers need no daemon change.
+
+### Added: Goose session replay
+
+- Goose sessions now feed the replay tree (clawmetry-pro#134). The mode chip comes from the permission mode Goose stores on the session: `auto` reads as "yolo", `approve` and `smart_approve` read as "default", and any other value reads "unknown" with the native value kept next to it. A session the Goose scheduler started carries the "cron" marker with its schedule id and cron expression. A session that ran a recipe gets one workflow group with the recipe title, instructions, prompt, activities and sub-recipes. A session without a recipe stays a flat replay.
+- **Limits:** Goose stores one mode per session, so a mode change in the middle of a session is not visible. Approval decisions are not in the session store, so none are shown. The values typed for recipe parameters are never read.
 
 ### Fixed: Assistant startup and Home refresh
 
@@ -25,6 +55,15 @@
 - Hosted dashboards retain Agents as the opening screen. Local-only surfaces explain where their data is available before making requests.
 
 - Context gauges and coverage share prompt-token readings, including adapter fields and fully cached prompts. Missing peaks and compaction measurements remain distinct from observed zero; cloud snapshots retain measurement status.
+
+### Added: OpenDots runtime wiring
+
+- Register OpenDots through the paid adapter path, runtime catalogue, discovery,
+  filters and capability map. The Pro adapter reads local conversation metadata,
+  scheduled work and call receipts. Chat messages and model usage are not stored
+  in the local OpenDots database.
+- Allow adapters to supply a content digest for ingestion watermarks, so late
+  record updates with unchanged timestamps can reach the local store.
 
 ### Release: checked English explanations
 

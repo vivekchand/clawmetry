@@ -231,3 +231,31 @@ def test_an_unreadable_command_line_does_not_condemn_the_holder(home,
     # Lock file written now, so the started-after-lock proof does not apply.
     os.utime(path, None)
     assert sync._acquire_pid_lock() is False
+
+
+# ── Linux zombie regression (#6271) ─────────────────────────────────────────
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="Linux-specific: empty /proc/<pid>/cmdline == zombie")
+def test_linux_zombie_pid_does_not_block_lock(home, foreign_process, monkeypatch):
+    """Field-failure #6271: daemon_lock_refused on Linux / py3.12.
+
+    When a process exits without being reaped by its parent (zombie), Linux
+    keeps its entry in the process table so ``is_alive()`` still returns True,
+    but ``/proc/<pid>/cmdline`` becomes empty.  The daemon was treating that as
+    "unreadable command line" (``"unknown"``) and refusing to reclaim the lock,
+    leaving a supervisor restart loop with no way out.
+
+    On Linux an empty cmdline is positive evidence of exit, not ambiguity — the
+    fix returns ``"foreign"`` there so the stale lock is reclaimed.
+    """
+    _write_lock(home, str(foreign_process.pid))
+    # Make _proc_start_epoch say the process started long ago so the
+    # started-after-lock proof does not fire and we reach the cmdline check.
+    monkeypatch.setattr("clawmetry.process_control._proc_start_epoch",
+                        lambda pid: 1.0)
+    # Simulate the zombie: /proc/<pid>/cmdline exists but is empty.
+    monkeypatch.setattr("clawmetry.process_control._proc_cmdline",
+                        lambda pid: [])
+    assert sync._acquire_pid_lock() is True, (
+        "daemon was permanently locked out by a zombie holding its PID (#6271)"
+    )

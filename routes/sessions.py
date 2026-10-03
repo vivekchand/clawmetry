@@ -2054,7 +2054,7 @@ def api_task_runs():
                        error, progress_summary, terminal_summary, terminal_outcome
                 FROM task_runs {where_sql}
                 ORDER BY COALESCE(started_at, created_at, 0) DESC
-                LIMIT ?""",
+                LIMIT ?""",  # nosec B608 - where_sql is built from literal '<column> = ?' fragments only; every value is bound
             args + [limit],
         )
         for r in cur.fetchall():

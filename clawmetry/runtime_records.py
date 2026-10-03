@@ -53,7 +53,7 @@ _STATES = frozenset({ON_DISK, DERIVED, UNAVAILABLE, UNKNOWN, PARTIAL})
 
 # Signals a surface can ask about. Deliberately short: these are the three the
 # broken-looking panels actually depend on. Adding a fourth means being able to
-# answer it for all 32 runtimes, which is the bar that keeps this table true.
+# answer it for all 33 runtimes, which is the bar that keeps this table true.
 SIGNALS = ("tokens", "cost", "model")
 
 
@@ -71,6 +71,13 @@ def _e(tokens, cost, model, evidence, *, note="", doc_label=None, doc_file="docs
 
 # Keyed by the runtime ids in ``clawmetry.entitlements.ALL_RUNTIMES``.
 RUNTIME_RECORDS: dict[str, dict] = {
+    "opendots": _e(
+        UNAVAILABLE, UNAVAILABLE, UNAVAILABLE,
+        "No model IDs, token usage or costs in the local workspace",
+        note="OpenDots exposes local conversation metadata, scheduled work and "
+             "call receipts. Normal chat history is held in CopilotKit Intelligence; "
+             "model usage, cost and reasoning are not recorded locally.",
+    ),
     # ── OpenClaw family ──────────────────────────────────────────────────
     "openclaw": _e(
         ON_DISK, ON_DISK, ON_DISK,
