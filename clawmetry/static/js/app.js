@@ -13073,7 +13073,7 @@ function _cmApplyRuntimeScopeNote(name) {
   if (name === 'overview') {
     if (rt === 'all') { if (existing) existing.parentNode.removeChild(existing); return; }
     var _ovl = _cmRuntimeLabel(rt);
-    var _ovmsg = 'Showing <strong>' + escHtml(_ovl) + '</strong>: today\'s tasks, activity, tokens and cost below are scoped to it. The autonomy score, reliability and activity heatmap stay <strong>node-wide</strong> (all runtimes).';
+    var _ovmsg = 'Showing <strong>' + escHtml(_ovl) + '</strong>: today\'s tasks, activity, tokens and cost below are scoped to it. The autonomy score and reliability stay <strong>node-wide</strong> (all runtimes).';
     var _ovhtml = '<div id="' + noteId + '" style="display:flex;align-items:center;gap:8px;margin:0 0 14px;padding:9px 13px;border-radius:8px;background:rgba(59,130,246,0.10);border:1px solid rgba(59,130,246,0.35);font-size:12px;color:var(--text-secondary);line-height:1.4;"><span style="color:#3b82f6;font-size:13px;flex-shrink:0;">&#127760;</span><span>' + _ovmsg + '</span></div>';
     if (existing) existing.outerHTML = _ovhtml;
     else page.insertAdjacentHTML('afterbegin', _ovhtml);
