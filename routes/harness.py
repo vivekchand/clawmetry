@@ -43,6 +43,7 @@ _NON_OPENCLAW_PREFIXES = frozenset({
     "replit",
     "muse_code",
     "openexecutive",
+    "opendots",
 })
 
 

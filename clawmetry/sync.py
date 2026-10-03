@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 import tempfile
 import time
@@ -188,6 +189,14 @@ def _holder_cmdline_verdict(pid: int) -> str:
     ``_proc_cmdline`` reads nothing on a Windows host without psutil, and
     treating "I could not look" as "not ours" there would let an upgrade
     reclaim a lock a perfectly healthy daemon still holds.
+
+    The one exception is Linux: ``/proc/<pid>/cmdline`` is always non-empty for
+    a live process.  An empty read there means the process has already exited or
+    is a zombie — the process-table entry is still visible to ``is_alive()`` but
+    the process can no longer hold a lock meaningfully.  Return ``"foreign"`` so
+    the stale entry is reclaimed rather than leaving the daemon locked out in a
+    supervisor restart loop (field-failure #6271, daemon_lock_refused on Linux /
+    py3.12 caused by a zombie holding a recycled PID).
     """
     try:
         from clawmetry.process_control import _proc_cmdline
@@ -195,6 +204,11 @@ def _holder_cmdline_verdict(pid: int) -> str:
     except Exception:  # noqa: BLE001
         return "unknown"
     if not blob:
+        # On Linux /proc/<pid>/cmdline is populated for every live process;
+        # empty means exited or zombie.  On other platforms an empty result
+        # just means "could not read" — keep "unknown" there.
+        if sys.platform.startswith("linux"):
+            return "foreign"
         return "unknown"
     if "clawmetry" in blob and ("sync" in blob or "daemon" in blob):
         return "ours"
@@ -8170,6 +8184,7 @@ _LITE_RT_LABELS = {
     "replit": "Replit Agent",
     "muse_code": "Muse Code",
     "openexecutive": "OpenExecutive",
+    "opendots": "OpenDots",
 
 }
 
@@ -15060,6 +15075,7 @@ _FAMILY_ADAPTER_SPECS = (
     # the audit log with per-call usage, and the outbound sends its scheduler
     # has queued. The store has no fixed home, so the adapter discovers it.
     ("clawmetry_pro.adapters.openexecutive", "OpenExecutiveAdapter"),
+    ("clawmetry_pro.adapters.opendots", "OpenDotsAdapter"),
 )
 
 
@@ -16216,6 +16232,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 # would freeze every quiet session at whatever it was last doing.
                 # Cheap: adapter fields only, no event read.
                 _s_extra = s.extra if isinstance(s.extra, dict) else {}
+                # Some native stores update records without advancing their
+                # timestamps (OpenDots late call transcripts). Adapters may
+                # provide a content digest to invalidate this session's mark.
+                _session_rev = _ingest_rev
+                _data_rev = _s_extra.get("ingestRevision")
+                if isinstance(_data_rev, str) and re.fullmatch(r"[0-9a-f]{16,64}", _data_rev):
+                    _session_rev += "/data:" + _data_rev
                 _record_session_phase(
                     store, ns_id, runtime,
                     phase=getattr(s, "phase", None),
@@ -16257,7 +16280,7 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                 _child_running = bool(getattr(s, "parent_id", None)) and (
                     (getattr(s, "cost_status", "") or "") == "running")
                 if (_hw_ts and _activity and _activity <= _hw_ts
-                        and _hw_rev == _ingest_rev and not _child_running):
+                        and _hw_rev == _session_rev and not _child_running):
                     continue
                 metadata = {
                     "runtime": runtime,
@@ -16648,13 +16671,13 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                         # again. Only on a clean ingest -- a failure leaves the
                         # mark behind so we retry the session next cycle.
                         if _activity:
-                            _evt_hw[ns_id] = _activity + "@@" + _ingest_rev
+                            _evt_hw[ns_id] = _activity + "@@" + _session_rev
                     except Exception as _ee:
                         log.warning("family event ingest failed (%s): %s", ns_id, _ee)
                 elif _activity:
                     # No event rows (e.g. an empty/metadata-only session): still
                     # mark it seen so we don't re-scan it every cycle forever.
-                    _evt_hw[ns_id] = _activity + "@@" + _ingest_rev
+                    _evt_hw[ns_id] = _activity + "@@" + _session_rev
                 # Replay stream (#4813): adapters with iter_replay_events
                 # feed the replay_events table for this session. Independent
                 # of the event rows above so an empty transcript read still
@@ -16945,6 +16968,7 @@ _RUNTIME_PREFIXES = frozenset({
     "replit",
     "muse_code",
     "openexecutive",
+    "opendots",
 })
 
 
@@ -22714,6 +22738,15 @@ def _emit_detector_incidents(store, state: dict) -> int:
     # Each session's write actions, for the fleet pass after the loop
     # (clawmetry/detector_swarm.py). Collected here so the steps are parsed once.
     fleet_fps: dict = {}
+    # Opt-in capability-gap export (#5412, clawmetry/capability_gaps.py).
+    # None unless CLAWMETRY_CAPGAP_EXPORT_DIR is set, so the default tick
+    # pays one env read. Reads the SAME events this loop already fetched.
+    capgap = None
+    try:
+        from clawmetry import capability_gaps as _capgap
+        capgap = _capgap.Exporter.from_env()
+    except Exception as _ce:  # noqa: BLE001
+        log.debug("capability gaps: exporter unavailable: %s", _ce)
     for s in candidates:
         sid = s.get("session_id") or ""
         try:
@@ -22750,6 +22783,11 @@ def _emit_detector_incidents(store, state: dict) -> int:
         _record_guard_observation(
             store, sid, runtime or "", facts.get("agent_id") or "",
             _det.session_profile(steps, thresholds.get("write_tools")))
+        if capgap is not None:
+            try:
+                capgap.observe_events(sid, runtime or "", events)
+            except Exception as _ce:  # noqa: BLE001
+                log.debug("capability gaps: observe skipped for %s: %s", sid, _ce)
         try:
             from clawmetry import detector_swarm as _swarm
             _fps = _swarm.write_fingerprints(steps)
@@ -22903,6 +22941,20 @@ def _emit_detector_incidents(store, state: dict) -> int:
                 log.warning("detectors: ingest_loop_signal failed for %s: %s",
                             sid, e)
                 continue
+
+    if capgap is not None:
+        # A denied approval is a permission the operator refused (E02). One
+        # bounded read per tick; the exporter dedups by approval id.
+        try:
+            capgap.observe_approvals(store.query_approvals(status="denied", limit=200) or [])
+        except Exception as _ce:  # noqa: BLE001
+            log.debug("capability gaps: approvals skipped: %s", _ce)
+        try:
+            n_gap = capgap.flush()
+            if n_gap:
+                log.info("capability gaps: %d record(s) exported", n_gap)
+        except Exception as _ce:  # noqa: BLE001
+            log.debug("capability gaps: flush skipped: %s", _ce)
 
     # A session that recovered drops out of the memo so its "bad for" clock
     # restarts if it goes wrong again later. This also bounds the memo: it can

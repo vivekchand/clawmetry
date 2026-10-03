@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Added: opt-in capability-gap export
+
+- **Why:** ClawMetry records when an agent asked for a tool that does not exist, hit a permission refusal, a rate limit or a budget boundary. There was no machine-readable, taxonomy-tagged way for a local measurement tool to read those signals without reading transcripts (#5412, proposed by @flyoung588).
+- **What:** `CLAWMETRY_CAPGAP_EXPORT_DIR=<dir>` makes the daemon append one JSONL record per gap to `<dir>/capability_gaps.jsonl` on the detector tick, mapped to the MIX taxonomy. `E01_NO_MATCH`, `E02_NO_ACCESS`, `E05_CAPACITY_GAP` and `E08_CAPITAL_NEED` are emitted. The other four codes are declared and not emitted. A denied approval is recorded as `E02_NO_ACCESS`. `GET /api/capability-gaps` classifies recent store rows on request, with `window`, `session`, `runtime`, `code` and `limit` filters, and returns the contract next to the records. Documented in `docs/CAPABILITY_GAPS.md`.
+- **Privacy:** a record carries the code, session id, runtime, tool name, the fixed marker that fired, an HTTP status, the event id and timestamps. Never prompts, arguments, outputs, exception text or credentials. Files are created `0600`. Nothing is sent over the network. Off unless the variable is set.
+- **Verified:** 29 new tests cover each emitted code, precedence and the fixed field set. They also cover exporter dedup across a restart, the daemon hook with the variable unset and set, and the route. The detector pass is unchanged when the variable is unset.
+- **Limits:** the mapping is conservative and marker based. A failure without a mapped marker is not exported. Sessions idle longer than the detector window are not re-read.
+
 ### Added: Qwen Code session replay
 
 - Qwen Code sessions now feed the replay tree. The reader maps each chat recording into the canonical replay stream: one turn per user prompt, reasoning and model replies with usage, tool calls with their results, and the recorded decision on each tool call. The mode chip reads "unknown" because Qwen Code keeps no approval mode in the chat log. Sub-agent transcripts attach under the call that started them, with their resolved approval mode on the spawn. The daemon writes the stream for every adapter that offers one, so later runtime mappers need no daemon change.
@@ -25,6 +33,15 @@
 - Hosted dashboards retain Agents as the opening screen. Local-only surfaces explain where their data is available before making requests.
 
 - Context gauges and coverage share prompt-token readings, including adapter fields and fully cached prompts. Missing peaks and compaction measurements remain distinct from observed zero; cloud snapshots retain measurement status.
+
+### Added: OpenDots runtime wiring
+
+- Register OpenDots through the paid adapter path, runtime catalogue, discovery,
+  filters and capability map. The Pro adapter reads local conversation metadata,
+  scheduled work and call receipts. Chat messages and model usage are not stored
+  in the local OpenDots database.
+- Allow adapters to supply a content digest for ingestion watermarks, so late
+  record updates with unchanged timestamps can reach the local store.
 
 ### Release: checked English explanations
 

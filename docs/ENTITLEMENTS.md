@@ -110,7 +110,11 @@ below live here so the free UI can render locked rows with an accurate
 `claude_code`, `codex`, `cursor`, `aider`, `opencode`,
 `hermes`, `picoclaw`, `nanoclaw`, `pi`, `deepagents`,
 `n8n`, `antigravity`, `copilot`, `grok`, `grok_bot`, `qm`, `deepseek_harness`, `exo`,
-`kimi`, `devin`, `gemini_cli`, `cline`, `openhands`, `openworker`, `lovable`, `openexecutive`.
+`kimi`, `devin`, `gemini_cli`, `cline`, `openhands`, `openworker`, `lovable`, `openexecutive`, `opendots`.
+
+OpenDots support covers local conversation metadata, scheduled work and call
+receipts. Normal chat messages live in CopilotKit Intelligence; model usage, cost
+and reasoning are unavailable from its local workspace database.
 
 **Additional features**, split across three tiers:
 
