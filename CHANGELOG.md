@@ -1,5 +1,14 @@
 ## Unreleased
 
+### Added: durable Guard investigations and persisted live activity
+
+- Loop and repeated tool failure findings retain their identity, evidence and recovery history across refreshes and restarts. Acknowledgement is separate from recovery. Missing telemetry is labelled stale.
+- Guard opens the implicated events in Tracing, with scoped history pages, explicit retention and preview limits, and separate execution and finding states. Hosted investigation uses encrypted node queries and confirmed acknowledgements.
+- Brain, Flow and investigation views share bounded activity reads backed by committed event positions. Reconnects replay late arrivals and updated payloads. Expired cursors request a fresh read. Hidden and inactive views pause their readers.
+- The store adds bounded incident and event-change tables. Older source events are not retroactively declared active incidents. Hosted deployment requires the matching cloud relay support.
+- Entitled recurring-error groups retain per-event resolution and open representative events directly in Tracing. Counts describe the bounded read window. Incomplete messages remain separate.
+- Session list, inspect and watch commands use the private extension and the same persisted reads, with JSON output and resumable activity checkpoints. Existing session commands remain available.
+
 ### Added: OpenClaw session replay
 
 - **Why:** the replay viewer had a write path and a Qwen Code mapper (#6292) but nothing for OpenClaw, the runtime the OSS package exists for. A session's tool calls, results, approvals and sub-agent spawns were in the store as flat events and in the OpenClaw state database, and the replay tree for every OpenClaw session came back empty (#4816).
@@ -41,6 +50,15 @@
 - Hosted dashboards retain Agents as the opening screen. Local-only surfaces explain where their data is available before making requests.
 
 - Context gauges and coverage share prompt-token readings, including adapter fields and fully cached prompts. Missing peaks and compaction measurements remain distinct from observed zero; cloud snapshots retain measurement status.
+
+### Added: OpenDots runtime wiring
+
+- Register OpenDots through the paid adapter path, runtime catalogue, discovery,
+  filters and capability map. The Pro adapter reads local conversation metadata,
+  scheduled work and call receipts. Chat messages and model usage are not stored
+  in the local OpenDots database.
+- Allow adapters to supply a content digest for ingestion watermarks, so late
+  record updates with unchanged timestamps can reach the local store.
 
 ### Release: checked English explanations
 

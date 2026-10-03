@@ -178,6 +178,13 @@ _HINTS: Dict[str, Dict[str, str]] = {
                 "or email conversation continues in its own thread.",
         "source": "clawmetry adapter: episodic_memory.db sessions + audit_log",
     },
+    "opendots": {
+        "command": "",
+        "note": "Reopen the conversation in the OpenDots app. Scheduled runs "
+                "are managed from OpenDots tasks.",
+        "source": "CopilotKit/OpenDots app conversation and task views "
+                  "(b01ac1f6a903e5e56c119d960901353ac0a3d171)",
+    },
     "openworker": {
         "command": "",
         "note": "OpenWorker is a desktop app. Reopen the conversation in the "

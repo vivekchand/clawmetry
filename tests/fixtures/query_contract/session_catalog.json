@@ -1,0 +1,43 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "session_catalog",
+  "_via": "<volatile>",
+  "coverage": {
+    "limit": 2,
+    "node_reachable": true,
+    "source": "persisted_sessions",
+    "truncated": false
+  },
+  "rows": [
+    {
+      "agent_type": "openclaw",
+      "ended_at": null,
+      "last_active_at": "2026-01-02T10:00:03Z",
+      "node_id": "agent+golden",
+      "outcome": null,
+      "runtime": "openclaw",
+      "session_id": "sess-b",
+      "started_at": "2026-01-02T10:00:03Z",
+      "status": "ended",
+      "title": "beta cleanup"
+    },
+    {
+      "agent_type": "openclaw",
+      "ended_at": null,
+      "last_active_at": "2026-01-02T10:00:02Z",
+      "node_id": "agent+golden",
+      "outcome": null,
+      "runtime": "openclaw",
+      "session_id": "sess-a",
+      "started_at": "2026-01-02T10:00:00Z",
+      "status": "active",
+      "title": "golden alpha refactor"
+    }
+  ],
+  "schema_version": 1,
+  "scope": {
+    "node_id": "agent+golden",
+    "runtime": null,
+    "session_id": null
+  }
+}

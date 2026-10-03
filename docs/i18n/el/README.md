@@ -16,7 +16,7 @@
 τα tool calls και όποια δεδομένα token και κόστους εκθέτει το runtime σε μία
 προβολή — ώστε να ξεχωρίζεις μια μεγάλη εκτέλεση που δουλεύει από μία που έχει κολλήσει.
 
-Δουλεύει με **32 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 ακόμα. Ένα dashboard για ολόκληρο τον στόλο agents σου. ([η πλήρης λίστα](SUPPORTED_RUNTIMES.txt), παραγόμενη από τον κατάλογο.)
+Δουλεύει με **33 AI agent runtimes** — Claude Code, OpenAI Codex, Hermes, OpenClaw & 29 ακόμα. Ένα dashboard για ολόκληρο τον στόλο agents σου. ([η πλήρης λίστα](SUPPORTED_RUNTIMES.txt), παραγόμενη από τον κατάλογο.)
 
 > 🌐 **Διάβασέ το στα:** [English](README.md) · [简体中文](docs/i18n/zh-CN/README.md) · [日本語](docs/i18n/ja/README.md) · [한국어](docs/i18n/ko/README.md) · [Español](docs/i18n/es/README.md) · [Português (BR)](docs/i18n/pt-BR/README.md) · [Français](docs/i18n/fr/README.md) · [Deutsch](docs/i18n/de/README.md) · [हिन्दी](docs/i18n/hi/README.md) · [العربية](docs/i18n/ar/README.md) · [Русский](docs/i18n/ru/README.md) · [περισσότερα →](docs/i18n/)
 
@@ -47,7 +47,7 @@ pip install clawmetry && clawmetry
 να την μπλοκάρεις ([ποιοι έλεγχοι είναι πραγματικοί, ανά runtime](docs/APPROVALS.md)).
 
 
-## Δουλεύει με 32 agent runtimes
+## Δουλεύει με 33 agent runtimes
 
 **Δωρεάν στην open source εφαρμογή:** 🦞 **[OpenClaw](https://clawmetry.com/runtimes/openclaw)** · 🟩 **[NVIDIA NemoClaw](https://clawmetry.com/nemoclaw)** · 🪿 **[Goose](https://clawmetry.com/runtimes/goose)** · ◈ **[Qwen Code](https://clawmetry.com/runtimes/qwen-code)**
 
@@ -80,7 +80,7 @@ pip install clawmetry && clawmetry
 Ένα ποσοστό αξιοποίησης είναι τόσο ειλικρινές όσο και ο διαιρέτης του. Το ClawMetry
 μεγεθοποιεί το παράθυρο ανά πάροχο από [έναν πίνακα που μπορείς να διαβάσεις και να κάνεις
 PR](clawmetry/context_windows.py), καλύπτοντας Anthropic, OpenAI, Google, xAI,
-DeepSeek, Kimi, Qwen, Mistral, Llama και GLM. Δεν μετράει και τα 32
+DeepSeek, Kimi, Qwen, Mistral, Llama και GLM. Δεν μετράει και τα 33
 runtimes με τον χάρακα ενός μόνο προμηθευτή. Αυτό έχει σημασία: ένα turn 300K GPT-5
 βαθμολογημένο με βάση τα 200K της Anthropic διαβάζεται ως ">100%, blown" ενώ στην
 πραγματικότητα είναι στο 75% των 400K του GPT-5. Ο ίδιος χάρακας κρύβει ένα πραγματικά
@@ -100,7 +100,7 @@ runtimes με τον χάρακα ενός μόνο προμηθευτή. Αυτ
 
 | Διαδρομή | Προστίθεται στον agent σου | Προεπιλογή; |
 |---|---|---|
-| Tailing αρχείων session (και τα 32 runtimes) | **0**. Ξεχωριστή διεργασία, χωρίς κώδικα ClawMetry στον agent σου | ενεργό |
+| Tailing αρχείων session (και τα 33 runtimes) | **0**. Ξεχωριστή διεργασία, χωρίς κώδικα ClawMetry στον agent σου | ενεργό |
 | HTTP interceptor (`CLAWMETRY_INTERCEPT=1`) | **+0,44 ms** ανά κλήση LLM, ή 0,009% ενός κλήσης 5s | ανενεργό |
 | Pre-tool hook gate (ζεστή cache) | **+44 ms** ανά ελεγχόμενη κλήση tool, πάνω από ένα κατώφλι διερμηνέα 36 ms | ανενεργό |
 | Enforcement proxy | **+9,7 ms** ανά κλήση LLM | ανενεργό |

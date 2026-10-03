@@ -114,7 +114,7 @@ def _fetch_peer_cert_unverified(host: str, port: int, proxy: str = "") -> bytes:
     This never carries application data — it exists so we can show the
     user WHO is actually terminating their TLS.
     """
-    ctx = ssl._create_unverified_context()  # noqa: S323 — diagnostic fetch only
+    ctx = ssl._create_unverified_context()  # nosec B323 - unverified ON PURPOSE: this handshake carries no application data, it exists only to read back WHO terminated the TLS
     _net.relax_strict_verification(ctx)
     sock = _open_tcp(host, port, proxy)
     try:

@@ -78,3 +78,14 @@ def test_every_used_capability_is_mapped_to_tabs():
     # intentionally not unique keys in _CM_CAP_TABS.
     unmapped = used - mapped - {"LOGS", "BRAIN"}
     assert not unmapped, f"capabilities used in _CM_RT_CAPS but not mapped in _CM_CAP_TABS: {unmapped}"
+
+
+def test_recorded_flow_is_available_for_event_runtimes_without_channels():
+    src = open(_APP_JS, encoding="utf-8").read()
+    block = re.search(r"var _CM_CAP_TABS = \{(.*?)\n\};", src, re.S).group(1)
+    mapping = {cap: set(re.findall(r"'([^']+)'", tabs))
+               for cap, tabs in re.findall(r"\n\s*([A-Z_]+):\s*\[(.*?)\]", block)}
+    for runtime, caps in _frontend_caps().items():
+        if "EVENTS" in caps:
+            enabled = set().union(*(mapping.get(cap, set()) for cap in caps))
+            assert "flow" in enabled, runtime
