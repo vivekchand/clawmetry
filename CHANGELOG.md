@@ -4,6 +4,13 @@
 
 - The daemon now verifies that the lock-holder PID is alive before refusing to start on Linux. A process killed without cleanup (SIGKILL, container restart) left a stale lock that blocked all future daemon starts until the lock file was manually removed. Carries #6290.
 
+### Added: durable Guard investigations and committed activity replay
+
+- Guard findings retain their identity and evidence across refreshes and restarts. Operators can open a finding directly in Tracing, distinguish recovery from stale evidence, and acknowledge it independently of execution state.
+- The daemon persists incident episodes and positive recovery evidence in DuckDB. Scoped investigation and activity reads use bounded pages and committed ingestion positions, preserving late events and payload updates.
+- Brain and Flow share active-view subscriptions, pause when hidden, and reconnect without duplicating recorded work. Flow preserves native parallel calls, runtime identity and source timestamps, with explicit connection state and limited-preview scope.
+- The cloud companion relays encrypted reads and node-confirmed acknowledgements. Carries #6250.
+
 ### Added: OpenDots runtime support (Pro)
 
 - The OSS layer adds OpenDots to the runtime catalogue, daemon loader, discovery, runtime filters, and capability maps. The paid adapter ships through clawmetry-pro; the OSS layer is inert without it. Adapters without a session digest retain existing watermark behavior. Carries #6249.
