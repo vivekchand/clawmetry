@@ -15752,6 +15752,39 @@ def _harvest_delegated_agent_ids(events) -> list:
     return out
 
 
+def _ingest_family_replay_events(store, adapter, native_id: str,
+                                 ns_id: str, runtime: str) -> int:
+    """Write an adapter's canonical replay stream for one session (#4813).
+
+    Only adapters that implement ``iter_replay_events`` take part; the
+    rows are re-homed from the adapter's native session id onto the
+    namespaced ``<runtime>:<id>`` the sessions table uses, which is the id
+    the replay-tree endpoint is asked for. Best-effort: a mapper or store
+    failure is logged and never blocks the session ingest, and the
+    high-water mark is not involved (a grown transcript re-yields the same
+    span ids, which the store upserts). Returns the rows written.
+    """
+    mapper = getattr(adapter, "iter_replay_events", None)
+    if not callable(mapper):
+        return 0
+    try:
+        rows = []
+        for ev in mapper(native_id):
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("session_id") in (None, "", native_id):
+                ev = dict(ev)
+                ev["session_id"] = ns_id
+            rows.append(ev)
+        if not rows:
+            return 0
+        return int(store.ingest_replay_events(rows) or 0)
+    except Exception as exc:
+        log.debug("family replay ingest failed (%s/%s): %s",
+                  runtime, ns_id, exc)
+        return 0
+
+
 def _session_tool_health(events) -> dict:
     """Per-session tool failure-rate from the adapter events: how many tool
     results came back as a REAL (non-benign) error. A tool that keeps failing
@@ -16652,6 +16685,16 @@ def sync_family_runtimes(config: dict, state: dict, paths: dict) -> int:
                     # No event rows (e.g. an empty/metadata-only session): still
                     # mark it seen so we don't re-scan it every cycle forever.
                     _evt_hw[ns_id] = _activity + "@@" + _ingest_rev
+                # Replay stream (#4813): adapters with iter_replay_events
+                # feed the replay_events table for this session. Independent
+                # of the event rows above so an empty transcript read still
+                # gets its replay, and never touches the high-water mark.
+                try:
+                    _ingest_family_replay_events(
+                        store, adapter, s.id, ns_id, runtime)
+                except Exception as _re:
+                    log.debug("family replay ingest skipped (%s): %s",
+                              ns_id, _re)
                 # Agent Graph spans (WS-A): reconstruct runtime-stamped spans
                 # from the SAME normalized events already in hand so the
                 # Agent Graph shows real runtimes + main→child edges instead
