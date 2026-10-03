@@ -1,6 +1,7 @@
 """Hosted/local Improve uses scoped evidence and truthful transport states.
 
 AC-ASSIST-006.2 -- encrypted candidate/evidence responses render in hosted UI.
+AC-ASSIST-006.3 -- distinct recoverable states and actionable key unlock.
 AC-ASSIST-006.4 -- scope isolation, partial/stale coverage, unavailable and retry.
 """
 from pathlib import Path
@@ -17,9 +18,15 @@ let runtime = 'codex';
 window.CLOUD_MODE = true;
 window.CLOUD_NODE_ID = 'node-a';
 window.CLOUD_TOKEN = 'account-a';
+let encryptionKey = 'key-a';
+global.localStorage = {getItem:()=>encryptionKey};
 window._cmRuntimeFilter = () => runtime;
 function element() {
-  return {textContent:'', innerHTML:'', hidden:true, style:{}, children:[],
+  return {_text:'', _html:'', hidden:true, style:{}, children:[],
+    get textContent(){return this._text},
+    set textContent(v){this._text=v;this._html='';this.children=[]},
+    get innerHTML(){return this._html},
+    set innerHTML(v){this._html=v;this._text='';this.children=[]},
     setAttribute(){}, classList:{toggle(){}}, querySelector(){return null},
     appendChild(child){this.children.push(child);return child},
     addEventListener(type, fn){this[type]=fn}};
@@ -76,7 +83,8 @@ assert(note.children.some(child=>child.textContent==='Refresh'));
 
 
 @pytest.mark.parametrize('reason,expected', [
-    ('missing_key','Unlock'), ('missing_snapshot','Waiting'),
+    ('missing_key','Unlock'), ('missing_snapshot','No saved'),
+    ('snapshot_pending','Waiting'), ('old_collector','Update ClawMetry'),
     ('missing_slice','Update ClawMetry'), ('node_offline','offline'),
     ('decrypt_failed','could not be unlocked'), ('unavailable','unavailable'),
     ('<script>private provider error</script>','unavailable'),
@@ -152,4 +160,106 @@ window.CLOUD_MODE=true; window.CLOUD_NODE_ID='node-b'; nodes['cm-cloud-improve']
 fetch=async url=>{calls.push(url);const p=payload();p.scope.node_id='node-b';return response(p)};
 await loadImprove(); assert.equal(calls.length,2);
 assert.equal(window._cmImproveState.data.scope.node_id,'node-b');
+''')
+
+
+@pytest.mark.parametrize('reason', ['missing_key', 'decrypt_failed'])
+def test_key_prompt_unlock_retries_current_guidance(reason):
+    import json
+    run_node('const failure='+json.dumps(reason)+';'+r'''
+let prompt;
+window._cmRenderKeyPrompt=(container,options)=>{prompt={container,options};};
+fetch=async url=>{calls.push(url);return response(calls.length===1
+ ? {available:false,reason:failure} : payload());};
+await loadImprove();
+assert.equal(prompt.container,nodes['improve-list']);
+assert.match(prompt.options.title,/guidance/i);
+assert.equal(nodes['improve-summary-candidates'].textContent,'Unavailable');
+encryptionKey='corrected-key';
+await prompt.options.onUnlock();
+assert.equal(calls.length,2);
+assert.equal(nodes['improve-summary-candidates'].textContent,'1');
+''')
+
+
+@pytest.mark.parametrize('change', ["encryptionKey=null", "encryptionKey='key-b'",
+                                   "window.CLOUD_TOKEN='account-b'", "window.CLOUD_NODE_ID='node-b'"])
+def test_cached_guidance_is_not_reused_after_unlock_context_changes(change):
+    run_node(r'''
+await loadImprove();
+assert.match(nodes['improve-list'].innerHTML,/Always keep/);
+fetch=async url=>{calls.push(url);return response({available:false,reason:'missing_key'});};
+'''+change+';'+r'''
+await loadImprove();
+assert.equal(calls.length,2);
+assert.equal(window._cmImproveState.data,null);
+assert.doesNotMatch(nodes['improve-list'].innerHTML,/Always keep/);
+assert.equal(nodes['improve-summary-candidates'].textContent,'Unavailable');
+''')
+
+
+@pytest.mark.parametrize('change', ["encryptionKey=null", "encryptionKey='key-b'",
+                                   "window.CLOUD_TOKEN='account-b'", "window.CLOUD_NODE_ID='node-b'"])
+def test_pending_guidance_cannot_publish_after_unlock_context_changes(change):
+    run_node(r'''
+let release;
+fetch=async url=>{calls.push(url);return {ok:true,json:()=>new Promise(resolve=>{release=resolve})};};
+const pending=loadImprove();
+await new Promise(resolve=>setImmediate(resolve));
+'''+change+';'+r'''
+release(payload('codex','Old private guidance'));
+await pending;
+assert.equal(window._cmImproveState.data,null);
+assert.doesNotMatch(nodes['improve-list'].innerHTML,/Old private/);
+assert.notEqual(nodes['improve-summary-candidates'].textContent,'1');
+''')
+
+
+def test_real_empty_is_measured_zero_with_the_empty_state():
+    run_node(r'''
+fetch=async()=>response({...payload(),signals:[],candidate_count:0,message_count:0,conversation_count:0,project_count:0});
+await loadImprove();
+assert.equal(nodes['improve-summary-candidates'].textContent,'0');
+assert.equal(nodes['improve-empty'].style.display,'flex');
+assert.equal(window._cmImproveState.loaded,true);
+''')
+
+
+def test_new_key_request_does_not_join_old_pending_request():
+    run_node(r'''
+let release;
+fetch=url=>{calls.push(url);return calls.length===1
+ ? new Promise(resolve=>{release=resolve}) : Promise.resolve(response(payload('codex','New guidance')));};
+const old=loadImprove();
+encryptionKey='key-b';
+const current=loadImprove();
+assert.notEqual(current,old);
+await current;
+release(response(payload('codex','Old private guidance')));await old;
+assert.equal(calls.length,2);
+assert.match(nodes['improve-list'].innerHTML,/New guidance/);
+assert.doesNotMatch(nodes['improve-list'].innerHTML,/Old private/);
+''')
+
+
+def test_filter_click_cannot_render_cached_guidance_after_key_removal():
+    run_node(r'''
+await loadImprove();
+encryptionKey=null;
+fetch=async url=>{calls.push(url);return response({available:false,reason:'missing_key'});};
+improveSetKind('preference');await loadImprove();
+assert.equal(window._cmImproveState.data,null);
+assert.doesNotMatch(nodes['improve-list'].innerHTML,/Always keep/);
+''')
+
+
+def test_obsolete_unlock_prompt_cannot_refresh_another_account():
+    run_node(r'''
+let unlock;
+window._cmRenderKeyPrompt=(container,options)=>{unlock=options.onUnlock;};
+fetch=async url=>{calls.push(url);return response({available:false,reason:'missing_key'});};
+await loadImprove();
+window.CLOUD_TOKEN='other-account';encryptionKey='other-key';
+await unlock();
+assert.equal(calls.length,1);
 ''')

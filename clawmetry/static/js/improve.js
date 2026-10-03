@@ -4,13 +4,23 @@
  * the explicit review flow and the Pro self-evolve implementation. */
 var _cmImproveState = window._cmImproveState || { kind: 'all', data: null, loaded: false };
 var _improveRequest = 0, _improvePending = null, _improveController = null;
+var _improveCacheScope = null;
 window._cmImproveState = _cmImproveState;
 
 function currentScope() {
   var runtime = typeof window._cmRuntimeFilter === 'function' ? window._cmRuntimeFilter() : 'all';
+  var secret = null;
+  if (window.CLOUD_MODE) {
+    try { secret = localStorage.getItem('cm-enc-key-' + (window.CLOUD_NODE_ID || '') + '-' +
+      (window.CLOUD_TOKEN || '').slice(0,16)); } catch (e) {}
+  }
   return {runtime: runtime || 'all', node: window.CLOUD_NODE_ID || '',
-    key: [window.CLOUD_MODE ? 'cloud' : 'local', window.CLOUD_TOKEN || '',
-      window.CLOUD_NODE_ID || '', runtime || 'all'].join('|')};
+    secret: secret, key: JSON.stringify([window.CLOUD_MODE ? 'cloud' : 'local', window.CLOUD_TOKEN || '',
+      window.CLOUD_NODE_ID || '', runtime || 'all'])};
+}
+
+function sameScope(left, right) {
+  return !!left && left.key === right.key && left.secret === right.secret;
 }
 
   function escapeHtml(value) {
@@ -116,6 +126,7 @@ function currentScope() {
   }
 
   function findSignal(id) {
+    if (!sameScope(_improveCacheScope, currentScope())) return null;
     var data = _cmImproveState.data || {};
     return (data.signals || []).find(function(signal) { return signal.id === id; }) || null;
   }
@@ -150,6 +161,9 @@ function currentScope() {
   }
 
   function renderList() {
+    if (_cmImproveState.data && !sameScope(_improveCacheScope, currentScope())) {
+      loadImprove(true); return;
+    }
     var list = document.getElementById('improve-list');
     var empty = document.getElementById('improve-empty');
     if (!list) return;
@@ -229,18 +243,35 @@ function currentScope() {
       pending: 'Waiting for guidance from your connected computer.',
       cache_pending: 'Waiting for guidance from your connected computer.',
       snapshot_pending: 'Waiting for guidance from your connected computer.',
-      missing_snapshot: 'Waiting for guidance from your connected computer.',
+      missing_snapshot: 'No saved guidance snapshot is available for this computer. Refresh after it syncs.',
+      old_collector: 'This saved snapshot does not include guidance. Update ClawMetry on this computer, then refresh.',
       offline: 'This computer is offline. Reconnect it, then refresh to review guidance.',
       node_offline: 'This computer is offline. Reconnect it, then refresh to review guidance.',
       missing_slice: 'Guidance has not synced for this selection. Update ClawMetry on this computer, then refresh.',
       slice_missing: 'Guidance has not synced for this selection. Update ClawMetry on this computer, then refresh.',
       locked: 'This runtime is not available with the computer’s current access.',
-      invalid_scope: 'Guidance is not available for this selection.'
+      invalid_scope: 'Guidance is not available for this selection.',
+      unsupported_window: 'The hosted view shows the last 30 days. Refresh to use that window.',
+      context_changed: 'The selected computer or key changed. Refresh to review its guidance.',
+      timeout: 'Guidance took too long to load. Refresh to try again.',
+      unauthorized: 'Your sign-in could not be verified. Sign in again, then refresh.'
     };
     var message = reasons[data.reason] || reasons[data.state] ||
       'Guidance is unavailable for this computer. Refresh to try again.';
     var list = document.getElementById('improve-list');
-    if (list) { list.textContent = message; addRefresh(list); }
+    if (list) {
+      list.textContent = message;
+      var reason = data.reason || data.state;
+      var needsKey = ['missing_key','key_required','key_missing','decrypt_failed','decryption_failed'].indexOf(reason) !== -1;
+      if (window.CLOUD_MODE && needsKey && typeof window._cmRenderKeyPrompt === 'function') {
+        var promptScope = currentScope();
+        window._cmRenderKeyPrompt(list, {title: 'Unlock guidance', onUnlock: function() {
+          // Unlock intentionally changes the key, but must not refresh a
+          // different account, computer or runtime from an obsolete prompt.
+          if (promptScope.key === currentScope().key) return loadImprove(true);
+        }});
+      } else addRefresh(list);
+    }
     ['candidates', 'conversations', 'projects', 'window'].forEach(function(name) {
       setText('improve-summary-' + name, 'Unavailable');
     });
@@ -254,8 +285,8 @@ function currentScope() {
     var list = document.getElementById('improve-list');
     if (!list) return Promise.resolve();
     var scope = currentScope();
-    if (_improvePending && _improvePending.key === scope.key && !force) return _improvePending.promise;
-    if (!force && _cmImproveState.key === scope.key && _cmImproveState.data &&
+    if (_improvePending && sameScope(_improvePending.scope, scope) && !force) return _improvePending.promise;
+    if (!force && sameScope(_improveCacheScope, scope) && _cmImproveState.data &&
         Date.now() - (_cmImproveState.at || 0) < 15000) {
       renderSummary(_cmImproveState.data); renderList(); return Promise.resolve();
     }
@@ -263,8 +294,9 @@ function currentScope() {
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
     _improveController = controller;
     var identity = ++_improveRequest;
-    var stillCurrent = function() { return identity === _improveRequest && scope.key === currentScope().key; };
+    var stillCurrent = function() { return identity === _improveRequest && sameScope(scope, currentScope()); };
     _cmImproveState.data = null;
+    _improveCacheScope = null;
     _cmImproveState.loaded = false;
     improveCloseReview();
     ['candidates', 'conversations', 'projects', 'window'].forEach(function(name) {
@@ -296,7 +328,11 @@ function currentScope() {
           return {response: response, data: data};
         })();
         var result = await Promise.race([request, timeout]);
-        if (!stillCurrent()) return;
+        if (!stillCurrent()) {
+          if (identity === _improveRequest) renderUnavailable({reason:
+            window.CLOUD_MODE && !currentScope().secret ? 'missing_key' : 'context_changed'});
+          return;
+        }
         var data = result.data || {};
         if (!result.response.ok || data.available === false || data.store_available === false ||
             !Array.isArray(data.signals)) {
@@ -313,15 +349,16 @@ function currentScope() {
         _cmImproveState.data = data;
         _cmImproveState.loaded = true;
         _cmImproveState.key = scope.key;
+        _improveCacheScope = scope;
         _cmImproveState.at = Date.now();
         renderSummary(data); renderList();
       } catch (error) {
-        if (stillCurrent()) renderUnavailable({});
+        if (stillCurrent()) renderUnavailable({reason: error.message === 'timeout' ? 'timeout' : 'unavailable'});
       } finally {
         if (timer) clearTimeout(timer);
       }
     })();
-    _improvePending = {key: scope.key, promise: work};
+    _improvePending = {scope: scope, promise: work};
     work.finally(function() {
       if (identity === _improveRequest) { _improvePending = null; _improveController = null; }
     });
