@@ -100,6 +100,39 @@
     return 'cm-enc-key-' + nodeId + '-' + acct;
   }
 
+  /* Old fragment parsing changed '+' in a registered node ID to a space.
+   * Recover only the current node/account's missing entry. Keep the source
+   * and prefer an existing canonical entry; AES authentication still checks
+   * the recovered key before any content can be shown. */
+  function restoreLegacyNodeKey() {
+    var node = window.CLOUD_NODE_ID || '';
+    var token = window.CLOUD_TOKEN || '';
+    if (node.indexOf('+') < 0 || !token) return;
+    try {
+      var canonical = storageKeyFor(node, token);
+      var legacy = storageKeyFor(node.replace(/\+/g, ' '), token);
+      if (!localStorage.getItem(canonical)) {
+        var saved = localStorage.getItem(legacy);
+        if (saved) localStorage.setItem(canonical, saved);
+      }
+    } catch (e) { /* Storage unavailable: the normal unlock flow remains. */ }
+  }
+
+  /* Shared by ALL hosted readers after AES authentication. A codec/JSON
+   * failure rejects as a data error, never as an authentication failure. */
+  async function decodePayload(pt) {
+    var bytes = new Uint8Array(pt);
+    if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      if (typeof DecompressionStream === 'undefined') {
+        throw new Error('This browser cannot decompress dashboard data.');
+      }
+      var inflated = new Blob([bytes]).stream()
+        .pipeThrough(new DecompressionStream('gzip'));
+      return JSON.parse(await new Response(inflated).text());
+    }
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
   /* AES-256-GCM, nonce = first 12 bytes, matching encrypt_payload in
    * clawmetry/sync.py. importKey is given extractable=false and ['decrypt'],
    * so the key cannot be read back out or used to encrypt anything. Returns
@@ -116,23 +149,7 @@
         return crypto.subtle.decrypt(
           { name: 'AES-GCM', iv: raw.slice(0, 12) }, ck, raw.slice(12)
         );
-      }).then(function (pt) {
-        /* The daemon may gzip the JSON before encrypting it (sync.py
-         * encrypt_payload, negotiated by the heartbeat `caps.blob_gzip`).
-         * gzip's magic bytes 0x1f 0x8b cannot begin a JSON document, so the
-         * plaintext says which it is. A browser without DecompressionStream
-         * gets null here, the same empty-card outcome as any unreadable
-         * blob; the server never advertises the codec to a node whose
-         * readers cannot inflate. */
-        var bytes = new Uint8Array(pt);
-        if (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-          if (typeof DecompressionStream === 'undefined') { return null; }
-          var inflated = new Blob([bytes]).stream()
-            .pipeThrough(new DecompressionStream('gzip'));
-          return new Response(inflated).text().then(JSON.parse);
-        }
-        return JSON.parse(new TextDecoder().decode(pt));
-      }).catch(function () { return null; });
+      }).then(decodePayload).catch(function () { return null; });
     } catch (e) {
       return Promise.resolve(null);
     }
@@ -151,7 +168,10 @@
     var h = window.location.hash || '';
     if (h.indexOf('key=') < 0 && h.indexOf('token=') < 0) return;
 
-    var hp = new URLSearchParams(h.substring(1));
+    /* Legacy clients interpolated node IDs directly. This is a fragment,
+     * not a form: a raw '+' is the account/hostname separator, not a space.
+     * New clients encode '+' as %2B and actual spaces as %20. */
+    var hp = new URLSearchParams(h.substring(1).replace(/\+/g, '%2B'));
     var token = hp.get('token') || '';
     var key = hp.get('key') || '';
     var node = hp.get('node') || window.CLOUD_NODE_ID || '';
@@ -202,6 +222,7 @@
     b64url: b64url,
     normalizeKey: normalizeKey,
     storageKeyFor: storageKeyFor,
+    decodePayload: decodePayload,
     decryptBlob: decryptBlob,
     consumeFragment: consumeFragment
   };
@@ -212,4 +233,5 @@
   window.cmDecryptBlob = decryptBlob;
 
   consumeFragment();
+  restoreLegacyNodeKey();
 })();

@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-306 modules, 89 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+310 modules, 92 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -34,6 +34,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/apikeys_admin.py` | small | `bp_apikeys_admin` | `/api/apikeys` | create, list and revoke the node's API keys. |
 | `routes/approval_routing.py` | small | `bp_approval_routing` | `/a`, `/a/decide`, `/api/approvals` | OSS stub after the impl moved to clawmetry-pro. |
 | `routes/assets.py` | small | `bp_assets` | `/api/assets` | OSS asset registry API. |
+| `routes/assistant.py` | medium | `bp_assistant` | `/api/assistant` | Conversational, read-only analytics over the local DuckDB data plane. |
 | `routes/attention.py` | medium | `bp_attention` | `/api/attention`, `/api/hooks` | "which of my agents needs me right now". |
 | `routes/audit.py` | small | `bp_audit` | `/api/audit-log` | Enterprise audit-log query endpoint. |
 | `routes/autonomy.py` | medium | `bp_autonomy` | `/api/autonomy` | Autonomy Score endpoint. |
@@ -46,6 +47,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/components.py` | large | `bp_components` | `/api/component` | Per-panel component detail endpoints. |
 | `routes/context_economics.py` | small | `bp_context_economics` | `/api/context-coverage`, `/api/context-economics` | context-window economics (PRD P1-2). |
 | `routes/crons.py` | large | `bp_crons` | `/api/agent-intentions`, `/api/cron`, `/api/cron-health`, `/api/cron-run-log`, `/api/crons` | Cron CRUD + health + run-log endpoints. |
+| `routes/dashboards.py` | small | `bp_dashboards` | `/api/dashboard` | Saved, user-authored dashboard panels. |
 | `routes/delegated.py` | small | `bp_delegated` | `/api/cursor`, `/api/delegated-usage` | Connect a Cursor account from the dashboard, and read delegated usage. |
 | `routes/device.py` | medium | `bp_device` | `/api/device`, `/device-preview` | Device snapshot — a compact, screen-sized JSON for hardware companions. |
 | `routes/dives.py` | medium | `bp_dives` | `/api/dives` | ClawMetry Dives: NL-to-SQL-to-chart over the local DuckDB store. |
@@ -60,6 +62,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/heartbeat.py` | medium | `bp_heartbeat` | `/api/heartbeat`, `/api/heartbeat-loops` | Heartbeat liveness panel API endpoint (#686). |
 | `routes/hitl.py` | medium | `bp_hitl` | `/api/hitl` | Human-in-the-loop (HITL) pause API. |
 | `routes/hooks.py` | large | `bp_hooks` | `/api/hooks`, `/api/lifecycle`, `/api/sessions` | local receiver for runtime pre-tool hooks. |
+| `routes/improve.py` | medium | `bp_improve` | `/api/improve` | Read-only guidance candidates derived from observed agent conversations. |
 | `routes/infra.py` | large | `bp_config`, `bp_logs`, `bp_memory`, `bp_security` | `/api/automation-analysis`, `/api/context-anatomy`, `/api/cost-optimization`, `/api/cost-optimizer`, `/api/file`, `/api/flow`, `/api/flow-events`, `/api/llmfit`, `/api/logs`, `/api/logs-stream`, `/api/memory`, `/api/memory-access`, `/api/memory-analytics`, `/api/memory-files`, `/api/memory-rag`, `/api/numbat`, `/api/security` | Infrastructure / security / config / logs endpoints. |
 | `routes/insights.py` | medium | `bp_insights` | `/api/insights`, `/insights` | Weekly Insights Digest endpoints. |
 | `routes/inventory.py` | medium | `bp_inventory` | `/api/inventory` | Agent Inventory tab API. |
@@ -154,6 +157,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/approval_events.py` | small | The public seam between approvals and whoever delivers them. |
 | `clawmetry/approvals.py` | large | cloud-mediated approval policy engine. |
 | `clawmetry/assessment_privacy.py` | medium | Mandatory, local-only masking for explicitly consented assessments. |
+| `clawmetry/assistant_managed.py` | medium | Optional bridge to ClawMetry's account-metered managed assistant. |
 | `clawmetry/attention_hook.py` | small | the `clawmetry hook attention` client. |
 | `clawmetry/audit.py` | medium | append-only audit log. |
 | `clawmetry/behaviour_signals.py` | large | Behaviour Signals: what people and agents *say* about a run (WO-58). |

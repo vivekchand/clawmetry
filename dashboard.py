@@ -111,6 +111,7 @@ from routes.harness import bp_harness
 from routes.delegated import bp_delegated
 from routes.readiness import bp_readiness
 from routes.guard import bp_guard
+from routes.improve import bp_improve  # noqa: E402 (route registration follows boot setup)
 from routes.signals import bp_signals
 from routes.selfdiag import bp_selfdiag
 from routes.health import bp_health
@@ -151,6 +152,8 @@ from routes.bench import bp_bench
 from routes.cohort import bp_cohort
 from routes.quality import bp_quality
 from routes.dives import bp_dives
+from routes.dashboards import bp_dashboards  # noqa: E402 (route registration follows boot setup)
+from routes.assistant import bp_assistant  # noqa: E402 (route registration follows boot setup)
 from routes.reports import bp_reports
 from routes.scheduler import bp_scheduler
 from routes.policy import bp_policy
@@ -6461,6 +6464,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_investigations)
     from routes.error_groups import bp_error_groups
     app.register_blueprint(bp_error_groups)
+    app.register_blueprint(bp_improve)
     app.register_blueprint(bp_signals)
     app.register_blueprint(bp_selfdiag)
     app.register_blueprint(bp_health)
@@ -6546,6 +6550,8 @@ def detect_config(args=None):
     except Exception as _sh_exc:
         print(f"  SelfHosted: [warn] not registered: {_sh_exc}")
     app.register_blueprint(bp_dives)
+    app.register_blueprint(bp_dashboards)
+    app.register_blueprint(bp_assistant)
     app.register_blueprint(bp_reports)
     app.register_blueprint(bp_scheduler)
     app.register_blueprint(bp_policy)
@@ -7089,14 +7095,15 @@ DASHBOARD_HTML = r"""
      air-gapped install has no route to Google, and in the EU an embedded
      Google Fonts request discloses the viewer's IP to a US processor with
      no legal basis. Regenerate with scripts/vendor_fonts.py. -->
-<link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=version) }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=version) }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/investigations.css', v=version) }}">
-<script src="{{ url_for('static', filename='js/nav-dropdown.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/alerts.js', v=version) }}" defer></script>
-<script src="{{ url_for('static', filename='js/trail.js', v=version) }}" defer></script>
-<script src="{{ url_for('static', filename='js/compliance.js', v=version) }}" defer></script>
-<script src="{{ url_for('static', filename='js/price-book.js', v=version) }}" defer></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=asset_version|default(version, true)) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=asset_version|default(version, true)) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/investigations.css', v=asset_version|default(version, true)) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css', v=asset_version|default(version, true)) }}">
+<script src="{{ url_for('static', filename='js/nav-dropdown.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/alerts.js', v=asset_version|default(version, true)) }}" defer></script>
+<script src="{{ url_for('static', filename='js/trail.js', v=asset_version|default(version, true)) }}" defer></script>
+<script src="{{ url_for('static', filename='js/compliance.js', v=asset_version|default(version, true)) }}" defer></script>
+<script src="{{ url_for('static', filename='js/price-book.js', v=asset_version|default(version, true)) }}" defer></script>
 <!-- Vendored + pinned (no external CDN, no supply-chain risk): marked renders
      transcript markdown, DOMPurify sanitizes it before it touches innerHTML.
      See cmSafeMarkdown() in app.js — never call marked.parse() into the DOM directly.
@@ -7104,10 +7111,10 @@ DASHBOARD_HTML = r"""
      byte-compared against its npm registry tarball by scripts/verify_vendor.py,
      and scripts/verify_no_external_assets.py fails CI on any absolute http(s)
      asset reference. The dashboard must render fully with zero egress. -->
-<script src="{{ url_for('static', filename='vendor/marked.min.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='vendor/purify.min.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='vendor/chart.umd.min.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='vendor/marked.min.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='vendor/purify.min.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='vendor/chartjs-adapter-date-fns.bundle.min.js', v=asset_version|default(version, true)) }}"></script>
 </head>
 <body data-theme="dark" class="booting has-profile-menu">
 {% include 'partials/overlays.html' %}
@@ -7255,6 +7262,10 @@ DASHBOARD_HTML = r"""
          raw-signal views stay under "Monitoring". The landing tab itself is
          `CM_LANDING_TAB` in static/js/app.js; this `active` class is the
          markup half and the two must agree. data-tab ids are unchanged. #}
+      <div class="left-nav-item active" data-tab="assistant" onclick="switchTab('assistant')" title="Ask questions and create dashboards from your agent data">
+        <span class="left-nav-icon" aria-hidden="true">✦</span>
+        <span class="left-nav-label">Assistant</span>
+      </div>
       <div class="left-nav-section-label" data-i18n="nav.section_monitoring">Monitoring</div>
       <div class="left-nav-item" data-tab="overview" onclick="switchTab('overview')" data-i18n-title="nav.home_tooltip" title="Is everything OK, at a glance">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></span>
@@ -7262,9 +7273,17 @@ DASHBOARD_HTML = r"""
         <span id="nav-stuck-badge" class="left-nav-badge" style="display:none;">0</span>
       </div>
 
-      <div class="left-nav-item active" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
+      <div class="left-nav-item" data-tab="inventory" onclick="switchTab('inventory')" data-i18n-title="nav.inventory_tooltip" title="Every agent on this machine: what it runs, what it costs, is it alive, who owns it">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></span>
         <span class="left-nav-label" data-i18n="nav.inventory">Agents</span>
+      </div>
+      <div class="left-nav-item" data-tab="setup" onclick="switchTab('setup')" title="Rules, skills, commands, agents, and hooks shaping how your agents work">
+        <span class="left-nav-icon" aria-hidden="true">&#10022;</span>
+        <span class="left-nav-label">Setup</span>
+      </div>
+      <div class="left-nav-item" data-tab="improve" onclick="switchTab('improve')" title="Repeated guidance signals worth reviewing">
+        <span class="left-nav-icon" aria-hidden="true">&#10047;</span>
+        <span class="left-nav-label">Improve</span>
       </div>
       <div class="left-nav-item" data-tab="transcripts" onclick="switchTab('transcripts')" data-i18n-title="nav.session_replay_tooltip" title="Every session, newest first. Open one to see what it was asked, what it did, and how it ended">
         <span class="left-nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
@@ -7356,6 +7375,9 @@ DASHBOARD_HTML = r"""
         <div class="left-nav-item left-nav-item-sub" id="left-nav-harness" data-tab="harness" onclick="switchTab('harness')" title="What a harness is, part by part, and where to watch each part live">
           <span class="left-nav-label" data-i18n="nav.harness">Harness</span>
         </div>
+        <div class="left-nav-item left-nav-item-sub" data-tab="dives" onclick="switchTab('dives')" title="Ask questions about your AI usage in plain English">
+          <span class="left-nav-label" data-i18n="nav.ask">SQL charts</span>
+        </div>
       </div>
     </div>
 
@@ -7419,6 +7441,12 @@ DASHBOARD_HTML = r"""
 <!-- AGENT INVENTORY (single-pane control-tower roster) -->
 {% include 'tabs/inventory.html' %}
 
+<!-- HARNESS SETUP (runtime-aware rules, skills, commands, agents, and hooks) -->
+{% include 'tabs/setup.html' %}
+
+<!-- IMPROVE (read-only evidence-backed guidance candidates) -->
+{% include 'tabs/improve.html' %}
+
 <!-- ALERTS (Cloud-Pro feature) -->
 {% include 'tabs/guard.html' %}
 {% include 'tabs/signals.html' %}
@@ -7438,6 +7466,8 @@ DASHBOARD_HTML = r"""
 {% include 'tabs/price-book.html' %}
 
 <!-- DIVES (NL-to-SQL-to-chart over local DuckDB) -->
+{% include 'tabs/dives.html' %}
+{% include 'tabs/assistant.html' %}
 
 <!-- CRONS -->
 {% include 'tabs/crons.html' %}
@@ -7524,18 +7554,23 @@ DASHBOARD_HTML = r"""
   </main>
 </div> <!-- end app-shell -->
 {% endif %}
-<script src="{{ url_for('static', filename='js/i18n.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/runtime-logos.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/time-range-picker.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/i18n.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/runtime-logos.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/time-range-picker.js', v=asset_version|default(version, true)) }}"></script>
 <!-- Provenance badges: the shared "measured / derived / estimated" component
      every dollar amount and score renders through. Loaded BEFORE app.js so
      window.cmMoney / cmProvBadge exist by the time a tab paints. -->
-<script src="{{ url_for('static', filename='js/provenance.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/app.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/guard-checks.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/activity-live.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/investigations.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/error-groups.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/provenance.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/app.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/guard-checks.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/activity-live.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/investigations.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/error-groups.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/dives.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/assistant.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/custom-dashboard.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/setup.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/improve.js', v=asset_version|default(version, true)) }}"></script>
 </div> <!-- end zoom-wrapper -->
 
 {# position:fixed overlays must live OUTSIDE #zoom-wrapper: its zoom
@@ -7606,13 +7641,13 @@ DASHBOARD_HTML = r"""
   </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/gw-setup.js', v=version) }}"></script>
-<script src="{{ url_for('static', filename='js/onboarding.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/gw-setup.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/onboarding.js', v=asset_version|default(version, true)) }}"></script>
 <!-- Loaded LAST: trial-pill.js reads window.CM_PLANS (published by app.js) as
      its price ladder and exposes window.cmOpenUpgradeModal, which gw-setup.js's
      profile menu calls. Both are looked up at call time, so load order only
      needs app.js to have run first. -->
-<script src="{{ url_for('static', filename='js/trial-pill.js', v=version) }}"></script>
+<script src="{{ url_for('static', filename='js/trial-pill.js', v=asset_version|default(version, true)) }}"></script>
 
 </body>
 </html>

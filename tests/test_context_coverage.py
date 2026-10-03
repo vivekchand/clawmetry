@@ -129,6 +129,30 @@ def test_absent_runtimes_are_omitted_not_zero_padded(store):
     assert names == {"codex"}
 
 
+@pytest.mark.parametrize("data,expected", [
+    ({"extra": {"model": "claude-opus-4-7", "inputTokens": 5, "cacheReadInputTokens": 120,
+                 "cacheCreationInputTokens": 10, "outputTokens": 999}}, 135),
+    ({"message": {"usage": {"input_tokens": 0, "cache_read_input_tokens": 120,
+                              "cache_creation_input_tokens": 10, "output_tokens": 999}}}, 130),
+])
+def test_context_readers_agree_for_adapter_and_cached_prompt_shapes(store, data, expected):
+    row = _turn(0, "claude_code:measured")
+    row["data"] = data
+    store.ingest_many([row])
+    store.flush()
+    coverage = store.query_context_coverage()["runtimes"][0]
+    assert coverage["runtime"] == "claude_code"
+    assert coverage["utilization"] == {"count": 1, "verdict": "observed", "note": ""}
+    points = store.query_context_economics(runtime="claude_code")["utilization"]
+    assert len(points) == 1 and points[0]["tokens"] == expected
+    peek = store.query_context_window_peek()
+    assert peek["input_tokens"] == expected
+    if data.get("extra", {}).get("model"):
+        assert peek["model"] == data["extra"]["model"]
+        assert points[0]["model"] == peek["model"]
+        assert points[0]["window"] == peek["context_window"]
+
+
 def test_empty_store_returns_empty_rows_without_raising(store):
     out = store.query_context_coverage()
     assert out["runtimes"] == []

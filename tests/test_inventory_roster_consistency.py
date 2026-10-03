@@ -23,6 +23,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+
+import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _APP_JS = os.path.join(_HERE, "..", "clawmetry", "static", "js", "app.js")
@@ -101,23 +105,47 @@ def test_coverage_chip_markup_and_i18n():
         "roster rows must carry the device-parity covered/metered chip"
     )
     en = json.load(open(_EN_JSON, encoding="utf-8"))
-    assert en.get("inventory.covered_chip") == "covered"
+    assert "t('inventory.subscription_signin_chip'" in body
+    assert "t('inventory.covered_chip'" not in body
+    assert en.get("inventory.subscription_signin_chip") == "subscription"
     assert en.get("inventory.metered_chip") == "metered"
 
 
-def test_today_tile_uses_24h_cost_and_covered_hero():
+@pytest.mark.parametrize("plan,extra", [
+    ({"mode": "subscription", "label": "Claude Max 20x"}, 0),
+    ({"mode": "subscription", "label": "Claude Max 20x"}, 12.5),
+    (None, None),
+])
+def test_today_tile_estimates_usage_without_inventing_a_subscription_invoice(plan, extra):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is not installed")
     js = _read(_APP_JS)
-    start = js.find("async function renderInventory")
-    if start == -1:
-        start = js.find("function renderInventory")
-    assert start != -1
-    body = js[start:start + 24000]
-    assert "cost24hUsd" in body, (
-        "the Today tile must sum cost24hUsd - it used to sum lifetime costUsd "
-        "under a 'Today' label"
-    )
-    assert "extraCost24hUsd" in body and "accountPlan" in body, (
-        "the Today tile must render the subscription-covered hero (extra "
-        "spend + 'plan covers it - ~$X at API rates') when the account plan "
-        "is a subscription"
-    )
+    start = js.index("  setSub('inv-tile-agents-sub',")
+    start = js.index("\n", start) + 1
+    end = js.index("  var health = _invHealth(agents);", start)
+    code = "\n".join([
+        "var inv = " + json.dumps({"accountPlan": plan, "extraCost24hUsd": extra}) + ";",
+        "var totalCost24h = 1121.38; var shown = {};",
+        "var subtitle = {textContent: '', style: {}};",
+        "var document = {getElementById: () => subtitle};",
+        "function setTxt(id, value) { shown[id] = value; }",
+        "function _invFmtUsd(n) { return '$' + Number(n).toFixed(2); }",
+        js[start:end],
+        "console.log(JSON.stringify({value: shown['inv-tile-today'], sub: subtitle.textContent}));",
+    ])
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=20)
+    assert out.returncode == 0, out.stderr
+    got = json.loads(out.stdout)
+    assert got["value"] == "$1121.38"
+    assert "API-equivalent estimate" in got["sub"]
+    assert "provider account" in got["sub"]
+    assert "covers it" not in got["sub"]
+    assert "extra" not in got["value"]
+
+
+def test_subscription_row_does_not_promise_unobserved_billing_coverage():
+    body = _fn(_read(_APP_JS), "_invRosterRow")
+    assert "sign-in detected" in body
+    assert "check your provider account" in body
+    assert "not an extra bill" not in body
