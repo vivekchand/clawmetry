@@ -777,7 +777,7 @@ def sh_status():
         conn = _db()
         try:
             counts = {
-                table: conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+                table: conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]  # nosec B608 - table name comes from the hardcoded literal tuple in the enclosing comprehension
                 for table in ("nodes", "events", "ingest_log", "sessions", "cache")
             }
         finally:
