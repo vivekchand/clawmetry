@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: a workflow replay is drawn as a graph
+
+- **Why:** a workflow runtime such as n8n runs a graph of nodes, and its replay was a flat list of raw event rows. The list did not show which node failed or which nodes never ran.
+- **What:** when the `workflow.start` event of a replay carries `nodes` and `edges`, the replay view draws them as a graph. Each node is a box at its canvas position, coloured by the status of its latest run. A node that did not run has a dashed outline. A model or tool sub-node is joined to the node it serves with a dashed line. The caption states how many nodes ran. The event rows stay available under the graph. Part of clawmetry-pro#132.
+- **Verified:** 18 new renderer checks cover node status, the latest run of a node, an edge to an unknown node, escaped names, a graph without positions, a workflow without nodes and an execution whose node runs are not stored. The output for three captured n8n executions was rendered to an image and inspected.
+- **Limits:** the graph appears only for a runtime whose replay mapper sends nodes. The n8n mapper that does so ships in the Pro adapter package. A Goose recipe has no nodes and keeps the list. The graph was not opened in a running dashboard.
+
 ### Fixed: Sessions stays a readable conversation
 
 - Opening a session with recorded replay events keeps the conversation, filters, tool details and playback controls visible. Raw event details are now an optional section that loads when opened.
