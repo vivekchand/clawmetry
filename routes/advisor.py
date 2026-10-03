@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import time
 import urllib.error
@@ -154,7 +153,8 @@ def _load_anthropic_auth() -> tuple[str | None, str | None]:
 
     # 3. claude CLI OAuth fallback. The binary uses whatever profile the
     # user already authenticated, so OAuth-only users still work.
-    claude_bin = shutil.which("claude")
+    from clawmetry.harness import find_claude_cli
+    claude_bin = find_claude_cli()
     if claude_bin:
         profile_path = os.path.expanduser(
             "~/.openclaw/agents/main/agent/auth-profiles.json"
