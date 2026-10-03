@@ -16,6 +16,14 @@
 
 - The connected dashboard showed raw i18n keys in place of tooltip and accessible-name attributes when a translation was missing. The attribute translator now preserves each original attribute value before applying a locale so partial catalogs and language changes retain readable text. Carries #6278.
 
+### Added: Goose replay mapper with recipe workflow and cron mode
+
+- Goose sessions now feed the replay tree. The reader maps sessions from Goose's SQLite store into the canonical replay stream: one leading mode event (`auto` → `yolo`; `approve`/`smart_approve` → `default`), cron-started sessions tagged with their schedule id and cron expression, recipe-defined workflows with steps and sub-recipes, and messages with tool calls, results and model usage. Same-second events preserve transcript order via span-id encoding. A database without the mode or schedule columns reports `unknown`. Carries #6297.
+
+### Added: OpenClaw replay mapper over the transcript and the read-only state database
+
+- OpenClaw sessions now feed the replay tree. The reader walks the v3 transcript and the `~/.openclaw/state/openclaw.sqlite` state database (opened read-only): LLM calls and responses with usage and stop reason, thinking blocks, tool calls and results, compactions, approval requests and decisions (system resolutions as `policy`, operator as `user`), and sub-agent spawns resolved through `sessions.json`. The mode chip reads `yolo` only when `security=full` and `ask=never`; anything that can refuse shows `default`. Carries #6293.
+
 ### Hardened: bandit B608 MEDIUM findings outside the store are annotated
 
 - Ten medium-confidence bandit B608 false positives in seven files (goose adapter, family_usage, sync, history, alerts, selfhosted_ingest, sessions) now carry `# nosec` comments so new genuine findings stand out. SQL values are always bound; no behaviour changes. Carries #6296.
