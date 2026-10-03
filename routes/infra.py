@@ -72,7 +72,7 @@ def resolve_gateway_log_path():
     # Newest /tmp/openclaw/openclaw-*.log. Use os.listdir (not glob) so we
     # don't depend on glob's stat behaviour, then pick the most recent by
     # mtime — falling back to filename order if mtime can't be read.
-    tmp_dir = "/tmp/openclaw"
+    tmp_dir = "/tmp/openclaw"  # nosec B108 - read-only listdir of the gateway's own log dir
     _default_log_re = re.compile(r"openclaw-\d{4}-\d{2}-\d{2}\.log$")
     try:
         names = [
