@@ -7,6 +7,13 @@
 - **Verified:** 5 new tests cover sessions before and after the collector start, a second tick that writes nothing, an assignment made by hand that is kept, a later correction that supersedes the collector's row, a changed value and a name that is too long.
 - **Limits:** the variable is read from the collector's environment. It is not read from the environment of each agent, so one collector gives one name. Sessions that started before the collector did keep their derived project. A session with no recorded start time is not assigned. Changing the value applies to sessions that start later.
 
+### Fixed: the runtime hook registry replaced hooks it did not own
+
+- **Why:** `clawmetry.hooks.install` set the config key of a hook to its own value. A `hooks.PreToolUse` list in `~/.claude/settings.json` that already held a user hook was replaced. It also wrote a `__clawmetry` key next to the hook events, and it rewrote a config it could not parse as an empty one. Uninstall copied the backup taken at install time over the config, which dropped every edit made since. No shipped component installs through this registry yet, so no user config was affected.
+- **What:** install appends its entries to a list that is already there and writes nothing else into the config. It stops with an error when the config is not a JSON object. The manifest records what was added. Uninstall restores the exact prior bytes when the config is unchanged since install, and removes only the recorded entries when it has changed. `status()` and `verify_all()` report a hook whose config entry was removed by hand. The config file keeps its file mode.
+- **Verified:** `tests/test_hooks.py` targeted an older API and every test in it errored. It is rewritten against the shipped API (26 tests) and now runs in CI.
+- **Limits:** a config that changed after install is rewritten with two-space indentation on uninstall. Comments are not supported in the config file.
+
 ### Fixed: long sessions were cut short in the replay tree without notice
 
 - **Why:** `GET /api/replay-tree/<session_id>` read the store with its default limit of 2000 events. A longer session came back as its first 2000 events and nothing said the rest was missing. Two Codex sessions on the test machine have more than 4500 replay events each.
