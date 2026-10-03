@@ -3670,7 +3670,11 @@ def api_replay_tree(session_id):
           "runtime":    <latest runtime seen, or null>,
           "mode":       <latest mode.changed payload, or null>,
           "turns":      [{turn_id, events[], delegations[], approvals[]}],
-          "workflows":  [{span_id, kind, events[]}]
+          "workflows":  [{span_id, kind, events[]}],
+          "row_count":  <events in this response>,
+          "truncated":  <true when the session has more events than
+                         ``event_limit``; the response holds the earliest>,
+          "event_limit": <the cap>
         }
 
     Empty ``turns`` / ``workflows`` is the honest shape until adapter
@@ -3679,16 +3683,31 @@ def api_replay_tree(session_id):
     §0a.4). Cloud parity: the cloud dashboard reads the same shape
     from its snapshot slice once the snapshot writer path lands.
     """
+    # Ask for one row past the cap: the extra row is the only way to tell a
+    # session that fits from one that was cut, and the store's own default
+    # (2000) silently dropped the end of long sessions.
     try:
-        rows = _ls_call("query_replay_events", session_id=session_id) or []
+        rows = _ls_call("query_replay_events", session_id=session_id,
+                        limit=_REPLAY_TREE_MAX_EVENTS + 1) or []
     except Exception:
         rows = []
-    return jsonify(_build_replay_tree(session_id, rows))
+    truncated = len(rows) > _REPLAY_TREE_MAX_EVENTS
+    tree = _build_replay_tree(session_id, rows[:_REPLAY_TREE_MAX_EVENTS])
+    tree["truncated"] = truncated
+    tree["event_limit"] = _REPLAY_TREE_MAX_EVENTS
+    return jsonify(tree)
 
 
 # Deepest delegation chain the replay tree follows. Mappers stop inlining
 # children well before this; the cap only bounds a malformed parent chain.
 _REPLAY_TREE_MAX_DEPTH = 32
+
+# Most replay events one tree response carries. The earliest rows are kept,
+# so a cut tree is a coherent prefix of the session. Stays under the 10000
+# row ceiling ``routes.local_query._coerce_args`` applies to the
+# ``replay_events`` shape, with room for the one extra row that detects the
+# cut.
+_REPLAY_TREE_MAX_EVENTS = 8000
 
 
 def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:

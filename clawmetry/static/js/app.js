@@ -31830,6 +31830,18 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
            _escape(mode.permission) + '</div>';
   }
 
+  // A session longer than the endpoint's event cap comes back as its
+  // earliest events only. Say so, or the replay reads as the whole session.
+  function _renderTruncated(tree) {
+    if (!tree || !tree.truncated) return '';
+    var count = tree.row_count || 0;
+    var fallback = 'This session is longer than the replay can show. ' +
+                   'The first ' + count + ' events are listed.';
+    var msg = (typeof t === 'function')
+      ? t('trail.tree_truncated', {n: count}, fallback) : fallback;
+    return '<div class="replay-tree-truncated" role="note">' + _escape(msg) + '</div>';
+  }
+
   function _renderWorkflows(workflows, runtime) {
     if (!workflows || !workflows.length) return '';
     var html = '<div class="replay-tree-workflows">';
@@ -31857,6 +31869,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     var html = '<div class="replay-tree" data-runtime="' +
                _escape(tree.runtime || 'unknown') + '">';
     html += _renderModeChip(tree.mode);
+    html += _renderTruncated(tree);
     html += _renderWorkflows(tree.workflows, tree.runtime);
     for (var i = 0; i < (tree.turns || []).length; i++) {
       html += _renderTurn(tree.turns[i], tree.runtime);
