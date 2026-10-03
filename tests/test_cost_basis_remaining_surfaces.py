@@ -413,8 +413,12 @@ def test_the_hero_chip_shows_the_tile_figure_with_its_basis():
         % ((json.dumps(entry),) * 3), fns=("_cmHeroCostChip",))
     assert "$8.49" in got["priced"]
     assert _badges(got["priced"]) == ["published rates"]
-    assert "not an extra bill" in got["plan"]
-    assert "not an extra bill" not in got["zeroPlan"]
+    # Authentication is not a billing ledger or proof of plan coverage.
+    assert "Subscription authentication detected" in got["plan"]
+    assert "Check your provider for actual charges" in got["plan"]
+    assert "included in your plan" not in got["plan"]
+    assert "not an extra bill" not in got["plan"]
+    assert "Subscription authentication detected" not in got["zeroPlan"]
     assert "$8.49" in got["old"] and not _badges(got["old"])
     hero = _fn(_app(), "_renderOverviewHero")
     assert "_cmHeroCostChip(" in hero

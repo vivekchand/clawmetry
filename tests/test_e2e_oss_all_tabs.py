@@ -126,7 +126,10 @@ CANONICAL_TABS = [
     # clawmetry/templates/tabs/ or routes/ as of 2026-06-09.
     "channels",          # routes/channels.py: 21 chat-channel adapters
     "harness",           # harness.html: harness observability
+    "assistant",         # conversational analytics and saved visuals
     "inventory",         # inventory.html: tool/resource inventory
+    "setup",             # setup.html: runtime setup map
+    "improve",           # improve.html: guidance candidates
     "nemoclaw",          # nemoclaw.html: NeMo Guardrails governance
     "guard",             # guard.html: Guard incidents + session controls + policies
     "signals",           # signals.html: Behaviour Signals (frustration, praise, refusals, giving up)
@@ -139,6 +142,7 @@ CANONICAL_TABS = [
     "version-impact",    # version-impact.html: version impact view
     "context-economics", # context-economics.html: context economics
     "agents",            # agents.html: multi-agent orchestration view
+    "dives",             # dives.html: conversational dashboard builder
     "evals",             # evals.html: LLM-judge scores + evaluator library
     "bench",             # bench.html: Harness Engineering (cross-runtime bench)
     "trail",             # trail.html: one session as Inputs / Decisions / Outcome

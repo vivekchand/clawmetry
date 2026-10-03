@@ -1,5 +1,19 @@
 ## Unreleased
 
+### Added: conversational dashboards from local agent evidence
+
+- Home keeps replies, live state, and cached figures in the selected runtime. Daily costs use the daily response, local period totals reuse DuckDB usage, and unavailable periods remain explicit. Cost review labels its node-wide scope and distinguishes estimates from actual charges or proven savings.
+
+- Assistant is the local opening screen. Ask a question, refine the answer, and create charts, tables, or metrics from recorded data.
+- Save a generated panel to Home. Saved panels and conversations persist locally; panels query current data when Home opens.
+- Use an authenticated Claude harness with tools disabled, an Anthropic API key, or a connected Builder account. Voice input requires an explicit click and transcript review.
+- Queries are read-only and bounded. Raw payload columns are removed before a generated query runs. Sources disclose query errors, limited previews, and missing measurements.
+- Setup gathers known rules, skills, commands, and hooks. Improve presents guidance candidates with conversation evidence for review.
+- Page navigation isolates each screen and preserves tab links. Context and model reviews distinguish recorded usage from unmeasured effectiveness or savings.
+- Hosted dashboards retain Agents as the opening screen. Local-only surfaces explain where their data is available before making requests.
+
+- Context gauges and coverage share prompt-token readings, including adapter fields and fully cached prompts. Missing peaks and compaction measurements remain distinct from observed zero; cloud snapshots retain measurement status.
+
 ### Added: OpenDots runtime wiring
 
 - Register OpenDots through the paid adapter path, runtime catalogue, discovery,
@@ -26,6 +40,20 @@
 - Selected dashboard explanations now use shorter sentences and clearer missing-data labels. Source transcripts remain unchanged.
 - CI also checks literal browser translation fallbacks against the English catalog. Connection and integrity messages retain uncertainty. Renderer tests cover catalog availability, event counts, channel names, and cost figures. Other dynamic messages and editorial review remain pending.
 - Central command-line help now uses the same checks. Shorter explanations retain option names, defaults, update conditions, and removal behavior. Interactive prompts and command results still require migration.
+
+### Fixed: dashboard status and error messages follow the chosen language
+
+- **Why:** many short messages in the dashboard were hard-coded English, so a user on any of the other locales saw a translated page with English "Failed to load", "Saving...", "Healthy" or "Error:" in the middle of it (#2258).
+- **What:** save states (Saved, Saving, Save), retention setting messages, API key and coverage key messages, the credential scan "Clean" badge, the advisor "Live" footer and the agent graph empty and error states in `app.js` now go through `t()`. English text is unchanged. Shipped in 0.12.902 (#6243).
+- **New in this release:** the alert and confirm dialogs for self-config restore, approval approve and reject, the advisory-only pause notice, session emergency stop, cron kill-all and pause, and Guard policy save and delete now go through `t()` with named placeholders, so a translated sentence keeps the session, job or error text in the right place. Carries #6260.
+- **Already shipped in 0.12.901 without an entry here:** "Failed to load" and Retry states (#6234), "Error:" prefixes in cron toasts and the skills browser (#6235), "Save failed", "Loading", "Untitled session" and "No data yet" (#6236), health status labels, channel loading states and full-screen controls (#6237), and the heartbeat banner, heartbeat status, memory status and cron tool tiles (#6239).
+- **Limits:** new keys are added to `en.json` only; other locales show English for a new key until the translation sync PR merges. Long tooltips, upgrade prompts with links and sentences built by concatenation are still English.
+
+### Fixed: Sessions row Pause, Resume and Stop work again
+
+- **Why:** `app.js` declared `guardControl` twice with different parameter orders. The later declaration (Guard tab) replaced the earlier one (Sessions row), so the row buttons sent the action in the runtime position and the control request never matched a session.
+- **What:** the Sessions row handler is now `sessionRowControl`, so each caller reaches its own function with its own argument order. A test fails if `app.js` declares one top-level function name twice with different parameters. Carries #6265.
+- **Limits:** checked by unit test and by reading the request the row sends. The buttons were not clicked against a live agent.
 
 ### Fixed: OpenClaw 2026.9.x sessions appear again
 
