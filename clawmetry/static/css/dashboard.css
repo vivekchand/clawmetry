@@ -2749,6 +2749,23 @@ body.has-profile-menu #logout-btn { display: none !important; }
   background: var(--bg-secondary); border-radius: 6px; }
 .replay-tree-workflow > summary { cursor: pointer; font-weight: 600;
   color: var(--text-primary); }
+.replay-wf-graph-wrap { overflow-x: auto; margin: 8px 0 4px; }
+.replay-wf-graph { display: block; }
+.replay-wf-edge { fill: none; stroke: var(--border-primary); stroke-width: 1.5; }
+.replay-wf-edge[data-ran="1"] { stroke: var(--text-muted); }
+.replay-wf-edge-sub { stroke-dasharray: 4 3; }
+.replay-wf-node rect { fill: var(--bg-tertiary); stroke: var(--border-primary); stroke-width: 1.5; }
+.replay-wf-node text { fill: var(--text-primary); font-size: 11px; font-family: inherit; }
+.replay-wf-node[data-status="none"] rect { stroke-dasharray: 3 3; }
+.replay-wf-node[data-status="none"] text { fill: var(--text-muted); }
+.replay-wf-node[data-status="success"] rect { stroke: #3fae7a; fill: color-mix(in srgb, #3fae7a 14%, var(--bg-tertiary)); }
+.replay-wf-node[data-status="error"] rect { stroke: #d63b3b; fill: color-mix(in srgb, #d63b3b 18%, var(--bg-tertiary)); }
+.replay-wf-node[data-status="running"] rect,
+.replay-wf-node[data-status="waiting"] rect { stroke: #4a9eff; fill: color-mix(in srgb, #4a9eff 14%, var(--bg-tertiary)); }
+.replay-wf-caption { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+.replay-wf-events > summary { cursor: pointer; font-size: 12px; color: var(--text-muted); padding: 2px 0; }
+.replay-tree-badge[data-status="error"] { background: color-mix(in srgb, #d63b3b 24%, var(--bg-tertiary)); }
+.replay-tree-badge[data-status="success"] { background: color-mix(in srgb, #3fae7a 20%, var(--bg-tertiary)); }
 .replay-tree-turn {
   border: 1px solid var(--border-secondary); border-radius: 8px;
   padding: 10px 12px; background: var(--bg-secondary);
