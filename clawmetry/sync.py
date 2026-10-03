@@ -10621,8 +10621,13 @@ def _build_memory_cache_pushes(config: dict) -> list:
             "scope":    scope,
         })
         body = content[:MEMORY_CONTENT_TRUNCATE]
+        content_available = isinstance(blob_raw, (str, bytes, bytearray))
+        content_truncated = len(body) < len(content)
+        omitted_reason = "" if content_available else "not_collected"
         if spent + len(body) > MEMORY_CACHE_TOTAL_BUDGET:
             body = ""
+            content_available = False
+            omitted_reason = "snapshot_budget"
             dropped += 1
         else:
             spent += len(body)
@@ -10630,7 +10635,10 @@ def _build_memory_cache_pushes(config: dict) -> list:
         # runtimes can carry the same path, so a viewer that matches on path
         # alone would show one runtime's copy under the other's tree.
         contents.append({"path": path, "content": body,
-                         "runtime": r.get("agent_type") or "openclaw"})
+                         "runtime": r.get("agent_type") or "openclaw",
+                         "content_available": content_available,
+                         "truncated": content_truncated,
+                         "omitted_reason": omitted_reason})
     if not files:
         return []
     if dropped:

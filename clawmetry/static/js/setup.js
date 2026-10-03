@@ -9,7 +9,58 @@ var _cmSetupState = {
   kind: 'all',
   selectedRuntime: null,
   selectedGroups: [],
+  cloudGroups: null,
+  requestId: 0,
+  fileRequestId: 0,
+  scope: null,
 };
+
+function _cmSetupScope() {
+  return typeof _cmRuntimeFilter === 'function' ? (_cmRuntimeFilter() || 'all') : 'all';
+}
+
+function _cmSetupRuntimes() {
+  var scope = _cmSetupScope();
+  return ((_cmSetupState.catalog && _cmSetupState.catalog.runtimes) || []).filter(function(runtime) {
+    return scope === 'all' || runtime.id === scope;
+  });
+}
+
+function _cmSetupCloudCatalog(groups) {
+  var runtimes = {};
+  groups.forEach(function(group) {
+    var id = group.runtime;
+    if (!id || !group.exists) return;
+    var runtime = runtimes[id] || (runtimes[id] = {
+      id: id, label: group.runtime_label || id, present: true, counts: {}, roots: []
+    });
+    var count = (group.files || []).length;
+    runtime.counts[group.category] = (runtime.counts[group.category] || 0) + count;
+    runtime.roots.push({exists: true, scope: group.scope, count: count});
+  });
+  return {runtimes: Object.keys(runtimes).map(function(id) { return runtimes[id]; })};
+}
+
+function _cmSetupUnavailable(message, needKey) {
+  _cmSetupState.catalog = null;
+  _cmSetupState.cloudGroups = null;
+  setupCloseFiles();
+  var grid = document.getElementById('setup-runtime-grid');
+  if (grid) {
+    grid.textContent = message;
+    if (needKey && typeof window._cmRenderKeyPrompt === 'function') {
+      window._cmRenderKeyPrompt(grid, {title: 'Encrypted setup', onUnlock: function() { loadSetup(true); }});
+      var note = document.getElementById('cm-mem-err');
+      if (note) { note.textContent = message; note.style.display = ''; }
+    }
+  }
+  var empty = document.getElementById('setup-empty');
+  if (empty) empty.style.display = 'none';
+  ['runtimes', 'files', 'projects', 'global'].forEach(function(name) {
+    var count = document.getElementById('setup-summary-' + name);
+    if (count) count.textContent = 'Unavailable';
+  });
+}
 
 function _cmSetupEscape(value) {
   if (typeof escHtml === 'function') return escHtml(value == null ? '' : String(value));
@@ -66,7 +117,8 @@ function _cmSetupRenderCatalog() {
   var grid = document.getElementById('setup-runtime-grid');
   var empty = document.getElementById('setup-empty');
   if (!grid) return;
-  var runtimes = ((_cmSetupState.catalog && _cmSetupState.catalog.runtimes) || []).filter(function(runtime) {
+  if (!_cmSetupState.catalog) return;
+  var runtimes = _cmSetupRuntimes().filter(function(runtime) {
     return runtime.present && _cmSetupFileCount(runtime, _cmSetupState.kind) > 0;
   });
   runtimes.sort(function(a, b) {
@@ -77,7 +129,15 @@ function _cmSetupRenderCatalog() {
   });
   if (!runtimes.length) {
     grid.innerHTML = '';
-    if (empty) empty.style.display = '';
+    if (empty) {
+      empty.style.display = '';
+      var heading = empty.querySelector('strong');
+      var detail = empty.querySelector('span');
+      if (heading) heading.textContent = window.CLOUD_MODE ? 'No synced files in this view.' : 'No setup files found in this view.';
+      if (detail) detail.textContent = window.CLOUD_MODE && _cmSetupState.kind === 'hooks'
+        ? 'Hook settings can contain credentials and stay on the agent machine. Instructions, skills, commands and agents are available in the other categories.'
+        : (window.CLOUD_MODE ? 'Try another category or refresh after your node syncs.' : 'Try another category or rescan after using this runtime.');
+    }
     return;
   }
   if (empty) empty.style.display = 'none';
@@ -85,7 +145,7 @@ function _cmSetupRenderCatalog() {
 }
 
 function _cmSetupRenderSummary() {
-  var runtimes = ((_cmSetupState.catalog && _cmSetupState.catalog.runtimes) || []);
+  var runtimes = _cmSetupRuntimes();
   var found = runtimes.filter(function(r) { return r.present; });
   var files = runtimes.reduce(function(total, r) {
     return total + _cmSetupFileCount(r, 'all');
@@ -113,28 +173,52 @@ function _cmSetupRenderSummary() {
 async function loadSetup(force) {
   var grid = document.getElementById('setup-runtime-grid');
   if (!grid) return;
-  if (window.CLOUD_MODE) {
-    grid.textContent = 'Setup files stay on your agent’s computer. Open the local ClawMetry dashboard to inspect its rules, skills, and hooks.';
-    ['runtimes', 'files', 'projects', 'global'].forEach(function (name) {
-      var count = document.getElementById('setup-summary-' + name);
-      if (count) count.textContent = 'Local only';
-    });
-    return;
+  var scope = _cmSetupScope();
+  var requestId = ++_cmSetupState.requestId;
+  if (scope !== _cmSetupState.scope || force) {
+    setupCloseFiles();
+    _cmSetupState.scope = scope;
   }
-  if (_cmSetupState.catalog && !force) {
+  var source = document.getElementById('setup-source-note');
+  if (source) source.textContent = window.CLOUD_MODE
+    ? 'Synced setup files for ' + (scope === 'all' ? 'all runtimes' : (typeof _cmRuntimeLabel === 'function' ? _cmRuntimeLabel(scope) : scope)) + '. Contents are decrypted in your browser. Runtime configuration stays on the node.'
+    : 'Pick a harness to review the files it exposes.';
+  var refresh = document.getElementById('setup-refresh');
+  if (refresh) refresh.textContent = window.CLOUD_MODE ? 'Refresh synced setup' : 'Rescan setup';
+  if (_cmSetupState.catalog && !force && !window.CLOUD_MODE) {
     _cmSetupRenderSummary();
     _cmSetupRenderCatalog();
     return;
   }
-  grid.innerHTML = '<div class="cm-setup-loading">Scanning known setup locations…</div>';
+  grid.innerHTML = '<div class="cm-setup-loading">Loading setup files…</div>';
+  ['runtimes', 'files', 'projects', 'global'].forEach(function(name) {
+    var count = document.getElementById('setup-summary-' + name);
+    if (count) count.textContent = 'Loading';
+  });
   try {
-    var response = await _cmSetupFetch('/api/runtimes/memory-catalog', { credentials: 'same-origin' }, 8000);
-    if (!response.ok) throw new Error('http ' + response.status);
-    _cmSetupState.catalog = await response.json();
+    var catalog;
+    if (window.CLOUD_MODE) {
+      if (typeof window._cmCloudRuntimeFiles !== 'function') throw new Error('Reload this page to reconnect to your synced files.');
+      var data = await window._cmCloudRuntimeFiles('all', null, {force: !!force});
+      if (requestId !== _cmSetupState.requestId || scope !== _cmSetupScope()) return;
+      if (data.decrypt_error) { _cmSetupUnavailable('Your saved key could not unlock this node’s setup files. Unlock with the node’s current key, then refresh.', true); return; }
+      if (data.needkey) { _cmSetupUnavailable('Unlock your encrypted setup files, then refresh this view.', true); return; }
+      if (data.pending) { _cmSetupUnavailable(data.node_online === false ? 'Your node is offline and no setup snapshot is available. Refresh when it reconnects.' : 'Waiting for your node to sync its setup files. Refresh in a moment.'); return; }
+      if (!Array.isArray(data.groups)) throw new Error('Setup files could not be loaded. Try refreshing this view.');
+      _cmSetupState.cloudGroups = data.groups;
+      catalog = _cmSetupCloudCatalog(data.groups);
+    } else {
+      var response = await _cmSetupFetch('/api/runtimes/memory-catalog', { credentials: 'same-origin' }, 8000);
+      if (!response.ok) throw new Error('Setup scan could not be loaded. Try again.');
+      catalog = await response.json();
+    }
+    if (requestId !== _cmSetupState.requestId || scope !== _cmSetupScope()) return;
+    _cmSetupState.catalog = catalog;
     _cmSetupRenderSummary();
     _cmSetupRenderCatalog();
   } catch (error) {
-    grid.innerHTML = '<div class="cm-setup-error">Setup scan unavailable. ' + _cmSetupEscape(error && error.message || error) + '</div>';
+    if (requestId !== _cmSetupState.requestId || scope !== _cmSetupScope()) return;
+    _cmSetupUnavailable('Setup files could not be loaded. Check the node connection and refresh this view.');
   }
 }
 
@@ -148,6 +232,8 @@ function setupSetKind(kind) {
 }
 
 async function setupSelectRuntime(runtimeId) {
+  if (_cmSetupScope() !== 'all' && _cmSetupScope() !== runtimeId) return;
+  var requestId = ++_cmSetupState.fileRequestId;
   _cmSetupState.selectedRuntime = runtimeId;
   _cmSetupRenderCatalog();
   var runtime = ((_cmSetupState.catalog && _cmSetupState.catalog.runtimes) || []).find(function(item) {
@@ -167,9 +253,17 @@ async function setupSelectRuntime(runtimeId) {
   try {
     var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/files';
     if (_cmSetupState.kind !== 'all') url += '?category=' + encodeURIComponent(_cmSetupState.kind);
-    var response = await _cmSetupFetch(url, { credentials: 'same-origin' }, 8000);
-    if (!response.ok) throw new Error('http ' + response.status);
-    var payload = await response.json();
+    var payload;
+    if (window.CLOUD_MODE) {
+      payload = {groups: (_cmSetupState.cloudGroups || []).filter(function(group) {
+        return group.runtime === runtimeId && (_cmSetupState.kind === 'all' || group.category === _cmSetupState.kind);
+      })};
+    } else {
+      var response = await _cmSetupFetch(url, { credentials: 'same-origin' }, 8000);
+      if (!response.ok) throw new Error('Files could not be loaded. Try again.');
+      payload = await response.json();
+    }
+    if (requestId !== _cmSetupState.fileRequestId || _cmSetupState.selectedRuntime !== runtimeId) return;
     var groups = (payload.groups || []).filter(function(group) {
       return group.exists && (group.files || []).length;
     });
@@ -192,6 +286,7 @@ async function setupSelectRuntime(runtimeId) {
     }).join('');
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
+    if (requestId !== _cmSetupState.fileRequestId || _cmSetupState.selectedRuntime !== runtimeId) return;
     list.innerHTML = '<div class="cm-setup-error">Could not read setup files. ' + _cmSetupEscape(error && error.message || error) + '</div>';
   }
 }
@@ -202,20 +297,36 @@ async function setupOpenFile(groupIndex, fileIndex) {
   var runtimeId = _cmSetupState.selectedRuntime;
   var preview = document.getElementById('setup-file-preview');
   if (!group || !file || !preview || !runtimeId) return;
+  var requestId = ++_cmSetupState.fileRequestId;
   preview.innerHTML = '<div class="cm-setup-loading">Reading ' + _cmSetupEscape(file.path || group.label) + '…</div>';
   try {
     var url = '/api/runtimes/' + encodeURIComponent(runtimeId) + '/file?root=' + encodeURIComponent(group.root) + '&path=' + encodeURIComponent(file.path || '');
-    var response = await _cmSetupFetch(url, { credentials: 'same-origin' }, 8000);
-    var data = await response.json();
-    if (!response.ok) throw new Error(data.error || ('http ' + response.status));
+    var data;
+    if (window.CLOUD_MODE) {
+      if (file.content_available === false || typeof file.content !== 'string') {
+        preview.textContent = file.omitted_reason === 'snapshot_budget'
+          ? 'This file is listed, but its contents were omitted to keep sync within its size limit. Open it on the node to read the full file.'
+          : 'This file is listed in the synced inventory, but its contents have not been synced. Refresh after the next node sync.';
+        return;
+      }
+      data = {content: file.content, language: file.language || 'text', truncated: !!file.truncated};
+    } else {
+      var response = await _cmSetupFetch(url, { credentials: 'same-origin' }, 8000);
+      data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'File could not be read.');
+    }
+    if (requestId !== _cmSetupState.fileRequestId || _cmSetupState.selectedRuntime !== runtimeId) return;
     preview.innerHTML = '<div class="cm-setup-preview-head"><strong>' + _cmSetupEscape(file.path || group.label) + '</strong><span>' + _cmSetupEscape(data.language || 'text') + '</span></div>'
+      + (data.truncated ? '<p class="cm-setup-section-note">Partial preview. This file exceeds the synced preview limit; open it on the node to read the full file.</p>' : '')
       + '<pre class="cm-setup-preview-code">' + _cmSetupEscape(data.content || '') + '</pre>';
   } catch (error) {
+    if (requestId !== _cmSetupState.fileRequestId || _cmSetupState.selectedRuntime !== runtimeId) return;
     preview.innerHTML = '<div class="cm-setup-error">Could not read this file. ' + _cmSetupEscape(error && error.message || error) + '</div>';
   }
 }
 
 function setupCloseFiles() {
+  ++_cmSetupState.fileRequestId;
   var panel = document.getElementById('setup-files-panel');
   if (panel) panel.style.display = 'none';
   _cmSetupState.selectedRuntime = null;
