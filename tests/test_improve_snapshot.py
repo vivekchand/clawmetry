@@ -181,10 +181,64 @@ def test_failure_is_unavailable_not_zero_or_cached(store, monkeypatch):
     assert store.query_improve_candidates()['message_count'] == 0
 
 
-def test_scrub_failure_never_publishes_raw_text(store, monkeypatch):
+@pytest.mark.parametrize('field', ['text', 'workspace'])
+@pytest.mark.parametrize('scrubber', ['_scrub_text', '_pii_core'])
+def test_internal_scrub_failure_never_publishes_or_caches_raw_evidence(store, monkeypatch, field, scrubber):
+    """AC-ASSIST-006.4: exercise errors swallowed by redact_text itself."""
+    from flask import Flask
+    from clawmetry import redaction
+    import routes.improve as route
+    marker = 'private-guidance@example.com'
+    text = 'Always keep replies concise.'
+    workspace = '/work/project'
+    if field == 'text':
+        text += ' Contact ' + marker
+    else:
+        workspace += '-' + marker
+    seed(store, 'one', text=text, workspace=workspace)
+    original = getattr(redaction, scrubber)
+
+    def fail_inside_redactor(value, *args, **kwargs):
+        if marker in value:
+            raise ValueError('internal scrub failure')
+        return original(value, *args, **kwargs)
+
+    monkeypatch.setattr(redaction, scrubber, fail_inside_redactor)
+    failed_input = text if field == 'text' else workspace
+    assert redaction.redact_text(failed_input) == failed_input  # proves the old API fails open
+    _, reasons = redaction.scrub_payload(failed_input)
+    assert reasons == ['error']  # audited API reports its internal failure
+
+    bundle = ic.build_snapshot(store)
+    assert bundle['improve']['available'] is False
+    assert bundle['improveByRuntime'] == {}
+    assert marker not in json.dumps(bundle)
+    assert not store._improve_cache
+    app = Flask(__name__); app.register_blueprint(route.bp_improve)
+    monkeypatch.setattr(route, '_store_call', lambda method, **kw: getattr(store, method)(**kw))
+    response = app.test_client().get('/api/improve/candidates?runtime=codex')
+    assert response.status_code == 503
+    assert response.get_json()['available'] is False
+    assert marker not in response.get_data(as_text=True)
+    assert not store._improve_cache
+    monkeypatch.setattr(redaction, scrubber, original)
+    recovered = ic.build_snapshot(store)
+    assert recovered['improve']['available'] is True
+    assert marker not in json.dumps(recovered)
+
+
+@pytest.mark.parametrize('failure', ['error', 'too_large', 'raised'])
+def test_scrub_error_or_withheld_report_aborts_slice_before_cache(store, monkeypatch, failure):
+    """Reject the API's reason list even if its returned value looks usable."""
     from clawmetry import redaction
     seed(store, 'one')
-    monkeypatch.setattr(redaction, 'redact_text', lambda text: (_ for _ in ()).throw(ValueError('scrub failure')))
+
+    def rejected(value, *args, **kwargs):
+        if failure == 'raised':
+            raise RuntimeError('scrubber unavailable')
+        return value, [failure]
+
+    monkeypatch.setattr(redaction, 'scrub_payload', rejected)
     assert ic.build_snapshot(store)['improve']['available'] is False
     assert not store._improve_cache
 

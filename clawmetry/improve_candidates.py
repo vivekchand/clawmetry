@@ -241,16 +241,22 @@ def _build_candidates(rows: list[dict[str, Any]], *, window_days: int) -> dict[s
         if not text or not _is_user_message(row, data, text):
             continue
         # Re-scrub legacy rows before keys, excerpts or labels are derived.
-        # A redaction failure fails the slice closed, never uploads raw text.
-        from clawmetry.redaction import redact_text
-        text = redact_text(text)
+        # redact_text deliberately fails open at ingest. The audited API reports
+        # internal failures; withhold this entire slice before it can be cached.
+        from clawmetry.redaction import scrub_payload
+        scrubbed, withheld = scrub_payload({
+            "text": text, "workspace": str(row.get("workspace_id") or ""),
+        })
+        if withheld:
+            raise ValueError("Improve evidence could not be redacted")
+        text = scrubbed["text"]
+        label = _workspace_label(scrubbed["workspace"])
         message_key = (str(row.get("session_id") or ""), text)
         if message_key in seen_messages:
             continue
         seen_messages.add(message_key)
         if row.get("session_id"):
             all_sessions.add(str(row["session_id"]))
-        label = _workspace_label(redact_text(str(row.get("workspace_id") or "")))
         if label:
             all_workspaces.add(label)
         message_count += 1
@@ -281,7 +287,6 @@ def _build_candidates(rows: list[dict[str, Any]], *, window_days: int) -> dict[s
         group["sessions"].add(str(row.get("session_id") or ""))
         if row.get("session_id"):
             all_sessions.add(str(row.get("session_id")))
-        label = _workspace_label(redact_text(str(row.get("workspace_id") or "")))
         if label:
             group["workspaces"].add(label)
             all_workspaces.add(label)
