@@ -6,6 +6,7 @@
 - **What:** when a flush fails because of a value in a row, the store rewrites the text of the queued events once and writes them again. A lone surrogate becomes U+FFFD, and a surrogate pair that arrived split becomes its character. The store logs a warning with the number of events it changed. A flush that fails for any other reason keeps the events queued unchanged, as before.
 - **Verified:** 6 new tests cover a lone surrogate in the session id, the model, a text payload and the event id, each queued between two valid events, a store I/O failure that must not rewrite anything, and the text helper. Without the fix 5 of them fail.
 - **Limits:** only the event queue is covered. The check that keeps an OTLP event out of a session the daemon already owns still fails for a session id with a lone surrogate, and logs a warning. A span with unencodable text is still refused, as before.
+
 ### Fixed: the runtime hook registry replaced hooks it did not own
 
 - **Why:** `clawmetry.hooks.install` set the config key of a hook to its own value. A `hooks.PreToolUse` list in `~/.claude/settings.json` that already held a user hook was replaced. It also wrote a `__clawmetry` key next to the hook events, and it rewrote a config it could not parse as an empty one. Uninstall copied the backup taken at install time over the config, which dropped every edit made since. No shipped component installs through this registry yet, so no user config was affected.
