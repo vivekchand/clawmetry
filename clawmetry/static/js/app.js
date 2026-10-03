@@ -2680,6 +2680,9 @@ async function loadNeedsYou() {
 async function loadActivityToday() {
   var strip = document.getElementById('activity-today-strip');
   if (!strip) return;
+  // A failed read replaces the counters with Retry. Keep the trusted template
+  // so the next successful read can restore the elements it updates.
+  if (strip._cmActivityMarkup === undefined) strip._cmActivityMarkup = strip.innerHTML;
   var _rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
   var _q = (_rt && _rt !== 'all') ? ('?runtime=' + encodeURIComponent(_rt)) : '';
   var d = {};
@@ -2703,6 +2706,7 @@ async function loadActivityToday() {
       brow = d.browser_actions_today || 0, msgs = d.messages_today || 0,
       uniq = d.unique_tools_today || 0;
   if (!(tool || exec || brow || msgs || uniq)) { strip.style.display = 'none'; return; }
+  if (!document.getElementById('at-tool-calls')) strip.innerHTML = strip._cmActivityMarkup;
   var set = function(id, v){ var el = document.getElementById(id); if (el) el.textContent = v; };
   set('at-tool-calls', tool); set('at-exec-calls', exec); set('at-browser-actions', brow);
   set('at-messages', msgs); set('at-unique-tools', uniq);
