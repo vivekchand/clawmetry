@@ -44,7 +44,7 @@ class Node {
     this.parentNode = null;
     this.listeners = {};
     this.attributes = {};
-    this.style = {};
+    this.style = {setProperty(name, value) { this[name] = String(value); }};
     this.hidden = false;
     this.value = '';
     this.scrollHeight = 42;
@@ -78,7 +78,7 @@ class Node {
   dispatch(name, event = {}) { (this.listeners[name] || []).forEach((handler) => handler(event)); }
   focus() {}
   select() {}
-  getBoundingClientRect() { return this.bounds; }
+  getBoundingClientRect() { return {...this.bounds, height: this.bounds.bottom - this.bounds.top}; }
   scrollIntoView(options) { this.scrollCalls.push(options); }
   querySelector(selector) {
     if (selector === '.cm-assistant-main' && this.className.split(/\s+/).includes('cm-assistant-main')) return this;
@@ -99,7 +99,7 @@ function add(id, tag, className) {
   return node;
 }
 const page = add('page-assistant', 'div', 'page active');
-const main = add('main', 'main', 'cm-assistant-main');
+const main = add('main', 'div', 'cm-assistant-main');
 page.appendChild(main);
 [
   ['cm-assistant-suggestions', 'div'], ['cm-assistant-status-message', 'div'],
@@ -146,25 +146,29 @@ def test_assistant_assets_are_loaded_and_router_hooks_exist():
     assert "window.assistantLeave" in js
 
     # AC-ASSIST-005.1: DOM reading/tab order, not a mirror of CSS declarations.
-    class MainOrder(HTMLParser):
-        in_main = False
-
+    class AssistantOrder(HTMLParser):
         def __init__(self):
             super().__init__()
             self.ids = []
+            self.container_tag = None
+            self.container_depth = 0
 
         def handle_starttag(self, tag, attrs):
             attrs = dict(attrs)
-            if tag == "main":
-                self.in_main = "cm-assistant-main" in attrs.get("class", "").split()
-            if self.in_main and "id" in attrs:
+            if self.container_depth:
+                if tag == self.container_tag:
+                    self.container_depth += 1
+            elif "cm-assistant-main" in attrs.get("class", "").split():
+                self.container_tag = tag
+                self.container_depth = 1
+            if self.container_depth and "id" in attrs:
                 self.ids.append(attrs["id"])
 
         def handle_endtag(self, tag):
-            if tag == "main":
-                self.in_main = False
+            if self.container_depth and tag == self.container_tag:
+                self.container_depth -= 1
 
-    parsed = MainOrder()
+    parsed = AssistantOrder()
     parsed.feed(html)
     ordered = [
         "cm-assistant-title", "cm-assistant-thread", "cm-assistant-composer",
