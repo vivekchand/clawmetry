@@ -341,7 +341,7 @@ The runtime adapters that ship in open source. The paid ones live in `clawmetry-
 | `clawmetry/adapters/openclaw_share.py` | medium | OpenClaw public-share state (issue #5746). |
 | `clawmetry/adapters/openclaw_update_pipeline.py` | small | Update-pipeline state scanner for the OpenClaw adapter. |
 | `clawmetry/adapters/phase.py` | medium | The session phase model: one state machine, every runtime. |
-| `clawmetry/adapters/qwen_code.py` | medium | QwenCodeAdapter — read Qwen Code chat-recording history from disk. |
+| `clawmetry/adapters/qwen_code.py` | large | QwenCodeAdapter — read Qwen Code chat-recording history from disk. |
 | `clawmetry/adapters/registry.py` | small | Process-wide adapter registry. |
 
 ## Data providers (`clawmetry/providers/`)
