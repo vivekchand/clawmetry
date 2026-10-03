@@ -1,3 +1,6 @@
+/* Assistant answers across runtimes; keep its controls clear of the floating filter. */
+body.cm-assistant-active #cm-runtime-chip,
+body.cm-assistant-active #cm-runtime-chip-menu { display: none !important; }
 /* Native dashboard tokens keep Assistant consistent in both themes. */
 #page-assistant { max-width: none; padding: 0; }
 .cm-assistant { color: var(--text-primary); background: var(--bg-primary); }

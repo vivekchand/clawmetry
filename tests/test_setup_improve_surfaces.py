@@ -61,7 +61,9 @@ window._cmCloudRuntimeFiles=async()=>{calls++;return {groups};};
 
 
 def test_hosted_setup_reads_synced_inventory_and_escaped_content():
-    """AC-ASSIST-006.1: cloud Setup uses the already encrypted file inventory."""
+    """
+    AC-ASSIST-006.1 -- cloud Setup uses the already encrypted file inventory.
+    """
     _setup_browser(r'''
 await loadSetup();
 assert.equal(el('setup-summary-files').textContent,'3');
