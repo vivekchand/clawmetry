@@ -424,6 +424,18 @@ def _event_role(data: dict) -> str:
     return str(role or "").strip().lower()
 
 
+def _tool_result_blocks(data: dict) -> list[dict]:
+    """The ``tool_result`` blocks of a user-role envelope. The Anthropic
+    message format returns a tool's output inside a ``user`` message, so an
+    envelope that holds such blocks is a tool reply and not a human turn."""
+    msg = data.get("message") if isinstance(data.get("message"), dict) else data
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return []
+    return [b for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_result"]
+
+
 def normalize_events(events: Iterable[dict]) -> list[dict]:
     """Flatten heterogenous store events (newest-first OR oldest-first) into a
     flat, CHRONOLOGICAL (oldest-first) list of NormStep dicts. A single event
@@ -452,6 +464,22 @@ def normalize_events(events: Iterable[dict]) -> list[dict]:
                           "is_error": False, "result_text": "", "has_text": False})
             continue
         if et in _USER_TYPES or role == "user":
+            blocks = _tool_result_blocks(data)
+            for blk in blocks:
+                txt = _result_text(blk)
+                values, limits = _secret_scan(blk)
+                sflag = _structured_is_error(blk)
+                steps.append({"i": i, "kind": "tool_result", "tool": "",
+                              "args_hash": "",
+                              "is_error": bool(sflag) or _text_looks_failed(txt),
+                              "result_text": txt,
+                              "tool_call_id": call_id(blk),
+                              "outcome_known": sflag is not None or bool(txt),
+                              "has_text": False,
+                              "secret_values": values,
+                              "inspection_limits": limits})
+            if blocks:
+                continue
             steps.append({"i": i, "kind": "user", "tool": "", "args_hash": "",
                           "is_error": False, "result_text": "", "has_text": False})
             continue

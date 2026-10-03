@@ -110,6 +110,77 @@ def test_stuck_loop_ngram_cycle_positive():
     assert inc["evidence"]["pattern"] == "cycle"
 
 
+def _envelope_call(tool: str, args: dict, call: str, i: int) -> dict:
+    return {"event_type": "assistant", "ts": _ts(i), "data": {
+        "type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "id": call, "name": tool, "input": args}]}}}
+
+
+def _envelope_result(call: str, text: str, i: int, is_error=None) -> dict:
+    # The Anthropic message format carries a tool's output in a user message.
+    blk = {"type": "tool_result", "tool_use_id": call, "content": text}
+    if is_error is not None:
+        blk["is_error"] = is_error
+    return {"event_type": "user", "ts": _ts(i), "data": {
+        "type": "user", "message": {"role": "user", "content": [blk]}}}
+
+
+def _envelope_session(n: int, *, same: bool = True, is_error=None,
+                      text: str = "Same results") -> list[dict]:
+    chrono = [{"event_type": "user", "ts": _ts(0), "data": {
+        "type": "user", "message": {"role": "user", "content": "find boxes"}}}]
+    for k in range(n):
+        args = {"query": "boxes" if same else f"boxes {k}"}
+        chrono.append(_envelope_call("WebSearch", args, f"toolu_{k}", 2 * k + 1))
+        chrono.append(_envelope_result(f"toolu_{k}", text, 2 * k + 2, is_error))
+    return chrono
+
+
+def test_user_envelope_tool_result_is_a_tool_result_step():
+    steps = detectors.normalize_events(_newest_first(_envelope_session(2)))
+    assert [s["kind"] for s in steps] == [
+        "user", "tool_call", "tool_result", "tool_call", "tool_result"]
+    result = steps[2]
+    assert result["tool_call_id"] == "toolu_0"
+    assert result["tool"] == "WebSearch"  # matched to its call by native id
+    assert result["is_error"] is False and result["outcome_known"] is True
+
+
+def test_stuck_loop_survives_tool_results_in_user_envelopes():
+    # Regression: each reply was read as a new human turn, which cleared the
+    # run of identical calls, so this session never raised a loop.
+    inc = detectors.stuck_loop(_newest_first(_envelope_session(6)), SID)
+    assert inc is not None
+    assert inc["evidence"]["pattern"] == "identical"
+    assert inc["evidence"]["repeats"] == 6
+
+
+def test_stuck_loop_user_envelope_changing_arguments_is_not_a_loop():
+    chrono = _envelope_session(6, same=False)
+    assert detectors.stuck_loop(_newest_first(chrono), SID) is None
+
+
+def test_stuck_loop_real_user_turn_still_breaks_the_run():
+    # 4 identical calls, a person steps in, then 2 more: 6 in total, but the
+    # run after the human turn is below the threshold.
+    chrono = _envelope_session(4)
+    chrono.append({"event_type": "user", "ts": _ts(50), "data": {
+        "type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "try once more"}]}}})
+    for k in range(4, 6):
+        chrono.append(_envelope_call("WebSearch", {"query": "boxes"}, f"toolu_{k}", 50 + 2 * k))
+        chrono.append(_envelope_result(f"toolu_{k}", "Same results", 51 + 2 * k))
+    assert detectors.stuck_loop(_newest_first(chrono), SID) is None
+
+
+def test_repeated_tool_failure_counts_failed_user_envelope_results():
+    chrono = _envelope_session(4, same=False, is_error=True,
+                               text="PreToolUse:WebSearch hook error")
+    inc = detectors.repeated_tool_failure(_newest_first(chrono), SID)
+    assert inc is not None
+    assert inc["evidence"]["tool"] == "WebSearch"
+
+
 def test_stuck_loop_negative_legitimate_different_calls():
     # Repeated-but-DIFFERENT tool calls (different args each) = real work.
     chrono = [_tool_call("Bash", {"cmd": f"cat file{i}.txt"}, i) for i in range(8)]

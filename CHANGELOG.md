@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: a loop of identical tool calls went unreported when the tool replies arrived as user messages
+
+- **Why:** 0.12.906 made the loop check start again at each user turn. The Anthropic message format returns a tool's output inside a `user` message, and the event reader classed every such message as a user turn. A session stored in that form, for example a Claude CLI run started by OpenClaw, therefore never raised `stuck_loop`, however many times it repeated one call. 0.12.905 reported these sessions. The same reading hid failed replies of this form from the repeated-failure check.
+- **What:** a user message whose content holds `tool_result` blocks is read as one tool reply per block. Each reply is matched to its call by `tool_use_id` and carries the block's `is_error` flag. A user message with text is a user turn as before.
+- **Verified:** 5 new tests cover the step list, six identical calls, six calls with changing arguments, a real user turn between two short runs, and four failed replies. 3 of them fail on the 0.12.906 code.
+- **Limits:** sessions stored in this form can now raise `repeated_tool_failure` and `action_discrepancy`, which they could not before. The hook-failure and waiting-for-user checks read events on their own and still treat such a message as a user turn.
+
 ### Fixed: Sessions stays a readable conversation
 
 - Opening a session with recorded replay events keeps the conversation, filters, tool details and playback controls visible. Raw event details are now an optional section that loads when opened.
