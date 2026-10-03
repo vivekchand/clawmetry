@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: a span the store refused still showed in the live tiles
+
+- **Why:** the OTLP trace receiver added a span's cost, tokens and run count to the live tiles before it wrote the span to the store. A span the store refused, for example one with a token count beyond the column range, was answered as rejected and is in no table. Its cost and tokens still showed in the tiles and counted toward the spending-limit check. Left open by #5963, part of #5949.
+- **What:** the tiles are lit after the store answers. The span write reports the ids of the spans it refused as `rejected_span_ids`, and those spans light no tile. A corrected span sent later under the same id is counted once.
+- **Verified:** 5 new tests cover a refused span beside a valid one, a corrected resend, a failed store write followed by a retry, a store answer without the id list, and the id list itself. 4 of them fail on the previous code.
+- **Limits:** when the store is down or cannot confirm the write, the tiles are lit as before and the sender is asked to retry. A collector that runs a daemon older than this release keeps the previous behaviour, because that daemon does not report which span it refused.
+
 ### Added: the Usage tab shows cost by project and project budgets
 
 - **Why:** spend per project and a budget per project existed only as `/api/projects`, `/api/projects/budgets` and a CSV export. Nobody could see them in the dashboard, and setting a budget took a hand-written request (#5941).

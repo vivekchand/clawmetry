@@ -29,6 +29,11 @@ Acceptance criteria declared here:
   ``test_a_log_record_the_store_cannot_hold_is_refused_not_retried_forever``,
   ``test_a_span_write_the_store_itself_failed_is_still_503``,
   ``test_one_unstorable_span_keeps_the_rest_of_the_batch``,
+  ``test_a_span_the_store_refuses_lights_no_tile``,
+  ``test_a_corrected_span_under_a_refused_id_lights_the_tiles_once``,
+  ``test_a_failed_store_write_still_lights_the_tiles_once``,
+  ``test_an_outcome_without_refused_ids_lights_tiles_as_before``,
+  ``test_refused_span_ids_name_only_spans_that_were_not_stored``,
   ``test_an_undecodable_body_is_400_and_counted``,
   ``test_a_remote_request_without_a_token_is_401_and_counted``.
 * AC-OBS-OIA-001.3 -- re-delivery changes nothing; distinct calls stay two:
@@ -451,7 +456,8 @@ def test_one_unstorable_span_keeps_the_rest_of_the_batch(store, ls):
     out = store.ingest_spans_batch(
         spans=[ok, beyond, unencodable, infinite, no_name], with_outcome=True)
     # An infinite count is not a number, so it is stored as unknown.
-    assert out == {"written": 2, "rejected": 3}
+    assert out == {"written": 2, "rejected": 3,
+                   "rejected_span_ids": ["oia-u5", "oia-u2", "oia-u3"]}
     assert store.ingest_spans_batch(
         [dict(ok, span_id="oia-u6"), dict(beyond, span_id="oia-u7")]) == 1
 
@@ -602,6 +608,89 @@ def test_redelivered_span_lights_the_tiles_once(client, store, tiles):
         assert _post(client, "traces", body).status_code == 200
     assert [c for c, _ in tiles].count("cost") == 1
     assert [c for c, _ in tiles].count("tokens") == 1
+
+
+def _beyond_span(span_hex, cost=0.5):
+    sp = _span(span_hex, cost=cost)
+    sp.attributes.extend([_kv("gen_ai.usage.input_tokens", i=_BEYOND_INTEGER)])
+    return sp
+
+
+def test_a_span_the_store_refuses_lights_no_tile(client, store, tiles):
+    """Before: tiles were lit ahead of the store write, so the refused span's
+    cost and tokens showed in the live tiles and matched no stored row."""
+    body = _traces([_span("4444444444444451", cost=0.25),
+                    _beyond_span("4444444444444452")])
+    for _ in range(2):
+        r = _post(client, "traces", body)
+        assert r.status_code == 200, r.get_data(as_text=True)
+    assert len(store.query_spans(span_id="4444444444444452", limit=5)) == 0
+    assert [e["usd"] for c, e in tiles if c == "cost"] == [0.25]
+    assert [e["input"] for c, e in tiles if c == "tokens"] == [100]
+    assert [c for c, _ in tiles].count("runs") == 0
+
+
+def test_a_corrected_span_under_a_refused_id_lights_the_tiles_once(
+        client, store, tiles):
+    assert _post(client, "traces",
+                 _traces([_beyond_span("4444444444444453")])).status_code == 200
+    assert tiles == []
+    fixed = _traces([_span("4444444444444453", cost=0.75)])
+    for _ in range(2):
+        assert _post(client, "traces", fixed).status_code == 200
+    assert len(store.query_spans(span_id="4444444444444453", limit=5)) == 1
+    assert [e["usd"] for c, e in tiles if c == "cost"] == [0.75]
+
+
+def test_a_failed_store_write_still_lights_the_tiles_once(
+        client, store, tiles, monkeypatch):
+    """A store that is down refuses nothing: the live view keeps working and
+    the retry the 503 asks for adds nothing to it."""
+    import duckdb
+    real = store._write_span_rows_locked
+
+    def _io_error(_rows):
+        raise duckdb.IOException("disk I/O error")
+
+    body = _traces([_span("4444444444444455", cost=0.5)])
+    monkeypatch.setattr(store, "_write_span_rows_locked", _io_error)
+    assert _post(client, "traces", body).status_code == 503
+    monkeypatch.setattr(store, "_write_span_rows_locked", real)
+    assert _post(client, "traces", body).status_code == 200
+    assert [c for c, _ in tiles].count("cost") == 1
+
+
+def test_an_outcome_without_refused_ids_lights_tiles_as_before(
+        client, store, tiles, monkeypatch):
+    """A daemon older than the receiver answers without ``rejected_span_ids``.
+    The receiver cannot tell which span was refused, so it withholds none."""
+    real = store.ingest_spans_batch
+
+    def _old_daemon(spans, with_outcome=False):
+        out = dict(real(spans=spans, with_outcome=with_outcome))
+        out.pop("rejected_span_ids")
+        return out
+
+    monkeypatch.setattr(store, "ingest_spans_batch", _old_daemon)
+    body = _traces([_span("4444444444444456", cost=0.25),
+                    _beyond_span("4444444444444457")])
+    r = _post(client, "traces", body)
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert [c for c, _ in tiles].count("cost") == 2
+
+
+def test_refused_span_ids_name_only_spans_that_were_not_stored(store):
+    ok = {"span_id": "oia-r1", "trace_id": "t", "name": "n", "start_ts": 1.0}
+    out = store.ingest_spans_batch(spans=[
+        {"span_id": "oia-r2", "trace_id": "t", "start_ts": 1.0},   # no name
+        dict(ok, span_id="oia-r2"),                               # same id, storable
+        dict(ok, span_id="oia-r3", tokens_input=_BEYOND_INTEGER),
+        ok,
+    ], with_outcome=True)
+    assert out == {"written": 2, "rejected": 2, "rejected_span_ids": ["oia-r3"]}
+    assert len(store.query_spans(span_id="oia-r2", limit=5)) == 1
+    assert store.ingest_spans_batch(spans=[ok], with_outcome=True) == {
+        "written": 0, "rejected": 0, "rejected_span_ids": []}
 
 
 def _token_usage(t_ns, value):
