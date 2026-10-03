@@ -890,7 +890,6 @@
   "nav.approvals": "Approvals",
   "nav.approvals_tooltip": "Cloud-mediated approval queue",
   "nav.ask": "SQL charts",
-  "nav.guard_tooltip": "See what is running, detect agents that go off track, and stop them",
   "nav.bench": "Harness Engineering",
   "nav.bench_tooltip": "Which harness is engineered better for your work? Verdicts, cost per finished job, and what to route where.",
   "nav.beta": "(beta)",
