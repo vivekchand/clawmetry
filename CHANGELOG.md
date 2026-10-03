@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: the sessions list shows how each session ran
+
+- **Why:** the permission mode of a session was visible only after its transcript was opened. A session that runs tools without asking looked the same in the list as a supervised one.
+- **What:** the `sessions` table gains `mode_permission`, `mode_sandbox`, `mode_collaboration` and `mode_resolved_at`. The store fills them from the latest `mode.changed` replay event each time a replay mapper writes a session. `/api/sessions` rows carry the three mode fields. The Sessions list shows a badge for YOLO, plan and auto-edit sessions. Part of #4814.
+- **Verified:** 8 new tests cover the latest event winning, an older batch that does not move the mode back, a session upsert that keeps the mode, a missing session row, and the list row.
+- **Limits:** a session has a mode only when its runtime has a replay mapper and reports one. An empty value means not captured. It does not mean default. The default approval policy of a runtime is not stored yet.
+
 ### Fixed: sub-agent events in the session replay tree
 
 - **Why:** `GET /api/replay-tree/<session_id>` listed every sub-agent event twice, once in the turn and once under the spawn. A sub-agent started by another sub-agent was never nested, because the nested list was a placeholder that always came back empty. The Qwen Code mapper already writes this shape and the Claude Code mapper writes it several levels deep.

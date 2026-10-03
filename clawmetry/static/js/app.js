@@ -14567,6 +14567,7 @@ async function loadSessions() {
     // this every desktop session reads as someone typing in a terminal.
     // Absent for runtimes that only have one surface — no badge, no noise.
     html += _cmSurfaceBadge(s.surface);
+    html += _cmModeBadge(s);
     if (sessCost && sessCost.cost_usd > 0) {
       html += '<span style="font-size:11px;color:var(--text-success);font-weight:600;">💰 $' + Number(sessCost.cost_usd||0).toFixed(4) + ' total</span>';
     }
@@ -23069,6 +23070,35 @@ function _cmSurfaceBadge(surface) {
     + '" style="background:var(--bg-secondary);color:var(--text-muted);'
     + 'border:1px solid var(--border-primary);font-weight:600;">'
     + glyph + ' ' + escHtml(label) + '</span></span>';
+}
+
+// Permission-mode badge for a session row (#4814). Only modes that change
+// what the agent may do without asking get a badge: "default" and "unknown"
+// stay silent, so an absent badge never claims the session was supervised.
+var _CM_MODE_BADGES = {
+  bypasspermissions: { key: 'sessions.mode_yolo', label: 'YOLO', tipKey: 'sessions.mode_yolo_tip',
+    tip: 'This session runs tools without asking for permission.', danger: true },
+  yolo: { key: 'sessions.mode_yolo', label: 'YOLO', tipKey: 'sessions.mode_yolo_tip',
+    tip: 'This session runs tools without asking for permission.', danger: true },
+  plan: { key: 'sessions.mode_plan', label: 'Plan', tipKey: 'sessions.mode_plan_tip',
+    tip: 'This session is in plan mode. The agent proposes changes and does not make them.' },
+  acceptedits: { key: 'sessions.mode_accept_edits', label: 'Auto-edit', tipKey: 'sessions.mode_accept_edits_tip',
+    tip: 'This session applies file edits without asking. Other tools still ask.' }
+};
+
+function _cmModeBadge(s) {
+  var m = _CM_MODE_BADGES[String((s && s.mode_permission) || '').toLowerCase()];
+  if (!m) return '';
+  var tip = t(m.tipKey, null, m.tip);
+  if (s.mode_sandbox && s.mode_sandbox !== 'unknown') {
+    tip += ' ' + t('sessions.mode_sandbox_tip', { sandbox: s.mode_sandbox }, 'Sandbox: {sandbox}.');
+  }
+  var style = m.danger
+    ? 'background:color-mix(in srgb, #d63b3b 24%, var(--bg-tertiary));color:#fff;border:1px solid #d63b3b;font-weight:700;'
+    : 'background:var(--bg-secondary);color:var(--text-muted);border:1px solid var(--border-primary);font-weight:600;';
+  return '<span><span class="badge cm-mode-badge" data-mode="' + escAttr(s.mode_permission)
+    + '" title="' + escAttr(tip) + '" style="' + style + '">'
+    + escHtml(t(m.key, null, m.label)) + '</span></span>';
 }
 
 // ── Org-wide Claude coverage ────────────────────────────────────────────────
