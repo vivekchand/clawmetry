@@ -653,7 +653,7 @@ def _gateway_log_files() -> list:
         "CLAWMETRY_OPENCLAW_DIR", os.path.expanduser("~/.openclaw")
     )
     candidates = [
-        "/tmp/openclaw",
+        "/tmp/openclaw",  # nosec B108 - read-only discovery candidate: the gateway's own log dir, probed for existence and read, never written
         os.path.join(openclaw_dir, "logs"),
     ]
 
@@ -1064,7 +1064,7 @@ def _openshell_sandbox_logs(name: str, count: int = 20) -> list:
                 try:
                     _exec_res = _sp.run(
                         ["openshell", "sandbox", "exec", "-n", name, "--",
-                         "tail", "-n", str(count), "/tmp/gateway.log"],
+                         "tail", "-n", str(count), "/tmp/gateway.log"],  # nosec B108 - path inside the sandbox container, read via openshell exec; not a host path
                         capture_output=True, text=True, timeout=10,
                     )
                     for _exec_line in (_exec_res.stdout or "").splitlines():
@@ -1250,7 +1250,7 @@ def _openshell_sandbox_logs_tail(name: str):
                 elif not _gw_log_override:
                     gw_proc = _sp.Popen(
                         ["openshell", "sandbox", "exec", "-n", name, "--",
-                         "tail", "-n", "200", "-f", "/tmp/gateway.log"],
+                         "tail", "-n", "200", "-f", "/tmp/gateway.log"],  # nosec B108 - path inside the sandbox container, read via openshell exec; not a host path
                         stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True, bufsize=1,
                     )
             except Exception:
@@ -1484,7 +1484,7 @@ def _sandbox_inference_configs() -> list:
                     # the managed proxy.  A missing or empty file means the
                     # sandbox may run unrouted/unguarded even when supervision
                     # is otherwise feasible.
-                    _proxy_env = "/tmp/nemoclaw-proxy-env.sh"
+                    _proxy_env = "/tmp/nemoclaw-proxy-env.sh"  # nosec B108 - dcode owns this path; isfile/getsize probe only, never created or written here
                     _proxy_env_present = os.path.isfile(_proxy_env)
                     _proxy_env_nonempty = (
                         _proxy_env_present

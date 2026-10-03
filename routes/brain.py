@@ -1002,7 +1002,7 @@ def api_brain_history():
     log_files = []
     for d in log_dirs:
         log_files += sorted(glob.glob(os.path.join(d, "openclaw-*.log")))
-    log_files += sorted(glob.glob("/tmp/openclaw/openclaw-*.log"))
+    log_files += sorted(glob.glob("/tmp/openclaw/openclaw-*.log"))  # nosec B108 - read-only glob of the gateway's own log files
     log_files = list(dict.fromkeys(log_files))
 
     for lf in log_files[-3:]:

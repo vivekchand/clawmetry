@@ -54,7 +54,7 @@ _GIT_SCHEMES = ("git+ssh:", "git+https:", "git+http:", "git+file:", "git:",
 _HOSTED_GIT = {"github": "github.com", "gitlab": "gitlab.com",
                "bitbucket": "bitbucket.org", "gist": "gist.github.com"}
 _TEMP_DIRS = ("/tmp/", "/var/tmp/", "/private/tmp/", "/private/var/tmp/",
-              "/dev/shm/", "/private/var/folders/", "/var/folders/")
+              "/dev/shm/", "/private/var/folders/", "/var/folders/")  # nosec B108 - prefix table the detector MATCHES package sources against; never opened as a path
 
 _KEY_SPLIT = re.compile(r"[_\-.\s]+|(?<=[a-z0-9])(?=[A-Z])")
 # ``name@tail`` or ``@scope/name@tail``: the tail is what npm resolves.
