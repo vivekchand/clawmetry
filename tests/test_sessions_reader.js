@@ -81,6 +81,15 @@ window._cmReplayTree = { fetchReplayTree: () => { requests++; return new Promise
   assert.equal(ids['replay-state-thinking'].textContent, 'Not recorded');
   assert.equal(context._buildReplayEvent({role:'user',tokens:0},0).tokens,0);
   assert.equal(context._buildReplayEvent({role:'user',tokens:Infinity},0).tokens,null);
+  context._resetTranscriptReplay();
+  window.CLOUD_MODE = true;
+  const beforeCloud = requests;
+  context._loadReplayTree('hosted-session', window._transcriptViewRequest);
+  mount = parent.children[0]; mount.open = true;
+  await mount.ontoggle();
+  assert.match(mount.children[1].textContent, /hosted view shows the synced conversation/);
+  assert.equal(requests, beforeCloud, 'hosted view must not query the cloud container for local events');
+
   // Real transcript-open logic: late A must not overwrite B, and backing
   // out during loading must leave the list visible with playback stopped.
   const waiting = new Map();

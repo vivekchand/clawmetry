@@ -22651,6 +22651,11 @@ function _loadReplayTree(sessionId, viewRequest) {
   var loading = false;
   mount.ontoggle = async function() {
     if (!mount.open || loaded || loading || viewRequest !== window._transcriptViewRequest) return;
+    if (window.CLOUD_MODE) {
+      body.textContent = t('transcripts.replay_details_local', null, 'Advanced replay details are available on the dashboard running on your agent\'s machine. This hosted view shows the synced conversation below.');
+      loaded = true;
+      return;
+    }
     loading = true;
     body.textContent = t('transcripts.loading_replay_details', null, 'Loading replay details…');
     try {
