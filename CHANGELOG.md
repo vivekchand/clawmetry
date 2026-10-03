@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: a failing pre-tool hook went unreported when the tool replies arrived as user messages
+
+- **Why:** the check that reports an agent blocked by an erroring pre-tool hook counts hook errors in tool replies and starts again at each user turn. It read events on its own and classed a `user` message holding `tool_result` blocks as a user turn. A session stored in that form, for example a Claude CLI run started by OpenClaw, therefore never raised `blocked_on_user` for a failing hook, including ClawMetry's own gate.
+- **What:** the hook check reads each `tool_result` block of such a message as a tool reply. A hook error counts, any other reply means the agent recovered, and a user message with text clears the count as before.
+- **Verified:** 4 new tests cover two errors from ClawMetry's own gate, one error from another hook after an idle period, a successful reply after the errors, and a typed user message after the errors. 2 of them fail without the change.
+- **Limits:** the question and permission-request path of the same check is unchanged. Not run against a live session with a failing hook.
+
 ### Added: `CLAWMETRY_PROJECT` on the collector names the project of new sessions
 
 - **Why:** a session's project came from its repository or working directory, or from an assignment made by hand through `/api/projects/assignments`. A machine that works for one client, a CI runner or a container had no way to say so once, in its configuration (#5941).
