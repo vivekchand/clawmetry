@@ -121,6 +121,36 @@ check('delegation wrapper rendered',
 check('delegation summary references spawn id',
       delegMount.innerHTML.includes('delegated span spawn1'));
 
+// Nested delegations render inside their parent, with label and approvals.
+const treeNested = {
+  session_id: 's3', runtime: 'claude_code', row_count: 6, mode: null,
+  workflows: [],
+  turns: [{
+    turn_id: 'u1',
+    events: [{span_id: 'spawn1', kind: 'agent.spawn', runtime: 'claude_code'}],
+    delegations: [{
+      span_id: 'spawn1', label: 'Explore <repo>',
+      events: [{span_id: 'spawn2', kind: 'agent.spawn', runtime: 'claude_code'}],
+      approvals: [{span_id: 'ap1', kind: 'approval.decided'}],
+      delegations: [{
+        span_id: 'spawn2', label: '', approvals: [],
+        events: [{span_id: 'grand-u1', kind: 'llm.call', runtime: 'claude_code'}],
+        delegations: [],
+      }],
+    }],
+    approvals: [],
+  }],
+};
+const nestedMount = new _StubEl('div');
+api.renderTree(treeNested, nestedMount);
+const nestedHtml = nestedMount.innerHTML;
+check('nested delegation rendered at depth 2', nestedHtml.includes('data-depth="2"'));
+check('nested delegation sits inside its parent',
+      nestedHtml.indexOf('delegated span spawn2') > nestedHtml.indexOf('delegated span spawn1') &&
+      nestedHtml.indexOf('delegated span spawn2') < nestedHtml.lastIndexOf('</details>'));
+check('delegation label escaped', nestedHtml.includes('Explore &lt;repo&gt;'));
+check('delegation approvals badge', nestedHtml.includes('replay-tree-badge approvals">✓1'));
+
 if (fail > 0) {
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(1);

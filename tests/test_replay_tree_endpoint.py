@@ -163,6 +163,86 @@ def test_build_tree_folds_delegations_under_spawn():
     assert d["span_id"] == "spawn1"
     assert len(d["events"]) == 2
     assert [e["span_id"] for e in d["events"]] == ["child-u1", "child-a1"]
+    # The child's events are listed once, under the spawn, not in the turn.
+    assert [e["span_id"] for e in turn["events"]] == ["u1", "a1", "spawn1"]
+    assert d["delegations"] == []
+    assert d["approvals"] == []
+
+
+def test_build_tree_nests_delegations_to_the_depth_the_rows_carry():
+    """The shape the Qwen Code and Claude Code mappers write: a spawn under
+    the spawning tool call, the child's events under the spawn, a nested
+    spawn under a tool call in the child."""
+    from routes.sessions import _build_replay_tree
+
+    rows = [
+        _e(span_id="u1", kind="llm.call", ts=1.0),
+        _e(span_id="t1", kind="tool.call", ts=2.0),
+        _e(span_id="spawn1", kind="agent.spawn", ts=2.1, parent_span_id="t1",
+           payload={"description": "Explore the repo",
+                    "child_session_id": "s1::agent-a"}),
+        _e(span_id="c-u1", kind="llm.call", ts=3.0, parent_span_id="spawn1"),
+        _e(span_id="c-t1", kind="tool.call", ts=4.0, parent_span_id="spawn1"),
+        _e(span_id="spawn2", kind="agent.spawn", ts=4.1, parent_span_id="c-t1",
+           payload={"subagent_type": "general-purpose"}),
+        _e(span_id="g-u1", kind="llm.call", ts=5.0, parent_span_id="spawn2"),
+        _e(span_id="g-t1", kind="tool.call", ts=6.0, parent_span_id="spawn2"),
+        _e(span_id="g-ap", kind="approval.decided", ts=6.1,
+           parent_span_id="g-t1", approval={"status": "denied"}),
+        _e(span_id="ret2", kind="agent.return", ts=7.0, parent_span_id="spawn2"),
+        _e(span_id="c-ap", kind="approval.decided", ts=7.5,
+           parent_span_id="c-t1", approval={"status": "approved"}),
+        _e(span_id="ret1", kind="agent.return", ts=8.0, parent_span_id="spawn1"),
+        _e(span_id="tr1", kind="tool.result", ts=9.0),
+        _e(span_id="u2", kind="llm.call", ts=10.0),
+    ]
+    out = _build_replay_tree("s1", rows)
+    assert [t["turn_id"] for t in out["turns"]] == ["u1", "u2"]
+    turn = out["turns"][0]
+    assert [e["span_id"] for e in turn["events"]] == ["u1", "t1", "spawn1", "tr1"]
+    assert len(turn["delegations"]) == 1
+    d1 = turn["delegations"][0]
+    assert d1["span_id"] == "spawn1"
+    assert d1["label"] == "Explore the repo"
+    assert d1["child_session_id"] == "s1::agent-a"
+    assert [e["span_id"] for e in d1["events"]] == [
+        "c-u1", "c-t1", "spawn2", "ret1"]
+    assert [a["span_id"] for a in d1["approvals"]] == ["c-ap"]
+    assert len(d1["delegations"]) == 1
+    d2 = d1["delegations"][0]
+    assert d2["span_id"] == "spawn2"
+    assert d2["label"] == "general-purpose"
+    assert [e["span_id"] for e in d2["events"]] == ["g-u1", "g-t1", "ret2"]
+    assert [a["span_id"] for a in d2["approvals"]] == ["g-ap"]
+    assert d2["delegations"] == []
+    # The turn total counts the delegated approvals too.
+    assert sorted(a["span_id"] for a in turn["approvals"]) == ["c-ap", "g-ap"]
+    # Every non-approval row appears exactly once in the tree.
+    seen = []
+
+    def walk(events, delegations):
+        seen.extend(e["span_id"] for e in events)
+        for d in delegations:
+            walk(d["events"], d["delegations"])
+
+    for t in out["turns"]:
+        walk(t["events"], t["delegations"])
+    assert sorted(seen) == sorted(
+        r["span_id"] for r in rows if not r["kind"].startswith("approval."))
+
+
+def test_build_tree_survives_a_parent_cycle_between_spawns():
+    from routes.sessions import _build_replay_tree
+
+    rows = [
+        _e(span_id="u1", kind="llm.call", ts=1.0),
+        _e(span_id="sA", kind="agent.spawn", ts=2.0, parent_span_id="sB"),
+        _e(span_id="sB", kind="agent.spawn", ts=3.0, parent_span_id="sA"),
+        _e(span_id="s0", kind="agent.spawn", ts=4.0, parent_span_id="s0"),
+    ]
+    out = _build_replay_tree("s1", rows)
+    assert len(out["turns"]) == 1
+    assert out["row_count"] == 4
 
 
 def test_build_tree_groups_workflow_events():
