@@ -31842,17 +31842,198 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     return '<div class="replay-tree-truncated" role="note">' + _escape(msg) + '</div>';
   }
 
+  // ── Workflow graph (clawmetry-pro#132) ────────────────────────────────
+  // A workflow.start whose payload carries `nodes` (and `edges`) is drawn
+  // as a graph: one box per node, coloured by the status of its last run.
+  // A start without nodes (a Goose recipe) keeps the plain event list.
+  var _WF_NODE_W = 150, _WF_NODE_H = 34, _WF_PAD = 12;
+
+  function _tr(key, vars, fallback) {
+    return (typeof t === 'function') ? t(key, vars, fallback) : fallback;
+  }
+
+  function _workflowStart(wf) {
+    var events = (wf && wf.events) || [];
+    for (var i = 0; i < events.length; i++) {
+      if (events[i] && events[i].kind === 'workflow.start') return events[i];
+    }
+    return null;
+  }
+
+  // Latest run of each node: {status, runs, duration_ms, error, role}.
+  function _workflowNodeRuns(wf) {
+    var runs = {};
+    var events = (wf && wf.events) || [];
+    for (var i = 0; i < events.length; i++) {
+      var ev = events[i];
+      if (!ev || ev.kind !== 'workflow.stage') continue;
+      var p = (ev.payload && typeof ev.payload === 'object') ? ev.payload : {};
+      if (typeof p.node !== 'string') continue;
+      var prev = runs[p.node];
+      runs[p.node] = {
+        status: p.is_error ? 'error' : String(p.status || ''),
+        runs: (prev ? prev.runs : 0) + 1,
+        duration_ms: p.duration_ms,
+        error: p.error || '',
+        role: p.role || ''
+      };
+    }
+    return runs;
+  }
+
+  // Canvas positions when every node has one; otherwise columns by the
+  // distance from a node with no incoming edge.
+  function _workflowLayout(nodes, edges) {
+    var pos = {}, i;
+    var havePositions = nodes.every(function(n) {
+      return Array.isArray(n.position) && n.position.length === 2 &&
+             isFinite(n.position[0]) && isFinite(n.position[1]);
+    });
+    if (havePositions) {
+      var minX = Infinity, minY = Infinity;
+      nodes.forEach(function(n) {
+        minX = Math.min(minX, n.position[0]);
+        minY = Math.min(minY, n.position[1]);
+      });
+      nodes.forEach(function(n) {
+        pos[n.name] = {x: _WF_PAD + (n.position[0] - minX),
+                       y: _WF_PAD + (n.position[1] - minY) * 0.5};
+      });
+      // Two nodes drawn on the same spot would hide one of them.
+      var seen = {}, clash = false;
+      nodes.forEach(function(n) {
+        var key = Math.round(pos[n.name].x / _WF_NODE_W) + ':' +
+                  Math.round(pos[n.name].y / _WF_NODE_H);
+        if (seen[key]) clash = true;
+        seen[key] = true;
+      });
+      if (!clash) return pos;
+      pos = {};
+    }
+    var depth = {}, incoming = {};
+    edges.forEach(function(e) { incoming[e.to] = true; });
+    nodes.forEach(function(n) { if (!incoming[n.name]) depth[n.name] = 0; });
+    for (var pass = 0; pass < nodes.length; pass++) {
+      var moved = false;
+      for (i = 0; i < edges.length; i++) {
+        var e = edges[i];
+        if (depth[e.from] == null) continue;
+        if (depth[e.to] == null || depth[e.to] < depth[e.from] + 1) {
+          if (depth[e.from] + 1 > nodes.length) continue;  // a cycle
+          depth[e.to] = depth[e.from] + 1;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    var rows = {};
+    nodes.forEach(function(n) {
+      var d = depth[n.name] || 0;
+      rows[d] = rows[d] || 0;
+      pos[n.name] = {x: _WF_PAD + d * (_WF_NODE_W + 40),
+                     y: _WF_PAD + rows[d] * (_WF_NODE_H + 22)};
+      rows[d]++;
+    });
+    return pos;
+  }
+
+  function _renderWorkflowGraph(wf) {
+    var start = _workflowStart(wf);
+    var payload = (start && start.payload && typeof start.payload === 'object') ? start.payload : {};
+    var nodes = Array.isArray(payload.nodes) ? payload.nodes.filter(function(n) {
+      return n && typeof n.name === 'string';
+    }) : [];
+    if (!nodes.length) return '';
+    var known = {};
+    nodes.forEach(function(n) { known[n.name] = true; });
+    var edges = (Array.isArray(payload.edges) ? payload.edges : []).filter(function(e) {
+      return e && known[e.from] && known[e.to];
+    });
+    var runs = _workflowNodeRuns(wf);
+    var pos = _workflowLayout(nodes, edges);
+    var width = 0, height = 0, ran = 0;
+    nodes.forEach(function(n) {
+      width = Math.max(width, pos[n.name].x + _WF_NODE_W + _WF_PAD);
+      height = Math.max(height, pos[n.name].y + _WF_NODE_H + _WF_PAD);
+      if (runs[n.name]) ran++;
+    });
+    var notRun = _tr('trail.workflow_node_not_run', null, 'Did not run');
+    var svg = '<svg class="replay-wf-graph" role="img" width="' + width +
+              '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height +
+              '" aria-label="' + _escape(_tr('trail.workflow_graph_label',
+                {name: payload.workflow || ''}, 'Workflow graph ' + (payload.workflow || ''))) + '">';
+    edges.forEach(function(e) {
+      var a = pos[e.from], b = pos[e.to];
+      var sub = e.type && e.type !== 'main';
+      var x1, y1, x2, y2, d;
+      if (sub) {
+        // A model or tool sub-node hangs under the node it serves.
+        x1 = a.x + _WF_NODE_W / 2; y1 = a.y;
+        x2 = b.x + _WF_NODE_W / 2; y2 = b.y + _WF_NODE_H;
+        d = 'M' + x1 + ' ' + y1 + ' L' + x2 + ' ' + y2;
+      } else {
+        x1 = a.x + _WF_NODE_W; y1 = a.y + _WF_NODE_H / 2;
+        x2 = b.x; y2 = b.y + _WF_NODE_H / 2;
+        var mid = (x1 + x2) / 2;
+        d = 'M' + x1 + ' ' + y1 + ' C' + mid + ' ' + y1 + ' ' + mid + ' ' + y2 + ' ' + x2 + ' ' + y2;
+      }
+      svg += '<path class="replay-wf-edge' + (sub ? ' replay-wf-edge-sub' : '') +
+             '" data-ran="' + (runs[e.from] && runs[e.to] ? '1' : '0') + '" d="' + d + '"/>';
+    });
+    nodes.forEach(function(n) {
+      var run = runs[n.name];
+      var status = run ? (run.status || 'unknown') : 'none';
+      var tip = n.name + ' · ' + (n.type || n.node_type || '') + ' · ' +
+                (run ? status : notRun);
+      if (run && isFinite(run.duration_ms)) tip += ' · ' + run.duration_ms + ' ms';
+      if (run && run.runs > 1) tip += ' · ×' + run.runs;
+      if (run && run.error) tip += ' · ' + run.error;
+      var label = n.name.length > 20 ? n.name.slice(0, 19) + '…' : n.name;
+      var p = pos[n.name];
+      svg += '<g class="replay-wf-node" data-node="' + _escape(n.name) +
+             '" data-status="' + _escape(status) + '"' +
+             (n.disabled ? ' data-disabled="1"' : '') + '>' +
+             '<title>' + _escape(tip) + '</title>' +
+             '<rect x="' + p.x + '" y="' + p.y + '" width="' + _WF_NODE_W +
+             '" height="' + _WF_NODE_H + '" rx="6"/>' +
+             '<text x="' + (p.x + _WF_NODE_W / 2) + '" y="' + (p.y + _WF_NODE_H / 2 + 4) +
+             '" text-anchor="middle">' + _escape(label) + '</text></g>';
+    });
+    svg += '</svg>';
+    var caption = _tr('trail.workflow_nodes_ran', {ran: ran, total: nodes.length},
+                      ran + ' of ' + nodes.length + ' nodes ran');
+    if (payload.run_data) {
+      caption = _tr('trail.workflow_run_data_unavailable', null,
+                    'The node runs of this execution are not stored in the database.');
+    }
+    return '<div class="replay-wf-graph-wrap">' + svg + '</div>' +
+           '<div class="replay-wf-caption">' + _escape(caption) + '</div>';
+  }
+
   function _renderWorkflows(workflows, runtime) {
     if (!workflows || !workflows.length) return '';
     var html = '<div class="replay-tree-workflows">';
     for (var i = 0; i < workflows.length; i++) {
       var wf = workflows[i];
+      var start = _workflowStart(wf);
+      var name = (start && start.payload && (start.payload.title ||
+                  (start.payload.nodes ? start.payload.workflow : ''))) || '';
+      var status = (start && start.payload && start.payload.nodes && start.payload.status) || '';
+      var graph = _renderWorkflowGraph(wf);
       html += '<details class="replay-tree-workflow" open>';
-      html += '<summary>⚙ workflow ' + _escape(wf.span_id) + ' (' +
-              (wf.events || []).length + ' stages)</summary>';
+      html += '<summary>⚙ workflow ' + _escape(name || wf.span_id) +
+              (status ? ' <span class="replay-tree-badge" data-status="' + _escape(status) + '">' + _escape(status) + '</span>' : '') +
+              ' (' + (wf.events || []).length + ' stages)</summary>';
+      html += graph;
+      if (graph) {
+        // The graph is the primary view; the event rows stay one click away.
+        html += '<details class="replay-wf-events"><summary>' +
+                _escape(_tr('trail.workflow_events', null, 'Events')) + '</summary>';
+      }
       for (var j = 0; j < (wf.events || []).length; j++) {
         html += _renderEvent(wf.events[j], runtime);
       }
+      if (graph) html += '</details>';
       html += '</details>';
     }
     html += '</div>';
