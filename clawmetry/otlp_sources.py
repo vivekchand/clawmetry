@@ -233,7 +233,7 @@ def replace_payload(store, ev: dict) -> bool:
         # (id, agent_type, node_id, agent_id, session_id, workspace_id,
         #  event_type, ts, data, cost, tokens, model, created_at,
         #  runtime_kind, role, block_kind, tool_name, is_error)
-        with store._write_lock:
+        with store._write_lock, _ls._txn(store._conn):
             store._conn.execute(
                 "UPDATE events SET data = ?, cost_usd = ?, token_count = ?, "
                 "model = ?, role = ?, block_kind = ?, tool_name = ?, is_error = ? "
@@ -241,6 +241,7 @@ def replace_payload(store, ev: dict) -> bool:
                 [row[8], row[9], row[10], row[11], row[14], row[15], row[16],
                  row[17], row[0]],
             )
+            store._record_event_changes_locked([row[0]])
         return True
     except Exception:
         log.warning("otlp events: payload replacement failed", exc_info=True)

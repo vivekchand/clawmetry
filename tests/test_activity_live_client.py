@@ -1,0 +1,388 @@
+"""AC-OBS-INV-004.1/2: replay, bounded buffers and active-view request budgets."""
+import json
+import pathlib
+import shutil
+import subprocess
+
+import pytest
+
+from tests.test_incident_lifecycle import server  # noqa: F401
+
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / 'clawmetry/static/js/activity-live.js'
+
+
+def run(case, setup=''):
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('node not installed')
+    harness = r'''
+const assert = require('node:assert/strict');
+global.window=global; window._cmCurrentTab='brain'; window.CLOUD_MODE=false;
+const hooks={}; global.document={hidden:false,addEventListener:(k,fn)=>{
+ const previous=hooks[k];hooks[k]=()=>{if(previous)previous();fn();};
+}};
+window.addEventListener=()=>{};
+const timers=new Map(); let timerId=0;
+global.setTimeout=(fn,delay)=>{timers.set(++timerId,{fn,delay});return timerId;};
+global.clearTimeout=(id)=>timers.delete(id);
+let pages=[], hits=[], fail=false, pending=null;
+global.fetch=async url=>{
+ hits.push(url);
+ if(pending) return await pending;
+ if(fail) throw new Error('offline');
+ return {ok:true,json:async()=>pages.shift() || {cursor:'quiet',rows:[],brain_events:[]}};
+};
+async function tick(){
+ const pair=Array.from(timers.entries()).sort((a,b)=>a[1].delay-b[1].delay)[0];
+ if(!pair)return false; timers.delete(pair[0]); pair[1].fn();
+ for(let i=0;i<8;i++)await Promise.resolve();
+ return true;
+}
+const row=(id,text=id)=>({id,ts:'2026-10-02T00:00:00Z',data:{text}});
+const page=(cursor,rows=[],more=false)=>({cursor,rows,brain_events:rows.map(r=>({eventId:r.id,detail:r.data.text})),has_more:more});
+__SCRIPT__
+__SETUP__
+(async()=>{
+__CASE__
+console.log(JSON.stringify({ok:true,hits,timers:timers.size}));
+})().catch(e=>{console.error(e);process.exitCode=1;});
+'''
+    program = harness.replace('__SCRIPT__', SCRIPT.read_text()).replace('__SETUP__', setup).replace('__CASE__', case)
+    result = subprocess.run([node, '-e', program], text=True, capture_output=True, timeout=10, check=False)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_shared_scope_uses_one_fetch_and_no_off_tab_or_hidden_poller():
+    run(r'''
+let left=[],right=[]; pages=[page('one',[row('a')])];
+const a=cmWatchActivity({runtime:'codex'},(p,e)=>left.push(p),'brain');
+const b=cmWatchActivity({runtime:'codex'},(p,e)=>right.push(p),'brain');
+await tick(); assert.equal(hits.length,1); assert.equal(left.length,1);assert.equal(right.length,1);
+assert(hits[0].includes('runtime=codex'));
+window._cmCurrentTab='guard';cmActivityVisibilityChanged();assert.equal(timers.size,0);
+document.hidden=true;window._cmCurrentTab='brain';hooks.visibilitychange();assert.equal(timers.size,0);
+document.hidden=false;hooks.visibilitychange();await tick();assert.equal(hits.length,2);
+a();b();assert.equal(timers.size,0);
+''')
+
+
+def test_failed_read_keeps_cursor_and_reconnect_replays_it():
+    run(r'''
+let received=[],errors=0; pages=[page('committed',[row('a')])];
+cmWatchActivity({},(p,e)=>e?errors++:received.push(p),'brain');
+await tick();fail=true;await tick();assert.equal(errors,1);
+fail=false;pages=[page('later',[row('late')])];await tick();
+assert(hits[1].includes('cursor=committed'));assert(hits[2].includes('cursor=committed'));
+assert.equal(received[1].rows[0].id,'late');
+''')
+
+
+def test_scope_change_and_hidden_inflight_read_do_not_advance_cursor():
+    run(r'''
+let received=[];let resolve;
+pending=new Promise(r=>resolve=r);
+cmWatchActivity({runtime:'codex'},(p,e)=>received.push(p),'brain');
+await tick();document.hidden=true;
+resolve({ok:true,json:async()=>page('missed',[row('a')])});
+for(let i=0;i<8;i++)await Promise.resolve();
+assert.equal(received.length,0);assert.equal(timers.size,0);
+pending=null;document.hidden=false;pages=[page('replayed',[row('a')])];
+hooks.visibilitychange();await tick();
+assert(!hits[1].includes('cursor='));assert.equal(received[0].rows[0].id,'a');
+''')
+
+
+def test_expired_cursor_discards_buffer_and_bootstraps():
+    run(r'''
+let received=[]; pages=[page('one',[row('a')]),{resync_required:true,rows:[]},page('fresh',[row('b')])];
+cmWatchActivity({},(p,e)=>received.push(p),'brain');
+await tick();await tick();await tick();
+assert.equal(received[1].resync_required,true);assert(!hits[2].includes('cursor='));
+let cached;cmWatchActivity({},(p,e)=>cached=p,'brain');
+await Promise.resolve();assert.deepEqual(cached.rows.map(r=>r.id),['b']);
+''')
+
+
+def test_buffers_are_bounded_and_updates_replace_existing_id():
+    run(r'''
+let stop=cmWatchActivity({},()=>{},'brain');
+for(let i=0;i<7;i++){pages=[page(String(i),Array.from({length:100},(_,j)=>row(String(i*100+j))),true)];await tick();}
+pages=[page('updated',[row('699','updated')])];await tick();stop();
+let cached;cmWatchActivity({},(p,e)=>cached=p,'brain');await Promise.resolve();
+assert.equal(cached.rows.length,500);assert.equal(cached.brain_events.length,500);
+assert.equal(cached.rows.filter(r=>r.id==='699').length,1);
+assert.equal(cached.rows.find(r=>r.id==='699').data.text,'updated');
+assert.equal(cached.brain_events.find(r=>r.eventId==='699').detail,'updated');
+''')
+
+
+def test_compatibility_stream_shares_reader_and_reports_resync():
+    run(r'''
+pages=[page('one',[row('a')])];let messages=[],connected=0,resync=0;
+let stream=cmActivityEventSource({runtime:'codex'});
+stream.onmessage=e=>messages.push(JSON.parse(e.data));
+stream.addEventListener('connected',()=>connected++);stream.addEventListener('resync',()=>resync++);
+let other=[];const stop=cmWatchActivity({runtime:'codex'},p=>other.push(p),'brain');
+await tick();assert.equal(hits.length,1);assert.equal(connected,1);assert.equal(messages[0].eventId,'a');
+pages=[{resync_required:true}];await tick();assert.equal(resync,1);
+stream.close();stop();assert.equal(stream.readyState,2);assert.equal(timers.size,0);
+''')
+
+
+def test_brain_quiet_reconnect_preserves_cached_evidence_and_filters():
+    app = SCRIPT.with_name('app.js').read_text()
+    start = app.index('function _startBrainSSE() {')
+    end = app.index('\nfunction _stopBrainSSE()', start)
+    setup = r'''
+let _brainRange=null, _brainSSE=null, _brainSSEConnected=false, _brainSSEEverConnected=false;
+let _brainAllEvents=[], _brainFilter='selected-session', _brainTypeFilter='tool';
+let _brainSSEFirstFailMs=0, _brainRefreshTimer=null;
+let _brainActivityRuntime='codex';
+function _cmRuntimeFilter(){return 'codex';}
+function _updateBrainLiveIndicator(){}
+function _resetBrainSSEReconnectState(){}
+function _scheduleBrainSSEReconnect(){}
+function renderBrainStream(){}
+function renderBrainChart(){}
+function renderBrainTypeChips(){}
+function loadBrainPage(){}
+document.getElementById=()=>null;
+document.querySelector=()=>({});
+''' + app[start:end]
+    run(r'''
+function brainPage(cursor, ids) {
+ const result=page(cursor,ids.map(id=>row(id)));
+ result.brain_events.forEach(event=>{event.time='2026-10-02T00:00:00Z';event.source='codex';});
+ return result;
+}
+pages=[brainPage('first',['evidence'])];_startBrainSSE();await tick();
+assert.deepEqual(_brainAllEvents.map(event=>event.eventId),['evidence']);
+fail=true;await tick();assert.equal(_brainSSE,null);
+fail=false;pages=[brainPage('quiet',[])];_startBrainSSE();
+await Promise.resolve();await tick();
+assert.deepEqual(_brainAllEvents.map(event=>event.eventId),['evidence']);
+assert.equal(_brainFilter,'selected-session');assert.equal(_brainTypeFilter,'tool');
+pages=[{resync_required:true}];await tick();
+assert.deepEqual(_brainAllEvents,[]);
+_brainSSE.close();
+''', setup)
+
+
+def app_activity_setup():
+    app = SCRIPT.with_name('app.js').read_text()
+    brain = app[app.index('function _startBrainSSE() {'):app.index('\nfunction _stopBrainSSE()')]
+    loader = app[app.index('window.cmLoadPersistedBrain ='):app.index('\nasync function loadBrainPage')]
+    flow = app[app.index('function _flowActivityStatus(message) {'):app.index('\nfunction _populateFlowSkills()')]
+    visibility = app[app.index('(function _installSSEVisibilityGuard() {'):app.index('\nasync function resolvePrimaryModelFallback()')]
+    setup = r'''
+let rt='codex', visible=['old'], _brainRange=null, _brainSSE=null, _brainSSEConnected=false;
+let _brainActivityRuntime='codex', _brainSSEEverConnected=false, _brainAllEvents=[];
+let _brainFilter='previous-session', _brainTypeFilter='tool';
+let _brainSSEFirstFailMs=0, _brainRefreshTimer=null;
+let _brainAuxLastLoaded=0, _brainAuxPending=null, auxCalls=0;
+let _flowBrainSse=null, _flowActivityRuntime='codex', _flowActivitySeen=new Set(), pulses=0;
+let flowStats={events:0,activeTools:{},msgTimestamps:[],messages:0}, _flowFeedItems=[], shownFlowCount=0, inbound=0;
+const flowStatus={textContent:''};
+function _cmRuntimeFilter(){return rt;}
+function _updateBrainLiveIndicator(){}
+function _resetBrainSSEReconnectState(){}
+function _scheduleBrainSSEReconnect(){}
+function renderBrainStream(rows){visible=rows.map(r=>r.eventId);}
+function renderBrainChart(){}
+function renderBrainTypeChips(){}
+function renderBrainFilterChips(){}
+function _buildSourcesList(){return [];}
+function loadBrainPage(){}
+function loadLoopSignals(){auxCalls++;return Promise.resolve();}
+function loadBrainAtRisk(){auxCalls++;return Promise.resolve();}
+function loadBrainProgress(){auxCalls++;return Promise.resolve();}
+function _brainTypeToFlowTool(){return null;}
+function escHtml(value){return String(value).replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function _flowPulseEdge(){pulses++;}
+function _flowRailSetStage(){}
+function _flowPulseInbound(){inbound++;}
+function addFlowFeedItem(label){_flowFeedItems.push(label);visible=_flowFeedItems.slice();shownFlowCount=flowStats.events;}
+function clearToolStream(){_flowFeedItems=[];visible=[];flowStats.events=0;}
+function updateFlowStats(){}
+document.getElementById=id=>id==='flow-activity-status'?flowStatus:null;document.querySelector=()=>({});
+Object.defineProperty(window,'_brainSSE',{get:()=>_brainSSE,set:v=>_brainSSE=v});
+Object.defineProperty(window,'_flowBrainSse',{get:()=>_flowBrainSse,set:v=>_flowBrainSse=v});
+''' + brain + '\n' + loader + '\n' + flow + '\n' + visibility
+    return setup
+
+
+@pytest.mark.parametrize('pane', ['brain', 'flow'])
+def test_runtime_switch_replaces_subscription_and_clears_previous_visible_rows(pane):
+    run(r'''
+window._cmCurrentTab='__PANE__';
+const start=window._cmCurrentTab==='brain'?cmLoadPersistedBrain:_startFlowBrainStream;
+const first=page('first',[row('codex-event')]);
+first.brain_events.forEach(e=>{e.type='tool';e.time='2026-10-02T00:00:00Z';e.source='codex';});
+pages=[first];start();await tick();assert(visible.length);
+rt='claude_code';pages=[page('new-scope',[])];start();
+assert.deepEqual(visible,[]);await tick();
+assert(hits[1].includes('runtime=claude_code'));assert(!hits[1].includes('cursor=first'));
+await tick();assert(hits.slice(1).every(url=>url.includes('runtime=claude_code')));
+assert.deepEqual(visible,[]);
+if(window._cmCurrentTab==='brain'){
+ assert.equal(_brainFilter,'all');assert.equal(_brainTypeFilter,'tool');
+ assert.equal(auxCalls,3);start();await Promise.resolve();assert.equal(auxCalls,3);
+}
+window._cmCurrentTab='guard';cmActivityVisibilityChanged();assert.equal(timers.size,0);
+'''.replace('__PANE__', pane), app_activity_setup())
+
+
+def test_flow_cached_reconnect_deduplicates_and_does_not_pulse_historical_tools():
+    run(r'''
+window._cmCurrentTab='flow';
+const first=page('first',[row('one')]);first.mode='bootstrap';
+first.brain_events.forEach(e=>{e.type='TOOL_CALL';e.tool='exec';e.time='2026-10-02T00:00:00Z';});
+pages=[first];_startFlowBrainStream();await tick();
+assert.equal(flowStats.events,1);assert.equal(visible.length,1);assert.equal(pulses,0);
+assert.equal(shownFlowCount,1);
+_flowBrainSse.close();pages=[page('quiet',[])];_startFlowBrainStream();
+await Promise.resolve();await tick();
+assert.equal(flowStats.events,1);assert.equal(visible.length,1);assert.equal(pulses,0);
+const fresh=page('next',[row('two')]);fresh.mode='replay';
+fresh.brain_events.forEach(e=>{e.type='TOOL_CALL';e.tool='exec';e.time=new Date().toISOString();});
+pages=[fresh];await tick();assert.equal(pulses,1);assert.equal(flowStats.events,2);
+pages=[{resync_required:true}];await tick();assert.equal(flowStats.events,0);
+pages=[first];await tick();assert.equal(flowStats.events,1);assert.equal(pulses,1);
+''', app_activity_setup())
+
+
+def test_flow_counts_only_tool_calls_and_escapes_recorded_tool_names():
+    run(r'''
+window._cmCurrentTab='flow';
+const mixed=page('first',['call','reply','usage','result','error'].map(id=>row(id)));
+mixed.brain_events.forEach((e,i)=>{
+ e.type=['TOOL_CALL','MESSAGE','USAGE','TOOL_RESULT','ERROR'][i];
+ e.tool='<native tool>';e.time='2026-10-02T00:00:00Z';
+});
+pages=[mixed];_startFlowBrainStream();await tick();
+assert.equal(flowStats.events,1);assert.equal(visible.length,1);
+assert.equal(visible[0],'⚡ &lt;native tool&gt;');
+const channel=page('next',[row('inbound')]);channel.mode='replay';
+channel.brain_events[0]={eventId:'inbound',type:'CHANNEL.IN',channel:'webchat',time:new Date().toISOString()};
+pages=[channel];await tick();assert.equal(inbound,1);assert.equal(flowStats.msgTimestamps.length,1);
+assert.equal(flowStats.events,1);assert.equal(visible.length,1);
+const nested=page('nested',[row('assistant-tools')]);
+nested.brain_events[0]={eventId:'assistant-tools',type:'ASSISTANT',time:'2026-10-02T00:00:00Z',
+ toolCalls:[{id:'a',name:'Read'},{id:'b',name:'Read'}]};
+pages=[nested];await tick();assert.equal(flowStats.events,3);assert.equal(visible.length,3);
+// An upsert adds one parallel call; the two existing calls stay counted once.
+nested.brain_events[0].toolCalls.push({id:'c',name:'Write'});
+pages=[nested];await tick();assert.equal(flowStats.events,4);assert.equal(visible.length,4);
+// A different containing event with the same native call cannot count it twice.
+nested.brain_events[0].eventId='another-row';nested.brain_events[0].toolCalls=[{id:'c',name:'Write'}];
+pages=[nested];await tick();assert.equal(flowStats.events,4);
+// Native identities are session-scoped.
+nested.brain_events[0].sessionId='another-session';
+pages=[nested];await tick();assert.equal(flowStats.events,5);
+''', app_activity_setup())
+
+
+def test_flow_channel_rate_includes_recent_bootstrap_and_delayed_replay():
+    run(r'''
+window._cmCurrentTab='flow';
+const recent=page('first',[row('recent'),row('old')]);recent.mode='bootstrap';
+recent.brain_events.forEach((e,i)=>{
+ e.type='CHANNEL.IN';e.time=new Date(Date.now()-(i?61000:15000)).toISOString();
+});
+pages=[recent];_startFlowBrainStream();await tick();
+assert.equal(flowStats.msgTimestamps.length,1);assert.equal(inbound,0);
+_flowBrainSse.close();_startFlowBrainStream();await Promise.resolve();await tick();
+assert.equal(flowStats.msgTimestamps.length,1);assert.equal(inbound,0);
+const delayed=page('second',[row('delayed')]);delayed.mode='replay';
+delayed.brain_events[0].type='CHANNEL.IN';
+delayed.brain_events[0].time=new Date(Date.now()-15000).toISOString();
+pages=[delayed];await tick();assert.equal(flowStats.msgTimestamps.length,2);assert.equal(inbound,0);
+''', app_activity_setup())
+
+
+def test_flow_parallel_call_cache_reconnect_does_not_inflate_counts():
+    run(r'''
+window._cmCurrentTab='flow';
+const large=page('first',Array.from({length:17},(_,i)=>row('event-'+i)));
+large.brain_events.forEach((e,i)=>{
+ e.type='ASSISTANT';e.time='2026-10-02T00:00:00Z';
+ e.toolCalls=Array.from({length:256},(_,j)=>({id:i+':'+j,name:'Read'}));
+});
+pages=[large];_startFlowBrainStream();await tick();assert.equal(flowStats.events,4352);
+_flowBrainSse.close();_startFlowBrainStream();await Promise.resolve();await tick();
+assert.equal(flowStats.events,4352);
+''', app_activity_setup())
+
+
+def test_flow_native_call_identity_includes_runtime_node_and_session():
+    run(r'''
+window._cmCurrentTab='flow';rt='all';
+const mixed=page('first',Array.from({length:4},(_,i)=>row('event-'+i)));
+mixed.brain_events.forEach((e,i)=>{
+ e.type='TOOL_CALL';e.time='2026-10-02T00:00:00Z';e.sessionId='bare-session';
+ e.runtime=i===0?'claude_code':'codex';e.nodeId=i===3?'second-node':'first-node';
+ e.toolCalls=[{id:'same-native-call',name:'Read'}];
+});
+pages=[mixed];_startFlowBrainStream();await tick();assert.equal(flowStats.events,3);
+''', app_activity_setup())
+
+
+def test_flow_connection_feedback_does_not_treat_cached_evidence_as_connected():
+    run(r'''
+window._cmCurrentTab='flow';pages=[page('one',[])];_startFlowBrainStream();
+assert(flowStatus.textContent.startsWith('Connecting'));await tick();
+assert(flowStatus.textContent.startsWith('Connected'));
+fail=true;await tick();assert(flowStatus.textContent.startsWith('Connection unavailable'));
+fail=false;_startFlowBrainStream();await Promise.resolve();
+assert(flowStatus.textContent.startsWith('Connecting'));
+await tick();assert(flowStatus.textContent.startsWith('Connected'));
+''', app_activity_setup())
+
+
+def test_legacy_log_stream_cannot_project_into_persisted_flow():
+    app = SCRIPT.with_name('app.js').read_text()
+    start = app.index('function processFlowEvent(line) {')
+    end = app.index('\n}', start) + 2
+    run(r'''
+processFlowEvent('tool start tool=exec');
+processFlowEvent('inbound message received');
+assert.equal(flowStats.events,0);assert.equal(flowStats.msgTimestamps.length,0);
+assert.equal(_flowFeedItems.length,0);
+''', app_activity_setup() + '\n' + app[start:end])
+
+
+def test_flow_does_not_borrow_channel_topology_for_other_runtimes():
+    app = SCRIPT.with_name('app.js').read_text()
+    start = app.index('function _applyRuntimeFlowDiagram(rt) {')
+    end = app.index('\n}', start) + 2
+    setup = r'''
+const svg={innerHTML:'original-channel-topology',style:{}}, journey={hidden:false};
+let _origFlowSvgInner=null, _cmLockedRuntimes={};
+document.getElementById=id=>id==='flow-svg'?svg:id==='brain-model-text'?{textContent:'another-runtime-model'}:null;
+document.querySelector=()=>journey;
+function _cmCapsForRuntime(rt){return rt==='openclaw'?['EVENTS','CHANNELS']:['EVENTS'];}
+function _buildRuntimeFlowInner(rt,model){assert.equal(model,'');return rt==='codex'?'rtShadow codex-topology':null;}
+function hideUnconfiguredChannels(){}
+''' + app[start:end]
+    run(r'''
+_applyRuntimeFlowDiagram('codex');assert(journey.hidden);assert.equal(svg.style.display,'');
+assert(svg.innerHTML.includes('codex-topology'));
+for(const runtime of ['muse_code','openworker','qm','replit','foreign-otlp']){
+ _applyRuntimeFlowDiagram(runtime);assert(journey.hidden);assert.equal(svg.style.display,'none');
+}
+_applyRuntimeFlowDiagram('openclaw');assert(!journey.hidden);assert.equal(svg.style.display,'');
+assert.equal(svg.innerHTML,'original-channel-topology');
+''', setup)
+
+
+@pytest.mark.parametrize('pane', ['brain', 'flow'])
+def test_real_visibility_guard_resumes_persisted_activity_without_navigation(pane):
+    run(r'''
+window._cmCurrentTab='__PANE__';
+const start=window._cmCurrentTab==='brain'?cmLoadPersistedBrain:_startFlowBrainStream;
+pages=[page('first',[])];start();await tick();
+document.hidden=true;hooks.visibilitychange();assert.equal(timers.size,0);
+document.hidden=false;hooks.visibilitychange();await tick();
+assert.equal(hits.length,2);assert(hits[1].includes('cursor=first'));
+'''.replace('__PANE__', pane), app_activity_setup())

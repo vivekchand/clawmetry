@@ -20,8 +20,8 @@ assuming it.
 The rules here are recorded, not just applied: "An action reference is pinned
 to a commit, or it does not merge" in the Release Verification and Merge Gating
 blueprint carries them as contracts -- pinned means a full 40-character SHA;
-composite actions under ``.github/actions/`` are in scope because their
-``uses:`` lines run with the CALLING job's token; and this is a gate that is
+every action definition in the repository is in scope because its ``uses:``
+lines run with the CALLING job's token; and this is a gate that is
 deliberately NOT ``SecurityAuditScanner``, whose reporting-only posture is
 unchanged. It also records why the gate checks pin SHAPE offline and leaves
 target resolution opt-in.
@@ -38,9 +38,15 @@ publish to PyPI, so the blast radius is real. Pinning every reference was done
 over a series of changes; this check is what keeps it done, because a single
 convenient ``@v4`` in a later PR would otherwise undo it silently.
 
-Both halves cover composite actions under ``.github/actions/`` as well as the
+Both halves cover every action definition in the repository as well as the
 workflows. A composite action's own ``uses:`` lines run with the same token as
 the job that calls it, so leaving them unchecked left the shorter path in.
+
+Action definitions are discovered repo-wide, not under ``.github/actions/``
+alone. ``integrations/github-action/`` is a PUBLISHED action: its ``uses:``
+lines run in other people's repositories, with their token, so a floating tag
+there has a blast radius wider than any of ours. A directory-scoped walk left
+that one file outside the gate while reporting the gate as held.
 
 Usage::
 
@@ -59,7 +65,23 @@ import urllib.request
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WORKFLOW_DIR = os.path.join(REPO_ROOT, ".github", "workflows")
-ACTION_DIR = os.path.join(REPO_ROOT, ".github", "actions")
+# Directories that never hold a first-party action definition. ``node_modules``
+# is the one that matters: a dependency ships its own ``action.yml``, and how
+# that dependency pins its references is not something this gate can fix.
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+        ".venv",
+        "__pycache__",
+        "build",
+        "dist",
+        "node_modules",
+        "venv",
+    }
+)
 
 # `uses: owner/repo@ref` or `uses: owner/repo/path@ref`. Local (`./`) and
 # docker (`docker://`) references resolve differently and are skipped.
@@ -68,18 +90,34 @@ _USES = re.compile(r"^\s*-?\s*uses:\s*['\"]?([A-Za-z0-9._-]+/[A-Za-z0-9._/-]+)@(
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
-def source_files() -> list:
-    """Every file that can carry a `uses:` line: workflows and composite actions.
+def action_files() -> list:
+    """Every action definition in the repository, wherever it lives.
 
-    Auto-discovered rather than listed, so a new workflow or a new composite
-    action is covered the day it lands (the FLYWHEEL rule: allowlists drift).
+    Walked repo-wide rather than globbed under ``.github/actions/``. An action
+    definition is an action definition no matter which directory holds it, and
+    the one this repository PUBLISHES -- ``integrations/github-action/`` -- is
+    outside that directory, so the narrower glob skipped exactly the file whose
+    ``uses:`` lines run in other people's jobs.
+    """
+    found: list = []
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        for name in ("action.yml", "action.yaml"):
+            if name in filenames:
+                found.append(os.path.join(dirpath, name))
+    return sorted(found)
+
+
+def source_files() -> list:
+    """Every file that can carry a `uses:` line: workflows and action definitions.
+
+    Auto-discovered rather than listed, so a new workflow or a new action is
+    covered the day it lands (the FLYWHEEL rule: allowlists drift).
     """
     files: list = []
     for ext in ("yml", "yaml"):
         files.extend(glob.glob(os.path.join(WORKFLOW_DIR, f"*.{ext}")))
-        files.extend(
-            glob.glob(os.path.join(ACTION_DIR, "**", f"action.{ext}"), recursive=True)
-        )
+    files.extend(action_files())
     return sorted(files)
 
 

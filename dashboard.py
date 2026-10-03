@@ -6459,6 +6459,12 @@ def detect_config(args=None):
     app.register_blueprint(bp_delegated)
     app.register_blueprint(bp_readiness)
     app.register_blueprint(bp_guard)
+    from routes.activity import bp_activity
+    from routes.investigations import bp_investigations
+    app.register_blueprint(bp_activity)
+    app.register_blueprint(bp_investigations)
+    from routes.error_groups import bp_error_groups
+    app.register_blueprint(bp_error_groups)
     app.register_blueprint(bp_improve)
     app.register_blueprint(bp_signals)
     app.register_blueprint(bp_selfdiag)
@@ -7093,6 +7099,7 @@ DASHBOARD_HTML = r"""
      no legal basis. Regenerate with scripts/vendor_fonts.py. -->
 <link rel="stylesheet" href="{{ url_for('static', filename='css/fonts.css', v=asset_version|default(version, true)) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css', v=asset_version|default(version, true)) }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/investigations.css', v=asset_version|default(version, true)) }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/assistant.css', v=asset_version|default(version, true)) }}">
 <script src="{{ url_for('static', filename='js/nav-dropdown.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/alerts.js', v=asset_version|default(version, true)) }}" defer></script>
@@ -7313,7 +7320,7 @@ DASHBOARD_HTML = r"""
       </div>
 
       <div class="left-nav-section-label" data-i18n="nav.section_govern">Govern</div>
-      <div class="left-nav-item" data-tab="guard" onclick="switchTab('guard')" data-i18n-title="nav.guard_tooltip" title="See what is running, detect agents that go off track, and stop them">
+      <div class="left-nav-item" data-tab="guard" onclick="switchTab('guard')" data-i18n-title="nav.guard_tooltip" title="Review running agents, detector warnings, and the controls available for each agent.">
         <span class="left-nav-icon" aria-hidden="true">&#128737;</span>
         <span class="left-nav-label" data-i18n="nav.guard">Guard</span>
         <span id="nav-guard-badge" class="left-nav-badge" style="display:none;">0</span>
@@ -7558,6 +7565,9 @@ DASHBOARD_HTML = r"""
 <script src="{{ url_for('static', filename='js/provenance.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/app.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/guard-checks.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/activity-live.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/investigations.js', v=asset_version|default(version, true)) }}"></script>
+<script src="{{ url_for('static', filename='js/error-groups.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/dives.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/assistant.js', v=asset_version|default(version, true)) }}"></script>
 <script src="{{ url_for('static', filename='js/custom-dashboard.js', v=asset_version|default(version, true)) }}"></script>
@@ -13731,7 +13741,7 @@ def _print_login_url_banner(port, host, token):
         return
     # Always frame the token inside the /auth URL; never print the bare token.
     # 0.0.0.0 / :: are bind-all sentinels; the user clicks from localhost.
-    public_binds = ("0.0.0.0", "::", "")
+    public_binds = ("0.0.0.0", "::", "")  # nosec B104 - sentinels compared against, to rewrite the printed URL to localhost; never passed to bind()
     display_host = "localhost" if host in public_binds else host
     url = f"http://{display_host}:{port}/auth?token={token}"
     print(f"  -> {url}  (one-click sign-in)")

@@ -179,6 +179,30 @@ def _proxy_dispatch(shape: str, args: dict):
 def _coerce_args(shape: str, raw: dict) -> dict:
     """Strict per-shape arg coercion. Drops anything not in the per-shape
     allowed-keys set, casts limit/since/until to safe types."""
+    if shape in ("error_groups", "session_catalog"):
+        args = {key: raw.get(key) or None for key in ("node_id", "runtime", "session_id")}
+        args["limit"] = _safe_int(raw.get("limit"), default=500 if shape == "error_groups" else 100,
+                                  lo=1, hi=1000 if shape == "error_groups" else 200)
+        if shape == "error_groups":
+            args["days"] = _safe_int(raw.get("days"), default=7, lo=1, hi=90)
+        return args
+    if shape == "activity":
+        return {"node_id": raw.get("node_id") or None, "runtime": raw.get("runtime") or None,
+                "session_id": raw.get("session_id") or None, "cursor": raw.get("cursor") or None,
+                "limit": _safe_int(raw.get("limit"), default=100, lo=1, hi=200)}
+    if shape == "incidents":
+        return {"runtime": raw.get("runtime") or None, "node_id": raw.get("node_id") or None,
+                "session_id": raw.get("session_id") or None, "state": raw.get("state") or None,
+                "incident_id": raw.get("incident_id") or None,
+                "limit": _safe_int(raw.get("limit"), default=100, lo=1, hi=500)}
+    if shape == "investigation":
+        for key in ("session_id", "runtime", "node_id"):
+            if not isinstance(raw.get(key), str) or not raw[key] or len(raw[key]) > 1024:
+                raise ValueError("investigation requires session_id, runtime and node_id")
+        return {"session_id": raw["session_id"], "runtime": raw["runtime"],
+                "node_id": raw["node_id"], "incident_id": raw.get("incident_id") or None,
+                "cursor": raw.get("cursor") or None, "event_id": raw.get("event_id") or None,
+                "limit": _safe_int(raw.get("limit"), default=100, lo=1, hi=200)}
     if shape == "events":
         return {
             "session_id": raw.get("session_id"),
@@ -395,7 +419,7 @@ def _dispatch(shape: str, args: dict) -> dict:
     store = _store()
     if shape == "health":
         body = store.health()
-    elif shape in ("agent_graph", "transcript_page", "similar_sessions"):
+    elif shape in ("agent_graph", "transcript_page", "similar_sessions", "investigation", "activity", "error_groups", "session_catalog"):
         # These return a dict directly (nodes/edges/count for agent_graph,
         # rows/has_more/next_before_ts for transcript_page), not a list, so
         # pass them through like health rather than wrapping in {"rows": ...}.
@@ -404,6 +428,9 @@ def _dispatch(shape: str, args: dict) -> dict:
         method_name = _SHAPES[shape]
         rows = getattr(store, method_name)(**args)
         body = {"rows": rows, "count": len(rows)}
+    if shape == "activity":
+        from routes.brain import _stored_brain_events
+        body["brain_events"] = _stored_brain_events(body.get("rows") or [])
     body["_shape"] = shape
     body["_via"] = "direct"
     body["_elapsed_ms"] = int((time.monotonic() - started) * 1000)
@@ -1269,6 +1296,12 @@ _DAEMON_METHODS = frozenset({
     "query_self_report_counts",
     "query_self_report_honesty",
     "query_guard_incidents",
+    "query_incidents",
+    "query_investigation",
+    "query_activity",
+    "query_error_groups",
+    "query_session_catalog",
+    "acknowledge_incident",
     # Agent supply chain inventory (#5947), read by /api/guard/inventory.
     "query_agent_inventory",
     "query_session_denials",

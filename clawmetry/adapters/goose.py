@@ -581,8 +581,7 @@ class GooseAdapter(AgentAdapter):
             _cols += ", " + ", ".join(_have_opt)
         try:
             cur = conn.execute(
-                "SELECT " + _cols + " "
-                "FROM sessions ORDER BY updated_at DESC LIMIT ?",
+                "SELECT " + _cols + " FROM sessions ORDER BY updated_at DESC LIMIT ?",  # nosec B608 - column list is _essential plus names filtered against the hardcoded _optional list; LIMIT is bound
                 (max(1, int(limit)),),
             )
             # Read the cron scheduler definitions once (sibling schedule.json),
@@ -906,6 +905,19 @@ class GooseAdapter(AgentAdapter):
                     ))
 
         return events
+
+    def iter_replay_events(self, session_id: str, limit: int = 5000):
+        """Yield canonical replay events for one session (#4813).
+
+        One leading ``mode.changed`` from ``sessions.goose_mode`` (with
+        ``collaboration: "cron"`` for a scheduled session), one
+        ``workflow.start`` when the session ran a recipe, then the
+        messages as ``llm.*``, ``thinking`` and ``tool.*`` events. See
+        ``clawmetry/adapters/goose_replay.py``. Never raises.
+        """
+        from clawmetry.adapters import goose_replay
+        yield from goose_replay.iter_replay_events(
+            self._db_path, session_id, limit)
 
     def capabilities(self) -> set[Capability]:
         # SESSIONS + EVENTS + COST. Goose records REAL token usage on disk

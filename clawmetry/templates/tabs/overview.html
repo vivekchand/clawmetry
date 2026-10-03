@@ -192,6 +192,12 @@
       <input id="triage-input-note" type="text" placeholder="Optional note: why is this expected?" autocomplete="off" style="padding:6px 10px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;">
       <button onclick="submitResolveError()" style="padding:6px 14px;border:1px solid var(--border-primary);border-radius:6px;background:var(--bg-primary);color:var(--text-primary);font-size:12px;font-weight:600;cursor:pointer;" data-i18n="app.mark_resolved">Mark resolved</button>
     </div>
+    <details id="triage-groups" ontoggle="if(this.open && window.cmLoadErrorGroups) cmLoadErrorGroups(); else if(window.cmErrorGroupsVisibilityChanged) cmErrorGroupsVisibilityChanged()">
+      <summary>Recurring errors</summary>
+      <p class="section-sub">See which errors repeat, then open a recorded example.</p>
+      <button type="button" class="refresh-btn" onclick="cmLoadErrorGroups(true)">Refresh errors</button>
+      <div id="triage-groups-body" aria-live="polite"></div>
+    </details>
     <div id="triage-list-body"></div>
   </div>
 

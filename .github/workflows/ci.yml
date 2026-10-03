@@ -263,7 +263,7 @@ jobs:
         run: python3 -m pytest tests/test_workflow_yaml_valid.py -q
 
       - name: English policy regression tests
-        run: python3 -m pytest tests/test_english.py tests/test_english_inventory.py tests/test_english_js.py tests/test_english_browser_rendering.py tests/test_english_python.py tests/test_english_cli.py tests/test_insights_english.py tests/test_generated_english.py tests/test_deepeval_bridge.py -q
+        run: python3 -m pytest tests/test_english.py tests/test_english_inventory.py tests/test_english_js.py tests/test_english_browser_rendering.py tests/test_english_python.py tests/test_english_cli.py tests/test_insights_english.py tests/test_generated_english.py tests/test_deepeval_bridge.py tests/test_i18n_no_raw_codes.py -q
 
       - name: English explanations must not add language debt
         env:
@@ -1035,6 +1035,7 @@ jobs:
             tests/test_bench_route.py \
             tests/test_openclaw_quality_at_ingest.py \
             tests/test_openclaw_sqlite_mirror.py \
+            tests/test_openclaw_replay_events.py \
             tests/test_capability_gaps.py \
             tests/test_quality_sessions_per_runtime_limit.py \
             tests/test_quality_signals_contract.py \
@@ -1099,6 +1100,7 @@ jobs:
             tests/test_redaction_pii.py \
             tests/test_goose_adapter.py \
             tests/test_goose_platform_paths.py \
+            tests/test_goose_replay_events.py \
             tests/test_qwen_code_adapter.py \
             tests/test_adapter_inputs_helper.py \
             tests/test_license_sync_pro_from_config.py \
@@ -1126,6 +1128,8 @@ jobs:
             tests/test_blocked_agent_always_notifies.py \
             tests/test_detectors_rate_limited_blocked_crashed.py \
             tests/test_detectors.py \
+            tests/test_incident_lifecycle.py tests/test_activity_replay.py tests/test_activity_live_client.py \
+            tests/test_incident_evidence.py tests/test_investigation_reads.py tests/test_investigation_catalog.py tests/test_investigation_client.py tests/test_investigation_routes.py \
             tests/test_detectors_behavioural.py \
             tests/test_detectors_ngram.py \
             tests/test_detectors_secret_value_corpus.py \

@@ -51,6 +51,10 @@ from clawmetry import nonsecret_hash as _nsh
 from clawmetry.trail_store import TrailStoreMixin  # intent / back-fill / git join
 from clawmetry.local_store_agent_meta import AgentMetaMixin  # agent meta label surface (short module for Drift Bot)
 from clawmetry.local_store_projects import ProjectsMixin  # project attribution + budgets (REQ-OBS-PRJ-001)
+from clawmetry.activity_store import ActivityStoreMixin, ACTIVITY_DDL
+from clawmetry.incident_store import IncidentStoreMixin, INCIDENT_DDL
+from clawmetry.investigations import InvestigationStoreMixin
+from clawmetry.investigation_catalog import InvestigationCatalogMixin
 # REQ-OBS-OIA-001: a value the store cannot hold is refused on its own, not a
 # store failure (span batch retry, OTLP record refusal, event token count).
 from clawmetry.store_errors import (  # noqa: F401  (re-exported for tests)
@@ -2820,6 +2824,10 @@ def _assistant_decode_conversation(row: tuple[Any, ...]) -> dict[str, Any]:
     }
 
 
+_DDL.extend(INCIDENT_DDL)
+_DDL.extend(ACTIVITY_DDL)
+
+
 def _session_phase_row(row) -> dict:
     """One ``session_phase`` row as the shape every reader uses.
 
@@ -4102,7 +4110,7 @@ def _runtime_of_session_id(session_id: str, fallback: str = "openclaw") -> str:
     return fallback or "openclaw"
 
 
-class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
+class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMixin, InvestigationStoreMixin, InvestigationCatalogMixin, ActivityStoreMixin):
     """Thread-safe local event store with a background batched flusher.
 
     `read_only=True` opens the DuckDB in RO mode — read paths work the same,
@@ -12576,7 +12584,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             flat: list[Any] = []
             for r in chunk:
                 flat.extend(r)
-            self._conn.execute(sql, flat)
+            inserted = self._conn.execute(sql + " RETURNING id", flat).fetchall()
+            self._record_event_changes_locked([row[0] for row in inserted])
 
     def _apply_rollup_deltas_locked(
         self,
@@ -13886,9 +13895,11 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
         if not updates:
             return 0
         try:
-            self._conn.executemany(
-                "UPDATE events SET cost_usd = ? WHERE id = ?", updates
-            )
+            with self._write_lock, _txn(self._conn):
+                self._conn.executemany(
+                    "UPDATE events SET cost_usd = ? WHERE id = ?", updates
+                )
+                self._record_event_changes_locked([row[1] for row in updates])
         except Exception:
             return 0
         return len(updates)
@@ -13950,9 +13961,11 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
         if not updates:
             return 0
         try:
-            self._conn.executemany(
-                "UPDATE events SET cost_usd = ? WHERE id = ?", updates
-            )
+            with self._write_lock, _txn(self._conn):
+                self._conn.executemany(
+                    "UPDATE events SET cost_usd = ? WHERE id = ?", updates
+                )
+                self._record_event_changes_locked([row[1] for row in updates])
         except Exception:
             return 0
         return len(updates)
@@ -14085,9 +14098,11 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
 
         if updates:
             try:
-                self._conn.executemany(
-                    "UPDATE events SET data = ? WHERE id = ?", updates
-                )
+                with self._write_lock, _txn(self._conn):
+                    self._conn.executemany(
+                        "UPDATE events SET data = ? WHERE id = ?", updates
+                    )
+                    self._record_event_changes_locked([row[1] for row in updates])
             except Exception:
                 return (max_id, 0, len(rows))
         return (max_id, len(updates), len(rows))
@@ -15521,20 +15536,21 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             "kind": kind,
             "raw": (raw or "")[:300],
         }).encode("utf-8")
-        with self._write_lock:
-            self._conn.execute(
+        with self._write_lock, _txn(self._conn):
+            inserted = self._conn.execute(
                 """
                 INSERT OR IGNORE INTO events
                   (id, agent_type, node_id, agent_id, session_id, workspace_id,
                    event_type, ts, data, cost_usd, token_count, model, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
                 """,
                 [
                     ev_id, "openclaw", node_id or "local", "main", None, None,
                     "connector.health", ts_iso, payload, None, None, None,
                     int(time.time() * 1000),
                 ],
-            )
+            ).fetchall()
+            self._record_event_changes_locked([row[0] for row in inserted])
 
     def ingest_talk_lifecycle(
         self,
@@ -15582,13 +15598,13 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             "talkDurationMs": duration_ms,
             "talkByteLength": byte_length,
         }).encode("utf-8")
-        with self._write_lock:
-            self._conn.execute(
+        with self._write_lock, _txn(self._conn):
+            inserted = self._conn.execute(
                 """
                 INSERT OR IGNORE INTO events
                   (id, agent_type, node_id, agent_id, session_id, workspace_id,
                    event_type, ts, data, cost_usd, token_count, model, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
                 """,
                 [
                     ev_id, "openclaw", node_id or "local", "main",
@@ -15596,7 +15612,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                     "talk.lifecycle", ts_iso, payload, None, None, None,
                     int(time.time() * 1000),
                 ],
-            )
+            ).fetchall()
+            self._record_event_changes_locked([row[0] for row in inserted])
 
     def query_connector_health(self, since_hours: int = 24) -> list[dict[str, Any]]:
         """Recent ``connector.health`` signals, newest first.
@@ -19822,6 +19839,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                             except Exception:
                                 rc = -1
                             deleted = rc if rc is not None and rc >= 0 else rows_to_drop
+                            if deleted:
+                                self._invalidate_activity_locked()
         # CHECKPOINT forces DuckDB to merge WAL → main file, reclaiming space
         # similarly to SQLite VACUUM. Cheaper than full VACUUM on large DBs.
         with self._write_lock:
@@ -19853,11 +19872,13 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
         et = (event_type or "").strip()
         if not et:
             raise ValueError("event_type is required")
-        with self._write_lock:
+        with self._write_lock, _txn(self._conn):
             before = self._conn.execute(
                 "SELECT COUNT(*) FROM events WHERE event_type = ?", [et]
             ).fetchone()[0]
             self._conn.execute("DELETE FROM events WHERE event_type = ?", [et])
+            if before:
+                self._invalidate_activity_locked()
         return {"deleted_rows": int(before), "event_type": et}
 
     def delete_security_events_by_id_prefix(self, prefix: str) -> dict[str, Any]:
@@ -19941,10 +19962,10 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                 cur = self._conn.execute(
                     "DELETE FROM events WHERE created_at < ?", [cutoff_ms]
                 )
-                try:
-                    deleted = cur.rowcount
-                except Exception:
-                    deleted = -1
+                deleted = cur.fetchone()[0]
+                if deleted:
+                    self._invalidate_activity_locked()
+                self._prune_incidents_locked(cutoff_ms)
             # Best-effort CHECKPOINT so the on-disk file reflects the
             # delete; mirrors the post-DELETE pattern in ``_vacuum_locked``.
             try:
@@ -20081,20 +20102,21 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             "after_bytes": int(after_bytes),
             "cap_bytes": int(LOCAL_MAX_BYTES),
         }).encode("utf-8")
-        with self._write_lock:
-            self._conn.execute(
+        with self._write_lock, _txn(self._conn):
+            inserted = self._conn.execute(
                 """
                 INSERT OR IGNORE INTO events
                   (id, agent_type, node_id, agent_id, session_id, workspace_id,
                    event_type, ts, data, cost_usd, token_count, model, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
                 """,
                 [
                     ev_id, "clawmetry", node_id, "local_store", None, None,
                     "local_store_over_cap", ts_iso, payload, None, None, None,
                     int(time.time() * 1000),
                 ],
-            )
+            ).fetchall()
+            self._record_event_changes_locked([row[0] for row in inserted])
 
     # ── Insights fast path (feat/insights-v1) ──────────────────────────
     # Single allowlisted entry-point for hand-authored SELECT templates in
@@ -20210,13 +20232,14 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             "latency_ms": latency_ms,
             "had_error":  had_error,
         }).encode()
-        with self._write_lock:
-            self._conn.execute("""
+        with self._write_lock, _txn(self._conn):
+            inserted = self._conn.execute("""
                 INSERT INTO events
                     (id, agent_type, node_id, agent_id, event_type, ts, data, created_at)
                 VALUES (?, 'clawmetry', 'local', 'dives', 'dive_run', ?, ?, ?)
-                ON CONFLICT (id) DO NOTHING
-            """, [run_id, ts, data, int(_time.time())])
+                ON CONFLICT (id) DO NOTHING RETURNING id
+            """, [run_id, ts, data, int(_time.time())]).fetchall()
+            self._record_event_changes_locked([row[0] for row in inserted])
 
     # ── User-authored dashboard panels ─────────────────────────────────
 
@@ -21742,7 +21765,7 @@ def _pick_billable_turns(rows, extra=None):
             "ts":          ts,
             "id":          ev_id,
             "session_id":  sid,
-            "extra":       extra(data, row) if extra is not None else None,
+            "extra":       extra(data, row) if extra is not None else None,  # nosec B610 - `extra` is a local callable parameter, not a Django QuerySet.extra(); no SQL here
         }
 
         epoch_s = _ts_to_epoch_s(ts)

@@ -1323,7 +1323,7 @@ def api_alert_rules():
             _values += [now, now]
             db.execute(
                 f"INSERT INTO alert_rules ({', '.join(_fields)}) "
-                f"VALUES ({', '.join('?' * len(_fields))})",
+                f"VALUES ({', '.join('?' * len(_fields))})",  # nosec B608 - field names are literals probed against table_info; every value is bound as a ? placeholder
                 tuple(_values),
             )
             db.commit()
@@ -1440,7 +1440,7 @@ def api_alert_rule(rule_id):
     vals.append(rule_id)
     with _d._fleet_db_lock:
         db = _d._fleet_db()
-        db.execute(f"UPDATE alert_rules SET {', '.join(sets)} WHERE id = ?", vals)
+        db.execute(f"UPDATE alert_rules SET {', '.join(sets)} WHERE id = ?", vals)  # nosec B608 - sets holds literal '<column> = ?' fragments only; every value is bound
         db.commit()
         row = db.execute(
             "SELECT * FROM alert_rules WHERE id = ?", (rule_id,)
