@@ -12,6 +12,10 @@
 
 - Tooltip strings in the nav that were not yet in a locale's catalog showed blank space or a raw key. The Guard, Assistant, Brain and Fleet nav entries now carry checked English fallbacks so every locale reads a complete sentence until the translation sync catches up. Carries #6277.
 
+### Fixed: attribute translation preserves readable fallbacks
+
+- The connected dashboard showed raw i18n keys in place of tooltip and accessible-name attributes when a translation was missing. The attribute translator now preserves each original attribute value before applying a locale so partial catalogs and language changes retain readable text. Carries #6278.
+
 ### Hardened: bandit non-bulk medium findings are explicitly acknowledged
 
 - Security-scan annotations cover the remaining non-bulk `medium` findings so `make lint` passes the bandit pass without a suppression file. No behaviour change. Carries #6279.
