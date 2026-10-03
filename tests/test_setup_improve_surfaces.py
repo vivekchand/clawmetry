@@ -124,3 +124,27 @@ release({needkey:true}); await old;
 assert.equal(el('setup-summary-files').textContent,'1');
 assert.equal(_cmSetupState.catalog.runtimes.length,2);
 ''')
+
+
+def test_setup_drops_cached_and_pending_files_after_key_or_node_change():
+    """AC-ASSIST-006.3: cached previews cannot cross an encryption identity."""
+    _setup_browser(r'''
+let key='first';
+window.CLOUD_NODE_ID='node-a'; window.CLOUD_TOKEN='account-a';
+global.localStorage={getItem(){return key;}};
+await loadSetup(); await setupSelectRuntime('claude_code'); await setupOpenFile(0,0);
+assert.match(el('setup-file-preview').innerHTML,/&lt;script&gt;/);
+key=''; await setupOpenFile(0,0);
+assert.equal(el('setup-file-preview').innerHTML,'');
+assert.equal(_cmSetupState.catalog,null);
+key='second'; await loadSetup();
+window.CLOUD_NODE_ID='node-b'; setupSetKind('skills');
+assert.equal(_cmSetupState.cloudGroups,null);
+let release;
+window._cmCloudRuntimeFiles=()=>new Promise(r=>{release=r;});
+const pending=loadSetup();
+window.CLOUD_TOKEN='account-b';
+release({groups}); await pending;
+assert.equal(_cmSetupState.catalog,null);
+assert.equal(el('setup-summary-files').textContent,'Unavailable');
+''')

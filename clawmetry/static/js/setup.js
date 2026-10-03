@@ -13,7 +13,21 @@ var _cmSetupState = {
   requestId: 0,
   fileRequestId: 0,
   scope: null,
+  identity: null,
 };
+
+function _cmSetupIdentity() {
+  if (!window.CLOUD_MODE) return 'local';
+  var node = window.CLOUD_NODE_ID || '', token = window.CLOUD_TOKEN || '', key = '';
+  try { key = localStorage.getItem('cm-enc-key-' + node + '-' + token.slice(0, 16)) || ''; } catch (e) {}
+  return JSON.stringify([node, token, key]);
+}
+
+function _cmSetupCurrent() {
+  if (!window.CLOUD_MODE || _cmSetupState.identity === _cmSetupIdentity()) return true;
+  _cmSetupUnavailable('Your node or encryption key changed. Refresh to unlock its setup files.');
+  return false;
+}
 
 function _cmSetupScope() {
   return typeof _cmRuntimeFilter === 'function' ? (_cmRuntimeFilter() || 'all') : 'all';
@@ -174,7 +188,14 @@ async function loadSetup(force) {
   var grid = document.getElementById('setup-runtime-grid');
   if (!grid) return;
   var scope = _cmSetupScope();
+  var identity = _cmSetupIdentity();
   var requestId = ++_cmSetupState.requestId;
+  if (_cmSetupState.identity !== identity) {
+    _cmSetupState.catalog = null;
+    _cmSetupState.cloudGroups = null;
+    setupCloseFiles();
+  }
+  _cmSetupState.identity = identity;
   if (scope !== _cmSetupState.scope || force) {
     setupCloseFiles();
     _cmSetupState.scope = scope;
@@ -201,6 +222,7 @@ async function loadSetup(force) {
       if (typeof window._cmCloudRuntimeFiles !== 'function') throw new Error('Reload this page to reconnect to your synced files.');
       var data = await window._cmCloudRuntimeFiles('all', null, {force: !!force});
       if (requestId !== _cmSetupState.requestId || scope !== _cmSetupScope()) return;
+      if (!_cmSetupCurrent()) return;
       if (data.decrypt_error) { _cmSetupUnavailable('Your saved key could not unlock this node’s setup files. Unlock with the node’s current key, then refresh.', true); return; }
       if (data.needkey) { _cmSetupUnavailable('Unlock your encrypted setup files, then refresh this view.', true); return; }
       if (data.pending) { _cmSetupUnavailable(data.node_online === false ? 'Your node is offline and no setup snapshot is available. Refresh when it reconnects.' : 'Waiting for your node to sync its setup files. Refresh in a moment.'); return; }
@@ -223,6 +245,7 @@ async function loadSetup(force) {
 }
 
 function setupSetKind(kind) {
+  if (!_cmSetupCurrent()) return;
   _cmSetupState.kind = kind || 'all';
   document.querySelectorAll('.cm-setup-filter').forEach(function(button) {
     button.classList.toggle('is-active', button.getAttribute('data-setup-kind') === _cmSetupState.kind);
@@ -232,6 +255,7 @@ function setupSetKind(kind) {
 }
 
 async function setupSelectRuntime(runtimeId) {
+  if (!_cmSetupCurrent()) return;
   if (_cmSetupScope() !== 'all' && _cmSetupScope() !== runtimeId) return;
   var requestId = ++_cmSetupState.fileRequestId;
   _cmSetupState.selectedRuntime = runtimeId;
@@ -292,6 +316,7 @@ async function setupSelectRuntime(runtimeId) {
 }
 
 async function setupOpenFile(groupIndex, fileIndex) {
+  if (!_cmSetupCurrent()) return;
   var group = _cmSetupState.selectedGroups[groupIndex];
   var file = group && (group.files || [])[fileIndex];
   var runtimeId = _cmSetupState.selectedRuntime;
@@ -329,6 +354,10 @@ function setupCloseFiles() {
   ++_cmSetupState.fileRequestId;
   var panel = document.getElementById('setup-files-panel');
   if (panel) panel.style.display = 'none';
+  ['setup-files-list', 'setup-file-preview'].forEach(function(id) {
+    var element = document.getElementById(id);
+    if (element) element.innerHTML = '';
+  });
   _cmSetupState.selectedRuntime = null;
   _cmSetupState.selectedGroups = [];
   _cmSetupRenderCatalog();
