@@ -380,7 +380,7 @@ def test_concurrent_same_conversation_is_rejected(client, monkeypatch):
 def test_status_exposes_provider_state_without_credentials(client, monkeypatch):
     _chat_store(monkeypatch)
     _provider(monkeypatch, mode=None, credential=None)
-    monkeypatch.setattr(assistant.shutil, "which", lambda name: None)
+    monkeypatch.setattr(assistant, "find_claude_cli", lambda: None)
 
     response = client.get("/api/assistant/status")
     body = response.get_json()
@@ -479,7 +479,7 @@ def test_generation_errors_do_not_echo_internal_exception_details(client, monkey
 def test_harness_executable_is_resolved_locally_and_question_uses_stdin(monkeypatch):
     from types import SimpleNamespace
     seen = {}
-    monkeypatch.setattr(assistant.shutil, 'which', lambda name: '/opt/claude' if name == 'claude' else None)
+    monkeypatch.setattr(assistant, 'find_claude_cli', lambda: '/opt/claude')
     def run(argv, **kwargs):
         seen.update(argv=argv, **kwargs)
         return SimpleNamespace(returncode=0, stdout='{"result":"answer"}')

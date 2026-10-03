@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-303 modules, 90 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+304 modules, 90 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -220,6 +220,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/git_outcomes.py` | medium | Read a repository and say whether the agent's work shipped (REQ-OBS-CEA-022). |
 | `clawmetry/guard_actuator.py` | medium | Guard actuator — the ONE path from a decision to a process. |
 | `clawmetry/guard_checks.py` | small | Guard's operator-facing catalogue and durable, node-wide preferences. |
+| `clawmetry/harness.py` | small | Resolve installed harnesses when a background service has a minimal PATH. |
 | `clawmetry/harness_bench.py` | medium | Harness Engineering bench: pure scoring math, no I/O. |
 | `clawmetry/harness_templates.py` | medium | Per-harness custom-tab template registry. |
 | `clawmetry/hook_ownership.py` | medium | Ownership-aware editing of a shared hooks array. |
