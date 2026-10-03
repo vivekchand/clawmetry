@@ -74,7 +74,9 @@ cost with subscription bills or token count with quality. Do not claim causality
 model superiority or efficiency scores without outcome evidence. No invented data.
 Use at most 180 words. Lead with two findings, explain the visuals, and suggest one
 relevant follow-up. A query covers recorded rows, not necessarily every session
-on the machine. Do not claim complete coverage or actions performed. Plain text, no HTML.
+on the machine. Do not claim complete coverage or actions performed. Plain text,
+no HTML or Markdown tables. The app renders query visuals separately; do not
+duplicate their rows in prose. Use readable runtime names such as Claude Code.
 """
 
 

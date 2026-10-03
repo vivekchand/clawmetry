@@ -219,7 +219,8 @@ def test_history_detail_requests_cannot_let_an_older_click_overwrite_a_newer_one
     subprocess.run([node, "-e", script], cwd=ROOT, check=True)
 
 
-def test_saved_panel_headers_stay_readable_with_runtime_lookup_fallback():
+@pytest.mark.parametrize('runtime_column', ['runtime', 'Runtime', 'RUNTIME'])
+def test_saved_panel_headers_stay_readable_with_runtime_lookup_fallback(runtime_column):
     node = shutil.which('node')
     if not node:
         pytest.skip('Node.js is not installed')
@@ -229,13 +230,14 @@ def test_saved_panel_headers_stay_readable_with_runtime_lookup_fallback():
     script = '\n'.join([
         "var window = {_cmRuntimeLabel: value => value === 'claude_code' ? 'Claude Code' : value};",
         helpers, table,
-        "var host = {}; renderTable(host, [{runtime:'claude_code', estimated_cost_usd:12, tokens:null, note:'<script>alert(1)</script>'}]);",
+        "var host = {}; renderTable(host, [{estimated_cost_usd:12, " + runtime_column + ":'claude_code', tokens:null, note:'<script>alert(1)</script>'}]);",
         "console.log(host.innerHTML);",
     ])
     result = subprocess.run([node, '-e', script], capture_output=True, text=True, timeout=20)
     assert result.returncode == 0, result.stderr
     assert '<th>Estimated Cost Usd</th>' in result.stdout
     assert '<td>Claude Code</td>' in result.stdout
+    assert result.stdout.index('<td>Claude Code</td>') < result.stdout.index('<td>12</td>')
     assert 'Not measured' in result.stdout
     assert '<script>' not in result.stdout
     assert '&lt;script&gt;' in result.stdout
