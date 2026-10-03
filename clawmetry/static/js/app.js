@@ -4615,13 +4615,13 @@ function _renderWasteSummary() {
     var ex = document.getElementById('cm-waste-summary');
     if (!w || typeof w !== 'object') { if (ex) ex.remove(); return; }
     var rows = [];
-    if (Number(w.reasoning_cost_usd) > 0) rows.push(['🧠', '$' + Number(w.reasoning_cost_usd).toFixed(2) + ' on reasoning', '(' + (w.reasoning_pct_of_cost || 0) + '% of spend — billed, no deliverable)']);
-    if (Number(w.low_cache_sessions) > 0) rows.push(['⚡', w.low_cache_sessions + ' session' + (w.low_cache_sessions == 1 ? '' : 's'), 'with low cache hit (context re-sent at full price)']);
-    if (Number(w.reread_tax_usd) > 0) rows.push(['⏱', '$' + Number(w.reread_tax_usd).toFixed(2) + ' re-read tax', 'rebuilding the prompt cache after its 5-min TTL expired (' + w.reread_tax_sessions + ' session' + (w.reread_tax_sessions == 1 ? '' : 's') + ')']);
-    if (!Number(w.reread_tax_usd) && Number(w.cache_expiry_sessions) > 0) rows.push(['⏱', w.cache_expiry_count + ' cache ' + (w.cache_expiry_count == 1 ? 'expiry' : 'expiries'), 'idle gaps crossed the 5-min cache TTL in ' + w.cache_expiry_sessions + ' session' + (w.cache_expiry_sessions == 1 ? '' : 's') + ' (context re-derived)']);
-    if (Number(w.compressible_sessions) > 0) rows.push(['🗜', (Number(w.compressible_usd) > 0 ? '$' + Number(w.compressible_usd).toFixed(2) + ' recoverable' : '~' + Math.round(Number(w.compressible_tokens)/1000) + 'k tokens'), 'compressible tool output (JSON / logs / diffs) in ' + w.compressible_sessions + ' session' + (w.compressible_sessions == 1 ? '' : 's')]);
-    if (Number(w.tool_failing_sessions) > 0) rows.push(['⚠', w.tool_failing_sessions + ' session' + (w.tool_failing_sessions == 1 ? '' : 's'), 'with a tool failing (tokens burned on retries)']);
-    if (Number(w.compaction_heavy_sessions) > 0) rows.push(['♻', w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's'), 'thrashing context (re-summarised repeatedly)']);
+    if (Number(w.reasoning_cost_usd) > 0) rows.push(['🧠', '$' + Number(w.reasoning_cost_usd).toFixed(2) + ' on reasoning', '(' + (w.reasoning_pct_of_cost || 0) + '% of recorded usage value)']);
+    if (Number(w.low_cache_sessions) > 0) rows.push(['⚡', w.low_cache_sessions + ' session' + (w.low_cache_sessions == 1 ? '' : 's'), 'with low recorded cache reuse']);
+    if (Number(w.reread_tax_usd) > 0) rows.push(['⏱', '$' + Number(w.reread_tax_usd).toFixed(2) + ' estimated cache refresh cost', 'after idle gaps in ' + w.reread_tax_sessions + ' session' + (w.reread_tax_sessions == 1 ? '' : 's')]);
+    if (!Number(w.reread_tax_usd) && Number(w.cache_expiry_sessions) > 0) rows.push(['⏱', w.cache_expiry_count + ' possible cache refreshes', 'after idle gaps in ' + w.cache_expiry_sessions + ' session' + (w.cache_expiry_sessions == 1 ? '' : 's')]);
+    if (Number(w.compressible_sessions) > 0) rows.push(['🗜', (Number(w.compressible_usd) > 0 ? '$' + Number(w.compressible_usd).toFixed(2) + ' estimated reduction' : '~' + Math.round(Number(w.compressible_tokens)/1000) + 'k tokens'), 'potentially compressible tool output in ' + w.compressible_sessions + ' session' + (w.compressible_sessions == 1 ? '' : 's')]);
+    if (Number(w.tool_failing_sessions) > 0) rows.push(['⚠', w.tool_failing_sessions + ' session' + (w.tool_failing_sessions == 1 ? '' : 's'), 'with tool failures to investigate']);
+    if (Number(w.compaction_heavy_sessions) > 0) rows.push(['♻', w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's'), 'with repeated context compaction']);
     if (Number(w.model_fallback_sessions) > 0) rows.push(['🔀', w.model_fallback_sessions + ' session' + (w.model_fallback_sessions == 1 ? '' : 's'), 'on a silent model fallback']);
     if (!rows.length || !Number(w.flagged_session_count)) { if (ex) ex.remove(); return; }
     var inner = rows.map(function(r){
@@ -4633,22 +4633,23 @@ function _renderWasteSummary() {
     // (works the same in cloud + self-hosted; no backend needed).
     var _opps = [];
     if (Number(w.reasoning_cost_usd) > 0 && Number(w.total_cost_usd) > 0 && (w.reasoning_cost_usd / w.total_cost_usd) > 0.15)
-      _opps.push([w.reasoning_cost_usd * 2, 'Reasoning is $' + Number(w.reasoning_cost_usd).toFixed(2) + ' of your spend — lower the reasoning effort, or use a cheaper model for routine work.']);
+      _opps.push([w.reasoning_cost_usd * 2, 'Compare results at lower reasoning effort on representative tasks before changing models.']);
     if (Number(w.tool_failing_sessions) > 0)
-      _opps.push([Number(w.tool_failing_sessions) * 1.5, 'Fix the failing tool in ' + w.tool_failing_sessions + ' session' + (w.tool_failing_sessions == 1 ? '' : 's') + ' — you\'re paying tokens on the retries.']);
+      _opps.push([Number(w.tool_failing_sessions) * 1.5, 'Review the tool failures and check whether retries were necessary.']);
     if (Number(w.low_cache_sessions) > 0)
-      _opps.push([Number(w.low_cache_sessions), w.low_cache_sessions + ' session' + (w.low_cache_sessions == 1 ? '' : 's') + ' re-send context at full price — keep the prompt stable to warm the cache.']);
+      _opps.push([Number(w.low_cache_sessions), 'Review prompt stability and cache eligibility in the sessions with low cache reuse.']);
     if (Number(w.reread_tax_usd) > 0)
-      _opps.push([Number(w.reread_tax_usd) * 2, '$' + Number(w.reread_tax_usd).toFixed(2) + ' went to rebuilding the prompt cache after its 5-min TTL expired — keep sessions warm (a heartbeat or batched turns) so context is read at ~0.1x instead of re-written at full price.']);
+      _opps.push([Number(w.reread_tax_usd) * 2, 'Check your provider\'s cache policy and recorded cache writes before changing session timing.']);
     if (Number(w.compaction_heavy_sessions) > 0)
-      _opps.push([Number(w.compaction_heavy_sessions) * 0.8, w.compaction_heavy_sessions + ' session' + (w.compaction_heavy_sessions == 1 ? '' : 's') + ' thrash context with repeated compaction — work in a smaller window.']);
+      _opps.push([Number(w.compaction_heavy_sessions) * 0.8, 'Review repeated compactions and consider splitting long tasks at natural checkpoints.']);
     if (Number(w.compressible_sessions) > 0)
-      _opps.push([(Number(w.compressible_usd) || 0) * 3 + Number(w.compressible_sessions), (Number(w.compressible_usd) > 0 ? '$' + Number(w.compressible_usd).toFixed(2) + ' of tool output' : '~' + Math.round(Number(w.compressible_tokens)/1000) + 'k tokens of tool output') + ' is compressible without changing answers (bloated JSON / logs / diffs in ' + w.compressible_sessions + ' session' + (w.compressible_sessions == 1 ? '' : 's') + ') — trim or compress large tool results before they hit the model.']);
+      _opps.push([(Number(w.compressible_usd) || 0) * 3 + Number(w.compressible_sessions), 'Try reducing large tool results, then check that the agent still has the evidence needed to finish the task.']);
     _opps.sort(function(a, b){ return b[0] - a[0]; });
     var startHere = _opps.length ? ('<div style="font-size:12px;color:#22c55e;background:rgba(34,197,94,0.08);border-radius:6px;padding:7px 10px;margin-top:10px;"><strong>Start here:</strong> ' + escHtml(_opps[0][1]) + '</div>') : '';
     var html = '<div id="cm-waste-summary" style="background:var(--bg-secondary,#161b22);border:1px solid var(--border-primary,#30363d);border-left:3px solid #E5443A;border-radius:10px;padding:14px 18px;margin:0 0 16px;">'
-      + '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">💡 Recoverable spend '
-      + '<span style="font-weight:500;color:var(--text-muted,#6b7280);">— ' + w.flagged_session_count + ' of ' + w.session_count + ' recent sessions show a waste signal</span></div>'
+      + '<div style="font-size:13px;font-weight:700;color:var(--text-primary,#e6edf3);margin-bottom:8px;">💡 Cost review '
+      + '<span style="font-weight:500;color:var(--text-muted,#6b7280);">(' + Number(w.flagged_session_count) + ' of ' + Number(w.session_count) + ' recent sessions have review signals)</span></div>'
+      + '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">All runtimes on this node. Dollar figures are estimates at published rates, not an invoice or proven savings. Reasoning can be useful; these signals do not measure the quality of the result.</div>'
       + inner
       + startHere
       + '<div style="font-size:12px;color:var(--text-muted,#6b7280);margin-top:8px;">Drill into each on the Cost tab. <a href="https://clawmetry.com/blog/estimating-productivity-gains" target="_blank" rel="noopener" style="color:#E5443A;">How to estimate what this is worth →</a></div>'
@@ -4883,11 +4884,11 @@ function _cmRtRecentlyActive() {
 // note appears only for a real non-zero figure on a detected subscription: a
 // plan includes usage, it does not make it free (REQ-OBS-CEA-025.4).
 function _cmHeroCostChip(value, entry, onPlan) {
-  var included = !!onPlan && Number(value) !== 0;
+  var subscriptionAuth = !!onPlan && Number(value) !== 0;
   return '<strong style="color:var(--text-primary);">'
     + window.cmCostFigure(value, entry, { noBadge: true, label: 'Cost today' }) + '</strong>'
     + (entry ? ' ' + window.cmProv.badge(entry, { label: 'Cost today' }) : '')
-    + (included ? ' <span style="color:#22c55e;">included in your plan, not an extra bill</span>' : '');
+    + (subscriptionAuth ? ' <span style="color:var(--text-muted);">Subscription authentication detected. Check your provider for actual charges.</span>' : '');
 }
 function _renderOverviewHero() {
   var hero = document.getElementById('overview-hero');
@@ -4923,13 +4924,15 @@ function _renderOverviewHero() {
   // available (cloud, or the daemon briefly unreachable).
   var _live = window._cmLive;
   var _liveRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  if (_liveRt && _liveRt !== 'all') busy = _cmRtRecentlyActive();
+  if (_live && _live.rt !== _liveRt) _live = null;
   if (!_live || _live.rt !== _liveRt || (Date.now() - _live.ts) >= _CM_LIVE_TTL_MS) {
     _cmLoadLiveSessions(function () { try { _renderOverviewHero(); } catch (e) {} });
   }
   var _working = (_live && _live.counts && _live.counts.working) || 0;
   var _waiting = (_live && _live.counts && _live.counts.waiting) || 0;
   var _liveKnown = !!(_live && _live.available);
-  if (_working > 0) busy = true;
+  if (_liveKnown) busy = _working > 0;
 
   // Headline. Say the number and let it carry the news; fall back to the old
   // single-boolean sentence only when the session list can't be read.
@@ -4963,6 +4966,8 @@ function _renderOverviewHero() {
   // model card over ov.model here, else the hero kept showing the node's
   // dominant model (e.g. "running claude-opus-4-8" while PicoClaw is selected).
   var _scope = window._cmRuntimeScope;
+  if (_scope && _scope.runtime !== _liveRt) _scope = null;
+  var _scoped = !!(_liveRt && _liveRt !== 'all');
   // The cost tile starts life as a literal '$0.00' placeholder and only
   // reaches its real value once loadMiniWidgets lands, ~15s into a load. So
   // '$0.00' means EITHER 'genuinely free' OR 'not loaded yet', and the hero
@@ -4971,26 +4976,28 @@ function _renderOverviewHero() {
   // $8.49 of spend (founder report 2026-08-15). Track knownness explicitly:
   // window._cmCostTodayRaw is the number loadMiniWidgets actually rendered.
   var _costRaw = window._cmCostTodayRaw;
-  var _costKnown = _scope ? true : (typeof _costRaw === 'number');
+  var _costKnown = _scope ? (typeof _scope.cost === 'number' && Number.isFinite(_scope.cost))
+                         : (!_scoped && window._cmCostTodayRuntime === 'all' && typeof _costRaw === 'number' && Number.isFinite(_costRaw));
   // The number itself, not the tile's text read back off the DOM: the text
   // is the formatter's output and cannot carry a basis.
-  var _costVal = _scope ? Number(_scope.cost || 0) : _costRaw;
-  var model = _scope ? (_txt('model-primary') || _scope.model || '—')
-                     : (ov.model || _txt('model-primary') || 'your model');
+  var _costVal = _scope ? _scope.cost : _costRaw;
+  var model = _scope ? (_scope.model || null)
+                     : (_scoped ? null : (ov.model || _txt('model-primary') || null));
   // Node-wide, the chip is labelled "today" below, so it must BE today:
   // ov.sessionCount is an all-time count with no date predicate and read 89
   // on a day that had 16. Fall back to the all-time number only on a daemon
   // too old to send sessionsToday, where the label is dropped instead.
   var _todayKnown = (typeof ov.sessionsToday === 'number');
   var sessions = _scope ? _scope.sessions
-                        : (_todayKnown ? ov.sessionsToday
-                           : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null));
+                        : (_scoped ? null : (_todayKnown ? ov.sessionsToday
+                           : ((typeof ov.sessionCount === 'number') ? ov.sessionCount : null)));
   // Never assert 'free' from a number we have not actually read.
   var _onPlan = /oauth/i.test((document.getElementById('cost-trend') || {}).textContent || '');
   // Never assert 'free' (or 'included') from a number we have not read, and
   // never from the tile's text: only from the value loadMiniWidgets rendered.
   var free = _costKnown && (_costVal === 0 || _onPlan);
   var say = window._cmLastAgentSay;
+  if (_scoped && say && say.rt !== _liveRt) say = null;
   var sayText = say && say.text ? String(say.text).replace(/\s+/g, ' ').trim() : '';
   if (sayText.length > 90) sayText = sayText.slice(0, 90) + '…';
 
@@ -5024,7 +5031,7 @@ function _renderOverviewHero() {
       _cmLoadEfficiency(function () { window._cmEffHeroWait = false; try { _renderOverviewHero(); } catch (e) {} });
     }
   } catch (_e) {}
-  stats.push('🧠 running <strong style="color:var(--text-primary);">' + escHtml(model) + '</strong>');
+  if (model && model !== '—') stats.push('🧠 Model <strong style="color:var(--text-primary);">' + escHtml(model) + '</strong>');
   // Live throughput (⚡ tok/s) from the today-token delta between renders —
   // matches `clawmetry status --live`. Shown only while the agent is producing.
   try {
@@ -5158,9 +5165,14 @@ async function loadAll() {
     }
 
     // Usage may be slow on first run; keep trying in background with timeout.
+    var usageRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
     try {
-      var usage = await fetchJsonWithTimeout('/api/usage', 5000);
+      var usageUrl = '/api/usage' + (!window.CLOUD_MODE && usageRt !== 'all'
+        ? '?runtime=' + encodeURIComponent(usageRt) : '');
+      var usage = await fetchJsonWithTimeout(usageUrl, 5000);
+      if (_cmRuntimeFilter() !== usageRt) return false;
       window._cmLastUsage = usage;
+      window._cmLastUsageRuntime = usageRt;
       loadMiniWidgets(overview, usage);
     } catch (e) {
       // #5935: this used to draw $0.00 and 0 tokens -- figures nobody had
@@ -5169,7 +5181,8 @@ async function loadAll() {
       // one; otherwise render the rest of the widgets and put the cost and
       // token tiles back on their "still loading" placeholders. The 10 s
       // Overview refresh retries.
-      if (window._cmLastUsage) {
+      if (_cmRuntimeFilter() !== usageRt) return false;
+      if (window._cmLastUsage && window._cmLastUsageRuntime === usageRt) {
         loadMiniWidgets(overview, window._cmLastUsage);
       } else {
         Promise.resolve(loadMiniWidgets(overview, {}))
@@ -5201,9 +5214,8 @@ async function loadAll() {
 // earlier answer exists. Their template placeholders, never $0.00 or 0: a
 // figure nobody measured must not read as a measured zero.
 function _cmUsageTilesStillLoading() {
-  // A runtime is selected: loadMiniWidgets just drew that runtime's cost and
-  // tokens from /api/runtime-summary, which DID answer. Those figures are
-  // measured, so they stay; only the node-wide tiles wait for /api/usage.
+  // A selected runtime has its own measured or unavailable state. Preserve
+  // that state instead of replacing it with node-wide loading placeholders.
   if (window._cmRuntimeScope) return;
   // loadMiniWidgets(overview, {}) badged the tile "basis unknown" for a
   // payload that has no figures yet. No figure, no basis claim beside it.
@@ -5219,7 +5231,48 @@ function _cmUsageTilesStillLoading() {
   window._cmTodayTokensRaw = undefined;
 }
 
+function _cmScopedOverviewUsage(runtime, total, summary, periods) {
+  // The caller selects summary from runtimes[runtime]; that slice has no ID.
+  summary = summary || {};
+  var split = !!(periods && ['day', 'week', 'month'].every(function (period) {
+    return periods[period] && periods[period].runtime === runtime;
+  }));
+  function value(period, key) {
+    var raw = split ? periods[period][key] : null;
+    if (raw == null || raw === '') return null;
+    var n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  var rawCount = total == null || total === '' ? summary.sessions : total;
+  var count = rawCount == null ? null : Number(rawCount);
+  if (count != null && (!Number.isFinite(count) || count < 0)) count = null;
+  return {
+    runtime: runtime, periodSplit: split,
+    sessions: count,
+    sessionsToday: value('day', 'sessions_count'),
+    tokensToday: value('day', 'total_tokens'), tokensMonth: value('month', 'total_tokens'),
+    cost: value('day', 'total_cost'), costWeek: value('week', 'total_cost'),
+    costMonth: value('month', 'total_cost'), model: summary.primary_model || null
+  };
+}
+
+function _cmLocalOverviewPeriods(runtime, usage) {
+  var coverage = usage && usage.coverage;
+  if (!usage || usage._source !== 'local_store' || !coverage || coverage.runtime !== runtime) return null;
+  var known = coverage.status === 'ok' || coverage.status === 'no_activity';
+  function period(tokenKey, costKey) {
+    var costKnown = known && !(window.cmProv && window.cmProv.isUnknown(window.cmProv.of(usage, costKey)));
+    return {runtime: runtime, total_tokens: known ? usage[tokenKey] : null,
+      total_cost: costKnown ? usage[costKey] : null};
+  }
+  return {day: period('today', 'todayCost'), week: period('week', 'weekCost'), month: period('month', 'monthCost')};
+}
+
 async function loadMiniWidgets(overview, usage) {
+  var widgetRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var widgetScoped = !!(widgetRt && widgetRt !== 'all');
+  var localPeriods = !window.CLOUD_MODE ? _cmLocalOverviewPeriods(widgetRt, usage) : null;
+  var baseMatches = !widgetScoped || !!localPeriods;
   // 💰 Cost Ticker. provenance.js loads before app.js (asserted by
   // tests/test_provenance.py), so every figure below goes through it.
   // How these three numbers were obtained, on the tile's label. One badge for
@@ -5227,17 +5280,18 @@ async function loadMiniWidgets(overview, usage) {
   // same rule, so they share a basis.
   var _costEntry = window.cmProv ? window.cmProv.of(usage, 'todayCost') : null;
   // The hero chip prints this same entry beside this same number.
-  window._cmCostTodayEntry = _costEntry;
+  window._cmCostTodayEntry = baseMatches ? _costEntry : null;
+  window._cmCostTodayRuntime = baseMatches ? widgetRt : null;
   var _costUnknown = window.cmProv ? window.cmProv.isUnknown(_costEntry) : false;
   var _basisEl = document.getElementById('cost-basis-badge');
   if (_basisEl && window.cmProv) {
-    _basisEl.innerHTML = window.cmProv.badge(_costEntry, { label: 'Cost' });
+    _basisEl.innerHTML = baseMatches ? window.cmProv.badge(_costEntry, { label: 'Cost' }) : '';
   }
   // Record the value we actually rendered so the hero can tell a real $0.00
   // from the placeholder it would otherwise read off the DOM. When the cost
   // is UNKNOWN there is no value to record: leaving a 0 here would have the
   // hero announce "$0.00, free on your plan" over a spend nobody could read.
-  if (_costUnknown || usage.todayCost == null) {
+  if (!baseMatches || _costUnknown || usage.todayCost == null) {
     window._cmCostTodayRaw = null;
   } else {
     window._cmCostTodayRaw = Number(usage.todayCost || 0);
@@ -5245,6 +5299,7 @@ async function loadMiniWidgets(overview, usage) {
   var _setCost = function (id, key, label) {
     var el = document.getElementById(id);
     if (!el) return;
+    if (!baseMatches) { el.textContent = 'Loading...'; return; }
     if (window.cmProv) {
       // Each window gets its OWN entry: they share a basis but not a period,
       // and a week figure whose tooltip says "over today" is a new small lie
@@ -5303,11 +5358,11 @@ async function loadMiniWidgets(overview, usage) {
   loadToolActivity();
   
   // 📊 Token Burn Rate
-  function fmtTokens(n) { return n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
-  document.getElementById('token-rate').textContent = fmtTokens(usage.month || 0);
-  document.getElementById('tokens-today').textContent = fmtTokens(usage.today || 0);
+  function fmtTokens(n) { return n == null ? 'Not measured' : n >= 1000000 ? (n/1000000).toFixed(1) + 'M' : n >= 1000 ? (n/1000).toFixed(0) + 'K' : String(n); }
+  document.getElementById('token-rate').textContent = fmtTokens(baseMatches ? usage.month : null);
+  document.getElementById('tokens-today').textContent = fmtTokens(baseMatches ? usage.today : null);
   // Raw today-token total (unformatted) so the hero can compute live tokens/sec.
-  window._cmTodayTokensRaw = Number(usage.today || 0);
+  window._cmTodayTokensRaw = baseMatches ? usage.today : null;
   
   // SESSIONS card — show "sessions today" (overview.sessionCount), the SAME
   // definition as the Overview hero. Previously this card showed the LENGTH of
@@ -5319,8 +5374,8 @@ async function loadMiniWidgets(overview, usage) {
   // Same honesty fix as the hero chip: the card is LABELLED "Sessions today",
   // so it must carry today's count, not the all-time sessionCount.
   document.getElementById('hot-sessions-count').textContent =
-    (typeof overview.sessionsToday === 'number' ? overview.sessionsToday
-                                                : overview.sessionCount) || 0;
+    widgetScoped ? 'Loading...' : ((typeof overview.sessionsToday === 'number' ? overview.sessionsToday
+                                                : overview.sessionCount) || 0);
 
   // 📈 Runtime scope — when a runtime is selected, the Overview stat cards
   // (sessions / tokens / cost / model) must show ONLY that runtime's data
@@ -5329,10 +5384,10 @@ async function loadMiniWidgets(overview, usage) {
   //
   // Source of truth: the public v1 API, which filters SERVER-SIDE by ?runtime=
   // (cloud mode). period=day -> the "today" cards, period=month -> token-rate.
-  // Local mode has no v1 API, so it falls back to the /api/runtime-summary slice
-  // (per-runtime totals; the model already used this). `_cmRuntimeScope` is the
+  // Local mode reuses the scoped /api/usage response for period values and
+  // /api/runtime-summary for the model and all-time session count. `_cmRuntimeScope` is the
   // override the hero reads; null = node-wide (unchanged path).
-  var _ovModel = overview.model || 'unknown';
+  var _ovModel = widgetScoped ? '—' : (overview.model || 'unknown');
   window._cmRuntimeScope = null;
   try {
     var _ovRt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -5349,7 +5404,7 @@ async function loadMiniWidgets(overview, usage) {
       // runtime reads as "sessions gone" (founder report 2026-06-03: OpenClaw has
       // 2 sessions on record but the Overview showed 0). Use the switcher's
       // per-runtime total; fall back to the period count if it's not populated.
-      var _rtTotal = (window._cmGlobalRtCounts && window._cmGlobalRtCounts[_ovRt]) || 0;
+      var _rtTotal = window._cmGlobalRtCounts && window._cmGlobalRtCounts[_ovRt];
       var _scope = null;
       if (window.CLOUD_MODE) {
         // Server-side filtered, period-accurate (the founder's chosen contract).
@@ -5360,53 +5415,40 @@ async function loadMiniWidgets(overview, usage) {
             var _d = ((await _dR.json()) || {}).data || {}, _w = ((await _wR.json()) || {}).data || {}, _m = ((await _mR.json()) || {}).data || {};
             // Guard against an echo/stale mismatch (only trust a response that
             // confirms it filtered to the runtime we asked for).
-            if (String(_d.runtime || '') === _ovRt) {
-              _scope = { runtime: _ovRt, sessions: _rtTotal || (_m.sessions_count | 0) || (_d.sessions_count | 0),
-                         sessionsToday: _d.sessions_count | 0,
-                         tokensToday: _d.total_tokens | 0, tokensMonth: _m.total_tokens | 0,
-                         cost: +_m.total_cost || 0, costWeek: +_w.total_cost || 0,
-                         costMonth: +_m.total_cost || 0, model: _ovModel };
-            }
+            _scope = _cmScopedOverviewUsage(_ovRt, _rtTotal, _rs,
+              {day: _d, week: _w, month: _m});
           }
         } catch (e2) { /* fall through to slice */ }
       }
-      if (!_scope && _rs) {
-        // Local-mode fallback: the runtime-summary slice has per-runtime totals
-        // (not period-split, but scoped to the runtime — better than node-wide).
-        _scope = { runtime: _ovRt, sessions: _rtTotal || (_rs.sessions | 0),
-                   sessionsToday: _rs.sessions | 0,
-                   tokensToday: _rs.tokens | 0, tokensMonth: _rs.tokens | 0,
-                   cost: +_rs.cost_usd || 0, costWeek: +_rs.cost_usd || 0,
-                   costMonth: +_rs.cost_usd || 0, model: _ovModel };
-      }
+      // Lifetime totals do not establish today's or this month's usage.
+      if (!_scope) _scope = _cmScopedOverviewUsage(_ovRt, _rtTotal, _rs, localPeriods);
+      if (_cmRuntimeFilter() !== _ovRt) return;
       if (_scope) {
         window._cmRuntimeScope = _scope;
-        var _fmtT = function (n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n); };
-        var _set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v; };
+        var _fmtT = function (n) { return n == null ? 'Not measured' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n); };
+        var _set = function (id, v) { var e = document.getElementById(id); if (e) e.textContent = v == null ? 'Not measured' : v; };
         _set('hot-sessions-count', _scope.sessions);
         _set('tokens-today', _fmtT(_scope.tokensToday));
         _set('token-rate', _fmtT(_scope.tokensMonth));
-        window._cmCostTodayRaw = Number(_scope.cost || 0);
-        // These three came from the runtime-scoped API, not the payload
-        // loadMiniWidgets badged, and the local-mode fallback above is NOT
-        // period-split: it repeats the runtime's all-time total in all three
-        // slots. One entry for the source actually used is shared by the
-        // tile, its badge and the hero chip, so they cannot disagree. This
+        window._cmCostTodayRaw = _scope.cost;
+        window._cmCostTodayRuntime = _ovRt;
+        // These windows come from confirmed runtime-scoped usage. Missing
+        // period data remains unknown; lifetime totals never substitute.
+        // The tile and hero share the same figure and financial basis. This
         // block used to call an fmtCost that does not exist in this scope:
         // the ReferenceError was swallowed below, the tile kept node-wide
         // figures and the hero printed the runtime's.
-        var _split = (_scope.costWeek !== _scope.costMonth);
+        var _split = _scope.periodSplit;
         var _scopeEntry = {
-          basis: _split ? 'derived' : 'estimated',
-          label: _split ? 'derived' : 'estimated',
+          basis: _split ? 'derived' : 'unknown',
+          label: _split ? 'derived' : 'Not measured',
           hint: _split
             ? 'Derived: computed from measured inputs by an exact rule.'
-            : 'Estimated: modelled, with an assumption that can be wrong.',
+            : 'Period-specific usage is not available from this source.',
           formula: _split
             ? ('measured token counts for runtime ' + (_scope.runtime || '')
                + ', priced against the provider\'s published rate card')
-            : ('this runtime\'s all-time total, standing in for all three '
-               + 'windows because the scoped source is not split by period'),
+            : 'Lifetime totals are not used as daily, weekly, or monthly measurements.',
           source: _split ? '/api/v1/usage?runtime=' + (_scope.runtime || '')
                          : '/api/runtime-summary',
           cost_basis: 'published_rate',
@@ -5414,23 +5456,42 @@ async function loadMiniWidgets(overview, usage) {
             + '(computed by the runtime from published rates), otherwise '
             + 'ClawMetry\'s published price table'
         };
+        if (!_split) _scopeEntry = null;
+        else if (localPeriods) _scopeEntry = _costEntry;
         window._cmCostTodayEntry = _scopeEntry;
         var _setScopedCost = function (id, v, label) {
           var e = document.getElementById(id);
-          if (e) e.innerHTML = window.cmProv.figure(v, _scopeEntry, { label: label, noBadge: true });
+          var entry = _scopeEntry;
+          if (localPeriods && window.cmProv) entry = window.cmProv.of(usage,
+            {'cost-today':'todayCost', 'cost-week':'weekCost', 'cost-month':'monthCost'}[id]);
+          if (e) e.innerHTML = v == null ? 'Not measured' : window.cmProv.figure(v, entry, { label: label, noBadge: true });
         };
         _setScopedCost('cost-today', _scope.cost, 'Cost today');
         // SPENDING wk/mo sub-figures scope too (were node-wide projections).
-        if (_scope.costWeek != null) _setScopedCost('cost-week', _scope.costWeek, 'Cost this week');
-        if (_scope.costMonth != null) _setScopedCost('cost-month', _scope.costMonth, 'Cost this month');
+        _setScopedCost('cost-week', _scope.costWeek, 'Cost this week');
+        _setScopedCost('cost-month', _scope.costMonth, 'Cost this month');
         try {
           var _sBadge = document.getElementById('cost-basis-badge');
-          if (_sBadge) _sBadge.innerHTML = window.cmProv.badge(_scopeEntry, { label: 'Cost' });
+          if (_sBadge) _sBadge.innerHTML = _scopeEntry ? window.cmProv.badge(_scopeEntry, { label: 'Cost' }) : 'Not measured';
         } catch (_eb) {}
         window._cmTodayTokensRaw = _scope.tokensToday;
       }
     }
-  } catch (e) { /* keep the node-dominant values */ }
+  } catch (e) {
+    if (widgetScoped && _cmRuntimeFilter() === widgetRt) {
+      // A failed summary cannot restore another runtime's model or leave
+      // permanent loading text. Retain only separately confirmed usage.
+      window._cmRuntimeScope = _cmScopedOverviewUsage(widgetRt,
+        window._cmGlobalRtCounts && window._cmGlobalRtCounts[widgetRt], null, localPeriods);
+      var countEl = document.getElementById('hot-sessions-count');
+      if (countEl) countEl.textContent = window._cmRuntimeScope.sessions == null
+        ? 'Not measured' : window._cmRuntimeScope.sessions;
+      if (!baseMatches) ['cost-today','cost-week','cost-month','cost-basis-badge','tokens-today','token-rate'].forEach(function (id) {
+        var unavailable = document.getElementById(id);
+        if (unavailable) unavailable.textContent = 'Not measured';
+      });
+    }
+  }
   document.getElementById('model-primary').textContent = _ovModel;
   // Relabel the SESSIONS tile: scoped shows the runtime's TOTAL (matches the
   // switcher) so "today" would be wrong; node-wide stays the live "today".
@@ -7213,23 +7274,41 @@ async function loadToolActivity() {
 }
 
 async function loadActivityStream() {
+  var rt = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
+  var apiRt = (typeof _cmClientFilterRt === 'function') ? _cmClientFilterRt(rt) : rt;
+  var requestId = (window._cmActivityRequest || 0) + 1;
+  window._cmActivityRequest = requestId;
+  window._cmLastAgentSay = null;
+  function current() {
+    return window._cmActivityRequest === requestId &&
+      ((typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all') === rt;
+  }
   try {
-    var transcripts = await fetchJsonWithTimeout('/api/transcripts', 4000);
+    var transcripts = await fetchJsonWithTimeout('/api/transcripts' +
+      (apiRt && apiRt !== 'all' ? '?runtime=' + encodeURIComponent(apiRt) : ''), 4000);
+    if (!current()) return;
     var activities = [];
+    var rows = Array.isArray(transcripts.transcripts) ? transcripts.transcripts : [];
+    if (apiRt && apiRt !== 'all') rows = rows.filter(function (row) {
+      return typeof _cmRuntimeOf === 'function' && _cmRuntimeOf(row) === apiRt;
+    });
     
     // Get the most recent transcript to parse for activity
-    if (transcripts.transcripts && transcripts.transcripts.length > 0) {
-      var recent = transcripts.transcripts[0];
+    if (rows.length > 0) {
+      var recent = rows[0];
       try {
-        var transcript = await fetchJsonWithTimeout('/api/transcript/' + recent.id, 4000);
-        var recentMessages = transcript.messages.slice(-10); // Last 10 messages
+        var transcript = await fetchJsonWithTimeout('/api/transcript/' + encodeURIComponent(recent.id), 4000);
+        if (!current()) return;
+        var messages = Array.isArray(transcript.messages) ? transcript.messages : [];
+        var recentMessages = messages.slice(-10); // Last 10 messages
         // Stash the latest assistant reply for the Overview hero ("Last thing
         // it did: …") — reuses this already-fetched transcript, no new request.
         try {
-          for (var _mi = transcript.messages.length - 1; _mi >= 0; _mi--) {
-            var _m = transcript.messages[_mi];
-            if (_m && _m.role === 'assistant' && _m.content && String(_m.content).trim()) {
-              window._cmLastAgentSay = { text: String(_m.content).trim(), when: _m.timestamp || null };
+          for (var _mi = messages.length - 1; _mi >= 0; _mi--) {
+            var _m = messages[_mi];
+            if (_m && _m.role === 'assistant' && typeof _m.content === 'string' && _m.content.trim()) {
+              window._cmLastAgentSay = { text: String(_m.content).trim(), when: _m.timestamp || null,
+                rt: rt === 'all' && typeof _cmRuntimeOf === 'function' ? _cmRuntimeOf(recent) : rt };
               break;
             }
           }
@@ -7239,7 +7318,7 @@ async function loadActivityStream() {
         } catch (_e) {}
 
         recentMessages.forEach(function(msg) {
-          if (msg.role === 'assistant' && msg.content) {
+          if (msg && msg.role === 'assistant' && typeof msg.content === 'string' && msg.content) {
             var content = msg.content.toLowerCase();
             var activity = '';
             var time = new Date(msg.timestamp || Date.now()).toLocaleTimeString();
@@ -7266,19 +7345,19 @@ async function loadActivityStream() {
     }
     
     if (activities.length === 0) {
-      activities = [
-        new Date().toLocaleTimeString() + ' 🤖 AI agent initialized',
-        new Date().toLocaleTimeString() + ' 📡 Monitoring for activity...'
-      ];
+      activities = ['No recent activity recorded for this view.'];
     }
     
     var html = activities.slice(-8).map(function(a) {
       return '<div style="padding:4px 0; border-bottom:1px solid #1a1a30; color:#ccc;">' + escHtml(a) + '</div>';
     }).join('');
     
-    document.getElementById('activity-stream').innerHTML = html;
+    var stream = document.getElementById('activity-stream');
+    if (stream && current()) stream.innerHTML = html;
+    try { if (typeof _renderOverviewHero === 'function') _renderOverviewHero(); } catch (_e_empty) {}
   } catch(e) {
-    document.getElementById('activity-stream').innerHTML = '<div style="color:#666;">' + t("app.error_loading_activity_stream", null, "Error loading activity stream") + '</div>';
+    var errorStream = document.getElementById('activity-stream');
+    if (errorStream && current()) errorStream.innerHTML = '<div style="color:#666;">' + t("app.error_loading_activity_stream", null, "Error loading activity stream") + '</div>';
   }
 }
 
