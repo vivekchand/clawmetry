@@ -1,5 +1,13 @@
 ## Unreleased
 
+### Fixed: nav tooltips show their English text when a translation is missing
+
+- Tooltip strings in the nav that were not yet in a locale's catalog showed blank space or a raw key. The Guard, Assistant, Brain and Fleet nav entries now carry checked English fallbacks so every locale reads a complete sentence until the translation sync catches up. Carries #6277.
+
+### Hardened: bandit non-bulk medium findings are explicitly acknowledged
+
+- Security-scan annotations cover the remaining non-bulk `medium` findings so `make lint` passes the bandit pass without a suppression file. No behaviour change. Carries #6279.
+
 ### Added: opt-in capability-gap export
 
 - **Why:** ClawMetry records when an agent asked for a tool that does not exist, hit a permission refusal, a rate limit or a budget boundary. There was no machine-readable, taxonomy-tagged way for a local measurement tool to read those signals without reading transcripts (#5412, proposed by @flyoung588).
