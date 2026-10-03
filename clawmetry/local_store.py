@@ -60,6 +60,7 @@ from clawmetry.investigation_catalog import InvestigationCatalogMixin
 from clawmetry.store_errors import (  # noqa: F401  (re-exported for tests)
     int32_or_none as _int32_or_none,
     is_data_error as _is_data_error,
+    storable_text as _storable_text,
 )
 import threading
 import time
@@ -4157,6 +4158,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
         self._chain_heads: dict[str, str] = {}
         self._flusher_thread: threading.Thread | None = None
         self._last_flush_ts = time.monotonic()
+        # Events stored with U+FFFD in place of text the driver could not encode.
+        self._events_text_scrubbed = 0
         # Issue #1594 — auto-vacuum bookkeeping. ``_bytes_since_vacuum_check``
         # accumulates an approximation of the bytes flushed since we last
         # stat()ed the DB file; once it crosses ``AUTO_VACUUM_CHECK_EVERY_BYTES``
@@ -12289,8 +12292,22 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
             if not self._ring:
                 return 0
             batch = list(self._ring)
-        usages = [_extract_event_usage(e) for e in batch]
-        rows = [_event_to_row(e, u) for e, u in zip(batch, usages)]
+        # A string the driver cannot encode (a lone surrogate from a JSON
+        # body) fails the same way on every retry and holds every event queued
+        # beside it. On a data error the batch is rewritten once with
+        # storable text and written again; the ring is popped by count, so
+        # the local copy can differ from what is queued.
+        scrubbed = False
+        try:
+            usages = [_extract_event_usage(e) for e in batch]
+            rows = [_event_to_row(e, u) for e, u in zip(batch, usages)]
+        except Exception as exc:  # noqa: BLE001
+            if not _is_data_error(exc):
+                raise
+            batch = self._scrub_batch_text(batch, exc)
+            scrubbed = True
+            usages = [_extract_event_usage(e) for e in batch]
+            rows = [_event_to_row(e, u) for e, u in zip(batch, usages)]
         last_exc: Exception | None = None
         for attempt in range(FLUSH_MAX_ATTEMPTS):
             try:
@@ -12378,6 +12395,15 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                     if self.recover_invalidated_db(exc):
                         continue
                     break
+                if not scrubbed and _is_data_error(exc):
+                    scrubbed = True
+                    clean = self._scrub_batch_text(batch, exc)
+                    if clean is not batch:
+                        batch = clean
+                        usages = [_extract_event_usage(e) for e in batch]
+                        rows = [_event_to_row(e, u) for e, u in zip(batch, usages)]
+                        if attempt + 1 < FLUSH_MAX_ATTEMPTS:
+                            continue
                 if attempt + 1 < FLUSH_MAX_ATTEMPTS:
                     # Exponential backoff: 0.05s, 0.10s, 0.20s, ... capped at 1s.
                     delay = min(FLUSH_RETRY_BASE_SECS * (2 ** attempt), 1.0)
@@ -12447,6 +12473,21 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
             except Exception:
                 pass  # never crash the flusher on a label failure
         return len(rows)
+
+    def _scrub_batch_text(self, batch: list, exc: BaseException) -> list:
+        """The flush batch with unstorable text replaced (``storable_text``).
+        Returns ``batch`` itself when no event needed it."""
+        clean = [_storable_text(e) for e in batch]
+        changed = sum(1 for a, b in zip(batch, clean) if a is not b)
+        if not changed:
+            return batch
+        self._events_text_scrubbed += changed
+        log.warning(
+            "local store: %d of %d queued events carried text the store "
+            "cannot encode (%s); stored with U+FFFD in its place",
+            changed, len(batch), _brief_exc(exc),
+        )
+        return clean
 
     def flush(self) -> int:
         """Public synchronous flush. Drains the ring into DuckDB now and

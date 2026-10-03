@@ -22,13 +22,18 @@ names (``_is_data_error``, ``_int32_or_none``):
 * the event row builder stores an out-of-range ``events.token_count`` as
   unknown, because an exception in the ring flush fails every event queued
   beside it.
+* the ring flush that fails with a data error rewrites the text of its events
+  with ``storable_text`` and writes them again, so an event carrying a lone
+  surrogate lands (with U+FFFD in its place) instead of holding the ring.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
 
-__all__ = ["INT32_MIN", "INT32_MAX", "int32_or_none", "is_data_error"]
+__all__ = [
+    "INT32_MIN", "INT32_MAX", "int32_or_none", "is_data_error", "storable_text",
+]
 
 INT32_MIN, INT32_MAX = -(2 ** 31), 2 ** 31 - 1
 
@@ -63,3 +68,36 @@ def is_data_error(exc: BaseException) -> bool:
     if isinstance(exc, duckdb.DataError):
         return True
     return isinstance(exc, RuntimeError) and "Unable to cast Python instance" in str(exc)
+
+
+def _storable_str(s: str) -> str:
+    if s.isascii():
+        return s
+    try:
+        s.encode("utf-8")
+        return s
+    except UnicodeEncodeError:
+        # A split surrogate pair becomes its character; a lone one, U+FFFD.
+        return s.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+
+
+def storable_text(v: Any) -> Any:
+    """``v`` with every string the driver cannot encode made storable: a lone
+    surrogate (JSON allows ``"\\ud800"``, UTF-8 does not) becomes U+FFFD.
+    Walks dicts (keys too), lists and tuples. Returns ``v`` itself when
+    nothing changed, so a caller can tell with ``is``."""
+    if isinstance(v, str):
+        return _storable_str(v)
+    if isinstance(v, dict):
+        out = {storable_text(k): storable_text(x) for k, x in v.items()}
+        if len(out) == len(v) and all(
+            a is b and out[a] is x for (a, x), b in zip(v.items(), out)
+        ):
+            return v
+        return out
+    if isinstance(v, (list, tuple)):
+        items = [storable_text(x) for x in v]
+        if all(a is b for a, b in zip(v, items)):
+            return v
+        return items if isinstance(v, list) else tuple(items)
+    return v
