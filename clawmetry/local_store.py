@@ -633,7 +633,7 @@ def _on_disk_bytes() -> int:
         pass
     return total
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 18
 
 # A heartbeat row is a liveness ping, not a transport envelope. The daemon's
 # heartbeat POST also carries ``cache_pushes`` -- encrypted cache blobs for the
@@ -2386,7 +2386,438 @@ _DDL = [
         last_scan   BIGINT NOT NULL
     )
     """,
+    # User-authored, read-only dashboard panels. The definition lives in
+    # DuckDB so a saved Ask question survives browser restarts and is
+    # available through the daemon to both the local dashboard and cloud
+    # snapshot builders. The query is validated before it reaches this table.
+    """
+    CREATE TABLE IF NOT EXISTS custom_dashboard_panels (
+        panel_id    VARCHAR PRIMARY KEY,
+        name        VARCHAR NOT NULL,
+        question    VARCHAR NOT NULL,
+        sql         VARCHAR NOT NULL,
+        chart_spec  VARCHAR NOT NULL DEFAULT '{}',
+        created_at  BIGINT NOT NULL,
+        updated_at  BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_custom_dashboard_panels_updated ON custom_dashboard_panels(updated_at)",
+    # Bounded local persistence for the dashboard assistant. Messages are JSON
+    # text instead of DuckDB JSON so older DuckDB files and read-only readers
+    # keep the same scalar contract.
+    """
+    CREATE TABLE IF NOT EXISTS assistant_conversations (
+        id          VARCHAR PRIMARY KEY,
+        title       VARCHAR NOT NULL,
+        messages    VARCHAR NOT NULL,
+        updated_at  BIGINT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_assistant_conversations_updated ON assistant_conversations(updated_at DESC)",
 ]
+
+# The Dives table list is documentation for the older raw_select_safe path.
+# The assistant has a separate, deliberately smaller policy because its SQL is
+# user/model supplied. Memory metadata is useful for setup questions, while
+# raw payload columns are not a chat query surface.
+_ASSISTANT_ALLOWED_TABLES = frozenset({
+    "events",
+    "sessions",
+    "daily_aggregates",
+    "memory_blobs",
+    "heartbeats",
+    "system_snapshots",
+    "openclaw_channels",
+    "crons",
+    "subagents",
+})
+_ASSISTANT_SENSITIVE_TABLES = frozenset({
+    "events",
+    "memory_blobs",
+    "heartbeats",
+    "system_snapshots",
+})
+_ASSISTANT_ALLOWED_FUNCTIONS = frozenset({
+    # Aggregates and safe numeric/window helpers.
+    "approx_count_distinct", "avg", "corr", "count", "count_if", "cume_dist",
+    "dense_rank", "first", "first_value", "floor", "last", "last_value",
+    "lead", "max", "median", "min", "ntile", "percent_rank", "rank",
+    "row_number", "round", "stddev", "sum", "variance",
+    # String functions.
+    "concat", "concat_ws", "format", "left", "len", "length", "lower",
+    "ltrim", "regexp_extract", "regexp_matches", "regexp_replace", "replace",
+    "right", "rtrim", "split_part", "substr", "substring", "trim", "upper",
+    # JSON functions. Raw payload columns are rejected separately below.
+    "json_array_length", "json_extract", "json_extract_string", "json_keys",
+    "json_type", "json_valid", "to_json",
+    # Date/time and arithmetic helpers.
+    "abs", "ceil", "ceiling", "date_diff", "date_part", "date_trunc",
+    "day", "epoch", "greatest", "if", "least", "month", "nullif", "pow",
+    "now", "sqrt", "strftime", "strptime", "year",
+    # Safe scalar coercion.
+    "cast", "coalesce", "try_cast",
+})
+_ASSISTANT_ALLOWED_OPERATORS = frozenset({
+    "+", "-", "*", "/", "%", "//", "^", "**",
+    # DuckDB's AST spellings for LIKE/ILIKE and their negated forms.
+    "~~", "!~~", "~~*", "!~~*",
+})
+_ASSISTANT_RAW_IDENTIFIERS = frozenset({
+    "blob", "body", "content", "data", "evidence", "messages", "metadata", "payload", "raw",
+})
+_ASSISTANT_MAX_MESSAGES = 50
+_ASSISTANT_MAX_MESSAGE_BYTES = 256 * 1024
+_ASSISTANT_MAX_CONVERSATION_BYTES = 4 * 1024 * 1024
+_ASSISTANT_MAX_PANEL_ROWS = 500
+_ASSISTANT_MAX_PANELS = 50
+_ASSISTANT_MAX_QUERY_ROWS = 100
+_ASSISTANT_MAX_QUERY_TIMEOUT = 5.0
+_ASSISTANT_FILE_EXTENSIONS = frozenset({
+    "arrow", "csv", "feather", "json", "jsonl", "ndjson", "parquet",
+    "txt", "tsv", "xlsx",
+})
+
+
+def _assistant_validate_sql_shape(sql: str) -> tuple[str | None, str | None]:
+    """Return bounded SQL for the assistant's dedicated AST policy.
+
+    The assistant has a stricter DuckDB-AST policy than the legacy Dives
+    validator, including its own table and function allowlists. Keeping this
+    shape check separate lets safe scalar functions such as ``replace`` work
+    here without changing ``raw_select_safe`` or Dives callers.
+    """
+    if not isinstance(sql, str):
+        return None, "SQL rejected: query must be text"
+    normalized = sql.strip()
+    if not normalized:
+        return None, "SQL rejected: query is empty"
+    if len(normalized.encode("utf-8")) > 64 * 1024:
+        return None, "SQL rejected: query is too long"
+    return normalized, None
+
+
+def _assistant_validate_sql_ast(
+    cursor: Any, sql: str
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate DuckDB's parsed AST before table binding or execution."""
+    try:
+        raw = cursor.execute(
+            "SELECT json_serialize_sql(?)", [sql]
+        ).fetchone()
+        document = json.loads(raw[0]) if raw and raw[0] else {}
+    except Exception:
+        return None, "SQL rejected: parser could not read the query"
+    if document.get("error") or len(document.get("statements") or []) != 1:
+        return None, "SQL rejected: query must contain one readable statement"
+    statement = document["statements"][0]
+    root = statement.get("node") if isinstance(statement, dict) else None
+    if not isinstance(root, dict) or root.get("type") not in {
+        "SELECT_NODE",
+        "SET_OPERATION_NODE",
+    }:
+        return None, "SQL rejected: only SELECT queries are allowed"
+
+    cte_names: set[str] = set()
+    info: dict[str, Any] = {
+        "tables": set(),
+        "has_source": False,
+        "has_star": False,
+    }
+
+    def collect_ctes(value: Any) -> None:
+        if isinstance(value, dict):
+            cte_map = value.get("cte_map")
+            entries = cte_map.get("map") if isinstance(cte_map, dict) else None
+            if isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict) and entry.get("key"):
+                        cte_names.add(str(entry["key"]).lower())
+            for child in value.values():
+                collect_ctes(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_ctes(child)
+
+    collect_ctes(root)
+    if cte_names.intersection(_ASSISTANT_ALLOWED_TABLES):
+        return None, "SQL rejected: analytics table names are reserved"
+
+    def walk(value: Any) -> str | None:
+        if isinstance(value, dict):
+            node_type = str(value.get("type") or "").upper()
+            if node_type == "TABLE_FUNCTION":
+                return "SQL rejected: table functions are not allowed"
+            if node_type == "BASE_TABLE":
+                info["has_source"] = True
+                # DuckDB represents FROM 'path.csv' as a BASE_TABLE whose
+                # name looks like an ordinary table. Reject string sources
+                # from the AST location before get_table_names() can bind
+                # them and touch the filesystem. Double-quoted identifiers
+                # are valid SQL, so only reject the path/file forms there.
+                location = value.get("query_location")
+                if isinstance(location, int) and 0 <= location < len(sql):
+                    marker = sql[location]
+                    if marker == "'":
+                        return "SQL rejected: file and string sources are not allowed"
+                    if marker == '"':
+                        end = location + 1
+                        quoted = []
+                        while end < len(sql):
+                            if sql[end] == '"':
+                                if end + 1 < len(sql) and sql[end + 1] == '"':
+                                    quoted.append('"')
+                                    end += 2
+                                    continue
+                                break
+                            quoted.append(sql[end])
+                            end += 1
+                        source_name = "".join(quoted).lower()
+                        suffix = source_name.rsplit(".", 1)[-1]
+                        if (
+                            "/" in source_name
+                            or "\\" in source_name
+                            or "://" in source_name
+                            or suffix in _ASSISTANT_FILE_EXTENSIONS
+                        ):
+                            return "SQL rejected: file and string sources are not allowed"
+                table_name = str(value.get("table_name") or "").strip().lower()
+                schema_name = str(value.get("schema_name") or "").strip()
+                catalog_name = str(value.get("catalog_name") or "").strip()
+                if schema_name or catalog_name:
+                    return "SQL rejected: explicit schemas and catalogs are not allowed"
+                if table_name and table_name not in cte_names:
+                    info["tables"].add(table_name)
+            elif node_type in {"JOIN", "SUBQUERY"}:
+                info["has_source"] = True
+            if node_type == "STAR":
+                info["has_star"] = True
+            if node_type == "COLUMN_REF":
+                columns = value.get("column_names") or []
+                if columns and str(columns[-1]).lower() in _ASSISTANT_RAW_IDENTIFIERS:
+                    return "SQL rejected: raw payload columns are not available"
+            if (
+                value.get("class") == "FUNCTION"
+                or node_type in {"FUNCTION", "WINDOW_AGGREGATE"}
+            ):
+                name = str(value.get("function_name") or "").lower()
+                if name == "count_star":
+                    name = "count"
+                if value.get("schema") or value.get("catalog"):
+                    return "SQL rejected: qualified functions are not allowed"
+                if (
+                    name not in _ASSISTANT_ALLOWED_FUNCTIONS
+                    and name not in _ASSISTANT_ALLOWED_OPERATORS
+                ):
+                    return "SQL rejected: function is not allowlisted"
+            for child in value.values():
+                error = walk(child)
+                if error:
+                    return error
+        elif isinstance(value, list):
+            for child in value:
+                error = walk(child)
+                if error:
+                    return error
+        return None
+
+    error = walk(root)
+    if error:
+        return None, error
+    unknown_ast_tables = set(info["tables"]).difference(_ASSISTANT_ALLOWED_TABLES)
+    if unknown_ast_tables:
+        return None, "SQL rejected: referenced table is not allowlisted"
+    info["cte_names"] = cte_names
+    return info, None
+
+
+def _assistant_runtime_ctes(cursor: Any, table_names: set[str]) -> str:
+    """Expose metadata-only relations and canonical runtime attribution.
+
+    Rejecting named payload columns alone is insufficient: DuckDB accepts a
+    relation alias as a whole-row struct, including inside to_json(). Project
+    raw columns out before binding any user SQL, including implicit grouping,
+    whole-row values and positional column renaming.
+    """
+    source_tables = table_names.intersection(_ASSISTANT_ALLOWED_TABLES)
+    if not source_tables:
+        return ""
+    prefixes = ", ".join(
+        "'" + prefix.replace("'", "''") + "'"
+        for prefix in _NON_OPENCLAW_RUNTIME_PREFIXES
+    )
+    runtime_expr = "LOWER(split_part(CAST(session_id AS VARCHAR), ':', 1))"
+    ctes = []
+    for table_name in sorted(source_tables):
+        columns = cursor.execute(
+            "SELECT column_name, data_type FROM information_schema.columns "
+            "WHERE table_schema = 'main' AND table_name = ? "
+            "ORDER BY ordinal_position", [table_name],
+        ).fetchall()
+        visible = [
+            'source."' + str(name).replace('"', '""') + '"'
+            for name, ctype in columns
+            if str(name).lower() not in _ASSISTANT_RAW_IDENTIFIERS
+            and str(ctype).upper() not in {"BLOB", "BYTEA", "BINARY", "VARBINARY"}
+        ]
+        if table_name in {"sessions", "events"}:
+            visible.append(
+                f"CASE WHEN {runtime_expr} IN ({prefixes}) "
+                f"THEN {runtime_expr} ELSE 'openclaw' END AS runtime"
+            )
+        if not visible:
+            raise ValueError("No analytics metadata columns are available")
+        ctes.append(
+            f"{table_name} AS ("
+            f"SELECT {', '.join(visible)} "
+            f"FROM main.{table_name} AS source)"
+        )
+    return "WITH " + ", ".join(ctes) + " SELECT * FROM ("
+
+
+def _assistant_safe_sql_error(exc: BaseException) -> str:
+    """Map DuckDB errors to categories without echoing SQL or bind data."""
+    kind = type(exc).__name__
+    messages = {
+        "BinderException": "invalid table or column reference",
+        "CatalogException": "referenced object is unavailable",
+        "ConversionException": "value conversion failed",
+        "IOException": "database I/O failed",
+        "InvalidInputException": "invalid query input",
+        "ParserException": "invalid SQL syntax",
+    }
+    return f"query failed: {messages.get(kind, 'database rejected the query')}"
+
+
+def _assistant_normalize_table_name(name: Any) -> str:
+    value = str(name or "").strip().strip('"').lower()
+    return value.rsplit(".", 1)[-1].strip('"')
+
+
+def _assistant_timestamptz_cast_query(
+    bounded_sql: str, schema: list[tuple[Any, ...]]
+) -> str | None:
+    """Cast timezone timestamps before DuckDB's Python fetch conversion.
+
+    DuckDB 1.5.x imports ``pytz`` when converting a TIMESTAMPTZ cell through
+    ``fetchmany()``. ClawMetry intentionally does not depend on pytz, so keep
+    the conversion inside DuckDB and return an ISO-like VARCHAR instead. The
+    projection is built only from DuckDB's bound result schema, never from
+    user SQL identifiers.
+    """
+    if not any(
+        "TIMESTAMP WITH TIME ZONE" in str(row[1]).upper()
+        or "TIMESTAMPTZ" in str(row[1]).upper()
+        for row in schema
+        if len(row) > 1
+    ):
+        return None
+    projection: list[str] = []
+    for row in schema:
+        name = str(row[0])
+        quoted = '"' + name.replace('"', '""') + '"'
+        type_name = str(row[1]).upper() if len(row) > 1 else ""
+        expression = (
+            f"CAST(_assistant_result.{quoted} AS VARCHAR)"
+            if "TIMESTAMP WITH TIME ZONE" in type_name
+            or "TIMESTAMPTZ" in type_name
+            else f"_assistant_result.{quoted}"
+        )
+        projection.append(f"{expression} AS {quoted}")
+    return (
+        "SELECT " + ", ".join(projection)
+        + " FROM (" + bounded_sql + ") AS _assistant_result"
+    )
+
+
+def _assistant_validate_payload(value: Any, *, depth: int = 0) -> None:
+    """Validate nested chat data without assuming semantic key names."""
+    if depth > 20:
+        raise ValueError("assistant conversation is too deeply nested")
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if not isinstance(key, str) or len(key) > 256:
+                raise ValueError("assistant message keys are too long")
+            _assistant_validate_payload(child, depth=depth + 1)
+        return
+    if isinstance(value, list):
+        for child in value:
+            _assistant_validate_payload(child, depth=depth + 1)
+        return
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return
+    raise ValueError("assistant messages must contain JSON values only")
+
+
+def _assistant_validate_panel_shape(message: Any) -> None:
+    """Apply row bounds only to the known message panel shape.
+
+    Chat sources and query results also use keys such as ``rows`` and
+    ``panels`` for scalar values. Those are ordinary JSON and must not be
+    mistaken for rendered dashboard panels.
+    """
+    if not isinstance(message, dict):
+        return
+    panels = message.get("panels")
+    if not isinstance(panels, list):
+        return
+    if len(panels) > _ASSISTANT_MAX_PANELS:
+        raise ValueError(
+            f"assistant conversations are limited to {_ASSISTANT_MAX_PANELS} panels"
+        )
+    for panel in panels:
+        if not isinstance(panel, dict):
+            continue
+        rows = panel.get("rows")
+        if isinstance(rows, list) and len(rows) > _ASSISTANT_MAX_PANEL_ROWS:
+            raise ValueError(
+                f"assistant panels are limited to {_ASSISTANT_MAX_PANEL_ROWS} rows"
+            )
+
+
+def _assistant_encode_messages(messages: Any) -> str:
+    if not isinstance(messages, list):
+        raise ValueError("assistant messages must be a list")
+    if len(messages) > _ASSISTANT_MAX_MESSAGES:
+        raise ValueError(
+            f"assistant conversations are limited to {_ASSISTANT_MAX_MESSAGES} messages"
+        )
+    encoded_parts: list[str] = []
+    for message in messages:
+        _assistant_validate_payload(message)
+        _assistant_validate_panel_shape(message)
+        try:
+            encoded = json.dumps(
+                message, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("assistant messages must be valid JSON") from exc
+        if len(encoded.encode("utf-8")) > _ASSISTANT_MAX_MESSAGE_BYTES:
+            raise ValueError(
+                f"each assistant message is limited to {_ASSISTANT_MAX_MESSAGE_BYTES} bytes"
+            )
+        encoded_parts.append(encoded)
+    result = "[" + ",".join(encoded_parts) + "]"
+    if len(result.encode("utf-8")) > _ASSISTANT_MAX_CONVERSATION_BYTES:
+        raise ValueError(
+            f"assistant conversations are limited to {_ASSISTANT_MAX_CONVERSATION_BYTES} bytes"
+        )
+    return result
+
+
+def _assistant_decode_conversation(row: tuple[Any, ...]) -> dict[str, Any]:
+    try:
+        messages = json.loads(row[2])
+        if not isinstance(messages, list):
+            raise ValueError("stored messages are not a list")
+    except Exception:
+        log.warning("local store: invalid assistant conversation %s", row[0])
+        messages = []
+    return {
+        "id": row[0],
+        "title": row[1],
+        "messages": messages,
+        "updated_at": int(row[3]),
+    }
 
 
 def _session_phase_row(row) -> dict:
@@ -17494,12 +17925,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                 # model's *response*, not part of the prompt context, so they
                 # are intentionally excluded. (Bug surfaced 2026-05-23 while
                 # verifying the OSS↔cloud parity fix.)
-                splits = _extract_usage_splits(data)
-                tok = (
-                    int(splits.get("input_tokens", 0))
-                    + int(splits.get("cache_read_tokens", 0))
-                    + int(splits.get("cache_write_tokens", 0))
-                )
+                tok = _context_prompt_tokens(data)
                 if tok > 0:
                     # Carry the turn's model so callers can size the context
                     # window correctly (e.g. 1M for the [1m] Opus variant).
@@ -17507,10 +17933,12 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                     # a hardcoded 200K window read ">100%". Probed across the
                     # same shapes _extract_usage_splits handles.
                     msg = data.get("message") if isinstance(data.get("message"), dict) else {}
+                    extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
                     model = (
                         msg.get("model")
                         or data.get("model")
                         or data.get("modelId")
+                        or extra.get("model")
                         or ""
                     )
                     cw = resolve_context_window(model, tok)
@@ -17597,28 +18025,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
         except (TypeError, ValueError):
             compaction_limit = 200
 
-        def _ctx_tokens(data: dict) -> int:
-            """Prompt-side token total the model saw this turn. Mirrors
-            query_context_window_peek, plus a ``data.extra`` fallback for the
-            Claude Code SDK echo shape (inputTokens / cacheReadInputTokens /
-            cacheCreationInputTokens live under ``extra``, which
-            ``_extract_usage_splits`` doesn't walk)."""
-            splits = _extract_usage_splits(data)
-            tok = (
-                int(splits.get("input_tokens", 0))
-                + int(splits.get("cache_read_tokens", 0))
-                + int(splits.get("cache_write_tokens", 0))
-            )
-            if tok > 0:
-                return tok
-            extra = data.get("extra") if isinstance(data.get("extra"), dict) else {}
-            if extra:
-                return (
-                    _read_usage_int(extra, _USAGE_KEYS_INPUT)
-                    + _read_usage_int(extra, _USAGE_KEYS_CACHE_READ)
-                    + _read_usage_int(extra, _USAGE_KEYS_CACHE_WRITE)
-                )
-            return 0
+        _ctx_tokens = _context_prompt_tokens
 
         def _model_of(data: dict, fallback: str) -> str:
             msg = data.get("message") if isinstance(data.get("message"), dict) else {}
@@ -17734,21 +18141,27 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                 if tok > 0:
                     by_session_util.setdefault(str(sid), []).append((str(ts or ""), tok))
 
-        def _first_after(sid: str, comp_ts: str) -> int:
+        def _first_after(sid: str, comp_ts: str) -> int | None:
             pts = by_session_util.get(str(sid)) or []
             for ts, tok in sorted(pts):
                 if ts > (comp_ts or ""):
                     return tok
-            return 0
+            return None
 
         compactions: list[dict[str, Any]] = []
         overflow_counts: dict[str, dict[str, int]] = {}
         for sid, ts, raw in comp_rows:
             data = _parse(raw)
             summary = str(data.get("summary") or "")
-            tokens_before = int(
-                data.get("tokensBefore") or data.get("tokens_before") or 0
-            )
+            raw_before = data.get("tokensBefore")
+            if raw_before is None:
+                raw_before = data.get("tokens_before")
+            try:
+                tokens_before = int(raw_before) if raw_before is not None else None
+            except (TypeError, ValueError):
+                tokens_before = None
+            if tokens_before is not None and tokens_before <= 0:
+                tokens_before = None
             from_hook = bool(data.get("fromHook") or data.get("from_hook") or False)
             comp_ts = data.get("timestamp") or ts or ""
             # Trigger inference: scan the compaction blob's own text for an
@@ -17764,7 +18177,11 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
             )
             trigger = "overflow" if is_overflow else ("proactive" if from_hook else "proactive")
             tokens_after = _first_after(str(sid), str(comp_ts))
-            reclaimed = max(0, tokens_before - tokens_after) if tokens_before else 0
+            reclaimed = (
+                max(0, tokens_before - tokens_after)
+                if tokens_before is not None and tokens_after is not None
+                else None
+            )
             compactions.append({
                 "session_id":    sid,
                 "ts":            comp_ts,
@@ -17772,6 +18189,9 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                 "tokens_before": tokens_before,
                 "tokens_after":  tokens_after,
                 "reclaimed":     reclaimed,
+                "measurement_status": "observed"
+                if tokens_before is not None and tokens_after is not None
+                else "unavailable",
                 "from_hook":     from_hook,
                 "summary":       summary,
             })
@@ -18092,7 +18512,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                     f"ORDER BY ts DESC LIMIT {int(sample_per_runtime)}",
                     list(base_params),
                 ):
-                    if int(_extract_usage_splits(_parse(raw)).get("input_tokens", 0) or 0) > 0:
+                    if _context_prompt_tokens(_parse(raw)) > 0:
                         turns_with_tokens += 1
             except Exception:
                 turns_with_tokens = 0
@@ -19719,6 +20139,368 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin):
                 ON CONFLICT (id) DO NOTHING
             """, [run_id, ts, data, int(_time.time())])
 
+    # ── User-authored dashboard panels ─────────────────────────────────
+
+    def query_dashboard_panels(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Return saved dashboard panel definitions, newest first."""
+        rows = self._fetch(
+            """SELECT panel_id, name, question, sql, chart_spec,
+                      created_at, updated_at
+               FROM custom_dashboard_panels
+               ORDER BY updated_at DESC LIMIT ?""",
+            [max(1, min(200, int(limit)))],
+        )
+        cols = ["panel_id", "name", "question", "sql", "chart_spec", "created_at", "updated_at"]
+        return [dict(zip(cols, row)) for row in rows]
+
+    def query_dashboard_panel(self, *, panel_id: str) -> dict[str, Any] | None:
+        """Return one saved dashboard panel definition."""
+        rows = self._fetch(
+            """SELECT panel_id, name, question, sql, chart_spec,
+                      created_at, updated_at
+               FROM custom_dashboard_panels WHERE panel_id = ? LIMIT 1""",
+            [str(panel_id)],
+        )
+        if not rows:
+            return None
+        cols = ["panel_id", "name", "question", "sql", "chart_spec", "created_at", "updated_at"]
+        return dict(zip(cols, rows[0]))
+
+    def upsert_dashboard_panel(
+        self,
+        *,
+        panel_id: str,
+        name: str,
+        question: str,
+        sql: str,
+        chart_spec: str = "{}",
+        created_at: int = 0,
+    ) -> dict[str, Any]:
+        """Create or replace a panel definition under the daemon write lock."""
+        import time as _time
+        now = int(_time.time() * 1000)
+        created = int(created_at or now)
+        with self._write_lock:
+            self._conn.execute(
+                """INSERT INTO custom_dashboard_panels
+                    (panel_id, name, question, sql, chart_spec, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT (panel_id) DO UPDATE SET
+                     name = excluded.name, question = excluded.question,
+                     sql = excluded.sql, chart_spec = excluded.chart_spec,
+                     updated_at = excluded.updated_at""",
+                [str(panel_id), str(name), str(question), str(sql), str(chart_spec or "{}"), created, now],
+            )
+        return self.query_dashboard_panel(panel_id=str(panel_id)) or {}
+
+    def delete_dashboard_panel(self, *, panel_id: str) -> bool:
+        """Delete one saved panel and report whether it existed."""
+        with self._write_lock:
+            before = self._conn.execute(
+                "SELECT COUNT(*) FROM custom_dashboard_panels WHERE panel_id = ?",
+                [str(panel_id)],
+            ).fetchone()[0]
+            self._conn.execute(
+                "DELETE FROM custom_dashboard_panels WHERE panel_id = ?",
+                [str(panel_id)],
+            )
+        return bool(before)
+
+    # ── Assistant conversations and safe query surface ─────────────────
+
+    def query_assistant_conversations(
+        self, *, limit: int = 30
+    ) -> list[dict[str, Any]]:
+        """Return bounded conversation metadata, newest first."""
+        try:
+            bounded_limit = max(1, min(30, int(limit)))
+        except (TypeError, ValueError):
+            bounded_limit = 30
+        rows = self._fetch(
+            """SELECT id, title, updated_at
+               FROM assistant_conversations
+               ORDER BY updated_at DESC, id DESC
+               LIMIT ?""",
+            [bounded_limit],
+        )
+        return [
+            {"id": row[0], "title": row[1], "updated_at": int(row[2])}
+            for row in rows
+        ]
+
+    def query_assistant_conversation(
+        self, *, conversation_id: str
+    ) -> dict[str, Any]:
+        """Return one full bounded conversation, or {} when absent.
+
+        None is reserved for the daemon proxy's unavailable result so
+        callers can distinguish a missing record from a missing daemon.
+        """
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            return {}
+        rows = self._fetch(
+            """SELECT id, title, messages, updated_at
+               FROM assistant_conversations
+               WHERE id = ?
+               LIMIT 1""",
+            [conversation_id.strip()],
+        )
+        return _assistant_decode_conversation(rows[0]) if rows else {}
+
+    def save_assistant_conversation(
+        self,
+        *,
+        conversation_id: str,
+        title: str,
+        messages: Any,
+    ) -> dict[str, Any]:
+        """Insert or replace one bounded assistant conversation.
+
+        The write lock covers validation-independent DuckDB work and the
+        read-back, so a daemon writer and an assistant save cannot interleave.
+        """
+        if self._read_only:
+            raise RuntimeError(
+                "local_store: save_assistant_conversation() on read-only store"
+            )
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ValueError("assistant conversation id is required")
+        if len(conversation_id.encode("utf-8")) > 256:
+            raise ValueError("assistant conversation id is too long")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("assistant conversation title is required")
+        if len(title.encode("utf-8")) > 512:
+            raise ValueError("assistant conversation title is too long")
+        encoded_messages = _assistant_encode_messages(messages)
+        now_ms = int(time.time() * 1000)
+        conversation_id = conversation_id.strip()
+        title = title.strip()
+        with self._write_lock:
+            self._conn.execute(
+                """INSERT INTO assistant_conversations
+                    (id, title, messages, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT (id) DO UPDATE SET
+                     title = excluded.title,
+                     messages = excluded.messages,
+                     updated_at = excluded.updated_at""",
+                [conversation_id, title, encoded_messages, now_ms],
+            )
+            row = self._conn.execute(
+                """SELECT id, title, messages, updated_at
+                   FROM assistant_conversations
+                   WHERE id = ?
+                   LIMIT 1""",
+                [conversation_id],
+            ).fetchone()
+        return _assistant_decode_conversation(row) if row else {}
+
+    def query_assistant_sql(
+        self,
+        *,
+        sql: str,
+        max_rows: int = 100,
+        timeout_secs: float = 5.0,
+    ) -> dict[str, Any]:
+        """Run a bounded, read-only assistant query.
+
+        Validation happens before DuckDB sees the SQL. Table discovery and
+        execution share a dedicated cursor under the writer lock. A timer
+        interrupts only that cursor, then is cancelled and joined before the
+        cursor is closed, so an assistant timeout does not interrupt another
+        store query.
+        """
+        try:
+            row_limit = max(1, min(_ASSISTANT_MAX_QUERY_ROWS, int(max_rows)))
+        except (TypeError, ValueError):
+            row_limit = _ASSISTANT_MAX_QUERY_ROWS
+        try:
+            timeout = float(timeout_secs)
+        except (TypeError, ValueError):
+            timeout = _ASSISTANT_MAX_QUERY_TIMEOUT
+        if timeout != timeout:  # NaN
+            timeout = _ASSISTANT_MAX_QUERY_TIMEOUT
+        timeout = min(_ASSISTANT_MAX_QUERY_TIMEOUT, max(0.01, timeout))
+
+        validated_sql, validation_error = _assistant_validate_sql_shape(sql)
+        if validation_error:
+            return {"rows": [], "error": validation_error}
+
+        cursor = None
+        timer = None
+        timed_out = threading.Event()
+
+        def _interrupt_assistant_cursor() -> None:
+            timed_out.set()
+            try:
+                cursor.interrupt()  # type: ignore[union-attr]
+            except Exception:
+                log.debug("local store: assistant query cursor interrupt failed")
+
+        try:
+            with self._write_lock:
+                cursor = self._conn.cursor()
+                try:
+                    interrupt = getattr(cursor, "interrupt", None)
+                    if not callable(interrupt):
+                        return {
+                            "rows": [],
+                            "error": "assistant query timeout is unavailable",
+                        }
+                    timer = threading.Timer(timeout, _interrupt_assistant_cursor)
+                    timer.daemon = True
+                    timer.start()
+
+                    # json_serialize_sql receives the query as a value. It
+                    # parses the text into DuckDB's AST and never executes it.
+                    # This is deliberately before get_table_names(), whose
+                    # binder must never see an external file source.
+                    ast_info, ast_error = _assistant_validate_sql_ast(
+                        cursor, validated_sql
+                    )
+                    if ast_error:
+                        return {"rows": [], "error": ast_error}
+
+                    def _physical_main_tables(
+                        names: set[str],
+                    ) -> set[str]:
+                        if not names:
+                            return set()
+                        placeholders = ",".join("?" for _ in names)
+                        catalog_rows = cursor.execute(
+                            "SELECT table_name, table_type "
+                            "FROM information_schema.tables "
+                            "WHERE table_schema = 'main' "
+                            f"AND table_name IN ({placeholders})",
+                            sorted(names),
+                        ).fetchall()
+                        return {
+                            str(row[0]).lower()
+                            for row in catalog_rows
+                            if str(row[1]).upper() == "BASE TABLE"
+                        }
+
+                    ast_tables = set(ast_info["tables"])
+                    # Check AST-resolved names before get_table_names() can
+                    # bind the user SQL. This rejects views, temporary objects,
+                    # and file-like BASE_TABLE names before any external
+                    # source resolution occurs.
+                    if (
+                        ast_tables
+                        and _physical_main_tables(ast_tables) != ast_tables
+                    ):
+                        return {
+                            "rows": [],
+                            "error": (
+                                "SQL rejected: only known physical tables "
+                                "are allowed"
+                            ),
+                        }
+
+                    query_sql = str(validated_sql).strip().rstrip(";").strip()
+                    runtime_prefix = _assistant_runtime_ctes(cursor, ast_tables)
+                    execution_sql = (
+                        runtime_prefix + query_sql + ") AS _assistant_runtime_query"
+                        if runtime_prefix
+                        else query_sql
+                    )
+                    # Bind the generated projection, not the original query:
+                    # runtime is a trusted derived column and is absent from
+                    # the physical sessions/events schemas.
+                    table_names = {
+                        _assistant_normalize_table_name(name)
+                        for name in cursor.get_table_names(execution_sql)
+                    }
+                    if ast_info["has_source"] and not table_names:
+                        return {
+                            "rows": [],
+                            "error": "SQL rejected: no allowlisted table was resolved",
+                        }
+                    unknown_tables = table_names.difference(_ASSISTANT_ALLOWED_TABLES)
+                    if unknown_tables:
+                        return {
+                            "rows": [],
+                            "error": "SQL rejected: referenced table is not allowlisted",
+                        }
+
+                    # Verify that every resolved name is a physical main
+                    # table. This rejects views and temporary shadow tables.
+                    if (
+                        table_names
+                        and _physical_main_tables(table_names) != table_names
+                    ):
+                        return {
+                            "rows": [],
+                            "error": (
+                                "SQL rejected: only known physical tables "
+                                "are allowed"
+                            ),
+                        }
+
+                    # Wildcards over payload-bearing tables could select BLOB
+                    # or raw columns even when no column name is written.
+                    if (
+                        table_names.intersection(_ASSISTANT_SENSITIVE_TABLES)
+                        and ast_info["has_star"]
+                    ):
+                        return {
+                            "rows": [],
+                            "error": (
+                                "SQL rejected: wildcard projections over raw "
+                                "payload tables are not allowed"
+                            ),
+                        }
+
+                    bounded_sql = (
+                        "SELECT * FROM ("
+                        + execution_sql
+                        + f") AS _assistant_result LIMIT {row_limit + 1}"
+                    )
+                    # Describe first so TIMESTAMPTZ values can be cast to
+                    # VARCHAR inside DuckDB before fetchmany() asks its
+                    # Python adapter to import optional pytz support.
+                    schema = cursor.execute(
+                        "DESCRIBE " + bounded_sql
+                    ).fetchall()
+                    fetch_sql = _assistant_timestamptz_cast_query(
+                        bounded_sql, schema
+                    ) or bounded_sql
+                    cursor.execute(fetch_sql)
+                    columns = [d[0] for d in (cursor.description or [])]
+                    raw_rows = cursor.fetchmany(row_limit + 1)
+                    rows = [
+                        {
+                            column: _coerce_value(value)
+                            for column, value in zip(columns, row)
+                        }
+                        for row in raw_rows[:row_limit]
+                    ]
+                    result: dict[str, Any] = {"rows": rows}
+                    if len(raw_rows) > row_limit:
+                        result["truncated"] = True
+                        result["notice"] = f"Results truncated to {row_limit} rows."
+                    return result
+                finally:
+                    # Keep cleanup under the writer lock. Releasing it before
+                    # timer cancellation/cursor close permits a new query to
+                    # race with the interrupt callback.
+                    if timer is not None:
+                        timer.cancel()
+                        timer.join(timeout=0.2)
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+        except Exception as exc:
+            if timed_out.is_set():
+                return {
+                    "rows": [],
+                    "error": f"query timed out after {timeout:g} seconds",
+                }
+            safe_error = _assistant_safe_sql_error(exc)
+            log.warning("local store: assistant query failed: %s", safe_error)
+            return {"rows": [], "error": safe_error}
+
     def query_external_calls(
         self,
         *,
@@ -20909,6 +21691,36 @@ def _pick_billable_turns(rows, extra=None):
             chosen[collision_key] = payload
 
     return list(chosen.values()) + loose
+
+
+def _context_prompt_tokens(data: dict) -> int:
+    """Read prompt size consistently for context gauges and coverage counts.
+
+    A fully cached prompt can have zero fresh input tokens. Adapter events
+    may put the same reading under ``extra``. Neither case means the window
+    was empty. This read-side helper does not change billing attribution.
+    """
+    if not isinstance(data, dict):
+        return 0
+    splits = _extract_usage_splits(data)
+    total = sum(int(splits.get(k, 0)) for k in
+                ("input_tokens", "cache_read_tokens", "cache_write_tokens"))
+    if total:
+        return total
+    candidates = []
+    for parent, child in (("message", "usage"), ("promptCache", "lastCallUsage"),
+                          ("assistantMessage", "usage")):
+        envelope = data.get(parent)
+        candidates.append(envelope.get(child) if isinstance(envelope, dict) else None)
+    candidates.insert(1, data.get("usage"))
+    candidates.append(data.get("extra"))
+    for usage in candidates:
+        if isinstance(usage, dict):
+            total = sum(_read_usage_int(usage, keys) for keys in
+                        (_USAGE_KEYS_INPUT, _USAGE_KEYS_CACHE_READ, _USAGE_KEYS_CACHE_WRITE))
+            if total:
+                return total
+    return 0
 
 
 def _extract_usage_splits(data: dict) -> dict[str, int]:

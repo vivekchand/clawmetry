@@ -246,25 +246,15 @@ def test_dispatcher_refuses_a_prompt_action_when_not_opted_in(monkeypatch):
 
 
 def _dashboard_handoff_url():
-    """The hand-off URL as one string, however it is spelled in source.
-
-    Reads the ``_dashboard_url = ...`` assignment and joins it, so an
-    f-string split across several lines (which is how it is written now)
-    cannot make this guard silently match nothing and pass.
-    """
+    """Exercise the same URL producer used by connect."""
+    from clawmetry.cli import _cloud_dashboard_handoff_url
     src = open(
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                      "clawmetry", "cli.py"),
         encoding="utf-8",
     ).read()
-    marker = "_dashboard_url = "
-    i = src.index(marker)
-    chunk = src[i:i + 600]
-    # Keep only the quoted pieces, which is where the URL actually lives.
-    parts = re.findall(r'f?"([^"]*)"', chunk)
-    joined = "".join(parts)
-    assert "/cloud" in joined, f"could not recover the hand-off URL from: {chunk[:200]}"
-    return joined
+    assert "_dashboard_url = _cloud_dashboard_handoff_url(_app_base_done, api_key, enc_key, _node_id)" in src
+    return _cloud_dashboard_handoff_url("https://example.test", "cm_test_account", "SECRET_KEY", "owner+mini-local")
 
 
 def test_credentials_are_delivered_only_in_the_url_fragment():
@@ -281,7 +271,7 @@ def test_credentials_are_delivered_only_in_the_url_fragment():
     assert "#" in url, f"the hand-off URL has no fragment at all: {url}"
     before_fragment, fragment = url.split("#", 1)
 
-    for secret in ("{enc_key}", "{api_key}"):
+    for secret in ("SECRET_KEY", "cm_test_account"):
         assert secret in url, f"{secret} is no longer in the hand-off URL: {url}"
         assert secret not in before_fragment, (
             f"{secret} must sit after '#', never in the query or path: {url}"

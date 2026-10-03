@@ -107,15 +107,22 @@ def api_context_economics():
             entry["ts"] = ts
     session_chips = sorted(chips.values(), key=lambda c: c["ts"], reverse=True)
 
-    total_reclaimed = sum(int(c.get("reclaimed") or 0) for c in compactions)
+    known_reclaimed = [
+        int(c["reclaimed"])
+        for c in compactions
+        if c.get("measurement_status") == "observed" and c.get("reclaimed") is not None
+    ]
+    total_reclaimed = sum(known_reclaimed)
     overflow_count = sum(1 for c in compactions if c.get("trigger") == "overflow")
-    peak_pct = max((float(u.get("pct") or 0) for u in utilization), default=0.0)
+    peak_pct = max((float(u.get("pct") or 0) for u in utilization), default=None)
     summary = {
         "compaction_count":     len(compactions),
         "overflow_count":       overflow_count,
         "proactive_count":      len(compactions) - overflow_count,
         "total_reclaimed":      total_reclaimed,
-        "peak_pct":             round(peak_pct, 2),
+        "reclaimed_data_available": bool(known_reclaimed),
+        "reclaimed_known_count": len(known_reclaimed),
+        "peak_pct":             round(peak_pct, 2) if peak_pct is not None else None,
         "overflow_sessions":    len(overflow_sessions),
         "utilization_points":   len(utilization),
     }

@@ -214,6 +214,26 @@ def test_context_econ_by_runtime_buckets_util_and_chips(monkeypatch):
     assert [c["session_id"] for c in codex["session_chips"]] == ["codex:z"]
 
 
+def test_cloud_compaction_snapshot_keeps_measurement_status_after_runtime_scope(monkeypatch):
+    import clawmetry.sync as sync
+    monkeypatch.setattr(sync, "_runtime_of_session", lambda s: s.split(":")[0])
+    rows = sync._context_econ_compaction_snapshot([
+        {"session_id": "claude_code:a", "reclaimed": 0, "measurement_status": "observed",
+         "tokens_before": 10, "tokens_after": 10, "summary": "x" * 400},
+        {"session_id": "codex:b", "reclaimed": None, "measurement_status": "unavailable"},
+    ])
+    out = sync._context_econ_by_runtime(rows, [], {})
+    measured = out["claude_code"]["compactions"][0]
+    unknown = out["codex"]["compactions"][0]
+    assert measured["measurement_status"] == "observed"
+    assert measured["reclaimed"] == 0
+    assert measured["tokens_before"] == measured["tokens_after"] == 10
+    assert len(measured["summary"]) == 280
+    assert unknown["measurement_status"] == "unavailable"
+    assert unknown["reclaimed"] is None
+    assert len(sync._context_econ_compaction_snapshot([{}] * 100)) == 80
+
+
 def test_context_econ_by_runtime_no_util_back_compat(monkeypatch):
     """Old call shape (no utilization) still works: empty util/chips per
     runtime, peak inherits the node-wide value."""

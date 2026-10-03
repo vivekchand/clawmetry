@@ -1005,6 +1005,18 @@ _DAEMON_METHODS = frozenset({
     # SQL goes through clawmetry/dives_sql_safety.validate_sql() inside the
     # method — SELECT/WITH only, no DDL/DML, no file/HTTP/attach functions.
     "raw_select_safe",
+    # Persistent user-authored dashboard panels. Definitions and mutations
+    # stay behind the daemon writer lock; panel SQL is validated by the route.
+    "query_dashboard_panels",
+    "query_dashboard_panel",
+    "upsert_dashboard_panel",
+    "delete_dashboard_panel",
+    # Bounded assistant chat persistence and read-only SQL. The SQL method
+    # performs its own validation, table resolution, row cap, and timeout.
+    "query_assistant_conversations",
+    "query_assistant_conversation",
+    "save_assistant_conversation",
+    "query_assistant_sql",
     # Issue #1615 — decision sampling workflow. Four review-queue methods
     # exposed through the daemon proxy so /api/review/* in the dashboard
     # process can hit the writer-locked DuckDB.

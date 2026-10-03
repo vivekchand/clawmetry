@@ -1,0 +1,107 @@
+<div class="page active" id="page-assistant">
+  <section class="cm-assistant" aria-labelledby="cm-assistant-title">
+    <div class="cm-assistant-backdrop" aria-hidden="true"></div>
+
+    <header class="cm-assistant-hero">
+      <div class="cm-assistant-eyebrow">
+        <span class="cm-assistant-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>ClawMetry assistant</span>
+        <span class="cm-assistant-scope" id="cm-assistant-scope">All runtimes on this node</span>
+      </div>
+      <div class="cm-assistant-hero-row">
+        <div>
+          <h1 id="cm-assistant-title">How can I help?</h1>
+          <p>Ask about your agents in plain English. I can turn the answer into a live dashboard panel you can keep.</p>
+        </div>
+        <div class="cm-assistant-status-pill" id="cm-assistant-status-pill" role="status" aria-live="polite">
+          <span class="cm-assistant-status-dot" aria-hidden="true"></span>
+          <span id="cm-assistant-status-label">Checking your assistant...</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="cm-assistant-layout">
+      <aside class="cm-assistant-history" aria-label="Assistant conversations">
+        <div class="cm-assistant-history-head">
+          <div>
+            <div class="cm-assistant-kicker">Your conversations</div>
+            <div class="cm-assistant-history-hint">Private to this dashboard</div>
+          </div>
+          <button type="button" class="cm-assistant-icon-button" id="cm-assistant-new-chat" aria-label="Start a new conversation" title="New conversation">+</button>
+        </div>
+        <div class="cm-assistant-history-list" id="cm-assistant-history-list" aria-live="polite">
+          <div class="cm-assistant-loading-row">Loading conversations...</div>
+        </div>
+        <div class="cm-assistant-managed-note" id="cm-assistant-managed-note">
+          <div class="cm-assistant-managed-icon" aria-hidden="true">✦</div>
+          <div>
+            <strong>Managed billing</strong>
+            <p id="cm-assistant-managed-copy">Managed assistant access is not connected here yet. Use a local harness or your own API key.</p>
+            <div class="cm-assistant-managed-meta" id="cm-assistant-managed-meta" hidden>
+              <span id="cm-assistant-managed-balance"></span>
+              <span id="cm-assistant-managed-starter" hidden></span>
+            </div>
+            <div class="cm-assistant-managed-actions">
+              <button type="button" class="cm-assistant-managed-topup" id="cm-assistant-managed-topup" hidden disabled>Add $5 credit</button>
+              <a id="cm-assistant-managed-link" href="https://build.clawmetry.com/" target="_blank" rel="noopener noreferrer">Learn about managed access</a>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="cm-assistant-main">
+        <div class="cm-assistant-setup" id="cm-assistant-setup" aria-label="Suggested questions">
+          <div class="cm-assistant-setup-copy">
+            <span class="cm-assistant-setup-glyph" aria-hidden="true">✦</span>
+            <div>
+              <strong id="cm-assistant-setup-title">Start with a question</strong>
+              <p id="cm-assistant-setup-description">Ask for a decision, an explanation, or a panel for Home.</p>
+            </div>
+          </div>
+          <div class="cm-assistant-suggestions" id="cm-assistant-suggestions"></div>
+        </div>
+
+        <div class="cm-assistant-status-message" id="cm-assistant-status-message" role="status" aria-live="polite" hidden></div>
+        <div class="cm-assistant-data-notice" id="cm-assistant-data-notice" hidden></div>
+
+        <form class="cm-assistant-composer" id="cm-assistant-composer" novalidate>
+          <label class="cm-assistant-sr-only" for="cm-assistant-input">Ask ClawMetry a question</label>
+          <div class="cm-assistant-input-row">
+            <textarea id="cm-assistant-input" rows="1" maxlength="4000" autocomplete="off" spellcheck="true" placeholder="Ask about effectiveness, context, cost, or your agents..." aria-describedby="cm-assistant-composer-hint"></textarea>
+            <button type="button" class="cm-assistant-voice" id="cm-assistant-voice" aria-label="Start voice input" aria-pressed="false" title="Voice input">
+              <span class="cm-assistant-voice-icon" aria-hidden="true">●</span>
+              <span class="cm-assistant-sr-only">Voice</span>
+            </button>
+            <button type="submit" class="cm-assistant-send" id="cm-assistant-send" disabled><span>Send</span><span class="cm-assistant-send-arrow" aria-hidden="true">↗</span></button>
+          </div>
+          <div class="cm-assistant-composer-footer">
+            <span id="cm-assistant-composer-hint">Enter to send · Shift+Enter for a new line</span>
+            <div class="cm-assistant-engine-wrap">
+              <label for="cm-assistant-engine">Engine</label>
+              <select id="cm-assistant-engine" aria-label="Assistant engine">
+                <option value="auto">Automatic</option>
+                <option value="claude_cli">Local harness</option>
+                <option value="anthropic">Anthropic API key</option>
+                <option value="managed" disabled>Managed assistant</option>
+              </select>
+            </div>
+          </div>
+          <div class="cm-assistant-key-row" id="cm-assistant-key-row" hidden>
+            <label for="cm-assistant-api-key">Anthropic API key</label>
+            <input id="cm-assistant-api-key" type="password" autocomplete="off" placeholder="sk-ant-...">
+            <span>Used for this page only. ClawMetry never saves it.</span>
+          </div>
+        </form>
+
+        <section class="cm-assistant-thread" id="cm-assistant-thread" aria-label="Conversation">
+          <div class="cm-assistant-welcome" id="cm-assistant-welcome">
+            <div class="cm-assistant-welcome-orb" aria-hidden="true"><span></span></div>
+            <h2>Bring me a question.</h2>
+            <p>I will use the evidence ClawMetry has on this node, explain what is measured, and call out what is missing.</p>
+          </div>
+        </section>
+        <div class="cm-assistant-footnote">Answers use local observability data. Generated SQL is read-only and shown as a source detail.</div>
+      </main>
+    </div>
+  </section>
+</div>
