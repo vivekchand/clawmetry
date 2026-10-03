@@ -566,6 +566,286 @@ def _context_from_file(path: str, session_id: str) -> Event | None:
 # -- adapter -----------------------------------------------------------------
 
 
+
+# ── Replay-event mapper (#4813, clawmetry-pro#133) ───────────────────────
+# ``iter_replay_events`` maps one chat recording into the canonical
+# ``clawmetry.replay_schema`` stream the sync daemon writes to the
+# ``replay_events`` table and ``/api/replay-tree/<session_id>`` groups.
+#
+# ``parentUuid`` is a CHAIN (previous record), not a delegation tree, so no
+# event below carries it as ``parent_span_id``. The only delegation edges
+# are sub-agent transcripts (``<project>/subagents/<sid>/agent-*.jsonl``),
+# whose ``.meta.json`` names the spawning functionCall in ``toolUseId``.
+
+_REPLAY_TEXT_CAP = 4000
+
+# ``ui_telemetry`` records carry the decision Qwen Code took on a tool call.
+# Only values seen on disk are mapped; anything else is left unreported.
+_DECISION_MAP = {
+    "auto_accept": ("approved", "policy"),
+    "accept": ("approved", "user"),
+    "reject": ("denied", "user"),
+    "modify": ("edited", "user"),
+}
+
+# Sub-agent ``.meta.json`` ``resolvedApprovalMode`` -> canonical permission.
+_APPROVAL_MODE_MAP = {
+    "default": "default",
+    "autoedit": "acceptEdits",
+    "auto_edit": "acceptEdits",
+    "yolo": "yolo",
+    "plan": "plan",
+}
+
+
+def _cap_text(text: Any, cap: int = _REPLAY_TEXT_CAP) -> str:
+    if not isinstance(text, str):
+        return ""
+    return text if len(text) <= cap else text[:cap]
+
+
+def _cap_value(value: Any, cap: int = _REPLAY_TEXT_CAP) -> Any:
+    """Keep a JSON value as is when small, else a truncated JSON string."""
+    if value is None:
+        return None
+    try:
+        encoded = json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return _cap_text(str(value), cap)
+    if len(encoded) <= cap:
+        return value
+    return encoded[:cap]
+
+
+def _usage_dict(obj: dict[str, Any]) -> dict[str, int] | None:
+    usage = obj.get("usageMetadata")
+    if not isinstance(usage, dict):
+        return None
+    return {
+        "prompt_tokens": _int(usage.get("promptTokenCount")),
+        "output_tokens": _int(usage.get("candidatesTokenCount")),
+        "reasoning_tokens": _int(usage.get("thoughtsTokenCount")),
+        "cached_tokens": _int(usage.get("cachedContentTokenCount")),
+        "total_tokens": _int(usage.get("totalTokenCount")),
+    }
+
+
+def _read_meta(chat_path: str) -> dict[str, Any]:
+    """The ``agent-<id>.meta.json`` beside a sub-agent transcript, or {}."""
+    try:
+        with open(chat_path[:-6] + ".meta.json", encoding="utf-8") as fh:
+            loaded = json.load(fh)
+        return loaded if isinstance(loaded, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _first_ts(path: str) -> float:
+    for obj in _iter_records(path):
+        ts = _parse_ts(obj.get("timestamp"))
+        if ts:
+            return ts
+    return 0.0
+
+
+def _permission_from_meta(meta: dict[str, Any]) -> str:
+    raw = str(meta.get("resolvedApprovalMode") or "").strip().lower()
+    return _APPROVAL_MODE_MAP.get(raw, "unknown")
+
+
+def _replay_stream(
+    path: str,
+    session_id: str,
+    prefix: str,
+    parent_span: str | None,
+    permission: str | None,
+    subagents: dict[str, tuple[str, str, dict[str, Any]]],
+    state: dict[str, Any],
+):
+    """Yield canonical replay events for one transcript file.
+
+    ``parent_span`` is stamped on every event (the spawn span when a child
+    transcript is inlined under its parent, else ``None``). ``permission``
+    emits one leading ``mode.changed`` when set. ``subagents`` maps a
+    spawning functionCall id to ``(stem, child_path, meta)``; a match inlines
+    that child right after its ``tool.call``. ``state["last_ts"]`` tracks
+    the newest timestamp seen so the caller can time ``agent.return``.
+    """
+    pending_calls: dict[str, list[str]] = {}
+    seq = 0
+    first = True
+
+    def mk(kind, span, ts, payload, *, parent=parent_span, mode=None,
+           approval=None):
+        ev: dict[str, Any] = {
+            "ts": ts,
+            "kind": kind,
+            "span_id": span,
+            "parent_span_id": parent,
+            "session_id": session_id,
+            "runtime": _AGENT,
+            "payload": payload,
+        }
+        if mode is not None:
+            ev["mode"] = mode
+        if approval is not None:
+            ev["approval"] = approval
+        return ev
+
+    for obj in _iter_records(path):
+        rtype = obj.get("type") or ""
+        ts = _parse_ts(obj.get("timestamp"))
+        if ts and ts > float(state.get("last_ts") or 0.0):
+            state["last_ts"] = ts
+        seq += 1
+        uuid = str(obj.get("uuid") or "") or f"rec{seq}"
+        if first:
+            first = False
+            if permission is not None:
+                yield mk(
+                    "mode.changed", f"{prefix}:mode", ts,
+                    {"source": ("subagent meta resolvedApprovalMode"
+                                if permission != "unknown"
+                                else "Qwen Code records no approval mode")},
+                    mode={"permission": permission},
+                )
+        if rtype == "system":
+            payload_sys = obj.get("systemPayload")
+            ui = (payload_sys.get("uiEvent")
+                  if isinstance(payload_sys, dict) else None)
+            if (obj.get("subtype") != "ui_telemetry"
+                    or not isinstance(ui, dict)
+                    or ui.get("event.name") != "qwen-code.tool_call"):
+                continue
+            decision = ui.get("decision")
+            mapped = _DECISION_MAP.get(str(decision or "").strip().lower())
+            fname = str(ui.get("function_name") or "")
+            gates = pending_calls.get(fname)
+            if not mapped or not gates:
+                continue
+            gate = gates.pop(0)
+            status, resolver = mapped
+            yield mk(
+                "approval.decided", f"{prefix}:approval:{uuid}", ts,
+                {"tool": fname, "decision": decision,
+                 "status": ui.get("status"),
+                 "duration_ms": ui.get("duration_ms")},
+                parent=gate,
+                approval={"status": status, "resolver": resolver,
+                          "decision_reason": str(decision)},
+            )
+            continue
+
+        msg = obj.get("message") if isinstance(obj.get("message"), dict) else {}
+        parts = msg.get("parts")
+        model = obj.get("model") if isinstance(obj.get("model"), str) else ""
+
+        if rtype == "tool_result":
+            if not isinstance(parts, list):
+                continue
+            result = obj.get("toolCallResult")
+            result = result if isinstance(result, dict) else {}
+            for idx, p in enumerate(parts):
+                fr = p.get("functionResponse") if isinstance(p, dict) else None
+                if not isinstance(fr, dict):
+                    continue
+                resp = fr.get("response")
+                if isinstance(resp, dict) and isinstance(resp.get("output"), str):
+                    content = resp["output"]
+                elif resp is not None:
+                    content = json.dumps(resp, default=str)
+                else:
+                    content = ""
+                rid = str(fr.get("id") or "") or f"{uuid}:{idx}"
+                yield mk(
+                    "tool.result", f"{prefix}:result:{rid}", ts,
+                    {"tool": fr.get("name") or "",
+                     "call_id": str(fr.get("id") or ""),
+                     "output": _cap_text(content),
+                     "status": result.get("status") or ""},
+                )
+            continue
+
+        if rtype == "user":
+            visible, _ = _parts_text(parts)
+            yield mk("llm.call", f"{prefix}:{uuid}", ts,
+                     {"role": "user", "text": _cap_text(visible)})
+            continue
+
+        if rtype != "assistant":
+            continue
+
+        visible, reasoning = _parts_text(parts)
+        if reasoning:
+            yield mk("thinking", f"{prefix}:{uuid}:thinking", ts,
+                     {"text": _cap_text(reasoning), "model": model})
+        response: dict[str, Any] = {"role": "assistant",
+                                    "text": _cap_text(visible),
+                                    "model": model}
+        usage = _usage_dict(obj)
+        if usage:
+            response["usage"] = usage
+        yield mk("llm.response", f"{prefix}:{uuid}", ts, response)
+        if not isinstance(parts, list):
+            continue
+        for idx, p in enumerate(parts):
+            fc = p.get("functionCall") if isinstance(p, dict) else None
+            if not isinstance(fc, dict):
+                continue
+            name = str(fc.get("name") or "unknown")
+            call_id = str(fc.get("id") or "")
+            call_span = f"{prefix}:call:{call_id or f'{uuid}:{idx}'}"
+            pending_calls.setdefault(name, []).append(call_span)
+            yield mk("tool.call", call_span, ts,
+                     {"tool": name, "call_id": call_id,
+                      "args": _cap_value(fc.get("args"))})
+            child = subagents.pop(call_id, None) if call_id else None
+            if child:
+                yield from _replay_subagent(child, session_id, prefix,
+                                            call_span, ts, state, mk)
+
+    # Children whose spawning call never appeared in this transcript still
+    # belong to the session; they attach at the end of the stream.
+    for call_id in list(subagents):
+        child = subagents.pop(call_id)
+        yield from _replay_subagent(child, session_id, prefix, None,
+                                    _first_ts(child[1]) or
+                                    float(state.get("last_ts") or 0.0),
+                                    state, mk)
+
+
+def _replay_subagent(child, session_id, prefix, parent, ts, state, mk):
+    """Inline one sub-agent transcript: ``agent.spawn`` under the spawning
+    ``tool.call``, the child's events under the spawn, then ``agent.return``.
+    The resolved approval mode rides on the spawn payload, not as a
+    ``mode.changed`` event, so the parent's mode chip stays honest."""
+    stem, child_path, meta = child
+    spawn_span = f"{prefix}:spawn:{stem}"
+    raw_status = str(meta.get("status") or "")
+    payload = {
+        "agent_type": str(meta.get("agentType") or ""),
+        "description": _cap_text(str(meta.get("description") or ""), 400),
+        "status": raw_status,
+        "background": bool(meta.get("isBackgrounded")),
+        "permission": _permission_from_meta(meta),
+        "model": str(meta.get("model") or ""),
+        "child_session_id": f"{session_id}::{stem}",
+        "agent_file": stem,
+    }
+    yield mk("agent.spawn", spawn_span, ts, payload, parent=parent)
+    child_state: dict[str, Any] = {"last_ts": 0.0}
+    yield from _replay_stream(child_path, session_id, f"{prefix}:{stem}",
+                              spawn_span, None, {}, child_state)
+    end_ts = float(child_state.get("last_ts") or 0.0) or ts
+    if end_ts > float(state.get("last_ts") or 0.0):
+        state["last_ts"] = end_ts
+    ret = {"status": raw_status, "agent_file": stem}
+    if meta.get("lastError"):
+        ret["error"] = _cap_text(str(meta["lastError"]), 400)
+    yield mk("agent.return", f"{prefix}:return:{stem}", end_ts, ret,
+             parent=spawn_span)
+
+
 class QwenCodeAdapter(AgentAdapter):
     """Adapter for Qwen Code chat-recording sessions under ``~/.qwen``."""
 
@@ -901,6 +1181,85 @@ class QwenCodeAdapter(AgentAdapter):
         # Inputs & context: one context.compiled event in front of the
         # transcript (never displaces a row; the limit caps transcript rows).
         return prepend_context(events, _context_from_file(path, session_id))
+
+    def iter_replay_events(self, session_id: str, limit: int = 5000):
+        """Yield canonical replay events for one session (#4813).
+
+        Shape: ``clawmetry.replay_schema.ReplayEvent`` dicts in transcript
+        order. The daemon writes them to ``replay_events``; the replay-tree
+        endpoint groups them. One leading ``mode.changed`` says what the
+        recording exposes: ``unknown`` for a top-level session (Qwen Code
+        keeps no approval mode in the chat log) and the resolved mode from
+        ``.meta.json`` for a sub-agent asked for directly.
+
+        Per record: a user record is an ``llm.call`` (one turn); an
+        assistant record is a ``thinking`` event for its reasoning parts
+        plus an ``llm.response`` with usage, and a ``tool.call`` per
+        functionCall; a tool_result record is a ``tool.result`` per
+        functionResponse; a ``ui_telemetry`` tool-call record with a
+        ``decision`` becomes an ``approval.decided`` gated on the matching
+        ``tool.call``. ``parentUuid`` is a chain, so no event carries it as
+        ``parent_span_id``. Sub-agent transcripts whose ``.meta.json``
+        names the spawning call are inlined under an ``agent.spawn``.
+
+        Span ids are namespaced ``qwen_code:<session>:...`` so rows from
+        different sessions never collide in the store. Never raises; an
+        unknown session yields nothing.
+        """
+        path = self._find_session_path(session_id)
+        if not path:
+            return
+        try:
+            budget = max(0, int(limit))
+        except (TypeError, ValueError):
+            budget = 5000
+        prefix = f"{_AGENT}:{session_id}"
+        subagents: dict[str, tuple[str, str, dict[str, Any]]] = {}
+        if "::" in session_id:
+            permission = _permission_from_meta(_read_meta(path))
+        else:
+            permission = "unknown"
+            subagents = self._replay_subagents(path, session_id)
+        state: dict[str, Any] = {"last_ts": 0.0}
+        try:
+            for ev in _replay_stream(path, session_id, prefix, None,
+                                     permission, subagents, state):
+                if budget <= 0:
+                    return
+                budget -= 1
+                yield ev
+        except Exception as exc:  # a bad record never sinks the replay
+            logger.warning("QwenCodeAdapter: replay of %s stopped: %s",
+                           session_id, exc)
+
+    def _replay_subagents(
+        self, chat_path: str, session_id: str,
+    ) -> dict[str, tuple[str, str, dict[str, Any]]]:
+        """Direct sub-agent transcripts keyed by the spawning call id.
+
+        Nested children (``parentAgentId`` set) are left to their own
+        standalone replay; a child without ``toolUseId`` is keyed on its
+        file stem so it still attaches at the end of the parent stream.
+        """
+        sub_dir = self._subagents_dir_for(chat_path, session_id)
+        if not sub_dir:
+            return {}
+        try:
+            entries = sorted(
+                e for e in os.listdir(sub_dir)
+                if e.startswith("agent-") and e.endswith(".jsonl"))
+        except OSError:
+            return {}
+        out: dict[str, tuple[str, str, dict[str, Any]]] = {}
+        for name in entries[:100]:
+            child_path = os.path.join(sub_dir, name)
+            meta = _read_meta(child_path)
+            if meta.get("parentAgentId"):
+                continue
+            stem = name[:-6]
+            key = str(meta.get("toolUseId") or "") or f"file:{stem}"
+            out[key] = (stem, child_path, meta)
+        return out
 
     def _find_session_path(self, session_id: str) -> str | None:
         """Locate the .jsonl for a session id across project dirs.

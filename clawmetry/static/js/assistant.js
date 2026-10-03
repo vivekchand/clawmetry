@@ -572,7 +572,8 @@
         if (columns.indexOf(key) < 0 && columns.length < 16) columns.push(key);
       });
     });
-    if (columns.indexOf('runtime') > 0) columns.unshift(columns.splice(columns.indexOf('runtime'), 1)[0]);
+    var runtimeIndex = columns.findIndex(function (column) { return column.toLowerCase() === 'runtime'; });
+    if (runtimeIndex > 0) columns.unshift(columns.splice(runtimeIndex, 1)[0]);
     var wrap = make('div', 'cm-assistant-table-wrap');
     var table = make('table', 'cm-assistant-table');
     var head = make('thead');
@@ -583,7 +584,7 @@
     var body = make('tbody');
     normalized.slice(0, limit || 100).forEach(function (row) {
       var tr = make('tr');
-      columns.forEach(function (column) { tr.appendChild(make('td', '', column === 'runtime' && row[column] != null ? displayCategory(row[column]) : formatValue(row[column]))); });
+      columns.forEach(function (column) { tr.appendChild(make('td', '', column.toLowerCase() === 'runtime' && row[column] != null ? displayCategory(row[column]) : formatValue(row[column]))); });
       body.appendChild(tr);
     });
     table.appendChild(body);
