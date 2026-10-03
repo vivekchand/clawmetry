@@ -214,12 +214,13 @@ def test_an_empty_machine_is_told_on_the_page():
     """AC-OBS-FRP-001.3 -- the guidance survives the overlay.
 
     Removing the screen must not remove the one thing it did that was
-    worth doing. The Agents roster is the landing screen and carries a
+    worth doing. The Agents roster remains reachable and carries a
     runtime-neutral empty state, reachable, with the nav still live.
     """
     inventory = (ROOT / "clawmetry/templates/tabs/inventory.html").read_text()
     assert 'id="inv-empty"' in inventory
     assert 'data-i18n="inventory.empty_title"' in inventory
-    assert '<div class="page active" id="page-inventory">' in inventory, (
-        "the empty state only helps if the roster is the landing screen"
-    )
+    assert '<div class="page" id="page-inventory">' in inventory
+    assistant = (ROOT / "clawmetry/templates/tabs/assistant.html").read_text()
+    assert 'id="cm-assistant-input"' in assistant
+    assert 'data-tab="inventory"' in (ROOT / "dashboard.py").read_text()

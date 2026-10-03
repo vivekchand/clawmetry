@@ -172,14 +172,13 @@ async function testZeroClickAutoLogin() {
     overlayHidden ? '' : 'overlay still visible after 5s — auto-login did not fire'
   );
 
-  // Dashboard root rendered. The Agents roster is the canonical landing tab
-  // (agent-first IA 2026-09-20; Sessions before that, Overview before that).
-  // Select by `data-tab="inventory"` because visible labels change — text
+  // Dashboard root rendered. Assistant is the requested chat-first landing.
+  // Select by `data-tab="assistant"` because visible labels change — text
   // matching does not survive IA refactors. Both the legacy top `.nav-tab`
   // and the sidebar `.left-nav-item` get `.active` toggled by switchTab()
   // and both carry data-tab.
   const landingTab = page
-    .locator('.nav-tab.active[data-tab="inventory"], .left-nav-item.active[data-tab="inventory"]')
+    .locator('.nav-tab.active[data-tab="assistant"], .left-nav-item.active[data-tab="assistant"]')
     .first();
   let landingVisible = false;
   try {
@@ -187,9 +186,9 @@ async function testZeroClickAutoLogin() {
     landingVisible = true;
   } catch {}
   check(
-    'Agents tab is active — dashboard root rendered on the landing tab',
+    'Assistant tab is active — dashboard root rendered on the landing tab',
     landingVisible,
-    landingVisible ? '' : 'no .nav-tab.active or .left-nav-item.active with data-tab="inventory" found'
+    landingVisible ? '' : 'no .nav-tab.active or .left-nav-item.active with data-tab="assistant" found'
   );
 
   // Token must be in localStorage — that's how every later /api/* call

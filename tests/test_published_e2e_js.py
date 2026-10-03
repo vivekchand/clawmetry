@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -184,3 +185,76 @@ def test_published_js_inflates_a_gzip_blob():
         f".then(r => console.log(JSON.stringify(r)));"
     )
     assert json.loads(out) == payload
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("node_id", ["owner+mini-local", "owner+mini.local", "owner+work station"])
+def test_connect_handoff_keeps_the_registered_node_identity(node_id, legacy):
+    """The setup fragment must write the key where the node page reads it."""
+    from clawmetry.cli import _cloud_dashboard_handoff_url
+
+    key = generate_encryption_key()
+    token = "cm_test_account_token"
+    url = _cloud_dashboard_handoff_url("https://example.test", token, key, node_id)
+    fragment = (f"token={token}&key={key}&node={node_id}" if legacy else urlsplit(url).fragment)
+    blob = encrypt_payload({"unlocked": True}, key)
+    out = _node(
+        f"var sk = window.cmE2E.storageKeyFor({json.dumps(node_id)}, {json.dumps(token)});"
+        f"window.cmE2E.decryptBlob({json.dumps(blob)}, localStorage.getItem(sk))"
+        ".then(r => console.log(JSON.stringify(r)));",
+        location_hash="#" + fragment,
+    )
+    assert json.loads(out) == {"unlocked": True}
+
+
+def test_handoff_percent_encodes_reserved_characters():
+    from clawmetry.cli import _cloud_dashboard_handoff_url
+
+    token, key, node = "cm_test_account_token", "test+key/with=&%#", "owner+desk & lab/%#"
+    url = _cloud_dashboard_handoff_url("https://example.test", token, key, node)
+    assert "+" not in urlsplit(url).fragment  # spaces use %20, never form '+'.
+    out = _node("console.log(JSON.stringify(localStorage.store));", "#" + urlsplit(url).fragment)
+    assert json.loads(out)["cm-enc-key-" + node + "-" + token[:16]] == key
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_existing_legacy_node_alias_is_recovered_without_overwriting(existing):
+    setup = (
+        "window.CLOUD_NODE_ID='owner+mini-local';window.CLOUD_TOKEN='cm_test_account_token';"
+        "localStorage.setItem('cm-enc-key-owner mini-local-cm_test_account_', 'legacy-key');"
+    )
+    if existing:
+        setup += "localStorage.setItem('cm-enc-key-owner+mini-local-cm_test_account_', 'current-key');"
+    # Re-run the actual startup with pre-existing browser state.
+    source = open(E2E_JS, encoding="utf-8").read()
+    out = _node(setup + source + "console.log(JSON.stringify(localStorage.store));")
+    data = json.loads(out)
+    assert data["cm-enc-key-owner+mini-local-cm_test_account_"] == ("current-key" if existing else "legacy-key")
+    assert data["cm-enc-key-owner mini-local-cm_test_account_"] == "legacy-key"
+
+
+def test_legacy_alias_recovery_stays_within_the_current_account():
+    source = open(E2E_JS, encoding="utf-8").read()
+    out = _node(
+        "window.CLOUD_NODE_ID='owner+mini-local';window.CLOUD_TOKEN='cm_other_account_token';"
+        "localStorage.setItem('cm-enc-key-owner mini-local-cm_test_account_', 'legacy-key');"
+        + source + "console.log(JSON.stringify(Object.keys(localStorage.store)));"
+    )
+    assert json.loads(out) == ["cm-enc-key-owner mini-local-cm_test_account_"]
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_shared_plaintext_decoder_preserves_payload_errors(compressed):
+    """A bad JSON/gzip payload must reject, without becoming a key failure."""
+    import base64
+    import gzip
+
+    payload = b"not-json"
+    if compressed:
+        payload = gzip.compress(payload)
+    out = _node(
+        "Promise.resolve().then(() => window.cmE2E.decodePayload(Buffer.from("
+        + json.dumps(base64.b64encode(payload).decode()) + ", 'base64')))"
+        ".then(() => console.log('unexpected success'), e => console.log(e.name));"
+    )
+    assert out == "SyntaxError"

@@ -45,17 +45,17 @@ tracking pixel. Web assets are vendored into the package and served from the
 local process; CI fails on any absolute `http(s)` asset reference in a served
 page.
 
-Two optional features can contact a **model provider** with your own API key.
-Both are **off** until you turn them on: transcript quality scoring
+Other optional features can contact a **model provider** with your own API key.
+Two are **off** until you turn them on: transcript quality scoring
 (`CLAWMETRY_EVALS_ENABLED=1`) and the Claude rate-limit probe
 (`CLAWMETRY_CLAUDE_LIMIT_PROBE=1`). One is on when an `ANTHROPIC_API_KEY` is
 present: the alert narrator, which sends the alert's own one-line message and
 rule id, never session content (`CLAWMETRY_NARRATOR_ENABLED=0` to stop it).
 
 Destinations belonging to *your* agents (`api.anthropic.com`, `api.openai.com`
-and similar) otherwise appear in this codebase only as strings used to
-attribute costs and parse pricing. ClawMetry observes those calls; it does not
-make them.
+and similar) also appear as strings used to attribute costs and parse pricing.
+Outside the optional inference features described here, ClawMetry observes
+those calls rather than making them.
 
 The [local assessment privacy component](ASSESSMENT_PRIVACY.md) adds no
 network destination and enables no inference. It provides mandatory masking
@@ -63,6 +63,28 @@ and a consent/egress check for future assessment callers. It does not replace
 the redaction behavior of the existing optional model features above. A
 managed assessment integration must disclose its processor, allowed evidence
 and retention policy separately before sending a sanitized request.
+
+### Optional dashboard Assistant
+
+Sending a question in Assistant explicitly invokes the selected AI connection.
+The planner receives the question, recent conversation and table/column schema.
+The answer step also receives bounded, credential-scrubbed query-result previews.
+Raw event payloads, raw memory bodies and file reads are excluded from its SQL
+surface. The page discloses this inference boundary before sending. Conversations
+and saved panel definitions remain in local DuckDB.
+
+The supported connections are the installed Claude CLI (which contacts its
+configured Anthropic service with tools and project customization disabled), a
+request-scoped Anthropic API key (`api.anthropic.com/v1/messages`), and an optional
+authenticated Builder connection (`build.clawmetry.com/api/assistant/*`).
+Builder availability and balance checks require a configured account key; no
+anonymous balance or credit grant is assumed. Starting checkout requires an
+explicit top-up action. The API key typed into the dashboard is never persisted.
+Offline and self-hosted suppression also disable this external inference path.
+
+These are user-requested inference calls, separate from encrypted cloud sync.
+Do not interpret the Assistant's data notice as a claim that an AI provider
+cannot read the prompt or the selected query results it processes.
 
 ---
 

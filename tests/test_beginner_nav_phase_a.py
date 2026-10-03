@@ -42,7 +42,7 @@ def _ordered_tabs(html: str) -> list:
 def test_tier1_order_and_membership():
     nav = _nav_block()
     tabs = _ordered_tabs(nav)
-    tier1 = tabs[:12]
+    tier1 = _ordered_tabs(nav.split('id="left-nav-live-toggle"')[0])
     # Agent-first IA (2026-09-20): Agents is the landing item, with Sessions
     # directly after it (founder request 2026-09-15). Both sit under the
     # "Monitoring" label with Home + the raw-signal views (Activity, Cost,
@@ -51,10 +51,9 @@ def test_tier1_order_and_membership():
     # under Govern. Guard owns the Approvals and Alerts entry points
     # (REQ-GUX-003); existing tab ids remain usable for deep links.
     assert tier1 == [
-        "overview", "inventory", "transcripts", "brain", "usage", "models",
+        "assistant", "overview", "inventory", "setup", "improve", "transcripts", "brain", "usage", "models",
         "context-economics",
-        "evals", "bench",
-        "guard", "signals", "notifications",
+        "evals", "bench", "guard", "signals", "notifications",
     ], f"Tier-1 must be the beginner items in order, got {tier1}"
 
 
@@ -91,7 +90,7 @@ def test_no_tab_lost_in_restructure():
     expected = {
         # Tier-1 (notifications promoted from Advanced, founder 2026-07-29;
         # evals added top-level in #4295)
-        "overview", "inventory", "brain", "usage", "transcripts",
+        "overview", "inventory", "setup", "improve", "brain", "usage", "transcripts",
         "approvals", "alerts", "notifications", "evals",
         # Developer drawer. Phase B (UX_AUDIT.md) deliberately moved the
         # session-scoped views (tracing, turn-anatomy, swimlane) OUT of the
@@ -129,7 +128,7 @@ def test_developer_drawer_membership():
     # Models + Context usage moved up into the Monitoring group with the
     # session-first IA (Trail, 2026-09).
     assert got == {
-        "flow", "tracing", "agents", "tool-catalog", "harness",
+        "flow", "tracing", "agents", "tool-catalog", "harness", "dives",
     }, f"Developer drawer membership drifted: {sorted(got)}"
 
 

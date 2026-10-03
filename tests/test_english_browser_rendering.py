@@ -251,7 +251,7 @@ def test_duration_fallbacks_keep_counts_and_units(loaded):
 @pytest.mark.parametrize('days', [1, 2, 3])
 def test_trial_banner_retains_count_and_grammar_before_translation_loads(loaded, days):
     code = '''
-var window={}, els={'license-expired-banner':{style:{}},'license-expired-msg':{textContent:''}};
+var window={}, els={'license-expired-banner':{style:{},dataset:{}},'license-expired-msg':{textContent:''}};
 var document={getElementById:k=>els[k]}, localStorage={getItem:()=>null};
 var fetches=0;
 '''
