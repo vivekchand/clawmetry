@@ -12,6 +12,11 @@
 
 - Qwen Code sessions now feed the replay tree. The reader maps each chat recording into the canonical replay stream: one turn per user prompt, reasoning and model replies with usage, tool calls with their results, and the recorded decision on each tool call. The mode chip reads "unknown" because Qwen Code keeps no approval mode in the chat log. Sub-agent transcripts attach under the call that started them, with their resolved approval mode on the spawn. The daemon writes the stream for every adapter that offers one, so later runtime mappers need no daemon change.
 
+### Added: Goose session replay
+
+- Goose sessions now feed the replay tree (clawmetry-pro#134). The mode chip comes from the permission mode Goose stores on the session: `auto` reads as "yolo", `approve` and `smart_approve` read as "default", and any other value reads "unknown" with the native value kept next to it. A session the Goose scheduler started carries the "cron" marker with its schedule id and cron expression. A session that ran a recipe gets one workflow group with the recipe title, instructions, prompt, activities and sub-recipes. A session without a recipe stays a flat replay.
+- **Limits:** Goose stores one mode per session, so a mode change in the middle of a session is not visible. Approval decisions are not in the session store, so none are shown. The values typed for recipe parameters are never read.
+
 ### Fixed: Assistant startup and Home refresh
 
 - Assistant and Dives discover a native Claude installation when the background service has a minimal PATH. Existing authentication and constrained Assistant execution remain in use.
