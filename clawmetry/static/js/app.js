@@ -21707,7 +21707,7 @@ function _updateReplayStatePanel(currentTimestamp, currentIndex) {
   if (el) {
     el.textContent = model || window._replaySessionModel || t('transcripts.not_recorded', null, 'Not recorded');
     el.title = model ? t('transcripts.model_at_point', null, 'Model recorded at this point in the conversation')
-      : window._replaySessionModel ? t('transcripts.session_model_hint', null, 'Session model; no model was recorded at this point in the conversation') : '';
+      : window._replaySessionModel ? t('transcripts.session_model_hint', null, 'Session model. No model was recorded at this point in the conversation') : '';
   }
   el = document.getElementById('replay-state-thinking');
   if (el) el.textContent = thinkingLevel || t('transcripts.not_recorded', null, 'Not recorded');

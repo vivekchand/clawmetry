@@ -1293,7 +1293,7 @@
   "transcripts.replay_thinking": "Thinking",
   "transcripts.not_recorded": "Not recorded",
   "transcripts.model_at_point": "Model recorded at this point in the conversation",
-  "transcripts.session_model_hint": "Session model; no model was recorded at this point in the conversation",
+  "transcripts.session_model_hint": "Session model. No model was recorded at this point in the conversation",
   "transcripts.replay_details_local": "Advanced replay details are available on the dashboard running on your agent's machine. This hosted view shows the synced conversation below.",
   "transcripts.replay_details": "Advanced replay details",
   "transcripts.loading_replay_details": "Loading replay details…",
