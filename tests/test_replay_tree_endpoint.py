@@ -163,6 +163,86 @@ def test_build_tree_folds_delegations_under_spawn():
     assert d["span_id"] == "spawn1"
     assert len(d["events"]) == 2
     assert [e["span_id"] for e in d["events"]] == ["child-u1", "child-a1"]
+    # The child's events are listed once, under the spawn, not in the turn.
+    assert [e["span_id"] for e in turn["events"]] == ["u1", "a1", "spawn1"]
+    assert d["delegations"] == []
+    assert d["approvals"] == []
+
+
+def test_build_tree_nests_delegations_to_the_depth_the_rows_carry():
+    """The shape the Qwen Code and Claude Code mappers write: a spawn under
+    the spawning tool call, the child's events under the spawn, a nested
+    spawn under a tool call in the child."""
+    from routes.sessions import _build_replay_tree
+
+    rows = [
+        _e(span_id="u1", kind="llm.call", ts=1.0),
+        _e(span_id="t1", kind="tool.call", ts=2.0),
+        _e(span_id="spawn1", kind="agent.spawn", ts=2.1, parent_span_id="t1",
+           payload={"description": "Explore the repo",
+                    "child_session_id": "s1::agent-a"}),
+        _e(span_id="c-u1", kind="llm.call", ts=3.0, parent_span_id="spawn1"),
+        _e(span_id="c-t1", kind="tool.call", ts=4.0, parent_span_id="spawn1"),
+        _e(span_id="spawn2", kind="agent.spawn", ts=4.1, parent_span_id="c-t1",
+           payload={"subagent_type": "general-purpose"}),
+        _e(span_id="g-u1", kind="llm.call", ts=5.0, parent_span_id="spawn2"),
+        _e(span_id="g-t1", kind="tool.call", ts=6.0, parent_span_id="spawn2"),
+        _e(span_id="g-ap", kind="approval.decided", ts=6.1,
+           parent_span_id="g-t1", approval={"status": "denied"}),
+        _e(span_id="ret2", kind="agent.return", ts=7.0, parent_span_id="spawn2"),
+        _e(span_id="c-ap", kind="approval.decided", ts=7.5,
+           parent_span_id="c-t1", approval={"status": "approved"}),
+        _e(span_id="ret1", kind="agent.return", ts=8.0, parent_span_id="spawn1"),
+        _e(span_id="tr1", kind="tool.result", ts=9.0),
+        _e(span_id="u2", kind="llm.call", ts=10.0),
+    ]
+    out = _build_replay_tree("s1", rows)
+    assert [t["turn_id"] for t in out["turns"]] == ["u1", "u2"]
+    turn = out["turns"][0]
+    assert [e["span_id"] for e in turn["events"]] == ["u1", "t1", "spawn1", "tr1"]
+    assert len(turn["delegations"]) == 1
+    d1 = turn["delegations"][0]
+    assert d1["span_id"] == "spawn1"
+    assert d1["label"] == "Explore the repo"
+    assert d1["child_session_id"] == "s1::agent-a"
+    assert [e["span_id"] for e in d1["events"]] == [
+        "c-u1", "c-t1", "spawn2", "ret1"]
+    assert [a["span_id"] for a in d1["approvals"]] == ["c-ap"]
+    assert len(d1["delegations"]) == 1
+    d2 = d1["delegations"][0]
+    assert d2["span_id"] == "spawn2"
+    assert d2["label"] == "general-purpose"
+    assert [e["span_id"] for e in d2["events"]] == ["g-u1", "g-t1", "ret2"]
+    assert [a["span_id"] for a in d2["approvals"]] == ["g-ap"]
+    assert d2["delegations"] == []
+    # The turn total counts the delegated approvals too.
+    assert sorted(a["span_id"] for a in turn["approvals"]) == ["c-ap", "g-ap"]
+    # Every non-approval row appears exactly once in the tree.
+    seen = []
+
+    def walk(events, delegations):
+        seen.extend(e["span_id"] for e in events)
+        for d in delegations:
+            walk(d["events"], d["delegations"])
+
+    for t in out["turns"]:
+        walk(t["events"], t["delegations"])
+    assert sorted(seen) == sorted(
+        r["span_id"] for r in rows if not r["kind"].startswith("approval."))
+
+
+def test_build_tree_survives_a_parent_cycle_between_spawns():
+    from routes.sessions import _build_replay_tree
+
+    rows = [
+        _e(span_id="u1", kind="llm.call", ts=1.0),
+        _e(span_id="sA", kind="agent.spawn", ts=2.0, parent_span_id="sB"),
+        _e(span_id="sB", kind="agent.spawn", ts=3.0, parent_span_id="sA"),
+        _e(span_id="s0", kind="agent.spawn", ts=4.0, parent_span_id="s0"),
+    ]
+    out = _build_replay_tree("s1", rows)
+    assert len(out["turns"]) == 1
+    assert out["row_count"] == 4
 
 
 def test_build_tree_groups_workflow_events():
@@ -248,3 +328,77 @@ def test_endpoint_returns_empty_shape_for_unknown_session(store, monkeypatch):
     assert body["turns"] == []
     assert body["workflows"] == []
     assert body["row_count"] == 0
+
+
+def _replay_client(store, monkeypatch):
+    from flask import Flask
+    from routes.sessions import bp_sessions
+    from clawmetry import local_store as ls
+
+    monkeypatch.setattr(
+        "routes.local_query.local_store_via_daemon",
+        lambda *a, **kw: None,
+    )
+    monkeypatch.setattr(ls, "get_store", lambda read_only=False: store)
+    app = Flask(__name__)
+    app.register_blueprint(bp_sessions)
+    return app.test_client()
+
+
+def _turn_rows(session_id, count):
+    return [{
+        "span_id": "%s:%06d" % (session_id, i),
+        "parent_span_id": None,
+        "session_id": session_id,
+        "runtime": "codex",
+        "kind": "llm.call",
+        "ts": 1_700_000_000.0 + i,
+        "payload": {"prompt": "p%d" % i},
+    } for i in range(count)]
+
+
+def test_replay_tree_reads_past_the_store_default(store, monkeypatch):
+    """A session longer than the store's 2000-row default is served whole.
+
+    The endpoint used the default limit, so a 2500-event session came back
+    as its first 2000 events with nothing saying the rest was missing.
+    """
+    assert store.ingest_replay_events(_turn_rows("codex:long", 2500)) == 2500
+    body = _replay_client(store, monkeypatch).get(
+        "/api/replay-tree/codex:long").get_json()
+    assert body["row_count"] == 2500
+    assert len(body["turns"]) == 2500
+    assert body["truncated"] is False
+
+
+def test_replay_tree_reports_a_cut_session(store, monkeypatch):
+    """Past the endpoint cap the tree is the earliest events, flagged."""
+    import routes.sessions as rs
+
+    monkeypatch.setattr(rs, "_REPLAY_TREE_MAX_EVENTS", 5)
+    assert store.ingest_replay_events(_turn_rows("codex:cut", 9)) == 9
+    client = _replay_client(store, monkeypatch)
+    body = client.get("/api/replay-tree/codex:cut").get_json()
+    assert body["truncated"] is True
+    assert body["event_limit"] == 5
+    assert body["row_count"] == 5
+    assert [t["turn_id"] for t in body["turns"]] == [
+        "codex:cut:%06d" % i for i in range(5)]
+
+    # Exactly at the cap is not a cut.
+    monkeypatch.setattr(rs, "_REPLAY_TREE_MAX_EVENTS", 9)
+    body = client.get("/api/replay-tree/codex:cut").get_json()
+    assert body["truncated"] is False
+    assert body["row_count"] == 9
+
+
+def test_replay_tree_cap_fits_the_daemon_proxy_ceiling():
+    """The ``replay_events`` query shape clamps to 10000 rows. The endpoint
+    asks for cap + 1, so a cap at or above that ceiling could never see the
+    extra row on that path and would report a long session as complete."""
+    import routes.sessions as rs
+    from routes.local_query import _coerce_args as sanitize
+
+    asked = rs._REPLAY_TREE_MAX_EVENTS + 1
+    got = sanitize("replay_events", {"session_id": "s", "limit": asked})
+    assert got["limit"] == asked

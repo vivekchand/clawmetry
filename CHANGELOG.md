@@ -1,5 +1,41 @@
 ## Unreleased
 
+### Fixed: Sessions stays a readable conversation
+
+- Opening a session with recorded replay events keeps the conversation, filters, tool details and playback controls visible. Raw event details are now an optional section that loads when opened.
+- The reader opens at the latest recorded message, shows the recorded model and token count, and restarts from the beginning when Play is pressed. Missing measurements are labelled as not recorded.
+- Switching sessions discards late transcript, history-page and side-panel responses. Narrow screens put session titles above the action buttons.
+- Verified with the reported Claude Code session, a fresh real Claude exchange, a long Codex conversation with older history, and regression tests that fail when the old renderer takeover or position reset is restored.
+
+
+### Fixed: the runtime hook registry replaced hooks it did not own
+
+- **Why:** `clawmetry.hooks.install` set the config key of a hook to its own value. A `hooks.PreToolUse` list in `~/.claude/settings.json` that already held a user hook was replaced. It also wrote a `__clawmetry` key next to the hook events, and it rewrote a config it could not parse as an empty one. Uninstall copied the backup taken at install time over the config, which dropped every edit made since. No shipped component installs through this registry yet, so no user config was affected.
+- **What:** install appends its entries to a list that is already there and writes nothing else into the config. It stops with an error when the config is not a JSON object. The manifest records what was added. Uninstall restores the exact prior bytes when the config is unchanged since install, and removes only the recorded entries when it has changed. `status()` and `verify_all()` report a hook whose config entry was removed by hand. The config file keeps its file mode.
+- **Verified:** `tests/test_hooks.py` targeted an older API and every test in it errored. It is rewritten against the shipped API (26 tests) and now runs in CI.
+- **Limits:** a config that changed after install is rewritten with two-space indentation on uninstall. Comments are not supported in the config file.
+
+### Fixed: long sessions were cut short in the replay tree without notice
+
+- **Why:** `GET /api/replay-tree/<session_id>` read the store with its default limit of 2000 events. A longer session came back as its first 2000 events and nothing said the rest was missing. Two Codex sessions on the test machine have more than 4500 replay events each.
+- **What:** the endpoint now reads up to 8000 events. The response carries `truncated` and `event_limit`. A session past the limit returns its earliest 8000 events with `truncated: true`, and the replay view shows a note that states how many events are listed.
+- **Verified:** 3 new endpoint tests cover a 2500-event session served whole, a session past the limit, and a session exactly at the limit. 3 new renderer checks cover the note.
+- **Limits:** a session past 8000 events still shows only its start. There is no paging yet.
+
+### Added: the sessions list shows how each session ran
+
+- **Why:** the permission mode of a session was visible only after its transcript was opened. A session that runs tools without asking looked the same in the list as a supervised one.
+- **What:** the `sessions` table gains `mode_permission`, `mode_sandbox`, `mode_collaboration` and `mode_resolved_at`. The store fills them from the latest `mode.changed` replay event each time a replay mapper writes a session. `/api/sessions` rows carry the three mode fields. The Sessions list shows a badge for YOLO, plan and auto-edit sessions. Part of #4814.
+- **Verified:** 8 new tests cover the latest event winning, an older batch that does not move the mode back, a session upsert that keeps the mode, a missing session row, and the list row.
+- **Limits:** a session has a mode only when its runtime has a replay mapper and reports one. An empty value means not captured. It does not mean default. The default approval policy of a runtime is not stored yet.
+
+### Fixed: sub-agent events in the session replay tree
+
+- **Why:** `GET /api/replay-tree/<session_id>` listed every sub-agent event twice, once in the turn and once under the spawn. A sub-agent started by another sub-agent was never nested, because the nested list was a placeholder that always came back empty. The Qwen Code mapper already writes this shape and the Claude Code mapper writes it several levels deep.
+- **What:** an event belongs to the nearest spawn above it and is listed once, under that spawn. A spawn inside a delegation gets its own nested entry, to the depth the rows carry. Each delegation entry now has a `label` (the spawn description or agent type), the `child_session_id` and the approvals decided inside it. The turn approval count includes the delegated ones. The replay view shows the label and an approval count on each delegation.
+- **Verified:** 3 new builder tests cover a two-level delegation with approvals at both levels, the rule that every row appears exactly once, and a malformed parent cycle. 4 new checks cover the nested rendering.
+- **Limits:** a session with no sub-agents is unchanged. A delegation whose spawn row is missing stays in the turn as flat events.
+
 ### Added: durable Guard investigations and persisted live activity
 
 - Loop and repeated tool failure findings retain their identity, evidence and recovery history across refreshes and restarts. Acknowledgement is separate from recovery. Missing telemetry is labelled stale.

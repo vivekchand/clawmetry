@@ -45,6 +45,7 @@ SYNC_PATH = os.path.join(
 # loop. A persistent exception in any one of them must not stop the others,
 # and must not stop `state["last_sync"]` from advancing.
 TARGET_CALLS = frozenset({
+    "load_state",
     "sync_memory",
     "sync_sessions",
     "sync_claude_cli_sessions",

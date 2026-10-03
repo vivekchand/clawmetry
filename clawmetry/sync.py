@@ -3002,7 +3002,7 @@ def _detect_docker_openclaw() -> dict:
                                 timeout=30,
                             )
                             # Copy logs
-                            for log_path in ["/tmp/openclaw", f"{check_path}/logs"]:
+                            for log_path in ["/tmp/openclaw", f"{check_path}/logs"]:  # nosec B108 - container-side source for docker cp, read out of the container; not a host path
                                 subprocess.run(
                                     [
                                         "docker",
@@ -3099,12 +3099,12 @@ def detect_paths() -> dict:
             log.warning("           protocol: https")
 
     log_candidates = [
-        Path("/tmp/openclaw"),
+        Path("/tmp/openclaw"),  # nosec B108 - read-only discovery candidate, probed with .exists(); never written
         Path(_get_openclaw_dir()) / "logs",
         Path("/data/logs"),
     ]
     log_dir = docker_paths.get("log_dir") or next(
-        (str(p) for p in log_candidates if p.exists()), "/tmp/openclaw"
+        (str(p) for p in log_candidates if p.exists()), "/tmp/openclaw"  # nosec B108 - fallback log dir for the printed diagnostic; reported as text, never opened
     )
 
     workspace_candidates = [
@@ -26221,7 +26221,16 @@ def run_daemon() -> None:
 
     while True:
         try:
-            state = load_state()
+            # field-failure #6302 (daemon_ingest_stalled on Linux py3.11):
+            # load_state() internally guards the JSON read, but not the
+            # STATE_FILE.exists() call that precedes it.  An OSError/
+            # PermissionError there propagated to the outer "Sync cycle
+            # error" handler, leaving last_sync unwritten every cycle.
+            try:
+                state = load_state()
+            except Exception as _ls_e:
+                log.warning("load_state failed, using empty state (non-fatal): %s", _ls_e)
+                state = {"last_event_ids": {}, "last_log_offsets": {}, "last_sync": None}
 
             # ── BOOTSTRAP.md "First Contact" capture (issue #690) ─────────
             # Best-effort; runs early in the tick so we snapshot the file

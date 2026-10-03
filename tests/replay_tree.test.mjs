@@ -87,6 +87,14 @@ check('yolo mode chip painted', populatedMount.innerHTML.includes('data-yolo="1"
 check('turn rendered', populatedMount.innerHTML.includes('data-turn-id="u1"'));
 check('llm.call event rendered', populatedMount.innerHTML.includes('llm.call'));
 
+check('complete tree has no cut notice', !populatedMount.innerHTML.includes('replay-tree-truncated'));
+
+// A cut tree says how many events it lists.
+const cutMount = new _StubEl('div');
+api.renderTree(Object.assign({}, tree, {truncated: true, row_count: 8000, event_limit: 8000}), cutMount);
+check('cut tree shows the notice', cutMount.innerHTML.includes('class="replay-tree-truncated"'));
+check('cut notice names the event count', cutMount.innerHTML.includes('The first 8000 events'));
+
 // Custom kind renderer wins over neutral fallback.
 api.registerKindRenderer('claude_code', 'llm.call', () => '<div class="CUSTOM"></div>');
 const customMount = new _StubEl('div');
@@ -120,6 +128,36 @@ check('delegation wrapper rendered',
       delegMount.innerHTML.includes('replay-tree-delegations'));
 check('delegation summary references spawn id',
       delegMount.innerHTML.includes('delegated span spawn1'));
+
+// Nested delegations render inside their parent, with label and approvals.
+const treeNested = {
+  session_id: 's3', runtime: 'claude_code', row_count: 6, mode: null,
+  workflows: [],
+  turns: [{
+    turn_id: 'u1',
+    events: [{span_id: 'spawn1', kind: 'agent.spawn', runtime: 'claude_code'}],
+    delegations: [{
+      span_id: 'spawn1', label: 'Explore <repo>',
+      events: [{span_id: 'spawn2', kind: 'agent.spawn', runtime: 'claude_code'}],
+      approvals: [{span_id: 'ap1', kind: 'approval.decided'}],
+      delegations: [{
+        span_id: 'spawn2', label: '', approvals: [],
+        events: [{span_id: 'grand-u1', kind: 'llm.call', runtime: 'claude_code'}],
+        delegations: [],
+      }],
+    }],
+    approvals: [],
+  }],
+};
+const nestedMount = new _StubEl('div');
+api.renderTree(treeNested, nestedMount);
+const nestedHtml = nestedMount.innerHTML;
+check('nested delegation rendered at depth 2', nestedHtml.includes('data-depth="2"'));
+check('nested delegation sits inside its parent',
+      nestedHtml.indexOf('delegated span spawn2') > nestedHtml.indexOf('delegated span spawn1') &&
+      nestedHtml.indexOf('delegated span spawn2') < nestedHtml.lastIndexOf('</details>'));
+check('delegation label escaped', nestedHtml.includes('Explore &lt;repo&gt;'));
+check('delegation approvals badge', nestedHtml.includes('replay-tree-badge approvals">✓1'));
 
 if (fail > 0) {
   console.log(`\n${pass} passed, ${fail} failed`);

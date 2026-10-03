@@ -599,6 +599,9 @@ jobs:
       - name: Sessions row controls
         run: python3 -m pytest tests/test_session_row_control_js.py -q
 
+      - name: Sessions conversation and replay details
+        run: python3 -m pytest tests/test_sessions_reader.py tests/test_transcript_layout_grid.py -q
+
       - name: First-install preparation UI
         run: python3 -m pytest tests/test_startup_readiness.py -q
 
@@ -1095,12 +1098,14 @@ jobs:
             tests/test_tool_risk.py \
             tests/test_no_shadowed_module_functions.py \
             tests/test_hooks_claude_code.py \
+            tests/test_hooks.py \
             tests/test_hook_ownership_quoted_launcher.py \
             tests/test_hook_lifecycle.py \
             tests/test_redaction_pii.py \
             tests/test_goose_adapter.py \
             tests/test_goose_platform_paths.py \
             tests/test_goose_replay_events.py \
+            tests/test_session_mode_columns.py \
             tests/test_qwen_code_adapter.py \
             tests/test_adapter_inputs_helper.py \
             tests/test_license_sync_pro_from_config.py \
