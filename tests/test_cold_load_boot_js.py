@@ -266,6 +266,54 @@ def test_failed_tiles_say_so_instead_of_showing_zeros() -> None:
     assert "could not be read" in code, "a failed outcome read must say so in words"
 
 
+def test_activity_retry_restores_counters_after_failed_reads() -> None:
+    """A successful retry must replace the error and show fresh measurements."""
+    import json
+
+    with open(_OVERVIEW_HTML, encoding="utf-8") as fh:
+        template = fh.read().split('<div id="activity-today-strip"', 1)[1]
+    template = template.split("<!-- How independently", 1)[0]
+    script = "const vm=require('node:vm'),assert=require('node:assert/strict');"
+    script += "const template=" + json.dumps(template) + ";"
+    script += """
+      let html='', cells={}, result;
+      const strip={style:{},get innerHTML(){return html;},set innerHTML(value){
+        html=value; cells={};
+        for(const match of value.matchAll(/id="(at-[^"]+)"[^>]*>([^<]*)/g)){
+          cells[match[1]]={textContent:match[2]};
+        }
+      }};
+      strip.innerHTML=template;
+      const ctx={document:{getElementById:id=>id==='activity-today-strip'?strip:cells[id]},
+        _cmRuntimeFilter:()=> 'claude_code', escapeHtml:s=>s, t:(key,args,fallback)=>fallback,
+        _cmTileFetch:async()=>{if(result instanceof Error)throw result;return result;}};
+      vm.createContext(ctx);
+    """
+    script += "vm.runInContext(" + json.dumps(_function("loadActivityToday", is_async=True)) + ",ctx);"
+    script += """
+      (async()=>{
+        for (const count of [7, 19]) {
+          result=new Error('offline'); await ctx.loadActivityToday();
+          assert.match(strip.innerHTML,/could not be read/);
+          assert.equal(strip.style.display,'');
+          result={}; await ctx.loadActivityToday();
+          assert.equal(strip.style.display,'none');
+          result={tool_calls_today:count,exec_calls_today:2,browser_actions_today:3,
+                  messages_today:4,unique_tools_today:5};
+          await ctx.loadActivityToday();
+          assert.doesNotMatch(strip.innerHTML,/could not be read|onclick="loadActivityToday/);
+          assert.equal(strip.style.display,'');
+          for(const [id,value] of Object.entries({'at-tool-calls':count,'at-exec-calls':2,
+            'at-browser-actions':3,'at-messages':4,'at-unique-tools':5})){
+            assert.equal(Number(cells[id]?.textContent),value,id);
+          }
+        }
+      })().catch(error=>{console.error(error);process.exitCode=1;});
+    """
+    result = subprocess.run(["node", "-"], input=script, text=True, capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
 def test_boot_opens_live_streams_only_for_a_screen_that_shows_them() -> None:
     """The log and health EventSources hold 2 of the browser's 6 connections
     per origin for as long as they are open. Boot opened both on the Sessions

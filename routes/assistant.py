@@ -7,7 +7,6 @@ import time
 import logging
 import os
 import re
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -20,6 +19,7 @@ from flask import Blueprint, jsonify, request
 
 from clawmetry.dives_prompt import build_schema_descriptor
 from clawmetry import assistant_managed as managed
+from clawmetry.harness import find_claude_cli
 from routes.advisor import _load_anthropic_auth
 
 bp_assistant = Blueprint("assistant", __name__)
@@ -74,7 +74,9 @@ cost with subscription bills or token count with quality. Do not claim causality
 model superiority or efficiency scores without outcome evidence. No invented data.
 Use at most 180 words. Lead with two findings, explain the visuals, and suggest one
 relevant follow-up. A query covers recorded rows, not necessarily every session
-on the machine. Do not claim complete coverage or actions performed. Plain text, no HTML.
+on the machine. Do not claim complete coverage or actions performed. Plain text,
+no HTML or Markdown tables. The app renders query visuals separately; do not
+duplicate their rows in prose. Use readable runtime names such as Claude Code.
 """
 
 
@@ -119,7 +121,7 @@ def _provider(requested="auto", api_key=None):
         return ("managed", "configured") if managed.configured() else (None, None)
     mode, credential = _load_anthropic_auth()
     # Reuse the existing explicit provider preference and authenticated harness.
-    cli = shutil.which("claude")
+    cli = find_claude_cli()
     if requested == "claude_cli":
         return ("claude_cli", cli) if cli else (None, None)
     if requested == "anthropic":
@@ -139,7 +141,7 @@ def _generate(mode, credential, system, prompt):
     if mode == "claude_cli":
         # No tools, MCP, skills, hooks or project customization. Auth remains
         # owned by the installed harness; generated content cannot act on files.
-        executable = shutil.which("claude")
+        executable = find_claude_cli()
         if not executable:
             raise ValueError("The Claude harness is unavailable.")
         with tempfile.TemporaryDirectory(prefix="clawmetry-assistant-") as workdir:
@@ -344,7 +346,7 @@ def assistant_status():
     ready = bool(credential) and (mode != "managed" or bool(credit_status.get("available")))
     return jsonify(available=ready and data_available, provider=mode,
         providers=[{"id": "auto", "label": "Use my existing connection", "available": ready},
-                   {"id": "claude_cli", "label": "Claude Code harness", "available": bool(shutil.which("claude"))},
+                   {"id": "claude_cli", "label": "Claude Code harness", "available": bool(find_claude_cli())},
                    {"id": "anthropic", "label": "My Anthropic API key", "available": True},
                    {"id": "managed", "label": "ClawMetry credits", "available": bool(credit_status.get("available"))}],
         managed=credit_status, data_available=data_available, message=data_message,
