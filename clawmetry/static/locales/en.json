@@ -1498,6 +1498,7 @@
   "trail.view_failed": "This view could not be drawn.",
   "trail.tree_unavailable": "The replay tree is not available here. The Replay view has the full conversation.",
   "trail.tree_empty": "No replay tree yet for this runtime. The Replay view above has the full conversation.",
+  "trail.tree_truncated": "This session is longer than the replay can show. The first {n} events are listed.",
   "trail.tree_turns": "Turns",
   "trail.tree_mode": "Mode",
   "trail.turn": "Turn",
