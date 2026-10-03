@@ -127,7 +127,6 @@ def _list_dives() -> list[dict]:
 
 def _call_llm_for_sql(question: str, store, history: list | None = None) -> dict:
     """Return the LLM-generated {sql, chart_type, x, y, title, description} spec."""
-    import shutil
     from routes.advisor import (
         _load_anthropic_auth,
         _call_anthropic_api,
@@ -146,9 +145,8 @@ def _call_llm_for_sql(question: str, store, history: list | None = None) -> dict
     msgs = build_dives_prompt(question, store, history=history)
 
     if mode == "claude_cli":
-        claude_bin = shutil.which("claude") or "claude"
         raw = _call_via_claude_cli(
-            claude_bin,
+            credential,
             msgs["user"],
             system=msgs["system"],
             timeout=_QUERY_TIMEOUT_SEC,

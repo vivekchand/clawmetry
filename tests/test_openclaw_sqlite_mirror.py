@@ -275,3 +275,50 @@ def test_mirror_reads_a_store_without_event_zstd(openclaw_home_pre_zstd):
     index = json.loads(
         (Path(out) / "sessions.json").read_text(encoding="utf-8"))
     assert index["agent:main:main"]["sessionId"] == SID
+
+
+def test_session_header_cwd_reaches_the_sessions_row(openclaw_home, monkeypatch, tmp_path):
+    """OpenClaw records a session's working directory once, on the v4
+    ``{"type": "session", ..., "cwd": ...}`` header that opens every
+    transcript (clawmetry-pro#228). The mirror must keep that line and the
+    local ingest must harvest it into ``sessions.cwd``, or OpenClaw sessions
+    stay a wall of UUIDs with no workspace scan."""
+    import importlib
+
+    from clawmetry import sync
+
+    header = {"type": "session", "version": 4, "id": SID,
+              "timestamp": "2026-10-01T22:23:59.000Z",
+              "cwd": "/Users/test/.openclaw/workspace"}
+    _add_events(ocs.agent_db_path(openclaw_home),
+                [header, _event(0), _event(1, "assistant")])
+
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_PATH", str(tmp_path / "events.duckdb"))
+    monkeypatch.setenv("CLAWMETRY_LOCAL_STORE_READ", "1")
+    import clawmetry.local_store as ls
+    importlib.reload(ls)
+    ls.mark_writer_owner()
+    store = ls.get_store()
+
+    flushed: list = []
+    monkeypatch.setattr(sync, "_sync_allowed", lambda: True)
+    monkeypatch.setattr(
+        sync, "_flush_session_batch",
+        lambda batch, fname, *a, **k: flushed.append((fname, list(batch))))
+    monkeypatch.setattr(sync, "_sync_trajectory_context", lambda *a, **k: 0)
+    paths = {"sessions_dir": str(openclaw_home / "agents" / "main" / "sessions")}
+    assert sync.sync_sessions({"api_key": "k", "node_id": "n"}, {}, paths) == 3
+
+    fname, batch = flushed[0]
+    # The mirror kept the header as the first line of the transcript.
+    assert batch[0]["type"] == "session"
+    assert batch[0]["cwd"] == "/Users/test/.openclaw/workspace"
+
+    # The sessions row itself comes from sessions.json (no cwd there); the
+    # transcript ingest fills the location in afterwards.
+    store.ingest_sessions_batch([{"agent_type": "openclaw", "session_id": SID,
+                                  "node_id": "n", "status": "done"}])
+    sync._local_ingest_session_batch(batch, fname, "n", None)
+    row = next(r for r in store.query_sessions_table(limit=50)
+               if r.get("session_id") == SID)
+    assert row.get("cwd") == "/Users/test/.openclaw/workspace"

@@ -134,13 +134,14 @@
         if (cols.indexOf(col) < 0 && cols.length < 16) cols.push(col);
       });
     });
-    if (cols.indexOf('runtime') > 0) cols.unshift(cols.splice(cols.indexOf('runtime'), 1)[0]);
+    var runtimeIndex = cols.findIndex(function (col) { return col.toLowerCase() === 'runtime'; });
+    if (runtimeIndex > 0) cols.unshift(cols.splice(runtimeIndex, 1)[0]);
     var html = '<div class="cm-dashboard-table-wrap"><table class="usage-table cm-dashboard-table"><thead><tr>';
     cols.forEach(function (col) { html += '<th>' + esc(displayCategory(col)) + '</th>'; });
     html += '</tr></thead><tbody>';
     normalized.slice(0, 100).forEach(function (row) {
       html += '<tr>';
-      cols.forEach(function (col) { html += '<td>' + esc(col === 'runtime' && row[col] != null ? displayCategory(row[col]) : fmt(row[col])) + '</td>'; });
+      cols.forEach(function (col) { html += '<td>' + esc(col.toLowerCase() === 'runtime' && row[col] != null ? displayCategory(row[col]) : fmt(row[col])) + '</td>'; });
       html += '</tr>';
     });
     html += '</tbody></table></div>';
