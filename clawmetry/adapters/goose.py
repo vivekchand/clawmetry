@@ -581,8 +581,7 @@ class GooseAdapter(AgentAdapter):
             _cols += ", " + ", ".join(_have_opt)
         try:
             cur = conn.execute(
-                "SELECT " + _cols + " "
-                "FROM sessions ORDER BY updated_at DESC LIMIT ?",
+                "SELECT " + _cols + " FROM sessions ORDER BY updated_at DESC LIMIT ?",  # nosec B608 - column list is _essential plus names filtered against the hardcoded _optional list; LIMIT is bound
                 (max(1, int(limit)),),
             )
             # Read the cron scheduler definitions once (sibling schedule.json),

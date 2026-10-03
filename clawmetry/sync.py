@@ -13624,7 +13624,7 @@ def sync_run_ledger(config: dict, state: dict, paths: dict) -> int:
                     f"SELECT {', '.join(_RUN_LEDGER_SRC_COLS)} FROM task_runs "
                     "WHERE COALESCE(last_event_at, ended_at, created_at, 0) >= ? "
                     "ORDER BY COALESCE(last_event_at, ended_at, created_at, 0) ASC "
-                    "LIMIT 5000",
+                    "LIMIT 5000",  # nosec B608 - column list is the _RUN_LEDGER_SRC_COLS module constant; the watermark is bound
                     [watermark],
                 )
                 rows = [dict(r) for r in cur.fetchall()]
