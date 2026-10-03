@@ -13,7 +13,7 @@
   "source": {
     "system": "8090 Software Factory",
     "project_id": "b415065f-ab2f-4f53-8864-0c009fd098cb",
-    "synced_at": "2026-10-02",
+    "synced_at": "2026-10-03",
     "synced_by": "codex"
   },
   "_scope": [
@@ -33,7 +33,8 @@
     "AC-DEC-005.",
     "AC-STE-002.",
     "AC-STE-003.",
-    "AC-STE-005."
+    "AC-STE-005.",
+    "AC-ASSIST-"
   ],
   "external_prefixes": {
     "AC-CLOUD-": "clawmetry-cloud",
@@ -2417,6 +2418,30 @@
       "doc": "Durable incident investigations: evidence, recovery and live execution",
       "doc_id": "938e0c58-852c-45ef-b90d-ebeb979af8c7",
       "text": "When an entitled operator uses sessions list, inspect or watch, the CLI shall preserve runtime and session scope and support machine-readable JSON with the same incident identities, evidence and coverage semantics as the dashboard."
+    },
+    {
+      "id": "AC-ASSIST-005.1",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When opening Assistant without a conversation, the system shall show a prominent composer above suggested questions, using the dashboard's current light or dark palette; when opening a conversation, the composer shall remain reachable below the messages.\\"
+    },
+    {
+      "id": "AC-ASSIST-005.2",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When a local Claude harness or Anthropic API answer is generated from query evidence, the system shall show actual answer text incrementally before completion, with progress while gathering evidence and no internal reasoning or tool payloads.\\"
+    },
+    {
+      "id": "AC-ASSIST-005.3",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When a response completes, the system shall persist the same full answer, sources and panels that it displayed; an interrupted, failed or unsaved response shall not be presented as a completed saved answer.\\"
+    },
+    {
+      "id": "AC-ASSIST-005.4",
+      "doc": "Conversational dashboards grounded in local agent evidence",
+      "doc_id": "fb690e36-8372-48f6-8e52-32fe5bffc345",
+      "text": "When the user stops waiting, switches conversation or leaves Assistant, subsequent events shall not overwrite the visible conversation; abandoned streaming work shall release bounded request resources. Unavailable streaming transport shall produce an explicit recoverable error."
     }
   ]
 }

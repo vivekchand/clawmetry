@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-315 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+317 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -159,6 +159,8 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/approvals.py` | large | cloud-mediated approval policy engine. |
 | `clawmetry/assessment_privacy.py` | medium | Mandatory, local-only masking for explicitly consented assessments. |
 | `clawmetry/assistant_managed.py` | medium | Optional bridge to ClawMetry's account-metered managed assistant. |
+| `clawmetry/assistant_providers.py` | medium | Assistant text-only CLI and Anthropic streaming transports (no SDK needed). |
+| `clawmetry/assistant_stream.py` | medium | Bounded Assistant SSE lifecycle, cancellation and incremental redaction. |
 | `clawmetry/attention_hook.py` | small | the `clawmetry hook attention` client. |
 | `clawmetry/audit.py` | medium | append-only audit log. |
 | `clawmetry/behaviour_signals.py` | large | Behaviour Signals: what people and agents *say* about a run (WO-58). |

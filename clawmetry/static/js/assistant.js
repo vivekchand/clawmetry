@@ -168,6 +168,112 @@
     return request;
   }
 
+  // Fetch supports POST + a request-scoped key; EventSource cannot send either.
+  function requestStream(url, options, onEvent) {
+    var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var request = { controller: controller, kind: 'chat', timedOut: false, cancelReason: null };
+    state.requests.push(request);
+    var reader = null;
+    var timeoutReject;
+    var timeoutPromise = new Promise(function (_, reject) { timeoutReject = reject; });
+    var timer = setTimeout(function () {
+      request.timedOut = true;
+      if (controller) controller.abort();
+      if (reader) reader.cancel().catch(function () {});
+      var timeoutError = new Error('Assistant request timed out');
+      timeoutError._assistantTimedOut = true;
+      timeoutReject(timeoutError);
+    }, 180000);
+    options.signal = controller ? controller.signal : undefined;
+    function failure(message) {
+      var error = new Error(message);
+      error.data = { error: message };
+      return error;
+    }
+    request.cancelReader = function () {
+      if (reader) reader.cancel().catch(function () {});
+    };
+    var fetchPromise = fetch(url, options).then(async function (response) {
+      if (request.cancelReason || request.timedOut) {
+        if (response.body && response.body.cancel) response.body.cancel().catch(function () {});
+        var aborted = new Error('Aborted'); aborted.name = 'AbortError'; throw aborted;
+      }
+      if (!response.ok || !/text\/event-stream/i.test(response.headers.get('Content-Type') || '')) {
+        var data = {};
+        try { data = await response.json(); } catch (ignored) {}
+        if (!response.ok) {
+          var error = failure('The assistant request failed. Try again.');
+          error.status = response.status;
+          error.data = data;
+          throw error;
+        }
+        // Older servers can still return their complete JSON response.
+        if (typeof data.answer === 'string') return data;
+        throw failure('Live replies are unavailable on this connection. Refresh and try again.');
+      }
+      if (!response.body || !response.body.getReader || typeof TextDecoder === 'undefined') {
+        throw failure('This browser cannot receive live replies. Update your browser and try again.');
+      }
+      reader = response.body.getReader();
+      var decoder = new TextDecoder('utf-8', { fatal: true });
+      var buffer = '';
+      var eventName = '';
+      var lines = [];
+      var totalBytes = 0;
+      var result = null;
+      function dispatch() {
+        if (!lines.length) { eventName = ''; return; }
+        var payload;
+        try { payload = JSON.parse(lines.join('\n')); }
+        catch (ignored) { throw failure('The live reply was interrupted. Refresh this conversation before trying again.'); }
+        lines = [];
+        var type = eventName || 'message';
+        eventName = '';
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+          throw failure('The assistant sent an invalid live reply. Try again.');
+        }
+        if (type === 'error') throw failure(payload.error || 'The answer could not be completed. Try again.');
+        if (type === 'done') {
+          if (typeof payload.answer !== 'string' || !payload.conversation_id) {
+            throw failure('The reply ended without a saved conversation. Try again.');
+          }
+          result = payload;
+        } else if (type === 'status' || type === 'delta') {
+          onEvent(type, payload);
+        }
+      }
+      while (!result) {
+        var chunk = await reader.read();
+        if (request.cancelReason || request.timedOut) {
+          var aborted = new Error('Aborted'); aborted.name = 'AbortError'; throw aborted;
+        }
+        if (chunk.done) break;
+        totalBytes += chunk.value.byteLength;
+        if (totalBytes > 2 * 1024 * 1024) throw failure('The live reply was too large. Ask a narrower question.');
+        buffer += decoder.decode(chunk.value, { stream: true });
+        var newline;
+        while (!result && (newline = buffer.indexOf('\n')) !== -1) {
+          var line = buffer.slice(0, newline).replace(/\r$/, '');
+          buffer = buffer.slice(newline + 1);
+          if (!line) dispatch();
+          else if (line.indexOf('event:') === 0) eventName = line.slice(6).trim();
+          else if (line.indexOf('data:') === 0) lines.push(line.slice(5).replace(/^ /, ''));
+        }
+      }
+      if (!result) throw failure('The connection ended before the answer was saved. Refresh this conversation before trying again.');
+      return result;
+    }).finally(function () { request.cancelReader(); });
+    request.promise = Promise.race([fetchPromise, timeoutPromise]).catch(function (error) {
+      if (request.timedOut) error._assistantTimedOut = true;
+      throw error;
+    }).finally(function () {
+      clearTimeout(timer);
+      if (reader) reader.cancel().catch(function () {});
+      removeRequest(request);
+    });
+    return request;
+  }
+
   function cancelAllRequests(reason) {
     state.requests.slice().forEach(function (request) {
       request.cancelReason = reason || 'leave';
@@ -221,6 +327,8 @@
     var title = el('cm-assistant-setup-title');
     var description = el('cm-assistant-setup-description');
     if (!title || !description) return;
+    var setup = el('cm-assistant-setup');
+    if (setup) setup.classList.toggle('is-ready', !!(state.status && state.status.available && state.dataAvailable !== false));
     if (state.dataAvailable === false) {
       title.textContent = state.status && state.status.egress_suppressed ? 'External inference is disabled' : 'Open your local dashboard';
       description.textContent = state.dataStatusMessage || 'This assistant needs the local data store on your agent’s computer.';
@@ -502,21 +610,16 @@
     var thread = el('cm-assistant-thread');
     var main = page() && page().querySelector('.cm-assistant-main');
     if (main) main.classList.remove('has-messages');
+    var title = el('cm-assistant-title');
+    if (title) title.textContent = 'How can I help?';
     if (!thread) return;
     while (thread.firstChild) thread.removeChild(thread.firstChild);
   }
 
   function showWelcome() {
-    var thread = el('cm-assistant-thread');
-    if (!thread || thread.childElementCount) return;
-    var welcome = make('div', 'cm-assistant-welcome');
-    var orb = make('div', 'cm-assistant-welcome-orb');
-    orb.setAttribute('aria-hidden', 'true');
-    orb.appendChild(make('span'));
-    welcome.appendChild(orb);
-    welcome.appendChild(make('h2', '', 'Bring me a question.'));
-    welcome.appendChild(make('p', '', 'I’ll use the evidence ClawMetry has on this node, explain what is measured, and call out what is missing.'));
-    thread.appendChild(welcome);
+    // The heading and composer are the single opening state.
+    var main = page() && page().querySelector('.cm-assistant-main');
+    if (main) main.classList.remove('has-messages');
   }
 
   function setAnswerText(container, content) {
@@ -544,11 +647,14 @@
       Array.prototype.forEach.call(thread.querySelectorAll('.cm-assistant-welcome'), function (node) { node.remove(); });
     }
     if (main) main.classList.add('has-messages');
+    var title = el('cm-assistant-title');
+    if (title) title.textContent = 'ClawMetry assistant';
+    resizeInput();
     var article = make('article', 'cm-assistant-message ' + (role === 'user' ? 'is-user' : 'is-assistant'));
     var avatar = make('div', 'cm-assistant-avatar', role === 'user' ? 'You' : '✦');
     avatar.setAttribute('aria-hidden', 'true');
     var body = make('div', 'cm-assistant-message-body');
-    body.appendChild(make('div', 'cm-assistant-message-label', role === 'user' ? 'You' : 'ClawMetry'));
+    body.appendChild(make('div', 'cm-assistant-message-label' + (role === 'user' ? ' cm-assistant-sr-only' : ''), role === 'user' ? 'You' : 'ClawMetry'));
     var text = make('div', 'cm-assistant-message-content', content || '');
     if (role !== 'user') setAnswerText(text, content);
     body.appendChild(text);
@@ -646,7 +752,11 @@
     var horizontal = chartType === 'bar' && (labels.length > 10 || labels.some(function (label) { return label.length > 16; }));
     var showAllLabels = labels.length <= 20;
     if (horizontal) chartWrap.style.height = Math.max(220, labels.length * 26) + 'px';
-    var colors = ['#9b8cff', '#f28c83', '#71d5ca', '#f2b263', '#788cff', '#d995cb', '#82b5e8'];
+    var colors = ['#3b82f6', '#22c55e', '#f59e0b', '#f87171', '#06b6d4', '#a78bfa', '#ec4899'];
+    var palette = getComputedStyle(page());
+    var chartText = palette.getPropertyValue('--text-tertiary').trim();
+    var chartGrid = palette.getPropertyValue('--border-secondary').trim();
+    var chartAccent = palette.getPropertyValue('--bg-accent').trim();
     try {
       canvas._cmAssistantChart = new window.Chart(canvas, {
         type: chartType,
@@ -655,8 +765,8 @@
           datasets: [{
             label: yKey,
             data: values,
-            backgroundColor: isPie ? labels.map(function (_, index) { return colors[index % colors.length]; }) : 'rgba(155,140,255,.65)',
-            borderColor: isPie ? colors : '#b8adff',
+            backgroundColor: isPie ? labels.map(function (_, index) { return colors[index % colors.length]; }) : chartAccent,
+            borderColor: isPie ? colors : chartAccent,
             borderWidth: isPie ? 1 : 2,
             borderRadius: chartType === 'bar' ? 5 : 0,
             fill: chartType === 'line',
@@ -668,12 +778,12 @@
           maintainAspectRatio: false,
           indexAxis: horizontal ? 'y' : 'x',
           plugins: {
-            legend: { display: isPie, labels: { color: '#c9d0df', padding: 14, usePointStyle: true } },
-            tooltip: { bodyColor: '#f6f7fb', titleColor: '#f6f7fb', backgroundColor: '#182033', borderColor: 'rgba(255,255,255,.12)', borderWidth: 1 },
+            legend: { display: isPie, labels: { color: chartText, padding: 14, usePointStyle: true } },
+            tooltip: { bodyColor: '#f6f7fb', titleColor: '#f6f7fb', backgroundColor: '#19191d', borderColor: 'rgba(255,255,255,.12)', borderWidth: 1 },
           },
           scales: isPie ? {} : {
-            x: { ticks: { color: '#8f9ab0', autoSkip: horizontal ? false : !showAllLabels, maxTicksLimit: showAllLabels ? labels.length : 12, maxRotation: horizontal ? 0 : 45, minRotation: horizontal ? 0 : (labels.length > 10 ? 45 : 0) }, grid: { color: 'rgba(255,255,255,.055)' } },
-            y: { ticks: { color: '#8f9ab0', autoSkip: horizontal ? false : !showAllLabels, maxTicksLimit: showAllLabels ? labels.length : 12 }, grid: { color: 'rgba(255,255,255,.055)' } },
+            x: { ticks: { color: chartText, autoSkip: horizontal ? false : !showAllLabels, maxTicksLimit: showAllLabels ? labels.length : 12, maxRotation: horizontal ? 0 : 45, minRotation: horizontal ? 0 : (labels.length > 10 ? 45 : 0) }, grid: { color: chartGrid } },
+            y: { ticks: { color: chartText, autoSkip: horizontal ? false : !showAllLabels, maxTicksLimit: showAllLabels ? labels.length : 12 }, grid: { color: chartGrid } },
           },
         },
       });
@@ -914,7 +1024,13 @@
     if (!request) return false;
     request.cancelReason = reason || 'user';
     if (request.controller) request.controller.abort();
-    if (request.pendingNode && request.pendingNode.article) request.pendingNode.article.remove();
+    if (request.cancelReader) request.cancelReader();
+    if (request.pendingNode && request.pendingNode.article) {
+      request.pendingNode.article.classList.remove('is-streaming');
+      if (request.answerText) {
+        request.pendingNode.progress.textContent = 'Stopped. This answer is incomplete.';
+      } else request.pendingNode.article.remove();
+    }
     state.pendingNode = null;
     state.chatRequest = null;
     setComposerBusy(false);
@@ -993,7 +1109,7 @@
     send.disabled = !!(!busy && (!state.conversationReady || state.dataAvailable === false));
     send.classList.toggle('is-cancel', !!busy);
     var label = send.querySelector('span');
-    if (label) label.textContent = busy ? 'Stop waiting' : 'Send';
+    if (label) label.textContent = busy ? 'Stop' : 'Send';
     var arrow = send.querySelector('.cm-assistant-send-arrow');
     if (arrow) arrow.textContent = busy ? '×' : '↗';
     if (input) input.setAttribute('aria-busy', busy ? 'true' : 'false');
@@ -1051,30 +1167,55 @@
     addMessage('user', message);
     input.value = '';
     resizeInput();
-    var pending = addMessage('assistant', 'I’m checking the available evidence...');
-    var payload = { message: message, provider: provider };
+    var pending = addMessage('assistant', '');
+    pending.progress = make('div', 'cm-assistant-stream-status', 'Checking your question...');
+    pending.progress.setAttribute('role', 'status');
+    pending.body.appendChild(pending.progress);
+    pending.article.classList.add('is-streaming');
+    var answerText = '';
+    var payload = { message: message, provider: provider, stream: true };
     if (state.conversationId) payload.conversation_id = state.conversationId;
     if (provider === 'anthropic' && apiKey) payload.api_key = apiKey;
     setComposerBusy(true);
-    setStatusMessage('Working from local observability data. This can take a little while.', 'success');
-    var request = requestJson('/api/assistant/chat', {
+    setStatusMessage('');
+    var request = requestStream('/api/assistant/chat', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
-    }, 165000, 'chat');
+    }, function (type, data) {
+      if (state.chatRequest !== request || !isMounted()) return;
+      if (type === 'status' && typeof data.message === 'string') {
+        pending.progress.textContent = data.message;
+      } else if (type === 'delta' && typeof data.text === 'string') {
+        answerText += data.text;
+        if (answerText.length > 24000) {
+          cancelChat('user');
+          setStatusMessage('The answer was too long. Ask a narrower question.', 'warning');
+          return;
+        }
+        request.answerText = answerText;
+        var bounds = pending.article.getBoundingClientRect();
+        var composerTop = el('cm-assistant-composer').getBoundingClientRect().top;
+        var follow = bounds.bottom > 0 && bounds.bottom < Math.min(window.innerHeight, composerTop) + 160;
+        setAnswerText(pending.content, answerText);
+        pending.progress.textContent = 'Writing answer...';
+        if (follow) pending.article.scrollIntoView({ block: 'end' });
+      }
+    });
     request.pendingNode = pending;
     state.chatRequest = request;
+    if (pending.article.scrollIntoView) pending.article.scrollIntoView({ block: 'end' });
     request.promise.then(function (data) {
       if (state.chatRequest !== request || !isMounted()) return;
       if (state.chatRequest === request) state.chatRequest = null;
       setComposerBusy(false);
-      if (pending && pending.article) pending.article.remove();
+      pending.article.classList.remove('is-streaming');
+      pending.progress.remove();
       state.pendingNode = null;
       if (data && data.conversation_id) state.conversationId = data.conversation_id;
       renderDataNotice(data);
-      var responseNode = addMessage('assistant', '');
-      appendResult(responseNode, data, question);
+      appendResult(pending, data, question);
       setStatusMessage('Answer ready. Review the sources before saving a panel.', 'success');
       loadHistory(true);
     }).catch(function (error) {
@@ -1082,7 +1223,7 @@
       if (state.chatRequest !== request) return;
       state.chatRequest = null;
       setComposerBusy(false);
-      if (pending && pending.article) pending.article.remove();
+      pending.article.classList.remove('is-streaming');
       state.pendingNode = null;
       if (!isMounted() || reason === 'leave' || reason === 'conversation' || reason === 'new-chat') return;
       if (reason === 'user' || (error && error.name === 'AbortError')) {
@@ -1091,7 +1232,8 @@
       }
       var messageText = errorMessage(error);
       setStatusMessage(messageText, 'error');
-      addMessage('assistant', messageText);
+      pending.progress.textContent = answerText ? 'Incomplete answer. ' + messageText : messageText;
+      pending.progress.classList.add('is-error');
     });
   }
 
