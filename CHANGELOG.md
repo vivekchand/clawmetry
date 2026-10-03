@@ -9,6 +9,7 @@
 - Assistant and Dives discover a native Claude installation when the background service has a minimal PATH. Existing authentication and constrained Assistant execution remain in use.
 - Generated Runtime columns keep readable names and first-column placement in chat and saved panels.
 - Home refreshes broad analytics once a minute while live status continues at ten seconds. Shared summary requests reduce duplicate polling; failures retry and runtime changes refresh immediately.
+- Home activity counters return after a successful Retry, including after repeated failed or quiet reads.
 - Validation: 310 targeted tests passed. Real harness generation, follow-up, panel save, Home refresh, and history reopen passed with a minimal PATH. Matched browser windows measured 241 requests per minute before and 114 after the polling change.
 
 ### Added: conversational dashboards from local agent evidence
