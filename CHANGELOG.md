@@ -16,6 +16,10 @@
 
 - The connected dashboard showed raw i18n keys in place of tooltip and accessible-name attributes when a translation was missing. The attribute translator now preserves each original attribute value before applying a locale so partial catalogs and language changes retain readable text. Carries #6278.
 
+### Hardened: bandit B608 MEDIUM findings outside the store are annotated
+
+- Ten medium-confidence bandit B608 false positives in seven files (goose adapter, family_usage, sync, history, alerts, selfhosted_ingest, sessions) now carry `# nosec` comments so new genuine findings stand out. SQL values are always bound; no behaviour changes. Carries #6296.
+
 ### Hardened: bandit non-bulk medium findings are explicitly acknowledged
 
 - Security-scan annotations cover the remaining non-bulk `medium` findings so `make lint` passes the bandit pass without a suppression file. No behaviour change. Carries #6279.
