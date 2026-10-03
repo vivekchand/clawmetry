@@ -23,10 +23,10 @@
 # (read by the closed-source clawmetry-pro companion). 'landing_path'
 # is relative to https://clawmetry.com.
 
-COUNT = 32
+COUNT = 33
 FREE_COUNT = 4
-PAID_COUNT = 28
-BLURB = See your agent think. Zero-config observability & governance for 32 AI agent runtimes: Claude Code, OpenAI Codex, Hermes, OpenClaw & 28 more. Live token costs, sessions, tool calls, crons.
+PAID_COUNT = 29
+BLURB = See your agent think. Zero-config observability & governance for 33 AI agent runtimes: Claude Code, OpenAI Codex, Hermes, OpenClaw & 29 more. Live token costs, sessions, tool calls, crons.
 
 goose	Goose	free	/runtimes/goose
 nemoclaw	NemoClaw	free	/nemoclaw
@@ -53,6 +53,7 @@ muse_code	Muse Code	paid	/runtimes/muse-code
 n8n	n8n	paid	/runtimes/n8n
 nanoclaw	NanoClaw	paid	/runtimes/nanoclaw
 opencode	opencode	paid	/runtimes/opencode
+opendots	OpenDots	paid	/runtimes/opendots
 openexecutive	OpenExecutive	paid	/runtimes/openexecutive
 openhands	OpenHands	paid	/runtimes/openhands
 openworker	OpenWorker	paid	/runtimes/openworker

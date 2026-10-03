@@ -114,6 +114,7 @@ from routes.guard import bp_guard
 from routes.improve import bp_improve  # noqa: E402 (route registration follows boot setup)
 from routes.signals import bp_signals
 from routes.selfdiag import bp_selfdiag
+from routes.capability_gaps import bp_capability_gaps
 from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
@@ -6461,6 +6462,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_improve)
     app.register_blueprint(bp_signals)
     app.register_blueprint(bp_selfdiag)
+    app.register_blueprint(bp_capability_gaps)
     app.register_blueprint(bp_health)
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)
@@ -12460,7 +12462,7 @@ ARCHITECTURE_OVERVIEW = """\
   ┌─────────────────────┐              ┌─────────────────────┐              ┌─────────────────────┐
   │  🤖                 │  READS FILES │  🦞                 │  SHOWS YOU  │  📊                 │
   │  Your AI agents     │ ──────────->  │                     │ ──────────->  │                     │
-  │  Any of 32 runtimes │              │  ClawMetry          │              │  Your browser       │
+  │  Any of 33 runtimes │              │  ClawMetry          │              │  Your browser       │
   │                     │              │  Parses logs +      │              │  localhost:{port}   │
   │  Running normally.  │              │  sessions.          │              │  Live dashboard     │
   │  Nothing changes.   │              │  Serves dashboard.  │              │                     │
@@ -13729,7 +13731,7 @@ def _print_login_url_banner(port, host, token):
         return
     # Always frame the token inside the /auth URL; never print the bare token.
     # 0.0.0.0 / :: are bind-all sentinels; the user clicks from localhost.
-    public_binds = ("0.0.0.0", "::", "")
+    public_binds = ("0.0.0.0", "::", "")  # nosec B104 - sentinels compared against, to rewrite the printed URL to localhost; never passed to bind()
     display_host = "localhost" if host in public_binds else host
     url = f"http://{display_host}:{port}/auth?token={token}"
     print(f"  -> {url}  (one-click sign-in)")
