@@ -36,7 +36,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '22'
-      - run: python -m pip install -e . pytest
+      - run: python -m pip install -e . pytest requests
       - name: Verify paid seams, encrypted reads, navigation and trial continuation
         env:
           CLAWMETRY_AUTO_UPDATE: '0'
