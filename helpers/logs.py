@@ -60,7 +60,7 @@ def _get_log_dirs():
             os.path.join(tempfile.gettempdir(), "openclaw"),
             os.path.join(tempfile.gettempdir(), "moltbot"),
         ]
-    return [home_logs, home_logs_alt, "/tmp/openclaw", "/tmp/moltbot"]
+    return [home_logs, home_logs_alt, "/tmp/openclaw", "/tmp/moltbot"]  # nosec B108 - read-only discovery candidates for the gateway's own logs; the win32 branch above uses tempfile.gettempdir()
 
 
 def _find_log_file(ds):

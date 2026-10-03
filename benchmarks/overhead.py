@@ -300,7 +300,7 @@ _HOOK_EVENT = json.dumps({
     "hook_event_name": "PreToolUse",
     "tool_name": "Bash",
     "tool_input": {"command": "ls -la /tmp"},
-    "cwd": "/tmp",
+    "cwd": "/tmp",  # nosec B108 - benchmark fixture: a JSON string field in a synthetic hook event, never a path this process opens
 })
 
 # A policy that cannot match the Bash/ls event above, so the gate runs the

@@ -2,13 +2,14 @@
 
 Non-negotiable requirement: uninstalling ClawMetry must remove every
 hook cleanly so the runtime that had a hook installed continues to
-boot without errors.
+boot without errors, and installing one must never drop a hook the
+user or another tool already registered.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -16,277 +17,380 @@ import pytest
 
 @pytest.fixture
 def hooks_env(tmp_path, monkeypatch):
-    """Point HOOKS_DIR/MANIFEST_PATH/BACKUPS_DIR at tmp_path so tests
-    never touch a real ~/.clawmetry/hooks directory."""
+    """Point the manifest, backups and lock at tmp_path so tests never
+    touch a real ~/.clawmetry/hooks directory."""
     from clawmetry import hooks
 
-    monkeypatch.setattr(hooks, "HOOKS_DIR", tmp_path / "hooks")
-    monkeypatch.setattr(hooks, "MANIFEST_PATH",
-                        tmp_path / "hooks" / "installed.json")
-    monkeypatch.setattr(hooks, "BACKUPS_DIR", tmp_path / "hooks" / "backups")
-    monkeypatch.setattr(hooks, "DATA_DIR", tmp_path / "hooks" / "data")
+    root = tmp_path / "hooks"
+    monkeypatch.setattr(hooks, "_MANIFEST_DIR", root)
+    monkeypatch.setattr(hooks, "_MANIFEST_PATH", root / "installed.json")
+    monkeypatch.setattr(hooks, "_BACKUP_DIR", root / "backups")
+    monkeypatch.setattr(hooks, "_LOCK_PATH", root / ".manifest.lock")
     return hooks
 
 
-def _spec(hooks_mod, tmp_path, **over):
+OUR_ENTRY = {"matcher": "*", "hooks": [{"type": "command", "command": "ours"}]}
+USER_ENTRY = {"matcher": "Bash", "hooks": [{"type": "command", "command": "theirs"}]}
+
+
+def _spec(tmp_path, **over):
     from clawmetry.hooks import HookSpec
 
-    payload = over.pop("payload", b"#!/usr/bin/env node\nconsole.log('hook');\n")
     return HookSpec(
-        hook_id=over.pop("hook_id", "claude_code.approval_prompt_capture"),
+        id=over.pop("id", "claude_code.approval_prompt_capture"),
         runtime=over.pop("runtime", "claude_code"),
         purpose=over.pop("purpose", "test-only"),
         install_path=over.pop(
             "install_path", str(tmp_path / "runtime" / "hook.js")),
-        payload=payload,
+        hook_content=over.pop("hook_content", "console.log('hook');\n"),
         target_config=over.pop("target_config", None),
         target_config_key=over.pop("target_config_key", None),
         target_config_value=over.pop("target_config_value", None),
-        clawmetry_version=over.pop("clawmetry_version", "0.12.702"),
+        clawmetry_version=over.pop("clawmetry_version", "0.12.906"),
     )
+
+
+def _config_spec(tmp_path, cfg, **over):
+    over.setdefault("target_config", str(cfg))
+    over.setdefault("target_config_key", "hooks.PreToolUse")
+    over.setdefault("target_config_value", [OUR_ENTRY])
+    return _spec(tmp_path, **over)
+
+
+def _manifest(hooks_mod):
+    return json.loads(hooks_mod._MANIFEST_PATH.read_text())["hooks"]
 
 
 # ── install ──────────────────────────────────────────────────────────────
 
-
 def test_install_writes_manifest_and_file(hooks_env, tmp_path):
-    s = _spec(hooks_env, tmp_path)
-    entry = hooks_env.install(s)
+    s = _spec(tmp_path)
+    hooks_env.install(s)
 
-    # Hook file was dropped
-    assert Path(s.install_path).exists()
-    assert Path(s.install_path).read_bytes() == s.payload
-
-    # Manifest lists it
-    manifest = hooks_env.MANIFEST_PATH
-    assert manifest.exists()
-    data = json.loads(manifest.read_text())
-    assert data["schema_version"] == 1
-    assert len(data["hooks"]) == 1
-    assert data["hooks"][0]["hook_id"] == s.hook_id
-    assert data["hooks"][0]["checksum"].startswith("sha256:")
-    assert data["hooks"][0]["runtime"] == "claude_code"
-
-    # Returned entry matches
-    assert entry.hook_id == s.hook_id
-    assert entry.checksum == "sha256:" + hashlib.sha256(s.payload).hexdigest()
+    assert Path(s.install_path).read_text() == s.hook_content
+    (entry,) = _manifest(hooks_env)
+    assert entry["id"] == s.id
+    assert entry["checksum"].startswith("sha256:")
+    (st,) = hooks_env.status()
+    assert st.file_present and st.checksum_ok
+    assert st.hook_id == st.id == s.id
 
 
 def test_install_is_idempotent_by_hook_id(hooks_env, tmp_path):
-    s = _spec(hooks_env, tmp_path, payload=b"v1")
-    hooks_env.install(s)
-    s2 = _spec(hooks_env, tmp_path, payload=b"v2")
-    hooks_env.install(s2)
-
-    entries = hooks_env.status()
-    assert len(entries) == 1
-    assert entries[0].checksum == "sha256:" + hashlib.sha256(b"v2").hexdigest()
-    assert Path(s2.install_path).read_bytes() == b"v2"
-
-
-def test_install_backs_up_and_edits_target_config(hooks_env, tmp_path):
     cfg = tmp_path / "settings.json"
-    cfg.write_text(json.dumps({"other": "user-value"}))
-    s = _spec(hooks_env, tmp_path,
-              target_config=str(cfg),
-              target_config_key="hooks.PreToolUse",
-              target_config_value={"path": "/hook.js"})
-    entry = hooks_env.install(s)
+    s = _config_spec(tmp_path, cfg)
+    hooks_env.install(s)
+    hooks_env.install(s)
 
-    # Backup created
-    assert entry.backup_path is not None
-    assert Path(entry.backup_path).exists()
+    assert len(_manifest(hooks_env)) == 1
+    assert json.loads(cfg.read_text())["hooks"]["PreToolUse"] == [OUR_ENTRY]
 
-    # Config updated with the marker
+
+def test_install_appends_to_hooks_already_registered(hooks_env, tmp_path):
+    """Installing must not replace the list a user's own hook lives in."""
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({
+        "model": "opus",
+        "hooks": {"PreToolUse": [USER_ENTRY], "Stop": [USER_ENTRY]},
+    }))
+    hooks_env.install(_config_spec(tmp_path, cfg))
+
     data = json.loads(cfg.read_text())
-    assert data["other"] == "user-value"
-    assert data["hooks"]["PreToolUse"]["path"] == "/hook.js"
-    assert data["hooks"]["PreToolUse"][hooks_env.CLAWMETRY_MARKER_KEY] is True
+    assert data["hooks"]["PreToolUse"] == [USER_ENTRY, OUR_ENTRY]
+    assert data["hooks"]["Stop"] == [USER_ENTRY]
+    assert data["model"] == "opus"
+
+
+def test_install_adds_nothing_but_its_value_to_the_config(hooks_env, tmp_path):
+    """A runtime may reject keys it does not know, so no marker is written."""
+    cfg = tmp_path / "settings.json"
+    hooks_env.install(_config_spec(tmp_path, cfg))
+
+    assert json.loads(cfg.read_text()) == {"hooks": {"PreToolUse": [OUR_ENTRY]}}
+
+
+def test_install_backs_up_target_config(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    original = json.dumps({"hooks": {"PreToolUse": [USER_ENTRY]}})
+    cfg.write_text(original)
+    hooks_env.install(_config_spec(tmp_path, cfg))
+
+    (entry,) = _manifest(hooks_env)
+    assert Path(entry["backup_path"]).read_text() == original
+
+
+def test_install_refuses_a_config_it_cannot_parse(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text("{ not json")
+    s = _config_spec(tmp_path, cfg)
+
+    with pytest.raises(RuntimeError):
+        hooks_env.install(s)
+
+    assert cfg.read_text() == "{ not json"
+    assert not Path(s.install_path).exists()
+    assert hooks_env.status() == []
+
+
+def test_install_refuses_a_non_object_parent(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    original = json.dumps({"hooks": "disabled"})
+    cfg.write_text(original)
+
+    with pytest.raises(RuntimeError):
+        hooks_env.install(_config_spec(tmp_path, cfg))
+
+    assert cfg.read_text() == original
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_install_keeps_the_config_file_mode(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text("{}")
+    cfg.chmod(0o644)
+    hooks_env.install(_config_spec(tmp_path, cfg))
+
+    assert cfg.stat().st_mode & 0o777 == 0o644
 
 
 # ── uninstall ────────────────────────────────────────────────────────────
 
-
 def test_uninstall_removes_file_and_manifest_entry(hooks_env, tmp_path):
-    s = _spec(hooks_env, tmp_path)
+    s = _spec(tmp_path)
     hooks_env.install(s)
-    assert hooks_env.uninstall(s.hook_id) is True
+    hooks_env.uninstall(s.id)
 
     assert not Path(s.install_path).exists()
     assert hooks_env.status() == []
 
 
-def test_uninstall_is_idempotent_returns_false_when_absent(hooks_env, tmp_path):
-    assert hooks_env.uninstall("never-installed") is False
-
-
-def test_uninstall_removes_only_clawmetry_owned_config_key(
-        hooks_env, tmp_path):
-    """The most important safety property: uninstall must NEVER stomp
-    user config. Only the key ClawMetry marked gets removed; every
-    other key the user has in the config file stays put."""
-    cfg = tmp_path / "settings.json"
-    s = _spec(hooks_env, tmp_path,
-              target_config=str(cfg),
-              target_config_key="hooks.PreToolUse")
-    hooks_env.install(s)
-    # User adds their own hook at a sibling key BETWEEN install and uninstall
-    data = json.loads(cfg.read_text())
-    data["hooks"]["UserHook"] = {"path": "/user.js"}   # NOT marked
-    data["other_user_key"] = "user-value"
-    cfg.write_text(json.dumps(data))
-
-    hooks_env.uninstall(s.hook_id)
-
-    # User's keys survived
-    data_after = json.loads(cfg.read_text())
-    assert data_after["hooks"]["UserHook"] == {"path": "/user.js"}
-    assert data_after["other_user_key"] == "user-value"
-    # ClawMetry-owned key removed
-    assert "PreToolUse" not in data_after["hooks"]
-
-
-def test_uninstall_survives_user_replacing_our_key(hooks_env, tmp_path):
-    """If the user OVERWRITES the ClawMetry key with their own value
-    (dropping the marker), uninstall must leave it alone — never stomp
-    user config, even if the key path matches."""
-    cfg = tmp_path / "settings.json"
-    s = _spec(hooks_env, tmp_path,
-              target_config=str(cfg),
-              target_config_key="hooks.PreToolUse")
-    hooks_env.install(s)
-    # User replaces our value with theirs (no marker)
-    data = json.loads(cfg.read_text())
-    data["hooks"]["PreToolUse"] = {"path": "/user.js"}
-    cfg.write_text(json.dumps(data))
-
-    hooks_env.uninstall(s.hook_id)
-
-    data_after = json.loads(cfg.read_text())
-    assert data_after["hooks"]["PreToolUse"] == {"path": "/user.js"}
-
-
-def test_uninstall_all_drains_manifest(hooks_env, tmp_path):
-    s1 = _spec(hooks_env, tmp_path, hook_id="a",
-               install_path=str(tmp_path / "a.js"))
-    s2 = _spec(hooks_env, tmp_path, hook_id="b",
-               install_path=str(tmp_path / "b.js"))
-    s3 = _spec(hooks_env, tmp_path, hook_id="c",
-               install_path=str(tmp_path / "c.js"))
-    hooks_env.install(s1)
-    hooks_env.install(s2)
-    hooks_env.install(s3)
-
-    removed = hooks_env.uninstall_all()
-
-    assert sorted(removed) == ["a", "b", "c"]
+def test_uninstall_of_unknown_hook_is_a_no_op(hooks_env, tmp_path):
+    hooks_env.uninstall("never-installed")
     assert hooks_env.status() == []
-    for s in (s1, s2, s3):
-        assert not Path(s.install_path).exists()
-
-
-# ── verify_all + self_heal ───────────────────────────────────────────────
-
-
-def test_verify_all_reports_missing_file(hooks_env, tmp_path):
-    s = _spec(hooks_env, tmp_path)
-    hooks_env.install(s)
-    Path(s.install_path).unlink()
-
-    verdicts = hooks_env.verify_all()
-    assert len(verdicts) == 1
-    assert verdicts[0].ok is False
-    assert "hook file missing" in verdicts[0].reason
-
-
-def test_verify_all_reports_checksum_drift(hooks_env, tmp_path):
-    s = _spec(hooks_env, tmp_path)
-    hooks_env.install(s)
-    # User edits the hook file
-    Path(s.install_path).write_bytes(b"user-modified")
-
-    verdicts = hooks_env.verify_all()
-    assert len(verdicts) == 1
-    assert verdicts[0].ok is False
-    assert "checksum drift" in verdicts[0].reason
-
-
-def test_self_heal_deregisters_orphan(hooks_env, tmp_path):
-    s = _spec(hooks_env, tmp_path)
-    hooks_env.install(s)
-    Path(s.install_path).unlink()   # file gone out-of-band
-
-    logs: list[str] = []
-    removed = hooks_env.self_heal(logger=logs.append)
-    assert removed == 1
-    assert hooks_env.status() == []
-    assert any("deregistering orphan" in log for log in logs)
-
-
-def test_self_heal_keeps_drifted_hook_registered(hooks_env, tmp_path):
-    """Checksum drift is a warning, not a deregistration — the user
-    may have edited the hook intentionally. We surface the warning
-    but keep the manifest entry so ``clawmetry uninstall`` still
-    knows to clean it up."""
-    s = _spec(hooks_env, tmp_path)
-    hooks_env.install(s)
-    Path(s.install_path).write_bytes(b"user-modified")
-
-    logs: list[str] = []
-    removed = hooks_env.self_heal(logger=logs.append)
-    assert removed == 0
-    assert len(hooks_env.status()) == 1
-    assert any("checksum drift" in log for log in logs)
-
-
-# ── FLYWHEEL "clean uninstall" bar ───────────────────────────────────────
 
 
 def test_install_uninstall_leaves_config_byte_identical(hooks_env, tmp_path):
-    """The user's config file must be BYTE-IDENTICAL to its pre-install
-    state after uninstall (modulo whitespace) — the goal-thread
-    non-negotiable that runtimes must not error out when clawmetry is
-    removed depends on this."""
     cfg = tmp_path / "settings.json"
-    original = {"unrelated": {"deep": ["v1", "v2"]}, "top": 1}
-    cfg.write_text(json.dumps(original, indent=2))
-    original_text = cfg.read_text()
-
-    s = _spec(hooks_env, tmp_path,
-              target_config=str(cfg),
-              target_config_key="hooks.PreToolUse")
+    original = b'{"hooks":{"PreToolUse":[{"matcher":"Bash"}]},\n\t"x": 1}'
+    cfg.write_bytes(original)
+    s = _config_spec(tmp_path, cfg)
     hooks_env.install(s)
-    hooks_env.uninstall(s.hook_id)
+    assert cfg.read_bytes() != original
+    hooks_env.uninstall(s.id)
 
-    # Config still valid JSON, all user keys intact
-    after = json.loads(cfg.read_text())
-    assert after["unrelated"] == original["unrelated"]
-    assert after["top"] == 1
-    # Uninstall must not leave a dangling "hooks" key referencing our path
-    if "hooks" in after:
-        assert "PreToolUse" not in after["hooks"]
+    assert cfg.read_bytes() == original
 
 
-def test_hook_dir_permissions_600(hooks_env, tmp_path):
-    """Hook files carry secrets sometimes (e.g. a capture script that
-    writes prompts to disk); make sure they're not world-readable."""
-    s = _spec(hooks_env, tmp_path)
+def test_uninstall_deletes_a_config_that_install_created(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    s = _config_spec(tmp_path, cfg)
     hooks_env.install(s)
-    import stat
-    mode = Path(s.install_path).stat().st_mode & 0o777
-    assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+    hooks_env.uninstall(s.id)
+
+    assert not cfg.exists()
+
+
+def test_uninstall_keeps_edits_made_after_install(hooks_env, tmp_path):
+    """The most important safety property: uninstall must never roll the
+    config back over changes the user made since install."""
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({"hooks": {"PreToolUse": [USER_ENTRY]}}))
+    s = _config_spec(tmp_path, cfg)
+    hooks_env.install(s)
+
+    data = json.loads(cfg.read_text())
+    later = {"matcher": "Edit", "hooks": [{"type": "command", "command": "later"}]}
+    data["hooks"]["PreToolUse"].append(later)
+    data["hooks"]["Stop"] = [USER_ENTRY]
+    data["model"] = "sonnet"
+    cfg.write_text(json.dumps(data))
+
+    hooks_env.uninstall(s.id)
+
+    assert json.loads(cfg.read_text()) == {
+        "hooks": {"PreToolUse": [USER_ENTRY, later], "Stop": [USER_ENTRY]},
+        "model": "sonnet",
+    }
+
+
+def test_uninstall_prunes_only_the_keys_install_created(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    s = _config_spec(tmp_path, cfg)
+    hooks_env.install(s)
+    data = json.loads(cfg.read_text())
+    data["model"] = "sonnet"
+    cfg.write_text(json.dumps(data))
+
+    hooks_env.uninstall(s.id)
+
+    assert json.loads(cfg.read_text()) == {"model": "sonnet"}
+
+
+def test_uninstall_leaves_an_identical_hook_the_user_already_had(
+        hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({"hooks": {"PreToolUse": [OUR_ENTRY]}}))
+    s = _config_spec(tmp_path, cfg)
+    hooks_env.install(s)
+    data = json.loads(cfg.read_text())
+    assert data["hooks"]["PreToolUse"] == [OUR_ENTRY]
+    data["model"] = "sonnet"
+    cfg.write_text(json.dumps(data))
+
+    hooks_env.uninstall(s.id)
+
+    assert json.loads(cfg.read_text())["hooks"]["PreToolUse"] == [OUR_ENTRY]
+
+
+def test_uninstall_survives_user_replacing_our_scalar(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({"statusLine": "theirs"}))
+    s = _config_spec(tmp_path, cfg, target_config_key="statusLine",
+                     target_config_value="ours")
+    hooks_env.install(s)
+    assert json.loads(cfg.read_text())["statusLine"] == "ours"
+    cfg.write_text(json.dumps({"statusLine": "newer"}))
+
+    hooks_env.uninstall(s.id)
+
+    assert json.loads(cfg.read_text()) == {"statusLine": "newer"}
+
+
+def test_uninstall_restores_a_scalar_it_replaced(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({"statusLine": "theirs"}))
+    s = _config_spec(tmp_path, cfg, target_config_key="statusLine",
+                     target_config_value="ours")
+    hooks_env.install(s)
+    cfg.write_text(json.dumps({"statusLine": "ours", "model": "sonnet"}))
+
+    hooks_env.uninstall(s.id)
+
+    assert json.loads(cfg.read_text()) == {"statusLine": "theirs", "model": "sonnet"}
+
+
+def test_uninstall_leaves_an_unparsable_config_alone(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    s = _config_spec(tmp_path, cfg)
+    hooks_env.install(s)
+    cfg.write_text("{ broken by hand")
+
+    hooks_env.uninstall(s.id)
+
+    assert cfg.read_text() == "{ broken by hand"
+    assert not Path(s.install_path).exists()
+    assert hooks_env.status() == []
+
+
+def test_uninstall_all_drains_manifest_and_restores_shared_config(
+        hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    original = json.dumps({"hooks": {"PreToolUse": [USER_ENTRY]}})
+    cfg.write_text(original)
+    other = {"matcher": "*", "hooks": [{"type": "command", "command": "ours-2"}]}
+    s1 = _config_spec(tmp_path, cfg, id="a",
+                      install_path=str(tmp_path / "runtime" / "a.js"))
+    s2 = _config_spec(tmp_path, cfg, id="b", target_config_value=[other],
+                      install_path=str(tmp_path / "runtime" / "b.js"))
+    hooks_env.install(s1)
+    hooks_env.install(s2)
+    assert json.loads(cfg.read_text())["hooks"]["PreToolUse"] == [
+        USER_ENTRY, OUR_ENTRY, other]
+
+    assert sorted(hooks_env.uninstall_all()) == ["a", "b"]
+
+    assert cfg.read_text() == original
+    assert hooks_env.status() == []
+    assert not Path(s1.install_path).exists()
+    assert not Path(s2.install_path).exists()
+
+
+def test_uninstalling_the_older_of_two_hooks_keeps_the_newer(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    other = {"matcher": "*", "hooks": [{"type": "command", "command": "ours-2"}]}
+    s1 = _config_spec(tmp_path, cfg, id="a",
+                      install_path=str(tmp_path / "runtime" / "a.js"))
+    s2 = _config_spec(tmp_path, cfg, id="b", target_config_value=[other],
+                      install_path=str(tmp_path / "runtime" / "b.js"))
+    hooks_env.install(s1)
+    hooks_env.install(s2)
+
+    hooks_env.uninstall("a")
+
+    assert json.loads(cfg.read_text()) == {"hooks": {"PreToolUse": [other]}}
+    # "b" inherits the keys "a" created, so nothing empty is left behind.
+    hooks_env.uninstall("b")
+    assert json.loads(cfg.read_text()) == {}
+
+
+def test_entry_without_a_recorded_change_falls_back_to_the_backup(
+        hooks_env, tmp_path):
+    """Manifest entries written before changes were recorded."""
+    cfg = tmp_path / "settings.json"
+    cfg.write_text('{"a": 1}')
+    s = _config_spec(tmp_path, cfg)
+    hooks_env.install(s)
+    manifest = json.loads(hooks_env._MANIFEST_PATH.read_text())
+    for key in ("config_change", "config_existed", "config_checksum"):
+        manifest["hooks"][0].pop(key)
+    hooks_env._MANIFEST_PATH.write_text(json.dumps(manifest))
+
+    hooks_env.uninstall(s.id)
+
+    assert cfg.read_text() == '{"a": 1}'
+
+
+# ── status / verify ──────────────────────────────────────────────────────
+
+def test_verify_all_reports_missing_file(hooks_env, tmp_path):
+    s = _spec(tmp_path)
+    hooks_env.install(s)
+    Path(s.install_path).unlink()
+
+    (v,) = hooks_env.verify_all()
+    assert not v.ok
+    assert "missing" in v.issues[0]
+
+
+def test_verify_all_reports_checksum_drift(hooks_env, tmp_path):
+    s = _spec(tmp_path)
+    hooks_env.install(s)
+    Path(s.install_path).write_text("tampered")
+
+    (v,) = hooks_env.verify_all()
+    assert not v.ok
+    assert "modified" in v.issues[0]
+
+
+def test_verify_all_reports_a_config_entry_removed_by_hand(hooks_env, tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({"hooks": {"PreToolUse": [USER_ENTRY]}}))
+    s = _config_spec(tmp_path, cfg)
+    hooks_env.install(s)
+    (st,) = hooks_env.status()
+    assert st.config_present
+    assert hooks_env.verify_all()[0].ok
+
+    cfg.write_text(json.dumps({"hooks": {"PreToolUse": [USER_ENTRY]}}))
+
+    (st,) = hooks_env.status()
+    assert not st.config_present
+    (v,) = hooks_env.verify_all()
+    assert not v.ok
+    assert any("runtime config" in i for i in v.issues)
+
+
+def test_hook_without_a_config_is_not_flagged_for_one(hooks_env, tmp_path):
+    hooks_env.install(_spec(tmp_path))
+
+    (v,) = hooks_env.verify_all()
+    assert v.ok
 
 
 def test_manifest_survives_corrupt_read(hooks_env, tmp_path):
-    """A corrupt manifest must not silently discard installed hooks
-    into the void — read returns empty (so a fresh install proceeds)
-    but verify_all surfaces orphan files so operators notice."""
-    s = _spec(hooks_env, tmp_path)
-    hooks_env.install(s)
-    hooks_env.MANIFEST_PATH.write_text("not-valid-json")
+    hooks_env._MANIFEST_DIR.mkdir(parents=True)
+    hooks_env._MANIFEST_PATH.write_text("{ not json")
 
-    # status() returns [] on corrupt read
     assert hooks_env.status() == []
-    # But the file on disk is still there — self_heal would need
-    # orphan-file scanning (future work); today we at least don't crash.
-    assert Path(s.install_path).exists()
+    hooks_env.install(_spec(tmp_path))
+    assert len(hooks_env.status()) == 1

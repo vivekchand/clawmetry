@@ -107,6 +107,11 @@ class HookStatus:
     checksum_ok: bool = False
     config_present: bool = False
 
+    @property
+    def hook_id(self) -> str:
+        """Alias of :attr:`id`, the name ``clawmetry uninstall`` reads."""
+        return self.id
+
 
 @dataclass
 class HookVerdict:
@@ -128,15 +133,22 @@ def install(spec: HookSpec) -> None:
 
     1. Back up *target_config* (if provided).
     2. Write *hook_content* to *install_path* atomically (tmp-then-rename).
-    3. Patch *target_config* at *target_config_key* with *target_config_value*.
-    4. Append an entry to ``installed.json``.
+    3. Merge *target_config_value* into *target_config* at *target_config_key*.
+       A list value is appended to a list that is already there, so hooks
+       the user or another tool registered under the same key stay.
+    4. Append an entry to ``installed.json``, including what step 3 changed.
 
     Idempotent: if *spec.id* is already registered, returns immediately.
     Raises :class:`RuntimeError` on any failure and rolls back partial changes.
+    A *target_config* that exists but cannot be parsed is a failure: it is
+    never overwritten.
     """
     _ensure_dirs()
     install_path = Path(spec.install_path).expanduser()
     backup_path: Optional[Path] = None
+    config_change: Optional[dict] = None
+    config_existed = False
+    config_checksum: Optional[str] = None
 
     with _ManifestLock():
         manifest = _load_manifest()
@@ -150,10 +162,14 @@ def install(spec: HookSpec) -> None:
             checksum = _write_atomic(install_path, spec.hook_content)
 
             if spec.target_config and spec.target_config_key is not None:
-                _patch_json(
+                config_existed = Path(spec.target_config).expanduser().exists()
+                config_change = _patch_json(
                     spec.target_config,
                     spec.target_config_key,
                     spec.target_config_value,
+                )
+                config_checksum = _checksum(
+                    Path(spec.target_config).expanduser().read_bytes()
                 )
 
         except Exception as exc:
@@ -174,6 +190,9 @@ def install(spec: HookSpec) -> None:
             "target_config":       spec.target_config,
             "target_config_key":   spec.target_config_key,
             "backup_path":         str(backup_path) if backup_path else None,
+            "config_change":       config_change,
+            "config_existed":      config_existed,
+            "config_checksum":     config_checksum,
             "checksum":            checksum,
             "installed_at":        _utcnow(),
             "clawmetry_version":   spec.clawmetry_version,
@@ -193,6 +212,7 @@ def uninstall(hook_id: str) -> None:
             return
         _remove_entry(entry)
         manifest["hooks"] = [h for h in manifest["hooks"] if h["id"] != hook_id]
+        _hand_over_created_keys(entry, manifest["hooks"])
         _save_manifest(manifest)
 
 
@@ -204,7 +224,9 @@ def uninstall_all() -> List[str]:
     with _ManifestLock():
         manifest = _load_manifest()
         removed: List[str] = []
-        for entry in list(manifest["hooks"]):
+        # Newest first, so each config edit is undone on top of the state
+        # it was made on.
+        for entry in reversed(manifest["hooks"]):
             _remove_entry(entry)
             removed.append(entry["id"])
         manifest["hooks"] = []
@@ -225,10 +247,7 @@ def status() -> List[HookStatus]:
                 checksum_ok = _checksum(path.read_bytes()) == h["checksum"]
             except OSError:
                 pass
-        config_present = bool(
-            h.get("target_config")
-            and Path(h["target_config"]).expanduser().exists()
-        )
+        config_present = _config_entry_present(h)
         out.append(HookStatus(
             id=h["id"],
             runtime=h["runtime"],
@@ -251,12 +270,18 @@ def verify_all() -> List[HookVerdict]:
     Called by the daemon on start-up to self-heal after out-of-band changes.
     """
     verdicts: List[HookVerdict] = []
+    configured = {
+        h["id"] for h in _load_manifest()["hooks"]
+        if h.get("target_config") and h.get("target_config_key") is not None
+    }
     for s in status():
         issues: List[str] = []
         if not s.file_present:
             issues.append("hook file missing from disk")
         elif not s.checksum_ok:
             issues.append("hook file modified or corrupted since install")
+        if s.id in configured and not s.config_present:
+            issues.append("hook entry missing from the runtime config")
         verdicts.append(HookVerdict(id=s.id, ok=not issues, issues=issues))
     return verdicts
 
@@ -302,7 +327,8 @@ def _backup_file(config_path: str) -> Optional[Path]:
     if not src.exists():
         return None
     stamp = time.strftime("%Y%m%dT%H%M%S")
-    dst = _BACKUP_DIR / f"{src.name}_{stamp}.bak"
+    # time_ns keeps two installs within one second from sharing a backup.
+    dst = _BACKUP_DIR / f"{src.name}_{stamp}_{time.time_ns()}.bak"
     shutil.copy2(src, dst)
     return dst
 
@@ -311,36 +337,234 @@ def _restore_file(config_path: str, backup_path: str) -> None:
     src = Path(backup_path)
     if not src.exists():
         return
-    _write_atomic(Path(config_path).expanduser(), src.read_text(encoding="utf-8"))
+    _write_bytes_atomic(Path(config_path).expanduser(), src.read_bytes())
 
 
-def _patch_json(config_path: str, key: str, value: Any) -> None:
-    """Set dot-path *key* to *value* in a JSON config file.
+def _write_bytes_atomic(path: Path, data: bytes) -> None:
+    """Replace *path* with *data* via tmp-then-rename, keeping its file mode."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode: Optional[int] = None
+    try:
+        mode = path.stat().st_mode & 0o777
+    except OSError:
+        pass
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".clawmetry-tmp-")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        if mode is not None:
+            os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
-    Preserves all existing keys. The modified node gets a ``__clawmetry: true``
-    sentinel so a future fine-grained merge-remove can identify our entries.
+
+def _read_config(path: Path) -> dict:
+    """Parse a runtime config. A missing or empty file is an empty config.
+
+    Raises :class:`ValueError` when the file holds something other than a
+    JSON object, so a caller never rewrites a config it could not read.
+    """
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
+        return {}
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} does not hold a JSON object")
+    return data
+
+
+def _write_config(path: Path, data: dict) -> None:
+    _write_bytes_atomic(path, (json.dumps(data, indent=2) + "\n").encode("utf-8"))
+
+
+def _patch_json(config_path: str, key: str, value: Any) -> dict:
+    """Merge *value* into a JSON config file at dot-path *key*.
+
+    Preserves every existing key. When both the existing value and *value*
+    are lists, the items of *value* that are not already there are appended
+    and the rest of the list is left as found. Otherwise the key is set.
+
+    Returns a record of the change (stored in the manifest) that
+    :func:`_unpatch_json` needs to take exactly this change back out.
+    Nothing is written into the config besides *value* itself.
     """
     path = Path(config_path).expanduser()
-    data: dict = {}
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            data = {}
+    data = _read_config(path)
     parts = key.split(".")
     node = data
+    created_parents = 0
     for part in parts[:-1]:
-        node = node.setdefault(part, {})
-    node[parts[-1]] = value
-    node.setdefault("__clawmetry", True)
-    _write_atomic(path, json.dumps(data, indent=2))
+        if part not in node:
+            node[part] = {}
+            created_parents += 1
+        node = node[part]
+        if not isinstance(node, dict):
+            raise ValueError(f"{key!r}: {part!r} in {path} is not an object")
+    leaf = parts[-1]
+    change: dict = {"created_parents": created_parents}
+    if leaf not in node:
+        node[leaf] = value
+        change.update(mode="list" if isinstance(value, list) else "set",
+                      created=True)
+        if isinstance(value, list):
+            change["added"] = list(value)
+        else:
+            change["value"] = value
+    elif isinstance(node[leaf], list) and isinstance(value, list):
+        added = [item for item in value if item not in node[leaf]]
+        node[leaf].extend(added)
+        change.update(mode="list", created=False, added=added)
+    else:
+        change.update(mode="set", created=False, value=value,
+                      previous=node[leaf])
+        node[leaf] = value
+    _write_config(path, data)
+    return change
+
+
+def _unpatch_json(config_path: str, key: str, change: dict) -> None:
+    """Take one recorded :func:`_patch_json` change back out of a config.
+
+    Only what ClawMetry added is removed. A value the user replaced since
+    install is left alone, and so is everything else in the file.
+    """
+    path = Path(config_path).expanduser()
+    if not path.exists():
+        return
+    data = _read_config(path)
+    parts = key.split(".")
+    chain = [data]
+    for part in parts[:-1]:
+        nxt = chain[-1].get(part)
+        if not isinstance(nxt, dict):
+            return
+        chain.append(nxt)
+    node, leaf = chain[-1], parts[-1]
+    if leaf not in node:
+        return
+    if change.get("mode") == "list":
+        current = node[leaf]
+        if not isinstance(current, list):
+            return
+        for item in change.get("added") or []:
+            if item in current:
+                current.remove(item)
+        if not current and change.get("created"):
+            del node[leaf]
+    else:
+        if node[leaf] != change.get("value"):
+            return
+        if change.get("created"):
+            del node[leaf]
+        else:
+            node[leaf] = change.get("previous")
+    # Drop the parent objects install created, innermost first, once empty.
+    for depth in range(int(change.get("created_parents") or 0)):
+        idx = len(chain) - 1 - depth
+        if idx <= 0 or chain[idx]:
+            break
+        del chain[idx - 1][parts[idx - 1]]
+    _write_config(path, data)
+
+
+def _config_entry_present(entry: dict) -> bool:
+    """Whether the hook's entry is still in its runtime config."""
+    config = entry.get("target_config")
+    if not config:
+        return False
+    path = Path(config).expanduser()
+    if not path.exists():
+        return False
+    key = entry.get("target_config_key")
+    change = entry.get("config_change")
+    if key is None or not change:
+        return True
+    try:
+        node: Any = _read_config(path)
+    except (ValueError, OSError):
+        return False
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return False
+        node = node[part]
+    if change.get("mode") == "list":
+        return isinstance(node, list) and all(
+            item in node for item in change.get("added") or []
+        )
+    return node == change.get("value")
+
+
+def _remove_config_change(entry: dict) -> None:
+    """Undo the config edit of one manifest entry.
+
+    A config nobody touched since install goes back to its exact prior
+    bytes (or is deleted, when install created it). A config that changed
+    since then keeps those changes: only the recorded edit is taken out.
+    """
+    config = entry["target_config"]
+    path = Path(config).expanduser()
+    change = entry.get("config_change")
+    if change is None:
+        # Entry written before changes were recorded: the backup is all we have.
+        if entry.get("backup_path"):
+            _restore_file(config, entry["backup_path"])
+        return
+    if not path.exists():
+        return
+    untouched = (
+        entry.get("config_checksum")
+        and _checksum(path.read_bytes()) == entry["config_checksum"]
+    )
+    if untouched:
+        backup = entry.get("backup_path")
+        if backup and Path(backup).exists():
+            _restore_file(config, backup)
+            return
+        if not entry.get("config_existed"):
+            path.unlink()
+            return
+    _unpatch_json(config, entry["target_config_key"], change)
+
+
+def _hand_over_created_keys(removed: dict, remaining: List[dict]) -> None:
+    """Pass "install created this key" on to a hook that still uses the key.
+
+    When the hook that created a config key goes first, the key stays for
+    the hooks that share it. The next one in line inherits the record, so
+    the key and its parents are still cleaned up when the last one goes.
+    """
+    change = removed.get("config_change") or {}
+    if not (change.get("created") or change.get("created_parents")):
+        return
+    for other in remaining:
+        other_change = other.get("config_change")
+        if (
+            other_change
+            and other.get("target_config") == removed.get("target_config")
+            and other.get("target_config_key") == removed.get("target_config_key")
+            and other_change.get("mode") == change.get("mode") == "list"
+        ):
+            other_change["created"] = bool(
+                other_change.get("created") or change.get("created"))
+            other_change["created_parents"] = max(
+                int(other_change.get("created_parents") or 0),
+                int(change.get("created_parents") or 0),
+            )
+            return
 
 
 def _remove_entry(entry: dict) -> None:
-    """Remove a hook's file and restore its config backup (best-effort)."""
-    if entry.get("backup_path") and entry.get("target_config"):
+    """Remove a hook's file and its config entry (best-effort)."""
+    if entry.get("target_config"):
         try:
-            _restore_file(entry["target_config"], entry["backup_path"])
+            _remove_config_change(entry)
         except Exception:
             pass
     install_path = Path(entry["install_path"])
