@@ -7320,7 +7320,7 @@ DASHBOARD_HTML = r"""
       </div>
 
       <div class="left-nav-section-label" data-i18n="nav.section_govern">Govern</div>
-      <div class="left-nav-item" data-tab="guard" onclick="switchTab('guard')" data-i18n-title="nav.guard_tooltip" title="See what is running, detect agents that go off track, and stop them">
+      <div class="left-nav-item" data-tab="guard" onclick="switchTab('guard')" data-i18n-title="nav.guard_tooltip" title="Review running agents, detector warnings, and the controls available for each agent.">
         <span class="left-nav-icon" aria-hidden="true">&#128737;</span>
         <span class="left-nav-label" data-i18n="nav.guard">Guard</span>
         <span id="nav-guard-badge" class="left-nav-badge" style="display:none;">0</span>

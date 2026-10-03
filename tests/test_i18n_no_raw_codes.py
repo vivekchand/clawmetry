@@ -23,6 +23,7 @@ server needed.
 
 from __future__ import annotations
 
+import ast
 import glob
 import json
 import os
@@ -88,8 +89,17 @@ def test_every_template_i18n_key_exists_in_en():
         encoding="utf-8")).keys())
     used: dict[str, str] = {}
     pat = re.compile(r'data-i18n(?:-title|-placeholder|-aria-label)?="([^"]+)"')
-    for f in _TEMPLATES:
-        for m in pat.finditer(open(f, encoding="utf-8").read()):
+    sources = {f: open(f, encoding="utf-8").read() for f in _TEMPLATES}
+    # Navigation is in the served dashboard literal, outside the tab files.
+    # Parse the source without importing the app or opening its data stores.
+    dashboard = os.path.join(_ROOT, "dashboard.py")
+    literals = [n.value for n in ast.parse(open(dashboard, encoding="utf-8").read()).body
+                if isinstance(n, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == "DASHBOARD_HTML" for t in n.targets)]
+    assert len(literals) == 1, "Review dashboard template extraction after its structure changes"
+    sources[dashboard] = ast.literal_eval(literals[0])
+    for f, source in sources.items():
+        for m in pat.finditer(source):
             used.setdefault(m.group(1), os.path.basename(f))
     missing = {k: v for k, v in used.items() if k not in en}
     assert not missing, (

@@ -79,7 +79,7 @@ def reconcile(store, session_id, rows):
                 ids = split_ids[offset:offset + 200]
                 blobs.update(store._conn.execute(
                     "SELECT id, data FROM events WHERE id IN (" +
-                    ",".join("?" for _ in ids) + ")", ids).fetchall())
+                    ",".join("?" for _ in ids) + ")", ids).fetchall())  # nosec B608 - IN list is generated ? placeholders, one per id; the ids themselves are bound
             changes = []
             before, after = [], []
             for eid, atype, sid, ts, cost, tokens, model, event_type in existing:
@@ -130,7 +130,7 @@ def reconcile(store, session_id, rows):
                     store._conn.execute(
                         "UPDATE events SET cost_usd = CAST(v.cost AS DOUBLE), "
                         "token_count = CAST(v.tokens AS BIGINT), model = v.model "
-                        "FROM (VALUES " + ",".join("(?,?,?,?)" for _ in chunk) +
+                        "FROM (VALUES " + ",".join("(?,?,?,?)" for _ in chunk) +  # nosec B608 - VALUES tuples are generated ? placeholders, one per chunk row; every value is bound
                         ") AS v(id, cost, tokens, model) WHERE events.id = v.id",
                         [value for change in chunk for value in change],
                     )

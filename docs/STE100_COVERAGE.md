@@ -2,6 +2,51 @@
 
 Status: implementation in progress. Full STE compliance is not established.
 
+## Delivery update on 2026-10-02
+
+The evidence below is a chronological record. Earlier pending release notes
+describe the state at that check, not the current delivery state.
+
+- The initial migration and parameterized browser follow-up are published in
+  OSS 0.12.903. The published package files were compared with release source.
+  The cloud deploy now pins that version.
+- The cloud fleet cost explanation is deployed and was inspected beside a
+  connected node and real session data. The website's English control and
+  installation explanations were also inspected on the production homepage.
+- The website's new locale keys currently have English fallbacks. Those values
+  do not establish translated coverage.
+- Pro source changes are merged. Private-wheel deployment remains pending.
+- Complete surface coverage, generated-output review, and qualified dictionary
+  and grammar review remain incomplete.
+- The expanded shared blueprint was saved through the authenticated Factory
+  editor and verified after a reload on 2026-10-02. It includes generation,
+  extraction, attribute fallbacks, and the Pro, cloud, and website contracts.
+  The existing requirement already includes this scope. No acceptance criterion
+  was changed. The native Drift Bot status remains pending.
+
+### Navigation attribute correction
+
+The connected dashboard exposed `nav.guard_tooltip` instead of its explanation.
+The translation runtime now retains original tooltip, input-hint, and
+accessible-name text when a key or catalog is unavailable. The Guard label and
+tooltip now have English catalog entries. Its explanation refers to available
+controls without promising that every agent can be stopped.
+
+The catalog guard now includes the live dashboard navigation as well as tab
+templates. CI explicitly runs that guard. Four cases execute the complete
+translation runtime with catalogs present or absent and with application before
+or after boot. They cover partial translations, repeated application, and
+language changes. All four cases and the navigation catalog guard fail with the
+preceding runtime and catalog, and pass with the correction.
+
+The selected language, navigation, catalog, and workflow checks pass locally:
+975 passed and 449 skipped. Skips concern inapplicable workflow checks and the
+optional DeepEval import. The focused browser and catalog run passed 172 tests
+before the two additional boot cases were added. The corpus contains 4,147
+extracted messages with zero mechanical findings. JavaScript syntax and the
+test-file coverage ratchet pass. The correction is not released or verified
+live yet.
+
 Generate the current inventory with:
 
 ```sh
@@ -51,7 +96,7 @@ Writing guide: [STE100_WRITING.md](STE100_WRITING.md).
 
 These records were written before implementation and published to Software Factory on 2026-10-02.
 Requirement: `a5f5d75b-43b5-4f55-ab9a-393865c606ca` (version 3).
-Blueprint: `3d07dd70-06dd-4a2e-b4bd-122ee55ac751` (version 3). The expanded generation design is recorded locally. Publishing that revision failed because the Factory keychain credential was unavailable.
+Blueprint: `3d07dd70-06dd-4a2e-b4bd-122ee55ac751` (initial version 3). API publication of the expanded design initially failed because the Factory keychain credential was unavailable. The browser publication recorded above resolves that document gap.
 Initial delivery: [PR #6248](https://github.com/vivekchand/clawmetry/pull/6248), merged on 2026-10-02. Release carrier: [PR #6261](https://github.com/vivekchand/clawmetry/pull/6261), merged on 2026-10-02. Publication and cloud promotion are still pending at this record.
 No production release or whole-product compliance claim is recorded here.
 
