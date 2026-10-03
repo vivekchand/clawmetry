@@ -84,6 +84,7 @@ window._cmReplayTree = { fetchReplayTree: () => { requests++; return new Promise
   context._resetTranscriptReplay();
   window.CLOUD_MODE = true;
   const beforeCloud = requests;
+  window._cmReplayTree.fetchReplayTree = async () => {requests++; return {row_count:110};};
   context._loadReplayTree('hosted-session', window._transcriptViewRequest);
   mount = parent.children[0]; mount.open = true;
   await mount.ontoggle();
