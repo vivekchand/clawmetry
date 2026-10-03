@@ -114,6 +114,7 @@ from routes.guard import bp_guard
 from routes.improve import bp_improve  # noqa: E402 (route registration follows boot setup)
 from routes.signals import bp_signals
 from routes.selfdiag import bp_selfdiag
+from routes.capability_gaps import bp_capability_gaps
 from routes.health import bp_health
 from routes.alerts import bp_alerts, bp_budget
 from routes.channels import bp_channels
@@ -6467,6 +6468,7 @@ def detect_config(args=None):
     app.register_blueprint(bp_improve)
     app.register_blueprint(bp_signals)
     app.register_blueprint(bp_selfdiag)
+    app.register_blueprint(bp_capability_gaps)
     app.register_blueprint(bp_health)
     app.register_blueprint(bp_logs)
     app.register_blueprint(bp_memory)

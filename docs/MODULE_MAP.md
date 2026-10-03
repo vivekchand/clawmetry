@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-310 modules, 92 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+313 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -41,6 +41,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/bench.py` | medium | `bp_bench` | `/api/bench` | Harness Engineering tab endpoints (Blueprint: Harness Benchmarks & Comparison; REQ-HB-001..007). |
 | `routes/bootstrap.py` | small | `bp_bootstrap` | `/api/bootstrap` | "First Contact" bootstrap artifact endpoints. |
 | `routes/brain.py` | large | `bp_brain` | `/api/brain`, `/api/brain-history`, `/api/brain-stream`, `/api/llm-call-timeline` | Brain event feed endpoints. |
+| `routes/capability_gaps.py` | small | `bp_capability_gaps` | `/api/capability-gaps` | Capability-gap read API (#5412). |
 | `routes/channels.py` | large | `bp_channels` | `/api/channel`, `/api/channel-delivery-health`, `/api/channels` | Per-channel adapter endpoints. |
 | `routes/cohort.py` | medium | `bp_cohort` | `/api/cohort-compare`, `/api/sessions` | Cohort compare and similar runs (WO-60; requirement "Cohort compare and similar runs", REQ-COH-001..004). |
 | `routes/compliance.py` | small | `bp_compliance` | `/api/compliance` | OSS stub after the impl lives in clawmetry-pro. |
@@ -163,6 +164,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/behaviour_signals.py` | large | Behaviour Signals: what people and agents *say* about a run (WO-58). |
 | `clawmetry/brain_dedupe.py` | medium | Shared collapse for duplicate Brain-feed events. |
 | `clawmetry/briefs.py` | medium | Briefs (WO-62): a saved question, a schedule, and a destination channel. |
+| `clawmetry/capability_gaps.py` | medium | Opt-in capability-gap export (#5412). |
 | `clawmetry/ccr.py` | small | CCR — reversible event-payload compression for the DuckDB store (#2843). |
 | `clawmetry/claude_code_gate.py` | medium | Claude Code pre-tool gate: policy-driven PreToolUse hook, local-first. |
 | `clawmetry/cli.py` | huge |  |
