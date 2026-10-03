@@ -12,6 +12,8 @@ from pathlib import Path
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
+from unittest.mock import Mock
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -550,6 +552,194 @@ def test_cli_requires_success_result_not_just_text_and_exit_zero(tmp_path, monke
     with pytest.raises(stream.BrokenStream):
         list(providers.cli_text("claude", "system", "prompt", stream.StreamJob(lambda: None)))
     assert seen["proc"].poll() == 0 and seen["proc"].stdout.closed
+
+
+@pytest.fixture
+def windows_api(monkeypatch):
+    import ctypes
+
+    kernel = SimpleNamespace(**{name: Mock(return_value=value) for name, value in {
+        "CreateJobObjectW": 0x100000001, "SetInformationJobObject": 1,
+        "AssignProcessToJobObject": 1, "CloseHandle": 1,
+        "GetProcessId": 42, "CreateToolhelp32Snapshot": 0x300000001,
+        "Thread32First": 1, "Thread32Next": 0, "OpenThread": 0x400000001,
+        "GetProcessIdOfThread": 42, "WaitForSingleObject": 258, "ResumeThread": 1,
+    }.items()})
+
+    def first(snapshot, entry_pointer):
+        entry_pointer._obj.owner_pid = 42
+        entry_pointer._obj.thread_id = 123
+        return 1
+
+    kernel.Thread32First.side_effect = first
+    monkeypatch.setattr(ctypes, "WinDLL", lambda name, **kw: kernel, raising=False)
+    monkeypatch.setattr(providers, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(providers.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    return kernel
+
+
+def test_windows_cancel_releases_reader_after_launcher_exit_without_pid_lookup(windows_api, monkeypatch):
+    """AC-ASSIST-005.4 An exited launcher cannot strand a stream/admission slot."""
+    kernel = windows_api
+    descendant_exit, reading, released = threading.Event(), threading.Event(), threading.Event()
+    windows_job = providers._WindowsJob()
+    proc = SimpleNamespace(pid=42, _handle=0x200000001, poll=Mock(return_value=0), kill=Mock())
+    windows_job.assign_and_resume(proc)
+    kernel.CloseHandle.reset_mock()  # snapshot and thread handles were closed
+    proc._assistant_job = windows_job
+    kernel.CloseHandle.side_effect = lambda handle: descendant_exit.set() or 1
+    monkeypatch.setattr(providers.subprocess, "run", lambda *a, **kw: pytest.fail("PID-based taskkill could target a reused PID"))
+    control = stream.StreamJob(released.set)
+
+    def work(job):
+        with job.resource(lambda: providers._kill_process(proc)):
+            reading.set()
+            # Models the pipe writer held by a descendant after launcher exit.
+            assert descendant_exit.wait(3)
+            job.check()
+
+    control.start(work)
+    try:
+        assert reading.wait(1)
+        control.close()
+        assert released.wait(1), "launcher exit stranded the worker and admission slot"
+        assert descendant_exit.is_set()
+        control.worker.join(1)
+        assert not control.worker.is_alive()
+        providers._kill_process(proc)  # repeated cleanup must be harmless
+        kernel.CloseHandle.assert_called_once_with(0x100000001)
+        kernel.AssignProcessToJobObject.assert_called_once_with(0x100000001, 0x200000001)
+        proc.kill.assert_not_called()
+        proc.poll.assert_not_called()  # launcher liveness is not the ownership test
+    finally:
+        descendant_exit.set()
+        control.close()
+        control.worker.join(2)
+        windows_job.close()
+
+
+@pytest.mark.parametrize("failure", [None, "assign", "resume", "spawn", "configure", "thread_reused", "process_exited"])
+def test_windows_spawn_contains_before_resume_and_cleans_failure(windows_api, monkeypatch, failure):
+    import ctypes
+    kernel = windows_api
+    calls = []
+    proc = SimpleNamespace(_handle=0x200000001, poll=Mock(return_value=None),
+                           kill=Mock(), wait=Mock(), stdout=io.BytesIO())
+
+    def spawn(argv, **kwargs):
+        assert kwargs["creationflags"] == 0x204  # new group + CREATE_SUSPENDED
+        assert kwargs["start_new_session"] is False
+        calls.append("suspended")
+        if failure == "spawn":
+            raise OSError("spawn failed")
+        return proc
+
+    def assign(job_handle, process_handle):
+        assert process_handle == proc._handle
+        calls.append("assigned")
+        return 0 if failure == "assign" else 1
+
+    def resume(thread_handle):
+        assert calls == ["suspended", "assigned"]
+        assert thread_handle == 0x400000001
+        calls.append("resumed")
+        return 0xffffffff if failure == "resume" else 1
+
+    kernel.AssignProcessToJobObject.side_effect = assign
+    kernel.ResumeThread.side_effect = resume
+    if failure == "configure":
+        kernel.SetInformationJobObject.return_value = 0
+    if failure == "thread_reused":
+        kernel.GetProcessIdOfThread.return_value = 999
+    if failure == "process_exited":
+        kernel.WaitForSingleObject.return_value = 0
+    monkeypatch.setattr(providers.subprocess, "Popen", spawn)
+    if failure:
+        with pytest.raises(OSError):
+            providers._spawn_cli(["claude"])
+        assert [call.args[0] for call in kernel.CloseHandle.call_args_list].count(0x100000001) == 1
+        if failure in ("assign", "resume", "thread_reused", "process_exited"):
+            assert proc.stdout.closed
+            proc.kill.assert_called_once()
+            proc.wait.assert_called_once_with(timeout=2)
+        if failure != "resume":
+            kernel.ResumeThread.assert_not_called()
+    else:
+        assert providers._spawn_cli(["claude"]) is proc
+        assert calls == ["suspended", "assigned", "resumed"]
+        assert kernel.CreateJobObjectW.restype is ctypes.c_void_p
+        assert kernel.ResumeThread.argtypes == [ctypes.c_void_p]
+        kernel.GetProcessId.assert_called_once_with(proc._handle)
+        kernel.OpenThread.assert_called_once_with(0x802, False, 123)
+        proc._assistant_job.close()
+        assert [call.args[0] for call in kernel.CloseHandle.call_args_list] == [0x400000001, 0x300000001, 0x100000001]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="exercises native Windows jobs and inherited pipe handles")
+@pytest.mark.parametrize("timeout", [False, True])
+def test_windows_native_cancel_after_launcher_exit_kills_stdout_descendant(tmp_path, monkeypatch, timeout):
+    """AC-ASSIST-005.4 Native CI: a real orphaned pipe writer must die on cancel."""
+    import ctypes as c
+
+    kernel = c.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [c.c_uint32, c.c_int, c.c_uint32]
+    kernel.OpenProcess.restype = c.c_void_p
+    kernel.WaitForSingleObject.argtypes = [c.c_void_p, c.c_uint32]
+    kernel.WaitForSingleObject.restype = c.c_uint32
+    kernel.CloseHandle.argtypes = [c.c_void_p]
+    kernel.CloseHandle.restype = c.c_int
+    pid_file = tmp_path / "descendant.pid"
+    script = tmp_path / "launcher.py"
+    events = [{"type": "stream_event", "event": event} for event in provider_events(["Visible "])]
+    script.write_text(
+        "import subprocess, sys, json\nfrom pathlib import Path\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL, stdout=sys.stdout, stderr=subprocess.DEVNULL)\n"
+        "Path(" + repr(str(pid_file)) + ").write_text(str(child.pid))\n"
+        "for event in json.loads(" + repr(json.dumps(events)) + "):\n"
+        " print(json.dumps(event), flush=True)\n"
+        # The launcher exits while child keeps the exact stdout pipe open.
+    )
+    original = providers.subprocess.Popen
+    processes = []
+
+    def spawn(argv, **kwargs):
+        proc = original([sys.executable, str(script)], **kwargs)
+        processes.append(proc)
+        return proc
+
+    monkeypatch.setattr(providers.subprocess, "Popen", spawn)
+    visible, released = threading.Event(), threading.Event()
+    control = stream.StreamJob(released.set)
+
+    def work(job):
+        for text in providers.cli_text("claude", "system", "prompt", job):
+            visible.set()
+
+    child_handle = None
+    control.start(work)
+    try:
+        assert visible.wait(10), "suspended launcher did not resume and emit text"
+        assert processes[0].wait(timeout=5) == 0
+        assert not control.finished.is_set(), "descendant did not retain the pipe"
+        child_handle = kernel.OpenProcess(0x100000, False, int(pid_file.read_text()))
+        assert child_handle
+        assert kernel.WaitForSingleObject(child_handle, 0) == 258
+        control.abort(timeout=timeout)
+        control.close()
+        assert released.wait(5), "cancel did not release the worker/admission slot"
+        assert kernel.WaitForSingleObject(child_handle, 5000) == 0
+        control.worker.join(2)
+        assert not control.worker.is_alive()
+        assert processes[0].stdout.closed
+    finally:
+        control.close()
+        for proc in processes:
+            providers._kill_process(proc)
+            proc.wait(timeout=5)
+        control.worker.join(5)
+        if child_handle:
+            kernel.CloseHandle(child_handle)
 
 
 @pytest.mark.parametrize("send_headers", [False, True])

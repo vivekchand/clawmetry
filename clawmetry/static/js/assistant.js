@@ -1195,6 +1195,7 @@
           return;
         }
         request.answerText = answerText;
+        updateComposerClearance();
         var bounds = pending.article.getBoundingClientRect();
         var composerTop = el('cm-assistant-composer').getBoundingClientRect().top;
         var follow = bounds.bottom > 0 && bounds.bottom < Math.min(window.innerHeight, composerTop) + 160;
@@ -1242,6 +1243,15 @@
     if (!input) return;
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 160) + 'px';
+    updateComposerClearance();
+  }
+
+  function updateComposerClearance() {
+    var composer = el('cm-assistant-composer');
+    var thread = el('cm-assistant-thread');
+    if (composer && composer.getBoundingClientRect && thread && thread.style.setProperty) {
+      thread.style.setProperty('--cm-composer-clearance', (composer.getBoundingClientRect().height + 24) + 'px');
+    }
   }
 
   function setVoiceUi(active) {

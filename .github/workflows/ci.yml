@@ -903,6 +903,11 @@ jobs:
           pip install --require-hashes
           -r .github/requirements/ci-api-tests.txt
 
+      - name: Assistant Windows process-tree cancellation
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python3 -m pytest tests/test_assistant_stream.py -q --tb=short -k windows
+
       - name: Start server (Unix)
         if: runner.os != 'Windows'
         run: |

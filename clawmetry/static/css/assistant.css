@@ -92,7 +92,7 @@
 .cm-assistant-main.has-messages textarea { flex: 1; min-width: 0; min-height: 42px; font-size: 14px; }
 .cm-assistant-main.has-messages .cm-assistant-data-notice { order: 4; margin-top: 10px; }
 
-.cm-assistant-message { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-width: 0; scroll-margin-bottom: 180px; }
+.cm-assistant-message { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-width: 0; scroll-margin-bottom: var(--cm-composer-clearance, 180px); }
 .cm-assistant-message.is-user { align-self: flex-end; flex-direction: row-reverse; width: auto; max-width: 90%; }
 .cm-assistant-avatar { display: grid; place-items: center; flex: 0 0 28px; height: 28px; color: var(--text-tertiary); font-size: 14px; }
 .cm-assistant-message.is-user .cm-assistant-avatar { display: none; }

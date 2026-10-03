@@ -166,15 +166,15 @@ def api_text(credential, system, prompt, model, control):
 
 def _kill_process(proc):
     if os.name == "nt":
-        if proc.poll() is None:
-            try:
-                subprocess.run(
-                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2,
-                )
-            finally:
-                if proc.poll() is None:
-                    proc.kill()
+        job = getattr(proc, "_assistant_job", None)
+        if job is not None:
+            # The launcher may already be dead while descendants retain stdout.
+            # A job handle owns those descendants without looking up a PID.
+            job.close()
+        elif proc.poll() is None:
+            # Startup failed before assignment. Popen.kill uses the original
+            # process HANDLE, never taskkill against a potentially reused PID.
+            proc.kill()
     else:
         # Only the new session created below is targeted, never the dashboard's
         # own process group. This also closes stdout inherited by descendants.
@@ -187,6 +187,149 @@ def _kill_process(proc):
             # is becoming a zombie. Reap it; never mask the original outcome.
             if proc.poll() is None:
                 proc.kill()
+
+
+class _WindowsJob:
+    """Private kill-on-close job, assigned before a suspended launcher can run."""
+
+    def __init__(self):
+        import ctypes as c
+
+        class BasicLimits(c.Structure):
+            _fields_ = [
+                ("process_time", c.c_int64), ("job_time", c.c_int64),
+                ("flags", c.c_uint32), ("min_working_set", c.c_size_t),
+                ("max_working_set", c.c_size_t), ("active_processes", c.c_uint32),
+                ("affinity", c.c_size_t), ("priority", c.c_uint32),
+                ("scheduling", c.c_uint32),
+            ]
+
+        class ExtendedLimits(c.Structure):
+            _fields_ = [
+                ("basic", BasicLimits), ("io_counters", c.c_uint64 * 6),
+                ("process_memory", c.c_size_t), ("job_memory", c.c_size_t),
+                ("peak_process_memory", c.c_size_t), ("peak_job_memory", c.c_size_t),
+            ]
+
+        self._lock = threading.Lock()
+        self._handle = None
+        self._kernel = c.WinDLL("kernel32", use_last_error=True)
+        # Explicit pointer-sized HANDLE signatures are essential on Win64.
+        for name, args, result in (
+            ("CreateJobObjectW", [c.c_void_p, c.c_wchar_p], c.c_void_p),
+            ("SetInformationJobObject", [c.c_void_p, c.c_int, c.c_void_p, c.c_uint32], c.c_int),
+            ("AssignProcessToJobObject", [c.c_void_p, c.c_void_p], c.c_int),
+            ("CloseHandle", [c.c_void_p], c.c_int),
+            ("GetProcessId", [c.c_void_p], c.c_uint32),
+            ("CreateToolhelp32Snapshot", [c.c_uint32, c.c_uint32], c.c_void_p),
+            ("Thread32First", [c.c_void_p, c.c_void_p], c.c_int),
+            ("Thread32Next", [c.c_void_p, c.c_void_p], c.c_int),
+            ("OpenThread", [c.c_uint32, c.c_int, c.c_uint32], c.c_void_p),
+            ("GetProcessIdOfThread", [c.c_void_p], c.c_uint32),
+            ("WaitForSingleObject", [c.c_void_p, c.c_uint32], c.c_uint32),
+            ("ResumeThread", [c.c_void_p], c.c_uint32),
+        ):
+            function = getattr(self._kernel, name)
+            function.argtypes, function.restype = args, result
+        self._handle = self._kernel.CreateJobObjectW(None, None)
+        if not self._handle:
+            raise OSError("Could not create the Assistant process job")
+        limits = ExtendedLimits()
+        limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not self._kernel.SetInformationJobObject(self._handle, 9, c.byref(limits), c.sizeof(limits)):
+            self.close()
+            raise OSError("Could not configure the Assistant process job")
+
+    def assign_and_resume(self, proc):
+        # Popen retains the original kernel process handle on Windows.
+        handle = int(proc._handle)
+        if not self._kernel.AssignProcessToJobObject(self._handle, handle):
+            raise OSError("Could not contain the Assistant process")
+        self._resume_initial_thread(handle)
+
+    def _resume_initial_thread(self, process_handle):
+        """Use documented Toolhelp/OpenThread/ResumeThread APIs only.
+
+        CREATE_SUSPENDED keeps the initial thread from spawning any others.
+        Verify the opened thread against the retained process handle before
+        resuming it, rather than trusting a potentially stale snapshot ID.
+        """
+        import ctypes as c
+
+        class ThreadEntry(c.Structure):
+            _fields_ = [
+                ("size", c.c_uint32), ("usage", c.c_uint32),
+                ("thread_id", c.c_uint32), ("owner_pid", c.c_uint32),
+                ("base_priority", c.c_int32), ("delta_priority", c.c_int32),
+                ("flags", c.c_uint32),
+            ]
+
+        kernel = self._kernel
+        pid = kernel.GetProcessId(process_handle)
+        if not pid:
+            raise OSError("Could not identify the Assistant process")
+        snapshot = kernel.CreateToolhelp32Snapshot(0x4, 0)  # TH32CS_SNAPTHREAD
+        if snapshot in (None, 0, c.c_void_p(-1).value):
+            raise OSError("Could not find the Assistant initial thread")
+        try:
+            entry = ThreadEntry()
+            entry.size = c.sizeof(entry)
+            found = kernel.Thread32First(snapshot, c.byref(entry))
+            while found:
+                if entry.size >= 16 and entry.owner_pid == pid:
+                    # THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION
+                    thread = kernel.OpenThread(0x802, False, entry.thread_id)
+                    if not thread:
+                        raise OSError("Could not open the Assistant initial thread")
+                    try:
+                        if (kernel.GetProcessIdOfThread(thread) != pid or
+                                kernel.WaitForSingleObject(process_handle, 0) != 258):
+                            raise OSError("The Assistant process identity changed")
+                        if kernel.ResumeThread(thread) != 1:
+                            raise OSError("Could not resume the Assistant initial thread")
+                        return
+                    finally:
+                        kernel.CloseHandle(thread)
+                entry.size = c.sizeof(entry)
+                found = kernel.Thread32Next(snapshot, c.byref(entry))
+            raise OSError("The Assistant initial thread is unavailable")
+        finally:
+            kernel.CloseHandle(snapshot)
+
+    def close(self):
+        with self._lock:
+            if self._handle is not None:
+                if not self._kernel.CloseHandle(self._handle):
+                    raise OSError("Could not close the Assistant process job")
+                self._handle = None
+
+
+def _spawn_cli(argv, **kwargs):
+    windows = os.name == "nt"
+    job = _WindowsJob() if windows else None
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            argv, **kwargs, start_new_session=not windows,
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | 0x4) if windows else 0,
+        )  # 0x4 = CREATE_SUSPENDED: no child can escape before job assignment.
+        if job is not None:
+            job.assign_and_resume(proc)
+            proc._assistant_job = job
+        return proc
+    except BaseException:
+        try:
+            if job is not None:
+                job.close()
+        finally:
+            if proc is not None:
+                try:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait(timeout=2)
+                finally:
+                    proc.stdout.close()
+        raise
 
 
 def cli_text(executable, system, prompt, control):
@@ -206,10 +349,9 @@ def cli_text(executable, system, prompt, control):
             stdin.write(prompt.encode("utf-8"))
             stdin.seek(0)
             control.check()
-            proc = subprocess.Popen(
+            proc = _spawn_cli(
                 argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                cwd=workdir, env=env, start_new_session=os.name != "nt",
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                cwd=workdir, env=env,
             )
             timer = threading.Timer(CLI_SECONDS, lambda: control.abort(timeout=True))
             timer.daemon = True
