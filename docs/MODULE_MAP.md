@@ -347,6 +347,7 @@ The runtime adapters that ship in open source. The paid ones live in `clawmetry-
 | `clawmetry/adapters/inputs.py` | small | Inputs & context emit helper shared by the runtime adapters. |
 | `clawmetry/adapters/nemo.py` | large | NeMoAdapter — push-mode telemetry exporter for NVIDIA's NeMo Agent Toolkit. |
 | `clawmetry/adapters/openclaw.py` | large | This adapter does NOT re-implement OpenClaw session parsing. |
+| `clawmetry/adapters/openclaw_replay.py` | medium | Replay-event mapper for OpenClaw (#4816, schema in #4813). |
 | `clawmetry/adapters/openclaw_reply_recovery.py` | small | Reply-recovery event scanner for the OpenClaw adapter. |
 | `clawmetry/adapters/openclaw_share.py` | medium | OpenClaw public-share state (issue #5746). |
 | `clawmetry/adapters/openclaw_update_pipeline.py` | small | Update-pipeline state scanner for the OpenClaw adapter. |

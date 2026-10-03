@@ -4940,6 +4940,43 @@ def _local_ingest_session_batch(
             store.ingest_spans_batch(_spans)
     except Exception as _e:
         log.debug("span reconstruction skipped (non-fatal): %s", _e)
+    # Replay stream (#4816): the canonical replay_events rows for this
+    # session, re-read from the transcript the batch came from plus the
+    # read-only OpenClaw state database. Idempotent (upsert on span_id), so
+    # a grown transcript simply re-delivers the same ids. OpenClaw only: a
+    # NemoClaw sandbox batch on this shape has no state database to join,
+    # and a sub-agent batch is keyed on a session key, not a transcript.
+    if agent_type == "openclaw" and not subagent_id:
+        try:
+            _ingest_openclaw_replay_events(store, session_id)
+        except Exception as _e:
+            log.debug("openclaw replay ingest skipped (non-fatal): %s", _e)
+
+
+def _ingest_openclaw_replay_events(store, session_id: str,
+                                   limit: int = 5000) -> int:
+    """Write the OpenClaw replay stream for one session (#4816).
+
+    Mirrors ``_ingest_family_replay_events`` for the OpenClaw path, which
+    never ran through ``sync_family_runtimes``. Best effort: a mapper or
+    store failure logs and returns 0, so the transcript ingest that called
+    us is never affected. Returns the number of rows written.
+    """
+    if not session_id or ":" in session_id:
+        return 0  # runtime-prefixed ids belong to the family path
+    try:
+        from clawmetry.adapters.openclaw import OpenClawAdapter
+        rows = list(OpenClawAdapter().iter_replay_events(session_id, limit=limit))
+    except Exception as _e:
+        log.debug("openclaw replay mapper failed (%s): %s", session_id, _e)
+        return 0
+    if not rows:
+        return 0
+    try:
+        return int(store.ingest_replay_events(rows) or 0)
+    except Exception as _e:
+        log.debug("openclaw replay write failed (%s): %s", session_id, _e)
+        return 0
 
 
 # Where each runtime records the working directory and git branch of a
