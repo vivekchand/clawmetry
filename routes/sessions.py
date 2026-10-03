@@ -3680,6 +3680,11 @@ def api_replay_tree(session_id):
     return jsonify(_build_replay_tree(session_id, rows))
 
 
+# Deepest delegation chain the replay tree follows. Mappers stop inlining
+# children well before this; the cap only bounds a malformed parent chain.
+_REPLAY_TREE_MAX_DEPTH = 32
+
+
 def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
     """Group flat canonical replay-event rows into the tree the transcript
     viewer consumes. Pure function, easy to test.
@@ -3691,10 +3696,13 @@ def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
     - ``workflow.*`` events are collected into ``workflows`` at the top
       level; workflow.start creates the group, workflow.stage/end append.
     - ``agent.spawn`` / ``agent.return`` establish the delegation edges.
-      A child span (``parent_span_id`` set) attaches under its parent as
-      a ``delegations`` entry; the parent turn shows the delegation
-      inline. Nested delegation (child of child) attaches under that
-      child, arbitrary depth.
+      An event whose ``parent_span_id`` chain reaches an ``agent.spawn``
+      span belongs to that spawn (the nearest one) and is listed once,
+      in that spawn's ``delegations`` entry, never in the turn's own
+      ``events``. A spawn inside a delegation gets its own nested entry,
+      to the depth the rows carry. Each entry lists the approvals gated
+      on its events; the turn's ``approvals`` is the total for the turn,
+      delegated ones included.
     - Everything else (llm.*, tool.*, thinking, approval.*, compaction)
       is a "turn" event. Turns are chunked by the ordering of
       ``llm.call``/``llm.response`` roots — one root = one turn — so a
@@ -3704,18 +3712,39 @@ def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
     latest_runtime = None
     workflows_by_span: dict[str, dict] = {}
     turns: list[dict] = []
-    events_by_span: dict[str, dict] = {}
-    children_by_parent: dict[str, list[dict]] = {}
     approvals_by_span: dict[str, list[dict]] = {}
     _current_turn: dict | None = None
+
+    # Delegation ownership. A sub-agent's events point at the spawn span,
+    # and the events under those (an approval on a child tool call, a
+    # nested spawn's children) point further down the same chain.
+    spawn_spans: set[str] = set()
+    parent_of: dict[str, str] = {}
+    for row in rows:
+        span = row.get("span_id") or ""
+        if not span:
+            continue
+        if (row.get("kind") or "").startswith("agent.spawn"):
+            spawn_spans.add(span)
+        if row.get("parent_span_id"):
+            parent_of[span] = row["parent_span_id"]
+
+    def _owner_spawn(parent: str | None) -> str | None:
+        hops = 0
+        while parent and hops < _REPLAY_TREE_MAX_DEPTH:
+            if parent in spawn_spans:
+                return parent
+            parent = parent_of.get(parent)
+            hops += 1
+        return None
+
+    owned_events: dict[str, list[dict]] = {}
+    owned_approvals: dict[str, list[dict]] = {}
 
     for row in rows:
         kind = row.get("kind") or ""
         latest_runtime = row.get("runtime") or latest_runtime
-        events_by_span[row.get("span_id") or ""] = row
         parent = row.get("parent_span_id")
-        if parent:
-            children_by_parent.setdefault(parent, []).append(row)
 
         if kind == "mode.changed":
             latest_mode = row.get("mode") or latest_mode
@@ -3729,9 +3758,17 @@ def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
             })
             grp["events"].append(row)
             continue
+        owner = _owner_spawn(parent)
         if kind.startswith("approval."):
+            if owner:
+                owned_approvals.setdefault(owner, []).append(row)
+                continue
             gate = row.get("parent_span_id") or row.get("span_id") or ""
             approvals_by_span.setdefault(gate, []).append(row)
+            continue
+        if owner:
+            # Inside a delegation: listed under the spawn, not the turn.
+            owned_events.setdefault(owner, []).append(row)
             continue
         # llm.*, tool.*, thinking, agent.*, compaction — turn-level events.
         # Start a new turn on every llm.call at the session root (no parent).
@@ -3756,28 +3793,48 @@ def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:
                 })
             turns[0]["events"].append(row)
 
-    # Fold delegations into the turn that spawned them. agent.spawn events
-    # carry parent_span_id pointing at the parent's llm.response; the
-    # child session's events live under events_by_span keyed on the
-    # spawn's span_id.
+    # Fold delegations into the turn that spawned them. The spawn event
+    # stays in the events of whoever spawned (the turn, or the delegation
+    # above); everything it owns hangs off its entry.
+    def _delegation(spawn: dict, seen: frozenset) -> tuple[dict, list[dict]]:
+        spawn_id = spawn.get("span_id") or ""
+        events = owned_events.get(spawn_id, [])
+        approvals = list(owned_approvals.get(spawn_id, []))
+        total = list(approvals)
+        nested = []
+        seen = seen | {spawn_id}
+        if len(seen) <= _REPLAY_TREE_MAX_DEPTH:
+            for e in events:
+                if not (e.get("kind") or "").startswith("agent.spawn"):
+                    continue
+                if (e.get("span_id") or "") in seen:
+                    continue
+                child, child_total = _delegation(e, seen)
+                nested.append(child)
+                total.extend(child_total)
+        payload = spawn.get("payload") if isinstance(spawn.get("payload"), dict) else {}
+        label = payload.get("description") or payload.get("agent_type") \
+            or payload.get("subagent_type") or ""
+        entry = {
+            "span_id": spawn_id,
+            "label": str(label)[:200],
+            "child_session_id": payload.get("child_session_id"),
+            "events": events,
+            "delegations": nested,
+            "approvals": approvals,
+        }
+        return entry, total
+
     for turn in turns:
-        spawn_ids = [
-            e.get("span_id") for e in turn["events"]
-            if (e.get("kind") or "").startswith("agent.spawn")
-        ]
-        for spawn_id in spawn_ids:
-            children = children_by_parent.get(spawn_id, [])
-            turn["delegations"].append({
-                "span_id": spawn_id,
-                "events": children,
-                # nested-depth support lands with #4815 (Claude Code mapper).
-                "delegations": [],
-            })
-        # Attach approvals gated on any event in this turn.
         for e in turn["events"]:
             sid = e.get("span_id")
+            # Attach approvals gated on any event in this turn.
             if sid and sid in approvals_by_span:
                 turn["approvals"].extend(approvals_by_span[sid])
+            if (e.get("kind") or "").startswith("agent.spawn"):
+                entry, delegated = _delegation(e, frozenset())
+                turn["delegations"].append(entry)
+                turn["approvals"].extend(delegated)
 
     return {
         "session_id": session_id,

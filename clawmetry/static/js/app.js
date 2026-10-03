@@ -31746,7 +31746,11 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     for (var i = 0; i < delegations.length; i++) {
       var d = delegations[i];
       html += '<details class="replay-tree-delegation" open>';
-      html += '<summary>↳ delegated span ' + _escape(d.span_id) + '</summary>';
+      var dApprovals = (d.approvals || []).length;
+      html += '<summary>↳ delegated span ' + _escape(d.span_id) +
+              (d.label ? ' <span class="replay-tree-delegation-label">' + _escape(d.label) + '</span>' : '') +
+              (dApprovals ? ' <span class="replay-tree-badge approvals">✓' + dApprovals + '</span>' : '') +
+              '</summary>';
       for (var j = 0; j < (d.events || []).length; j++) {
         html += _renderEvent(d.events[j], runtime);
       }

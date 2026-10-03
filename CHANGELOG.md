@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Fixed: sub-agent events in the session replay tree
+
+- **Why:** `GET /api/replay-tree/<session_id>` listed every sub-agent event twice, once in the turn and once under the spawn. A sub-agent started by another sub-agent was never nested, because the nested list was a placeholder that always came back empty. The Qwen Code mapper already writes this shape and the Claude Code mapper writes it several levels deep.
+- **What:** an event belongs to the nearest spawn above it and is listed once, under that spawn. A spawn inside a delegation gets its own nested entry, to the depth the rows carry. Each delegation entry now has a `label` (the spawn description or agent type), the `child_session_id` and the approvals decided inside it. The turn approval count includes the delegated ones. The replay view shows the label and an approval count on each delegation.
+- **Verified:** 3 new builder tests cover a two-level delegation with approvals at both levels, the rule that every row appears exactly once, and a malformed parent cycle. 4 new checks cover the nested rendering.
+- **Limits:** a session with no sub-agents is unchanged. A delegation whose spawn row is missing stays in the turn as flat events.
+
 ### Added: durable Guard investigations and persisted live activity
 
 - Loop and repeated tool failure findings retain their identity, evidence and recovery history across refreshes and restarts. Acknowledgement is separate from recovery. Missing telemetry is labelled stale.
