@@ -74,10 +74,9 @@
   function T(key, vars, fb) {
     // Resolution chain: active locale -> English catalog -> caller-provided
     // fallback (original English literal) -> the key itself. The third arg
-    // exists for dynamic app.js calls that may fire before en.json finishes
-    // loading - without it, the user would briefly see the raw key. Tab i18n
-    // via data-i18n attrs doesn't need it because the markup already carries
-    // the English text on first paint.
+    // keeps both dynamic calls and DOM text readable when catalogs are missing
+    // or have not finished loading. DOM application preserves the original
+    // markup before it replaces text or attributes.
     var s = (DICT && DICT[key] != null) ? DICT[key]
           : (EN[key] != null ? EN[key] : (fb != null ? fb : key));
     // plural: key + "_one"/"_other"/... selected by Intl.PluralRules on vars.count
@@ -122,10 +121,17 @@
       // don't wipe nested badges/icons (those children carry their own data-i18n).
       if (el.children.length === 0) el.textContent = T(el.__i18nKey, null, el.__i18nFallback);
     });
-    // attributes
-    root.querySelectorAll("[data-i18n-title]").forEach(function (el) { el.title = T(el.getAttribute("data-i18n-title")); });
-    root.querySelectorAll("[data-i18n-placeholder]").forEach(function (el) { el.setAttribute("placeholder", T(el.getAttribute("data-i18n-placeholder"))); });
-    root.querySelectorAll("[data-i18n-aria-label]").forEach(function (el) { el.setAttribute("aria-label", T(el.getAttribute("data-i18n-aria-label"))); });
+    // Preserve attribute fallbacks before the first translation, as for text.
+    // A later language change must not mistake translated text for English.
+    ["title", "placeholder", "aria-label"].forEach(function (attr) {
+      root.querySelectorAll("[data-i18n-" + attr + "]").forEach(function (el) {
+        var fallbacks = el.__i18nAttrFallbacks || (el.__i18nAttrFallbacks = {});
+        if (!Object.prototype.hasOwnProperty.call(fallbacks, attr)) {
+          fallbacks[attr] = el.getAttribute(attr) || "";
+        }
+        el.setAttribute(attr, T(el.getAttribute("data-i18n-" + attr), null, fallbacks[attr]));
+      });
+    });
   }
 
   // ---- switcher menu (built from _meta.json, native endonyms) ----------------

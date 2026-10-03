@@ -19,6 +19,32 @@ Language checks operate on owned text after generation and before display or sto
 
 ## Feature-Specific Components
 
+### Readable attribute fallbacks
+
+Design recorded before implementation on 2026-10-02. The connected dashboard
+shows the internal key `nav.guard_tooltip` because the English catalog lacks
+that key and the attribute translator discards the original tooltip.
+The same translator handles input hints and accessible names.
+
+`clawmetry/static/js/i18n.js` shall retain each attribute's original literal
+text before applying a translation. Resolution shall use the selected language,
+then the English catalog, then that original text. Repeated application and
+language changes shall not replace the stored fallback with translated text.
+Missing text shall stay empty instead of exposing an internal key.
+
+The live navigation in `dashboard.py` shall have catalog entries for all its
+translation keys. The Guard explanation shall describe the warnings and
+available controls without promising that every agent can be stopped.
+The catalog and HTML fallback shall agree. The existing template-key guard
+shall also inspect the served dashboard literal without importing the app.
+
+Tests shall execute the shipped translation runtime with missing catalogs,
+partial translations, repeated application, and language changes. They shall
+cover title, placeholder, and accessible-name attributes. Restoring the prior
+runtime or catalog shall make the relevant regression fail.
+This correction changes no actions, data, permissions, or network requests.
+Other unreviewed navigation wording remains in the migration inventory.
+
 ### Command-line help
 
 The central parser in `clawmetry/cli.py` has 182 literal help values. The initial source audit found 35 mechanical findings in 30 values.

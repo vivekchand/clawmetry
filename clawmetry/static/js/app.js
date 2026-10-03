@@ -2139,6 +2139,8 @@ function switchTab(name) {
   // run on their own screen instead of on every tab.
   if (name !== 'assistant' && typeof assistantLeave === 'function') assistantLeave();
   _cmCurrentTab = name;
+  if (window.cmActivityVisibilityChanged) window.cmActivityVisibilityChanged();
+  if (window.cmErrorGroupsVisibilityChanged) window.cmErrorGroupsVisibilityChanged();
   document.body.classList.toggle('cm-assistant-active', name === 'assistant');
   // Phase 3: kill any pending SSE-open dwell from the tab we're leaving.
   cancelAllPendingSSEDwell();
@@ -3221,7 +3223,7 @@ function _selfconfigFileRow(path, size, depth, displayName) {
   if (mtime) {
     var ageMin = (Date.now() / 1000 - mtime) / 60;
     if (ageMin < 1440) {
-      recentDot = ' <span title="Changed in the last 24 hours" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#6366f1;vertical-align:middle;margin-left:5px;"></span>';
+      recentDot = ' <span title="' + escAttr(t('selfconfig.changed_24h_tip', null, 'Changed in the last 24 hours')) + '" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#6366f1;vertical-align:middle;margin-left:5px;"></span>';
     }
   }
   var active = (path === _selfconfigCurrentFile);
@@ -3697,8 +3699,8 @@ async function loadSkills() {
         '<th style="padding:10px 10px;">Status</th>' +
         '<th style="padding:10px 10px;">Last used</th>' +
         (_skillsShowDetails
-          ? '<th style="padding:10px 10px;text-align:right;" title="Tokens always loaded into the agent\'s context">Always loaded</th>'
-            + '<th style="padding:10px 10px;text-align:right;" title="Times the agent decided to look at this skill in the last 7 days">Used (7d)</th>'
+          ? '<th style="padding:10px 10px;text-align:right;" title="' + escAttr(t('skills.always_loaded_tip', null, 'Tokens that are always loaded into the context of the agent')) + '">Always loaded</th>'
+            + '<th style="padding:10px 10px;text-align:right;" title="' + escAttr(t('skills.used_7d_tip', null, 'Times the agent decided to look at this skill in the last 7 days')) + '">Used (7d)</th>'
           : '') +
       '</tr></thead><tbody>';
 
@@ -3709,7 +3711,7 @@ async function loadSkills() {
         : (sk.status === 'dead' || sk.status === 'unused' ? '\u2014' : 'recently');
       var rowBg = idx % 2 === 0 ? 'var(--bg-primary)' : 'var(--bg-secondary)';
       html += '<tr style="background:' + rowBg + ';border-bottom:1px solid var(--border-primary);">' +
-        '<td style="padding:10px 10px;font-weight:600;color:var(--text-primary);"><a href="#" onclick="event.preventDefault();openSkillBrowser(\'' + escHtml(sk.name) + '\')" style="color:var(--text-primary);text-decoration:none;border-bottom:1px dashed var(--border-primary);" title="Browse skill files">' + escHtml(sk.name) + '</a></td>' +
+        '<td style="padding:10px 10px;font-weight:600;color:var(--text-primary);"><a href="#" onclick="event.preventDefault();openSkillBrowser(\'' + escHtml(sk.name) + '\')" style="color:var(--text-primary);text-decoration:none;border-bottom:1px dashed var(--border-primary);" title="' + escAttr(t('skills.browse_files_tip', null, 'Browse skill files')) + '">' + escHtml(sk.name) + '</a></td>' +
         '<td style="padding:10px 10px;color:var(--text-muted);">' + escHtml(desc) + '</td>' +
         '<td style="padding:10px 10px;">' + _skillStatusPill(sk.status) + '</td>' +
         '<td style="padding:10px 10px;color:var(--text-muted);">' + lastUsed + '</td>' +
@@ -3907,10 +3909,13 @@ function _cmStartScreenStreams() {
 // on readyState===CLOSED, so this is idempotent).
 (function _installSSEVisibilityGuard() {
   if (typeof document === 'undefined' || !document.addEventListener) return;
-  function _closeAllSSE() {
+  function _closeAllSSE(pausePersisted) {
     ['_brainSSE', '_flowBrainSse', '_flowSse', 'healthStream', 'logStream'].forEach(function(key) {
       try {
         var es = window[key];
+        // Persisted readers pause their own fetches on hidden and resume
+        // from the committed cursor. Keep their subscribers registered.
+        if (pausePersisted === true && es && es.persistedActivity) return;
         if (es && typeof es.close === 'function') {
           es.close();
           window[key] = null;
@@ -3919,7 +3924,7 @@ function _cmStartScreenStreams() {
     });
   }
   document.addEventListener('visibilitychange', function() {
-    if (document.hidden) _closeAllSSE();
+    if (document.hidden) _closeAllSSE(true);
   });
   window.addEventListener('pagehide', _closeAllSSE);
 })();
@@ -4541,6 +4546,7 @@ async function loadSimilarRuns(sessionId) {
 // ── Error triage (#2196 item #5) ────────────────────────────────────────────
 
 async function loadTriageList() {
+  if (window.cmLoadErrorGroups) cmLoadErrorGroups();
   var body = document.getElementById('triage-list-body');
   if (!body) return;
   var data;
@@ -4583,14 +4589,14 @@ async function submitResolveError() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({event_id: eid, note: note}),
     });
-    if (resp.ok) { idEl.value = ''; noteEl.value = ''; loadTriageList(); }
+    if (resp.ok) { idEl.value = ''; noteEl.value = ''; if (window.cmLoadErrorGroups) cmLoadErrorGroups(true); loadTriageList(); }
   } catch (e) {}
 }
 
 async function unresolveError(eid) {
   try {
     var resp = await fetch('/api/error-triage/resolve?event_id=' + encodeURIComponent(eid), {method: 'DELETE'});
-    if (resp.ok) loadTriageList();
+    if (resp.ok) { if (window.cmLoadErrorGroups) cmLoadErrorGroups(true); loadTriageList(); }
   } catch (e) {}
 }
 
@@ -4865,7 +4871,7 @@ function _cmLiveRowsHtml(live) {
     var title = (s.title || '').trim() || 'Untitled session';
     var rtLabel = (typeof _cmRuntimeLabel === 'function' && _cmRuntimeLabel(s.runtime)) || s.runtime || '';
     html += '<button type="button" class="cm-live-row" onclick="cmOpenLiveSession(' + attrJsStr(s.session_id) + ')"'
-      + ' title="Open this session\'s transcript">'
+      + ' title="' + escAttr(t('sessions.open_transcript_tip', null, 'Open the transcript of this session')) + '">'
       + '<span class="cm-live-dot" style="background:' + col + ';' + (working ? '' : 'animation:none;') + '"></span>'
       + '<span class="cm-live-title">' + escHtml(title) + '</span>'
       + '<span class="cm-live-rt">' + escHtml(rtLabel) + '</span>'
@@ -6195,7 +6201,7 @@ var _Q_RUNTIME_NAMES = {
   kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
-  muse_code: 'Muse Code', openexecutive: 'OpenExecutive',
+  muse_code: 'Muse Code', openexecutive: 'OpenExecutive', opendots: 'OpenDots',
 };
 function _qRuntimeLabel(id) {
   return _Q_RUNTIME_NAMES[id] || id;
@@ -7519,7 +7525,7 @@ function _provenancePillHtml(meta, bodyHtml) {
   var pill =
     '<span class="brain-provenance-pill" style="display:inline-flex;align-items:center;gap:6px;background:var(--bg-tertiary,#1a1a2e);border:1px solid var(--border,#333);color:var(--text-muted);padding:2px 8px;border-radius:10px;font-size:10px;font-weight:500;margin-bottom:4px;font-family:ui-sans-serif,system-ui,sans-serif;">' +
     parts.join(' · ') +
-    ' <button type="button" onclick="event.stopPropagation();var el=document.getElementById(\'' + pillId + '\');if(el){el.style.display=el.style.display===\'none\'?\'block\':\'none\';}" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0 2px;font-size:11px;line-height:1;" title="Show raw provenance JSON">ⓘ</button>' +
+    ' <button type="button" onclick="event.stopPropagation();var el=document.getElementById(\'' + pillId + '\');if(el){el.style.display=el.style.display===\'none\'?\'block\':\'none\';}" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:0 2px;font-size:11px;line-height:1;" title="' + escAttr(t('provenance.show_raw_tip', null, 'Show raw provenance JSON')) + '">ⓘ</button>' +
     '</span>';
   var rawJson = '<pre id="' + pillId + '" style="display:none;background:var(--bg-tertiary,#1a1a2e);border:1px solid var(--border-primary,#333);border-radius:6px;padding:6px 10px;margin:4px 0;font-size:10px;color:var(--text-muted);overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:160px;">' + escHtml(JSON.stringify(meta, null, 2)) + '</pre>';
   return '<div class="brain-provenance-row">' + pill + rawJson + '</div>' + (bodyHtml || '');
@@ -8133,7 +8139,7 @@ function _brainChipHtml(s) {
   var hasReasoning = (_brainAllEvents || []).some(function(ev) {
     return ev.source === s.id && ev.type === 'THINK';
   });
-  var reasoningBadge = hasReasoning ? ' <span title="Has reasoning chains" style="font-size:9px;">&#129504;</span>' : '';
+  var reasoningBadge = hasReasoning ? ' <span title="' + escAttr(t('brain.has_reasoning_tip', null, 'Has reasoning chains')) + '" style="font-size:9px;">&#129504;</span>' : '';
   return '<button class="brain-chip' + (isActive ? ' active' : '') + '" data-source="' +
     escHtml(s.id) + '" title="' + escHtml(s.id) +
     '" onclick="setBrainFilter(this.dataset.source,this)" style="padding:3px 10px;border-radius:12px;border:1px solid ' +
@@ -8646,7 +8652,7 @@ function renderBrainStream(events) {
           var _tcContainerId = null;
           if (te.type === 'AGENT') {
             _tcContainerId = 'tokconf-' + ((te.eventId || (te.time || '') + (te.source || '')) + '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
-            turnTimeline += '<button onclick="event.stopPropagation();toggleTokenConfidence(this,\'' + escHtml(_tcContainerId) + '\')" data-tc=\'' + escHtml(JSON.stringify(te.token_confidence || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #38bdf8;background:transparent;color:#38bdf8;font-size:10px;cursor:pointer;white-space:nowrap;" title="How confident was the model in each word?">&#128202; Confidence</button>';
+            turnTimeline += '<button onclick="event.stopPropagation();toggleTokenConfidence(this,\'' + escHtml(_tcContainerId) + '\')" data-tc=\'' + escHtml(JSON.stringify(te.token_confidence || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #38bdf8;background:transparent;color:#38bdf8;font-size:10px;cursor:pointer;white-space:nowrap;" title="' + escAttr(t('brain.confidence_tip', null, 'How confident was the model in each word?')) + '">&#128202; Confidence</button>';
           }
           // Issue #1616: per-tool-call Alternatives toggle on tool rows.
           // Shows the options the model considered before picking this tool
@@ -8656,14 +8662,14 @@ function renderBrainStream(events) {
           var _altContainerId = null;
           if (te.tool_alternatives) {
             _altContainerId = 'toolalt-' + ((te.eventId || (te.time || '') + (te.source || '')) + '').replace(/[^a-z0-9-]/gi, '').slice(0, 24);
-            turnTimeline += '<button onclick="event.stopPropagation();toggleToolAlternatives(this,\'' + escHtml(_altContainerId) + '\')" data-ta=\'' + escHtml(JSON.stringify(te.tool_alternatives || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #a78bfa;background:transparent;color:#a78bfa;font-size:10px;cursor:pointer;white-space:nowrap;" title="What other tools did the model consider before picking this one?">&#9879; Alternatives</button>';
+            turnTimeline += '<button onclick="event.stopPropagation();toggleToolAlternatives(this,\'' + escHtml(_altContainerId) + '\')" data-ta=\'' + escHtml(JSON.stringify(te.tool_alternatives || null)) + '\' style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #a78bfa;background:transparent;color:#a78bfa;font-size:10px;cursor:pointer;white-space:nowrap;" title="' + escAttr(t('brain.alternatives_tip', null, 'What other tools did the model consider before picking this one?')) + '">&#9879; Alternatives</button>';
           }
           // Issue #1414: "Why did this happen?" — LLM-narrated explanation for AGENT turns.
           var _whyContainerId = null;
           if (te.type === 'AGENT' && te.eventId) {
             var _whySid = te.sessionId || '';
             _whyContainerId = 'why-' + te.eventId.replace(/[^a-z0-9-]/gi, '').slice(0, 24);
-            turnTimeline += '<button onclick="event.stopPropagation();loadBrainWhy(\'' + escHtml(_whySid) + '\',\'' + escHtml(te.eventId) + '\',\'' + escHtml(_whyContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #f43f5e;background:transparent;color:#fb7185;font-size:10px;cursor:pointer;white-space:nowrap;" title="Why did this happen? (AI narration)">&#128269; Why?</button>';
+            turnTimeline += '<button onclick="event.stopPropagation();loadBrainWhy(\'' + escHtml(_whySid) + '\',\'' + escHtml(te.eventId) + '\',\'' + escHtml(_whyContainerId) + '\')" style="flex-shrink:0;padding:1px 7px;border-radius:10px;border:1px solid #f43f5e;background:transparent;color:#fb7185;font-size:10px;cursor:pointer;white-space:nowrap;" title="' + escAttr(t('brain.why_tip', null, 'Why did this happen? (AI narration)')) + '">&#128269; Why?</button>';
           }
           turnTimeline += '</div>';
           if (_rcContainerId) {
@@ -10000,6 +10006,9 @@ function _hideBrainGraphDetail() {
 window._hideBrainGraphDetail = _hideBrainGraphDetail;
 
 var _brainSSE = null;
+var _brainActivityRuntime = null;
+var _brainAuxLastLoaded = 0;
+var _brainAuxPending = null;
 var _brainSSEConnected = false;
 // Issue #1596 — exponential backoff state for SSE reconnect. A single
 // retry chain (no parallel storms): `_brainSSERetryTimer` holds the
@@ -10124,32 +10133,36 @@ function _startBrainSSE() {
   _brainSSE = null;
   _brainSSEConnected = false;
 
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (_brainActivityRuntime !== runtime) {
+    _brainActivityRuntime = runtime;
+    _brainAllEvents = []; _brainFilter = 'all';
+    renderBrainStream([]); renderBrainChart([]);
+    renderBrainFilterChips([]); renderBrainTypeChips([]);
+    if (typeof syncBrainGraph === 'function') syncBrainGraph([]);
+  }
+
   try {
-    var url = '/api/brain-stream';
-    var token =
-      localStorage.getItem('clawmetry-token') ||
-      localStorage.getItem('gw_token') ||
-      localStorage.getItem('cm-token');
-    if (token) url += '?token=' + encodeURIComponent(token);
-    var es = new EventSource(url);
+    // The shared persisted reader supplies authenticated fetches.
+    var es = window.cmActivityEventSource({runtime:runtime});
     _brainSSE = es;
 
     es.addEventListener('connected', function() {
       _updateBrainLiveIndicator(true);
       // Issue #1596 — successful reconnect clears banner + retry state.
       _resetBrainSSEReconnectState();
-      // Issue #1606 — on reconnect (not first connect), the server may have
-      // restarted with a changed event shape. Flush the stale cache and
-      // reload so chip filters don't compute against a mixed old+new array.
-      if (_brainSSEEverConnected && !_brainRange) {
-        _brainAllEvents = [];
-        _brainFilter = 'all';
-        _brainTypeFilter = 'all';
-        loadBrainPage(true);
-      }
+      // Committed replay preserves the existing rows across reconnects.
+      // Only an explicit resync invalidates them; a quiet response is not
+      // evidence that the previously loaded activity disappeared.
       _brainSSEEverConnected = true;
     });
 
+    es.addEventListener('resync', function() {
+      _brainAllEvents = []; renderBrainStream(_brainAllEvents);
+    });
+    es.addEventListener('checkpoint', function() {
+      if (!_brainAllEvents.length) renderBrainStream([]);
+    });
     es.onmessage = function(e) {
       try {
         // Historical window active (race: range applied while a message
@@ -10161,6 +10174,7 @@ function _startBrainSSE() {
         // can suppress itself while live activity is clearly flowing.
         window._cmLastLiveEventMs = Date.now();
         // Prepend to events array
+        if (ev.eventId) _brainAllEvents = _brainAllEvents.filter(function(row) { return row.eventId !== ev.eventId; });
         _brainAllEvents.unshift(ev);
         // Cap at 500 events
         if (_brainAllEvents.length > 500) _brainAllEvents = _brainAllEvents.slice(0, 500);
@@ -10562,31 +10576,26 @@ window.selfevolveRun = async function () {
   }
 };
 
+window.cmLoadPersistedBrain = function () {
+  if (_brainRange || document.hidden || _cmCurrentTab !== 'brain') return;
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (!_brainSSE || _brainSSE.readyState === 2 || _brainActivityRuntime !== runtime) _startBrainSSE();
+  // Keep the existing badges available without adding a second activity
+  // poller or re-reading them on every quiet replay/reconnect.
+  if (!_brainAuxPending && Date.now() - _brainAuxLastLoaded >= 30000) {
+    _brainAuxLastLoaded = Date.now();
+    _brainAuxPending = Promise.allSettled([loadLoopSignals(), loadBrainAtRisk(), loadBrainProgress()])
+      .finally(function () { _brainAuxPending = null; });
+  }
+};
+
 async function loadBrainPage(silent) {
   // Mount the Grafana-style date/time-range picker on first paint (and
   // re-mount if the tab was rebuilt). Idempotent by design — the helper
   // no-ops when the container already has a picker attached.
   try { _brainMountRangePicker(); } catch (e) {}
-  // Cloud iframe doesn't proxy /api/brain-history (live event stream is
-  // local-only). Without this branch, `loadBrainPage` returned silently and
-  // left the inline `Loading...` placeholder in `#brain-stream` forever
-  // (P0 follow-up to #1235). Replace the spinner with an explicit
-  // empty-state so cloud users understand the surface is local-only and
-  // the spinner stops misrepresenting the load state.
-  // Date-time range investigations DO run on the hosted dashboard: the
-  // cloud intercepts the ranged /api/brain-history fetch and answers it
-  // via the node relay (encrypted end-to-end, decrypted in this browser).
-  // Only the LIVE stream stays local-only.
-  if (window.CLOUD_MODE && !_brainRange) {
-    var cloudEl = document.getElementById('brain-stream');
-    if (cloudEl && /Loading/i.test(cloudEl.innerText || '')) {
-      cloudEl.innerHTML = '<div style="color:var(--text-muted);padding:20px;font-size:13px;">' +
-  '<div style="font-size:15px;font-weight:600;margin-bottom:6px;">🔒 Brain activity stays local — by design.</div>' +
-  '<div style="margin-bottom:8px;">Your prompts, tool calls, and reasoning never leave your machine. We only see aggregated counts.</div>' +
-  '<a href="#local-first" style="color:var(--text-link, #60a5fa);text-decoration:none;">Why local-first →</a>' +
-  '</div>';
-    }
-    return;
+  if (!_brainRange && window.cmActivityEventSource) {
+    return window.cmLoadPersistedBrain(silent);
   }
   // Snapshot the active range so an async response for a STALE range (the
   // user clicked Back-to-live or picked a new window mid-flight) is dropped
@@ -11043,7 +11052,7 @@ async function loadLoopSignals() {
       : escHtml(totalRisk);
     var head = '<div style="display:grid;grid-template-columns:130px 150px 1fr 80px 70px;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-secondary);font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;">'
       + '<div>Last seen</div><div>Session</div><div>What happened</div>'
-      + '<div style="text-align:right;" title="Estimated cost of the flagged stretch, not the whole session.">At risk</div>'
+      + '<div style="text-align:right;" title="' + escAttr(t('guard.at_risk_col_tip', null, 'Estimated cost of the flagged stretch, not the whole session.')) + '">At risk</div>'
       + '<div style="text-align:right;">Repeats</div></div>';
     var body = rows.map(function(r) {
       var ts = r.last_seen || r.first_seen || '';
@@ -12727,7 +12736,7 @@ var _CM_RT_LABEL = {
   deepseek_harness: 'DeepSeek Harness', exo: 'Exo', kimi: 'Kimi CLI',
   devin: 'Devin', gemini_cli: 'Gemini CLI', cline: 'Cline', openhands: 'OpenHands',
   openworker: 'OpenWorker', lovable: 'Lovable', replit: 'Replit Agent',
-  muse_code: 'Muse Code', openexecutive: 'OpenExecutive',
+  muse_code: 'Muse Code', openexecutive: 'OpenExecutive', opendots: 'OpenDots',
 };
 // The CLOSED session-prefix runtimes (the only keys that can ride a session_id
 // prefix). Foreign OTLP / OpenLLMetry apps are NOT in here — they have no
@@ -12740,7 +12749,7 @@ var _CM_RT_PREFIXES = {
   kimi: 1,
   devin: 1, gemini_cli: 1, cline: 1, openhands: 1,
   openworker: 1, grok_bot: 1, lovable: 1, replit: 1,
-  muse_code: 1, openexecutive: 1,
+  muse_code: 1, openexecutive: 1, opendots: 1,
 };
 // Dynamic registry of foreign OTLP/OpenLLMetry apps surfaced by the daemon
 // (runtimeSummary/agentInventory carry `otlp:true` + a `displayName`). These are
@@ -12945,6 +12954,7 @@ var _CM_RT_CAPS = {
   // OpenExecutive: cost is a floor (specialist calls write no usage row);
   // specialists are steps, not child sessions, so no SUBAGENTS panel.
   openexecutive: ['SESSIONS','EVENTS','COST'],
+  opendots: ['SESSIONS','EVENTS','BRAIN'],
   hermes:      ['SESSIONS','EVENTS','COST','SUBAGENTS'],
   cursor:      ['SESSIONS','EVENTS','SUBAGENTS'],   // no COST
   picoclaw:    ['SESSIONS','EVENTS','SUBAGENTS'],   // no COST
@@ -12966,7 +12976,7 @@ var _CM_CAP_TABS = {
   // no-cost runtimes (Cursor/PicoClaw/NanoClaw) keep a context surface.
   // 'agents' (Agent Graph) is EVENTS-derived: spans are reconstructed from
   // every runtime's normalized events at family-ingest time.
-  EVENTS:      ['brain','models','tracing','turn-anatomy','context-economics','agents'],
+  EVENTS:      ['brain','flow','models','tracing','turn-anatomy','context-economics','agents'],
   // Nav uses data-tab="usage" for the Cost tab — 'cost' was a dead id that
   // left the tab visible for no-cost runtimes (Cursor/PicoClaw/NanoClaw).
   COST:        ['usage'],
@@ -12980,7 +12990,7 @@ var _CM_CAP_TABS = {
   // selected runtime via the requesting session-id prefix.
   // policy/selfevolve/version-impact stay OpenClaw gateway/admin concepts.
   GATEWAY_RPC: ['policy','selfevolve','version-impact'],
-  CHANNELS:    ['flow']
+  CHANNELS:    []
 };
 // Node/account-level tabs — not capability-gated, shown for every runtime.
 // approvals: one local queue spans all runtimes (see _CM_CAP_TABS note).
@@ -13585,7 +13595,7 @@ function _invRosterRow(a, rtFilter) {
       + ' sign-in detected. Cost columns estimate usage at API rates; check your provider account for actual charges.">'
       + t('inventory.subscription_signin_chip', null, 'subscription') + '</span>';
   } else if (a.billingMode === 'metered') {
-    covChip = ' <span class="inv-cov-chip inv-cov-met" title="Billed per token at API rates.">'
+    covChip = ' <span class="inv-cov-chip inv-cov-met" title="' + escAttr(t('inventory.cov_metered_tip', null, 'Billed per token at API rates.')) + '">'
       + t('inventory.metered_chip', null, 'metered') + '</span>';
   }
   var pencil = window.CLOUD_MODE
@@ -13603,7 +13613,7 @@ function _invRosterRow(a, rtFilter) {
           + (live.sessions === 1 ? ' session' : ' sessions') + '</span>'
         : '')
     +     (Number(a.tokens24h || 0) > 0
-        ? ' <span class="inv-doing-tok" title="Tokens in the last 24 hours">' + _invFmtTok(a.tokens24h) + ' tok</span>'
+        ? ' <span class="inv-doing-tok" title="' + escAttr(t('inventory.tokens_24h_tip', null, 'Tokens in the last 24 hours')) + '">' + _invFmtTok(a.tokens24h) + ' tok</span>'
         : '')
     +   '</td>'
     // "Last seen" says a checkable fact (when the transcript last grew) where
@@ -13617,7 +13627,7 @@ function _invRosterRow(a, rtFilter) {
     +     '">'
     +     escHtml(live.secs != null ? _invAgeWords(live.secs) : 'never')
     +     '</span></td>'
-    +   '<td class="inv-c-cost" title="Cost from the last 24 hours of activity (API-equivalent)">' + dayCell + '</td>'
+    +   '<td class="inv-c-cost" title="' + escAttr(t('inventory.cost_24h_tip', null, 'Cost from the last 24 hours of activity (API equivalent)')) + '">' + dayCell + '</td>'
     +   '<td class="inv-c-cost inv-c-cost-life" title="All-time cost across this agent\'s tracked sessions (API-equivalent)">' + lifeCell + '</td>'
     +   '<td class="inv-c-work">' + escHtml(work) + '</td>'
     +   '<td class="inv-c-model">' + escHtml(model) + '</td>'
@@ -14563,35 +14573,35 @@ async function loadSessions() {
     // Cost-intelligence chips (foundation): reasoning-tax $ + cache-hit %, shown
     // only for runtimes whose adapter reports the field (others omit it).
     if (sessCost && sessCost.reasoning_cost_usd != null && Number(sessCost.reasoning_cost_usd) > 0) {
-      html += '<span title="Reasoning tokens billed at the output rate — spend that produces no visible deliverable" style="font-size:11px;color:#a78bfa;font-weight:600;">🧠 $' + Number(sessCost.reasoning_cost_usd).toFixed(4) + ' reasoning</span>';
+      html += '<span title="' + escAttr(t('sessions.cost_reasoning_tip', null, 'Reasoning tokens billed at the output rate. This spend produces no visible deliverable.')) + '" style="font-size:11px;color:#a78bfa;font-weight:600;">🧠 $' + Number(sessCost.reasoning_cost_usd).toFixed(4) + ' reasoning</span>';
     }
     if (sessCost && sessCost.cache_hit_pct != null) {
       var _chp = Number(sessCost.cache_hit_pct);
       var _chc = _chp >= 70 ? '#22c55e' : (_chp >= 40 ? '#f59e0b' : '#ef4444');
-      html += '<span title="Share of input context served from prompt cache (far cheaper). Low = re-sending context at full price every turn." style="font-size:11px;color:' + _chc + ';font-weight:600;">⚡ ' + _chp.toFixed(0) + '% cache</span>';
+      html += '<span title="' + escAttr(t('sessions.cost_cache_tip', null, 'Share of input context served from the prompt cache, which is far cheaper. A low share means the context is re-sent at full price every turn.')) + '" style="font-size:11px;color:' + _chc + ';font-weight:600;">⚡ ' + _chp.toFixed(0) + '% cache</span>';
     }
     if (sessCost && sessCost.model_mix) {
-      var _mmt = 'This session silently ran on more than one model — a fallback/downgrade you did not choose';
+      var _mmt = t('sessions.cost_model_mix_tip', null, 'This session silently ran on more than one model. That is a fallback or downgrade you did not choose.');
       if (sessCost.primary_model) _mmt += ' (' + escHtml(sessCost.primary_model) + (sessCost.secondary_model ? ' + ' + escHtml(sessCost.secondary_model) : '') + ')';
       html += '<span title="' + _mmt + '" style="font-size:11px;color:#f59e0b;font-weight:600;">🔀 model fallback</span>';
     }
     if (sessCost && sessCost.tool_error_pct != null && Number(sessCost.tool_error_pct) > 0) {
       var _tep = Number(sessCost.tool_error_pct);
       var _tec = _tep >= 30 ? '#ef4444' : '#f59e0b';
-      html += '<span title="Share of this session\'s tool calls that came back a real (non-benign) error — a failing tool you only ever see as the agent \'thinking\'." style="font-size:11px;color:' + _tec + ';font-weight:600;">⚠ ' + _tep.toFixed(0) + '% tools failing</span>';
+      html += '<span title="' + escAttr(t('sessions.cost_tool_errors_tip', null, 'Share of tool calls in this session that returned a real, non-benign error. Such a failing tool is only visible as the agent thinking.')) + '" style="font-size:11px;color:' + _tec + ';font-weight:600;">⚠ ' + _tep.toFixed(0) + '% tools failing</span>';
     }
     if (sessCost && sessCost.compaction_count != null && Number(sessCost.compaction_count) > 0) {
       var _cc = Number(sessCost.compaction_count);
-      html += '<span title="Times this session auto-compacted — each one silently re-summarises (and re-bills) the context window. Frequent compaction = context thrash / wasted tokens." style="font-size:11px;color:#f59e0b;font-weight:600;">♻ compacted ' + _cc + '×</span>';
+      html += '<span title="' + escAttr(t('sessions.cost_compaction_tip', null, 'Times this session auto-compacted. Each compaction silently re-summarises and re-bills the context window. Frequent compaction means context thrash and wasted tokens.')) + '" style="font-size:11px;color:#f59e0b;font-weight:600;">♻ compacted ' + _cc + '×</span>';
     }
     if (sessCost && sessCost.downstream_cost_usd != null && Number(sessCost.downstream_cost_usd) > 0) {
       var _dc = Number(sessCost.downstream_cost_usd), _sa = Number(sessCost.subagent_count || 0);
-      html += '<span title="The TRUE cost of this ask: it spawned ' + _sa + ' sub-agent(s) that spent this much downstream — billed under their own keys but caused by this session. (Context graph)" style="font-size:11px;color:#60a5fa;font-weight:600;">&#8627; +$' + _dc.toFixed(4) + (_sa ? ' · ' + _sa + ' agents' : '') + '</span>';
+      html += '<span title="' + escAttr(t('sessions.cost_downstream_tip', {count: _sa}, 'The true cost of this ask. It spawned {count} sub-agents that spent this much downstream. They are billed under their own keys but caused by this session. (Context graph)')) + '" style="font-size:11px;color:#60a5fa;font-weight:600;">&#8627; +$' + _dc.toFixed(4) + (_sa ? ' · ' + _sa + ' agents' : '') + '</span>';
     }
     if (sessCost && Number(sessCost.governance_count) > 0) {
       var _gn = Number(sessCost.governance_count), _gd = Number(sessCost.governance_denied || 0);
       var _gc = _gd > 0 ? '#ef4444' : '#22c55e';
-      html += '<span title="Tool calls this session put through governance (NeMo guardrails + the approval queue): ' + _gn + ' gated, ' + _gd + ' denied/blocked. (Context graph)" style="font-size:11px;color:' + _gc + ';font-weight:600;">&#128737; ' + _gn + ' gated' + (_gd ? ' · ' + _gd + ' denied' : '') + '</span>';
+      html += '<span title="' + escAttr(t('sessions.cost_governance_tip', {gated: _gn, denied: _gd}, 'Tool calls this session put through governance (NeMo guardrails and the approval queue): {gated} gated, {denied} denied or blocked. (Context graph)')) + '" style="font-size:11px;color:' + _gc + ';font-weight:600;">&#128737; ' + _gn + ' gated' + (_gd ? ' · ' + _gd + ' denied' : '') + '</span>';
     }
     // Issue #1619 Phase 1 — Score pill. Color band matches the overview
     // tile (4+ green, 3-4 yellow, <3 red). Hover shows the judge's reason.
@@ -15298,16 +15308,16 @@ async function loadCronHealth() {
         var icon = healthIcon[j.health] || '';
         var projStr = j.monthlyProjectedCost > 0 ? ' &middot; ~$'+j.monthlyProjectedCost.toFixed(2)+'/mo' : '';
         var anomalyBadges = '';
-        if (j.costSpike) anomalyBadges += ' <span title="Cost spike detected" style="font-size:11px;background:#f59e0b22;color:#f59e0b;border-radius:4px;padding:1px 5px;">cost spike</span>';
-        if (j.durationSpike) anomalyBadges += ' <span title="Duration spike detected" style="font-size:11px;background:#f59e0b22;color:#f59e0b;border-radius:4px;padding:1px 5px;">slow run</span>';
-        if (j.isSilent) anomalyBadges += ' <span title="Job has not run in over 2.5x expected interval" style="font-size:11px;background:#ef444422;color:#ef4444;border-radius:4px;padding:1px 5px;">silent</span>';
+        if (j.costSpike) anomalyBadges += ' <span title="' + escAttr(t('crons.cost_spike_tip', null, 'Cost spike detected')) + '" style="font-size:11px;background:#f59e0b22;color:#f59e0b;border-radius:4px;padding:1px 5px;">cost spike</span>';
+        if (j.durationSpike) anomalyBadges += ' <span title="' + escAttr(t('crons.duration_spike_tip', null, 'Duration spike detected')) + '" style="font-size:11px;background:#f59e0b22;color:#f59e0b;border-radius:4px;padding:1px 5px;">slow run</span>';
+        if (j.isSilent) anomalyBadges += ' <span title="' + escAttr(t('crons.silent_tip', null, 'Job has not run in over 2.5x the expected interval')) + '" style="font-size:11px;background:#ef444422;color:#ef4444;border-radius:4px;padding:1px 5px;">silent</span>';
         html += '<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-secondary);border-radius:8px;border:1px solid var(--border-secondary);">';
         html += '<span style="width:8px;height:8px;border-radius:50%;background:'+color+';flex-shrink:0;"></span>';
         html += '<span style="font-size:12px;font-weight:600;color:var(--text-primary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+escHtml(j.name||j.id)+'</span>';
         html += anomalyBadges;
         if (j.consecutiveFailures > 1) html += '<span style="font-size:11px;background:#ef444422;color:#ef4444;border-radius:4px;padding:1px 5px;">'+j.consecutiveFailures+' fails</span>';
         html += '<span style="font-size:11px;color:var(--text-muted);white-space:nowrap;">'+projStr+'</span>';
-        if (_cronWritesAvailable) html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="Pause this job" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
+        if (_cronWritesAvailable) html += '<button onclick="event.stopPropagation();cronPauseJob(\''+escHtml(j.id)+'\')" title="' + escAttr(t('crons.pause_job_tip', null, 'Pause this job')) + '" style="font-size:11px;padding:2px 7px;border-radius:5px;border:1px solid var(--border-secondary);background:var(--bg-tertiary);color:var(--text-secondary);cursor:pointer;">&#x23F8; Pause</button>';
         html += '</div>';
       });
       html += '</div>';
@@ -15493,7 +15503,7 @@ function renderCronList(jobs) {
       }
     }
     if (j.lastRunTokens && j.lastRunTokens > 500 && j.state && j.state.lastStatus === 'ok') {
-      if (!j.runHistory || !j.runHistory.length) badges += '<span title="Possible idle spend: tokens used but check if output was produced" style="margin-left:4px;cursor:help;">&#x1F4B8;</span>';
+      if (!j.runHistory || !j.runHistory.length) badges += '<span title="' + escAttr(t('crons.idle_spend_tip', null, 'Possible idle spend. Tokens were used, so check whether output was produced.')) + '" style="margin-left:4px;cursor:help;">&#x1F4B8;</span>';
     }
     if (badges) html += '<div style="display:inline;">' + badges + '</div>';
 
@@ -16730,6 +16740,11 @@ function _taRenderTurn(t) {
 }
 
 async function loadTracing() {
+  if (window._pendingInvestigation) {
+    var investigation = window._pendingInvestigation; window._pendingInvestigation = null;
+    return window.cmLoadInvestigation(investigation);
+  }
+  if (window.cmCloseInvestigation) window.cmCloseInvestigation();
   // Session deep-dive handoff (Phase B): a pending session skips the list and
   // opens the per-session detail directly.
   if (window._pendingTraceSession) {
@@ -22463,7 +22478,7 @@ async function _loadLifecycleCoverageLine(sessionId) {
   var label = rt;
   try { label = _cmRuntimeLabel(rt) || rt; } catch (e) {}
   var html = '<div id="lifecycle-coverage-line" class="stat-row" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-secondary);align-items:flex-start;">'
-    + '<span class="stat-label" title="Which lifecycle facts ' + escHtml(label) + ' can put on this trail. Full: reported as it happens. Partial: recovered after the event. Not exposed: the runtime never tells anyone.">Trail facts</span>'
+    + '<span class="stat-label" title="' + escAttr(t('trail.facts_tip', {label: label}, 'Which lifecycle facts {label} can put on this trail. Full: reported as it happens. Partial: recovered after the event. Not exposed: the runtime never tells anyone.')) + '">Trail facts</span>'
     + '<span class="stat-val" style="font-size:11px;line-height:1.5;">';
   if (!lines.length) {
     html += '<span style="color:#16a34a;">All ' + full + ' lifecycle facts reported as they happen</span>';
@@ -22846,7 +22861,7 @@ function _tcProvBadge(prov, provider) {
 }
 
 function _tcFmtMs(ms) {
-  if (ms === null || ms === undefined) return '<span style="color:var(--text-faint);" title="No matching tool_result captured for these calls">&mdash;</span>';
+  if (ms === null || ms === undefined) return '<span style="color:var(--text-faint);" title="' + escAttr(t('tools.no_result_tip', null, 'No matching tool_result captured for these calls')) + '">&mdash;</span>';
   if (ms < 1000) return ms + 'ms';
   if (ms < 60000) return (ms / 1000).toFixed(1) + 's';
   return Math.round(ms / 60000) + 'm';
@@ -22943,7 +22958,7 @@ async function loadMcpServers() {
       html += '<div><div style="font-weight:700;color:var(--text-primary);">' + (s.calls || 0) + '</div><div style="font-size:10px;color:var(--text-muted);">calls</div></div>';
       html += '<div title="median / 95th-percentile call duration"><div style="font-weight:700;color:var(--text-primary);">' + _mcpFmtMs(s.p50_ms) + ' / ' + _mcpFmtMs(s.p95_ms) + '</div><div style="font-size:10px;color:var(--text-muted);">p50 / p95</div></div>';
       html += '<div><div style="font-weight:700;color:' + errColor + ';">' + errPct + '%</div><div style="font-size:10px;color:var(--text-muted);">errors</div></div>';
-      html += '<div title="Model spend on the turns that called this server (cache-aware). Not the MCP execution cost."><div style="font-weight:700;color:var(--text-primary);">$' + (s.cost_usd >= 0.01 ? Number(s.cost_usd).toFixed(2) : (s.cost_usd > 0 ? '&lt;0.01' : '0.00')) + '</div><div style="font-size:10px;color:var(--text-muted);">turn spend</div></div>';
+      html += '<div title="' + escAttr(t('mcp.turn_spend_tip', null, 'Model spend on the turns that called this server (cache aware). Not the MCP execution cost.')) + '"><div style="font-weight:700;color:var(--text-primary);">$' + (s.cost_usd >= 0.01 ? Number(s.cost_usd).toFixed(2) : (s.cost_usd > 0 ? '&lt;0.01' : '0.00')) + '</div><div style="font-size:10px;color:var(--text-muted);">turn spend</div></div>';
       html += '</div></div>';
       if (topTools) html += '<div style="margin-top:7px;display:flex;gap:5px;flex-wrap:wrap;">' + topTools + '</div>';
       html += '</div>';
@@ -22968,17 +22983,17 @@ function renderToolCatalog() {
   html += '<span style="width:14px;"></span>';
   html += '<span style="flex:1;">Tool</span>';
   html += '<span style="width:96px;">Provenance</span>';
-  html += '<span style="width:54px;text-align:right;" title="Number of times this tool was called">Calls</span>';
+  html += '<span style="width:54px;text-align:right;" title="' + escAttr(t('tools.calls_tip', null, 'Number of times this tool was called')) + '">Calls</span>';
   html += '<span style="width:62px;text-align:right;" title="Median (50th percentile) call duration">p50</span>';
   html += '<span style="width:62px;text-align:right;" title="95th percentile call duration">p95</span>';
-  html += '<span style="width:64px;text-align:right;" title="Share of calls that returned an error">Errors</span>';
+  html += '<span style="width:64px;text-align:right;" title="' + escAttr(t('tools.errors_tip', null, 'Share of calls that returned an error')) + '">Errors</span>';
   html += '</div>';
   tools.forEach(function(tool) {
     var expanded = !!_tcExpanded[tool.name];
     var errPct = (tool.error_rate || 0) * 100;
     var errColor = errPct > 0 ? '#ef4444' : 'var(--text-muted)';
     var nameEsc = tool.name.replace(/'/g, "\\'");
-    html += '<div onclick="_tcToggle(\'' + nameEsc + '\')" title="Click to expand recent calls for ' + escHtml(tool.name) + '" style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:13px;cursor:pointer;transition:background 0.1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
+    html += '<div onclick="_tcToggle(\'' + nameEsc + '\')" title="' + escAttr(t('tools.expand_calls_tip', {name: tool.name}, 'Click to expand recent calls for {name}')) + '" style="display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border-secondary);font-size:13px;cursor:pointer;transition:background 0.1s;" onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'">';
     html += '<span style="width:14px;color:var(--text-muted);font-size:11px;">' + (expanded ? '&#9660;' : '&#9654;') + '</span>';
     html += '<span style="flex:1;font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono,monospace);" title="' + escHtml(tool.name) + '">' + escHtml(tool.name) + '</span>';
     html += '<span style="width:96px;">' + _tcProvBadge(tool.provenance, tool.provider) + '</span>';
@@ -23682,7 +23697,7 @@ async function _tcLoadCalls(name) {
       rows += '<span style="width:48px;font-size:10px;font-weight:700;color:' + statusColor + ';">' + statusLabel + '</span>';
       if (c.session_id) {
         var sidEsc = String(c.session_id).replace(/'/g, "\\'");
-        rows += '<span onclick="event.stopPropagation();viewTranscript(\'' + sidEsc + '\')" title="Open this session\'s transcript" style="flex:1;color:var(--accent,#3b82f6);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;">' + escHtml(String(c.session_id).slice(0, 32)) + '</span>';
+        rows += '<span onclick="event.stopPropagation();viewTranscript(\'' + sidEsc + '\')" title="' + escAttr(t('sessions.open_transcript_tip', null, 'Open the transcript of this session')) + '" style="flex:1;color:var(--accent,#3b82f6);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-decoration:underline;">' + escHtml(String(c.session_id).slice(0, 32)) + '</span>';
       } else {
         rows += '<span style="flex:1;color:var(--text-faint);">(no session)</span>';
       }
@@ -24909,7 +24924,7 @@ function hideFlowRunDetail() {
 }
 
 function initFlow() {
-  if (flowInitDone) return;
+  if (flowInitDone) { _startFlowBrainStream(); return; }
   flowInitDone = true;
 
   // Performance: Reduce update frequency on mobile
@@ -24953,15 +24968,17 @@ function initFlow() {
     }
   }).catch(function(){});
   // Connect to the typed flow-events SSE (tails gateway.log + session JSONL)
-  _startFlowSse();
+  if (!window.cmActivityEventSource) _startFlowSse();
   // Active Tools + Live Tool Call Stream — DuckDB-backed (issue #1127).
   // The flow-events SSE only fires when gateway.log emits the right keywords,
   // which leaves "Active Tools: —" and "Waiting for activity…" stuck on most
   // installs. /api/brain-history + /api/brain-stream read from the same
   // DuckDB store that drives the rest of the Brain tab, so we backfill
   // recent tool events and subscribe to the live stream from there.
-  _backfillFlowFromBrain();
-  _backfillFlowEventCount();
+  if (!window.cmActivityEventSource) {
+    _backfillFlowFromBrain();
+    _backfillFlowEventCount();
+  }
   _startFlowBrainStream();
 
   // Lazy-load Phase 2 follow-up: this used to be a raw `setInterval(...)`
@@ -25013,6 +25030,7 @@ var _RT_FLOW = {
   gemini_cli: { label:'Gemini CLI', src:['⌨️','Terminal'], accent:'#4285f4', stroke:'#1a73e8', tools:[['⚡','Shell'],['📖','ReadFile'],['📁','ReadFolder'],['🔍','SearchText']] },
   cline: { label:'Cline', src:['⌨️','Terminal'], accent:'#5a4fcf', stroke:'#463cad', tools:[['📖','read_files'],['🔍','search_codebase'],['⚡','run_commands'],['🧩','apply_patch']] },
   openhands: { label:'OpenHands', src:['⌨️','Terminal'], accent:'#c9a227', stroke:'#a8871c', tools:[['⚡','terminal'],['📝','file_editor'],['✅','task_tracker'],['🤝','delegate']] },
+  opendots: { label:'OpenDots', src:['⠿','Local work records'], subtitle:'Local work records', accent:'#33665a', stroke:'#214d43', tools:[], minimal:true },
   openexecutive: { label:'OpenExecutive', src:['💬','Chat + Slack'], accent:'#1e3a8a', stroke:'#172f6e', tools:[['🧑‍💼','Specialists'],['🗓️','Scheduler'],['✉️','Send'],['📚','Knowledge']] },
   picoclaw:    { label:'PicoClaw',    src:['👤','You'],      accent:'#ec4899', stroke:'#db2777', tools:[['⚡','Exec'],['🧠','Memory'],['📋','Sessions']], minimal:true },
   nanoclaw:    { label:'NanoClaw',    src:['👤','You'],      accent:'#14b8a6', stroke:'#0d9488', tools:[['⚡','Exec'],['🧠','Memory']], minimal:true },
@@ -25047,7 +25065,7 @@ function _buildRuntimeFlowInner(rt, model) {
   h += '<g class="flow-node flow-node-brain"><rect x="' + agentX + '" y="' + agentY + '" width="' + agentW + '" height="' + agentH + '" rx="14" fill="' + s.accent + '" stroke="' + s.stroke + '" stroke-width="3" filter="url(#rtShadow)"/>'
     + '<text x="' + agentCx + '" y="' + (agentY + 31) + '" style="font-size:22px;text-anchor:middle;">🧠</text>'
     + '<text x="' + agentCx + '" y="' + (agentY + 55) + '" style="font-size:17px;font-weight:800;fill:#fff;text-anchor:middle;">' + escHtml(s.label) + '</text>'
-    + '<text x="' + agentCx + '" y="' + (agentY + 73) + '" style="font-size:10px;fill:rgba(255,255,255,0.85);text-anchor:middle;">' + escHtml(model || (s.minimal ? 'OpenClaw-family' : 'coding agent')) + '</text>'
+    + '<text x="' + agentCx + '" y="' + (agentY + 73) + '" style="font-size:10px;fill:rgba(255,255,255,0.85);text-anchor:middle;">' + escHtml(model || s.subtitle || (s.minimal ? 'OpenClaw-family' : 'coding agent')) + '</text>'
     + '<circle cx="' + agentCx + '" cy="' + (agentY + agentH - 9) + '" r="4" fill="#fff"><animate attributeName="opacity" values="0.4;1;0.4" dur="1.4s" repeatCount="indefinite"/></circle></g>';
   // Tool column (right).
   for (var j = 0; j < n; j++) { var y = y0 + j * (th + gap), cy = y + th / 2;
@@ -25066,10 +25084,15 @@ function _buildRuntimeFlowInner(rt, model) {
 function _applyRuntimeFlowDiagram(rt) {
   var svg = document.getElementById('flow-svg');
   if (!svg) return;
+  // Channel routing is not part of a coding runtime's execution path.
+  var journey = document.querySelector('#page-flow .flow-journey');
+  var caps = _cmCapsForRuntime(rt);
+  var channelPath = !rt || rt === 'all' || !!(caps && caps.indexOf('CHANNELS') !== -1);
+  if (journey) journey.hidden = !channelPath;
   if (_origFlowSvgInner === null) _origFlowSvgInner = svg.innerHTML;
+  // The primary-session model is node-wide; it cannot label a selected
+  // runtime's topology. The diagram uses its neutral agent label instead.
   var model = '';
-  try { var ml = document.getElementById('brain-model-text'); model = ml ? (ml.textContent || '') : ''; } catch (e) {}
-  if (model === 'unknown') model = '';
   // Never render a LOCKED runtime (e.g. Claude Code on the free plan) as an
   // active Flow topology — that contradicts the "install OpenClaw" empty-state
   // and reads as if a Pro runtime is live. Fall back to the default OpenClaw
@@ -25077,6 +25100,9 @@ function _applyRuntimeFlowDiagram(rt) {
   var inner = (typeof _cmLockedRuntimes !== 'undefined' && _cmLockedRuntimes && _cmLockedRuntimes[rt])
     ? null
     : _buildRuntimeFlowInner(rt, model);
+  // Unknown topologies keep their recorded call list without borrowing the
+  // channel diagram from a different runtime.
+  svg.style.display = inner || channelPath ? '' : 'none';
   if (inner) {
     svg.innerHTML = inner;
   } else if (svg.innerHTML.indexOf('rtShadow') !== -1) {
@@ -25273,51 +25299,91 @@ function _backfillFlowFromBrain() {
 }
 
 var _flowBrainSse = null;
+var _flowActivityRuntime = null;
+var _flowActivitySeen = new Set();
+function _flowActivityStatus(message) {
+  var el = document.getElementById('flow-activity-status');
+  if (el) el.textContent = message;
+}
 function _startFlowBrainStream() {
-  if (window.CLOUD_MODE) return;
-  if (_flowBrainSse && _flowBrainSse.readyState !== EventSource.CLOSED) return;
+  if (_cmCurrentTab !== 'flow' || document.hidden) return;
+  var runtime = typeof _cmRuntimeFilter === 'function' ? _cmRuntimeFilter() : '';
+  if (_flowBrainSse && _flowBrainSse.readyState !== 2 && _flowActivityRuntime === runtime) return;
+  if (_flowBrainSse) _flowBrainSse.close();
+  if (_flowActivityRuntime !== runtime) {
+    _flowActivityRuntime = runtime;
+    _flowActivitySeen.clear();
+    flowStats.msgTimestamps = []; flowStats.messages = 0;
+    clearToolStream(); flowStats.activeTools = {}; updateFlowStats();
+  }
+  _flowActivityStatus('Connecting to recorded activity...');
   try {
-    var url = '/api/brain-stream';
-    var tok =
-      localStorage.getItem('clawmetry-token') ||
-      localStorage.getItem('gw_token') ||
-      localStorage.getItem('cm-token');
-    if (tok) url += '?token=' + encodeURIComponent(tok);
-    var es = new EventSource(url);
+    var es = window.cmActivityEventSource({runtime:runtime});
     _flowBrainSse = es;
+    es.addEventListener('connected', function() {
+      _flowActivityStatus('Connected to recorded activity');
+    });
+    es.addEventListener('resync', function() {
+      _flowActivitySeen.clear(); clearToolStream();
+      flowStats.msgTimestamps = []; flowStats.messages = 0;
+      flowStats.activeTools = {}; updateFlowStats();
+      _flowActivityStatus('Refreshing recorded activity...');
+    });
+    es.addEventListener('checkpoint', function() {
+      if (es.readyState === 1) _flowActivityStatus('Connected to recorded activity');
+    });
+    function firstSeen(key) {
+      var seen = _flowActivitySeen.has(key);
+      // Match the reader's retained domain: 500 events, each with at most
+      // 256 calls plus one channel action. Upserts refresh key order too.
+      _flowActivitySeen.delete(key);
+      _flowActivitySeen.add(key);
+      while (_flowActivitySeen.size > 500 * 257) _flowActivitySeen.delete(_flowActivitySeen.values().next().value);
+      return !seen;
+    }
     es.onmessage = function(e) {
       try {
         var ev = JSON.parse(e.data);
         if (!ev || !ev.type) return;
-        var tool = _brainTypeToFlowTool(ev.type);
-        // Accuracy: a type that maps to a real bucket lights that component +
-        // pulses its edge; an UNMAPPED type must NOT falsely light "Exec" — we
-        // pulse the neutral Skills edge and still record the REAL name in the
-        // feed (#flow-live-feed is the exact per-call truth).
-        if (tool) {
-          // Drive Active Tools + the existing tool-call animation off the same
-          // DuckDB-backed event. triggerToolCall already handles the 5s expiry.
-          triggerToolCall(tool);
-          _flowPulseEdge('path-brain-' + tool);
-          _flowRailSetStage('tools');
-          var label = '⚡ ' + tool + ': ' + _flowFeedLabelForTool(tool);
-          addFlowFeedItem(label, '#f0c040', 'tool');
-        } else {
-          // Unknown tool class — neutral pulse, honest label with the raw type.
-          _flowPulseEdge('path-brain-skills');
-          _flowRailSetStage('tools');
-          var rawName = String(ev.tool || ev.type || 'tool');
-          addFlowFeedItem('⚡ ' + rawName, '#f0c040', 'tool');
+        var eventType = String(ev.type).toUpperCase();
+        var legacyTool = _brainTypeToFlowTool(eventType);
+        var age = Date.now() - new Date(ev.time).getTime();
+        var live = !e.fromCache && e.activityMode === 'replay' && age >= 0 && age < 5000;
+        var scope = [ev.nodeId || '', ev.runtime || runtime || '', ev.sessionId || ''];
+        if (eventType === 'CHANNEL.IN' && firstSeen(JSON.stringify(scope.concat(['in', ev.eventId || ev.time])))) {
+          if (age >= 0 && age < 60000) flowStats.msgTimestamps.push(new Date(ev.time).getTime());
+          flowStats.messages++;
+          if (live) _flowPulseInbound(ev.channel || '');
         }
-        flowStats.events++;
+        if (eventType === 'CHANNEL.OUT' && live && firstSeen(JSON.stringify(scope.concat(['out', ev.eventId || ev.time])))) _flowRailSetStage('reply');
+        // A single recorded message can contain several calls. Replay can
+        // later add calls to that same event, so dedup the calls individually.
+        var calls = Array.isArray(ev.toolCalls) ? ev.toolCalls.slice(0, 256) : [];
+        if (!calls.length && (eventType === 'TOOL_CALL' || eventType === 'TOOL.CALL' || eventType === 'TOOL' || legacyTool)) {
+          calls = [{name:ev.tool || (legacyTool ? ev.type : '')}];
+        }
+        calls.forEach(function(call, index) {
+          if (!call || typeof call !== 'object') return;
+          var key = call.id ? ['call', call.id] : ['event', ev.eventId || ev.time, index];
+          if (!firstSeen(JSON.stringify(scope.concat(key)))) return;
+          flowStats.events++;
+          var tool = _brainTypeToFlowTool(call.name || ev.type);
+          if (live) {
+            if (tool) triggerToolCall(tool);
+            _flowPulseEdge('path-brain-' + (tool || 'skills'));
+            _flowRailSetStage('tools');
+          }
+          addFlowFeedItem('⚡ ' + escHtml(String(call.name || 'Tool name unavailable')), '#f0c040', 'tool', ev.time);
+        });
       } catch(e2) {}
     };
     es.onerror = function() {
+      _flowActivityStatus('Connection unavailable. Showing recorded activity; retrying...');
       try { es.close(); } catch(e3) {}
       _flowBrainSse = null;
       setTimeout(_startFlowBrainStream, 5000);
     };
-  } catch(e) {}
+  } catch(e) { _flowActivityStatus('Recorded activity unavailable'); }
 }
 
 function _populateFlowSkills() {
@@ -25700,9 +25766,9 @@ var _toolCategoryColors = {
   error: '#e74c3c', heartbeat: '#4a7090', result: '#50c070', ai: '#a080f0'
 };
 
-function addFlowFeedItem(text, color, category) {
+function addFlowFeedItem(text, color, category, recordedAt) {
   if (_toolStreamPaused) return;
-  var now = new Date();
+  var now = recordedAt ? new Date(recordedAt) : new Date();
   var time = now.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
   var cat = category || 'system';
   _flowFeedItems.push({time: time, text: text, color: color || '#888', cat: cat});
@@ -25738,6 +25804,9 @@ function renderToolStream() {
 
 var flowThrottles = {};
 function processFlowEvent(line) {
+  // The log stream still serves Logs, but cannot add unscoped inferred
+  // activity to a Flow view backed by the persisted runtime reader.
+  if (window.cmActivityEventSource) return;
   flowStats.events++;
   var now = Date.now();
   var msg = '', level = '';
@@ -30387,7 +30456,7 @@ function clearSwimlaneLanes() {
 }
 
 // One-click preset: most-recent session per distinct runtime (cap 4). This is
-// the headline demo path — the 32 runtimes side by side. Respects the global
+// the headline demo path — the 33 runtimes side by side. Respects the global
 // runtime switcher: when scoped to one runtime, only that runtime is picked.
 function swimlanePresetPerRuntime() {
   var rtFilter = (typeof _cmRuntimeFilter === 'function') ? _cmRuntimeFilter() : 'all';
@@ -31015,7 +31084,7 @@ function cmFileViewerRender(hostId) {
   if (isMd) {
     tools += '<span class="cm-fv-seg">'
       + '<button class="cm-fv-btn' + (s.mode === 'code' ? ' active' : '') + '" '
-      + 'onclick="cmFvSetMode(\'' + hid + '\',\'code\')" title="Raw file source">Code</button>'
+      + 'onclick="cmFvSetMode(\'' + hid + '\',\'code\')" title="' + escAttr(t('files.raw_source_tip', null, 'Raw file source')) + '">Code</button>'
       + '<button class="cm-fv-btn' + (s.mode === 'preview' ? ' active' : '') + '" '
       + 'onclick="cmFvSetMode(\'' + hid + '\',\'preview\')" title="Rendered markdown">Preview</button>'
       + '</span>';
@@ -31025,7 +31094,7 @@ function cmFileViewerRender(hostId) {
       + 'onclick="cmFvToggleWrap(\'' + hid + '\')" title="Soft-wrap long lines">Wrap</button>';
   }
   tools += '<button class="cm-fv-btn" onclick="cmFvCopy(\'' + hid + '\',this)" '
-    + 'title="Copy the whole file">⧉ Copy</button>';
+    + 'title="' + escAttr(t('files.copy_whole_tip', null, 'Copy the whole file')) + '">⧉ Copy</button>';
   tools += '<button class="cm-fv-btn" onclick="cmFvToggleFullscreen(\'' + hid + '\')" title="'
     + escHtml(s.fs ? t('memory.exit_full_screen_esc', null, 'Exit full screen (Esc)') : t('memory.full_screen', null, 'Full screen')) + '">'
     + (s.fs ? '✕ ' + escHtml(t('memory.exit_full_screen', null, 'Exit full screen')) : '⤡ ' + escHtml(t('memory.full_screen', null, 'Full screen'))) + '</button>';
@@ -31252,6 +31321,7 @@ function _cmRuntimeIcon(id) {
     gemini_cli: '♊',
     cline: '🖇',
     openexecutive: '🏛️',
+    opendots: '⠿',
     openhands: '🙌',
   };
   return map[id] || '•';
@@ -32684,13 +32754,13 @@ function loadGuardSessions() {
       // got a verdict (no gateway to ask), and drawing anything for that would
       // turn "we do not know" into a claim.
       if (s.public_share === true) {
-        statusCell += ' <span class="pill pill-warn" title="This session is published to a read-only public link. Anyone with the link can read its conversation text, including messages sent from now on. Revoke it from the OpenClaw session menu.">Public link</span>';
+        statusCell += ' <span class="pill pill-warn" title="' + escAttr(t('sessions.public_link_tip', null, 'This session is published to a read-only public link. Anyone with the link can read its conversation text, including messages sent from now on. Revoke it from the OpenClaw session menu.')) + '">Public link</span>';
       }
       // Listed from the live process probe, so it can be stopped now, but the
       // sync daemon has not read its transcript yet. Say that rather than let
       // the blank cost and missing detector status read as "nothing to see".
       if (!inc && !ws && s.pending_ingest) {
-        statusCell += ' <span class="muted" title="This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.">&middot; just started</span>';
+        statusCell += ' <span class="muted" title="' + escAttr(t('sessions.just_started_tip', null, 'This session is running and can be stopped now. Its cost and detector status appear once the sync daemon reads its transcript.')) + '">&middot; just started</span>';
       }
       // The estimate says what it is: a burn-rate figure and a
       // window-fraction figure are not the same kind of number, and the
@@ -32752,7 +32822,10 @@ function loadGuardSessions() {
               '</h4><p>' + guardEsc(finding.detail || 'Open this session to review the matching activity.') + '</p>' +
               (finding.since ? '<small>First seen ' + guardEsc(guardAgo(finding.since)) + '</small>' : '') + '</div>';
           }).join('') + '<footer><span>' + (inc && Number(inc.spend_at_risk_usd) > 0 ? guardMoney(inc.spend_at_risk_usd) + ' estimated at risk' : 'Detected activity, not a blocked action') +
-          '</span><div><button class="btn btn-xs" data-sid="' + guardEsc(s.session_id) +
+          '</span><div>' + (inc && inc.incident_id ? '<button class="btn btn-xs" data-incident="' + guardEsc(inc.incident_id) +
+          '" data-sid="' + guardEsc(s.session_id) + '" data-rt="' + guardEsc(s.runtime) + '" data-node="' + guardEsc(inc.node_id || '') +
+          '" onclick="cmOpenIncident(this.dataset.incident,this.dataset.rt,this.dataset.sid,this.dataset.node)">See what happened</button> ' : '') +
+          '<button class="btn btn-xs" data-sid="' + guardEsc(s.session_id) +
           '" onclick="openTrail(this.dataset.sid)">View session</button> ' + control + '</div></footer></article>');
       }
 
@@ -32762,7 +32835,7 @@ function loadGuardSessions() {
         '<td>' + statusCell + '</td>' +
         '<td>' + riskCell + '</td>' +
         '<td>' + (s.pending_ingest
-          ? '<span class="muted" title="Not measured yet - the sync daemon has not read this session\'s transcript.">&mdash;</span>'
+          ? '<span class="muted" title="' + escAttr(t('sessions.not_measured_tip', null, 'Not measured yet. The sync daemon has not read the transcript of this session.')) + '">&mdash;</span>'
           : '$' + (Number(s.cost_usd) || 0).toFixed(2)) + '</td>' +
         '<td>' + guardEsc(guardAgo(s.last_active_at)) + '</td>' +
         '<td>' + control + '</td></tr>';
@@ -33118,7 +33191,7 @@ function guardShowPolicyForm() {
     '<div class="form-row"><label>At least N events</label><input id="gp-repeat" type="number" min="0" value="0"></div>' +
     '<div class="form-row"><label>Bad for (minutes)</label><input id="gp-mins" type="number" min="0" value="5"></div>' +
     '<div class="form-row"><label>Session spent at least ($)</label><input id="gp-spend" type="number" min="0" step="0.5" value="0"></div>' +
-    '<div class="form-row"><label title="The estimated cost of the flagged stretch, not the whole session. This is the threshold most people actually want.">At risk at least ($)</label><input id="gp-at-risk" type="number" min="0" step="0.5" value="0"></div>' +
+    '<div class="form-row"><label title="' + escAttr(t('guard.at_risk_field_tip', null, 'The estimated cost of the flagged stretch, not the whole session. This is the threshold most people actually want.')) + '">At risk at least ($)</label><input id="gp-at-risk" type="number" min="0" step="0.5" value="0"></div>' +
     '<div class="form-row"><label>Then do this</label><div id="gp-steps"></div></div>' +
     '<div class="form-row"><label></label><div>' +
       '<button class="btn btn-xs" onclick="guardAddStep()">Add escalation step</button> ' +
@@ -33243,7 +33316,7 @@ function loadGuardActions() {
       var stepCell = '';
       if (anyLadder) {
         var si = Number(a.step_index) || 0;
-        stepCell = '<td class="muted" title="Rung of this policy\'s escalation ladder">' +
+        stepCell = '<td class="muted" title="' + escAttr(t('guard.ladder_rung_tip', null, 'Rung of the escalation ladder of this policy')) + '">' +
           (si + 1) + '</td>';
       }
       html += '<tr><td>' + guardEsc(guardAgo(new Date(a.created_at).toISOString())) + '</td>' +
@@ -33919,7 +33992,7 @@ async function renderFirstRunReport(overview) {
   // at: it probes local runtime paths and prescribes `clawmetry connect` /
   // `clawmetry --sample`. On a hosted node page the probe runs inside the
   // cloud container, which has no runtimes and never will, so it reported
-  // "No supported runtime was detected ... checked 32 runtimes" about the
+  // "No supported runtime was detected ... checked 33 runtimes" about the
   // server while the reader was looking at their own laptop's sessions.
   // A local-machine diagnostic has no honest answer to give here.
   if (window.CLOUD_MODE) { el.style.display = 'none'; return; }
@@ -33980,7 +34053,7 @@ async function renderFirstRunReport(overview) {
 
   // How widely we looked, and where to get the detail.
   //
-  // This used to render the expanded probe path for all 32 runtimes. Two
+  // This used to render the expanded probe path for all 33 runtimes. Two
   // problems with putting that on a screen. It carries the account name
   // (`/Users/<name>/...`) into every screenshot, screen-share and pasted
   // issue of an empty dashboard, which is the rule the detector surface

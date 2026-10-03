@@ -147,6 +147,35 @@ def click_tab(page: Page, tab_label: str):
 
 
 class TestTabsLoad:
+    @pytest.mark.parametrize("width", [320, 375, 768, 1280])
+    def test_activity_toolbar_stays_inside_viewport(self, page: Page, width):
+        """The connected badge and every Activity action remain reachable."""
+        load_dashboard(page)
+        click_tab(page, "Brain")
+        page.wait_for_function(
+            "document.getElementById('brain-live-indicator').textContent.includes('LIVE')",
+            timeout=15000,
+        )
+        page.set_viewport_size({"width": width, "height": 900})
+        if width <= 768:
+            page.wait_for_function(
+                "document.getElementById('left-nav').getBoundingClientRect().right <= 0",
+            )
+        bounds = page.evaluate("""() => {
+            const badge = document.getElementById('brain-live-indicator');
+            const toolbar = badge.parentElement;
+            const heading = toolbar.parentElement;
+            const nodes = [heading, ...toolbar.children];
+            return nodes.map(el => {
+                const rect = el.getBoundingClientRect();
+                return {text: el.textContent.trim(), left: rect.left,
+                        right: rect.right, width: rect.width};
+            });
+        }""")
+        for rect in bounds:
+            assert rect["width"] > 0, rect
+            assert rect["left"] >= 0 and rect["right"] <= width, rect
+
     def test_page_loads(self, page: Page):
         """Dashboard root loads without error."""
         load_dashboard(page)

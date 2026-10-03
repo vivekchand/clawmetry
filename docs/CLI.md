@@ -104,3 +104,32 @@ ClawMetry:
 > loop signals fire, stop brute-forcing and change approach. Check spend
 > with `clawmetry usage --json`. All commands exit 3 when ClawMetry isn't
 > running (safe to skip), and are read-only.
+# Session investigations
+
+With the paid extension installed and an entitled plan, use the same retained
+evidence and activity as the dashboard:
+
+```console
+clawmetry sessions list --runtime codex --json
+clawmetry sessions inspect codex:SESSION --json
+clawmetry sessions inspect codex:SESSION --event EVENT_ID --json
+clawmetry sessions watch codex:SESSION --json
+clawmetry sessions watch codex:SESSION --cursor SAVED_CURSOR --once --json
+```
+
+The list discovers recorded node and runtime identity. Inspection and watching
+require an exact session ID; use `--node` and `--runtime` when an ID is ambiguous.
+Missing identity or unavailable history produces an explicit error. Lists and
+pages are bounded by `--limit` (1 to 200), and JSON includes coverage. Inspection
+returns an older-history cursor under `coverage.next_cursor`.
+
+Watch emits newline-delimited JSON: `_meta`, event-ID `upsert` or `remove`
+records, then a `_checkpoint` carrying the committed cursor and coverage.
+Apply events by ID and save a cursor only after processing its preceding batch.
+An `_resync` means discard the old buffer; the next read starts a fresh bounded
+preview. Ctrl+C emits `_end` with the last completed cursor. Connection failure
+exits with an error; silence never proves recovery or session completion.
+
+Existing `clawmetry sessions [SID] [facet flags]` and `status --live` retain their
+behavior. For a legacy session literally named `list`, `inspect`, or `watch`,
+use the standard end-of-options marker, for example `clawmetry sessions -- list`.

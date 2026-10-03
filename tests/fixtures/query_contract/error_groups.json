@@ -1,0 +1,15 @@
+{
+  "_elapsed_ms": "<volatile>",
+  "_shape": "error_groups",
+  "_via": "<volatile>",
+  "available": false,
+  "error": "upgrade_required",
+  "reason": "Error grouping requires an entitled plan.",
+  "rows": [],
+  "schema_version": 1,
+  "scope": {
+    "node_id": null,
+    "runtime": null,
+    "session_id": null
+  }
+}

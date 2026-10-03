@@ -2646,6 +2646,35 @@ class OpenClawAdapter(AgentAdapter):
     name = "openclaw"
     display_name = "OpenClaw"
 
+    def __init__(self, sessions_dir: Optional[str] = None,
+                 state_db: Optional[str] = None) -> None:
+        # Replay-mapper overrides (#4816). The daemon and the registry build
+        # the adapter with no arguments and resolve both lazily; tests point
+        # them at fixtures.
+        self._replay_sessions_dir = sessions_dir
+        self._replay_state_db = state_db
+
+    def iter_replay_events(self, session_id: str, limit: int = 5000):
+        """Yield canonical replay events for one session (#4816, #4813).
+
+        Shape: ``clawmetry.replay_schema.ReplayEvent`` dicts, oldest first,
+        from the session transcript (legacy ``agents/main/sessions`` or the
+        2026.9.x SQLite mirror) plus the read-only state database: the
+        ``exec_approvals_config`` row becomes the leading ``mode.changed``,
+        ``operator_approvals`` rows become ``approval.requested`` and
+        ``approval.decided``, ``subagent_runs`` rows become ``agent.spawn``.
+        The transcript ``parentId`` is a chain, so no event carries it as
+        ``parent_span_id``. Span ids are namespaced ``openclaw:<sid>:...``.
+        Never raises; an unknown session yields nothing. The mapping lives
+        in ``clawmetry/adapters/openclaw_replay.py``.
+        """
+        from .openclaw_replay import iter_replay_events as _iter
+        yield from _iter(
+            session_id, limit=limit,
+            sessions_dir=self._replay_sessions_dir,
+            state_db=self._replay_state_db,
+        )
+
     def detect(self) -> DetectResult:
         try:
             d = _d()

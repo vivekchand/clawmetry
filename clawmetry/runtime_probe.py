@@ -230,6 +230,11 @@ RUNTIME_PROBES: tuple = (
                   "~/.config/coworker/conversations",
                   "~/AppData/Roaming/coworker/coworker.db"),
                  env="CLAWMETRY_OPENWORKER_STATE_DIR"),
+    RuntimeProbe("opendots", "OpenDots",
+                 ("data/opendots.sqlite", "~/*/data/opendots.sqlite",
+                  "~/projects/*/data/opendots.sqlite", "~/code/*/data/opendots.sqlite",
+                  "~/dev/*/data/opendots.sqlite", "~/src/*/data/opendots.sqlite"),
+                 env="CLAWMETRY_OPENDOTS_DB"),
     # Lovable (lovable.dev) has NO install and no fixed data dir: the local
     # evidence is a git clone of a Lovable-synced repo, identified by its
     # CONTENT (README project marker + bot commits), which a path glob cannot

@@ -237,7 +237,7 @@ def _parse_junit_xml(xml_bytes: bytes) -> set[str]:
     failed: set[str] = set()
     try:
         _reject_doctype(xml_bytes)
-        root = ET.fromstring(xml_bytes)  # noqa: S314 -- DTD refused above
+        root = ET.fromstring(xml_bytes)  # nosec B314 - _reject_doctype() above raises on any DTD, so the entity-expansion vector is closed before the parse
     except ET.ParseError as exc:
         print(f"  WARN: could not parse JUnit XML: {exc}", file=sys.stderr)
         return failed
