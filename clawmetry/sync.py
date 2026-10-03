@@ -22751,6 +22751,15 @@ def _emit_detector_incidents(store, state: dict) -> int:
     # Each session's write actions, for the fleet pass after the loop
     # (clawmetry/detector_swarm.py). Collected here so the steps are parsed once.
     fleet_fps: dict = {}
+    # Opt-in capability-gap export (#5412, clawmetry/capability_gaps.py).
+    # None unless CLAWMETRY_CAPGAP_EXPORT_DIR is set, so the default tick
+    # pays one env read. Reads the SAME events this loop already fetched.
+    capgap = None
+    try:
+        from clawmetry import capability_gaps as _capgap
+        capgap = _capgap.Exporter.from_env()
+    except Exception as _ce:  # noqa: BLE001
+        log.debug("capability gaps: exporter unavailable: %s", _ce)
     for s in candidates:
         sid = s.get("session_id") or ""
         try:
@@ -22787,6 +22796,11 @@ def _emit_detector_incidents(store, state: dict) -> int:
         _record_guard_observation(
             store, sid, runtime or "", facts.get("agent_id") or "",
             _det.session_profile(steps, thresholds.get("write_tools")))
+        if capgap is not None:
+            try:
+                capgap.observe_events(sid, runtime or "", events)
+            except Exception as _ce:  # noqa: BLE001
+                log.debug("capability gaps: observe skipped for %s: %s", sid, _ce)
         try:
             from clawmetry import detector_swarm as _swarm
             _fps = _swarm.write_fingerprints(steps)
@@ -22940,6 +22954,20 @@ def _emit_detector_incidents(store, state: dict) -> int:
                 log.warning("detectors: ingest_loop_signal failed for %s: %s",
                             sid, e)
                 continue
+
+    if capgap is not None:
+        # A denied approval is a permission the operator refused (E02). One
+        # bounded read per tick; the exporter dedups by approval id.
+        try:
+            capgap.observe_approvals(store.query_approvals(status="denied", limit=200) or [])
+        except Exception as _ce:  # noqa: BLE001
+            log.debug("capability gaps: approvals skipped: %s", _ce)
+        try:
+            n_gap = capgap.flush()
+            if n_gap:
+                log.info("capability gaps: %d record(s) exported", n_gap)
+        except Exception as _ce:  # noqa: BLE001
+            log.debug("capability gaps: flush skipped: %s", _ce)
 
     # A session that recovered drops out of the memo so its "bad for" clock
     # restarts if it goes wrong again later. This also bounds the memo: it can

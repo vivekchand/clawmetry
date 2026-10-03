@@ -8,10 +8,25 @@
 - **Verified:** 32 tests over the shipped v3 fixture, a transcript in the live 2026.9.x shape (millisecond timestamps, string user content), the real `exec_approvals_config`, `operator_approvals` and `subagent_runs` table shapes, a corrupt database, a database without the tables, the store upsert, the daemon hook and the replay-tree endpoint. Mapped cleanly on a live OpenClaw 2026.9.3 node.
 - **Limits:** the ACP replay stream (`acp_replay_events`), `flow_runs` / `task_runs` workflows and `plugin_binding_approvals` are not read yet; on a live 2026.9.3 node the first two tables are empty and the third is not session scoped, so there is no verified shape to map. An approval for a tool call the transcript does not show is counted in the session but not placed on a turn. `agent.return` is not emitted; the run table records no end.
 
+### Added: opt-in capability-gap export
+
+- **Why:** ClawMetry records when an agent asked for a tool that does not exist, hit a permission refusal, a rate limit or a budget boundary. There was no machine-readable, taxonomy-tagged way for a local measurement tool to read those signals without reading transcripts (#5412, proposed by @flyoung588).
+- **What:** `CLAWMETRY_CAPGAP_EXPORT_DIR=<dir>` makes the daemon append one JSONL record per gap to `<dir>/capability_gaps.jsonl` on the detector tick, mapped to the MIX taxonomy. `E01_NO_MATCH`, `E02_NO_ACCESS`, `E05_CAPACITY_GAP` and `E08_CAPITAL_NEED` are emitted. The other four codes are declared and not emitted. A denied approval is recorded as `E02_NO_ACCESS`. `GET /api/capability-gaps` classifies recent store rows on request, with `window`, `session`, `runtime`, `code` and `limit` filters, and returns the contract next to the records. Documented in `docs/CAPABILITY_GAPS.md`.
+- **Privacy:** a record carries the code, session id, runtime, tool name, the fixed marker that fired, an HTTP status, the event id and timestamps. Never prompts, arguments, outputs, exception text or credentials. Files are created `0600`. Nothing is sent over the network. Off unless the variable is set.
+- **Verified:** 29 new tests cover each emitted code, precedence and the fixed field set. They also cover exporter dedup across a restart, the daemon hook with the variable unset and set, and the route. The detector pass is unchanged when the variable is unset.
+- **Limits:** the mapping is conservative and marker based. A failure without a mapped marker is not exported. Sessions idle longer than the detector window are not re-read.
+
 ### Added: Qwen Code session replay
 
 - Qwen Code sessions now feed the replay tree. The reader maps each chat recording into the canonical replay stream: one turn per user prompt, reasoning and model replies with usage, tool calls with their results, and the recorded decision on each tool call. The mode chip reads "unknown" because Qwen Code keeps no approval mode in the chat log. Sub-agent transcripts attach under the call that started them, with their resolved approval mode on the spawn. The daemon writes the stream for every adapter that offers one, so later runtime mappers need no daemon change.
 
+### Fixed: Assistant startup and Home refresh
+
+- Assistant and Dives discover a native Claude installation when the background service has a minimal PATH. Existing authentication and constrained Assistant execution remain in use.
+- Generated Runtime columns keep readable names and first-column placement in chat and saved panels.
+- Home refreshes broad analytics once a minute while live status continues at ten seconds. Shared summary requests reduce duplicate polling; failures retry and runtime changes refresh immediately.
+- Home activity counters return after a successful Retry, including after repeated failed or quiet reads.
+- Validation: 310 targeted tests passed. Real harness generation, follow-up, panel save, Home refresh, and history reopen passed with a minimal PATH. Matched browser windows measured 241 requests per minute before and 114 after the polling change.
 
 ### Added: conversational dashboards from local agent evidence
 
