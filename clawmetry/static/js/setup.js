@@ -50,7 +50,7 @@ function _cmSetupUnavailable(message, needKey) {
     grid.textContent = message;
     if (needKey && typeof window._cmRenderKeyPrompt === 'function') {
       window._cmRenderKeyPrompt(grid, {title: 'Encrypted setup', onUnlock: function() { loadSetup(true); }});
-      var note = document.getElementById('cm-mem-err');
+      var note = grid.querySelector('#cm-mem-err');
       if (note) { note.textContent = message; note.style.display = ''; }
     }
   }
