@@ -7,6 +7,7 @@
 - **Verified:** 3 new tests: the shipped renderer and save function run in node (escaped names, an earlier assignment left out, the target list, the two required fields, the request body, a refused request), and the route returns `match_label` and the spend moves under the project name. The card was inspected as a rendered image in the light theme.
 - **Limits:** the card was not opened in a running dashboard. An assignment covers all of a repository's spend, past and future. A start or end date, a single session and removing an assignment are still API only. An earlier assignment is kept in the API and not shown in the card.
 
+
 ### Fixed: one event with unencodable text stopped every later event from being stored
 
 - **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
