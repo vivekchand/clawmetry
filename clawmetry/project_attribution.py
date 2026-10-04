@@ -349,6 +349,12 @@ def validate_assignment(body: Any) -> tuple[dict | None, str | None]:
         return None, "match_value is required"
     if mt == "project" and not is_project_id(mv):
         return None, "match_value must be a project id from /api/projects"
+    if mt == "project" and mv.startswith("prjn_"):
+        # A named project is the result of an assignment, never a target:
+        # sessions resolve through their derived (prj_) project only, so this
+        # row would be stored and match nothing.
+        return None, ("match_value is a project name, which cannot be assigned: "
+                      "use the id of its repository or directory instead")
     if not name:
         return None, "project_name is required"
     if len(name) > _MAX_NAME:
