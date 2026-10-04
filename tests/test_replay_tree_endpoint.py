@@ -104,6 +104,7 @@ def test_build_tree_empty_rows_returns_honest_shape():
         "session_id": "sess-x",
         "runtime": None,
         "mode": None,
+        "branches": None,
         "turns": [],
         "workflows": [],
         "row_count": 0,
@@ -142,6 +143,50 @@ def test_build_tree_captures_latest_mode():
     ]
     out = _build_replay_tree("s1", rows)
     assert out["mode"] == {"permission": "bypassPermissions"}
+
+
+def test_build_tree_reports_branch_counts_from_the_mode_event():
+    """A Pi session replays its active branch only. The mapper counts what
+    it left out on the mode event, and the tree hands the counts on."""
+    from routes.sessions import _build_replay_tree
+
+    rows = [
+        _e(span_id="m1", kind="mode.changed", ts=0.0, runtime="pi",
+           mode={"permission": "unknown", "sandbox": "unknown"},
+           payload={"source": "none", "branch_points": 2,
+                    "entries_off_active_path": 7}),
+        _e(span_id="u1", kind="llm.call", ts=1.0, runtime="pi"),
+    ]
+    out = _build_replay_tree("s1", rows)
+    assert out["branches"] == {"branch_points": 2, "entries_off_active_path": 7}
+    assert out["mode"] == {"permission": "unknown", "sandbox": "unknown"}
+
+
+def test_build_tree_has_no_branch_counts_without_a_branch_point():
+    from routes.sessions import _build_replay_tree
+
+    for payload in (None, {}, {"source": "none"}, {"branch_points": 0},
+                    {"branch_points": "3"}, {"branch_points": True},
+                    {"branch_points": 1.5}, "branch_points"):
+        rows = [_e(span_id="m1", kind="mode.changed", payload=payload),
+                _e(span_id="u1", kind="llm.call", ts=1.0)]
+        assert _build_replay_tree("s1", rows)["branches"] is None, payload
+
+
+def test_build_tree_branch_counts_survive_a_later_mode_event():
+    """A later mode change without counts does not erase them, and a count
+    of hidden entries that is not a whole number reads as zero."""
+    from routes.sessions import _build_replay_tree
+
+    rows = [
+        _e(span_id="m1", kind="mode.changed", ts=0.0,
+           payload={"branch_points": 1, "entries_off_active_path": "many"}),
+        _e(span_id="u1", kind="llm.call", ts=1.0),
+        _e(span_id="m2", kind="mode.changed", ts=2.0,
+           mode={"permission": "yolo"}, payload={"source": "launch_flag"}),
+    ]
+    out = _build_replay_tree("s1", rows)
+    assert out["branches"] == {"branch_points": 1, "entries_off_active_path": 0}
 
 
 def test_build_tree_folds_delegations_under_spawn():
