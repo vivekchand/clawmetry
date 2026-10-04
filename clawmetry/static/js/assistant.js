@@ -297,7 +297,11 @@
         if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
           throw failure('The assistant sent an invalid live reply. Try again.');
         }
-        if (type === 'error') throw failure(payload.error || 'The answer could not be completed. Try again.');
+        if (type === 'error') {
+          var streamError = failure(payload.error || 'The answer could not be completed. Try again.');
+          streamError.data = payload;
+          throw streamError;
+        }
         if (type === 'done') {
           if (typeof payload.answer !== 'string' || !payload.conversation_id) {
             throw failure('The reply ended without a saved conversation. Try again.');
@@ -330,6 +334,9 @@
     }).finally(function () { request.cancelReader(); });
     request.promise = Promise.race([fetchPromise, timeoutPromise]).catch(function (error) {
       if (request.timedOut) error._assistantTimedOut = true;
+      // The cloud decrypting reader can fail after HTTP headers arrived.
+      // Preserve the same recovery contract as a non-2xx JSON response.
+      if (!error.data && error.reason) error.data = {reason: error.reason, error: error.message};
       throw error;
     }).finally(function () {
       clearTimeout(timer);

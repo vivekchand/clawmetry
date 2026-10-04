@@ -384,3 +384,28 @@ assert.equal(failedChatCalls, 1, 'unlock refreshes readiness and history, never 
 assert.equal(elements.get('cm-assistant-recovery').hidden, true);
 context.assistantLeave();
 ''')
+
+
+@pytest.mark.parametrize('transport', ['reader', 'sse-error'])
+def test_key_failure_after_stream_headers_retains_unlock_reason(transport):
+    from tests.test_assistant_frontend import _run_node
+
+    _run_node(_cloud_page_script() + 'const transport = ' + repr(transport) + r'''
+let unlockCallback;
+context._cmRenderKeyPrompt = (host, options) => {
+  host.textContent = 'Unlock your node'; unlockCallback = options.onUnlock;
+};
+const stream = await startChat('Keep the question visible after key failure');
+if (transport === 'reader') stream.fail(Object.assign(new Error('This key could not unlock Assistant.'), {
+  reason:'decrypt_failed',status:422,
+}));
+else stream.push(frame('error', {reason:'decrypt_failed',error:'This key could not unlock Assistant.'}));
+await flush();
+assert.match(thread.textContent, /Keep the question visible after key failure/);
+assert.match(elements.get('cm-assistant-recovery').textContent, /Unlock your node/);
+assert.equal(send.disabled, true);
+unlockCallback(); await flush();
+assert.equal(send.disabled, false);
+assert.equal(chatCalls.length, 1, 'unlock never resubmits');
+context.assistantLeave();
+''')
