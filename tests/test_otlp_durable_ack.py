@@ -476,6 +476,77 @@ def test_one_unstorable_span_keeps_the_rest_of_the_batch(store, ls):
     assert not ls._is_data_error(RuntimeError("disk full"))
 
 
+@pytest.mark.parametrize("field, bad", [
+    ("session_id", {"session_id": "sess-oia-text-\ud800"}),
+    ("model", {"data": {"_otlp": True, "model": "m\ud800"}}),
+    ("data", {"data": "raw \ud800 text"}),
+    ("id", {"id": "otlp:oia-text-\ud800"}),
+])
+def test_an_event_with_unencodable_text_does_not_hold_the_ring(store, field, bad):
+    """Before: a lone surrogate (JSON allows it, UTF-8 does not) in any text
+    column failed the ring flush on every retry, and every event queued
+    beside it, then and later, stayed queued with it."""
+    base = {"node_id": "otlp", "agent_type": "my_agent", "agent_id": "main",
+            "session_id": "sess-oia-text", "runtime_kind": "my_agent",
+            "event_type": "llm_call", "data": {"_otlp": True},
+            "ts": "2026-09-14T00:00:00+00:00"}
+    outcome = store.put_otlp_batch(records=[], events=[
+        dict(base, id="otlp:oia-text-before"),
+        dict(dict(base, id="otlp:oia-text-bad"), **bad),
+        dict(base, id="otlp:oia-text-after"),
+    ])
+    assert outcome["events_flush_failed"] is False
+    assert len(store._ring) == 0
+    assert store._events_text_scrubbed == 1
+    rows = store._fetch(
+        "SELECT id, session_id, model, data FROM events WHERE node_id = ?", ["otlp"])
+    assert len(rows) == 3
+    for row in rows:
+        for value in row:
+            if isinstance(value, (bytes, bytearray)):
+                value = bytes(value).decode("utf-8")
+            if isinstance(value, str):
+                value.encode("utf-8")  # every stored string is valid text
+    changed = [r for r in rows if "\ufffd" in "".join(
+        bytes(v).decode("utf-8") if isinstance(v, (bytes, bytearray)) else str(v)
+        for v in r)]
+    assert len(changed) == 1
+
+    # A later, clean batch is not charged for the earlier one.
+    store.ingest(dict(base, id="otlp:oia-text-later"))
+    assert store.flush() == 1
+    assert store._events_text_scrubbed == 1
+
+
+def test_storable_text_changes_only_what_cannot_be_encoded():
+    from clawmetry.store_errors import storable_text
+    clean = {"a": ["x", "\u00e9", "\U0001f600"], "n": 3, "t": ("y", None)}
+    assert storable_text(clean) is clean
+    assert storable_text("lone \ud800 one") == "lone \ufffd one"
+    # A pair that arrived split is the character it spells.
+    assert storable_text("\ud83d\ude00") == "\U0001f600"
+    out = storable_text({"k\udc00": [{"v": "a\ud800"}], "keep": clean})
+    assert out == {"k\ufffd": [{"v": "a\ufffd"}], "keep": clean}
+    assert out["keep"] is clean
+
+
+def test_a_flush_the_store_itself_failed_is_not_rewritten(store, monkeypatch):
+    """Only a data error rewrites the batch. A store failure keeps the events
+    queued as they are."""
+    import duckdb
+
+    def _io_error(_rows):
+        raise duckdb.IOException("disk I/O error")
+
+    monkeypatch.setattr(store, "_insert_event_rows_locked", _io_error)
+    store.ingest({"id": "otlp:oia-text-io", "node_id": "otlp",
+                  "event_type": "llm_call", "session_id": "s\ud800",
+                  "ts": "2026-09-14T00:00:00+00:00"})
+    with pytest.raises(duckdb.IOException):
+        store.flush()
+    assert len(store._ring) == 1 and store._events_text_scrubbed == 0
+
+
 def test_an_undecodable_body_is_400_and_counted(client, store):
     r = _post(client, "logs", b"{not json", "application/json")
     assert r.status_code == 400

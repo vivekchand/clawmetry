@@ -35,7 +35,7 @@ DESCRIPTIONS = {
     "repo_config_exec": ("workspace", "Workspace commands", "Git settings or editor tasks name commands that can run when the workspace is used."),
     "agent_config_tamper": ("workspace", "Agent hooks", "Agent configuration contains commands that run during a session."),
     "agent_component_change": ("workspace", "Agent supply chain", "An MCP server, skill, plugin or instruction file was added or changed after the baseline."),
-    "package_manifest_exec": ("workspace", "Install scripts", "A package manifest names scripts that run when dependencies are installed."),
+    "package_manifest_exec": ("workspace", "Install scripts", "A package manifest names scripts that run when dependencies are installed, or a dependency that runs a script on install is new to the lockfile."),
     "coordinated_action": ("fleet", "Coordinated actions", "Independent session families share an unusual pattern of network writes."),
 }
 
