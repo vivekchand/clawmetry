@@ -22,6 +22,13 @@
 - **Verified:** 5 new tests cover a refused span beside a valid one, a corrected resend, a failed store write followed by a retry, a store answer without the id list, and the id list itself. 4 of them fail on the previous code.
 - **Limits:** when the store is down or cannot confirm the write, the tiles are lit as before and the sender is asked to retry. A collector that runs a daemon older than this release keeps the previous behaviour, because that daemon does not report which span it refused.
 
+### Added: the replay says when a conversation has other branches and what Aider does not store
+
+- **Why:** a Pi conversation is a tree. A user can go back to an earlier message and continue from there, and the replay follows the active branch only. An Aider history file holds prompts, replies, confirmations and applied edits, and holds no tool call and no reasoning. The replay showed neither fact, so a branched Pi session and an Aider session both read as the complete record (clawmetry-pro#135).
+- **What:** `/api/replay-tree/<session_id>` has a new field `branches` with `branch_points` and `entries_off_active_path`, taken from the session's `mode.changed` event. It is `null` for a session with no branch point. The replay view shows a notice above the turns with the number of branch points and the number of entries on other branches that are not shown. An Aider replay shows a notice that names what the history file does not hold.
+- **Verified:** 3 new endpoint tests cover the counts, eight payloads without a valid branch point and a later mode event without counts. 8 new renderer checks cover both notices, a session with no hidden entries, counts that are not numbers and other runtimes.
+- **Limits:** this is a notice, not a branch selector. The entries on other branches are not stored in the replay and cannot be opened. The counts appear only for a runtime whose replay mapper sends them. The Pi mapper that does so ships in the Pro adapter package. The notices were not opened in a running dashboard.
+
 ### Added: the Usage tab shows cost by project and project budgets
 
 - **Why:** spend per project and a budget per project existed only as `/api/projects`, `/api/projects/budgets` and a CSV export. Nobody could see them in the dashboard, and setting a budget took a hand-written request (#5941).
