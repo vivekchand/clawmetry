@@ -83,7 +83,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 PB = "application/x-protobuf"
 
 
-# ── fixtures ────────────────────────────────────────────────────────────────
+# ── fixtures ────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
 def _clean_module_state(monkeypatch):
@@ -154,7 +154,7 @@ def tiles(monkeypatch):
     return captured
 
 
-# ── builders ────────────────────────────────────────────────────────────────
+# ── builders ────────────────────────────────────────────
 
 def _kv(key, s=None, i=None, d=None):
     v = common_pb2.AnyValue()
@@ -226,7 +226,7 @@ def _cost_by_team(store, team="platform"):
     return rows.get(team)
 
 
-# ── AC-OBS-OIA-001.1: acknowledged only once stored ─────────────────────────
+# ── AC-OBS-OIA-001.1: acknowledged only once stored ───────────────────────────
 
 def test_logs_export_the_store_never_took_is_503_then_lands_once_on_retry(
         client, unreachable_daemon, store, monkeypatch, ls):
@@ -610,6 +610,148 @@ def test_redelivered_span_lights_the_tiles_once(client, store, tiles):
     assert [c for c, _ in tiles].count("tokens") == 1
 
 
+def _token_usage(t_ns, value):
+    dp = metrics_pb2.NumberDataPoint(time_unix_nano=t_ns, as_int=value)
+    dp.attributes.extend([_kv("gen_ai.token.type", s="input")])
+    m = metrics_pb2.Metric(name="gen_ai.client.token.usage",
+                           sum=metrics_pb2.Sum(data_points=[dp]))
+    rm = metrics_pb2.ResourceMetrics(
+        scope_metrics=[metrics_pb2.ScopeMetrics(metrics=[m])])
+    rm.resource.attributes.extend([_kv("service.name", s="my-agent")])
+    return metrics_service_pb2.ExportMetricsServiceRequest(
+        resource_metrics=[rm]).SerializeToString()
+
+
+def test_redelivered_metric_point_lights_the_tiles_once(client, store, tiles):
+    t = int(time.time() * 1e9)
+    body = _token_usage(t, 120)
+    assert _post(client, "metrics", body).status_code == 200
+    assert _post(client, "metrics", body).status_code == 200
+    assert [c for c, _ in tiles].count("tokens") == 1
+    # A new reading at a new time is not a re-delivery.
+    assert _post(client, "metrics", _token_usage(t + 10**9, 120)).status_code == 200
+    assert [c for c, _ in tiles].count("tokens") == 2
+    status = otlp_intake.snapshot()["signals"]["metrics"]["items"]
+    assert status["live_view_only"] == 3
+    assert status["stored"] == 0
+
+
+# ── AC-OBS-OIA-001.4: intake status ─────────────────────────────────────────
+
+def test_intake_status_counts_and_never_repeats_content(client, store):
+    secret = "sk-ant-api03-DO-NOT-ECHO-" + "x" * 20
+    email = "dana@acme.example"
+    body = _logs([_api_request(time.time(), extra=[
+        _kv("prompt", s=f"use {secret} and mail {email}"),
+    ])])
+    assert _post(client, "logs", body).status_code == 200
+    assert _post(client, "logs", b"garbage", "application/json").status_code == 400
+
+    r = client.get("/api/otel-status")
+    assert r.status_code == 200, r.get_data(as_text=True)[:300]
+    intake = r.get_json()["intake"]
+    logs = intake["signals"]["logs"]
+    assert logs["items"]["received"] == 1
+    assert logs["items"]["stored"] == 1
+    assert logs["requests"]["acknowledged"] == 1
+    assert logs["requests"]["malformed"] == 1
+    assert logs["last_success_at"] and logs["last_failure"] == "malformed"
+    assert intake["queue"]["kept"] is False
+    text = json.dumps(intake)
+    assert secret not in text and email not in text and "garbage" not in text
+
+
+# ── AC-OBS-OIA-001.5: a budget pause does not pause intake ──────────────────
+
+def test_a_budget_pause_does_not_stop_intake(client, store, monkeypatch):
+    monkeypatch.setattr(_d, "_budget_paused", True, raising=False)
+    r = _post(client, "logs", _logs([_api_request(time.time(), cost=9.99)]))
+    assert r.status_code == 200, r.get_data(as_text=True)
+    assert _cost_by_team(store)["cost_usd"] == pytest.approx(9.99)
+    reqs = otlp_intake.snapshot()["signals"]["logs"]["requests"]
+    assert reqs["during_budget_pause"] == 1
+
+
+# ── AC-OBS-OIA-001.6: unknown usage is not zero ───────────────────────────────
+
+def test_unreported_usage_is_unknown_not_zero(client, store):
+    t = time.time()
+    _post(client, "logs", _logs([
+        _api_request(t, session_id="s-input-only", cost=None, tout=None),
+    ], team="no-cost"))
+    _post(client, "logs", _logs([
+        _api_request(t, session_id="s-priced", cost=1.25),
+        _api_request(t + 1, session_id="s-unpriced", cost=None),
+    ], team="mixed"))
+
+    row = store.query_otlp_records(session_id="s-input-only")[0]
+    assert row["tokens_input"] == 1500
+    assert row["tokens_output"] is None, "an unreported side is unknown, not 0"
+    assert row["cost_usd"] is None
+
+    groups = {r["key"]: r for r in store.query_otlp_rollup(dimension="team")}
+    assert groups["no-cost"]["cost_usd"] is None
+    assert groups["no-cost"]["records_with_cost"] == 0
+    assert groups["mixed"]["cost_usd"] == pytest.approx(1.25)
+    assert groups["mixed"]["records_with_cost"] == 1
+    assert groups["mixed"]["records"] == 2
+
+
+# ── AC-OBS-OIA-001.7: trace sampling does not reduce spend ──────────────────
+
+def test_sampled_spans_do_not_change_spend_from_unsampled_log_records(client, store):
+    """Three model calls are logged (logs are not sampled). The sender's trace
+    sampler kept one of the three spans, which carries its own cost. The
+    spend answer is the three log records, not the one surviving span, and
+    the span's cost is not added on top."""
+    t = time.time()
+    _post(client, "logs", _logs([
+        _api_request(t + i, session_id="sess-sampled", cost=1.0) for i in range(3)
+    ]))
+    _post(client, "traces", _traces([
+        _span("5555555555555555", cost=1.0, session_id="sess-sampled"),
+    ]))
+    by_session = {r["key"]: r for r in store.query_otlp_rollup(dimension="session_id")}
+    assert by_session["sess-sampled"]["cost_usd"] == pytest.approx(3.0)
+    assert by_session["sess-sampled"]["records"] == 3
+
+
+# ── AC-OBS-OIA-001.8: the generated reference ───────────────────────────────────
+
+def test_generated_reference_states_ack_retry_identity_and_session_rules():
+    doc = (ROOT / "docs" / "INGEST.md").read_text()
+    for phrase in (
+        "| `503` |", "Retry-After", "partialSuccess", "| `401` |",
+        "### Acknowledgement and retry", "### Recognising a re-delivery",
+        "### Session identity when the sender names none",
+        "### Held only in the live view", "### Intake status",
+        "does not pause intake",
+    ):
+        assert phrase in doc, f"docs/INGEST.md does not state: {phrase}"
+    # Only the OTLP receiver's table: the run/event API below it keeps its own
+    # 429 row, which is a different surface.
+    otlp_section = doc.split("## OTLP receiver", 1)[1].split("## Run / event ingest API", 1)[0]
+    assert "| `429` |" not in otlp_section, "OTLP intake no longer pauses on a budget limit"
+    from clawmetry.ingest_contract import OTLP_RETRY_AFTER_SECONDS
+    assert otlp_intake.snapshot()["retry_after_seconds"] == OTLP_RETRY_AFTER_SECONDS
+
+
+# ── every real mapper reports an outcome ─────────────────────────────────────────
+
+@pytest.mark.parametrize("name", ["_process_otlp_logs", "_process_otlp_traces",
+                                  "_process_otlp_metrics"])
+def test_every_mapper_reports_an_outcome(name, store):
+    empty = {
+        "_process_otlp_logs": logs_service_pb2.ExportLogsServiceRequest(),
+        "_process_otlp_traces": trace_service_pb2.ExportTraceServiceRequest(),
+        "_process_otlp_metrics": metrics_service_pb2.ExportMetricsServiceRequest(),
+    }[name].SerializeToString()
+    out = getattr(_d, name)(empty)
+    assert isinstance(out, dict) and out["durable"] is True and out["received"] == 0
+
+
+# ── AC-OBS-OIA-001.2 (new): refused spans keep live tiles clean ─────────────────
+
 def _beyond_span(span_hex, cost=0.5):
     sp = _span(span_hex, cost=cost)
     sp.attributes.extend([_kv("gen_ai.usage.input_tokens", i=_BEYOND_INTEGER)])
@@ -691,143 +833,3 @@ def test_refused_span_ids_name_only_spans_that_were_not_stored(store):
     assert len(store.query_spans(span_id="oia-r2", limit=5)) == 1
     assert store.ingest_spans_batch(spans=[ok], with_outcome=True) == {
         "written": 0, "rejected": 0, "rejected_span_ids": []}
-
-
-def _token_usage(t_ns, value):
-    dp = metrics_pb2.NumberDataPoint(time_unix_nano=t_ns, as_int=value)
-    dp.attributes.extend([_kv("gen_ai.token.type", s="input")])
-    m = metrics_pb2.Metric(name="gen_ai.client.token.usage",
-                           sum=metrics_pb2.Sum(data_points=[dp]))
-    rm = metrics_pb2.ResourceMetrics(
-        scope_metrics=[metrics_pb2.ScopeMetrics(metrics=[m])])
-    rm.resource.attributes.extend([_kv("service.name", s="my-agent")])
-    return metrics_service_pb2.ExportMetricsServiceRequest(
-        resource_metrics=[rm]).SerializeToString()
-
-
-def test_redelivered_metric_point_lights_the_tiles_once(client, store, tiles):
-    t = int(time.time() * 1e9)
-    body = _token_usage(t, 120)
-    assert _post(client, "metrics", body).status_code == 200
-    assert _post(client, "metrics", body).status_code == 200
-    assert [c for c, _ in tiles].count("tokens") == 1
-    # A new reading at a new time is not a re-delivery.
-    assert _post(client, "metrics", _token_usage(t + 10**9, 120)).status_code == 200
-    assert [c for c, _ in tiles].count("tokens") == 2
-    status = otlp_intake.snapshot()["signals"]["metrics"]["items"]
-    assert status["live_view_only"] == 3
-    assert status["stored"] == 0
-
-
-# ── AC-OBS-OIA-001.4: intake status ─────────────────────────────────────────
-
-def test_intake_status_counts_and_never_repeats_content(client, store):
-    secret = "sk-ant-api03-DO-NOT-ECHO-" + "x" * 20
-    email = "dana@acme.example"
-    body = _logs([_api_request(time.time(), extra=[
-        _kv("prompt", s=f"use {secret} and mail {email}"),
-    ])])
-    assert _post(client, "logs", body).status_code == 200
-    assert _post(client, "logs", b"garbage", "application/json").status_code == 400
-
-    r = client.get("/api/otel-status")
-    assert r.status_code == 200, r.get_data(as_text=True)[:300]
-    intake = r.get_json()["intake"]
-    logs = intake["signals"]["logs"]
-    assert logs["items"]["received"] == 1
-    assert logs["items"]["stored"] == 1
-    assert logs["requests"]["acknowledged"] == 1
-    assert logs["requests"]["malformed"] == 1
-    assert logs["last_success_at"] and logs["last_failure"] == "malformed"
-    assert intake["queue"]["kept"] is False
-    text = json.dumps(intake)
-    assert secret not in text and email not in text and "garbage" not in text
-
-
-# ── AC-OBS-OIA-001.5: a budget pause does not pause intake ──────────────────
-
-def test_a_budget_pause_does_not_stop_intake(client, store, monkeypatch):
-    monkeypatch.setattr(_d, "_budget_paused", True, raising=False)
-    r = _post(client, "logs", _logs([_api_request(time.time(), cost=9.99)]))
-    assert r.status_code == 200, r.get_data(as_text=True)
-    assert _cost_by_team(store)["cost_usd"] == pytest.approx(9.99)
-    reqs = otlp_intake.snapshot()["signals"]["logs"]["requests"]
-    assert reqs["during_budget_pause"] == 1
-
-
-# ── AC-OBS-OIA-001.6: unknown usage is not zero ─────────────────────────────
-
-def test_unreported_usage_is_unknown_not_zero(client, store):
-    t = time.time()
-    _post(client, "logs", _logs([
-        _api_request(t, session_id="s-input-only", cost=None, tout=None),
-    ], team="no-cost"))
-    _post(client, "logs", _logs([
-        _api_request(t, session_id="s-priced", cost=1.25),
-        _api_request(t + 1, session_id="s-unpriced", cost=None),
-    ], team="mixed"))
-
-    row = store.query_otlp_records(session_id="s-input-only")[0]
-    assert row["tokens_input"] == 1500
-    assert row["tokens_output"] is None, "an unreported side is unknown, not 0"
-    assert row["cost_usd"] is None
-
-    groups = {r["key"]: r for r in store.query_otlp_rollup(dimension="team")}
-    assert groups["no-cost"]["cost_usd"] is None
-    assert groups["no-cost"]["records_with_cost"] == 0
-    assert groups["mixed"]["cost_usd"] == pytest.approx(1.25)
-    assert groups["mixed"]["records_with_cost"] == 1
-    assert groups["mixed"]["records"] == 2
-
-
-# ── AC-OBS-OIA-001.7: trace sampling does not reduce spend ──────────────────
-
-def test_sampled_spans_do_not_change_spend_from_unsampled_log_records(client, store):
-    """Three model calls are logged (logs are not sampled). The sender's trace
-    sampler kept one of the three spans, which carries its own cost. The
-    spend answer is the three log records, not the one surviving span, and
-    the span's cost is not added on top."""
-    t = time.time()
-    _post(client, "logs", _logs([
-        _api_request(t + i, session_id="sess-sampled", cost=1.0) for i in range(3)
-    ]))
-    _post(client, "traces", _traces([
-        _span("5555555555555555", cost=1.0, session_id="sess-sampled"),
-    ]))
-    by_session = {r["key"]: r for r in store.query_otlp_rollup(dimension="session_id")}
-    assert by_session["sess-sampled"]["cost_usd"] == pytest.approx(3.0)
-    assert by_session["sess-sampled"]["records"] == 3
-
-
-# ── AC-OBS-OIA-001.8: the generated reference ───────────────────────────────
-
-def test_generated_reference_states_ack_retry_identity_and_session_rules():
-    doc = (ROOT / "docs" / "INGEST.md").read_text()
-    for phrase in (
-        "| `503` |", "Retry-After", "partialSuccess", "| `401` |",
-        "### Acknowledgement and retry", "### Recognising a re-delivery",
-        "### Session identity when the sender names none",
-        "### Held only in the live view", "### Intake status",
-        "does not pause intake",
-    ):
-        assert phrase in doc, f"docs/INGEST.md does not state: {phrase}"
-    # Only the OTLP receiver's table: the run/event API below it keeps its own
-    # 429 row, which is a different surface.
-    otlp_section = doc.split("## OTLP receiver", 1)[1].split("## Run / event ingest API", 1)[0]
-    assert "| `429` |" not in otlp_section, "OTLP intake no longer pauses on a budget limit"
-    from clawmetry.ingest_contract import OTLP_RETRY_AFTER_SECONDS
-    assert otlp_intake.snapshot()["retry_after_seconds"] == OTLP_RETRY_AFTER_SECONDS
-
-
-# ── every real mapper reports an outcome ────────────────────────────────────
-
-@pytest.mark.parametrize("name", ["_process_otlp_logs", "_process_otlp_traces",
-                                  "_process_otlp_metrics"])
-def test_every_mapper_reports_an_outcome(name, store):
-    empty = {
-        "_process_otlp_logs": logs_service_pb2.ExportLogsServiceRequest(),
-        "_process_otlp_traces": trace_service_pb2.ExportTraceServiceRequest(),
-        "_process_otlp_metrics": metrics_service_pb2.ExportMetricsServiceRequest(),
-    }[name].SerializeToString()
-    out = getattr(_d, name)(empty)
-    assert isinstance(out, dict) and out["durable"] is True and out["received"] == 0
