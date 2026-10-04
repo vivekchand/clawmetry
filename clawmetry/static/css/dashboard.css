@@ -2744,6 +2744,16 @@ body.has-profile-menu #logout-btn { display: none !important; }
   background: var(--bg-secondary); color: var(--text-secondary);
   border: 1px solid var(--border-primary);
 }
+.replay-tree-branches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.replay-tree-branch {
+  font: inherit; font-size: 12px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+}
+.replay-tree-branch:hover, .replay-tree-branch:focus-visible { border-color: var(--accent); }
+.replay-tree-branch:disabled { opacity: 0.6; cursor: progress; }
+.replay-tree-branch-count { color: var(--text-secondary); }
 .replay-tree-workflows { display: flex; flex-direction: column; gap: 6px; }
 .replay-tree-workflow { border-left: 3px solid var(--accent); padding: 6px 10px;
   background: var(--bg-secondary); border-radius: 6px; }

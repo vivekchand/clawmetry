@@ -3717,6 +3717,7 @@ def _replay_branch_counts(payload) -> dict | None:
     branch only and says how much it left out: ``branch_points`` and
     ``entries_off_active_path``. Counts that are not whole numbers, or no
     branch point at all, yield ``None`` so the viewer shows no notice.
+    ``stored`` lists the other branches the mapper stored, when it did.
     """
     if not isinstance(payload, dict):
         return None
@@ -3726,7 +3727,49 @@ def _replay_branch_counts(payload) -> dict | None:
     off = payload.get("entries_off_active_path")
     if isinstance(off, bool) or not isinstance(off, int) or off < 0:
         off = 0
-    return {"branch_points": points, "entries_off_active_path": off}
+    out = {"branch_points": points, "entries_off_active_path": off}
+    stored = _replay_stored_branches(payload.get("branches"))
+    if stored:
+        out["stored"] = stored
+    return out
+
+
+# Most stored branches one tree response lists.
+_REPLAY_TREE_MAX_BRANCHES = 32
+
+
+def _replay_stored_branches(listed) -> list[dict]:
+    """The other branches a mapper stored as their own replay streams.
+
+    Each row of the mode payload's ``branches`` names the session id its
+    events are stored under. A row without a usable id is dropped, because
+    the viewer could not open it. ``entries`` counts the entries only that
+    branch holds, ``shared_entries`` the ones it has in common with the
+    active branch.
+    """
+    if not isinstance(listed, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for row in listed:
+        if len(out) >= _REPLAY_TREE_MAX_BRANCHES:
+            break
+        if not isinstance(row, dict):
+            continue
+        sid = row.get("session_id")
+        if not isinstance(sid, str) or not sid or len(sid) > 512 or sid in seen:
+            continue
+        seen.add(sid)
+        item: dict = {"session_id": sid}
+        for key in ("entries", "shared_entries"):
+            value = row.get(key)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                item[key] = value
+        label = row.get("label")
+        if isinstance(label, str) and label.strip():
+            item["label"] = label.strip()[:200]
+        out.append(item)
+    return out
 
 
 def _build_replay_tree(session_id: str, rows: list[dict]) -> dict:

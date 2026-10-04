@@ -32294,11 +32294,13 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       var text = _tr('trail.branch_note', {n: points},
                      'Branch points in this conversation: ' + points +
                      '. The replay follows the active branch.');
-      if (off) {
+      // Branches the mapper stored can be opened below, so nothing is
+      // counted as left out next to that list.
+      if (off && !_storedBranches(b.stored).length) {
         text += ' ' + _tr('trail.branch_note_hidden', {n: off},
                           'Entries on other branches, not shown: ' + off + '.');
       }
-      notes.push(['branches', text]);
+      notes.push(['branches', text, _renderBranchList(b.stored)]);
     }
     if (tree && tree.runtime === 'aider') {
       notes.push(['aider', _tr('trail.aider_note', null,
@@ -32308,9 +32310,118 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     var html = '';
     for (var i = 0; i < notes.length; i++) {
       html += '<div class="replay-tree-note" data-note="' +
-              notes[i][0] + '" role="note">' + _escape(notes[i][1]) + '</div>';
+              notes[i][0] + '" role="note">' + _escape(notes[i][1]) +
+              (notes[i][2] || '') + '</div>';
     }
     return html;
+  }
+
+  // The other branches a mapper stored (Pi), one button each. A click
+  // replaces the replay with that branch; see _openBranch.
+  function _storedBranches(stored) {
+    var out = [];
+    if (!Array.isArray(stored)) return out;
+    for (var i = 0; i < stored.length; i++) {
+      var s = stored[i];
+      if (s && typeof s.session_id === 'string' && s.session_id) out.push(s);
+    }
+    return out;
+  }
+
+  function _branchName(branch, index) {
+    if (typeof branch.label === 'string' && branch.label) {
+      return branch.label.length > 60 ? branch.label.slice(0, 59) + '\u2026' : branch.label;
+    }
+    return _tr('trail.branch_unnamed', {n: index + 1}, 'Branch ' + (index + 1));
+  }
+
+  function _renderBranchList(stored) {
+    var list = _storedBranches(stored);
+    if (!list.length) return '';
+    var html = '<div class="replay-tree-branches"><span class="replay-tree-branches-label">' +
+               _escape(_tr('trail.branch_open', null, 'Open another branch:')) + '</span>';
+    for (var i = 0; i < list.length; i++) {
+      var entries = (typeof list[i].entries === 'number' && list[i].entries >= 0)
+        ? Math.floor(list[i].entries) : null;
+      html += '<button type="button" class="replay-tree-branch" data-branch-index="' + i + '">' +
+              _escape(_branchName(list[i], i));
+      if (entries != null) {
+        html += ' <span class="replay-tree-branch-count">' +
+                _escape(_tr('trail.branch_entries', {n: entries},
+                            'own entries: ' + entries)) + '</span>';
+      }
+      html += '</button>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // Shown above a branch that was opened from the list: which branch it
+  // is, how much of it the active branch also holds, and the way back.
+  function _renderBranchView(view) {
+    if (!view) return '';
+    var text = _tr('trail.branch_viewing', {name: view.name},
+                   'Showing another branch: ' + view.name + '.');
+    if (typeof view.shared === 'number' && view.shared > 0) {
+      var shared = Math.floor(view.shared);
+      text += ' ' + _tr('trail.branch_shared', {n: shared},
+                        'Entries it shares with the active branch: ' + shared + '.');
+    }
+    return '<div class="replay-tree-note" data-note="branch-view" role="note">' +
+           _escape(text) +
+           ' <button type="button" class="replay-tree-branch" data-branch-back="1">' +
+           _escape(_tr('trail.branch_back', null, 'Back to the active branch')) +
+           '</button></div>';
+  }
+
+  function _branchError(home, mountEl, name) {
+    var msg = _tr('trail.branch_failed', {name: name},
+                  'The branch "' + name + '" could not be loaded.');
+    var note = '<div class="replay-tree-note replay-tree-note-error" data-note="branch-error" role="alert">' +
+               _escape(msg) + '</div>';
+    renderTree(home, mountEl);
+    mountEl.innerHTML = note + mountEl.innerHTML;
+  }
+
+  // Replace the replay in `mountEl` with one stored branch of `home`.
+  // The home tree stays in memory, so the way back needs no request.
+  async function _openBranch(home, index, mountEl) {
+    var list = _storedBranches(home && home.branches && home.branches.stored);
+    var branch = list[index];
+    if (!branch) return false;
+    var name = _branchName(branch, index);
+    var tree = null;
+    try {
+      tree = await fetchReplayTree(branch.session_id);
+    } catch (e) {
+      tree = null;
+    }
+    if (mountEl._cmReplayHome !== home) return false;
+    if (!tree || !tree.row_count) {
+      _branchError(home, mountEl, name);
+      return false;
+    }
+    return renderTree(tree, mountEl, {home: home, name: name, shared: branch.shared_entries});
+  }
+
+  function _branchClick(mountEl, ev) {
+    var el = ev && ev.target;
+    while (el && el !== mountEl && !(el.getAttribute &&
+           (el.getAttribute('data-branch-index') != null ||
+            el.getAttribute('data-branch-back') != null))) {
+      el = el.parentNode;
+    }
+    if (!el || el === mountEl || !el.getAttribute) return;
+    var home = mountEl._cmReplayHome;
+    if (!home) return;
+    if (el.getAttribute('data-branch-back') != null) {
+      renderTree(home, mountEl);
+      return;
+    }
+    var index = parseInt(el.getAttribute('data-branch-index'), 10);
+    if (!(index >= 0)) return;
+    el.disabled = true;
+    _openBranch(home, index, mountEl);
   }
 
   // ── Workflow graph (clawmetry-pro#132) ────────────────────────────────
@@ -32637,18 +32748,22 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     return html;
   }
 
-  function renderTree(tree, mountEl) {
+  // `view` is set only when a stored branch is drawn in place of the
+  // session it belongs to: {home: the session's tree, name, shared}.
+  function renderTree(tree, mountEl, view) {
     if (!mountEl) return false;
     if (!tree || !tree.row_count) {
       // Honest empty state — caller falls back to the flat renderer.
       mountEl.innerHTML = '';
       return false;
     }
+    mountEl._cmReplayHome = (view && view.home) || tree;
+    mountEl.onclick = function(ev) { _branchClick(mountEl, ev); };
     var html = '<div class="replay-tree" data-runtime="' +
                _escape(tree.runtime || 'unknown') + '">';
     html += _renderModeChip(tree.mode);
     html += _renderTruncated(tree);
-    html += _renderNotes(tree);
+    html += view ? _renderBranchView(view) : _renderNotes(tree);
     html += _renderWorkflows(tree.workflows, tree.runtime, tree.turns);
     for (var i = 0; i < (tree.turns || []).length; i++) {
       html += _renderTurn(tree.turns[i], tree.runtime);

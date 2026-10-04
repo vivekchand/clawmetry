@@ -22,6 +22,13 @@
 - **Verified:** 5 new tests cover a refused span beside a valid one, a corrected resend, a failed store write followed by a retry, a store answer without the id list, and the id list itself. 4 of them fail on the previous code.
 - **Limits:** when the store is down or cannot confirm the write, the tiles are lit as before and the sender is asked to retry. A collector that runs a daemon older than this release keeps the previous behaviour, because that daemon does not report which span it refused.
 
+### Added: the replay of a Pi conversation opens its other branches
+
+- **Why:** a Pi conversation that was branched replayed its active branch only. The notice above the replay counted the entries it left out, and there was no way to read them (clawmetry-pro#135).
+- **What:** when the Pi mapper has stored the other branches, the notice lists them as buttons, each with the first prompt of the branch and the number of entries only that branch holds. A click replaces the replay with that branch and says how many entries it shares with the active branch. "Back to the active branch" restores the session without a second request. `/api/replay-tree` hands the list on as `branches.stored`.
+- **Verified:** 13 new checks in `tests/replay_tree.test.mjs` and 3 new tests in `tests/test_replay_tree_endpoint.py`. Run on the output of the Pi mapper from clawmetry-pro#321 for a conversation with two abandoned branches, and inspected as a rendered image in the light and the dark theme.
+- **Limits:** the list is empty until a clawmetry-pro release with the mapper from clawmetry-pro#321 is installed, and then the notice is the same as before. At most 32 branches are listed, and the mapper stores at most 8. A branch label is cut at 60 characters. Not checked in a running dashboard. The hosted dashboard does not show the advanced replay details, so this is local only.
+
 ### Added: a workflow node lists its error and the model and tool calls made for it
 
 - **Why:** the workflow graph showed which node failed, and the reason was only in a hover tooltip, which a touch screen cannot open. The model and tool calls of an n8n Agent node were listed among the turns below the graph, with nothing that tied them to the node (clawmetry-pro#132).
