@@ -7,6 +7,13 @@
 - **Verified:** 10 new renderer checks cover both counts, a zero count, a count that is not a number, a turn without counts, a fork at the top level and nested, a fresh sub-agent and a delegation without a spawn payload. The output for a sample turn was rendered to an image and inspected in the light theme.
 - **Limits:** the badges appear only for a runtime whose replay mapper sends these fields. The Claude Code mapper that does so ships in the Pro adapter package. A sub-agent that starts with a fresh context has no tag. The badges were not opened in a running dashboard and the dark theme was not inspected.
 
+### Fixed: one event with unencodable text stopped every later event from being stored
+
+- **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
+- **What:** when a flush fails because of a value in a row, the store rewrites the text of the queued events once and writes them again. A lone surrogate becomes U+FFFD, and a surrogate pair that arrived split becomes its character. The store logs a warning with the number of events it changed. A flush that fails for any other reason keeps the events queued unchanged, as before.
+- **Verified:** 6 new tests cover a lone surrogate in the session id, the model, a text payload and the event id, each queued between two valid events, a store I/O failure that must not rewrite anything, and the text helper. Without the fix 5 of them fail.
+- **Limits:** only the event queue is covered. The check that keeps an OTLP event out of a session the daemon already owns still fails for a session id with a lone surrogate, and logs a warning. A span with unencodable text is still refused, as before.
+
 ### Added: `CLAWMETRY_PROJECT` on the collector names the project of new sessions
 
 - **Why:** a session's project came from its repository or working directory, or from an assignment made by hand through `/api/projects/assignments`. A machine that works for one client, a CI runner or a container had no way to say so once, in its configuration (#5941).
@@ -19,13 +26,13 @@
 - Keep the Assistant in the dashboard's native theme, with the question box as the main focus. Answers stream as they arrive, and Stop cancels the active response.
 - Make hosted Setup show synced rules, skills, commands, and agent files with runtime filters and file previews. Explain unavailable files and unlock states directly in the page.
 - Make hosted Improve use encrypted, runtime-scoped guidance snapshots from DuckDB. Show evidence coverage and freshness, and exclude delegated agent messages from human guidance candidates.
-
 ### Fixed: a loop of identical tool calls went unreported when the tool replies arrived as user messages
 
 - **Why:** 0.12.906 made the loop check start again at each user turn. The Anthropic message format returns a tool's output inside a `user` message, and the event reader classed every such message as a user turn. A session stored in that form, for example a Claude CLI run started by OpenClaw, therefore never raised `stuck_loop`, however many times it repeated one call. 0.12.905 reported these sessions. The same reading hid failed replies of this form from the repeated-failure check.
 - **What:** a user message whose content holds `tool_result` blocks is read as one tool reply per block. Each reply is matched to its call by `tool_use_id` and carries the block's `is_error` flag. A user message with text is a user turn as before.
 - **Verified:** 5 new tests cover the step list, six identical calls, six calls with changing arguments, a real user turn between two short runs, and four failed replies. 3 of them fail on the 0.12.906 code.
 - **Limits:** sessions stored in this form can now raise `repeated_tool_failure` and `action_discrepancy`, which they could not before. The hook-failure and waiting-for-user checks read events on their own and still treat such a message as a user turn.
+
 
 ### Added: a workflow replay is drawn as a graph
 
