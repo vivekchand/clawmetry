@@ -34,6 +34,7 @@ from typing import Any
 from clawmetry import error_signal as _error_signal
 from clawmetry import nonsecret_hash as _nsh
 from clawmetry import session_titles as _session_titles
+from clawmetry import url_guard as _url_guard
 from clawmetry.adapters import phase as _phase
 # The ONE actuator both the Guard tab and the policy pass call. A leaf
 # module (it imports this one lazily), so there is no cycle. Bound under
@@ -28356,6 +28357,12 @@ def _rule_wants_webhook(rule: dict) -> bool:
 
 def _post_local_alert_webhook(url: str, payload: dict) -> bool:
     """POST the match JSON to the configured webhook. Never raises."""
+    # urlopen also speaks file:// and ftp://, and serves a file:// URL even
+    # with a data= body, so the configured scheme is checked before the
+    # request is built. See clawmetry/url_guard.py.
+    if not _url_guard.is_http_url(url):
+        log.warning("alerts(local): webhook URL rejected (scheme must be http/https)")
+        return False
     try:
         req = urllib.request.Request(
             url,
