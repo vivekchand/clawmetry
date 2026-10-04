@@ -46,6 +46,7 @@ jobs:
           CLAWMETRY_NO_CLOUD: '1'
         run: >-
           python -m pytest tests/test_robotics_plugin_operations.py
+          tests/test_robotics_mutation_rpc_auth.py
           tests/test_robotics_stop_entitlement.py tests/test_extensions_introspection.py
           tests/test_query_contract_drift.py tests/test_query_contract_goldens.py
           tests/test_local_query_dispatch_edge_cases.py tests/test_sync_cloud_plan_cache.py
