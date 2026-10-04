@@ -1,5 +1,12 @@
 ## Unreleased
 
+### Added: the Usage tab shows cost by project and project budgets
+
+- **Why:** spend per project and a budget per project existed only as `/api/projects`, `/api/projects/budgets` and a CSV export. Nobody could see them in the dashboard, and setting a budget took a hand-written request (#5941).
+- **What:** the Usage tab has a **Cost by Project** card for the last 30 days. Each row is a project with what named it (repository, directory, assignment or no project), its cost, its share of the total, sessions and runtimes. A line under the table says what share of the spend belongs to a project and how many tokens have no price. Where budgets are in the plan, the card lists each budget with its amount, period and timezone, a bar of the spend in the current period (amber from 80%, red from 100%), and the server's notice that an alert does not stop a charge. A short form sets a budget for a project in the browser's timezone, and each budget has a Remove button. The card stays hidden until a session belongs to a project.
+- **Verified:** 6 new tests run the shipped renderers in node: escaped project names, the cost basis badge, shares, the two notes, a bar that stays full above 100%, a budget with an unknown timezone, the empty state, the form's project list and the hidden card. The card was inspected as a rendered image in the light theme.
+- **Limits:** no new route and no change to the API. The card was not opened in a running dashboard. It needs `/api/projects`, so it stays hidden on a hosted dashboard that does not serve that route. Without budgets in the plan the table shows and the budget part does not. Assigning a session or a repository to a project is still API only, and so is per-user attribution.
+
 ### Added: the replay shows background work in flight and marks a forked sub-agent
 
 - **Why:** a Claude Code turn can start while background agents or workflows from earlier turns are still running, and a sub-agent can be a fork that starts with the whole context of its parent. The replay showed neither. A turn read as if nothing else was running, and a fork read like a sub-agent that was given a fresh brief.
