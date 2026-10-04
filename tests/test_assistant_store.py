@@ -384,6 +384,24 @@ def test_assistant_methods_are_daemon_allowlisted():
     } <= _DAEMON_METHODS
 
 
+def test_planner_outcome_coverage_example_excludes_unknown_sentinels(fresh_store):
+    from routes.assistant import _PLAN
+    _local_store, store = fresh_store
+    # Exercise the exact SQL taught to the planner, rather than asserting that
+    # a prompt happens to contain words such as "unknown".
+    expression = _PLAN.split("Use COUNT(CASE WHEN\n", 1)[1].split(" instead.", 1)[0]
+    expression = "COUNT(CASE WHEN\n" + expression
+    with store._write_lock:
+        store._conn.executemany(
+            "INSERT INTO sessions (agent_type, session_id, outcome, updated_at) VALUES ('openclaw', ?, ?, 1)",
+            [(f"coverage-{index}", value) for index, value in enumerate(
+                [None, "", " unknown ", "Unspecified", "completed"]
+            )],
+        )
+    result = store.query_assistant_sql(sql="SELECT " + expression + " AS measured FROM sessions")
+    assert result == {"rows": [{"measured": 1}]}
+
+
 @pytest.mark.parametrize('table,insert', [
     ('events', "INSERT INTO events (id,agent_type,node_id,agent_id,event_type,ts,data,created_at) VALUES ('row','openclaw','local','main','message','2026-10-02',?,1)"),
     ('sessions', "INSERT INTO sessions (agent_type,session_id,metadata,updated_at) VALUES ('openclaw','row',?,1)"),

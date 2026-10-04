@@ -759,6 +759,7 @@ _DAEMON_METHODS = frozenset({
     "query_cohort_sessions",
     "query_similar_sessions",
     "query_events",
+    "query_improve_candidates",
     # Same rows as query_events with the two bulk ``data`` keys dropped
     # (content / tool_calls). The Cost-tab roll-ups scan 20k-50k events and
     # the full shape marshals ~38 MB per call, which is what starves sibling
