@@ -4139,6 +4139,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
         # All writes go through ``_write_lock``; reads issue cursors which
         # DuckDB makes thread-safe internally.
         self._write_lock = threading.Lock()
+        self._improve_cache_lock = threading.Lock()
+        self._improve_cache: dict = {}
         # Issue #1590 — serialise ``_flush_now`` invocations. The ring
         # snapshot-then-pop pattern is NOT safe under concurrent flushes:
         # two flushers can snapshot the same batch independently, each
@@ -13277,6 +13279,13 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
             return n
 
     # ── queries ─────────────────────────────────────────────────────────
+
+    def query_improve_candidates(self, *, window_days=30, runtime=None,
+                                 node_id=None, include_by_runtime=False):
+        """Bounded guidance evidence shared by local reads and encrypted sync."""
+        from clawmetry.improve_candidates import query_candidates
+        return query_candidates(self, window_days=window_days, runtime=runtime,
+                                node_id=node_id, include_by_runtime=include_by_runtime)
 
     def query_events(
         self,

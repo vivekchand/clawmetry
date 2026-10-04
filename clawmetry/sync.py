@@ -34,6 +34,7 @@ from typing import Any
 from clawmetry import error_signal as _error_signal
 from clawmetry import nonsecret_hash as _nsh
 from clawmetry import session_titles as _session_titles
+from clawmetry import url_guard as _url_guard
 from clawmetry.adapters import phase as _phase
 # The ONE actuator both the Guard tab and the policy pass call. A leaf
 # module (it imports this one lazily), so there is no cycle. Bound under
@@ -10621,8 +10622,13 @@ def _build_memory_cache_pushes(config: dict) -> list:
             "scope":    scope,
         })
         body = content[:MEMORY_CONTENT_TRUNCATE]
+        content_available = isinstance(blob_raw, (str, bytes, bytearray))
+        content_truncated = len(body) < len(content)
+        omitted_reason = "" if content_available else "not_collected"
         if spent + len(body) > MEMORY_CACHE_TOTAL_BUDGET:
             body = ""
+            content_available = False
+            omitted_reason = "snapshot_budget"
             dropped += 1
         else:
             spent += len(body)
@@ -10630,7 +10636,10 @@ def _build_memory_cache_pushes(config: dict) -> list:
         # runtimes can carry the same path, so a viewer that matches on path
         # alone would show one runtime's copy under the other's tree.
         contents.append({"path": path, "content": body,
-                         "runtime": r.get("agent_type") or "openclaw"})
+                         "runtime": r.get("agent_type") or "openclaw",
+                         "content_available": content_available,
+                         "truncated": content_truncated,
+                         "omitted_reason": omitted_reason})
     if not files:
         return []
     if dropped:
@@ -24672,6 +24681,16 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
     except Exception as _e_br:
         log.debug("snapshot: briefs slice failed: %s", _e_br)
 
+    # AC-ASSIST-006.2/.4: daemon-owned, bounded shared candidate evidence.
+    # This stays inside the encrypted snapshot, never the plaintext heartbeat.
+    from clawmetry.improve_candidates import build_snapshot as _improve_snapshot
+    from clawmetry import local_store as _improve_ls
+    try:
+        _improve_slice = _improve_snapshot(_improve_ls.get_store(), node_id=node_id)
+    except Exception:
+        from clawmetry.improve_candidates import unavailable as _improve_unavailable
+        _improve_slice = {"improve": _improve_unavailable(node_id=node_id), "improveByRuntime": {}}
+
     from clawmetry.providers_pricing import provider_for_model as _pfm
     payload = {
         "system": system,
@@ -24718,6 +24737,8 @@ def sync_system_snapshot(config: dict, state: dict, paths: dict) -> int:
         # WO-62 Briefs: saved questions with a schedule and a channel, read-only
         # on the cloud (manage them on the local dashboard).
         "briefs": _briefs_slice,
+        "improve": _improve_slice["improve"],
+        "improveByRuntime": _improve_slice["improveByRuntime"],
         "subagentCounts": {
             "active": active_count,
             "idle": len([s for s in subagents_list if s["status"] == "idle"]),
@@ -28336,6 +28357,12 @@ def _rule_wants_webhook(rule: dict) -> bool:
 
 def _post_local_alert_webhook(url: str, payload: dict) -> bool:
     """POST the match JSON to the configured webhook. Never raises."""
+    # urlopen also speaks file:// and ftp://, and serves a file:// URL even
+    # with a data= body, so the configured scheme is checked before the
+    # request is built. See clawmetry/url_guard.py.
+    if not _url_guard.is_http_url(url):
+        log.warning("alerts(local): webhook URL rejected (scheme must be http/https)")
+        return False
     try:
         req = urllib.request.Request(
             url,

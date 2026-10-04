@@ -599,6 +599,9 @@ jobs:
       - name: Sessions row controls
         run: python3 -m pytest tests/test_session_row_control_js.py -q
 
+      - name: Sessions conversation and replay details
+        run: python3 -m pytest tests/test_sessions_reader.py tests/test_transcript_layout_grid.py -q
+
       - name: First-install preparation UI
         run: python3 -m pytest tests/test_startup_readiness.py -q
 
@@ -900,6 +903,11 @@ jobs:
           pip install --require-hashes
           -r .github/requirements/ci-api-tests.txt
 
+      - name: Assistant Windows process-tree cancellation
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python3 -m pytest tests/test_assistant_stream.py -q --tb=short -k windows
+
       - name: Start server (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -971,6 +979,7 @@ jobs:
         run: >-
           python3 -m pytest -q --tb=short
           tests/test_assistant_route.py
+          tests/test_assistant_stream.py
           tests/test_harness_service_discovery.py
           tests/test_assistant_store.py
           tests/test_assistant_managed.py
@@ -981,6 +990,9 @@ jobs:
           tests/test_context_economics_truthfulness.py
           tests/test_home_evidence_truthfulness.py
           tests/test_improve_candidates.py
+          tests/test_improve_snapshot.py
+          tests/test_improve_frontend.py
+          tests/test_runtime_memory_sync.py
           tests/test_setup_improve_surfaces.py
       - name: Verify shared secret redaction and its persistence boundary
         run: python3 -m pytest tests/test_redaction.py -q --tb=short
@@ -1095,6 +1107,7 @@ jobs:
             tests/test_tool_risk.py \
             tests/test_no_shadowed_module_functions.py \
             tests/test_hooks_claude_code.py \
+            tests/test_hooks.py \
             tests/test_hook_ownership_quoted_launcher.py \
             tests/test_hook_lifecycle.py \
             tests/test_redaction_pii.py \
@@ -1342,6 +1355,15 @@ jobs:
           -r .github/requirements/ci-tests.txt
       - name: Run red-team corpus regression suite
         run: python3 -m pytest tests/test_redteam_corpus.py -v --tb=short
+      # The outbound-webhook scheme guard, and the SSRF predicate it reuses.
+      # test_ssrf_guard.py has existed since cloud #1574 but was listed in no
+      # workflow, so it ran in no job -- which is how the predicate it checks
+      # came to have no production caller at all. Both files are wired in here
+      # so that stays visible.
+      - name: Outbound webhook URL guard (scheme + SSRF predicate)
+        run: >-
+          python3 -m pytest tests/test_webhook_scheme_guard.py
+          tests/test_ssrf_guard.py -v --tb=short
       - name: Replay the corpus through the audit (exit-code contract)
         run: |
           set +e

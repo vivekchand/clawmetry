@@ -211,7 +211,7 @@ def test_chat_returns_contract_and_preserves_sql_error_vs_empty_result(client, m
 
 def test_chat_normalizes_mixed_panel_shapes_without_executing_invalid_items(client, monkeypatch):
     _provider(monkeypatch)
-    _generator(
+    generations = _generator(
         monkeypatch,
         {
             "answer": "Mixed panels",
@@ -263,6 +263,9 @@ def test_chat_normalizes_mixed_panel_shapes_without_executing_invalid_items(clie
     assert body["panels"][1]["chart_spec"]["y"] is None
     executed_sql = [kwargs["sql"] for method, kwargs in calls if method == "query_assistant_sql"]
     assert "SELECT should_not_run" not in executed_sql
+    evidence = json.loads(generations[-1]["prompt"].split("\nEvidence:\n", 1)[1])
+    assert [item["visual"] for item in evidence] == [True, True, False]
+    assert "never call them a visual" in generations[-1]["system"]
 
 
 def test_followup_uses_saved_history_and_returns_same_conversation(client, monkeypatch):

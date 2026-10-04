@@ -4505,6 +4505,7 @@ async function runCohortCompare(a, b, title) {
 // Rendered below the fold of the session view. Tool-call n-gram similarity,
 // computed in the daemon; no model call.
 async function loadSimilarRuns(sessionId) {
+  var viewRequest = window._transcriptViewRequest;
   var card = document.getElementById('similar-runs-card');
   var body = document.getElementById('similar-runs-body');
   if (!card || !body || !sessionId) return;
@@ -4517,10 +4518,13 @@ async function loadSimilarRuns(sessionId) {
   var data = null;
   try {
     var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/similar?window=30d&limit=10');
+    if (viewRequest !== window._transcriptViewRequest) return;
     if (resp.status === 402) { card.style.display = 'none'; return; }
     if (!resp.ok) throw new Error('http ' + resp.status);
     data = await resp.json();
+    if (viewRequest !== window._transcriptViewRequest) return;
   } catch (e) {
+    if (viewRequest !== window._transcriptViewRequest) return;
     body.innerHTML = escapeHtmlSafe(t('overview.compare_unreachable', null, 'ClawMetry cannot reach the local data store. Try again.'));
     return;
   }
@@ -20655,6 +20659,8 @@ function _cmRuntimeEmptyMsg(rt) {
 }
 
 async function loadTranscripts() {
+  showTranscriptList();
+  var viewRequest = window._transcriptViewRequest;
   // Mount the Grafana-style date/time-range picker on first paint.
   // Idempotent — the helper no-ops when already attached.
   try { _transcriptsMountRangePicker(); } catch (e) {}
@@ -20690,6 +20696,7 @@ async function loadTranscripts() {
       if (!r.ok) throw new Error('transcripts unavailable');
       return r.json();
     });
+    if (viewRequest !== window._transcriptViewRequest) return false;
     var html = '';
     // ChatGPT-style row: derived title on top (first user prompt, when the
     // daemon shipped one in the snapshot), with the full session id demoted
@@ -20849,12 +20856,15 @@ async function loadTranscripts() {
     } catch (e) {}
     return data.store_available !== false;
   } catch(e) {
+    if (viewRequest !== window._transcriptViewRequest) return false;
     document.getElementById('transcript-list').innerHTML = '<div style="padding:16px;color:#666;">' + t("app.failed_to_load_transcripts", null, "Failed to load transcripts") + '</div>';
     return false;
   }
 }
 
 function showTranscriptList() {
+  window._transcriptViewRequest = (window._transcriptViewRequest || 0) + 1;
+  _resetTranscriptReplay();
   document.getElementById('transcript-list').style.display = '';
   document.getElementById('transcript-viewer').style.display = 'none';
   document.getElementById('transcript-back-btn').style.display = 'none';
@@ -20986,7 +20996,7 @@ function _buildReplayEvent(m, idx) {
     type: type,
     content: m.content || '',
     timestamp: m.timestamp,
-    tokens: m.tokens || null,
+    tokens: (typeof m.tokens === 'number' && Number.isFinite(m.tokens) && m.tokens >= 0) ? m.tokens : null,
     // Daemon-stamped per-event cost (stamped on the first message of each
     // event row) — summed per turn for the chapter-header cost badge.
     cost: m.cost_usd || null,
@@ -20998,7 +21008,7 @@ function _buildReplayEvent(m, idx) {
     originalIndex: idx,
     extra: extra,
     omitted: omitted,
-    modelId: m.modelId || null,
+    modelId: m.modelId || m.model || null,
     thinkingLevel: m.thinkingLevel || null
   };
 }
@@ -21575,6 +21585,8 @@ function _replayRenderCurrent() {
     wrap.innerHTML = '<div style="color:var(--text-muted);padding:16px;">' + t("app.no_events_match_this_filter", null, "No events match this filter.") + '</div>';
     document.getElementById('replay-pos').textContent = '0/0';
     if (tocEl) tocEl.innerHTML = '';
+    var statePanel = document.getElementById('replay-state');
+    if (statePanel) statePanel.style.display = 'none';
     return;
   }
   var idx = window._replayIndex;
@@ -21623,7 +21635,7 @@ function _replayRenderCurrent() {
     var el = document.getElementById('replay-msg-' + highlightOriginal);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
-  _updateReplayStatePanel(filtered[idx] ? filtered[idx].timestamp : null);
+  _updateReplayStatePanel(filtered[idx] ? filtered[idx].timestamp : null, highlightOriginal);
   _updateLoadEarlierBtn();
   _armHistoryGapAutoload();
 }
@@ -21651,7 +21663,7 @@ function replayJumpTo(index) {
   _replayRenderCurrent();
 }
 
-function replayFilter(type) {
+function replayFilter(type, startAtEnd) {
   window._replayFilter = type;
   window._replayIndex = 0;
   // Update pill styles
@@ -21662,33 +21674,45 @@ function replayFilter(type) {
     btn.style.borderColor = isActive ? '#6366f1' : 'var(--border-secondary)';
   });
   var filtered = _replayFilteredEvents();
+  if (startAtEnd) window._replayIndex = Math.max(0, filtered.length - 1);
   var scrubber = document.getElementById('replay-scrubber');
   scrubber.max = Math.max(0, filtered.length - 1);
-  scrubber.value = 0;
+  scrubber.value = window._replayIndex;
   _replayRenderCurrent();
 }
 
-function _updateReplayStatePanel(currentTimestamp) {
+function _updateReplayStatePanel(currentTimestamp, currentIndex) {
   var model = null;
   var thinkingLevel = null;
   var totalTokens = 0;
+  var tokensRecorded = false;
   for (var i = 0; i < window._replayEvents.length; i++) {
     var ev = window._replayEvents[i];
-    if (currentTimestamp && ev.timestamp && ev.timestamp > currentTimestamp) break;
-    if (ev.type === 'model_change' && ev.modelId) model = ev.modelId;
+    // Several blocks can share a timestamp. Stop at the selected block,
+    // not at a later sibling that happens to have the same timestamp.
+    if (typeof currentIndex === 'number' ? i > currentIndex
+        : currentTimestamp && ev.timestamp && ev.timestamp > currentTimestamp) break;
+    if (ev.modelId) model = ev.modelId;
     if (ev.type === 'thinking_level_change' && ev.thinkingLevel) thinkingLevel = ev.thinkingLevel;
-    if (typeof ev.tokens === 'number') totalTokens += ev.tokens;
+    if (typeof ev.tokens === 'number' && Number.isFinite(ev.tokens) && ev.tokens >= 0) {
+      totalTokens += ev.tokens;
+      tokensRecorded = true;
+    }
   }
   var panel = document.getElementById('replay-state');
   if (!panel) return;
   panel.style.display = 'flex';
   var el;
   el = document.getElementById('replay-state-model');
-  if (el) el.textContent = model || '—';
+  if (el) {
+    el.textContent = model || window._replaySessionModel || t('transcripts.not_recorded', null, 'Not recorded');
+    el.title = model ? t('transcripts.model_at_point', null, 'Model recorded at this point in the conversation')
+      : window._replaySessionModel ? t('transcripts.session_model_hint', null, 'Session model. No model was recorded at this point in the conversation') : '';
+  }
   el = document.getElementById('replay-state-thinking');
-  if (el) el.textContent = thinkingLevel || '—';
+  if (el) el.textContent = thinkingLevel || t('transcripts.not_recorded', null, 'Not recorded');
   el = document.getElementById('replay-state-tokens');
-  if (el) el.textContent = totalTokens > 1000 ? (totalTokens / 1000).toFixed(1) + 'K' : String(totalTokens);
+  if (el) el.textContent = tokensRecorded ? totalTokens.toLocaleString() : t('transcripts.not_recorded', null, 'Not recorded');
 }
 
 function replayTogglePlay() {
@@ -21698,6 +21722,13 @@ function replayTogglePlay() {
     var btn = document.getElementById('replay-play-btn');
     if (btn) btn.innerHTML = '&#9654; <span data-i18n="transcripts.play">Play</span>';
   } else {
+    var events = _replayFilteredEvents();
+    if (!events.length) return;
+    if (window._replayIndex >= events.length - 1) {
+      window._replayIndex = 0;
+      window._replayScrollOnRender = true;
+      _replayRenderCurrent();
+    }
     window._replayPlaying = true;
     var btn = document.getElementById('replay-play-btn');
     if (btn) btn.innerHTML = '&#9646;&#9646; <span data-i18n="transcripts.pause">Pause</span>';
@@ -21873,6 +21904,7 @@ async function loadEarlierMessages() {
             + (p.cursor ? ('&before_ts=' + Math.floor(p.cursor)) : '');
     var r = await fetch(url);
     var body = await r.json();
+    if (window._transcriptPaging !== p) return;
     if (!r.ok || body.error) throw new Error(body.error || ('HTTP ' + r.status));
     var master = window._transcriptAllMessages || [];
     // Dedupe: the preserved opening prompt reappears when paging reaches the
@@ -21927,6 +21959,7 @@ async function loadEarlierMessages() {
       se.scrollTop = beforeTop + (se.scrollHeight - beforeH);
     }
   } catch (e) {
+    if (window._transcriptPaging !== p) return;
     p.error = String((e && e.message) || e);
   }
   p.loading = false;
@@ -21969,7 +22002,40 @@ function _refreshHistoryGapRow() {
   }
 }
 
+function _resetTranscriptReplay() {
+  clearInterval(window._replayInterval);
+  window._replayPlaying = false;
+  window._replayInterval = null;
+  window._replaySessionModel = null;
+  window._replayEvents = [];
+  window._replayIndex = 0;
+  window._replayFilter = 'all';
+  window._transcriptAllMessages = [];
+  window._transcriptPaging = null;
+  window._replayScrollOnRender = false;
+  if (window._historyGapObserver) window._historyGapObserver.disconnect();
+  ['replay-controls', 'authority-panel', 'orchestration-panel', 'inputs-panel',
+    'selfreports-panel', 'similar-runs-card'].forEach(function(id) {
+    var panel = document.getElementById(id);
+    if (panel) panel.style.display = 'none';
+  });
+  var meta = document.getElementById('transcript-meta');
+  if (meta) meta.innerHTML = '';
+  var messages = document.getElementById('transcript-messages');
+  if (messages) messages.style.display = '';
+  var tree = document.getElementById('replay-tree-container');
+  if (tree) tree.remove();
+  var state = document.getElementById('replay-state');
+  if (state) state.style.display = 'none';
+  var toc = document.getElementById('transcript-toc');
+  if (toc) toc.innerHTML = '';
+  var play = document.getElementById('replay-play-btn');
+  if (play) play.innerHTML = '&#9654; <span data-i18n="transcripts.play">Play</span>';
+}
+
 async function viewTranscript(sessionId) {
+  var viewRequest = window._transcriptViewRequest = (window._transcriptViewRequest || 0) + 1;
+  _resetTranscriptReplay();
   document.getElementById('transcript-list').style.display = 'none';
   document.getElementById('transcript-viewer').style.display = '';
   document.getElementById('transcript-back-btn').style.display = '';
@@ -21996,6 +22062,7 @@ async function viewTranscript(sessionId) {
       window.CLOUD_MODE ? Promise.resolve(null)
         : fetch('/api/evals/metrics?session_id=' + encodeURIComponent(sessionId) + '&limit=8').then(r => r.json()).catch(() => null)
     ]);
+    if (viewRequest !== window._transcriptViewRequest) return;
     // /api/transcript 404s when the session has no renderable turns (a
     // session_id minted off a gateway log line, or a transcript whose file is
     // gone). Without this guard the meta card below renders "Session
@@ -22024,6 +22091,8 @@ async function viewTranscript(sessionId) {
         });
       } catch (e) { /* chips are optional decoration */ }
     }
+    if (viewRequest !== window._transcriptViewRequest) return;
+    window._replaySessionModel = data.model || null;
     // Metadata
     var metaHtml = '<div class="stat-row"><span class="stat-label">Session</span><span class="stat-val">' + escHtml(data.name) + '</span></div>';
     if (evalChips.length) {
@@ -22096,7 +22165,7 @@ async function viewTranscript(sessionId) {
     _loadAuthorityPanel(sessionId);
     _loadOrchestrationPanel(sessionId);
     _loadSelfReportsPanel(sessionId);
-    _loadReplayTree(sessionId);   // wire-up per #4814 — no-op until adapters land (#4815, #4816)
+    _loadReplayTree(sessionId, viewRequest);
     // Build replay events array - include compaction markers as special events
     var events = [];
     var compactionIdx = 0;
@@ -22146,11 +22215,12 @@ async function viewTranscript(sessionId) {
       scrubber.value = window._replayIndex;
       document.getElementById('replay-controls').style.display = '';
       // Reset filter pills to "all"
-      replayFilter('all');
+      replayFilter('all', true);
     } else {
       document.getElementById('transcript-messages').innerHTML = '<div style="color:#555;padding:16px;">' + t("app.no_messages_in_this_transcript", null, "No messages in this transcript") + '</div>';
     }
   } catch(e) {
+    if (viewRequest !== window._transcriptViewRequest) return;
     document.getElementById('transcript-messages').innerHTML = '<div style="color:#e74c3c;padding:16px;">' + t("app.failed_to_load_transcript", null, "Failed to load transcript") + '</div>';
   }
 }
@@ -22160,6 +22230,7 @@ async function viewTranscript(sessionId) {
 // each agent was handed and what it replied) plus plain sub-agents. Fed by
 // /api/session-orchestration/<id> (DuckDB subagents table; local-store only).
 async function _loadOrchestrationPanel(sessionId) {
+  var viewRequest = window._transcriptViewRequest;
   var panel = document.getElementById('orchestration-panel');
   var body = document.getElementById('orchestration-panel-body');
   var sumEl = document.getElementById('orchestration-panel-summary');
@@ -22168,6 +22239,7 @@ async function _loadOrchestrationPanel(sessionId) {
   body.innerHTML = '';
   try {
     var d = await fetch('/api/session-orchestration/' + encodeURIComponent(sessionId)).then(function(r) { return r.json(); });
+    if (viewRequest !== window._transcriptViewRequest) return;
     if (!d || d.error) return;
     var wfs = d.workflows || [];
     var subs = d.subagents || [];
@@ -22404,6 +22476,7 @@ function _renderInputsBody(d) {
 }
 
 async function _loadInputsPanel(sessionId) {
+  var viewRequest = window._transcriptViewRequest;
   var panel = document.getElementById('inputs-panel');
   var body  = document.getElementById('inputs-panel-body');
   var sumEl = document.getElementById('inputs-panel-summary');
@@ -22412,6 +22485,7 @@ async function _loadInputsPanel(sessionId) {
   body.innerHTML = '';
   try {
     var d = await _fetchSessionContext(sessionId);
+    if (viewRequest !== window._transcriptViewRequest) return;
     if (!d || d.error) return;
     var r = _renderInputsBody(d);
     body.innerHTML = r.html;
@@ -22449,6 +22523,7 @@ async function _loadCeInputsMeasured(sessionId) {
 // dashboard before its interceptor lands) renders nothing rather than a
 // blank or invented state.
 async function _loadLifecycleCoverageLine(sessionId) {
+  var viewRequest = window._transcriptViewRequest;
   var meta = document.getElementById('transcript-meta');
   if (!meta) return;
   var prev = document.getElementById('lifecycle-coverage-line');
@@ -22468,6 +22543,7 @@ async function _loadLifecycleCoverageLine(sessionId) {
     var r = await fetch('/api/lifecycle/coverage?runtime=' + encodeURIComponent(rt));
     if (!r.ok) return;
     data = await r.json();
+    if (viewRequest !== window._transcriptViewRequest) return;
   } catch (e) { return; }
   if (!data || !data.facts) return;
   var lines = (data.lines || []).filter(function(l){ return !!l; });
@@ -22493,6 +22569,7 @@ async function _loadLifecycleCoverageLine(sessionId) {
 }
 
 async function _loadAuthorityPanel(sessionId) {
+  var viewRequest = window._transcriptViewRequest;
   var panel = document.getElementById('authority-panel');
   var body  = document.getElementById('authority-panel-body');
   var sumEl = document.getElementById('authority-panel-summary');
@@ -22501,6 +22578,7 @@ async function _loadAuthorityPanel(sessionId) {
   try {
     var fp = await fetch('/api/authority?session_id=' + encodeURIComponent(sessionId))
                     .then(function(r){ return r.json(); });
+    if (viewRequest !== window._transcriptViewRequest) return;
     if (!fp || fp.error) return;
     var tools = fp.tools || [];
     var files = fp.filesystem || [];
@@ -22549,46 +22627,52 @@ async function _loadAuthorityPanel(sessionId) {
   } catch(e) { /* non-critical — panel stays hidden on error */ }
 }
 
-// Runtime-aware replay tree wire-up (#4814) — called from viewTranscript.
-// Overlays the replay tree atop the flat renderer when replay_events exist.
-// No-op today (row_count always 0) until adapter mappers land in #4815/#4816.
-async function _loadReplayTree(sessionId) {
+// Advanced replay stays opt-in. Canonical event payloads are diagnostics,
+// not a replacement for the readable conversation, filters, or playback.
+function _loadReplayTree(sessionId, viewRequest) {
   if (!window._cmReplayTree) return;
   var viewer = document.getElementById('transcript-viewer');
   if (!viewer) return;
-  var mount = document.getElementById('replay-tree-container');
-  if (!mount) {
-    mount = document.createElement('div');
-    mount.id = 'replay-tree-container';
-    // Span the full row of .transcript-layout's grid. That parent is a
-    // two-column grid (messages | sticky turn TOC); as a plain auto-placed
-    // sibling this mount takes the wide first column and pushes
-    // #transcript-messages into the narrow 240px TOC column - the replay
-    // then renders as a squeezed, overflowing strip on the right with the
-    // whole left half blank (founder report 2026-09-05, same trap as
-    // #replay-load-earlier). The CSS rule on .transcript-layout children
-    // covers this too; the inline style keeps the node correct on its own.
-    mount.style.gridColumn = '1 / -1';
-    // The Trail page re-parents #transcript-messages into its own card, so
-    // the anchor is not always a child of #transcript-viewer; inserting
-    // relative to the anchor's real parent avoids the NotFoundError seen on
-    // the hosted dashboard (0.12.811) when a trail opened the replay.
-    var anchor = document.getElementById('transcript-messages');
-    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(mount, anchor);
-    else viewer.appendChild(mount);
-  } else {
-    mount.innerHTML = '';
-  }
-  try {
-    var tree = await window._cmReplayTree.fetchReplayTree(sessionId);
-    if (window._cmReplayTree.renderTree(tree, mount)) {
-      // Tree has rows — shadow the flat renderer.
-      var msgs = document.getElementById('transcript-messages');
-      var ctrl = document.getElementById('replay-controls');
-      if (msgs) msgs.style.display = 'none';
-      if (ctrl) ctrl.style.display = 'none';
+  var mount = document.createElement('details');
+  mount.id = 'replay-tree-container';
+  mount.className = 'replay-details';
+  mount.style.gridColumn = '1 / -1';
+  var summary = document.createElement('summary');
+  summary.textContent = t('transcripts.replay_details', null, 'Advanced replay details');
+  var body = document.createElement('div');
+  body.className = 'replay-details-body';
+  mount.appendChild(summary);
+  mount.appendChild(body);
+  // Trail re-parents the message stream, so use its actual parent.
+  var anchor = document.getElementById('transcript-messages');
+  if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(mount, anchor);
+  else viewer.appendChild(mount);
+  var loaded = false;
+  var loading = false;
+  mount.ontoggle = async function() {
+    if (!mount.open || loaded || loading || viewRequest !== window._transcriptViewRequest) return;
+    if (window.CLOUD_MODE) {
+      body.textContent = t('transcripts.replay_details_local', null, 'Advanced replay details are available on the dashboard running on your agent\'s machine. This hosted view shows the synced conversation below.');
+      loaded = true;
+      return;
     }
-  } catch (e) { /* non-critical — flat renderer stays on any error */ }
+    loading = true;
+    body.textContent = t('transcripts.loading_replay_details', null, 'Loading replay details…');
+    try {
+      var tree = await window._cmReplayTree.fetchReplayTree(sessionId);
+      if (viewRequest !== window._transcriptViewRequest || !mount.isConnected) return;
+      if (!window._cmReplayTree.renderTree(tree, body)) {
+        body.textContent = t('transcripts.no_replay_details', null, 'No advanced replay events were recorded for this session. The conversation is shown below.');
+      }
+      loaded = true;
+    } catch (e) {
+      if (viewRequest === window._transcriptViewRequest && mount.isConnected) {
+        body.textContent = t('transcripts.replay_details_retry', null, 'Replay details could not be loaded. Close and reopen this section to retry. The conversation remains available below.');
+      }
+    } finally {
+      loading = false;
+    }
+  };
 }
 
 function toggleMsg(idx) {
@@ -31842,17 +31926,198 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     return '<div class="replay-tree-truncated" role="note">' + _escape(msg) + '</div>';
   }
 
+  // ── Workflow graph (clawmetry-pro#132) ────────────────────────────────
+  // A workflow.start whose payload carries `nodes` (and `edges`) is drawn
+  // as a graph: one box per node, coloured by the status of its last run.
+  // A start without nodes (a Goose recipe) keeps the plain event list.
+  var _WF_NODE_W = 150, _WF_NODE_H = 34, _WF_PAD = 12;
+
+  function _tr(key, vars, fallback) {
+    return (typeof t === 'function') ? t(key, vars, fallback) : fallback;
+  }
+
+  function _workflowStart(wf) {
+    var events = (wf && wf.events) || [];
+    for (var i = 0; i < events.length; i++) {
+      if (events[i] && events[i].kind === 'workflow.start') return events[i];
+    }
+    return null;
+  }
+
+  // Latest run of each node: {status, runs, duration_ms, error, role}.
+  function _workflowNodeRuns(wf) {
+    var runs = {};
+    var events = (wf && wf.events) || [];
+    for (var i = 0; i < events.length; i++) {
+      var ev = events[i];
+      if (!ev || ev.kind !== 'workflow.stage') continue;
+      var p = (ev.payload && typeof ev.payload === 'object') ? ev.payload : {};
+      if (typeof p.node !== 'string') continue;
+      var prev = runs[p.node];
+      runs[p.node] = {
+        status: p.is_error ? 'error' : String(p.status || ''),
+        runs: (prev ? prev.runs : 0) + 1,
+        duration_ms: p.duration_ms,
+        error: p.error || '',
+        role: p.role || ''
+      };
+    }
+    return runs;
+  }
+
+  // Canvas positions when every node has one; otherwise columns by the
+  // distance from a node with no incoming edge.
+  function _workflowLayout(nodes, edges) {
+    var pos = {}, i;
+    var havePositions = nodes.every(function(n) {
+      return Array.isArray(n.position) && n.position.length === 2 &&
+             isFinite(n.position[0]) && isFinite(n.position[1]);
+    });
+    if (havePositions) {
+      var minX = Infinity, minY = Infinity;
+      nodes.forEach(function(n) {
+        minX = Math.min(minX, n.position[0]);
+        minY = Math.min(minY, n.position[1]);
+      });
+      nodes.forEach(function(n) {
+        pos[n.name] = {x: _WF_PAD + (n.position[0] - minX),
+                       y: _WF_PAD + (n.position[1] - minY) * 0.5};
+      });
+      // Two nodes drawn on the same spot would hide one of them.
+      var seen = {}, clash = false;
+      nodes.forEach(function(n) {
+        var key = Math.round(pos[n.name].x / _WF_NODE_W) + ':' +
+                  Math.round(pos[n.name].y / _WF_NODE_H);
+        if (seen[key]) clash = true;
+        seen[key] = true;
+      });
+      if (!clash) return pos;
+      pos = {};
+    }
+    var depth = {}, incoming = {};
+    edges.forEach(function(e) { incoming[e.to] = true; });
+    nodes.forEach(function(n) { if (!incoming[n.name]) depth[n.name] = 0; });
+    for (var pass = 0; pass < nodes.length; pass++) {
+      var moved = false;
+      for (i = 0; i < edges.length; i++) {
+        var e = edges[i];
+        if (depth[e.from] == null) continue;
+        if (depth[e.to] == null || depth[e.to] < depth[e.from] + 1) {
+          if (depth[e.from] + 1 > nodes.length) continue;  // a cycle
+          depth[e.to] = depth[e.from] + 1;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    var rows = {};
+    nodes.forEach(function(n) {
+      var d = depth[n.name] || 0;
+      rows[d] = rows[d] || 0;
+      pos[n.name] = {x: _WF_PAD + d * (_WF_NODE_W + 40),
+                     y: _WF_PAD + rows[d] * (_WF_NODE_H + 22)};
+      rows[d]++;
+    });
+    return pos;
+  }
+
+  function _renderWorkflowGraph(wf) {
+    var start = _workflowStart(wf);
+    var payload = (start && start.payload && typeof start.payload === 'object') ? start.payload : {};
+    var nodes = Array.isArray(payload.nodes) ? payload.nodes.filter(function(n) {
+      return n && typeof n.name === 'string';
+    }) : [];
+    if (!nodes.length) return '';
+    var known = {};
+    nodes.forEach(function(n) { known[n.name] = true; });
+    var edges = (Array.isArray(payload.edges) ? payload.edges : []).filter(function(e) {
+      return e && known[e.from] && known[e.to];
+    });
+    var runs = _workflowNodeRuns(wf);
+    var pos = _workflowLayout(nodes, edges);
+    var width = 0, height = 0, ran = 0;
+    nodes.forEach(function(n) {
+      width = Math.max(width, pos[n.name].x + _WF_NODE_W + _WF_PAD);
+      height = Math.max(height, pos[n.name].y + _WF_NODE_H + _WF_PAD);
+      if (runs[n.name]) ran++;
+    });
+    var notRun = _tr('trail.workflow_node_not_run', null, 'Did not run');
+    var svg = '<svg class="replay-wf-graph" role="img" width="' + width +
+              '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height +
+              '" aria-label="' + _escape(_tr('trail.workflow_graph_label',
+                {name: payload.workflow || ''}, 'Workflow graph ' + (payload.workflow || ''))) + '">';
+    edges.forEach(function(e) {
+      var a = pos[e.from], b = pos[e.to];
+      var sub = e.type && e.type !== 'main';
+      var x1, y1, x2, y2, d;
+      if (sub) {
+        // A model or tool sub-node hangs under the node it serves.
+        x1 = a.x + _WF_NODE_W / 2; y1 = a.y;
+        x2 = b.x + _WF_NODE_W / 2; y2 = b.y + _WF_NODE_H;
+        d = 'M' + x1 + ' ' + y1 + ' L' + x2 + ' ' + y2;
+      } else {
+        x1 = a.x + _WF_NODE_W; y1 = a.y + _WF_NODE_H / 2;
+        x2 = b.x; y2 = b.y + _WF_NODE_H / 2;
+        var mid = (x1 + x2) / 2;
+        d = 'M' + x1 + ' ' + y1 + ' C' + mid + ' ' + y1 + ' ' + mid + ' ' + y2 + ' ' + x2 + ' ' + y2;
+      }
+      svg += '<path class="replay-wf-edge' + (sub ? ' replay-wf-edge-sub' : '') +
+             '" data-ran="' + (runs[e.from] && runs[e.to] ? '1' : '0') + '" d="' + d + '"/>';
+    });
+    nodes.forEach(function(n) {
+      var run = runs[n.name];
+      var status = run ? (run.status || 'unknown') : 'none';
+      var tip = n.name + ' · ' + (n.type || n.node_type || '') + ' · ' +
+                (run ? status : notRun);
+      if (run && isFinite(run.duration_ms)) tip += ' · ' + run.duration_ms + ' ms';
+      if (run && run.runs > 1) tip += ' · ×' + run.runs;
+      if (run && run.error) tip += ' · ' + run.error;
+      var label = n.name.length > 20 ? n.name.slice(0, 19) + '…' : n.name;
+      var p = pos[n.name];
+      svg += '<g class="replay-wf-node" data-node="' + _escape(n.name) +
+             '" data-status="' + _escape(status) + '"' +
+             (n.disabled ? ' data-disabled="1"' : '') + '>' +
+             '<title>' + _escape(tip) + '</title>' +
+             '<rect x="' + p.x + '" y="' + p.y + '" width="' + _WF_NODE_W +
+             '" height="' + _WF_NODE_H + '" rx="6"/>' +
+             '<text x="' + (p.x + _WF_NODE_W / 2) + '" y="' + (p.y + _WF_NODE_H / 2 + 4) +
+             '" text-anchor="middle">' + _escape(label) + '</text></g>';
+    });
+    svg += '</svg>';
+    var caption = _tr('trail.workflow_nodes_ran', {ran: ran, total: nodes.length},
+                      ran + ' of ' + nodes.length + ' nodes ran');
+    if (payload.run_data) {
+      caption = _tr('trail.workflow_run_data_unavailable', null,
+                    'The node runs of this execution are not stored in the database.');
+    }
+    return '<div class="replay-wf-graph-wrap">' + svg + '</div>' +
+           '<div class="replay-wf-caption">' + _escape(caption) + '</div>';
+  }
+
   function _renderWorkflows(workflows, runtime) {
     if (!workflows || !workflows.length) return '';
     var html = '<div class="replay-tree-workflows">';
     for (var i = 0; i < workflows.length; i++) {
       var wf = workflows[i];
+      var start = _workflowStart(wf);
+      var name = (start && start.payload && (start.payload.title ||
+                  (start.payload.nodes ? start.payload.workflow : ''))) || '';
+      var status = (start && start.payload && start.payload.nodes && start.payload.status) || '';
+      var graph = _renderWorkflowGraph(wf);
       html += '<details class="replay-tree-workflow" open>';
-      html += '<summary>⚙ workflow ' + _escape(wf.span_id) + ' (' +
-              (wf.events || []).length + ' stages)</summary>';
+      html += '<summary>⚙ workflow ' + _escape(name || wf.span_id) +
+              (status ? ' <span class="replay-tree-badge" data-status="' + _escape(status) + '">' + _escape(status) + '</span>' : '') +
+              ' (' + (wf.events || []).length + ' stages)</summary>';
+      html += graph;
+      if (graph) {
+        // The graph is the primary view; the event rows stay one click away.
+        html += '<details class="replay-wf-events"><summary>' +
+                _escape(_tr('trail.workflow_events', null, 'Events')) + '</summary>';
+      }
       for (var j = 0; j < (wf.events || []).length; j++) {
         html += _renderEvent(wf.events[j], runtime);
       }
+      if (graph) html += '</details>';
       html += '</details>';
     }
     html += '</div>';
@@ -32685,6 +32950,7 @@ function loadGuardSelfReports() {
 
 // Transcript view: the notes this session's agent sent, in time order.
 async function _loadSelfReportsPanel(sessionId) {
+  var viewRequest = window._transcriptViewRequest;
   var panel = document.getElementById('selfreports-panel');
   var body = document.getElementById('selfreports-panel-body');
   var sumEl = document.getElementById('selfreports-panel-summary');
@@ -32694,6 +32960,7 @@ async function _loadSelfReportsPanel(sessionId) {
   try {
     var d = await fetch('/api/self-reports?session=' + encodeURIComponent(sessionId) + '&limit=200')
       .then(function (r) { return r.json(); });
+    if (viewRequest !== window._transcriptViewRequest) return;
     if (!d || d.error) return;
     var rows = (d.reports || []).slice().sort(function (a, b) { return (Number(a.ts) || 0) - (Number(b.ts) || 0); });
     panel.style.display = '';

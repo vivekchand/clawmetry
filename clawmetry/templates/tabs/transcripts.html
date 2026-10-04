@@ -201,8 +201,8 @@
          Shown by _updateReplayStatePanel() when replay controls are active. -->
     <div id="replay-state" style="display:none;background:var(--bg-secondary);border:1px solid var(--border-secondary);border-radius:8px;padding:7px 14px;margin-bottom:8px;font-size:12px;color:var(--text-secondary);gap:14px;flex-wrap:wrap;align-items:center;">
       <span>🤖 <span data-i18n="transcripts.replay_model">Model</span>: <strong id="replay-state-model" style="color:var(--text-primary);">Unknown</strong></span>
-      <span>💡 <span data-i18n="transcripts.replay_thinking">Thinking</span>: <strong id="replay-state-thinking" style="color:var(--text-primary);">Unknown</strong></span>
-      <span>📈 <span data-i18n="transcripts.replay_tokens">Tokens so far</span>: <strong id="replay-state-tokens" style="color:var(--text-primary);">0</strong></span>
+      <span>💡 <span data-i18n="transcripts.replay_thinking_effort">Thinking effort</span>: <strong id="replay-state-thinking" style="color:var(--text-primary);">Unknown</strong></span>
+      <span title="Sum of recorded token counts in loaded messages up to the selected message. Earlier unloaded messages and token categories the runtime did not record are excluded.">📈 <span data-i18n="transcripts.replay_recorded_tokens">Recorded tokens</span>: <strong id="replay-state-tokens" style="color:var(--text-primary);">Not recorded</strong></span>
     </div>
     <!-- Turn-anchored layout (session-trace redesign): messages on the left,
          sticky jump-to-turn TOC on the right. TOC is populated by

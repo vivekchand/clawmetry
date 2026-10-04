@@ -1,5 +1,33 @@
 ## Unreleased
 
+### Fixed
+
+- Keep the Assistant in the dashboard's native theme, with the question box as the main focus. Answers stream as they arrive, and Stop cancels the active response.
+- Make hosted Setup show synced rules, skills, commands, and agent files with runtime filters and file previews. Explain unavailable files and unlock states directly in the page.
+- Make hosted Improve use encrypted, runtime-scoped guidance snapshots from DuckDB. Show evidence coverage and freshness, and exclude delegated agent messages from human guidance candidates.
+
+### Added: a workflow replay is drawn as a graph
+
+- **Why:** a workflow runtime such as n8n runs a graph of nodes, and its replay was a flat list of raw event rows. The list did not show which node failed or which nodes never ran.
+- **What:** when the `workflow.start` event of a replay carries `nodes` and `edges`, the replay view draws them as a graph. Each node is a box at its canvas position, coloured by the status of its latest run. A node that did not run has a dashed outline. A model or tool sub-node is joined to the node it serves with a dashed line. The caption states how many nodes ran. The event rows stay available under the graph. Part of clawmetry-pro#132.
+- **Verified:** 18 new renderer checks cover node status, the latest run of a node, an edge to an unknown node, escaped names, a graph without positions, a workflow without nodes and an execution whose node runs are not stored. The output for three captured n8n executions was rendered to an image and inspected.
+- **Limits:** the graph appears only for a runtime whose replay mapper sends nodes. The n8n mapper that does so ships in the Pro adapter package. A Goose recipe has no nodes and keeps the list. The graph was not opened in a running dashboard.
+
+### Fixed: Sessions stays a readable conversation
+
+- Opening a session with recorded replay events keeps the conversation, filters, tool details and playback controls visible. Raw event details are now an optional section that loads when opened.
+- The reader opens at the latest recorded message, shows the recorded model and token count, and restarts from the beginning when Play is pressed. Missing measurements are labelled as not recorded.
+- Switching sessions discards late transcript, history-page and side-panel responses. Narrow screens put session titles above the action buttons.
+- Verified with the reported Claude Code session, a fresh real Claude exchange, a long Codex conversation with older history, and regression tests that fail when the old renderer takeover or position reset is restored.
+
+
+### Fixed: the runtime hook registry replaced hooks it did not own
+
+- **Why:** `clawmetry.hooks.install` set the config key of a hook to its own value. A `hooks.PreToolUse` list in `~/.claude/settings.json` that already held a user hook was replaced. It also wrote a `__clawmetry` key next to the hook events, and it rewrote a config it could not parse as an empty one. Uninstall copied the backup taken at install time over the config, which dropped every edit made since. No shipped component installs through this registry yet, so no user config was affected.
+- **What:** install appends its entries to a list that is already there and writes nothing else into the config. It stops with an error when the config is not a JSON object. The manifest records what was added. Uninstall restores the exact prior bytes when the config is unchanged since install, and removes only the recorded entries when it has changed. `status()` and `verify_all()` report a hook whose config entry was removed by hand. The config file keeps its file mode.
+- **Verified:** `tests/test_hooks.py` targeted an older API and every test in it errored. It is rewritten against the shipped API (26 tests) and now runs in CI.
+- **Limits:** a config that changed after install is rewritten with two-space indentation on uninstall. Comments are not supported in the config file.
+
 ### Fixed: long sessions were cut short in the replay tree without notice
 
 - **Why:** `GET /api/replay-tree/<session_id>` read the store with its default limit of 2000 events. A longer session came back as its first 2000 events and nothing said the rest was missing. Two Codex sessions on the test machine have more than 4500 replay events each.

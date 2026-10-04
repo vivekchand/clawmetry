@@ -86,7 +86,10 @@ def test_injected_children_span_the_grid_row():
 def test_each_injected_mount_also_sets_grid_column_inline(mount_id: str):
     """Belt and braces: each mount is correct without the stylesheet too."""
     js = _read(_APP_JS)
-    idx = js.index("'%s'" % mount_id)
+    # The reset path can look up the node before its creation helper does.
+    creation = re.search(r"\.id\s*=\s*['\"]" + re.escape(mount_id) + r"['\"]", js)
+    assert creation, "missing mount creation: " + mount_id
+    idx = creation.start()
     # The assignment lands within the creation block that follows the id.
     window = js[idx:idx + 2000]
     assert re.search(r"grid-?[Cc]olumn\s*[:=]\s*'?1 / -1", window), (
