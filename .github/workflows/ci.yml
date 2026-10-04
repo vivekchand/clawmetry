@@ -903,6 +903,11 @@ jobs:
           pip install --require-hashes
           -r .github/requirements/ci-api-tests.txt
 
+      - name: Assistant Windows process-tree cancellation
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python3 -m pytest tests/test_assistant_stream.py -q --tb=short -k windows
+
       - name: Start server (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -974,6 +979,7 @@ jobs:
         run: >-
           python3 -m pytest -q --tb=short
           tests/test_assistant_route.py
+          tests/test_assistant_stream.py
           tests/test_harness_service_discovery.py
           tests/test_assistant_store.py
           tests/test_assistant_managed.py
@@ -984,6 +990,9 @@ jobs:
           tests/test_context_economics_truthfulness.py
           tests/test_home_evidence_truthfulness.py
           tests/test_improve_candidates.py
+          tests/test_improve_snapshot.py
+          tests/test_improve_frontend.py
+          tests/test_runtime_memory_sync.py
           tests/test_setup_improve_surfaces.py
       - name: Verify shared secret redaction and its persistence boundary
         run: python3 -m pytest tests/test_redaction.py -q --tb=short
