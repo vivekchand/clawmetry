@@ -36,6 +36,7 @@
 - **Verified:** 3 new endpoint tests cover the counts, eight payloads without a valid branch point and a later mode event without counts. 8 new renderer checks cover both notices, a session with no hidden entries, counts that are not numbers and other runtimes.
 - **Limits:** this is a notice, not a branch selector. The entries on other branches are not stored in the replay and cannot be opened. The counts appear only for a runtime whose replay mapper sends them. The Pi mapper that does so ships in the Pro adapter package. The notices were not opened in a running dashboard.
 
+
 ### Fixed: one event with unencodable text stopped every later event from being stored
 
 - **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
