@@ -32,11 +32,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: '3.12'
+          python-version: '3.11'
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '22'
-      - run: python -m pip install -e . pytest requests
+      - name: Install the pinned CI dependencies and package under test
+        run: |
+          python -m pip install --require-hashes -r .github/requirements/ci-tests.txt
+          python -m pip install --no-deps -e .
       - name: Verify paid seams, encrypted reads, navigation and trial continuation
         env:
           CLAWMETRY_AUTO_UPDATE: '0'
