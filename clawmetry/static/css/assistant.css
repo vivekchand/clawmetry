@@ -30,6 +30,8 @@ body.cm-assistant-active #cm-runtime-chip-menu { display: none !important; }
 
 .cm-assistant-main { display: flex; flex-direction: column; align-items: center; min-width: 0; padding: 36px clamp(20px, 4vw, 64px) 24px; }
 .cm-assistant-main > * { width: 100%; max-width: 840px; box-sizing: border-box; }
+.cm-assistant-recovery { order: 3; margin-top: 12px; }
+.cm-assistant-recovery > button { margin-top: 10px; }
 .cm-assistant-hero { order: 0; margin-bottom: 26px; text-align: center; }
 .cm-assistant-eyebrow { margin-bottom: 14px; }
 .cm-assistant-scope { color: var(--text-muted); font-size: 11px; }

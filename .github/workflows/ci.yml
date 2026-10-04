@@ -980,6 +980,8 @@ jobs:
           python3 -m pytest -q --tb=short
           tests/test_assistant_route.py
           tests/test_assistant_stream.py
+          tests/test_assistant_executor.py
+          tests/test_assistant_relay.py
           tests/test_harness_service_discovery.py
           tests/test_assistant_store.py
           tests/test_assistant_managed.py

@@ -2138,6 +2138,7 @@ function switchTab(name) {
   // Track the active tab so tab-scoped pollers (Overview loadAll, etc.) only
   // run on their own screen instead of on every tab.
   if (name !== 'assistant' && typeof assistantLeave === 'function') assistantLeave();
+  if (name !== 'overview' && typeof customDashboardLeave === 'function') customDashboardLeave();
   _cmCurrentTab = name;
   if (window.cmActivityVisibilityChanged) window.cmActivityVisibilityChanged();
   if (window.cmErrorGroupsVisibilityChanged) window.cmErrorGroupsVisibilityChanged();

@@ -14,7 +14,9 @@ import json
 import pytest
 from flask import Flask
 
-import routes.assistant as assistant
+from clawmetry import assistant_service as assistant
+from clawmetry import assistant_executor as execution, assistant_http
+from routes.assistant import bp_assistant
 import routes.dashboards as dashboards
 
 
@@ -73,37 +75,26 @@ def real_stack(tmp_path, monkeypatch):
             ],
         )
 
+    executor_ref={'executor':execution.Executor(store_ref['store'],'test-node')}
     def dispatch(method, **kwargs):
-        return getattr(store_ref["store"], method)(**kwargs)
-
-    # Exercise the actual route code while keeping the daemon boundary local
-    # to this temporary store rather than contacting a running local gateway.
-    monkeypatch.setattr(assistant, "_store", dispatch)
-    monkeypatch.setattr(dashboards, "_daemon_call", dispatch)
-    monkeypatch.setattr(
-        assistant,
-        "_provider",
-        lambda requested="auto", api_key=None: ("test-provider", "test-credential"),
-    )
-    assistant._schema_for_window.cache_clear()
-    with assistant._conversation_lock:
-        assistant._conversations_in_flight.clear()
-
-    app = Flask(__name__)
-    app.register_blueprint(assistant.bp_assistant)
+        executor=executor_ref['executor']
+        if executor.store is not store_ref['store']:
+            executor=execution.Executor(store_ref['store'],'test-node')
+            executor_ref['executor']=executor
+        return {'start_assistant_job':executor.start,'read_assistant_job':executor.read,
+                'cancel_assistant_job':executor.cancel}[method](**kwargs)
+    monkeypatch.setattr(assistant_http,'rpc',dispatch)
+    monkeypatch.setattr(assistant,'_egress_suppressed',lambda:False)
+    monkeypatch.setattr(assistant,'_provider',lambda requested='auto',api_key=None:('test-provider','test-credential'))
+    app=Flask(__name__)
+    app.register_blueprint(bp_assistant)
     app.register_blueprint(dashboards.bp_dashboards)
-
     try:
-        yield {
-            "app": app,
-            "client": app.test_client(),
-            "local_store": local_store,
-            "store_ref": store_ref,
-        }
+        yield {'app':app,'client':app.test_client(),'local_store':local_store,'store_ref':store_ref}
     finally:
-        assistant._schema_for_window.cache_clear()
-        with assistant._conversation_lock:
-            assistant._conversations_in_flight.clear()
+        for job in executor_ref['executor'].jobs.values():
+            job.abort()
+            if job.worker and job.worker.ident is not None:job.worker.join(3)
         local_store._reset_singleton_for_tests()
 
 
@@ -186,7 +177,7 @@ def test_real_store_chat_panel_rerun_and_reopen_preserve_production_shapes(
             return plan["answer"] if len(generations) <= 2 else followup_plan["answer"]
         raise AssertionError("unexpected assistant generation prompt")
 
-    monkeypatch.setattr(assistant, "_generate", fake_generate)
+    monkeypatch.setattr(assistant, "_stream_generate", lambda control, mode, credential, system, prompt, **kw: fake_generate(mode, credential, system, prompt))
     client = real_stack["client"]
 
     response = client.post(
@@ -324,7 +315,7 @@ def test_real_store_keeps_empty_results_distinct_from_sql_errors(real_stack, mon
             return plan["answer"]
         raise AssertionError("unexpected assistant generation prompt")
 
-    monkeypatch.setattr(assistant, "_generate", fake_generate)
+    monkeypatch.setattr(assistant, "_stream_generate", lambda control, mode, credential, system, prompt, **kw: fake_generate(mode, credential, system, prompt))
     response = real_stack["client"].post(
         "/api/assistant/chat", json={"message": "Compare empty and failed queries"}
     )

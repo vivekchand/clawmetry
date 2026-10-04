@@ -6,8 +6,12 @@ from routes.dashboards import bp_dashboards
 
 
 @pytest.fixture()
-def panel_stack(monkeypatch):
+def panel_stack(monkeypatch, tmp_path):
     from flask import Flask
+    from clawmetry import local_store, assistant_executor as execution, assistant_http, assistant_service
+    monkeypatch.setattr(local_store,"DB_PATH",tmp_path/"panels.duckdb")
+    store=local_store.LocalStore()
+    executor=execution.Executor(store,"test-node")
 
     app = Flask(__name__)
     app.register_blueprint(bp_dashboards)
@@ -37,6 +41,8 @@ def panel_stack(monkeypatch):
             return list(stored.values())
         if method == "query_dashboard_panel":
             if state["panel_override"] is not no_override:
+                if state["panel_override"] is None:
+                    raise assistant_service._ChatFailure("Saved panels are unavailable.",503)
                 return state["panel_override"]
             return stored.get(kwargs["panel_id"])
         if method == "query_assistant_sql":
@@ -45,14 +51,28 @@ def panel_stack(monkeypatch):
             return bool(stored.pop(kwargs["panel_id"], None))
         raise AssertionError(method)
 
-    monkeypatch.setattr("routes.dashboards._daemon_call", fake_call)
-    return {
+    monkeypatch.setattr(executor.service,'call',fake_call)
+    monkeypatch.setattr(assistant_http,'rpc',lambda method,**kwargs:{
+        'start_assistant_job':executor.start,'read_assistant_job':executor.read,
+        'cancel_assistant_job':executor.cancel}[method](**kwargs))
+    original=executor.receipts.finish
+    def finish(rid,outcome,check, **kwargs):
+        m=outcome.mutation or {}
+        if m.get('kind')=='panel_create':
+            fake_call('upsert_dashboard_panel',**{k:m[k] for k in ('panel_id','name','question','sql','chart_spec','created_at')})
+        return original(rid,outcome,check, **kwargs)
+    monkeypatch.setattr(executor.receipts,'finish',finish)
+    yield {
         "client": app.test_client(),
         "stored": stored,
         "calls": calls,
         "state": state,
         "no_override": no_override,
     }
+    for job in executor.jobs.values():
+        job.abort()
+        if job.worker and job.worker.ident is not None:job.worker.join(3)
+    store.stop(flush=False)
 
 
 @pytest.fixture()

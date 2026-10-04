@@ -227,7 +227,7 @@ function sameScope(left, right) {
     var button = document.createElement('button');
     button.type = 'button';
     button.textContent = 'Refresh';
-    button.className = 'cm-improve-refresh';
+    button.className = 'cm-improve-refresh cm-improve-secondary-button';
     button.addEventListener('click', function() { loadImprove(true); });
     node.appendChild(document.createTextNode(' '));
     node.appendChild(button);

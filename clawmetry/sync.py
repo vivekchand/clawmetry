@@ -9452,6 +9452,12 @@ def send_heartbeat(config: dict) -> bool:
         # accounts without the clawmetry-pro adapters too.
         "detected_runtimes": _detect_runtimes_for_heartbeat(),
     }
+    try:
+        from clawmetry.assistant_relay import capability
+        payload["assistant_relay"] = capability(config)
+    except Exception:
+        # Never advertise readiness before writer/receipt initialization.
+        payload["assistant_relay"] = {"v": 1, "epoch": "", "enabled": False, "paused": False}
     # Stuck-agent signal (clawmetry-hardware#15). The WiFi desk device fetches
     # the CLOUD device_summary (built from Postgres), NOT the local dashboard or
     # the legacy E2E snapshot, so the daemon's loop_signals never reached it.
@@ -10841,6 +10847,7 @@ _PENDING_ACTIONS = frozenset({
     "cron_killall",
     "cron_fix",
     "dives_query",
+    "assistant_request",
     "runtime_backfill",
     # Runaway-agent control (engine in clawmetry/process_control.py). Relayed
     # from the web dashboard AND the desk device via the cloud action queue.
@@ -11131,6 +11138,10 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         return
     if atype == "dives_query":
         _action_dives_query(config, action)
+        return
+    if atype == "assistant_request":
+        from clawmetry.assistant_relay import dispatch
+        dispatch(config, action)
         return
     if atype in ("kill_session", "pause_session", "resume_session"):
         _action_process_control(config, action)
@@ -25671,6 +25682,12 @@ def run_daemon() -> None:
         log.warning("local query server: failed to start: %s", _e)
 
     # ── Startup sync: recent-first so Brain feed shows current activity ──
+    try:
+        from clawmetry import assistant_executor, assistant_relay, local_store
+        assistant_executor.initialize(local_store.get_store(), config.get("node_id") or "local")
+        assistant_relay.configure(load_config)
+    except Exception:
+        log.warning("Assistant executor could not initialize; requests remain unavailable")
     send_heartbeat(config)
     log.info("Initial heartbeat sent")
 

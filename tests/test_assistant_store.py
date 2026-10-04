@@ -385,7 +385,7 @@ def test_assistant_methods_are_daemon_allowlisted():
 
 
 def test_planner_outcome_coverage_example_excludes_unknown_sentinels(fresh_store):
-    from routes.assistant import _PLAN
+    from clawmetry.assistant_service import _PLAN
     _local_store, store = fresh_store
     # Exercise the exact SQL taught to the planner, rather than asserting that
     # a prompt happens to contain words such as "unknown".
