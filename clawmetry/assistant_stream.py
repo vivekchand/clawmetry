@@ -237,7 +237,7 @@ def response(work, persist, release, error_message):
 
 @contextmanager
 def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
-    """Use a retained public socket handle to interrupt a blocked HTTP read.
+    """Use a retained duplicate socket to interrupt CONNECT, TLS and HTTP.
 
     Closing a buffered HTTPResponse from another thread can block on its reader
     lock. Socket shutdown wakes the producer, which then closes its own buffers.
@@ -249,9 +249,17 @@ def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
         raise ValueError("Invalid provider address")
     with ExitStack() as resources:
         def connected(sock):
+            # TLS takes ownership of (detaches) the original descriptor. A
+            # duplicate keeps the same underlying connection cancellable
+            # without changing SSLContext's handshake/verification protocol.
+            # socket.dup is public on Windows too; Winsock duplicate handles
+            # share socket state, so shutdown affects the connection itself.
+            retained = sock.dup()
+            resources.callback(retained.close)
+
             def abort():
                 try:
-                    sock.shutdown(socket.SHUT_RDWR)
+                    retained.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
 
@@ -270,7 +278,11 @@ def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
             def create_retained(*args, **kwargs):
                 control.check()
                 sock = create(*args, **kwargs)
-                connected(sock)
+                try:
+                    connected(sock)
+                except BaseException:
+                    sock.close()
+                    raise
                 return sock
 
             connection._create_connection = create_retained
@@ -285,18 +297,6 @@ def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
                 super().__init__(*args, **kwargs)
                 retain_tcp(self)
 
-            def connect(self):
-                http.client.HTTPConnection.connect(self)
-                # TLS replaces (detaches) the raw socket. Retain the SSL
-                # handle before its handshake so cancellation covers TLS too.
-                # The original context still enforces certificates/hostnames.
-                self.sock = self._context.wrap_socket(
-                    self.sock, server_hostname=self._tunnel_host or self.host,
-                    do_handshake_on_connect=False)
-                connected(self.sock)
-                self.sock.do_handshake()
-                control.check()
-
         class HTTPHandler(urllib.request.HTTPHandler):
             def http_open(self, req):
                 return self.do_open(HTTPConnection, req)
@@ -307,7 +307,11 @@ def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
 
         # Keep urllib's default proxy discovery, HTTPS CONNECT support, no_proxy,
         # redirects and certificate validation, as in the existing JSON path.
-        opener = urllib.request.build_opener(HTTPHandler(), HTTPSHandler())
+        # The daemon installs truststore and enterprise CA settings at startup.
+        # Reuse its context builder for this private, cancellable opener too.
+        from clawmetry.net import build_ssl_context
+        opener = urllib.request.build_opener(
+            HTTPHandler(), HTTPSHandler(context=build_ssl_context()))
         req = urllib.request.Request(url, data=payload, headers=headers, method=method)
         with opener.open(req, timeout=10) as result:
             control.check()

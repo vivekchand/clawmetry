@@ -239,8 +239,30 @@ def test_lifecycle_never_replaces_a_still_blocked_poll(delivery, monkeypatch):
 @pytest.mark.parametrize('part', ['headers', 'body', 'proxy_headers', 'proxy_tls'])
 @pytest.mark.parametrize('stop', [False, True])
 def test_delivery_transport_interrupts_real_drip_socket(monkeypatch, part, stop):
+    _check_drip_cancellation(monkeypatch, part, stop)
+
+
+@pytest.mark.parametrize('part', ['proxy_headers', 'proxy_tls'])
+@pytest.mark.parametrize('stop', [False, True])
+def test_daemon_tls_truststore_cancels_proxy(monkeypatch, part, stop):
+    import ssl
+    import truststore
+    from clawmetry import net
+    monkeypatch.setattr(net, 'build_ssl_context', lambda: truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT))
+    _check_drip_cancellation(monkeypatch, part, stop)
+
+
+def _check_drip_cancellation(monkeypatch, part, stop):
     # This transport test also runs on all three native API-test runners,
     # without requiring a DuckDB or cryptography installation there.
+    import socket
+    duplicates = []
+    original_dup = socket.socket.dup
+    def tracked_dup(sock):
+        duplicate = original_dup(sock)
+        duplicates.append(duplicate)
+        return duplicate
+    monkeypatch.setattr(socket.socket, 'dup', tracked_dup)
     config = {'node_id': 'node-test', 'api_key': 'owner', 'encryption_key': 'key'}
     executor = SimpleNamespace(epoch=uuid.uuid4().hex, node_id=config['node_id'])
     monkeypatch.setattr(execution, 'current', lambda: executor)
@@ -325,6 +347,7 @@ def test_delivery_transport_interrupts_real_drip_socket(monkeypatch, part, stop)
         server.shutdown()
         server.server_close()
         server_thread.join(2)
+    assert duplicates and all(sock.fileno() == -1 for sock in duplicates)
 
 
 def test_wake_response_byte_bound_and_exact_node_encoding(monkeypatch):

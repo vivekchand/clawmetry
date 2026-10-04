@@ -836,29 +836,42 @@ def test_streaming_transport_preserves_environment_proxy_discovery(monkeypatch):
         worker.join(2)
 
 
-def test_https_transport_preserves_certificate_and_hostname_validation(tmp_path, monkeypatch):
-    """Deferred, cancellable TLS still authenticates the server normally."""
+@pytest.fixture
+def tls_test_server(tmp_path, monkeypatch):
+    """Real TLS endpoint with an isolated self-signed CA, never system trust."""
     import datetime
     import ssl
     import urllib.error
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.x509.oid import NameOID
+    from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Assistant test CA')])
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
     now = datetime.datetime.now(datetime.timezone.utc)
-    certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
-        .public_key(key.public_key()).serial_number(x509.random_serial_number())
+    ca = (x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)
+        .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
         .not_valid_before(now-datetime.timedelta(minutes=1)).not_valid_after(now+datetime.timedelta(hours=1))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.KeyUsage(False, False, False, False, False, True, True, False, False), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
+        .sign(ca_key, hashes.SHA256()))
+    certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(ca_name)
+        .public_key(key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now-datetime.timedelta(minutes=1)).not_valid_after(now+datetime.timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost')]), critical=False)
-        .add_extension(x509.KeyUsage(True, False, True, False, False, True, True, False, False), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .add_extension(x509.KeyUsage(True, False, True, False, False, False, False, False, False), critical=True)
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
-        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
-        .sign(key, hashes.SHA256()))
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()), critical=False)
+        .sign(ca_key, hashes.SHA256()))
     cert_path, key_path = tmp_path/'cert.pem', tmp_path/'key.pem'
+    ca_path = tmp_path/'ca.pem'
+    ca_path.write_bytes(ca.public_bytes(serialization.Encoding.PEM))
     cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
     key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                            serialization.NoEncryption()))
@@ -877,20 +890,74 @@ def test_https_transport_preserves_certificate_and_hostname_validation(tmp_path,
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     monkeypatch.setenv('no_proxy', 'localhost,127.0.0.1')
     worker.start()
-    def fetch(host):
-        with stream.http_response(f'https://{host}:{server.server_port}/', payload=None, headers={},
-                                  method='GET', control=stream.StreamJob(lambda: None)) as response:
-            return response.read()
     try:
-        with pytest.raises(urllib.error.URLError) as rejected:
-            fetch('localhost')
-        assert isinstance(rejected.value.reason, ssl.SSLCertVerificationError)
-        monkeypatch.setenv('SSL_CERT_FILE', str(cert_path))
-        assert fetch('localhost') == b'ok'
-        with pytest.raises(urllib.error.URLError) as mismatch:
-            fetch('127.0.0.1')
-        assert isinstance(mismatch.value.reason, ssl.SSLCertVerificationError)
+        yield server.server_port, ca_path
     finally:
         server.shutdown()
         server.server_close()
         worker.join(2)
+
+
+def test_https_transport_preserves_certificate_and_hostname_validation(tls_test_server, monkeypatch):
+    """Cancellable TLS still authenticates the server normally."""
+    import ssl
+    import urllib.error
+    port, cert_path = tls_test_server
+    def fetch(host):
+        with stream.http_response(f'https://{host}:{port}/', payload=None, headers={},
+                                  method='GET', control=stream.StreamJob(lambda: None)) as response:
+            return response.read()
+    with pytest.raises(urllib.error.URLError) as rejected:
+        fetch('localhost')
+    assert isinstance(rejected.value.reason, ssl.SSLCertVerificationError)
+    monkeypatch.setenv('SSL_CERT_FILE', str(cert_path))
+    assert fetch('localhost') == b'ok'
+    with pytest.raises(urllib.error.URLError) as mismatch:
+        fetch('127.0.0.1')
+    assert isinstance(mismatch.value.reason, ssl.SSLCertVerificationError)
+
+
+@pytest.mark.parametrize('mode', ['untrusted', 'configured_ca', 'hostname_mismatch'])
+def test_daemon_tls_truststore(tls_test_server, tmp_path, monkeypatch, mode):
+    """
+    AC-ASSIST-007.8
+    Actual daemon TLS bootstrap must work without bypassing CA or host checks.
+    Injection is process-global, so isolate it from the rest of the test suite.
+    """
+    import subprocess
+    port, cert_path = tls_test_server
+    config_path = tmp_path/'network.json'
+    config_path.write_text(json.dumps({} if mode == 'untrusted' else {'ca_bundle': str(cert_path)}))
+    for name in ('SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE', 'CLAWMETRY_CA_BUNDLE', 'CLAWMETRY_TLS_NO_VERIFY'):
+        monkeypatch.delenv(name, raising=False)
+    script = r'''import json, logging, socket, ssl, sys, urllib.error
+from clawmetry import net
+from clawmetry.assistant_stream import StreamJob, http_response
+logging.disable(logging.CRITICAL)
+net.CONFIG_PATH = sys.argv[1]
+net.configure_outbound_network()
+assert net.state()['truststore'], 'production truststore dependency must be installed'
+assert not net.state()['verify_disabled']
+url = 'https://' + ('127.0.0.1' if sys.argv[3] == 'hostname_mismatch' else 'localhost') + ':' + sys.argv[2] + '/'
+duplicates = []
+original_dup = socket.socket.dup
+def tracked_dup(sock):
+    duplicate = original_dup(sock)
+    duplicates.append(duplicate)
+    return duplicate
+socket.socket.dup = tracked_dup
+try:
+    with http_response(url, payload=None, headers={}, method='GET', control=StreamJob(lambda: None)) as response:
+        assert response.read() == b'ok'
+    assert sys.argv[3] == 'configured_ca', 'untrusted or wrong-host server was accepted'
+except urllib.error.URLError as exc:
+    assert sys.argv[3] != 'configured_ca', type(exc.reason).__name__
+    assert isinstance(exc.reason, ssl.SSLCertVerificationError), type(exc.reason).__name__
+finally:
+    assert duplicates and all(sock.fileno() == -1 for sock in duplicates), 'retained socket leaked'
+print('verified', sys.argv[3])
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(config_path), str(port), mode],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'verified ' + mode
