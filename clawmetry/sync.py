@@ -593,6 +593,11 @@ def _graceful_shutdown(reason: str, *, force_exit: bool) -> None:
 
     log.info("graceful shutdown: %s — draining local store ring", reason)
 
+    # Revoke background delivery before the writer begins teardown. A held
+    # wake may finish later, but its old response cannot admit another job.
+    from clawmetry.assistant_relay import stop_delivery
+    stop_delivery()
+
     # Run the flush on a background thread so we can enforce a wall-clock
     # timeout. A blocked DuckDB write must not hang launchctl/systemctl
     # for >5s — the orchestrator will SIGKILL us anyway after its own
@@ -732,12 +737,10 @@ HEARTBEAT_INTERVAL_SLOW = 60
 # Wake long-poll (fast relay, 2026-08-29). On the SLOW cadence a relay query
 # (e.g. the cloud session-trace page asking for a transcript) used to sit
 # unseen for up to 60s — the daemon only learns about queued work on its next
-# heartbeat. Instead of tightening the fleet-wide cadence, the idle sleep at
-# the bottom of the main loop is spent holding GET /ingest/wake open; the
-# cloud answers early the moment there is a queued query, a durable pending
-# action, or a viewer watching the dashboard, and the daemon heartbeats
-# immediately. Net request rate while idle: one cheap held GET per ~15s tick
-# in place of a plain sleep. CLAWMETRY_WAKE_POLL=0 turns it off; a cloud
+# heartbeat. One independent wake worker holds GET /ingest/wake, dispatches
+# encrypted Assistant requests and forwards general hints to the main loop.
+# Assistant mode holds until work arrives or the timeout, even with a viewer.
+# Net idle rate: one cheap held GET per ~15s. CLAWMETRY_WAKE_POLL=0 disables it; a cloud
 # without the endpoint (404) mutes it for WAKE_POLL_MUTE_SECS so old servers
 # aren't hammered.
 WAKE_POLL_MAX_WAIT = 15          # seconds the server may hold one wake call
@@ -7955,13 +7958,15 @@ def _wake_says_heartbeat(resp_json: dict | None) -> bool:
     return bool(resp_json.get("work") or resp_json.get("viewer_active"))
 
 
-def _wake_wait(config: dict, wait_secs: float) -> dict | None:
+def _wake_wait(config: dict, wait_secs: float, *, assistant_epoch=None, control=None) -> dict | None:
     """Hold GET /ingest/wake open for up to ``wait_secs``; the cloud answers
     early when there is a reason to heartbeat (queued relay query, durable
-    pending action, or an active viewer).
+    pending action, or an active viewer). Assistant opt-in only answers early
+    for eligible Assistant actions, then includes the same general hints.
 
-    Returns the parsed response dict, or None on any failure — callers treat
-    None as "sleep normally". A 404 (cloud without the endpoint yet) mutes
+    Returns the parsed response dict, or None on any failure. The sole wake
+    worker supplies its retained-socket deadline/cancellation control and
+    backs off on failure. A 404 (cloud without the endpoint yet) mutes
     the wake poll for WAKE_POLL_MUTE_SECS so old servers aren't polled with
     a request they will never understand.
     """
@@ -7984,18 +7989,29 @@ def _wake_wait(config: dict, wait_secs: float) -> dict | None:
     url = (
         INGEST_URL.rstrip("/")
         + "/ingest/wake?node_id="
-        + urllib.parse.quote(node_id)
+        + urllib.parse.quote(node_id, safe="")
         + f"&wait={int(wait_secs)}"
     )
-    req = urllib.request.Request(
-        url, headers={"X-Api-Key": api_key, "X-Node-Id": node_id}, method="GET"
-    )
+    if assistant_epoch is not None:
+        url += "&assistant_epoch=" + urllib.parse.quote(assistant_epoch, safe="")
+    from clawmetry.assistant_relay import _headers
+    req = urllib.request.Request(url, headers=_headers(config), method="GET")
     try:
         # Timeout leaves headroom past the server's hold; no retries — a
         # failed wake costs nothing (the next tick tries again) and retrying
         # a long-poll would double-hold the connection.
-        with urllib.request.urlopen(req, timeout=wait_secs + 10) as resp:
-            raw = resp.read()
+        if control is not None:
+            from clawmetry.assistant_stream import http_response
+            response = http_response(url, payload=None, headers=dict(req.header_items()),
+                                     method="GET", control=control, timeout=25)
+        else:
+            response = urllib.request.urlopen(req, timeout=min(25, wait_secs + 5))
+        with response as resp:
+            raw = resp.read(1024 * 1024 + 1)
+        if control is not None:
+            control.check()
+        if len(raw) > 1024 * 1024:
+            return None
         body = json.loads(raw) if (raw and raw.strip()) else {}
         return body if isinstance(body, dict) else None
     except urllib.error.HTTPError as e:
@@ -8004,33 +8020,20 @@ def _wake_wait(config: dict, wait_secs: float) -> dict | None:
             log.debug("wake poll unsupported by cloud (%s); muted for %ss",
                       e.code, WAKE_POLL_MUTE_SECS)
         return None
-    except Exception as e:
-        log.debug("wake poll failed (non-fatal): %s", e)
+    except Exception:
+        log.debug("wake poll failed (non-fatal)")
         return None
 
 
 def _idle_sleep_or_wake(config: dict, sleep_secs: float,
                         allow_wake: bool) -> bool:
-    """The main loop's end-of-cycle sleep. When ``allow_wake`` (SLOW cadence,
-    heartbeats healthy), the sleep is spent holding /ingest/wake instead of
-    ``time.sleep`` — same wall-clock, but the cloud can end it early.
-
-    Returns True when the caller should heartbeat immediately.
-    """
+    """Sleep on the wake owner's event, without a competing HTTP long poll."""
     sleep_secs = max(1.0, float(sleep_secs))
     if not allow_wake:
         time.sleep(sleep_secs)
         return False
-    t0 = time.time()
-    resp = _wake_wait(config, sleep_secs)
-    if _wake_says_heartbeat(resp):
-        return True
-    # Wake declined/failed/answered early with nothing: sleep out the
-    # remainder so a broken endpoint can't turn the tick into a hot loop.
-    remaining = sleep_secs - (time.time() - t0)
-    if remaining > 0.05:
-        time.sleep(remaining)
-    return False
+    from clawmetry.assistant_relay import wait_for_wake
+    return wait_for_wake(sleep_secs)
 
 
 def _machine_specs() -> dict:
@@ -12533,7 +12536,13 @@ def _dispatch_pending_queries(config: dict, pending: list) -> None:
     api_key = config.get("api_key", "")
     enc_key = config.get("encryption_key")
     node_id = config.get("node_id", "")
-    for q in pending or []:
+    # Launch authenticated Assistant consumers before a slow generic query
+    # can consume their unchanged 30-second start validity. Stable within
+    # each group; validation remains in the existing dispatch paths.
+    entries = pending or []
+    entries = sorted(entries, key=lambda q: not (
+        isinstance(q, dict) and q.get("type") == "assistant_request"))
+    for q in entries:
         try:
             if not isinstance(q, dict):
                 continue
@@ -25688,6 +25697,7 @@ def run_daemon() -> None:
         from clawmetry import assistant_executor, assistant_relay, local_store
         assistant_executor.initialize(local_store.get_store(), config.get("node_id") or "local")
         assistant_relay.configure(load_config)
+        assistant_relay.start_delivery()
     except Exception:
         log.warning("Assistant executor could not initialize; requests remain unavailable")
     send_heartbeat(config)
@@ -26909,14 +26919,9 @@ def run_daemon() -> None:
         # POLL_INTERVAL still rules, so bandwidth + Cloud Run cost stay
         # flat.
         #
-        # Wake long-poll (fast relay, 2026-08-29): on the SLOW cadence the
-        # sleep is spent holding GET /ingest/wake instead — same wall-clock
-        # when idle, but a fresh relay query (cloud trace page, Guard action)
-        # or a newly-arrived viewer ends it early and forces an immediate
-        # heartbeat, cutting relay latency from "next slow beat" (≤60s) to a
-        # couple of seconds. Skipped on FAST (3s beats are already prompt)
-        # and while heartbeats are failing (don't hold sockets to a flapping
-        # cloud).
+        # The independent wake owner forwards generic work/viewer hints via
+        # an event. Only this loop sends heartbeats and executes generic
+        # queries; Assistant delivery continues during a long collection pass.
         _cycle_sleep = max(1, min(POLL_INTERVAL, heartbeat_interval))
         _wake_now = _idle_sleep_or_wake(
             config,

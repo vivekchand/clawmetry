@@ -255,18 +255,47 @@ def http_response(url, *, payload, headers, control, timeout=65, method="POST"):
                 except OSError:
                     pass
 
-            resources.enter_context(control.resource(abort))
-            sock.settimeout(min(timeout, max(0.001, control.deadline - time.monotonic())))
+            try:
+                resources.enter_context(control.resource(abort))
+                sock.settimeout(min(timeout, max(0.001, control.deadline - time.monotonic())))
+            except BaseException:
+                sock.close()
+                raise
+
+        def retain_tcp(connection):
+            # Keep http.client's proxy CONNECT handling, but register the TCP
+            # socket before CONNECT can block waiting for proxy headers.
+            create = connection._create_connection
+
+            def create_retained(*args, **kwargs):
+                control.check()
+                sock = create(*args, **kwargs)
+                connected(sock)
+                return sock
+
+            connection._create_connection = create_retained
 
         class HTTPConnection(http.client.HTTPConnection):
-            def connect(self):
-                super().connect()
-                connected(self.sock)
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                retain_tcp(self)
 
         class HTTPSConnection(http.client.HTTPSConnection):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                retain_tcp(self)
+
             def connect(self):
-                super().connect()
+                http.client.HTTPConnection.connect(self)
+                # TLS replaces (detaches) the raw socket. Retain the SSL
+                # handle before its handshake so cancellation covers TLS too.
+                # The original context still enforces certificates/hostnames.
+                self.sock = self._context.wrap_socket(
+                    self.sock, server_hostname=self._tunnel_host or self.host,
+                    do_handshake_on_connect=False)
                 connected(self.sock)
+                self.sock.do_handshake()
+                control.check()
 
         class HTTPHandler(urllib.request.HTTPHandler):
             def http_open(self, req):

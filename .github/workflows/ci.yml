@@ -921,6 +921,10 @@ jobs:
         timeout-minutes: 3
         run: python3 -m pytest tests/test_assistant_stream.py -q --tb=short -k windows
 
+      - name: Assistant wake socket cancellation
+        timeout-minutes: 2
+        run: python3 -m pytest tests/test_assistant_delivery.py -q --tb=short -k delivery_transport
+
       - name: Start server (Unix)
         if: runner.os != 'Windows'
         run: |
@@ -995,6 +999,7 @@ jobs:
           tests/test_assistant_stream.py
           tests/test_assistant_executor.py
           tests/test_assistant_relay.py
+          tests/test_assistant_delivery.py
           tests/test_harness_service_discovery.py
           tests/test_assistant_store.py
           tests/test_assistant_managed.py

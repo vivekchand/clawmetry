@@ -1,10 +1,8 @@
 """Unit tests for the daemon-side wake long-poll (fast relay, 2026-08-29).
 
-On the SLOW (60s) heartbeat cadence, a cloud relay query used to wait for the
-next heartbeat before the daemon even learned it existed. The main loop now
-spends its idle sleep holding ``GET /ingest/wake``; when the cloud answers
-"there is work" (or "a viewer just arrived"), the daemon heartbeats
-immediately.
+The independent delivery worker owns ``GET /ingest/wake``. It forwards work
+and viewer hints to the main loop without a second HTTP poll; collection and
+generic queries remain on the main loop.
 
 These tests cover the pure decision helper, the sleep/wake orchestration
 (with the network call stubbed), and the 404 mute — no network, no daemon.
@@ -61,25 +59,25 @@ def test_idle_sleep_without_wake_just_sleeps(monkeypatch):
 
 
 def test_wake_with_work_forces_heartbeat_and_skips_sleep(monkeypatch):
+    from clawmetry import assistant_relay as relay
     slept = []
     monkeypatch.setattr(sync.time, "sleep", lambda s: slept.append(s))
-    monkeypatch.setattr(
-        sync, "_wake_wait", lambda cfg, w: {"ok": True, "work": True,
-                                           "viewer_active": False})
+    monkeypatch.setattr(sync, "_wake_wait", lambda *a, **kw: pytest.fail("duplicate HTTP poll"))
+    relay._wake_hint.set()
     assert sync._idle_sleep_or_wake(CONFIG, 15, allow_wake=True) is True
+    assert not relay._wake_hint.is_set()
     assert slept == []  # woken: get to the heartbeat, don't finish the nap
 
 
 def test_wake_error_sleeps_out_the_remainder(monkeypatch):
-    """A broken/missing wake endpoint must not turn the tick into a hot
-    loop: when _wake_wait returns instantly with None, the remainder of the
-    cycle sleep still happens."""
-    slept = []
-    monkeypatch.setattr(sync.time, "sleep", lambda s: slept.append(s))
-    monkeypatch.setattr(sync, "_wake_wait", lambda cfg, w: None)
+    """Absent hints wait on the event; no main-thread network or busy loop."""
+    from clawmetry import assistant_relay as relay
+    waited = []
+    relay._wake_hint.clear()
+    monkeypatch.setattr(relay._wake_hint, 'wait', lambda timeout: waited.append(timeout) or False)
+    monkeypatch.setattr(sync, "_wake_wait", lambda *a, **kw: pytest.fail("duplicate HTTP poll"))
     assert sync._idle_sleep_or_wake(CONFIG, 15, allow_wake=True) is False
-    assert len(slept) == 1
-    assert 14.0 < slept[0] <= 15.0
+    assert waited == [15.0]
 
 
 # ── _wake_wait: gates and mute ─────────────────────────────────────────────

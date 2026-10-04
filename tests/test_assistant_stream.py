@@ -834,3 +834,62 @@ def test_streaming_transport_preserves_environment_proxy_discovery(monkeypatch):
         proxy.shutdown()
         proxy.server_close()
         worker.join(2)
+
+
+def test_https_transport_preserves_certificate_and_hostname_validation(tmp_path, monkeypatch):
+    """Deferred, cancellable TLS still authenticates the server normally."""
+    import datetime
+    import ssl
+    import urllib.error
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    certificate = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+        .public_key(key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now-datetime.timedelta(minutes=1)).not_valid_after(now+datetime.timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost')]), critical=False)
+        .add_extension(x509.KeyUsage(True, False, True, False, False, True, True, False, False), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(key.public_key()), critical=False)
+        .sign(key, hashes.SHA256()))
+    cert_path, key_path = tmp_path/'cert.pem', tmp_path/'key.pem'
+    cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                           serialization.NoEncryption()))
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            self.wfile.write(b'ok')
+        def log_message(self, *a): pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert_path, key_path)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    monkeypatch.setenv('no_proxy', 'localhost,127.0.0.1')
+    worker.start()
+    def fetch(host):
+        with stream.http_response(f'https://{host}:{server.server_port}/', payload=None, headers={},
+                                  method='GET', control=stream.StreamJob(lambda: None)) as response:
+            return response.read()
+    try:
+        with pytest.raises(urllib.error.URLError) as rejected:
+            fetch('localhost')
+        assert isinstance(rejected.value.reason, ssl.SSLCertVerificationError)
+        monkeypatch.setenv('SSL_CERT_FILE', str(cert_path))
+        assert fetch('localhost') == b'ok'
+        with pytest.raises(urllib.error.URLError) as mismatch:
+            fetch('127.0.0.1')
+        assert isinstance(mismatch.value.reason, ssl.SSLCertVerificationError)
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(2)
