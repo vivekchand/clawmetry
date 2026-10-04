@@ -566,13 +566,13 @@
       setConversationReady(false);
       setStatusPill('Connecting to your computer');
     }
-    var navigationToken = state.navigationToken;
     var request = requestJson('/api/assistant/status', { credentials: 'same-origin' }, 12000, 'status');
-    request.navigationToken = navigationToken;
     state.statusRequest = request;
     request.promise.then(function (data) {
-      if (state.statusRequest === request) state.statusRequest = null;
-      if (!requestIsCurrent(request)) return;
+      // Status belongs to the node, not the selected conversation. Starting a
+      // new chat while connecting must not discard its readiness response.
+      if (state.statusRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
+      state.statusRequest = null;
       state.status = data || {};
       state.dataAvailable = state.status.data_available !== false && !state.status.egress_suppressed;
       state.dataStatusMessage = state.status.message || '';
@@ -596,8 +596,9 @@
       if (state.dataAvailable === false) renderRecovery(state.status);
       else clearRecovery();
     }).catch(function (error) {
-      if (state.statusRequest === request) state.statusRequest = null;
-      if (!isMounted() || navigationToken !== state.navigationToken || (error && error.name === 'AbortError' && request.cancelReason)) return;
+      if (state.statusRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
+      state.statusRequest = null;
+      if (error && error.name === 'AbortError' && request.cancelReason) return;
       state.statusLoadedAt = 0;
       if (window.CLOUD_MODE) {
         state.dataAvailable = false;
@@ -694,19 +695,18 @@
       renderHistory();
       return;
     }
-    var navigationToken = state.navigationToken;
     var request = requestJson('/api/assistant/conversations', { credentials: 'same-origin' }, 15000, 'history');
-    request.navigationToken = navigationToken;
     state.historyRequest = request;
     request.promise.then(function (data) {
-      if (state.historyRequest === request) state.historyRequest = null;
-      if (!requestIsCurrent(request)) return;
+      if (state.historyRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
+      state.historyRequest = null;
       state.conversations = Array.isArray(data && data.conversations) ? data.conversations : [];
       state.historyLoadedAt = Date.now();
       renderHistory();
     }).catch(function (error) {
-      if (state.historyRequest === request) state.historyRequest = null;
-      if (!isMounted() || navigationToken !== state.navigationToken || (error && error.name === 'AbortError' && request.cancelReason)) return;
+      if (state.historyRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
+      state.historyRequest = null;
+      if (error && error.name === 'AbortError' && request.cancelReason) return;
       var list = el('cm-assistant-history-list');
       if (!list) return;
       while (list.firstChild) list.removeChild(list.firstChild);

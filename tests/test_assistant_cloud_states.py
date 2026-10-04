@@ -106,6 +106,30 @@ assert.equal(timers.size, 0, 'no standing cloud poller in this surface');
 ''')
 
 
+def test_new_conversation_while_connecting_preserves_node_readiness_and_history():
+    from tests.test_assistant_frontend import _run_node
+
+    script = _cloud_page_script().replace('context.loadAssistantPage();', r'''
+let finishStatus, finishHistory;
+context.fetch = async url => new Promise(resolve => {
+  if (url.endsWith('/status')) finishStatus = resolve;
+  else if (url.endsWith('/conversations')) finishHistory = resolve;
+  else assert.fail('unexpected request: ' + url);
+});
+context.loadAssistantPage();
+''')
+    _run_node(script + r'''
+assert.equal(send.disabled, true);
+elements.get('cm-assistant-new-chat').dispatch('click');
+finishStatus(jsonResponse({available:true,data_available:true,providers:[],managed:{}}));
+finishHistory(jsonResponse({conversations:[{id:'kept',title:'Saved before this visit'}]}));
+await flush();
+assert.equal(send.disabled, false, 'New conversation must not discard node readiness');
+assert.match(elements.get('cm-assistant-history-list').textContent, /Saved before this visit/);
+context.assistantLeave();
+''')
+
+
 @pytest.mark.parametrize('reason', ['missing_key', 'decrypt_failed'])
 def test_cloud_assistant_unlock_retries_status_and_history(reason):
     from tests.test_assistant_frontend import _run_node
