@@ -103,7 +103,8 @@ def _decrypt_envelope(private_key: X25519PrivateKey, envelope: dict) -> str:
     return text
 
 
-def _json_request(path: str, *, method: str = "GET", payload: dict | None = None, idempotency: bool = False) -> dict:
+def _json_request(path: str, *, method: str = "GET", payload: dict | None = None,
+                  idempotency: bool = False, control=None) -> dict:
     key = _api_key()
     if not key:
         raise ManagedAssistantNotConfigured("managed assistant is not configured")
@@ -120,10 +121,19 @@ def _json_request(path: str, *, method: str = "GET", payload: dict | None = None
 
     req = request.Request(_base_url() + path, data=body, headers=headers, method=method)
     try:
-        with request.urlopen(req, timeout=60) as response:
-            raw = response.read()
+        if control is None:
+            with request.urlopen(req, timeout=60) as response:
+                raw = response.read()
+        else:
+            from clawmetry.assistant_stream import http_response
+            with http_response(req.full_url, payload=body, headers=headers,
+                               method=method, control=control, timeout=60) as response:
+                raw = response.read(2 * 1024 * 1024 + 1)
+                if len(raw) > 2 * 1024 * 1024:
+                    raise ManagedAssistantUnavailable("managed assistant returned invalid data")
     except error.HTTPError as exc:
         status = int(getattr(exc, "code", 0) or 0)
+        exc.close()
         if status in (401, 403):
             raise ManagedAssistantAuthError("managed assistant authentication failed") from None
         if status == 402:
@@ -220,7 +230,7 @@ def status() -> dict:
     return result
 
 
-def complete(system: str, prompt: str) -> str:
+def complete(system: str, prompt: str, *, control=None) -> str:
     """Complete one prompt against the managed account and return only text."""
     if not _CRYPTO_AVAILABLE:
         raise ManagedAssistantUnavailable("managed assistant encryption is unavailable")
@@ -230,13 +240,17 @@ def complete(system: str, prompt: str) -> str:
     public_key = _b64(private_key.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw,
     ))
+    options = {"control": control} if control is not None else {}
     value = _json_request(
         "/api/assistant/complete",
         method="POST",
         payload={"system": system, "prompt": prompt, "max_tokens": _max_tokens(),
                  "response_public_key": public_key},
         idempotency=True,
+        **options,
     )
+    if control is not None:
+        control.check()
     try:
         return _decrypt_envelope(private_key, value.get("envelope"))
     except Exception:
