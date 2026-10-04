@@ -9452,6 +9452,12 @@ def send_heartbeat(config: dict) -> bool:
         # accounts without the clawmetry-pro adapters too.
         "detected_runtimes": _detect_runtimes_for_heartbeat(),
     }
+    try:
+        from clawmetry.assistant_relay import capability
+        payload["assistant_relay"] = capability(config)
+    except Exception:
+        # Never advertise readiness before writer/receipt initialization.
+        payload["assistant_relay"] = {"v": 1, "epoch": "", "enabled": False, "paused": False}
     # Stuck-agent signal (clawmetry-hardware#15). The WiFi desk device fetches
     # the CLOUD device_summary (built from Postgres), NOT the local dashboard or
     # the legacy E2E snapshot, so the daemon's loop_signals never reached it.
@@ -10841,6 +10847,7 @@ _PENDING_ACTIONS = frozenset({
     "cron_killall",
     "cron_fix",
     "dives_query",
+    "assistant_request",
     "runtime_backfill",
     # Runaway-agent control (engine in clawmetry/process_control.py). Relayed
     # from the web dashboard AND the desk device via the cloud action queue.
@@ -11131,6 +11138,10 @@ def _dispatch_pending_action(config: dict, action: dict) -> None:
         return
     if atype == "dives_query":
         _action_dives_query(config, action)
+        return
+    if atype == "assistant_request":
+        from clawmetry.assistant_relay import dispatch
+        dispatch(config, action)
         return
     if atype in ("kill_session", "pause_session", "resume_session"):
         _action_process_control(config, action)
@@ -25671,6 +25682,12 @@ def run_daemon() -> None:
         log.warning("local query server: failed to start: %s", _e)
 
     # ── Startup sync: recent-first so Brain feed shows current activity ──
+    try:
+        from clawmetry import assistant_executor, assistant_relay, local_store
+        assistant_executor.initialize(local_store.get_store(), config.get("node_id") or "local")
+        assistant_relay.configure(load_config)
+    except Exception:
+        log.warning("Assistant executor could not initialize; requests remain unavailable")
     send_heartbeat(config)
     log.info("Initial heartbeat sent")
 
@@ -26571,6 +26588,12 @@ def run_daemon() -> None:
                     log.warning(f"alerts: evaluator tick errored: {_ae}")
                 # Per-project budgets ride the same throttle. Independent of
                 # cloud rules: a node with no cloud account still alerts.
+                # CLAWMETRY_PROJECT on the collector tags new sessions first,
+                # so a budget on that project counts them on this same tick.
+                try:
+                    tag_env_project_sessions()
+                except Exception as _epe:
+                    log.warning(f"env project: tick errored: {_epe}")
                 try:
                     evaluate_project_budget_alerts(config)
                 except Exception as _pbe:
@@ -28611,6 +28634,41 @@ def _evaluate_alerts_local(config: dict, state: dict) -> int:
 
     state["alerts_last_eval_ts"] = _iso_now()
     return delivered
+
+
+# When this collector process started. Only sessions that begin after it are
+# tagged from CLAWMETRY_PROJECT, so setting the variable never rewrites the
+# project of history collected before it.
+_ENV_PROJECT_SINCE = time.time()
+_env_project_warned: set = set()
+
+
+def tag_env_project_sessions(since: float | None = None) -> int:
+    """Assign new sessions to ``CLAWMETRY_PROJECT`` when the collector has it
+    set (#5941). Runs on the alert tick. Returns the number of sessions
+    assigned by this call. Never raises into the daemon loop."""
+    name = os.environ.get("CLAWMETRY_PROJECT", "").strip()
+    if not name:
+        return 0
+    try:
+        from clawmetry import local_store
+        store = local_store.get_store()
+        res = store.record_env_project_assignments(
+            project_name=name,
+            since=_ENV_PROJECT_SINCE if since is None else since)
+    except Exception as e:
+        log.warning("env project: assignment failed: %s", e)
+        return 0
+    if not res.get("ok"):
+        err = str(res.get("error") or "")
+        if err not in _env_project_warned:
+            _env_project_warned.add(err)
+            log.warning("env project: CLAWMETRY_PROJECT ignored: %s", err)
+        return 0
+    n = int(res.get("assigned") or 0)
+    if n:
+        log.info("env project: assigned %d new session(s) to the CLAWMETRY_PROJECT project", n)
+    return n
 
 
 def evaluate_project_budget_alerts(config: dict) -> int:

@@ -36,11 +36,75 @@
     checkoutRequest: null,
     navigationToken: 0,
     conversationReady: true,
+    scopeIdentity: null,
+    resettingScope: false,
   };
 
   function el(id) { return document.getElementById(id); }
   function page() { return el('page-assistant'); }
-  function isMounted() { return !!(state.mounted && page()); }
+  function cloudTransportReady() {
+    return !!(window._cmAssistantRelay && window._cmAssistantRelay.version === 1
+      && typeof window._cmAssistantRelay.identity === 'function');
+  }
+
+  function scopeIdentity() {
+    if (!window.CLOUD_MODE) return 'local';
+    if (!cloudTransportReady()) return 'cloud-unavailable';
+    try { return window._cmAssistantRelay.identity(); }
+    catch (error) { return 'cloud-unavailable'; }
+  }
+
+  function resetScope(identity) {
+    if (state.resettingScope) return;
+    state.resettingScope = true;
+    state.scopeIdentity = identity;
+    state.navigationToken += 1;
+    stopVoice();
+    cancelChat('scope');
+    cancelConversationRequest('scope');
+    cancelAllRequests('scope');
+    state.statusRequest = state.historyRequest = state.checkoutRequest = null;
+    state.status = null;
+    state.statusLoadedAt = state.historyLoadedAt = 0;
+    state.conversationId = null;
+    state.conversations = [];
+    state.dataAvailable = false;
+    state.dataStatusMessage = 'Checking the connection to your computer.';
+    state.voiceBase = state.voiceFinal = state.voiceInterim = '';
+    ['cm-assistant-api-key', 'cm-assistant-input'].forEach(function (id) {
+      var input = el(id);
+      if (input) input.value = '';
+    });
+    clearThread();
+    renderHistory();
+    clearRecovery();
+    updateEngineOptions();
+    renderManagedStatus();
+    renderDataNotice({});
+    renderSetupState();
+    setConversationReady(false);
+    setStatusPill('Checking connection', 'warning');
+    setStatusMessage(state.dataStatusMessage, 'warning');
+    state.resettingScope = false;
+    if (state.mounted) Promise.resolve().then(function () {
+      if (state.mounted && state.scopeIdentity === identity) loadAssistantPage();
+    });
+  }
+
+  function isMounted() {
+    if (!(state.mounted && page())) return false;
+    var identity = scopeIdentity();
+    if (state.scopeIdentity !== null && state.scopeIdentity !== identity) {
+      resetScope(identity);
+      return false;
+    }
+    return true;
+  }
+
+  function requestIsCurrent(request) {
+    return isMounted() && request.scopeIdentity === scopeIdentity()
+      && request.navigationToken === state.navigationToken;
+  }
 
   function make(tag, className, text) {
     var node = document.createElement(tag);
@@ -97,14 +161,14 @@
   }
 
   function errorMessage(error, fallback) {
-    if (error && error._assistantTimedOut) return 'The assistant took too long to respond. The request may still finish on the server and appear in conversation history. Try again only if it does not appear.';
-    if (error && error.name === 'AbortError') return 'Request stopped waiting. The answer may still finish and appear in conversation history.';
+    if (error && error._assistantTimedOut) return 'The connection timed out. Check conversation history before retrying in case the answer was already saved.';
+    if (error && error.name === 'AbortError') return 'Stop requested. Any answer already saved remains in your history.';
     var data = error && error.data;
     var status = error && error.status;
     if (data && data.error === 'no_auth') return 'No assistant engine is connected. Sign in to the local harness or add an Anthropic API key.';
     if (data && data.error === 'missing_api_key') return 'Add an Anthropic API key for this page, then try again.';
     var backendError = data && typeof data.error === 'string' ? data.error.trim() : '';
-    if (backendError && backendError.length <= 600 && !/[<>\u0000-\u001f]/.test(backendError)) return backendError;
+    if (backendError && backendError.length <= 600 && /\s/.test(backendError) && !/[<>\u0000-\u001f]/.test(backendError)) return backendError;
     if (status === 503 || (data && data.status === 503)) return 'The assistant is temporarily unavailable while ClawMetry reconnects to its local data store. Try again in a moment.';
     if (status === 401 || status === 403) return 'This assistant engine is not connected. Choose a local harness or add your own API key.';
     return fallback || 'The assistant could not complete that request. Try again.';
@@ -118,7 +182,8 @@
   function requestJson(url, options, timeoutMs, kind) {
     options = options || {};
     var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    var request = { controller: controller, kind: kind || 'request', timedOut: false, cancelReason: null };
+    var request = { controller: controller, kind: kind || 'request', timedOut: false, cancelReason: null,
+      scopeIdentity: scopeIdentity(), navigationToken: state.navigationToken };
     state.requests.push(request);
     var requestOptions = {};
     Object.keys(options).forEach(function (key) { requestOptions[key] = options[key]; });
@@ -135,7 +200,7 @@
         timeoutError._assistantTimedOut = true;
         timeoutReject(timeoutError);
       }
-    }, timeoutMs || 15000);
+    }, window.CLOUD_MODE ? 30000 : (timeoutMs || 15000));
     var fetchPromise = fetch(url, requestOptions)
       .then(function (response) {
         return response.text().then(function (body) {
@@ -300,7 +365,9 @@
     var notice = el('cm-assistant-data-notice');
     if (!notice) return;
     var message = data && data.data_notice;
-    notice.textContent = message || 'Relevant query results are sent to your selected AI provider.';
+    notice.textContent = window.CLOUD_MODE && cloudTransportReady()
+      ? 'Relevant query results go to your selected AI provider. Conversations and panels are available here and on your agent’s computer.'
+      : (message || 'Relevant query results are sent to your selected AI provider.');
     notice.hidden = false;
   }
 
@@ -330,7 +397,8 @@
     var setup = el('cm-assistant-setup');
     if (setup) setup.classList.toggle('is-ready', !!(state.status && state.status.available && state.dataAvailable !== false));
     if (state.dataAvailable === false) {
-      title.textContent = state.status && state.status.egress_suppressed ? 'External inference is disabled' : 'Open your local dashboard';
+      title.textContent = state.status && state.status.egress_suppressed ? 'External inference is disabled'
+        : (window.CLOUD_MODE ? 'Connect to your computer' : 'Open your local dashboard');
       description.textContent = state.dataStatusMessage || 'This assistant needs the local data store on your agent’s computer.';
     } else if (state.status && state.status.available) {
       title.textContent = 'Good questions to start with';
@@ -448,7 +516,7 @@
     }, 20000, 'managed-checkout');
     state.checkoutRequest = request;
     request.promise.then(function (data) {
-      if (state.checkoutRequest !== request || !isMounted()) return;
+      if (state.checkoutRequest !== request || !requestIsCurrent(request)) return;
       state.checkoutRequest = null;
       var url = data && data.url;
       if (!isHttpsUrl(url)) {
@@ -458,7 +526,7 @@
       }
       window.location.assign(String(url));
     }).catch(function (error) {
-      if (state.checkoutRequest !== request) return;
+      if (state.checkoutRequest !== request || !requestIsCurrent(request)) return;
       state.checkoutRequest = null;
       if (topup) { topup.disabled = false; topup.textContent = 'Add $5 credit'; }
       if (!isMounted()) return;
@@ -468,15 +536,15 @@
 
   function loadStatus() {
     if (state.statusRequest) return;
-    if (window.CLOUD_MODE) {
+    if (window.CLOUD_MODE && !cloudTransportReady()) {
       state.status = { available: false, data_available: false };
       state.dataAvailable = false;
-      state.dataStatusMessage = 'Assistant runs on your agent’s computer, where your private data and harness are available. Open ClawMetry there to ask questions and save panels.';
+      state.dataStatusMessage = 'The cloud connection to your computer is unavailable. Refresh this page to reconnect Assistant.';
       state.statusLoadedAt = Date.now();
       setConversationReady(false);
-      setStatusPill('Available on your computer', 'warning');
+      setStatusPill('Connection unavailable', 'warning');
       setStatusMessage(state.dataStatusMessage, 'warning');
-      renderDataNotice({ data_notice: 'Your local conversations and saved panels are not synced to this hosted dashboard.' });
+      renderDataNotice({});
       renderSetupState();
       ['cm-assistant-input', 'cm-assistant-engine', 'cm-assistant-voice', 'cm-assistant-new-chat'].forEach(function (id) {
         var control = el(id);
@@ -484,24 +552,37 @@
       });
       var billing = el('cm-assistant-managed-note');
       if (billing) billing.hidden = true;
+      renderRecovery({});
       return;
     }
-    var navigationToken = state.navigationToken;
+    ['cm-assistant-input', 'cm-assistant-engine', 'cm-assistant-voice', 'cm-assistant-new-chat'].forEach(function (id) {
+      var control = el(id);
+      if (control) control.disabled = false;
+    });
+    var billing = el('cm-assistant-managed-note');
+    if (billing) billing.hidden = false;
+    if (window.CLOUD_MODE && !state.statusLoadedAt) {
+      state.dataAvailable = false;
+      setConversationReady(false);
+      setStatusPill('Connecting to your computer');
+    }
     var request = requestJson('/api/assistant/status', { credentials: 'same-origin' }, 12000, 'status');
-    request.navigationToken = navigationToken;
     state.statusRequest = request;
     request.promise.then(function (data) {
-      if (state.statusRequest === request) state.statusRequest = null;
-      if (!isMounted() || navigationToken !== state.navigationToken) return;
+      // Status belongs to the node, not the selected conversation. Starting a
+      // new chat while connecting must not discard its readiness response.
+      if (state.statusRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
+      state.statusRequest = null;
       state.status = data || {};
       state.dataAvailable = state.status.data_available !== false && !state.status.egress_suppressed;
       state.dataStatusMessage = state.status.message || '';
-      setConversationReady(state.conversationReady);
+      setConversationReady(!state.conversationRequest);
       state.statusLoadedAt = Date.now();
       var ready = !!state.status.available;
       var provider = state.status.provider ? providerLabel(state.status.provider) : '';
       if (state.dataAvailable === false) {
-        setStatusPill(state.status.egress_suppressed ? 'External inference disabled' : 'Local data unavailable', 'warning');
+        setStatusPill(state.status.egress_suppressed ? 'External inference disabled'
+          : (window.CLOUD_MODE ? 'Connection needs attention' : 'Local data unavailable'), 'warning');
         setStatusMessage(state.dataStatusMessage || 'Local ClawMetry data is unavailable. Reconnect the local store before asking the assistant.', 'warning');
       } else {
         setStatusPill(ready ? 'Ready' + (provider ? ' · ' + provider : '') : 'Connect an engine', ready ? '' : 'warning');
@@ -512,15 +593,60 @@
       renderSetupState();
       updateEngineOptions();
       renderManagedStatus();
+      if (state.dataAvailable === false) renderRecovery(state.status);
+      else clearRecovery();
     }).catch(function (error) {
-      if (state.statusRequest === request) state.statusRequest = null;
-      if (!isMounted() || navigationToken !== state.navigationToken || (error && error.name === 'AbortError' && request.cancelReason)) return;
+      if (state.statusRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
+      state.statusRequest = null;
+      if (error && error.name === 'AbortError' && request.cancelReason) return;
       state.statusLoadedAt = 0;
+      if (window.CLOUD_MODE) {
+        state.dataAvailable = false;
+        state.dataStatusMessage = errorMessage(error, 'Could not connect to your computer. Try again.');
+        setConversationReady(false);
+      }
       setStatusPill('Status unavailable', 'warning');
       renderDataNotice({});
       renderSetupState();
       setStatusMessage(errorMessage(error, 'Assistant status is temporarily unavailable. You can still try a request.'), 'error');
+      renderRecovery(error && error.data);
     });
+  }
+
+  function clearRecovery() {
+    var recovery = el('cm-assistant-recovery');
+    if (!recovery) return;
+    while (recovery.firstChild) recovery.firstChild.remove();
+    recovery.hidden = true;
+  }
+
+  function renderRecovery(data) {
+    var recovery = el('cm-assistant-recovery');
+    if (!recovery) return;
+    clearRecovery();
+    recovery.hidden = false;
+    var identity = scopeIdentity();
+    function retry() {
+      if (!isMounted() || identity !== scopeIdentity()) return;
+      state.statusLoadedAt = state.historyLoadedAt = 0;
+      loadStatus();
+      loadHistory(true);
+    }
+    if (window.CLOUD_MODE && data && (data.reason === 'missing_key' || data.reason === 'decrypt_failed')
+        && typeof window._cmRenderKeyPrompt === 'function') {
+      var unlock = make('div');
+      recovery.appendChild(unlock);
+      window._cmRenderKeyPrompt(unlock, { title: 'Unlock Assistant', onUnlock: function () {
+        if (!state.mounted) return;
+        var current = scopeIdentity();
+        if (current !== state.scopeIdentity) resetScope(current);
+        else retry();
+      } });
+    }
+    var button = make('button', 'cm-assistant-panel-button', 'Retry connection');
+    button.type = 'button';
+    button.addEventListener('click', retry);
+    recovery.appendChild(button);
   }
 
   function relativeDate(value) {
@@ -559,9 +685,9 @@
   }
 
   function loadHistory(force) {
-    if (window.CLOUD_MODE) {
+    if (window.CLOUD_MODE && !cloudTransportReady()) {
       var history = el('cm-assistant-history-list');
-      if (history) history.textContent = 'Conversations are saved on your agent’s computer.';
+      if (history) history.textContent = 'Reconnect to your computer to load saved conversations.';
       return;
     }
     if (state.historyRequest) return;
@@ -569,19 +695,18 @@
       renderHistory();
       return;
     }
-    var navigationToken = state.navigationToken;
     var request = requestJson('/api/assistant/conversations', { credentials: 'same-origin' }, 15000, 'history');
-    request.navigationToken = navigationToken;
     state.historyRequest = request;
     request.promise.then(function (data) {
-      if (state.historyRequest === request) state.historyRequest = null;
-      if (!isMounted() || navigationToken !== state.navigationToken) return;
+      if (state.historyRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
+      state.historyRequest = null;
       state.conversations = Array.isArray(data && data.conversations) ? data.conversations : [];
       state.historyLoadedAt = Date.now();
       renderHistory();
     }).catch(function (error) {
-      if (state.historyRequest === request) state.historyRequest = null;
-      if (!isMounted() || navigationToken !== state.navigationToken || (error && error.name === 'AbortError' && request.cancelReason)) return;
+      if (state.historyRequest !== request || !isMounted() || request.scopeIdentity !== scopeIdentity()) return;
+      state.historyRequest = null;
+      if (error && error.name === 'AbortError' && request.cancelReason) return;
       var list = el('cm-assistant-history-list');
       if (!list) return;
       while (list.firstChild) list.removeChild(list.firstChild);
@@ -832,6 +957,7 @@
       body: JSON.stringify(body),
     }, 20000, 'save-panel');
     request.promise.then(function () {
+      if (!requestIsCurrent(request)) return;
       confirm.disabled = false;
       row.hidden = true;
       trigger.hidden = false;
@@ -846,6 +972,7 @@
       });
       feedback.parentNode.appendChild(home);
     }).catch(function (error) {
+      if (!requestIsCurrent(request)) return;
       confirm.disabled = false;
       if (!isMounted()) return;
       feedback.textContent = errorMessage(error, 'The panel could not be saved. Try again.');
@@ -1059,14 +1186,14 @@
     clearThread();
     addMessage('assistant', 'Loading this conversation...');
     setStatusMessage(hadWaiting
-      ? 'Stopped waiting. The answer may still finish and appear in conversation history. Loading saved conversation.'
+      ? 'Stop requested. Any answer already saved remains in your history. Loading saved conversation.'
       : 'Loading saved conversation...', 'success');
     var request = requestJson('/api/assistant/conversations/' + encodeURIComponent(id), { credentials: 'same-origin' }, 15000, 'conversation');
     request.navigationToken = navigationToken;
     state.conversationRequest = request;
     request.promise.then(function (data) {
       if (state.conversationRequest === request) state.conversationRequest = null;
-      if (!isMounted() || navigationToken !== state.navigationToken) return;
+      if (!requestIsCurrent(request)) return;
       setConversationReady(true);
       clearThread();
       state.conversationId = data && data.id ? data.id : id;
@@ -1096,7 +1223,7 @@
     clearThread();
     showWelcome();
     setStatusMessage(hadWaiting
-      ? 'Stopped waiting. The answer may still finish and appear in conversation history. New conversation ready.'
+      ? 'Stop requested. Any answer already saved remains in your history. New conversation ready.'
       : 'New conversation ready.', 'success');
     var input = el('cm-assistant-input');
     if (input) { input.value = ''; resizeInput(); input.focus(); }
@@ -1122,9 +1249,10 @@
   }
 
   function sendMessage() {
+    if (!isMounted()) return;
     if (state.chatRequest) {
       cancelChat('user');
-      setStatusMessage('Stopped waiting. The answer may still finish and appear in conversation history.', 'success');
+      setStatusMessage('Stop requested. Any answer already saved remains in your history.', 'success');
       return;
     }
     if (!state.conversationReady) {
@@ -1184,7 +1312,7 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }, function (type, data) {
-      if (state.chatRequest !== request || !isMounted()) return;
+      if (state.chatRequest !== request || !requestIsCurrent(request)) return;
       if (type === 'status' && typeof data.message === 'string') {
         pending.progress.textContent = data.message;
       } else if (type === 'delta' && typeof data.text === 'string') {
@@ -1204,11 +1332,13 @@
         if (follow) pending.article.scrollIntoView({ block: 'end' });
       }
     });
+    request.scopeIdentity = scopeIdentity();
+    request.navigationToken = state.navigationToken;
     request.pendingNode = pending;
     state.chatRequest = request;
     if (pending.article.scrollIntoView) pending.article.scrollIntoView({ block: 'end' });
     request.promise.then(function (data) {
-      if (state.chatRequest !== request || !isMounted()) return;
+      if (state.chatRequest !== request || !requestIsCurrent(request)) return;
       if (state.chatRequest === request) state.chatRequest = null;
       setComposerBusy(false);
       pending.article.classList.remove('is-streaming');
@@ -1221,14 +1351,14 @@
       loadHistory(true);
     }).catch(function (error) {
       var reason = request.cancelReason;
-      if (state.chatRequest !== request) return;
+      if (state.chatRequest !== request || !requestIsCurrent(request)) return;
       state.chatRequest = null;
       setComposerBusy(false);
       pending.article.classList.remove('is-streaming');
       state.pendingNode = null;
       if (!isMounted() || reason === 'leave' || reason === 'conversation' || reason === 'new-chat') return;
       if (reason === 'user' || (error && error.name === 'AbortError')) {
-        setStatusMessage('Stopped waiting. The answer may still finish and appear in conversation history.', 'success');
+        setStatusMessage('Stop requested. Any answer already saved remains in your history.', 'success');
         return;
       }
       var messageText = errorMessage(error);
@@ -1282,6 +1412,12 @@
     var input = el('cm-assistant-input');
     if (!input) return;
     var recognition = new Recognition();
+    var voiceScope = scopeIdentity();
+    var voiceNavigation = state.navigationToken;
+    function voiceIsCurrent() {
+      return isMounted() && state.voice === recognition && voiceScope === scopeIdentity()
+        && voiceNavigation === state.navigationToken;
+    }
     state.voice = recognition;
     state.voiceActive = true;
     state.voiceBase = String(input.value || '').trim();
@@ -1291,11 +1427,12 @@
     recognition.interimResults = true;
     recognition.lang = navigator.language || 'en-US';
     recognition.onstart = function () {
-      if (!isMounted()) return;
+      if (!voiceIsCurrent()) return;
       setVoiceUi(true);
       setStatusMessage('Listening. Review the transcript before sending.', 'success');
     };
     recognition.onresult = function (event) {
+      if (!voiceIsCurrent()) return;
       var interim = '';
       for (var i = event.resultIndex; i < event.results.length; i++) {
         var text = event.results[i][0].transcript || '';
@@ -1308,6 +1445,7 @@
       if (interim) setStatusMessage('Listening: ' + interim + ' · review before sending.', 'success');
     };
     recognition.onerror = function (event) {
+      if (!voiceIsCurrent()) return;
       state.voiceActive = false;
       setVoiceUi(false);
       if (!isMounted()) return;
@@ -1316,6 +1454,7 @@
         : 'Voice input could not start. You can still type your question.', 'warning');
     };
     recognition.onend = function () {
+      if (!voiceIsCurrent()) return;
       state.voiceActive = false;
       state.voiceInterim = '';
       setVoiceUi(false);
@@ -1373,6 +1512,12 @@
     initialize();
     if (!page()) return;
     state.mounted = true;
+    var identity = scopeIdentity();
+    if (state.scopeIdentity !== null && state.scopeIdentity !== identity) {
+      resetScope(identity);
+      return;
+    }
+    state.scopeIdentity = identity;
     if (!el('cm-assistant-thread').childElementCount) showWelcome();
     if (!state.statusLoadedAt || Date.now() - state.statusLoadedAt > 30000) loadStatus();
     if (!state.historyLoadedAt || Date.now() - state.historyLoadedAt > 30000) loadHistory(false);
@@ -1399,6 +1544,12 @@
 
   window.loadAssistantPage = loadAssistantPage;
   window.assistantLeave = assistantLeave;
+
+  if (typeof window.addEventListener === 'function') window.addEventListener('cm-assistant-scope-changed', function () {
+    if (!window.CLOUD_MODE || !state.initialized) return;
+    var identity = scopeIdentity();
+    if (state.scopeIdentity !== identity) resetScope(identity);
+  });
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize);
   else initialize();

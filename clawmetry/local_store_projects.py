@@ -23,6 +23,7 @@ Public API:
   - query_project_usage(days, now)           -> projects with spend + totals
   - add_project_assignment(...)              -> {ok, assignment | error}
   - query_project_assignments()              -> history, superseded marked
+  - record_env_project_assignments(name, since) -> {ok, assigned | error}
   - upsert_project_budget(...)               -> {ok, budget | error}
   - delete_project_budget(budget_id)         -> {ok, deleted}
   - query_project_budgets()                  -> budgets
@@ -50,6 +51,10 @@ log = logging.getLogger("clawmetry.local_store.projects")
 _BUCKET_CACHE: dict = {}
 _BUCKET_CACHE_LOCK = threading.Lock()
 _IN_CHUNK = 500
+
+# Actor on the assignments the collector records from ``CLAWMETRY_PROJECT``.
+ENV_ASSIGNMENT_ACTOR = "daemon:env"
+ENV_ASSIGNMENT_REASON = "CLAWMETRY_PROJECT was set on the collector when this session started"
 
 
 def _cache_ttl() -> float:
@@ -337,6 +342,54 @@ class ProjectsMixin:
                  row["actor"], row["reason"], row["created_at"]])
         row["project_id"] = _pa.assigned_project_id(row["project_name"])
         return {"ok": True, "assignment": row}
+
+    def record_env_project_assignments(self, project_name: str = "",
+                                       since: Any = None) -> dict[str, Any]:
+        """Assign sessions to the project the collector's environment names.
+
+        Covers sessions that started at or after ``since`` and carry no
+        session-level assignment yet, so a call per tick records each session
+        once and never overrides an operator's own assignment. A session with
+        no known start is left alone. Rows are ordinary session assignments
+        with actor ``daemon:env``; a later correction supersedes them."""
+        name = " ".join(str(project_name or "").split())
+        if not name:
+            return _fail("project_name is required")
+        if len(name) > _pa._MAX_NAME:
+            return _fail(f"project_name must be at most {_pa._MAX_NAME} characters")
+        since_e = _pa.to_epoch(since)
+        if since_e is None:
+            return _fail("since is required")
+        if getattr(self, "_read_only", False):
+            return _fail("store is read-only in this process")
+        try:
+            rows = self._fetch(
+                "SELECT s.session_id, s.started_at, s.last_active_at FROM sessions s "
+                "WHERE NOT EXISTS (SELECT 1 FROM project_assignments a "
+                "WHERE a.match_type = 'session' AND a.match_value = s.session_id)", [])
+        except Exception:  # noqa: BLE001
+            return _fail("store query failed")
+        starts: dict[str, float] = {}
+        for sid, started, last in rows:
+            at = _pa.to_epoch(started or last)
+            if not sid or at is None:
+                continue
+            sid = str(sid)
+            starts[sid] = min(at, starts.get(sid, at))
+        targets = sorted(sid for sid, at in starts.items() if at >= since_e)
+        if not targets:
+            return {"ok": True, "assigned": 0, "project_id": _pa.assigned_project_id(name)}
+        now_ms = int(time.time() * 1000)
+        with self._write_lock:
+            self._conn.executemany(
+                "INSERT INTO project_assignments (assignment_id, match_type, match_value, "
+                "project_name, effective_from, effective_to, actor, reason, created_at) "
+                "VALUES (?, 'session', ?, ?, NULL, NULL, ?, ?, ?)",
+                [["pa_" + uuid.uuid4().hex[:16], sid[:200], name,
+                  ENV_ASSIGNMENT_ACTOR, ENV_ASSIGNMENT_REASON, now_ms]
+                 for sid in targets])
+        return {"ok": True, "assigned": len(targets),
+                "project_id": _pa.assigned_project_id(name)}
 
     def query_project_assignments(self) -> list[dict]:
         rows = _pa.annotate_superseded(self._project_assignment_rows())

@@ -151,7 +151,7 @@ def _json_request(path: str, *, method: str = "GET", payload: dict | None = None
     return value
 
 
-def status() -> dict:
+def status(*, control=None) -> dict:
     """Return account balance plus separate deployed/readiness indicators."""
     if not configured():
         return {
@@ -161,12 +161,13 @@ def status() -> dict:
             "capability_advertised": False,
             "balance_cents": None,
         }
+    request_options = {"control": control} if control is not None else {}
     capability_advertised = False
     endpoint_ready = False
     provider_available = False
     health = {}
     try:
-        config = _json_request("/api/config")
+        config = _json_request("/api/config", **request_options)
         capability = config.get("managed_assistant")
         capability_advertised = (
             isinstance(capability, dict)
@@ -177,7 +178,7 @@ def status() -> dict:
     except (ManagedAssistantError, TypeError, ValueError):
         capability_advertised = False
     try:
-        health = _json_request("/api/assistant/status") if capability_advertised else {}
+        health = _json_request("/api/assistant/status", **request_options) if capability_advertised else {}
         endpoint_ready = health.get("endpoint_ready") is True
         provider_available = health.get("available") is True
     except ManagedAssistantError:
@@ -191,7 +192,7 @@ def status() -> dict:
         else:
             # Keep the existing billing surface as a diagnostic fallback. It
             # never makes the managed completion available by itself.
-            value = _json_request("/api/billing")
+            value = _json_request("/api/billing", **request_options)
     except ManagedAssistantError:
         return {
             "configured": True,
@@ -257,7 +258,7 @@ def complete(system: str, prompt: str, *, control=None) -> str:
         raise ManagedAssistantUnavailable("managed assistant returned invalid completion") from None
 
 
-def checkout(amount_cents: int = 500) -> str:
+def checkout(amount_cents: int = 500, *, control=None) -> str:
     """Create an existing Builder checkout; callers invoke this only on click."""
     if isinstance(amount_cents, bool) or not isinstance(amount_cents, int) or amount_cents < 500:
         raise ManagedAssistantCreditsError("managed assistant top-up amount is invalid")
@@ -265,6 +266,7 @@ def checkout(amount_cents: int = 500) -> str:
         "/api/credits/checkout",
         method="POST",
         payload={"amount_cents": amount_cents, "currency": "usd"},
+        **({"control": control} if control is not None else {}),
     )
     url = value.get("url")
     if not isinstance(url, str) or not url.startswith(("https://", "http://")):

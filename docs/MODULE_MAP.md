@@ -4,7 +4,7 @@
 > `python3 scripts/gen_module_map.py` (CI fails on drift via
 > `tests/test_module_map_drift.py`).
 
-319 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
+324 modules, 93 Flask blueprints. `CLAUDE.md` carries a short curated table of the ones you reach for most often; this is the whole list.
 
 Size bands are deliberately coarse so this file does not churn on every PR: **small** is under 200 lines, **medium** under 1k, **large** under 5k, **huge** is 5k and up.
 
@@ -34,7 +34,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/apikeys_admin.py` | small | `bp_apikeys_admin` | `/api/apikeys` | create, list and revoke the node's API keys. |
 | `routes/approval_routing.py` | small | `bp_approval_routing` | `/a`, `/a/decide`, `/api/approvals` | OSS stub after the impl moved to clawmetry-pro. |
 | `routes/assets.py` | small | `bp_assets` | `/api/assets` | OSS asset registry API. |
-| `routes/assistant.py` | medium | `bp_assistant` | `/api/assistant` | Conversational, read-only analytics over the local DuckDB data plane. |
+| `routes/assistant.py` | small | `bp_assistant` | `/api/assistant` | Local Assistant JSON/SSE interface backed by the single daemon executor. |
 | `routes/attention.py` | medium | `bp_attention` | `/api/attention`, `/api/hooks` | "which of my agents needs me right now". |
 | `routes/audit.py` | small | `bp_audit` | `/api/audit-log` | Enterprise audit-log query endpoint. |
 | `routes/autonomy.py` | medium | `bp_autonomy` | `/api/autonomy` | Autonomy Score endpoint. |
@@ -48,7 +48,7 @@ One module per feature, each owning one or more Flask blueprints. New endpoints 
 | `routes/components.py` | large | `bp_components` | `/api/component` | Per-panel component detail endpoints. |
 | `routes/context_economics.py` | small | `bp_context_economics` | `/api/context-coverage`, `/api/context-economics` | context-window economics (PRD P1-2). |
 | `routes/crons.py` | large | `bp_crons` | `/api/agent-intentions`, `/api/cron`, `/api/cron-health`, `/api/cron-run-log`, `/api/crons` | Cron CRUD + health + run-log endpoints. |
-| `routes/dashboards.py` | small | `bp_dashboards` | `/api/dashboard` | Saved, user-authored dashboard panels. |
+| `routes/dashboards.py` | small | `bp_dashboards` | `/api/dashboard` | Saved dashboard HTTP contracts using the node's shared Assistant service. |
 | `routes/delegated.py` | small | `bp_delegated` | `/api/cursor`, `/api/delegated-usage` | Connect a Cursor account from the dashboard, and read delegated usage. |
 | `routes/device.py` | medium | `bp_device` | `/api/device`, `/device-preview` | Device snapshot — a compact, screen-sized JSON for hardware companions. |
 | `routes/dives.py` | medium | `bp_dives` | `/api/dives` | ClawMetry Dives: NL-to-SQL-to-chart over the local DuckDB store. |
@@ -158,8 +158,13 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/approval_events.py` | small | The public seam between approvals and whoever delivers them. |
 | `clawmetry/approvals.py` | large | cloud-mediated approval policy engine. |
 | `clawmetry/assessment_privacy.py` | medium | Mandatory, local-only masking for explicitly consented assessments. |
+| `clawmetry/assistant_executor.py` | medium | Single daemon-owned Assistant execution and persistence boundary. |
+| `clawmetry/assistant_http.py` | small | Local HTTP adapters for typed daemon Assistant jobs; no inference here. |
 | `clawmetry/assistant_managed.py` | medium | Optional bridge to ClawMetry's account-metered managed assistant. |
 | `clawmetry/assistant_providers.py` | medium | Assistant text-only CLI and Anthropic streaming transports (no SDK needed). |
+| `clawmetry/assistant_receipts.py` | small | Durable at-most-once Assistant work on the daemon's existing DuckDB writer. |
+| `clawmetry/assistant_relay.py` | medium | Authenticated encrypted Assistant adapter over the existing node relay. |
+| `clawmetry/assistant_service.py` | medium | One Assistant implementation for local and encrypted remote adapters. |
 | `clawmetry/assistant_stream.py` | medium | Bounded Assistant SSE lifecycle, cancellation and incremental redaction. |
 | `clawmetry/attention_hook.py` | small | the `clawmetry hook attention` client. |
 | `clawmetry/audit.py` | medium | append-only audit log. |

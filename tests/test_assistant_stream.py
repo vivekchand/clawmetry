@@ -19,7 +19,8 @@ from urllib.error import HTTPError, URLError
 import pytest
 from flask import Flask
 
-import routes.assistant as assistant
+from clawmetry import assistant_service as assistant
+from tests.assistant_test_support import daemon_adapter
 from clawmetry import assistant_managed as managed
 from clawmetry import assistant_providers as providers
 from clawmetry import assistant_stream as stream
@@ -38,11 +39,9 @@ def unpack(chunk):
 
 
 @pytest.fixture
-def chat(monkeypatch):
+def chat(monkeypatch, daemon_adapter):
     app = Flask(__name__)
     app.register_blueprint(assistant.bp_assistant)
-    monkeypatch.setattr(assistant, "_gate", threading.BoundedSemaphore(2))
-    monkeypatch.setattr(assistant, "_conversations_in_flight", set())
     monkeypatch.setattr(assistant, "_egress_suppressed", lambda: False)
     monkeypatch.setattr(assistant, "_planner_system", lambda window: assistant._PLAN)
     monkeypatch.setattr(assistant, "_provider", lambda *a: ("anthropic", "sk-ant-test-credential"))
@@ -122,15 +121,19 @@ def test_deltas_arrive_before_provider_completion_and_history_commit(chat, monke
 @pytest.mark.parametrize("flag", [None, False, "true", 1])
 def test_only_boolean_true_selects_streaming(chat, monkeypatch, flag):
     _app, client, saved = chat
-    monkeypatch.setattr(assistant, "_generate", lambda *a: json.dumps({"answer": "JSON answer", "queries": []}))
-    monkeypatch.setattr(providers, "generate", lambda *a, **k: pytest.fail("nonstream used streaming transport"))
+    calls = []
+    def generated(*args, **kwargs):
+        calls.append(kwargs)
+        assert kwargs.get("on_text") is None
+        return json.dumps({"answer": "JSON answer", "queries": []})
+    monkeypatch.setattr(providers, "generate", generated)
     payload = {"message": "Hello"}
     if flag is not None:
         payload["stream"] = flag
     result = client.post("/api/assistant/chat", json=payload)
     assert result.is_json and result.status_code == 200
     assert result.get_json()["answer"] == "JSON answer"
-    assert len(saved) == 1
+    assert len(saved) == 1 and len(calls) == 1
 
 
 def test_no_query_stream_uses_real_synthesis_without_emitting_planner_json(chat, monkeypatch):
@@ -223,20 +226,24 @@ def test_persistence_failure_sends_error_instead_of_done(chat, monkeypatch):
 
 
 @pytest.mark.parametrize("consume_first", [False, True])
-def test_close_before_worker_start_releases_slot_and_conversation(chat, monkeypatch, consume_first):
+def test_close_local_response_cancels_daemon_job(chat, monkeypatch, consume_first):
     app, _client, saved = chat
-    monkeypatch.setattr(providers, "generate", lambda *a, **k: pytest.fail("closed response started provider"))
-    with app.test_request_context(json={"message": "Count", "stream": True, "conversation_id": "old"}):
-        response = assistant.assistant_chat()
-    assert assistant._conversations_in_flight == {"old"}
+    def blocked(*args, **kwargs):
+        while True:
+            kwargs['control'].check()
+            threading.Event().wait(.01)
+    monkeypatch.setattr(providers, 'generate', blocked)
+    with app.test_request_context(json={'message':'Count','stream':True,'conversation_id':'old'}):
+        response=assistant.assistant_chat()
     if consume_first:
-        assert unpack(next(iter(response.response)))[0] == "status"
-    response.close()
-    response.close()  # cleanup is idempotent
+        assert unpack(next(iter(response.response)))[0]=='status'
+    response.close(); response.close()
+    for _ in range(100):
+        if not assistant._conversations_in_flight:break
+        threading.Event().wait(.01)
     assert not assistant._conversations_in_flight
     assert assistant._gate.acquire(False) and assistant._gate.acquire(False)
-    assistant._gate.release()
-    assistant._gate.release()
+    assistant._gate.release(); assistant._gate.release()
     assert not saved
 
 
@@ -277,12 +284,20 @@ def test_cancel_during_plan_keeps_worker_bounded_until_it_exits(chat, monkeypatc
     assert exited.wait(1)
     jobs[0].worker.join(1)
     assert not jobs[0].worker.is_alive()
+    for _ in range(100):
+        if not assistant._conversations_in_flight:break
+        threading.Event().wait(.01)
     assert not assistant._conversations_in_flight
     assert saved == []
 
 
 def test_stream_admission_and_preflight_errors_remain_json(chat, monkeypatch):
     _app, client, _saved = chat
+    def blocked(*args, **kwargs):
+        while True:
+            kwargs['control'].check()
+            threading.Event().wait(.01)
+    monkeypatch.setattr(providers, 'generate', blocked)
     one = client.post("/api/assistant/chat", json={"message": "One", "stream": True})
     two = client.post("/api/assistant/chat", json={"message": "Two", "stream": True})
     try:
@@ -291,6 +306,9 @@ def test_stream_admission_and_preflight_errors_remain_json(chat, monkeypatch):
     finally:
         one.close()
         two.close()
+    for _ in range(100):
+        if not assistant._conversations_in_flight:break
+        threading.Event().wait(.01)
     monkeypatch.setattr(assistant, "_egress_suppressed", lambda: True)
     monkeypatch.setattr(assistant, "_provider", lambda *a: pytest.fail("offline called provider"))
     offline = client.post("/api/assistant/chat", json={"message": "Count", "stream": True})
@@ -318,13 +336,18 @@ def test_request_deadline_cancels_full_queue_and_releases_worker(chat, monkeypat
     _app, client, saved = chat
     monkeypatch.setattr(stream, "REQUEST_SECONDS", 0.1)
     monkeypatch.setattr(stream, "QUEUE_SIZE", 1)
-    native(monkeypatch, chunks=("word ",) * 1000)
+    def endless(mode, credential, system, prompt, **kwargs):
+        if system.startswith(assistant._PLAN):return json.dumps(PLAN)
+        while True:
+            kwargs['control'].check()
+            kwargs['on_text']('word ')
+            threading.Event().wait(.001)
+    monkeypatch.setattr(providers,'generate',endless)
     response = client.post("/api/assistant/chat", json={"message": "Count", "stream": True})
     iterator = iter(response.response)
     assert unpack(next(iterator))[0] == "status"
-    assert unpack(next(iterator))[0] == "status"
-    # Let the worker's queue fill while the client stops reading. The deadline
-    # must cancel queue.put as well as provider reads, without another consumer.
+    # The daemon continues consuming when HTTP pauses. The independent
+    # deadline must still cancel generation without another browser read.
     threading.Event().wait(0.2)
     events = list(map(unpack, iterator))
     assert events[-1][0] == "error" and "too long" in events[-1][1]["error"]
@@ -332,24 +355,18 @@ def test_request_deadline_cancels_full_queue_and_releases_worker(chat, monkeypat
     assert not assistant._conversations_in_flight and saved == []
 
 
-def test_completed_but_unconsumed_result_does_not_persist(chat, monkeypatch):
+def test_committed_daemon_result_survives_http_disconnect(chat, monkeypatch, daemon_adapter):
+    # ADR-007: once the daemon's atomic commit crossed its live-lease barrier,
+    # a browser disconnect cannot turn the completed answer into a lost turn.
     _app, client, saved = chat
     native(monkeypatch)
-    captured = []
-    original = stream.StreamJob.start
-
-    def start(self, work):
-        captured.append(self)
-        original(self, work)
-
-    monkeypatch.setattr(stream.StreamJob, "start", start)
-    response = client.post("/api/assistant/chat", json={"message": "Count", "stream": True})
-    iterator = iter(response.response)
-    next(iterator)
-    next(iterator)
-    assert captured[0].finished.wait(2)
+    response=client.post('/api/assistant/chat',json={'message':'Count','stream':True})
+    for _ in range(100):
+        if saved and all(j.terminal for j in daemon_adapter.jobs.values()):break
+        threading.Event().wait(.01)
     response.close()
-    assert saved == [] and not assistant._conversations_in_flight
+    assert len(saved)==1
+    assert saved[0]['messages'][-1]['content']=='Three sessions.'
 
 
 @pytest.mark.parametrize("raw", [

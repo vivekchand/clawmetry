@@ -7,6 +7,8 @@
   var _charts = {};
   var _loadGeneration = 0;
   var _activeControllers = [];
+  var _scopeIdentity = null;
+  var _mounted = false;
   var LOAD_TIMEOUT_MS = 15000;
 
   function removeController(controller) {
@@ -23,12 +25,66 @@
   }
 
   function isCurrentLoad(generation) {
-    return generation === _loadGeneration;
+    if (_scopeIdentity !== scopeIdentity()) {
+      clearScope();
+      return false;
+    }
+    return _mounted && generation === _loadGeneration;
+  }
+
+  function cloudTransportReady() {
+    return !!(window._cmAssistantRelay && window._cmAssistantRelay.version === 1
+      && typeof window._cmAssistantRelay.identity === 'function');
+  }
+
+  function scopeIdentity() {
+    if (!window.CLOUD_MODE) return 'local';
+    if (!cloudTransportReady()) return 'cloud-unavailable';
+    try { return window._cmAssistantRelay.identity(); }
+    catch (error) { return 'cloud-unavailable'; }
+  }
+
+  function clearScope() {
+    stopActiveLoads();
+    destroyCharts();
+    _scopeIdentity = scopeIdentity();
+    var grid = document.getElementById('custom-dashboard-grid');
+    if (grid) grid.textContent = '';
+    if (_mounted) Promise.resolve().then(function () {
+      if (_mounted) loadCustomDashboardPanels();
+    });
+  }
+
+  function showRecovery(container, error) {
+    var generation = _loadGeneration;
+    var message = document.createElement('div');
+    message.className = 'cm-dashboard-empty-state';
+    message.textContent = loadError(error, 'Saved panels');
+    container.appendChild(message);
+    var data = error && error.data;
+    if (window.CLOUD_MODE && data && (data.reason === 'missing_key' || data.reason === 'decrypt_failed')
+        && typeof window._cmRenderKeyPrompt === 'function') {
+      var unlock = document.createElement('div');
+      container.appendChild(unlock);
+      window._cmRenderKeyPrompt(unlock, { title: 'Unlock saved panels', onUnlock: function () {
+        if (_mounted) loadCustomDashboardPanels();
+      } });
+    }
+    var retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn-xs';
+    retry.textContent = 'Retry connection';
+    retry.addEventListener('click', function () {
+      if (isCurrentLoad(generation)) loadCustomDashboardPanels();
+    });
+    container.appendChild(retry);
   }
 
   function loadError(error, subject) {
     if (error && error.code === 'timeout') return subject + ' timed out. Try again.';
-    if (error && error.status) return subject + ' failed to load (HTTP ' + error.status + ').';
+    var message = error && error.data && error.data.error;
+    if (typeof message === 'string' && message.length < 600 && /\s/.test(message)
+        && !/[<>\u0000-\u001f]/.test(message)) return message;
     return subject + ' could not be loaded. Try again.';
   }
 
@@ -42,7 +98,7 @@
       _activeControllers.push(controller);
     }
     var timer;
-    var timeout = timeoutMs || LOAD_TIMEOUT_MS;
+    var timeout = window.CLOUD_MODE ? 30000 : (timeoutMs || LOAD_TIMEOUT_MS);
     var timeoutPromise = new Promise(function (_, reject) {
       timer = setTimeout(function () {
         if (controller) controller.abort();
@@ -266,12 +322,14 @@
     var section = document.getElementById('custom-dashboard-section');
     var grid = document.getElementById('custom-dashboard-grid');
     if (!section || !grid) return;
+    _mounted = true;
     stopActiveLoads();
+    _scopeIdentity = scopeIdentity();
     var generation = _loadGeneration;
     destroyCharts();
-    if (window.CLOUD_MODE) {
+    if (window.CLOUD_MODE && !cloudTransportReady()) {
       section.style.display = '';
-      grid.textContent = 'Your custom panels are saved on your agent’s computer. Open the local ClawMetry dashboard to create or view them.';
+      grid.textContent = 'The cloud connection to your computer is unavailable. Refresh this page to load saved panels.';
       return;
     }
     grid.innerHTML = '<div class="cm-dashboard-loading">Loading saved panels…</div>';
@@ -310,7 +368,8 @@
     } catch (e) {
       if (!isCurrentLoad(generation)) return;
       section.style.display = '';
-      grid.innerHTML = '<div class="cm-dashboard-empty-state">Saved panels could not be loaded right now. Try refreshing the Home tab.</div>';
+      grid.innerHTML = '';
+      showRecovery(grid, e);
     }
   }
 
@@ -331,4 +390,11 @@
   }
 
   window.loadCustomDashboardPanels = loadCustomDashboardPanels;
+  window.customDashboardLeave = function () {
+    _mounted = false;
+    stopActiveLoads();
+  };
+  if (typeof window.addEventListener === 'function') window.addEventListener('cm-assistant-scope-changed', function () {
+    if (window.CLOUD_MODE && _scopeIdentity !== scopeIdentity()) clearScope();
+  });
 }());

@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 from flask import Flask
 
-import routes.assistant as assistant
+from clawmetry import assistant_service as assistant
+from tests.assistant_test_support import daemon_adapter
 
 
 def test_dashboard_registers_the_assistant_blueprint():
@@ -37,7 +38,7 @@ def test_assistant_store_methods_are_available_through_the_daemon_contract():
 
 
 @pytest.fixture()
-def client():
+def client(daemon_adapter):
     app = Flask(__name__)
     app.register_blueprint(assistant.bp_assistant)
     with assistant._conversation_lock:
@@ -77,7 +78,7 @@ def _generator(monkeypatch, plans, *, answer="Grounded answer"):
             return answer
         raise AssertionError("unexpected assistant prompt")
 
-    monkeypatch.setattr(assistant, "_generate", fake_generate)
+    monkeypatch.setattr(assistant, "_stream_generate", lambda control, mode, credential, system, prompt, **kw: fake_generate(mode, credential, system, prompt))
     return calls
 
 
@@ -402,7 +403,7 @@ def test_managed_status_shows_only_verified_credit_balance(client, monkeypatch):
     _chat_store(monkeypatch)
     _provider(monkeypatch, mode='managed', credential='configured')
     monkeypatch.setattr(assistant.managed, 'configured', lambda: True)
-    monkeypatch.setattr(assistant, '_managed_status', lambda window: {
+    monkeypatch.setattr(assistant, '_managed_status', lambda window, **kw: {
         'available': True, 'balance_cents': 321, 'starter_allowance_cents': 500,
     })
     body = client.get('/api/assistant/status').get_json()
@@ -414,7 +415,8 @@ def test_managed_status_shows_only_verified_credit_balance(client, monkeypatch):
 
 def test_topup_requires_explicit_post_and_only_creates_checkout(client, monkeypatch):
     calls = []
-    monkeypatch.setattr(assistant.managed, 'checkout', lambda amount: calls.append(amount) or 'https://checkout.stripe.com/test')
+    monkeypatch.setattr(assistant.managed, 'configured', lambda: True)
+    monkeypatch.setattr(assistant.managed, 'checkout', lambda amount, **kw: calls.append(amount) or 'https://checkout.stripe.com/test')
     assert client.get('/api/assistant/credits/checkout').status_code == 405
     assert client.post('/api/assistant/credits/checkout', json={'amount_cents': 5000}).status_code == 400
     assert calls == []
@@ -431,7 +433,7 @@ def test_empty_managed_credits_return_actionable_error(client, monkeypatch):
     def exhausted(*args):
         raise assistant.managed.ManagedAssistantCreditsError('credits unavailable')
 
-    monkeypatch.setattr(assistant, '_generate', exhausted)
+    monkeypatch.setattr(assistant, '_stream_generate', lambda *a, **kw: exhausted())
     response = client.post('/api/assistant/chat', json={'message': 'Show my cost', 'provider': 'managed'})
     assert response.status_code == 402
     assert 'Top up' in response.get_json()['error']
@@ -472,7 +474,7 @@ def test_generation_errors_do_not_echo_internal_exception_details(client, monkey
     _chat_store(monkeypatch)
     def fail(*args):
         raise failure('private-path /tmp/private-key sk-ant-secret')
-    monkeypatch.setattr(assistant, '_generate', fail)
+    monkeypatch.setattr(assistant, '_stream_generate', lambda *a, **kw: fail())
     response = client.post('/api/assistant/chat', json={'message': 'Show usage'})
     assert response.status_code == 502
     assert 'private' not in response.get_data(as_text=True)

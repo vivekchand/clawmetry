@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from clawmetry import harness
-from routes import advisor, assistant
+from routes import advisor
+from clawmetry import assistant_service as assistant
 
 
 @pytest.fixture
