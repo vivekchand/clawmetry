@@ -1,4 +1,11 @@
-"""Hosted surfaces must not query the cloud container as if it were a node."""
+"""Hosted surfaces use the encrypted node transport and reject stale output.
+
+AC-ASSIST-007.5 -- node/account/key changes clear decrypted content before render.
+AC-ASSIST-007.7 -- missing or incorrect keys offer unlock and a usable retry.
+
+Real encryption and exact owner authorization are also exercised in the cloud
+relay suite; these browser tests check the shared UI after that boundary.
+"""
 from pathlib import Path
 import shutil
 import subprocess
