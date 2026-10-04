@@ -32281,6 +32281,38 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     return '<div class="replay-tree-truncated" role="note">' + _escape(msg) + '</div>';
   }
 
+  // Notices above the turns (clawmetry-pro#135). A branched conversation
+  // (Pi) is replayed along its active branch only, and Aider's history
+  // file holds no tool calls. Without the notice both read as complete.
+  function _renderNotes(tree) {
+    var notes = [];
+    var b = tree && tree.branches;
+    if (b && typeof b.branch_points === 'number' && b.branch_points >= 1) {
+      var points = Math.floor(b.branch_points);
+      var off = (typeof b.entries_off_active_path === 'number' && b.entries_off_active_path > 0)
+        ? Math.floor(b.entries_off_active_path) : 0;
+      var text = _tr('trail.branch_note', {n: points},
+                     'Branch points in this conversation: ' + points +
+                     '. The replay follows the active branch.');
+      if (off) {
+        text += ' ' + _tr('trail.branch_note_hidden', {n: off},
+                          'Entries on other branches, not shown: ' + off + '.');
+      }
+      notes.push(['branches', text]);
+    }
+    if (tree && tree.runtime === 'aider') {
+      notes.push(['aider', _tr('trail.aider_note', null,
+        'Aider keeps prompts, replies, confirmations and applied edits in its ' +
+        'history file. It keeps no tool calls and no reasoning, so the replay lists none.')]);
+    }
+    var html = '';
+    for (var i = 0; i < notes.length; i++) {
+      html += '<div class="replay-tree-note" data-note="' +
+              notes[i][0] + '" role="note">' + _escape(notes[i][1]) + '</div>';
+    }
+    return html;
+  }
+
   // ── Workflow graph (clawmetry-pro#132) ────────────────────────────────
   // A workflow.start whose payload carries `nodes` (and `edges`) is drawn
   // as a graph: one box per node, coloured by the status of its last run.
@@ -32486,6 +32518,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
                _escape(tree.runtime || 'unknown') + '">';
     html += _renderModeChip(tree.mode);
     html += _renderTruncated(tree);
+    html += _renderNotes(tree);
     html += _renderWorkflows(tree.workflows, tree.runtime);
     for (var i = 0; i < (tree.turns || []).length; i++) {
       html += _renderTurn(tree.turns[i], tree.runtime);
