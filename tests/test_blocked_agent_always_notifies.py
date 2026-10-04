@@ -115,6 +115,58 @@ def test_a_deliberate_hook_denial_is_not_a_blocked_agent():
                                      facts={"idle_seconds": 9999}) is None
 
 
+def _envelope_call(tool: str, call: str, i: int) -> dict:
+    return _ev("assistant", {"type": "assistant", "message": {
+        "role": "assistant", "content": [
+            {"type": "tool_use", "id": call, "name": tool, "input": {}}]}}, i)
+
+
+def _envelope_result(call: str, text: str, i: int, is_error: bool = True) -> dict:
+    # The Anthropic message format carries a tool's output in a user message.
+    return _ev("user", {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": call, "content": text,
+         "is_error": is_error}]}}, i)
+
+
+def test_hook_errors_in_user_messages_are_a_blocked_agent():
+    evs = _newest_first(_envelope_call("Read", "t1", 1), _envelope_result("t1", _OWN, 2),
+                        _envelope_call("Bash", "t2", 3), _envelope_result("t2", _OWN, 4))
+    inc = detectors.blocked_on_user(evs, "openclaw:s8", "openclaw",
+                                    facts={"idle_seconds": 5})
+    assert inc and inc["severity"] == "critical"
+    assert inc["evidence"]["hook_errors"] == 2
+    assert inc["evidence"]["own_gate"] is True
+    assert inc["first_bad_step"] == 1
+
+
+def test_foreign_hook_error_in_a_user_message_after_idle_is_a_warning():
+    evs = _newest_first(_envelope_call("Bash", "t1", 1),
+                        _envelope_result("t1", _FOREIGN, 2))
+    inc = detectors.blocked_on_user(evs, "openclaw:s9", "openclaw",
+                                    facts={"idle_seconds": 600})
+    assert inc and inc["severity"] == "warning"
+    assert inc["evidence"]["hook_errors"] == 1
+
+
+def test_a_successful_reply_in_a_user_message_means_it_recovered():
+    evs = _newest_first(
+        _envelope_call("Read", "t1", 1), _envelope_result("t1", _OWN, 2),
+        _envelope_call("Read", "t2", 3), _envelope_result("t2", _OWN, 4),
+        _envelope_call("Read", "t3", 5), _envelope_result("t3", "ok", 6, False))
+    assert detectors.blocked_on_user(evs, "s10", "openclaw",
+                                     facts={"idle_seconds": 9999}) is None
+
+
+def test_a_typed_user_message_after_user_message_hook_errors_clears_it():
+    evs = _newest_first(
+        _envelope_call("Read", "t1", 1), _envelope_result("t1", _OWN, 2),
+        _envelope_call("Bash", "t2", 3), _envelope_result("t2", _OWN, 4),
+        _ev("user", {"type": "user", "message": {
+            "role": "user", "content": "fixed the hook"}}, 5))
+    assert detectors.blocked_on_user(evs, "s11", "openclaw",
+                                     facts={"idle_seconds": 9999}) is None
+
+
 def test_run_all_surfaces_the_own_gate_incident():
     evs = _newest_first(_call("Read", 1), _hook_err(_OWN, 2),
                         _call("Bash", 3), _hook_err(_OWN, 4))

@@ -19326,6 +19326,8 @@ async function loadUsage() {
     loadCostForecast();
     // Load per-agent / per-team cost attribution (issue #3000)
     loadUsageByTeam();
+    // Load cost by project and project budgets (issue #5941)
+    loadUsageByProject();
     // Load spend optimization recommendations (issue #1415)
     loadSpendOptimization();
     // NeMo daily-cap banner (issue #1170) — only visible when a free-tier
@@ -19861,6 +19863,203 @@ async function loadUsageByTeam() {
     if (hasGateway) html += renderGatewayUsage(gw, teams.length > 0);
     el.innerHTML = html; // codeql[js/xss] renderGatewayUsage/cmProv run all user-data values through esc() which sanitises them
     title.style.display = '';
+    card.style.display = '';
+  } catch(e) { /* non-fatal */ }
+}
+
+// ── Cost by project and project budgets (issue #5941) ───────────────────────
+// The Usage tab view of /api/projects and /api/projects/budgets. Project
+// names come from repository names, directory names and operator input, so
+// every label is escaped with costCardText. A budget row is an alert level,
+// never a spending stop: the server's notice says so and is always shown.
+function projectSourceText(source) {
+  if (source === 'assigned') return t('usage.project_source_assigned', null, 'assigned');
+  if (source === 'repository') return t('usage.project_source_repository', null, 'repository');
+  if (source === 'directory') return t('usage.project_source_directory', null, 'directory');
+  return t('usage.project_source_none', null, 'no project');
+}
+function renderProjectUsage(d) {
+  var projects = (d && d.projects) || [];
+  var totals = (d && d.totals) || {};
+  var days = (d && d.window && d.window.days) || 30;
+  var entry = window.cmProv.of(d, 'projects[].cost_usd');
+  var total = Number(totals.cost_usd) || 0;
+  var costLabel = t('usage.project_cost_window', {days: days}, 'Cost, last ' + days + ' days');
+  var rows = projects.map(function(p) {
+    var cost = Number(p.cost_usd) || 0;
+    var pct = total > 0 ? Math.round((cost / total) * 100) : 0;
+    return '<tr>'
+      + '<td style="padding:4px 8px;font-weight:500;">' + costCardText(p.label || '—') + '</td>'
+      + '<td style="padding:4px 8px;font-size:11px;color:var(--text-muted);">' + costCardText(projectSourceText(p.source)) + '</td>'
+      + '<td style="padding:4px 8px;text-align:right;">' + window.cmCostFigure(p.cost_usd, entry, { noBadge: true, label: costLabel }) + '</td>'
+      + '<td style="padding:4px 8px;text-align:right;color:var(--text-muted);">' + pct + '%</td>'
+      + '<td style="padding:4px 8px;text-align:right;color:var(--text-muted);">' + costCardText(Number(p.sessions) || 0) + '</td>'
+      + '<td style="padding:4px 8px;font-size:11px;color:var(--text-muted);">' + costCardText((p.runtimes || []).join(', ')) + '</td>'
+      + '</tr>';
+  }).join('');
+  var html = '<table style="width:100%;border-collapse:collapse;">'
+    + '<thead><tr style="font-size:11px;color:var(--text-muted);">'
+    + '<th style="padding:2px 8px;text-align:left;">' + costCardText(t('usage.project_col_project', null, 'Project')) + '</th>'
+    + '<th style="padding:2px 8px;text-align:left;">' + costCardText(t('usage.project_col_source', null, 'Named by')) + '</th>'
+    + '<th style="padding:2px 8px;text-align:right;">' + costCardText(t('usage.project_col_cost', {days: days}, 'Cost (' + days + 'd)'))
+    + (entry ? ' ' + window.cmProv.badge(entry, { label: t('usage.project_cost_badge', null, 'Project cost') }) : '') + '</th>'
+    + '<th style="padding:2px 8px;text-align:right;">' + costCardText(t('usage.project_col_share', null, 'Share')) + '</th>'
+    + '<th style="padding:2px 8px;text-align:right;">' + costCardText(t('usage.project_col_sessions', null, 'Sessions')) + '</th>'
+    + '<th style="padding:2px 8px;text-align:left;">' + costCardText(t('usage.project_col_runtimes', null, 'Runtimes')) + '</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  var notes = [];
+  var share = (totals.completeness || {}).attributed_cost_share;
+  if (typeof share === 'number' && share < 1) {
+    var sharePct = Math.round(share * 100);
+    notes.push(t('usage.project_attributed_share', {pct: sharePct}, sharePct + '% of this spend belongs to a project. The rest is in the Unassigned row.'));
+  }
+  var unpriced = Number(totals.unpriced_tokens) || 0;
+  if (unpriced > 0) {
+    var n = unpriced.toLocaleString('en-US');
+    notes.push(t('usage.project_unpriced_tokens', {tokens: n}, n + ' tokens have no price and are not in these costs.'));
+  }
+  if (notes.length) {
+    html += '<div style="margin-top:8px;font-size:11px;color:var(--text-muted);line-height:1.5;">' + costCardText(notes.join(' ')) + '</div>';
+  }
+  return html;
+}
+function projectBudgetPeriodText(period) {
+  if (period === 'day') return t('usage.project_budget_per_day', null, 'per day');
+  if (period === 'week') return t('usage.project_budget_per_week', null, 'per week');
+  return t('usage.project_budget_per_month', null, 'per month');
+}
+function renderProjectBudgets(b) {
+  var budgets = (b && b.budgets) || [];
+  var entry = window.cmProv.of(b, 'budgets[].spent_usd');
+  var html = '<div style="margin-top:14px;font-weight:600;font-size:12px;">' + costCardText(t('usage.project_budgets_title', null, 'Project budgets'))
+    + (entry && budgets.length ? ' ' + window.cmProv.badge(entry, { label: t('usage.project_budget_spent_label', null, 'Spent this period') }) : '') + '</div>';
+  if (!budgets.length) {
+    html += '<div style="margin-top:4px;font-size:12px;color:var(--text-muted);">' + costCardText(t('usage.project_budgets_none', null, 'No project has a budget yet.')) + '</div>';
+  }
+  budgets.forEach(function(row) {
+    var amount = Number(row.amount) || 0;
+    var head = '<span style="font-weight:500;">' + costCardText(row.label || row.project_id || '—') + '</span>'
+      + ' <span style="color:var(--text-muted);">' + costCardText(window.cmFmtMoney(amount) + ' ' + projectBudgetPeriodText(row.period) + ' \xb7 ' + (row.timezone || '')) + '</span>';
+    var remove = '<button type="button" data-budget-id="' + costCardText(row.budget_id) + '"'
+      + ' onclick="removeProjectBudget(this.getAttribute(\'data-budget-id\'))"'
+      + ' style="margin-left:8px;font-size:11px;background:none;border:1px solid var(--border-primary);border-radius:4px;color:var(--text-muted);cursor:pointer;padding:1px 6px;">'
+      + costCardText(t('usage.project_budget_remove', null, 'Remove')) + '</button>';
+    html += '<div style="margin-top:8px;font-size:12px;">' + head + remove;
+    if (row.available === false) {
+      html += '<div style="margin-top:2px;color:var(--text-muted);">' + costCardText(t('usage.project_budget_no_timezone', null, 'The timezone of this budget is not known on this machine, so its spend is not shown.')) + '</div></div>';
+      return;
+    }
+    var pct = typeof row.pct_used === 'number' ? row.pct_used : null;
+    var width = pct === null ? 0 : Math.max(0, Math.min(100, pct));
+    var color = pct !== null && pct >= 100 ? '#ef4444' : pct !== null && pct >= 80 ? '#f59e0b' : 'var(--accent, #3b82f6)';
+    var spentLabel = t('usage.project_budget_spent_label', null, 'Spent this period');
+    html += '<div style="margin-top:4px;height:6px;border-radius:3px;background:var(--bg-tertiary, rgba(127,127,127,0.2));overflow:hidden;">'
+      + '<div style="height:100%;width:' + width + '%;background:' + color + ';"></div></div>'
+      + '<div style="margin-top:3px;color:var(--text-muted);">'
+      + window.cmCostFigure(row.spent_usd, entry, { noBadge: true, label: spentLabel })
+      + ' ' + costCardText(t('usage.project_budget_of', {amount: window.cmFmtMoney(amount)}, 'of ' + window.cmFmtMoney(amount)))
+      + (pct === null ? '' : ' \xb7 ' + costCardText(t('usage.project_budget_pct', {pct: Math.round(pct)}, Math.round(pct) + '% used')))
+      + '</div>';
+    if ((row.reported_under || []).length) {
+      var names = row.reported_under.join(', ');
+      html += '<div style="margin-top:2px;font-size:11px;color:var(--text-muted);">'
+        + costCardText(t('usage.project_budget_reported_under', {projects: names}, 'This spend is listed above under: ' + names)) + '</div>';
+    }
+    html += '</div>';
+  });
+  if (b && b.notice) {
+    html += '<div style="margin-top:10px;font-size:11px;color:var(--text-muted);line-height:1.5;">' + costCardText(b.notice) + '</div>';
+  }
+  return html;
+}
+function projectBudgetTimezone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (e) { return 'UTC'; }
+}
+function renderProjectBudgetForm(projects) {
+  var options = (projects || []).filter(function(p) {
+    return /^(prj|prjn)_/.test(String(p.project_id || ''));
+  }).map(function(p) {
+    return '<option value="' + costCardText(p.project_id) + '">' + costCardText(p.label || p.project_id) + '</option>';
+  }).join('');
+  if (!options) return '';
+  var field = 'font-size:12px;padding:3px 6px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-primary);border-radius:4px;';
+  var tz = projectBudgetTimezone();
+  return '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;">'
+    + '<select id="project-budget-project" aria-label="' + costCardText(t('usage.project_col_project', null, 'Project')) + '" style="' + field + '">' + options + '</select>'
+    + '<input id="project-budget-amount" type="number" min="0" step="any" placeholder="' + costCardText(t('usage.project_budget_amount', null, 'Amount in USD')) + '" aria-label="' + costCardText(t('usage.project_budget_amount', null, 'Amount in USD')) + '" style="width:120px;' + field + '">'
+    + '<select id="project-budget-period" aria-label="' + costCardText(t('usage.project_budget_period', null, 'Period')) + '" style="' + field + '">'
+    + '<option value="month">' + costCardText(projectBudgetPeriodText('month')) + '</option>'
+    + '<option value="week">' + costCardText(projectBudgetPeriodText('week')) + '</option>'
+    + '<option value="day">' + costCardText(projectBudgetPeriodText('day')) + '</option></select>'
+    + '<span style="color:var(--text-muted);">' + costCardText(tz) + '</span>'
+    + '<button type="button" onclick="saveProjectBudget()" style="' + field + 'cursor:pointer;">' + costCardText(t('usage.project_budget_set', null, 'Set budget')) + '</button>'
+    + '<span id="project-budget-status" style="color:var(--text-muted);"></span>'
+    + '</div>';
+}
+function projectBudgetStatus(text) {
+  var el = document.getElementById('project-budget-status');
+  if (el) el.textContent = text || '';
+}
+async function saveProjectBudget() {
+  var project = document.getElementById('project-budget-project');
+  var amount = document.getElementById('project-budget-amount');
+  var period = document.getElementById('project-budget-period');
+  if (!project || !amount || !period) return;
+  var value = parseFloat(amount.value);
+  if (!(value > 0)) {
+    projectBudgetStatus(t('usage.project_budget_amount_invalid', null, 'Enter an amount above zero.'));
+    return;
+  }
+  try {
+    var res = await fetch('/api/projects/budgets', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({project_id: project.value, amount: value, currency: 'USD',
+                            period: period.value, timezone: projectBudgetTimezone()})
+    }).then(function(r) { return r.json(); });
+    if (!res || !res.ok) {
+      projectBudgetStatus((res && res.error) || t('usage.project_budget_save_failed', null, 'The budget was not saved.'));
+      return;
+    }
+    loadUsageByProject();
+  } catch (e) {
+    projectBudgetStatus(t('usage.project_budget_save_failed', null, 'The budget was not saved.'));
+  }
+}
+async function removeProjectBudget(budgetId) {
+  if (!budgetId) return;
+  try {
+    var res = await fetch('/api/projects/budgets/' + encodeURIComponent(budgetId), {method: 'DELETE'})
+      .then(function(r) { return r.json(); });
+    if (!res || !res.ok) {
+      projectBudgetStatus((res && res.error) || t('usage.project_budget_remove_failed', null, 'The budget was not removed.'));
+      return;
+    }
+    loadUsageByProject();
+  } catch (e) {
+    projectBudgetStatus(t('usage.project_budget_remove_failed', null, 'The budget was not removed.'));
+  }
+}
+async function loadUsageByProject() {
+  var title = document.getElementById('usage-by-project-title');
+  var card = document.getElementById('usage-by-project-card');
+  var el = document.getElementById('usage-by-project-content');
+  if (!card || !el) return;
+  try {
+    var d = await fetch('/api/projects?days=30').then(function(r){return r.json();});
+    var projects = (d && d.available !== false && d.projects) || [];
+    // A machine where no session resolves to a project has nothing to split.
+    var named = projects.filter(function(p) { return p.source && p.source !== 'none'; });
+    if (!named.length) return;
+    var html = renderProjectUsage(d);
+    var b = null;
+    try {
+      // 402 = budgets are not in this plan: the spend table still renders.
+      var r = await fetch('/api/projects/budgets');
+      if (r.ok) b = await r.json();
+    } catch (e) { b = null; }
+    if (b && b.available !== false) html += renderProjectBudgets(b) + renderProjectBudgetForm(projects);
+    el.innerHTML = html; // codeql[js/xss] every label goes through costCardText; figures through cmProv, which escapes
+    if (title) title.style.display = '';
     card.style.display = '';
   } catch(e) { /* non-fatal */ }
 }
@@ -31854,7 +32053,28 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
            '</div>';
   }
 
-  function _renderDelegations(delegations, runtime, depth) {
+  function _tr(key, vars, fallback) {
+    return (typeof t === 'function') ? t(key, vars, fallback) : fallback;
+  }
+
+  // A sub-agent that started with its parent's whole context (a Claude
+  // Code fork) is tagged, so its transcript is not read as a fresh brief.
+  // The delegation entry has no spawn payload; the spawn event sits in the
+  // event list of whoever spawned it, under the same span id.
+  function _forkTag(spanId, ownerEvents) {
+    for (var i = 0; i < (ownerEvents || []).length; i++) {
+      var ev = ownerEvents[i];
+      if (!ev || ev.span_id !== spanId || ev.kind !== 'agent.spawn') continue;
+      if (!ev.payload || ev.payload.context_inheritance !== 'fork') return '';
+      return ' <span class="replay-tree-badge fork" title="' +
+             _escape(_tr('trail.fork_title', null,
+                         'This sub-agent started with the full context of its parent.')) +
+             '">' + _escape(_tr('trail.fork_tag', null, 'Inherited context')) + '</span>';
+    }
+    return '';
+  }
+
+  function _renderDelegations(delegations, runtime, depth, ownerEvents) {
     depth = depth || 1;
     if (!delegations || !delegations.length) return '';
     var html = '<div class="replay-tree-delegations" data-depth="' + depth + '">';
@@ -31864,6 +32084,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       var dApprovals = (d.approvals || []).length;
       html += '<summary>↳ delegated span ' + _escape(d.span_id) +
               (d.label ? ' <span class="replay-tree-delegation-label">' + _escape(d.label) + '</span>' : '') +
+              _forkTag(d.span_id, ownerEvents) +
               (dApprovals ? ' <span class="replay-tree-badge approvals">✓' + dApprovals + '</span>' : '') +
               '</summary>';
       for (var j = 0; j < (d.events || []).length; j++) {
@@ -31871,10 +32092,42 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       }
       // Nested delegations render recursively — arbitrary depth (issue
       // #4815 Claude Code Task nesting stresses this).
-      html += _renderDelegations(d.delegations, runtime, depth + 1);
+      html += _renderDelegations(d.delegations, runtime, depth + 1, d.events);
       html += '</details>';
     }
     html += '</div>';
+    return html;
+  }
+
+  // Background agents and workflows that were still running when the turn
+  // opened (clawmetry-pro#123). The mapper puts the counts on the turn's
+  // opening llm.call as `in_flight_at_start`; a turn without them gets no
+  // badge, and a count that is not a positive whole number is not shown.
+  function _inFlightBadges(events) {
+    var counts = null;
+    for (var i = 0; i < (events || []).length; i++) {
+      var ev = events[i];
+      if (!ev || ev.kind !== 'llm.call') continue;
+      var p = ev.payload;
+      if (p && p.in_flight_at_start && typeof p.in_flight_at_start === 'object') {
+        counts = p.in_flight_at_start;
+      }
+      break;
+    }
+    if (!counts) return '';
+    var title = _escape(_tr('trail.in_flight_title', null,
+                            'Still running when this turn started.'));
+    var html = '';
+    var kinds = [
+      ['background_agents', 'trail.in_flight_agents', 'Background agents running: '],
+      ['workflows', 'trail.in_flight_workflows', 'Workflows running: '],
+    ];
+    for (var k = 0; k < kinds.length; k++) {
+      var n = counts[kinds[k][0]];
+      if (typeof n !== 'number' || n < 1 || n !== Math.floor(n)) continue;
+      html += ' <span class="replay-tree-badge in-flight" title="' + title + '">' +
+              _escape(_tr(kinds[k][1], {n: n}, kinds[k][2] + n)) + '</span>';
+    }
     return html;
   }
 
@@ -31893,6 +32146,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
                 '✓' + approvalCount + (deniedCount ? ' ✗' + deniedCount : '') +
                 '</span>';
     }
+    badges += _inFlightBadges(turn.events);
     html += '<header class="replay-tree-turn-header">' +
             '<span class="replay-tree-turn-id">turn ' + _escape(turn.turn_id) + '</span>' +
             badges + '</header>';
@@ -31901,7 +32155,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       html += _renderEvent(turn.events[i], runtime);
     }
     // Inline delegations under the turn that spawned them.
-    html += _renderDelegations(turn.delegations, runtime, 1);
+    html += _renderDelegations(turn.delegations, runtime, 1, turn.events);
     html += '</section>';
     return html;
   }
@@ -31932,10 +32186,6 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
   // as a graph: one box per node, coloured by the status of its last run.
   // A start without nodes (a Goose recipe) keeps the plain event list.
   var _WF_NODE_W = 150, _WF_NODE_H = 34, _WF_PAD = 12;
-
-  function _tr(key, vars, fallback) {
-    return (typeof t === 'function') ? t(key, vars, fallback) : fallback;
-  }
 
   function _workflowStart(wf) {
     var events = (wf && wf.events) || [];
