@@ -5062,6 +5062,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
     from clawmetry import otlp_intake as _oi
     _result = _oi.new_result("traces")
     _span_rows = []
+    # The live tiles are lit after the store answers, so a span it refuses
+    # lights none (see ``_otlp_light_span_tiles``).
+    _pending_tiles = []   # (span_id, category, entry)
+    _seen_keys = {}       # span_id -> its ``_otlp_seen`` record id
+    _refused_keys = set()
 
     for resource_spans in req.resource_spans:
         resource_attrs = {}
@@ -5097,8 +5102,11 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
                 # is refused by the store below, so it lights no tile either.
                 _span_key = str(_hex(span.span_id) or "")
                 _trace_key = str(_hex(span.trace_id) or "")
+                _seen_id = "span:%s:%s" % (_trace_key, _span_key)
                 _live = bool(_span_key and _trace_key and span.name) and not _otlp_seen(
-                    "span:%s:%s" % (_trace_key, _span_key))
+                    _seen_id)
+                if _live:
+                    _seen_keys[_span_key] = _seen_id
                 duration_ns = span.end_time_unix_nano - span.start_time_unix_nano
                 duration_ms = duration_ns / 1_000_000
 
@@ -5117,8 +5125,8 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
                     or span_name in ("openai.chat", "anthropic.chat")
                 )
                 if _live and ("run" in span_name or "completion" in span_name or _is_genai_run):
-                    _add_metric(
-                        "runs",
+                    _pending_tiles.append((
+                        _span_key, "runs",
                         {
                             "timestamp": ts,
                             "duration_ms": duration_ms,
@@ -5129,10 +5137,10 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
                                 "channel", resource_attrs.get("channel", "")
                             ),
                         },
-                    )
+                    ))
                 elif _live and "message" in span_name:
-                    _add_metric(
-                        "messages",
+                    _pending_tiles.append((
+                        _span_key, "messages",
                         {
                             "timestamp": ts,
                             "channel": attrs.get(
@@ -5141,7 +5149,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
                             "outcome": "processed",
                             "duration_ms": duration_ms,
                         },
-                    )
+                    ))
 
                 # Generic cost/token mapping from span ATTRIBUTES. Codex (and
                 # OTel-instrumented agents) emit cost/token telemetry on spans
@@ -5154,12 +5162,12 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
                        or attrs.get("cost") or attrs.get("gen_ai.usage.cost_usd"))
                 if _sc is not None and _live:
                     try:
-                        _add_metric("cost", {
+                        _pending_tiles.append((_span_key, "cost", {
                             "timestamp": ts, "usd": float(_sc),
                             "model": attrs.get("model", resource_attrs.get("model", "")),
                             "channel": attrs.get("channel", resource_attrs.get("channel", "")),
                             "provider": attrs.get("provider", resource_attrs.get("provider", "")),
-                        })
+                        }))
                     except (TypeError, ValueError):
                         pass
                 _si = (attrs.get("gen_ai.usage.input_tokens")
@@ -5171,12 +5179,12 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
                 if (_si is not None or _so is not None) and _live:
                     try:
                         _i, _o = int(_si or 0), int(_so or 0)
-                        _add_metric("tokens", {
+                        _pending_tiles.append((_span_key, "tokens", {
                             "timestamp": ts, "input": _i, "output": _o, "total": _i + _o,
                             "model": attrs.get("model", resource_attrs.get("model", "")),
                             "channel": attrs.get("channel", resource_attrs.get("channel", "")),
                             "provider": attrs.get("provider", resource_attrs.get("provider", "")),
-                        })
+                        }))
                     except (TypeError, ValueError):
                         pass
 
@@ -5193,6 +5201,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
                         _row = _otel_to_row(span, resource_attrs)
                         if not _otlp_span_row_storable(_row):
                             _result["rejected"] += 1
+                            _refused_keys.add(_span_key)
                             continue
                         _span_rows.append(_row)
                         _queued = True
@@ -5262,6 +5271,7 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
                         if not _queued:
                             # Could not even be turned into a row: refused.
                             _result["rejected"] += 1
+                            _refused_keys.add(_span_key)
                         try:
                             import logging as _lg
                             _lg.getLogger("clawmetry.dashboard").warning(
@@ -5308,9 +5318,17 @@ def _process_otlp_traces(pb_data, content_encoding=None, content_type=None, runt
             else:
                 _result["rejected"] += _n_refused
                 _result["stored"] += _n_rows - _n_refused
+                if isinstance(_written, dict):
+                    # Absent from a daemon older than this receiver: its
+                    # refused spans light their tiles as they did before.
+                    _ids = _written.get("rejected_span_ids")
+                    if isinstance(_ids, (list, tuple)):
+                        _refused_keys.update(str(i) for i in _ids if i)
                 # Unchanged re-deliveries (and in-export repeats) are not
                 # rewritten; they are already in the store.
                 _result["already_stored"] += max(0, _n_rows - _n_refused - _n_written)
+
+    _otlp_light_span_tiles(_pending_tiles, _refused_keys, _seen_keys)
 
     if _store is not None and (_otlp_wait_events or _otlp_tool_events):
         # A wait span may carry no tool name of its own (measured live); its
@@ -5486,6 +5504,39 @@ def _otlp_seen(record_id):
         while len(_otlp_seen_order) > _OTLP_SEEN_MAX:
             _otlp_seen_ids.discard(_otlp_seen_order.popleft())
     return False
+
+
+def _otlp_forget(record_id):
+    """Undo ``_otlp_seen`` for a record that never reached the tiles."""
+    with _otlp_seen_lock:
+        if record_id in _otlp_seen_ids:
+            _otlp_seen_ids.discard(record_id)
+            try:
+                _otlp_seen_order.remove(record_id)
+            except ValueError:
+                pass
+
+
+def _otlp_light_span_tiles(pending, refused, seen_keys):
+    """Light the live tiles for one trace export, after its store write.
+
+    ``pending`` holds ``(span_id, category, entry)`` for every tile entry the
+    export's spans produced. A span the store refused (no id or name, or a
+    value its column cannot hold) is in no table, so it lights no tile and
+    adds nothing to the budget check: before, its cost and tokens showed in
+    the tiles and matched no stored row. Its dedup mark is dropped as well,
+    so a corrected span sent later under the same id is counted. A store
+    that is down or could not confirm the write refuses nothing: those spans
+    light as before and the sender is asked to retry."""
+    refused = refused or ()
+    for span_id in refused:
+        seen_id = (seen_keys or {}).get(span_id)
+        if seen_id:
+            _otlp_forget(seen_id)
+    for span_id, category, entry in pending:
+        if span_id in refused:
+            continue
+        _add_metric(category, entry)
 
 
 def _otlp_event_suffix(event_name):
