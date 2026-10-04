@@ -32404,7 +32404,127 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     return pos;
   }
 
-  function _renderWorkflowGraph(wf) {
+  // Model and tool calls made by a workflow's sub-nodes, listed by the node
+  // they served (an n8n Agent node). The mapper puts those calls among the
+  // turn events and names the stage they belong to in `stage_span_id`, so a
+  // call is matched to this workflow by its stage, not by its node name: a
+  // sub-workflow can hold a node with the same name.
+  function _workflowActivity(wf, turns) {
+    var stages = {}, i;
+    var events = (wf && wf.events) || [];
+    for (i = 0; i < events.length; i++) {
+      if (events[i] && events[i].kind === 'workflow.stage' && events[i].span_id) {
+        stages[events[i].span_id] = true;
+      }
+    }
+    var byNode = {}, byCall = {}, byStage = {};
+    function visit(list) {
+      for (var j = 0; j < (list || []).length; j++) {
+        var ev = list[j];
+        var p = (ev && ev.payload && typeof ev.payload === 'object') ? ev.payload : null;
+        if (!p) continue;
+        var entry;
+        if ((ev.kind === 'llm.call' || ev.kind === 'tool.call') && stages[p.stage_span_id]) {
+          var owner = (typeof p.agent_node === 'string' && p.agent_node) ||
+                      (typeof p.node === 'string' && p.node) || '';
+          if (!owner) continue;
+          entry = {kind: ev.kind === 'llm.call' ? 'model' : 'tool',
+                   name: String(p.node || p.tool || ''),
+                   model: p.model || '', input: ev.kind === 'tool.call' ? p.args : '',
+                   output: '', failed: false, usage: null};
+          (byNode[owner] = byNode[owner] || []).push(entry);
+          byStage[p.stage_span_id] = entry;
+          if (ev.span_id) byCall[ev.span_id] = entry;
+        } else if (ev.kind === 'llm.response' && byStage[p.stage_span_id]) {
+          entry = byStage[p.stage_span_id];
+          entry.failed = !!p.is_error;
+          entry.output = p.is_error ? (p.error || '') : '';
+          if (p.model && !entry.model) entry.model = p.model;
+          if (p.usage && typeof p.usage === 'object') entry.usage = p.usage;
+        } else if (ev.kind === 'tool.result' && byCall[p.call_id]) {
+          entry = byCall[p.call_id];
+          entry.failed = !!p.is_error;
+          entry.output = p.output;
+        }
+      }
+    }
+    function visitDelegations(list) {
+      for (var j = 0; j < (list || []).length; j++) {
+        visit(list[j].events);
+        visitDelegations(list[j].delegations);
+      }
+    }
+    for (i = 0; i < (turns || []).length; i++) {
+      visit(turns[i].events);
+      visitDelegations(turns[i].delegations);
+    }
+    return byNode;
+  }
+
+  function _wfSnippet(value) {
+    if (value == null || value === '') return '';
+    var text = (typeof value === 'string') ? value : JSON.stringify(value);
+    return text.length > 200 ? text.slice(0, 199) + '…' : text;
+  }
+
+  // What the graph cannot hold: the error of a failed node and the calls
+  // an agent node made. A tooltip is out of reach on a touch screen.
+  function _renderWorkflowNodeDetails(nodes, runs, activity) {
+    var html = '';
+    nodes.forEach(function(n) {
+      var run = runs[n.name];
+      var calls = activity[n.name] || [];
+      var error = (run && run.error) ? String(run.error) : '';
+      if (!calls.length && !error) return;
+      var models = 0, tools = 0;
+      calls.forEach(function(c) { if (c.kind === 'model') models++; else tools++; });
+      var counts = [];
+      if (models) counts.push(_tr('trail.workflow_model_calls', {n: models}, 'Model calls: ' + models));
+      if (tools) counts.push(_tr('trail.workflow_tool_calls', {n: tools}, 'Tool calls: ' + tools));
+      var status = run ? (run.status || 'unknown') : 'none';
+      html += '<details class="replay-wf-node-detail" data-node="' + _escape(n.name) +
+              '" data-status="' + _escape(status) + '"' + (error ? ' open' : '') + '>' +
+              '<summary><span class="replay-wf-node-name">' + _escape(n.name) + '</span>' +
+              (counts.length ? ' <span class="replay-wf-node-counts">' +
+                               _escape(counts.join(' · ')) + '</span>' : '') +
+              '</summary>';
+      if (error) html += '<div class="replay-wf-node-error">' + _escape(error) + '</div>';
+      calls.forEach(function(c) {
+        var kind = c.kind === 'model'
+          ? _tr('trail.workflow_call_model', null, 'model')
+          : _tr('trail.workflow_call_tool', null, 'tool');
+        var meta = '';
+        if (c.kind === 'model') {
+          var u = c.usage;
+          if (c.model) meta = String(c.model);
+          if (u && (isFinite(u.input_tokens) || isFinite(u.output_tokens))) {
+            var tin = isFinite(u.input_tokens) ? u.input_tokens : 0;
+            var tout = isFinite(u.output_tokens) ? u.output_tokens : 0;
+            meta += (meta ? ' · ' : '') + _tr('trail.workflow_call_tokens',
+              {input: tin, output: tout}, tin + ' tokens in, ' + tout + ' out');
+          }
+        } else {
+          meta = _wfSnippet(c.input);
+        }
+        var out = _wfSnippet(c.output);
+        html += '<div class="replay-wf-call" data-kind="' + c.kind + '" data-error="' +
+                (c.failed ? '1' : '0') + '">' +
+                '<span class="replay-tree-kind">' + _escape(kind) + '</span>' +
+                '<span class="replay-wf-call-name">' + _escape(c.name) + '</span>' +
+                (meta ? '<span class="replay-wf-call-meta">' + _escape(meta) + '</span>' : '') +
+                (c.failed ? '<span class="replay-wf-call-failed">' +
+                            _escape(_tr('trail.workflow_call_failed', null, 'failed')) + '</span>' : '') +
+                (out ? '<div class="replay-wf-call-output">' + _escape(out) + '</div>' : '') +
+                '</div>';
+      });
+      html += '</details>';
+    });
+    if (!html) return '';
+    return '<div class="replay-wf-node-details" aria-label="' +
+           _escape(_tr('trail.workflow_node_details', null, 'Node details')) + '">' + html + '</div>';
+  }
+
+  function _renderWorkflowGraph(wf, turns) {
     var start = _workflowStart(wf);
     var payload = (start && start.payload && typeof start.payload === 'object') ? start.payload : {};
     var nodes = Array.isArray(payload.nodes) ? payload.nodes.filter(function(n) {
@@ -32417,6 +32537,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       return e && known[e.from] && known[e.to];
     });
     var runs = _workflowNodeRuns(wf);
+    var activity = _workflowActivity(wf, turns);
     var pos = _workflowLayout(nodes, edges);
     var width = 0, height = 0, ran = 0;
     nodes.forEach(function(n) {
@@ -32455,6 +32576,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       if (run && isFinite(run.duration_ms)) tip += ' · ' + run.duration_ms + ' ms';
       if (run && run.runs > 1) tip += ' · ×' + run.runs;
       if (run && run.error) tip += ' · ' + run.error;
+      var calls = (activity[n.name] || []).length;
       var label = n.name.length > 20 ? n.name.slice(0, 19) + '…' : n.name;
       var p = pos[n.name];
       svg += '<g class="replay-wf-node" data-node="' + _escape(n.name) +
@@ -32464,7 +32586,14 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
              '<rect x="' + p.x + '" y="' + p.y + '" width="' + _WF_NODE_W +
              '" height="' + _WF_NODE_H + '" rx="6"/>' +
              '<text x="' + (p.x + _WF_NODE_W / 2) + '" y="' + (p.y + _WF_NODE_H / 2 + 4) +
-             '" text-anchor="middle">' + _escape(label) + '</text></g>';
+             '" text-anchor="middle">' + _escape(label) + '</text>' +
+             // The number of model and tool calls made for this node.
+             (calls ? '<circle class="replay-wf-node-count" cx="' + (p.x + _WF_NODE_W - 2) +
+                      '" cy="' + (p.y + 2) + '" r="8"/>' +
+                      '<text class="replay-wf-node-count-text" x="' + (p.x + _WF_NODE_W - 2) +
+                      '" y="' + (p.y + 5.5) + '" text-anchor="middle">' +
+                      (calls > 99 ? '99+' : calls) + '</text>' : '') +
+             '</g>';
     });
     svg += '</svg>';
     var caption = _tr('trail.workflow_nodes_ran', {ran: ran, total: nodes.length},
@@ -32474,10 +32603,11 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
                     'The node runs of this execution are not stored in the database.');
     }
     return '<div class="replay-wf-graph-wrap">' + svg + '</div>' +
-           '<div class="replay-wf-caption">' + _escape(caption) + '</div>';
+           '<div class="replay-wf-caption">' + _escape(caption) + '</div>' +
+           _renderWorkflowNodeDetails(nodes, runs, activity);
   }
 
-  function _renderWorkflows(workflows, runtime) {
+  function _renderWorkflows(workflows, runtime, turns) {
     if (!workflows || !workflows.length) return '';
     var html = '<div class="replay-tree-workflows">';
     for (var i = 0; i < workflows.length; i++) {
@@ -32486,7 +32616,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
       var name = (start && start.payload && (start.payload.title ||
                   (start.payload.nodes ? start.payload.workflow : ''))) || '';
       var status = (start && start.payload && start.payload.nodes && start.payload.status) || '';
-      var graph = _renderWorkflowGraph(wf);
+      var graph = _renderWorkflowGraph(wf, turns);
       html += '<details class="replay-tree-workflow" open>';
       html += '<summary>⚙ workflow ' + _escape(name || wf.span_id) +
               (status ? ' <span class="replay-tree-badge" data-status="' + _escape(status) + '">' + _escape(status) + '</span>' : '') +
@@ -32519,7 +32649,7 @@ async function cmRuntimeOpenFile(clickEl, gi, fi) {
     html += _renderModeChip(tree.mode);
     html += _renderTruncated(tree);
     html += _renderNotes(tree);
-    html += _renderWorkflows(tree.workflows, tree.runtime);
+    html += _renderWorkflows(tree.workflows, tree.runtime, tree.turns);
     for (var i = 0; i < (tree.turns || []).length; i++) {
       html += _renderTurn(tree.turns[i], tree.runtime);
     }

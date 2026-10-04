@@ -2763,6 +2763,21 @@ body.has-profile-menu #logout-btn { display: none !important; }
 .replay-wf-node[data-status="running"] rect,
 .replay-wf-node[data-status="waiting"] rect { stroke: #4a9eff; fill: color-mix(in srgb, #4a9eff 14%, var(--bg-tertiary)); }
 .replay-wf-caption { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+.replay-wf-node-count { fill: var(--bg-primary); stroke: var(--text-muted); stroke-width: 1; }
+.replay-wf-node .replay-wf-node-count-text { font-size: 9px; fill: var(--text-primary); }
+.replay-wf-node-details { margin: 2px 0 8px; }
+.replay-wf-node-detail { border-left: 3px solid var(--border-primary); padding: 2px 0 2px 8px; margin: 4px 0; font-size: 12px; }
+.replay-wf-node-detail[data-status="error"] { border-left-color: #d63b3b; }
+.replay-wf-node-detail[data-status="success"] { border-left-color: #3fae7a; }
+.replay-wf-node-detail > summary { cursor: pointer; }
+.replay-wf-node-name { font-weight: 600; color: var(--text-primary); }
+.replay-wf-node-counts { color: var(--text-muted); font-size: 11px; }
+.replay-wf-node-error { color: #d63b3b; margin: 2px 0; overflow-wrap: anywhere; }
+.replay-wf-call { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; padding: 2px 0; }
+.replay-wf-call-name { color: var(--text-primary); }
+.replay-wf-call-meta { color: var(--text-muted); font-family: monospace; font-size: 11px; overflow-wrap: anywhere; }
+.replay-wf-call-failed { color: #d63b3b; font-weight: 600; }
+.replay-wf-call-output { flex-basis: 100%; color: var(--text-secondary); font-family: monospace; font-size: 11px; overflow-wrap: anywhere; }
 .replay-wf-events > summary { cursor: pointer; font-size: 12px; color: var(--text-muted); padding: 2px 0; }
 .replay-tree-badge[data-status="error"] { background: color-mix(in srgb, #d63b3b 24%, var(--bg-tertiary)); }
 .replay-tree-badge[data-status="success"] { background: color-mix(in srgb, #3fae7a 20%, var(--bg-tertiary)); }
