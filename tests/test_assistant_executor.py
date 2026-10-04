@@ -1,7 +1,11 @@
 """One node executor, final persistence and retries.
 
-Covers AC-ASSIST-007.1, AC-ASSIST-007.2, AC-ASSIST-007.3,
-AC-ASSIST-007.4, AC-ASSIST-007.6 and AC-ASSIST-007.8.
+AC-ASSIST-007.1
+AC-ASSIST-007.2
+AC-ASSIST-007.3
+AC-ASSIST-007.4
+AC-ASSIST-007.6
+AC-ASSIST-007.8
 """
 import json
 import threading

@@ -1,6 +1,9 @@
 """Real encryption, cancellation and receipt-only recovery.
 
-Covers AC-ASSIST-007.2, AC-ASSIST-007.4, AC-ASSIST-007.6 and AC-ASSIST-007.8.
+AC-ASSIST-007.2
+AC-ASSIST-007.4
+AC-ASSIST-007.6
+AC-ASSIST-007.8
 """
 import hashlib
 import threading
