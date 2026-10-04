@@ -1,0 +1,54 @@
+{
+  "id": "control-lockfile-routine-update",
+  "name": "CONTROL (negative): a routine dependency update and a new dependency with no install script",
+  "disclosed": "2026-01-01",
+  "source": "negative control - not a disclosure",
+  "cve": [],
+  "attack_class": "none",
+  "surface": "none",
+  "affects_runtimes": [
+    "*"
+  ],
+  "summary": "A lockfile changes the way lockfiles change every week: esbuild and fsevents, which already run an install script, move to a newer version, and zod, which has none, is added.",
+  "why_hard_to_see": "Inverted: a lockfile carries 2 to 13 install-script packages, almost all of them esbuild and fsevents. A check that reports them on every update is an incident per `npm update` and would be switched off within a week.",
+  "control": true,
+  "workspace": {
+    "before": {
+      "package.json": "{\n  \"name\": \"storefront\",\n  \"version\": \"0.4.0\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"vite build\",\n    \"test\": \"vitest run\"\n  },\n  \"dependencies\": {\n    \"vite\": \"^5.2.0\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"storefront\",\n  \"version\": \"0.4.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"storefront\",\n      \"version\": \"0.4.0\",\n      \"dependencies\": {\n        \"vite\": \"^5.2.0\"\n      }\n    },\n    \"node_modules/esbuild\": {\n      \"version\": \"0.21.5\",\n      \"resolved\": \"https://registry.npmjs.org/esbuild/-/esbuild-0.21.5.tgz\",\n      \"hasInstallScript\": true,\n      \"bin\": {\n        \"esbuild\": \"bin/esbuild\"\n      }\n    },\n    \"node_modules/fsevents\": {\n      \"version\": \"2.3.2\",\n      \"resolved\": \"https://registry.npmjs.org/fsevents/-/fsevents-2.3.2.tgz\",\n      \"hasInstallScript\": true,\n      \"optional\": true,\n      \"os\": [\n        \"darwin\"\n      ]\n    },\n    \"node_modules/vite\": {\n      \"version\": \"5.2.0\",\n      \"resolved\": \"https://registry.npmjs.org/vite/-/vite-5.2.0.tgz\"\n    }\n  }\n}\n",
+      "README.md": "# storefront\n"
+    },
+    "files": {
+      "package.json": "{\n  \"name\": \"storefront\",\n  \"version\": \"0.4.0\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"vite build\",\n    \"test\": \"vitest run\"\n  },\n  \"dependencies\": {\n    \"vite\": \"^5.2.0\",\n    \"zod\": \"^3.23.8\"\n  }\n}\n",
+      "package-lock.json": "{\n  \"name\": \"storefront\",\n  \"version\": \"0.4.0\",\n  \"lockfileVersion\": 3,\n  \"requires\": true,\n  \"packages\": {\n    \"\": {\n      \"name\": \"storefront\",\n      \"version\": \"0.4.0\",\n      \"dependencies\": {\n        \"vite\": \"^5.2.0\",\n        \"zod\": \"^3.23.8\"\n      }\n    },\n    \"node_modules/esbuild\": {\n      \"version\": \"0.23.1\",\n      \"resolved\": \"https://registry.npmjs.org/esbuild/-/esbuild-0.23.1.tgz\",\n      \"hasInstallScript\": true,\n      \"bin\": {\n        \"esbuild\": \"bin/esbuild\"\n      }\n    },\n    \"node_modules/fsevents\": {\n      \"version\": \"2.3.3\",\n      \"resolved\": \"https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz\",\n      \"hasInstallScript\": true,\n      \"optional\": true,\n      \"os\": [\n        \"darwin\"\n      ]\n    },\n    \"node_modules/vite\": {\n      \"version\": \"5.4.2\",\n      \"resolved\": \"https://registry.npmjs.org/vite/-/vite-5.4.2.tgz\"\n    },\n    \"node_modules/zod\": {\n      \"version\": \"3.23.8\",\n      \"resolved\": \"https://registry.npmjs.org/zod/-/zod-3.23.8.tgz\"\n    }\n  }\n}\n"
+    }
+  },
+  "events": [
+    {
+      "event_type": "tool_call",
+      "ts": "2026-09-08T11:00:01",
+      "data": {
+        "tool": "Bash",
+        "args": {
+          "command": "npm update"
+        }
+      }
+    },
+    {
+      "event_type": "tool_call",
+      "ts": "2026-09-08T11:00:30",
+      "data": {
+        "tool": "Bash",
+        "args": {
+          "command": "npm install zod"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "detected": false,
+    "any_of": [],
+    "min_severity": null,
+    "rationale": "A new version of a package that already ran an install script is not a new capability, and a new package without one runs nothing on install."
+  }
+}
