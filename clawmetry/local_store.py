@@ -10427,9 +10427,12 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
         connection, I/O) still raises.
 
         ``with_outcome=True`` (the OTLP receiver, which must tell its sender
-        what was refused) returns ``{"written": n, "rejected": n}`` and also
-        counts a span missing a required field as refused. Without it such a
-        span raises ValueError, as it always has."""
+        what was refused) returns ``{"written": n, "rejected": n,
+        "rejected_span_ids": [...]}`` and also counts a span missing a required
+        field as refused. ``rejected_span_ids`` names the refused spans that
+        carry an id, so the receiver can keep them out of the live tiles.
+        Without ``with_outcome`` such a span raises ValueError, as it always
+        has."""
         if self._read_only:
             raise RuntimeError(
                 "local_store: ingest_span() called on read-only store"
@@ -10447,6 +10450,7 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
         except Exception:
             redact = None  # partial install: never block ingest
         rejected = 0
+        rejected_ids: list[str] = []
         rows: dict[str, tuple[list[Any], dict[str, Any], str]] = {}
         for span in spans:
             try:
@@ -10455,6 +10459,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                 if not with_outcome:
                     raise
                 rejected += 1
+                if isinstance(span, dict) and span.get("span_id"):
+                    rejected_ids.append(str(span["span_id"]))
                 continue
             # Change detection hashes what was RECEIVED, before redaction:
             # an unchanged span re-sent every tick is skipped without paying
@@ -10464,7 +10470,12 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
             rows[str(params[0])] = (params, span, _content_hash(params[:-1]))
 
         def _out(n: int) -> Any:
-            return {"written": n, "rejected": rejected} if with_outcome else n
+            if not with_outcome:
+                return n
+            # An id repeated in the batch whose LAST occurrence is storable is
+            # not a refused span.
+            ids = [i for i in dict.fromkeys(rejected_ids) if i not in rows]
+            return {"written": n, "rejected": rejected, "rejected_span_ids": ids}
 
         if not rows:
             return _out(0)
@@ -10491,6 +10502,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                     if not with_outcome:
                         raise
                     rejected += 1
+                    rows.pop(str(params[0]), None)
+                    rejected_ids.append(str(params[0]))
                     continue
             to_write.append(params + [h])
         if not to_write:
@@ -10511,6 +10524,8 @@ class LocalStore(AgentMetaMixin, ProjectsMixin, TrailStoreMixin, IncidentStoreMi
                         if not _is_data_error(row_exc):
                             raise
                         rejected += 1
+                        rows.pop(str(params[0]), None)
+                        rejected_ids.append(str(params[0]))
                         log.warning(
                             "spans: span refused, the store cannot hold one "
                             "of its values: %s", row_exc,
