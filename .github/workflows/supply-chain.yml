@@ -114,11 +114,33 @@ jobs:
           python3 -m pip install --quiet --require-hashes
           -r .github/requirements/python-deps.txt
       - name: Audit declared dependencies for known advisories
+        # Every declared Python dependency file, not just requirements.txt.
+        # That one file is the dashboard's own runtime range set; the 34
+        # hash-pinned sets in .github/requirements/ are what the CI jobs
+        # install, and deploy/self-hosted/*requirements.txt is baked into the
+        # PUBLISHED, SIGNED self-hosted image -- an advisory there ships to a
+        # user machine rather than to a runner. All of it went unscanned while
+        # this step named a single file.
+        #
+        # A --require-hashes pin guarantees provenance, not soundness, and the
+        # two are easy to confuse because the pin looks so deliberate.
+        # Dependabot opens version bumps for those directories, so they do not
+        # freeze -- but a bump is not an advisory gate, and nothing in CI said
+        # "this pinned closure is named by a published advisory".
+        #
+        # The script reports CLEAN / ACCEPTED / UNAUDITABLE per file and fails
+        # on an undeclared advisory OR an undeclared resolve failure, because
+        # `pip-audit || true` over 39 files renders a scanner outage as a green
+        # check -- the failure clawmetry-cloud #2546, clawmetry-pro #204 and
+        # clawmetry-pro #300 were each filed for. Declarations live in
+        # .github/requirements/audit-acceptance.json and are held to the tree
+        # by tests/test_python_pin_audit_coverage.py.
+        #
         # Non-blocking on PRs: a fresh advisory in a transitive dep should not
         # wedge unrelated work. It still fails the scheduled run, which is the
         # signal that someone needs to act.
         continue-on-error: ${{ github.event_name == 'pull_request' }}
-        run: pip-audit --requirement requirements.txt --strict --progress-spinner off
+        run: python3 scripts/audit_python_pins.py
       - name: Generate CycloneDX SBOM
         run: |
           # Deliberately NOT hash-pinned, unlike the scanner install above.
