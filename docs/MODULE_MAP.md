@@ -150,7 +150,7 @@ The pip-installable package: CLI, sync daemon, DuckDB store, detectors, enforcem
 | `clawmetry/_paywall.py` | medium | Shared 402 ``upgrade_required`` body builder for OSS stub blueprints. |
 | `clawmetry/_paywall_events.py` | large | In-process rolling store for ``POST /api/paywall/event`` client beacons. |
 | `clawmetry/activity_store.py` | small | Bounded replay of committed event changes, independent of source clocks. |
-| `clawmetry/agent_inventory.py` | medium | Agent supply chain: what each agent runtime loads from disk, and what changed. |
+| `clawmetry/agent_inventory.py` | large | Agent supply chain: what each agent runtime loads from disk, and what changed. |
 | `clawmetry/agentops_metrics.py` | medium | AgentOps window metrics: latency, handoffs, guardrails, review, ground truth. |
 | `clawmetry/alert_evaluator.py` | large | Local alert-rule evaluator — pure logic, no I/O (PRD #779 PR-D part 2). |
 | `clawmetry/apikeys.py` | medium | scoped, revocable read keys for custom UIs. |

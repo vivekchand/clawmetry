@@ -40,11 +40,20 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 #: Every component kind the inventory records.
-INVENTORY_KINDS = ("mcp_server", "skill", "plugin", "instructions", "hooks")
+INVENTORY_KINDS = ("mcp_server", "skill", "plugin", "instructions", "hooks",
+                   "lockfile", "install_script_package")
 #: Kinds whose change raises ``agent_component_change``.
 COMPONENT_KINDS = ("mcp_server", "skill", "plugin")
 #: Kinds whose change raises ``agent_config_tamper`` (REQ-GOV-SCI-003).
 CONFIG_KINDS = ("instructions", "hooks")
+
+#: A project's ``package-lock.json`` and the packages in it that npm marks
+#: ``hasInstallScript``. The lockfile row carries no finding of its own: it
+#: records that this lockfile has been read before, which is what makes a
+#: package appearing later "new" rather than part of a first sight.
+LOCKFILE_KIND = "lockfile"
+INSTALL_SCRIPT_KIND = "install_script_package"
+LOCKFILE_KINDS = (LOCKFILE_KIND, INSTALL_SCRIPT_KIND)
 
 CHANGE_KIND = "agent_component_change"
 CONFIG_CHANGE_KIND = "agent_config_tamper"
@@ -53,6 +62,10 @@ CONFIG_CHANGE_KIND = "agent_config_tamper"
 #: finding already owns on the same session: one row per (session, signature),
 #: so sharing it would make the two findings overwrite each other every tick.
 CONFIG_CHANGE_SIGNATURE = "daemon_detect_agent_config_tamper_inventory"
+#: A new install-script package is the same kind as ``repo_scan``'s finding on
+#: the checkout's own package.json, and gets its own row for the same reason.
+INSTALL_SCRIPT_CHANGE_KIND = "package_manifest_exec"
+INSTALL_SCRIPT_SIGNATURE = "daemon_detect_package_manifest_exec_lockfile"
 
 #: How long after a change a running session is still told about it.
 DEFAULT_WINDOW_SECS = 3600
@@ -81,6 +94,7 @@ _RUNTIME_LABELS = {
 _KIND_LABELS = {
     "mcp_server": "MCP server", "skill": "skill", "plugin": "plugin",
     "instructions": "instruction file", "hooks": "hook or settings file",
+    "lockfile": "lockfile", "install_script_package": "package with an install script",
 }
 
 
@@ -672,6 +686,134 @@ def collect_global(home: Optional[str] = None) -> List[dict]:
     return Collection(_dedupe(out), unreadable, complete)
 
 
+# ── lockfile: packages that run code on install ─────────────────────────────
+# A dependency's install script runs inside the package manager, so the tool
+# stream of a poisoned install is the tool stream of an ordinary one. What the
+# install leaves behind is the lockfile: npm marks every package that ships a
+# preinstall / install / postinstall script with ``hasInstallScript``.
+#
+# The flag alone is not a finding. Measured on a working machine, a lockfile
+# carries 2 to 13 such packages (fsevents, esbuild, ...), all legitimate. The
+# narrow signal is a package that carries the flag NOW and did not when this
+# lockfile was last read: either a new dependency, or a known one that gained
+# an install script. A version bump of a package already flagged is not a
+# change (the content hash is the same for every version on purpose).
+#
+# Limits: npm lockfiles v2 and v3 only. A v1 lockfile, yarn.lock and
+# pnpm-lock.yaml do not record the flag, so they yield the lockfile row and no
+# packages. The first read of a lockfile is a baseline, so a project whose
+# first install was the poisoned one is not flagged.
+_LOCKFILE = "package-lock.json"
+_MAX_LOCK_PACKAGES = 300
+_MAX_PACKAGE_JSON_BYTES = 256 * 1024
+_INSTALL_SCRIPT_HASH_INPUT = b"hasInstallScript"
+#: ``node -e "try{require('./postinstall')}catch(e){}"`` is how core-js and
+#: es5-ext start their install script, so in a published package this shape is
+#: ordinary. It grades a checkout's own package.json (``repo_scan``), not this.
+_ORDINARY_IN_A_PACKAGE = ("runs code from the command line rather than a file",)
+
+
+def _package_hook_alarm(command: str) -> Optional[str]:
+    """Why a published package's install script is critical, or None."""
+    from clawmetry import repo_scan as _rs
+    for why, rx in _rs._HOOK_CRITICAL:
+        if why not in _ORDINARY_IN_A_PACKAGE and rx.search(str(command or "")):
+            return why
+    return None
+
+
+def install_script_packages(lock: Any) -> Dict[str, dict]:
+    """``name -> {"versions": [...], "paths": [...]}`` for every package a
+    parsed ``package-lock.json`` marks ``hasInstallScript``. ``{}`` for a
+    lockfile that does not record the flag. Never raises."""
+    out: Dict[str, dict] = {}
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if not isinstance(packages, dict):
+        return out
+    for key, entry in packages.items():
+        if not isinstance(entry, dict) or entry.get("hasInstallScript") is not True:
+            continue
+        if not key or entry.get("link"):
+            continue  # the project itself, or a symlink to a workspace package
+        key = str(key)
+        name = _clean_name(entry.get("name") or key.rpartition("node_modules/")[2])
+        if not name:
+            continue
+        slot = out.setdefault(name, {"versions": [], "paths": []})
+        version = _clean_name(entry.get("version") or "")
+        if version and version not in slot["versions"]:
+            slot["versions"].append(version)
+        slot["paths"].append(key)
+        if len(out) >= _MAX_LOCK_PACKAGES:
+            break
+    return out
+
+
+def _installed_hooks(ws: str, rel: str) -> List[dict]:
+    """The install-time scripts of one installed package, read from its own
+    ``package.json`` under ``node_modules``. ``[]`` when it is not installed.
+
+    ``rel`` comes from the lockfile, which is not trusted: a path that is
+    absolute, climbs out, or does not sit under ``node_modules`` is not read.
+    """
+    parts = str(rel).replace("\\", "/").split("/")
+    if (not rel or os.path.isabs(rel) or ".." in parts or "" in parts
+            or "node_modules" not in parts):
+        return []
+    status, text = _read_text_status(os.path.join(ws, *parts, "package.json"),
+                                     _MAX_PACKAGE_JSON_BYTES)
+    if status != OK:
+        return []
+    try:
+        scripts = json.loads(text).get("scripts")
+    except (ValueError, AttributeError):
+        return []
+    if not isinstance(scripts, dict):
+        return []
+    from clawmetry import repo_scan as _rs
+    hooks = []
+    for hook in ("preinstall", "install", "postinstall"):
+        command = scripts.get(hook)
+        if isinstance(command, str) and command.strip():
+            hooks.append({"hook": hook, "command": _rs._sketch(command),
+                          "alarm": _package_hook_alarm(command)})
+    return hooks
+
+
+def _lockfile_components(ws: str, unreadable: set) -> List[dict]:
+    status, lock = _read_json_status(os.path.join(ws, _LOCKFILE))
+    if status == ABSENT:
+        return []
+    if status == UNREADABLE or not isinstance(lock, dict):
+        # npm rewrites the file during an install: a torn read keeps the
+        # stored rows rather than reporting every package gone, then new.
+        unreadable.add(_LOCKFILE)
+        return []
+    packages = install_script_packages(lock)
+    constant = _sha(_INSTALL_SCRIPT_HASH_INPUT)
+    out = [_component(
+        LOCKFILE_KIND, _LOCKFILE, "project", ws, _LOCKFILE, (), constant,
+        str(lock.get("lockfileVersion") or ""),
+        {"install_script_packages": len(packages),
+         "records_install_scripts": isinstance(lock.get("packages"), dict)})]
+    for name in sorted(packages):
+        info = packages[name]
+        hooks: List[dict] = []
+        for rel in info["paths"][:3]:
+            try:
+                hooks = _installed_hooks(ws, rel)
+            except Exception:  # noqa: BLE001
+                hooks = []
+            if hooks:
+                break
+        out.append(_component(
+            INSTALL_SCRIPT_KIND, name, "project", ws, _LOCKFILE, (), constant,
+            ", ".join(info["versions"][:3]),
+            {"paths": info["paths"][:3], "hooks": hooks}))
+    return out
+
+
+
 def workspace_is_scannable(workspace: str, home: Optional[str] = None) -> bool:
     """A project scope is a real directory that is neither ``/`` nor the home
     directory (whose files are the global scope already; the daemon's launchd
@@ -732,6 +874,7 @@ def collect_workspace(workspace: str, home: Optional[str] = None) -> List[dict]:
         lambda: _claude_plugins(h, ws, unreadable),
         lambda: _files(_INSTRUCTION_FILES, "project", ws, "", ws, "instructions", unreadable),
         lambda: _files(_HOOK_FILES, "project", ws, "", ws, "hooks", unreadable),
+        lambda: _lockfile_components(ws, unreadable),
     )
     complete = True
     for step in steps:
@@ -764,7 +907,9 @@ def diff_inventory(previous: Iterable[dict], current: Iterable[dict], *,
     ``previous`` are the stored rows of that scope, ``current`` a fresh
     collection. On a ``baseline`` pass (the scope has never been inventoried)
     every component is recorded with ``last_change="baseline"`` and no change
-    is reported: "everything is new" on install is noise, not a finding.
+    is reported: "everything is new" on install is noise, not a finding. A
+    lockfile with no stored ``lockfile`` row is a baseline for its own rows in
+    the same way, whatever the scope's state.
 
     A previous row whose ``source`` is in ``unreadable_sources`` (a file that
     exists but could not be read or parsed), or any previous row when the
@@ -781,10 +926,17 @@ def diff_inventory(previous: Iterable[dict], current: Iterable[dict], *,
     if complete is None:
         complete = bool(getattr(current, "complete", True))
     prev = {r.get("component_id"): r for r in previous if isinstance(r, dict)}
+    # A lockfile has its own first sight: a scope inventoried before lockfiles
+    # were read, or a project that gains a lockfile later, must not report
+    # every install-script package in it as new.
+    known_lockfiles = {str(r.get("source") or "") for r in prev.values()
+                       if r.get("kind") == LOCKFILE_KIND}
     rows: List[dict] = []
     changes: List[dict] = []
     for comp in current:
         p = prev.pop(comp["component_id"], None)
+        first_sight = baseline or (comp.get("kind") in LOCKFILE_KINDS
+                                   and str(comp.get("source") or "") not in known_lockfiles)
         was_removed = p is not None and p.get("status") == "removed"
         restored = was_removed and p.get("content_hash") == comp["content_hash"]
         row = dict(comp)
@@ -810,7 +962,7 @@ def diff_inventory(previous: Iterable[dict], current: Iterable[dict], *,
         elif p is None or was_removed:
             row["first_seen"] = int((p or {}).get("first_seen") or now_ms)
             row["previous_hash"] = str((p or {}).get("content_hash") or "") if p else ""
-            if baseline and p is None:
+            if first_sight and p is None:
                 row.update(last_change="baseline", changed_at=0, change_count=0)
             else:
                 row.update(last_change="new", changed_at=now_ms,
@@ -852,7 +1004,9 @@ def _change(row: dict, previous: Optional[dict]) -> dict:
 
 # ── incidents ────────────────────────────────────────────────────────────────
 def _applies(row: dict, runtime: str, cwd: str) -> bool:
-    if runtime not in (row.get("readers") or []):
+    # A package manager runs an install script whichever agent asked for the
+    # install, so a lockfile row has no readers and applies by directory only.
+    if row.get("kind") not in LOCKFILE_KINDS and runtime not in (row.get("readers") or []):
         return False
     if row.get("scope") == "global":
         return True
@@ -919,7 +1073,8 @@ def incidents_for_session(recent: Iterable[dict], session_id: str, runtime: str,
 
     ``recent`` are stored rows (or :func:`diff_inventory` changes). Only
     ``new`` and ``changed`` inside the window count; a removal is recorded in
-    the inventory and raises nothing. At most one incident per kind.
+    the inventory and raises nothing. At most one incident per kind, plus one
+    for packages with an install script that are new to the project lockfile.
     """
     now_ms = int(now_ms if now_ms is not None else time.time() * 1000)
     horizon = now_ms - int(window_secs) * 1000
@@ -990,4 +1145,54 @@ def incidents_for_session(recent: Iterable[dict], session_id: str, runtime: str,
              "count": len(configs), "hooks_changed": hooks_changed})
         inc["signal_signature"] = CONFIG_CHANGE_SIGNATURE
         out.append(inc)
+
+    packages = [r for r in hits if r.get("kind") == INSTALL_SCRIPT_KIND]
+    if packages:
+        out.append(_install_script_incident(packages, session_id, runtime))
     return out
+
+
+def _install_script_incident(packages: List[dict], session_id: str, runtime: str) -> dict:
+    """One finding for the packages with an install script that are new to a
+    project's lockfile. Critical when a script read from ``node_modules`` has
+    a shape an ordinary package does not (:func:`_package_hook_alarm`)."""
+    listed = []
+    alarm = ""
+    alarm_name = ""
+    for r in packages[:10]:
+        det = r.get("details") or {}
+        hooks = [h for h in (det.get("hooks") or []) if isinstance(h, dict)]
+        for h in hooks:
+            if h.get("alarm") and not alarm:
+                alarm, alarm_name = str(h["alarm"]), str(r.get("name") or "")
+        listed.append({"name": r.get("name"), "version": r.get("version") or "",
+                       "changed_at": r.get("changed_at"), "hooks": hooks[:3]})
+    names = ", ".join(str(p["name"]) + (" " + p["version"] if p["version"] else "")
+                      for p in listed[:5])
+    if alarm:
+        title = "New dependency %s has an install script that %s" % (alarm_name, alarm)
+    elif len(packages) == 1:
+        title = "New dependency with an install script: %s" % packages[0].get("name")
+    else:
+        title = "%d new dependencies with install scripts" % len(packages)
+    detail = (
+        "%s now marks %s as running a script on install, and did not when ClawMetry "
+        "last read it: %s. npm, pnpm, bun and yarn run that script during an ordinary "
+        "install, with your privileges and your environment, and the agent's tool "
+        "stream shows only the install command. %s"
+        "ClawMetry read the lockfile and the package's package.json only; it did not "
+        "run anything. If you or your agent added this dependency on purpose, this is "
+        "expected. `npm install --ignore-scripts` skips install scripts for one command." % (
+            packages[0].get("source") or _LOCKFILE,
+            "this package" if len(packages) == 1 else "these packages", names,
+            ("The %s script %s, which an ordinary build step does not do. Treat the "
+             "credentials on this machine as exposed until you have read it. "
+             % (alarm_name, alarm)) if alarm else ""))
+    inc = _base_incident(
+        INSTALL_SCRIPT_CHANGE_KIND, session_id, runtime,
+        "critical" if alarm else "warning", title, detail,
+        {"observed": "lockfile", "manifest": packages[0].get("source") or _LOCKFILE,
+         "packages": listed, "count": len(packages),
+         "hooks": sorted({h.get("hook") for p in listed for h in p["hooks"] if h.get("hook")})})
+    inc["signal_signature"] = INSTALL_SCRIPT_SIGNATURE
+    return inc
