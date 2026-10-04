@@ -36,6 +36,20 @@
 - **Verified:** 3 new endpoint tests cover the counts, eight payloads without a valid branch point and a later mode event without counts. 8 new renderer checks cover both notices, a session with no hidden entries, counts that are not numbers and other runtimes.
 - **Limits:** this is a notice, not a branch selector. The entries on other branches are not stored in the replay and cannot be opened. The counts appear only for a runtime whose replay mapper sends them. The Pi mapper that does so ships in the Pro adapter package. The notices were not opened in a running dashboard.
 
+### Fixed: one event with unencodable text stopped every later event from being stored
+
+- **Why:** an event can carry a lone surrogate (JSON allows `"\ud800"`, UTF-8 does not). The store could not write such a string, so the flush of queued events failed on every retry. Every event queued beside it, and every event that arrived later, stayed in memory and never reached the store. An OTLP export that carried one was answered 503 on every delivery. Follow-up of #5949.
+- **What:** when a flush fails because of a value in a row, the store rewrites the text of the queued events once and writes them again. A lone surrogate becomes U+FFFD, and a surrogate pair that arrived split becomes its character. The store logs a warning with the number of events it changed. A flush that fails for any other reason keeps the events queued unchanged, as before.
+- **Verified:** 6 new tests cover a lone surrogate in the session id, the model, a text payload and the event id, each queued between two valid events, a store I/O failure that must not rewrite anything, and the text helper. Without the fix 5 of them fail.
+- **Limits:** only the event queue is covered. The check that keeps an OTLP event out of a session the daemon already owns still fails for a session id with a lone surrogate, and logs a warning. A span with unencodable text is still refused, as before.
+
+### Fixed: a span the store refused still showed in the live tiles
+
+- **Why:** the OTLP trace receiver added a span's cost, tokens and run count to the live tiles before it wrote the span to the store. A span the store refused, for example one with a token count beyond the column range, was answered as rejected and is in no table. Its cost and tokens still showed in the tiles and counted toward the spending-limit check. Left open by #5963, part of #5949.
+- **What:** the tiles are lit after the store answers. The span write reports the ids of the spans it refused as `rejected_span_ids`, and those spans light no tile. A corrected span sent later under the same id is counted once.
+- **Verified:** 5 new tests cover a refused span beside a valid one, a corrected resend, a failed store write followed by a retry, a store answer without the id list, and the id list itself. 4 of them fail on the previous code.
+- **Limits:** when the store is down or cannot confirm the write, the tiles are lit as before and the sender is asked to retry. A collector that runs a daemon older than this release keeps the previous behaviour, because that daemon does not report which span it refused.
+
 ### Added: the Usage tab shows cost by project and project budgets
 
 - **Why:** spend per project and a budget per project existed only as `/api/projects`, `/api/projects/budgets` and a CSV export. Nobody could see them in the dashboard, and setting a budget took a hand-written request (#5941).
